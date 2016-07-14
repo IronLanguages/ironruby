@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <metadata xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+    <id>IronRuby</id>
+    <title>IronRuby</title>
+    <version>3.0.0</version>
+    <authors>IronRuby Contributors,Microsoft</authors>
+    <owners>IronRuby Community</owners>
+    <projectUrl>https://github.com/IronLanguages/main</projectUrl>
+    <licenseUrl>http://ironpython.codeplex.com/license</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>IronRuby is an open-source implementation of the Ruby programming language which is tightly integrated with the .NET Framework. IronRuby can use the .NET Framework and Ruby libraries, and other .NET languages can use Ruby code just as easily.</description>
+    <summary>IronRuby is an open-source implementation of the Ruby programming language which is tightly integrated with the .NET Framework.</summary>
+    <language>en-US</language>
+    <tags>ironruby ruby dynamic dlr</tags>
+    <dependencies>
+      <dependency id="DynamicLanguageRuntime" version="1.5.0" />
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="Platforms\**\*.*" target="lib" />
+  </files>
+</package>

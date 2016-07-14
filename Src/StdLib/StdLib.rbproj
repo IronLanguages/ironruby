@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <PropertyGroup>
+    <ExcludeDlrReferences>true</ExcludeDlrReferences>
+  </PropertyGroup>
+  <Import Project="$(ProjectDir)..\..\Build\Common.proj" />
+  <PropertyGroup>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>{89993698-F0CA-411C-82B3-21F1A9705B77}</ProjectGuid>
+    <ProjectHome>.</ProjectHome>
+    <WorkingDirectory>.</WorkingDirectory>
+    <IsWindowsApplication>True</IsWindowsApplication>
+    <AssemblyName>RbStdLib</AssemblyName>
+    <Name>RbStdLib</Name>
+    <RootNamespace>RbStdLib</RootNamespace>
+    <StdLibPath>$(ProjectDir)ironruby</StdLibPath>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <LibOutputDir>$(OutputPath)\Lib</LibOutputDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="ironruby\**\*.*"
+             Exclude="$(ExcludedPackages)">
+       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="ruby\**\*.*"
+	     Exclude="$(ExcludedPackages)">
+       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <Import Project="$(MSBuildBinPath)\Microsoft.Common.targets" />
+
+  <Target Name="_CopyToOutput">
+    <Copy SourceFiles="@(Content)"
+          DestinationFiles="@(Content->'$(LibOutputDir)\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          UseHardlinksIfPossible="true" />
+  </Target>
+  
+  <Target Name="Build" DependsOnTargets="_CopyToOutput" />
+  
+  <Target Name="Clean">
+    <RemoveDir Directories="$(LibOutputDir)" />
+  </Target>
+  
+  <Target Name="Rebuild" DependsOnTargets="Clean;Build" />
+
+  <Target Name="Stage" DependsOnTargets="Build" />
+</Project>
+
