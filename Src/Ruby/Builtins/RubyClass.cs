@@ -1401,7 +1401,7 @@ namespace IronRuby.Builtins {
                 } else if (_structInfo != null) {
                     constructionOverloads = new OverloadInfo[] { new ReflectionOverloadInfo(Methods.CreateStructInstance) };
                 } else if (_factories.Length != 0) {
-                    constructionOverloads = ArrayUtils.ConvertAll(_factories, (d) => new ReflectionOverloadInfo(d.GetMethodInfo()));
+                    constructionOverloads = ArrayUtils.ConvertAll(_factories, (d) => new ReflectionOverloadInfo(d.Method));
                 } else {
                     // TODO: handle protected constructors
                     constructionOverloads = GetConstructors(type == typeof(object) ? typeof(RubyObject) : type).ToArray();

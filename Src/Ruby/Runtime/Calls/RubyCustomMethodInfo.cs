@@ -40,7 +40,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
-            return new MemberInfo[] { _ruleGenerator.GetMethodInfo() };
+            return new MemberInfo[] { _ruleGenerator.Method };
         }
 
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {

@@ -1779,7 +1779,7 @@ false
         /// </summary>
         public void ClrTypes1() {
             TestTypeAndTracker(typeof(ClassWithMethods1));
-            TestTypeAndTracker(TypeTracker.GetTypeTracker(typeof(ClassWithMethods1)));
+            TestTypeAndTracker(ReflectionCache.GetTypeTracker(typeof(ClassWithMethods1)));
         }
 
         public void TestTypeAndTracker(object type) {

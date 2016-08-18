@@ -249,7 +249,7 @@ namespace IronRuby.Builtins {
                         metaBuilder.BfcVariable = metaBuilder.GetTemporary(typeof(BlockParam), "#bfc");
                     }
 
-                    metaBuilder.Result = Ast.Call(new Func<UnaryOpStorage, BlockParam, object, object>(InvokeOpenBlock).GetMethodInfo(), 
+                    metaBuilder.Result = Ast.Call(new Func<UnaryOpStorage, BlockParam, object, object>(InvokeOpenBlock).Method, 
                         Ast.Constant(new UnaryOpStorage(args.RubyContext)),
                         metaBuilder.BfcVariable, 
                         metaBuilder.Result
