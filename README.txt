@@ -56,3 +56,5 @@ Please see http://wiki.github.com/IronLanguages/main for information on:
 - Setting up a development environment with easy access to utility scripts
 - Building
 - Running test
+
+Join the chat at https://gitter.im/IronLanguages/ironruby
