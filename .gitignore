@@ -6,6 +6,7 @@ bin/
 /bin/
 /Stage
 /Package
+/**/.vs
 
 # Temporary VS files
 *.suo
