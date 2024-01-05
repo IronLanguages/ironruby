@@ -35,20 +35,18 @@ namespace IronRuby.Builtins {
 
         private static void SetEnvironmentVariable(RubyContext/*!*/ context, string/*!*/ name, string value) {
             context.DomainManager.Platform.SetEnvironmentVariable(name, value);
-#if !SILVERLIGHT && !WIN8 && !WP75
             if (name == "TZ") {
-                TimeZone zone;
-                if (RubyTime.TryParseTimeZone(value, out zone)) {
+                if (RubyTime.TryParseTimeZoneInfo(value, out var zone)) {
                     RubyTime._CurrentTimeZone = zone;
-                } else {
+                } else
+                {
                     context.ReportWarning(String.Format(CultureInfo.InvariantCulture,
-                        "`{0}' is not a valid time zone specification; using the current time zone `{1}'", 
-                        value, 
+                        "`{0}' is not a valid time zone specification; using the current time zone `{1}'",
+                        value,
                         RubyTime._CurrentTimeZone.StandardName
                     ));
                 }
             }
-#endif
         }
 
         #region Public Instance Methods

@@ -17,7 +17,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
@@ -25,88 +25,154 @@ using System.Globalization;
 using System.Security;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
+using System.Linq;
 
 namespace IronRuby.Builtins {
     #region RubyTime
 
     public class RubyTime : IComparable, IComparable<RubyTime>, IEquatable<RubyTime>, IFormattable {
-        public readonly static DateTime Epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc); //January 1, 1970 00:00 UTC
+        public static readonly DateTime Epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc); //January 1, 1970 00:00 UTC
         
         #region Time Zones
-
-#if SILVERLIGHT
-        public TimeSpan GetCurrentZoneOffset() {
-            DateTime time = DateTime.Now;
-            return time.ToLocalTime() - time.ToUniversalTime();
-        }
-
-        public static string GetCurrentZoneName() {
-            return DateTime.Now.ToString("%K");
-        }
-
-        public bool GetCurrentDst(RubyContext/*!*/ context) { 
-            return _dateTime.IsDaylightSavingTime(); 
-        }
-
-        public static DateTime ToUniversalTime(DateTime dateTime) {
-            return dateTime.ToUniversalTime(); 
-        }
-
-        public static DateTime ToLocalTime(DateTime dateTime) {
-            return dateTime.ToLocalTime(); 
-        }
-#else
-        internal static TimeZone/*!*/ _CurrentTimeZone;
+        internal static TZI _CurrentTimeZone;
         private static Regex _tzPattern;
 
-        static RubyTime() {
+        static RubyTime() 
+        {
             string tz;
-            try {
+            try 
+            {
                 tz = Environment.GetEnvironmentVariable("TZ");
-            } catch (SecurityException) {
+            } 
+            catch (SecurityException) 
+            {
                 tz = null;
             }
-            TimeZone zone;
-            RubyTime.TryParseTimeZone(tz, out zone);
-            RubyTime._CurrentTimeZone = zone ?? TimeZone.CurrentTimeZone;
+
+            RubyTime.TryParseTimeZoneInfo(tz, out var zone);
+            RubyTime._CurrentTimeZone = zone ?? new TZI(TimeZoneInfo.Local, TimeZoneInfo.Local.StandardName);
         }
 
-        // TODO: Use Olson TZ database names
-        // See http://www.opengroup.org/onlinepubs/007908799/xbd/envvar.html
-        //     http://www.twinsun.com/tz/tz-link.htm
-        //     http://blogs.msdn.com/bclteam/archive/2006/04/03/567119.aspx
-        public static bool TryParseTimeZone(string timeZoneEnvSpec, out TimeZone timeZone) {
-            if (String.IsNullOrEmpty(timeZoneEnvSpec)) {
-                timeZone = TimeZone.CurrentTimeZone;
+        internal static bool TryParseTimeZoneInfo(string timeZoneEnvSpec, out TZI timeZoneInfo)
+        {
+            if (string.IsNullOrEmpty(timeZoneEnvSpec))
+            {
+                timeZoneInfo = new TZI(TimeZoneInfo.Local, TimeZoneInfo.Local.StandardName);
                 return true;
             }
 
-            if (_tzPattern == null) {
+            if (_tzPattern == null)
+            {
                 // TODO: we require offset and don't recognize DST rules
                 _tzPattern = new Regex(@"^\s*
                     (?<std>[^-+:,0-9\0]{3,})
                     (?<sh>[+-]?[0-9]{1,2})((:(?<sm>[0-9]{1,2}))?(:(?<ss>[0-9]{1,2}))?)?                    
-                    ", 
+                    ",
                     RegexOptions.IgnorePatternWhitespace | RegexOptions.CultureInvariant
                 );
             }
 
-            Match match = _tzPattern.Match(timeZoneEnvSpec);
-            if (!match.Success) {
-                timeZone = null;
+            var match = _tzPattern.Match(timeZoneEnvSpec);
+            if (!match.Success)
+            {
+                timeZoneInfo = null;
                 return false;
             }
 
-            timeZone = new TZ(
-                new TimeSpan(
-                    -Int32.Parse(match.Groups["sh"].Value, CultureInfo.InvariantCulture), 
-                    match.Groups["sm"].Success ? Int32.Parse(match.Groups["sm"].Value, CultureInfo.InvariantCulture) : 0,
-                    match.Groups["ss"].Success ? Int32.Parse(match.Groups["ss"].Value, CultureInfo.InvariantCulture) : 0
-                ),
-                match.Groups["std"].Value
-            );
+            var offset = new TimeSpan(-Int32.Parse(match.Groups["sh"].Value, CultureInfo.InvariantCulture), 
+                match.Groups["sm"].Success ? Int32.Parse(match.Groups["sm"].Value, CultureInfo.InvariantCulture) : 0,
+                match.Groups["ss"].Success ? Int32.Parse(match.Groups["ss"].Value, CultureInfo.InvariantCulture) : 0);
 
-            return true;
+            var standardName = match.Groups["std"].Value;
+
+            // Try to find a matching time zone by standard name first.
+            var zoneInfo = TimeZoneInfo.FindSystemTimeZoneById(standardName);
+            
+            if (zoneInfo != null)
+            {
+                timeZoneInfo = new TZI(zoneInfo, standardName);
+                return true;
+            }
+
+            zoneInfo = TimeZoneInfo
+                .GetSystemTimeZones()
+                .FirstOrDefault(tzi => tzi.BaseUtcOffset == offset);
+
+            if (zoneInfo != null)
+            {
+                timeZoneInfo = new TZI(zoneInfo, standardName);
+                return true;
+            }
+
+            timeZoneInfo = null;
+            return false;
+        }
+
+        internal sealed class TZI
+        {
+            public TZI(TimeZoneInfo zoneInfo, string standardName)
+            {
+                ZoneInfo = zoneInfo;
+                DaylightName = standardName;
+            }
+
+            public TimeZoneInfo ZoneInfo { get; }
+
+            public string DaylightName { get; }
+
+            public string StandardName => DaylightName;
+
+            public TimeSpan GetUtcOffset(DateTime time)
+            {
+                return time.Kind == DateTimeKind.Local ? ZoneInfo.BaseUtcOffset : TimeSpan.Zero;
+            }
+
+            public DateTime ToLocalTime(DateTime time)
+            {
+                return Adjust(time, ZoneInfo.BaseUtcOffset, DateTimeKind.Local);
+            }
+
+            public DateTime ToUniversalTime(DateTime time)
+            {
+                return Adjust(time, -ZoneInfo.BaseUtcOffset, DateTimeKind.Utc);
+            }
+
+            private static DateTime Adjust(DateTime time, TimeSpan targetOffset, DateTimeKind targetKind)
+            {
+                if (time.Kind == targetKind)
+                {
+                    return time;
+                }
+                long ticks = time.Ticks + targetOffset.Ticks;
+
+                if (ticks > DateTime.MaxValue.Ticks)
+                {
+                    return new DateTime(DateTime.MaxValue.Ticks, targetKind);
+                }
+
+                if (ticks < DateTime.MinValue.Ticks)
+                {
+                    return new DateTime(DateTime.MinValue.Ticks, targetKind);
+                }
+
+                return new DateTime(ticks, targetKind);
+            }
+
+            public bool IsDaylightSavingTime(DateTime time)
+            {
+                return ZoneInfo.IsDaylightSavingTime(time);
+            }
+
+            public DaylightTime GetDaylightChanges(int year)
+            {
+                return ZoneInfo.GetAdjustmentRules()
+                    .Where(rule => rule.DateStart.Year <= year && rule.DateEnd.Year >= year)
+                    .Select(rule => new DaylightTime(
+                        rule.DaylightTransitionStart.TimeOfDay, 
+                        rule.DaylightTransitionEnd.TimeOfDay, 
+                        rule.DaylightDelta))
+                    .FirstOrDefault();
+            }
         }
 
         private sealed class TZ : TimeZone {
@@ -164,47 +230,25 @@ namespace IronRuby.Builtins {
             }
         }
 
-        public TimeSpan GetCurrentZoneOffset() {
-            return _CurrentTimeZone.GetUtcOffset(_dateTime);
-        }
+        public TimeSpan GetCurrentZoneOffset() => _CurrentTimeZone.GetUtcOffset(_dateTime);
+        
 
-        public static string GetCurrentZoneName() {
-            return _CurrentTimeZone.StandardName;
-        }
+        public static string GetCurrentZoneName() => _CurrentTimeZone.StandardName;
+        
+        public bool GetCurrentDst(RubyContext /*!*/ context) =>
+            _CurrentTimeZone.ZoneInfo.IsDaylightSavingTime(_dateTime);
 
-        public bool GetCurrentDst(RubyContext/*!*/ context) {
-            var zone = _CurrentTimeZone;
-            if (zone is TZ) {
-                var stdName = zone.StandardName;
-                zone = TimeZone.CurrentTimeZone;
-
-                context.ReportWarning(String.Format(CultureInfo.InvariantCulture,
-                    "Daylight savings rule not available for time zone `{0}'; using the default time zone `{1}'", stdName, zone.StandardName
-                ));
-            } 
-            return zone.IsDaylightSavingTime(_dateTime);
-        }
-
-        public static DateTime ToUniversalTime(DateTime dateTime) {
-            return _CurrentTimeZone.ToUniversalTime(dateTime);
-        }
-
-        public static DateTime ToLocalTime(DateTime dateTime) {
-            return _CurrentTimeZone.ToLocalTime(dateTime);
-        }
-#endif
-
-        public DateTime ToUniversalTime() {
-            return ToUniversalTime(_dateTime);
-        }
-
-        public DateTime ToLocalTime() {
-            return ToLocalTime(_dateTime);
-        }
-
-        public static DateTime GetCurrentLocalTime() {
-            return ToLocalTime(DateTime.UtcNow);
-        }
+        public static DateTime ToUniversalTime(DateTime dateTime) =>
+            _CurrentTimeZone.ToUniversalTime(dateTime);
+        
+        public static DateTime ToLocalTime(DateTime dateTime) =>
+            _CurrentTimeZone.ToLocalTime(dateTime);
+        
+        public DateTime ToUniversalTime() => ToUniversalTime(_dateTime);
+        
+        public DateTime ToLocalTime() => ToLocalTime(_dateTime);
+        
+        public static DateTime GetCurrentLocalTime() => ToLocalTime(DateTime.UtcNow);
 
         #endregion
 
@@ -234,13 +278,11 @@ namespace IronRuby.Builtins {
             return new DateTime(ticks, dateTime.Kind);
         }
 
-        public long TicksSinceEpoch {
-            get { return ToUniversalTime().Ticks - Epoch.Ticks; }
-        }
+        public long TicksSinceEpoch => ToUniversalTime().Ticks - Epoch.Ticks;
 
         public DateTime DateTime {
-            get { return _dateTime; }
-            set { _dateTime = Round(value); }
+            get => _dateTime;
+            set => _dateTime = Round(value);
         }
 
         internal void SetDateTime(DateTime value) {
@@ -248,17 +290,11 @@ namespace IronRuby.Builtins {
             _dateTime = value;
         }
 
-        public long Ticks {
-            get { return _dateTime.Ticks; }
-        }
+        public long Ticks => _dateTime.Ticks;
 
-        public int Microseconds {
-            get { return (int)((_dateTime.Ticks / 10) % 1000000); }
-        }
+        public int Microseconds => (int)((_dateTime.Ticks / 10) % 1000000);
 
-        public DateTimeKind Kind {
-            get { return _dateTime.Kind; }
-        }
+        public DateTimeKind Kind => _dateTime.Kind;
 
         internal static long ToTicks(long seconds, long microseconds) {
             return seconds * 10000000 + microseconds * 10;
@@ -329,7 +365,7 @@ namespace IronRuby.Builtins {
         }
 
         public static bool operator ==(RubyTime x, RubyTime y) {
-            return ReferenceEquals(x, null) ? ReferenceEquals(y, null) : x.Equals(y);
+            return x?.Equals(y) ?? ReferenceEquals(y, null);
         }
 
         public static bool operator !=(RubyTime x, RubyTime y) {
@@ -532,19 +568,18 @@ namespace IronRuby.Builtins {
             }
 
             MutableString asStr = Protocols.TryCastToString(strConversionStorage, components[index]);
-            if (asStr != null) {
-                string str = asStr.ConvertToString();
+            if (asStr == null) return GetComponent(conversionStorage, components, index, defValue, false);
+            var str = asStr.ConvertToString();
 
-                if (str.Length == 3) {
-                    string strLower = str.ToLowerInvariant();
-                    int monthIndex = _Months.FindIndex(delegate(string obj) { return obj == strLower; });
-                    if (monthIndex != -1) {
-                        return monthIndex + 1;
-                    }
+            if (str.Length == 3) {
+                var strLower = str.ToLowerInvariant();
+                int monthIndex = _Months.FindIndex(obj => obj == strLower);
+                if (monthIndex != -1) {
+                    return monthIndex + 1;
                 }
-
-                components[index] = asStr; // fall through after modifying the array
             }
+
+            components[index] = asStr; // fall through after modifying the array
 
             return GetComponent(conversionStorage, components, index, defValue, false);
         }
@@ -986,19 +1021,16 @@ namespace IronRuby.Builtins {
                         break;
 
                     case 'z':
-                        if (context.RubyOptions.Compatibility > RubyCompatibility.Ruby186) {
-                            result.Append(self.FormatUtcOffset());
-                        } else {
-                            result.Append(RubyTime.GetCurrentZoneName());
-                        }
+                        result.Append(context.RubyOptions.Compatibility > RubyCompatibility.Ruby186
+                            ? self.FormatUtcOffset()
+                            : RubyTime.GetCurrentZoneName());
                         break;
 
                     default:
-                        if (context.RubyOptions.Compatibility > RubyCompatibility.Ruby186) {
-                            result.Append(character);
-                            break;
-                        } 
-                        return MutableString.CreateEmpty();
+                        if (context.RubyOptions.Compatibility <= RubyCompatibility.Ruby186)
+                            return MutableString.CreateEmpty();
+                        result.Append(character);
+                        break;
                 }
 
                 if (dateTimeFormat != null) {
@@ -1006,14 +1038,9 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if (inFormat) {
-                if (context.RubyOptions.Compatibility > RubyCompatibility.Ruby186) {
-                    return result.Append('%');
-                }
-                return MutableString.CreateEmpty();
-            }
-
-            return result;
+            if (!inFormat) return result;
+            return context.RubyOptions.Compatibility > RubyCompatibility.Ruby186 ? 
+                result.Append('%') : MutableString.CreateEmpty();
         }
 
         private static void FormatDayOfWeek(MutableString/*!*/ result, DateTime dateTime, int start) {
@@ -1058,17 +1085,19 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_a")]
         public static RubyArray ToArray(RubyContext/*!*/ context, RubyTime/*!*/ self) {
-            RubyArray result = new RubyArray();
-            result.Add(self.DateTime.Second);
-            result.Add(self.DateTime.Minute);
-            result.Add(self.DateTime.Hour);
-            result.Add(self.DateTime.Day);
-            result.Add(self.DateTime.Month);
-            result.Add(self.DateTime.Year);
-            result.Add((int)self.DateTime.DayOfWeek);
-            result.Add(self.DateTime.DayOfYear);
-            result.Add(self.GetCurrentDst(context));
-            result.Add(GetZone(context, self));
+            var result = new RubyArray
+            {
+                self.DateTime.Second,
+                self.DateTime.Minute,
+                self.DateTime.Hour,
+                self.DateTime.Day,
+                self.DateTime.Month,
+                self.DateTime.Year,
+                (int)self.DateTime.DayOfWeek,
+                self.DateTime.DayOfYear,
+                self.GetCurrentDst(context),
+                GetZone(context, self)
+            };
             return result;
         }
 
