@@ -17,17 +17,19 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Linq.Expressions;
+using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Math;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Actions;
+using Enumerable = System.Linq.Enumerable;
 #if !CLR2
 using BigInt = System.Numerics.BigInteger;
 using System.Reflection.Emit;
@@ -2674,8 +2676,8 @@ end
             Assert(dToStringStr.StartsWith("#<D:0x") && dToStringStr.EndsWith(">"));
             Assert(eToStringStr == "b");
               
-            // special ToString cases:
-            var range = new Range(1, 2, true);
+            // special ToString cases:.
+            var range = new Builtins.Range(1, 2, true);
             Assert(range.ToString() == "1...2");
 
             var regex = new RubyRegex(MutableString.CreateAscii("hello"), RubyRegexOptions.IgnoreCase | RubyRegexOptions.Multiline);
@@ -3290,7 +3292,7 @@ false
                 return a ?? b ?? 3;
             }
 
-            public object[] Numerics(byte a, sbyte b, short c, ushort d, int e, uint f, long g, ulong h, BigInteger i, Complex64 j, Convertible1 k) {
+            public object[] Numerics(byte a, sbyte b, short c, ushort d, int e, uint f, long g, ulong h, BigInt i, Complex j, Convertible1 k) {
                 return new object[] { a, b, c, d, e, f, g, h, i, j, k };
             }
 

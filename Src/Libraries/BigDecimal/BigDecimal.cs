@@ -20,7 +20,8 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using IronRuby.Builtins;
-using Microsoft.Scripting.Math;
+using System.Numerics;
+using Microsoft.Scripting.Utils;
 
 namespace IronRuby.StandardLibrary.BigDecimal {
     public class BigDecimal : IComparable<BigDecimal>, IEquatable<BigDecimal> {
@@ -374,7 +375,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public static object ToInteger(Config/*!*/ config, BigDecimal/*!*/ x) {
             if (IsFinite(x)) {
                 BigDecimal i = IntegerPart(config, x);
-                BigInteger d = BigInteger.Create(0);
+                BigInteger d = new BigInteger(0);
                 string digits = i._fraction.ToString();
                 foreach (char c in digits) {
                     d *= 10;
@@ -383,7 +384,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 if (IsNegative(x)) {
                     d = BigInteger.Negate(d);
                 }
-                return ClrBigInteger.Multiply(d, BigInteger.Create(10).Power(i.Exponent - digits.Length));
+                return ClrBigInteger.Multiply(d, new BigInteger(10).Power(i.Exponent - digits.Length));
             } else {
                 return null;
             }

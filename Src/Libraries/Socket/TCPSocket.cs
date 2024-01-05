@@ -93,6 +93,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             try {
                 if (remoteHost != null) {
+                    
                     socket.Connect(remoteHost.ConvertToString(), port);
                 } else {
                     socket.Connect(IPAddress.Loopback, port);

@@ -42,6 +42,7 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Runtime.InteropServices;
 
 namespace IronRuby.Runtime {
     [ReflectionCached]
@@ -285,7 +286,7 @@ namespace IronRuby.Runtime {
         
         internal RubyClass ComObjectClass {
             get {
-#if !SILVERLIGHT // COM
+#if !SILVERLIGHT && !NETSTANDARD // COM
                 if (_comObjectClass == null) {
                     GetOrCreateClass(TypeUtils.ComObjectType);
                 }
@@ -611,16 +612,10 @@ namespace IronRuby.Runtime {
             }
         }
 
-        public static string/*!*/ MakeDescriptionString() {
-            return String.Format(CultureInfo.InvariantCulture, "IronRuby {0} on {1}", IronRuby.CurrentVersion.DisplayVersion, MakeRuntimeDesriptionString());
-        }
+        public static string/*!*/ MakeDescriptionString() =>
+            $"IronRuby {CurrentVersion.DisplayVersion} on {RuntimeDescriptionString}";
 
-        internal static string MakeRuntimeDesriptionString() {
-            Type mono = typeof(object).Assembly.GetType("Mono.Runtime");
-            return mono != null ?
-                (string)mono.GetMethod("GetDisplayName", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, null)
-                : String.Format(CultureInfo.InvariantCulture, ".NET {0}", Environment.Version);
-        }
+        internal static string/*!*/ RuntimeDescriptionString => RuntimeInformation.FrameworkDescription;
 
         private static MutableString/*!*/ MakePlatformString() {
             switch (Environment.OSVersion.Platform) {
@@ -1630,7 +1625,7 @@ namespace IronRuby.Runtime {
                 if (RubyOps.TryGetGlobalScopeConstant(this, _globalScope, name, out value)) {
                     return value;
                 }
-
+                
                 if ((value = _namespaces.TryGetPackageAny(name)) != null) {
                     return TrackerToModule(value);
                 }
@@ -1645,7 +1640,7 @@ namespace IronRuby.Runtime {
             if (typeGroup != null) {
                 return value;
             }
-
+            
             // TypeTracker retrieved from namespace tracker should behave like a RubyClass/RubyModule:
             TypeTracker typeTracker = value as TypeTracker;
             if (typeTracker != null) {
@@ -2717,7 +2712,7 @@ namespace IronRuby.Runtime {
             }
 #endif
             _loader.SaveCompiledCode();
-
+            
             ExecuteShutdownHandlers();
 
             _currentException = null;
@@ -2989,7 +2984,7 @@ namespace IronRuby.Runtime {
             if (obj is IRubyDynamicMetaObjectProvider) {
                 return ArrayUtils.EmptyStrings;
             }
-#if !SILVERLIGHT // COM
+#if !SILVERLIGHT && !NETSTANDARD// COM
             if (TypeUtils.IsComObject(obj)) {
                 return new List<string>(Microsoft.Scripting.ComInterop.ComBinder.GetDynamicMemberNames(obj));
             }

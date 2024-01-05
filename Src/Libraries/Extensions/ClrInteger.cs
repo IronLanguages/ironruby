@@ -16,7 +16,7 @@
 using System;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Generation;
@@ -73,7 +73,7 @@ namespace IronRuby.Builtins {
                 
             // If 'self' has more than '31 - other' significant digits it will overflow:
             if (shift >= 31 || (self & ~((1 << (31 - shift)) - 1)) != 0) {
-                return BigInteger.LeftShift(self, shift);
+                return self << shift;
             }
 
             return self << shift;

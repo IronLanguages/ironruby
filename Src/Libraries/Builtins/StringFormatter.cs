@@ -17,10 +17,11 @@ using System;
 using System.Collections;
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Text;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using IronRuby.Runtime;
 using SM = System.Math;
 using IronRuby.Runtime.Calls;
@@ -625,7 +626,7 @@ namespace IronRuby.Builtins {
                 isNegative = true;
 
             if (isNegative && unsigned) {
-                val = val is BigInteger ? CastToUnsignedBigInteger(val as BigInteger) : (object)(uint)(int)val;
+                val = val is BigInteger ? CastToUnsignedBigInteger((BigInteger)val) : (object)(uint)(int)val;
             }
 
             if (fPos && (_opts.SignChar || _opts.Space)) {
@@ -695,7 +696,7 @@ namespace IronRuby.Builtins {
 
         private StringBuilder/*!*/ AppendBase(object/*!*/ value, int bitsToShift, bool lowerCase) {
             if (value is BigInteger)
-                return AppendBaseBigInteger(value as BigInteger, bitsToShift, lowerCase);
+                return AppendBaseBigInteger((BigInteger)value, bitsToShift, lowerCase);
 
             StringBuilder/*!*/ result = new StringBuilder();
             bool isNegative = IsNegative(value);
@@ -747,7 +748,7 @@ namespace IronRuby.Builtins {
 
         private StringBuilder/*!*/ AppendBase2(object/*!*/ value, int radix, bool unsigned) {
             if (value is BigInteger)
-                return AppendBaseBigInteger(value as BigInteger, radix);
+                return AppendBaseBigInteger((BigInteger)value, radix);
 
             if (unsigned)
                 return AppendBaseInt((int)value, radix);
@@ -767,25 +768,25 @@ namespace IronRuby.Builtins {
         }
 
         private BigInteger/*!*/ MakeBigIntegerFromByteArray(byte[] bytes) {
-            uint[] data = new uint[(bytes.Length / 4) + 1];
+            //uint[] data = new uint[(bytes.Length / 4) + 1];
 
-            int j = 0;
-            for (int i = 0; i < bytes.Length; i += 4) {
-                uint word = 0;
-                int diff = bytes.Length - i;
-                if (diff > 3) {
-                    word = (uint)bytes[i] | (uint)(bytes[i + 1] << 8) | (uint)(bytes[i + 2] << 16) | (uint)((uint)bytes[i + 3] << 24);
-                } else if (diff == 3) {
-                    word = (uint)bytes[i] | (uint)(bytes[i + 1] << 8) | (uint)(bytes[i + 2] << 16);
-                } else if (diff == 2) {
-                    word = (uint)bytes[i] | (uint)(bytes[i + 1] << 8);
-                } else if (diff == 1) {
-                    word = (uint)bytes[i];
-                }
-                data[j++] = word;
-            }
+            //int j = 0;
+            //for (int i = 0; i < bytes.Length; i += 4) {
+            //    uint word = 0;
+            //    int diff = bytes.Length - i;
+            //    if (diff > 3) {
+            //        word = (uint)bytes[i] | (uint)(bytes[i + 1] << 8) | (uint)(bytes[i + 2] << 16) | (uint)((uint)bytes[i + 3] << 24);
+            //    } else if (diff == 3) {
+            //        word = (uint)bytes[i] | (uint)(bytes[i + 1] << 8) | (uint)(bytes[i + 2] << 16);
+            //    } else if (diff == 2) {
+            //        word = (uint)bytes[i] | (uint)(bytes[i + 1] << 8);
+            //    } else if (diff == 1) {
+            //        word = (uint)bytes[i];
+            //    }
+            //    data[j++] = word;
+            //}
 
-            return new BigInteger(1, data);
+            return new BigInteger(bytes.ToArray());
         }
 
         private BigInteger/*!*/ CastToUnsignedBigInteger(BigInteger/*!*/ value) {
@@ -820,9 +821,10 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        private object/*!*/ Negate(object/*!*/ value) {
+        private object/*!*/ Negate(object/*!*/ value)
+        {
             if (value is BigInteger)
-                return ((BigInteger)value).OnesComplement();
+                return new BigInteger(0) - ((BigInteger)value);
             else
                 return -((int)value);
         }

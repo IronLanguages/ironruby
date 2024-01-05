@@ -32,7 +32,6 @@ using IronRuby.Runtime.Conversions;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Calls {
@@ -241,11 +240,11 @@ namespace IronRuby.Runtime.Calls {
                 if (method.IsParamArray(i)) {
                     // TODO: indicate splat args separately?
                     optional++;
-                } else if (info.IsOutParameter()) {
+                } else if (info.IsOut) {
                     // Python allows passing of optional "clr.Reference" to capture out parameters
                     // Ruby should allow similar
                     optional++;
-                } else if (info.IsMandatory()) {
+                } else if (!info.IsOptional) {
                     mandatory++;
                 } else {
                     optional++;
@@ -380,7 +379,7 @@ namespace IronRuby.Runtime.Calls {
             return new ActualArguments(
                 normalized.ToArray(),
                 DynamicMetaObject.EmptyMetaObjects,
-                ArrayUtils.EmptyStrings,
+                Array.Empty<string>(),
                 hidden,
                 collapsedArgCount,
                 firstSplattedArg,
@@ -486,7 +485,7 @@ namespace IronRuby.Runtime.Calls {
                 if (typeOne == actualType) {
                     if (typeTwo == actualType) {
                         // prefer non-nullable reference type over nullable:
-                        if (!actualType.IsValueType()) {
+                        if (!actualType.IsValueType) {
                             if (candidateOne.ProhibitNull) {
                                 return Candidate.One;
                             } else if (candidateTwo.ProhibitNull) {
@@ -502,11 +501,11 @@ namespace IronRuby.Runtime.Calls {
             }
 
             // prefer integer type over enum:
-            if (typeOne.IsEnum() && Enum.GetUnderlyingType(typeOne) == typeTwo) {
+            if (typeOne.IsEnum && Enum.GetUnderlyingType(typeOne) == typeTwo) {
                 return Candidate.Two;
             }
 
-            if (typeTwo.IsEnum() && Enum.GetUnderlyingType(typeTwo) == typeOne) {
+            if (typeTwo.IsEnum && Enum.GetUnderlyingType(typeTwo) == typeOne) {
                 return Candidate.One;
             }
 
@@ -541,7 +540,7 @@ namespace IronRuby.Runtime.Calls {
 
             if (restrictedType != null) {
                 if (restrictedType == typeof(DynamicNull)) {
-                    if (!toType.IsValueType() || toType.IsGenericType() && toType.GetGenericTypeDefinition() == typeof(Nullable<>)) {
+                    if (!toType.IsValueType || toType.IsGenericType && toType.GetGenericTypeDefinition() == typeof(Nullable<>)) {
                         return AstUtils.Constant(null, toType);
                     } else if (toType == typeof(bool)) {
                         return AstUtils.Constant(false);
@@ -783,13 +782,13 @@ namespace IronRuby.Runtime.Calls {
                                     return Methods.CreateArgumentsErrorForProc.OpCall(AstUtils.Constant(cr.GetArgumentTypeName(Binder)));
                                 }
 
-                                Debug.Assert(typeof(BlockParam).IsSealed());
+                                Debug.Assert(typeof(BlockParam).IsSealed);
                                 if (cr.To == typeof(BlockParam)) {
                                     return Methods.CreateArgumentsErrorForMissingBlock.OpCall();
                                 }
 
                                 string toType;
-                                if (cr.To.IsGenericType() && cr.To.GetGenericTypeDefinition() == typeof(Union<,>)) {
+                                if (cr.To.IsGenericType && cr.To.GetGenericTypeDefinition() == typeof(Union<,>)) {
                                     var g = cr.To.GetGenericArguments();
                                     toType = Binder.GetTypeName(g[0]) + " or " + Binder.GetTypeName(g[1]);
                                 } else {

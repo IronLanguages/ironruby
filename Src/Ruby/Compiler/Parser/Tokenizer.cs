@@ -24,7 +24,7 @@ using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
@@ -4045,7 +4045,7 @@ namespace IronRuby.Compiler {
                 if (value >= Int32.MinValue && value <= Int32.MaxValue) {
                     return (int)value;
                 } else {
-                    return BigInteger.Create(value);
+                    return new BigInteger(value);
                 }
             } else {
                 var parser = new BignumParser();

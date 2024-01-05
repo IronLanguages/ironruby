@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Ruby.Console": {
+      "commandName": "Project",
+      "commandLineArgs": "C:\\IronRubyDev\\ironruby-orig-updated\\bin\\Release\\net462\\irb"
+    }
+  }
+}

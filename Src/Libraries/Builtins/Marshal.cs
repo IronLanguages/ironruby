@@ -21,7 +21,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Generation;
@@ -560,7 +560,12 @@ namespace IronRuby.Builtins {
                     bits[dwords_lo] = _reader.ReadUInt16();
                 }
 
-                return new BigInteger(sign, bits);
+                List<byte> bytes = new List<byte>();
+                foreach (uint value in bits)
+                {
+                    bytes.AddRange(BitConverter.GetBytes(value));
+                }
+                return new BigInteger(bytes.ToArray());
             }
 
             private int ReadInt32() {

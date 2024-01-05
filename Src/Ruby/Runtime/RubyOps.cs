@@ -26,6 +26,8 @@ using System.Diagnostics;
 using System.Dynamic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
@@ -36,7 +38,6 @@ using IronRuby.Compiler.Generation;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Interpreter;
-using Microsoft.Scripting.Math;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Compiler.Ast;
@@ -286,7 +287,7 @@ namespace IronRuby.Runtime {
         public static Proc/*!*/ DefineBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
 #if !WIN8
             // DLR closures should not be used:
-            Debug.Assert(!(((Delegate)clrMethod).Target is Closure) || ((Closure)((Delegate)clrMethod).Target).Locals == null);
+            Debug.Assert(!(((Delegate)clrMethod).Target is RubyClosureScope) || ((RubyClosureScope)((Delegate)clrMethod).Target).Locals == null);
 #endif
             return new Proc(ProcKind.Block, self, scope, dispatcher.SetMethod(clrMethod));
         }
@@ -295,7 +296,7 @@ namespace IronRuby.Runtime {
         public static Proc/*!*/ DefineLambda(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
 #if !WIN8
             // DLR closures should not be used:
-            Debug.Assert(!(((Delegate)clrMethod).Target is Closure) || ((Closure)((Delegate)clrMethod).Target).Locals == null);
+            Debug.Assert(!(((Delegate)clrMethod).Target is RubyClosureScope) || ((RubyClosureScope)((Delegate)clrMethod).Target).Locals == null);
 #endif
             return new Proc(ProcKind.Lambda, self, scope, dispatcher.SetMethod(clrMethod));
         }
@@ -992,7 +993,14 @@ namespace IronRuby.Runtime {
             Debug.Assert(qualifiedName.Length >= 2 || qualifiedName.Length == 1 && isGet);
             RubyContext context = scope.RubyContext;
             context.RequiresClassHierarchyLock();
-
+            
+            //if(qualifiedName[0] == "System")
+            //{
+            //    var fullName = String.Join(".", qualifiedName);
+            //    var asm = scope.RubyContext.Namespaces.PackageAssemblies.First(a => a.FullName.Contains(fullName));
+            //    //return asm;
+            //}
+            
             RubyModule missingConstantOwner;
             RubyGlobalScope globalScope = scope.GlobalScope;
             int nameCount = (isGet) ? qualifiedName.Length : qualifiedName.Length - 1;
@@ -1954,23 +1962,23 @@ namespace IronRuby.Runtime {
         #region Ranges
 
         [Emitted]
-        public static Range/*!*/ CreateInclusiveRange(object begin, object end, RubyScope/*!*/ scope, BinaryOpStorage/*!*/ comparisonStorage) {
-            return new Range(comparisonStorage, scope.RubyContext, begin, end, false);
+        public static IronRuby.Builtins.Range/*!*/ CreateInclusiveRange(object begin, object end, RubyScope/*!*/ scope, BinaryOpStorage/*!*/ comparisonStorage) {
+            return new IronRuby.Builtins.Range(comparisonStorage, scope.RubyContext, begin, end, false);
         }
 
         [Emitted]
-        public static Range/*!*/ CreateExclusiveRange(object begin, object end, RubyScope/*!*/ scope, BinaryOpStorage/*!*/ comparisonStorage) {
-            return new Range(comparisonStorage, scope.RubyContext, begin, end, true);
+        public static IronRuby.Builtins.Range/*!*/ CreateExclusiveRange(object begin, object end, RubyScope/*!*/ scope, BinaryOpStorage/*!*/ comparisonStorage) {
+            return new IronRuby.Builtins.Range(comparisonStorage, scope.RubyContext, begin, end, true);
         }
 
         [Emitted]
-        public static Range/*!*/ CreateInclusiveIntegerRange(int begin, int end) {
-            return new Range(begin, end, false);
+        public static IronRuby.Builtins.Range/*!*/ CreateInclusiveIntegerRange(int begin, int end) {
+            return new IronRuby.Builtins.Range(begin, end, false);
         }
 
         [Emitted]
-        public static Range/*!*/ CreateExclusiveIntegerRange(int begin, int end) {
-            return new Range(begin, end, true);
+        public static IronRuby.Builtins.Range/*!*/ CreateExclusiveIntegerRange(int begin, int end) {
+            return new IronRuby.Builtins.Range(begin, end, true);
         }
 
         #endregion
@@ -2173,7 +2181,7 @@ namespace IronRuby.Runtime {
                 return (int)obj;
             }
 
-            var bignum = obj as BigInteger;
+            var bignum = (BigInteger)obj;
             if ((object)bignum != null) {
                 int fixnum;
                 if (bignum.AsInt32(out fixnum)) {
@@ -2216,7 +2224,7 @@ namespace IronRuby.Runtime {
                 return Converter.ToUInt32((int)obj);
             }
 
-            var bignum = obj as BigInteger;
+            var bignum = (BigInteger)obj;
             if ((object)bignum != null) {
                 return Converter.ToUInt32(bignum);
             }
@@ -2230,7 +2238,7 @@ namespace IronRuby.Runtime {
                 return (int)obj;
             }
 
-            var bignum = obj as BigInteger;
+            var bignum = (BigInteger)obj;
             if ((object)bignum != null) {
                 return Converter.ToInt64(bignum);
             }
@@ -2244,7 +2252,7 @@ namespace IronRuby.Runtime {
                 return Converter.ToUInt64((int)obj);
             }
 
-            var bignum = obj as BigInteger;
+            var bignum = (BigInteger)obj;
             if ((object)bignum != null) {
                 return Converter.ToUInt64(bignum);
             }
@@ -2258,7 +2266,7 @@ namespace IronRuby.Runtime {
                 return (int)obj;
             }
 
-            var bignum = obj as BigInteger;
+            var bignum = (BigInteger)obj;
             if ((object)bignum != null) {
                 return bignum;
             }
@@ -2272,7 +2280,7 @@ namespace IronRuby.Runtime {
                 return new IntegerValue((int)obj);
             }
 
-            var bignum = obj as BigInteger;
+            var bignum = (BigInteger)obj;
             if ((object)bignum != null) {
                 return new IntegerValue(bignum);
             }

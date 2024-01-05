@@ -46,7 +46,7 @@ namespace IronRuby.Runtime.Calls {
     using BlockCallTargetUnsplatProcN = Func<BlockParam, object, object[], RubyArray, Proc, object>;
 
     [Flags]
-    public enum BlockSignatureAttributes {
+    public enum  BlockSignatureAttributes {
         None = 0,
 
         // {|..., &b|}

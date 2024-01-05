@@ -22,7 +22,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Compiler;
@@ -2608,8 +2608,9 @@ namespace IronRuby.Builtins {
         #region to_i, hex, oct
 
         [RubyMethod("to_i")]
-        public static object/*!*/ ToInteger(MutableString/*!*/ self, [DefaultProtocol, DefaultParameterValue(10)]int @base) {
-            return ClrString.ToInteger(self.ConvertToString(), @base);
+        public static object/*!*/ ToInteger(MutableString/*!*/ self, [DefaultProtocol, DefaultParameterValue(10), Optional]int @base) {
+            var result = ClrString.ToInteger(self.ConvertToString(), @base);
+            return result; //ClrString.ToInteger(self.ConvertToString(), @base);
         }
 
         [RubyMethod("hex")]

@@ -16,7 +16,7 @@
 using System;
 using System.Diagnostics;
 using System.Text;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using System.Globalization;
 
 namespace IronRuby.StandardLibrary.BigDecimal {

@@ -15,7 +15,7 @@
 
 using System;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Generation;
 

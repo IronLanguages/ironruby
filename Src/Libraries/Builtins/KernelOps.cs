@@ -31,7 +31,7 @@ using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
@@ -1788,7 +1788,7 @@ namespace IronRuby.Builtins {
 
             bool isFixnum;
             int fixnum = 0;
-            BigInteger bignum = null;
+            BigInteger? bignum = null;
             if (intLimit.IsFixnum) {
                 if (intLimit.Fixnum == Int32.MinValue) {
                     bignum = -(BigInteger)intLimit.Fixnum;
@@ -1809,7 +1809,7 @@ namespace IronRuby.Builtins {
                     return ScriptingRuntimeHelpers.Int32ToObject(generator.Next(fixnum));
                 }
             } else {
-                return generator.Random(bignum);
+                return generator.Random(bignum ?? BigInteger.One);
             }
         }
 

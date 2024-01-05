@@ -173,7 +173,7 @@ namespace IronRuby.Runtime.Calls {
         internal Expression/*!*/ CreateExpression() {
             return Ast.New(Methods.RubyCallSignatureCtor, AstUtils.Constant(_countAndFlags));
         }
-
+        
         public bool Equals(RubyCallSignature other) {
             return _countAndFlags == other._countAndFlags;
         }

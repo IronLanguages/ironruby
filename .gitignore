@@ -8,12 +8,13 @@ bin/
 /Package
 /**/.vs
 
-# Temporary VS files
+# Temporary IDE files
 *.suo
 *.csproj.user
 *.wixproj.user
 *.pidb
-
+/**/.vs
+/**/.idea
 # Generated files
 BuildInfo.Generated.cs
 CurrentVersion.Generated.cs

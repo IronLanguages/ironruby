@@ -22,7 +22,7 @@ using Microsoft.Scripting.Ast;
 using System;
 using System.Collections.Generic;
 using System.Text;
-using System.Diagnostics;
+//using System.Diagnostics;
 using System.Threading;
 using System.Runtime.Serialization;
 using Microsoft.Scripting.Utils;
@@ -50,7 +50,7 @@ namespace IronRuby.Builtins {
         // Windows returns 2 EUC-JP encodings (CP 20932 and CP 51932). Mono implements EUC-JP as 51932 and doesn't support 20932.
         public const int CodePageEUCJP = 51932;
 
-        public const int CodePageUTF7 = 65000;
+        public const int CodePageUTF7 = 65001;
         public const int CodePageUTF8 = 65001;
         public const int CodePageUTF16BE = 1201;
         public const int CodePageUTF16LE = 1200;
@@ -62,7 +62,13 @@ namespace IronRuby.Builtins {
         public static readonly RubyEncoding/*!*/ Binary = new RubyEncoding(BinaryEncoding.Instance, BinaryEncoding.Instance, -4);
         public static readonly RubyEncoding/*!*/ UTF8 = new RubyEncoding(CreateEncoding(CodePageUTF8, false), CreateEncoding(CodePageUTF8, true), -3);
 
-#if FEATURE_ENCODING
+#if FEATURE_ENCODING 
+    #if NETCOREAPP || NETSTANDARD
+        static RubyEncoding()
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        }
+    #endif
         public static readonly RubyEncoding/*!*/ Ascii = new RubyEncoding(CreateEncoding(CodePageAscii, false), CreateEncoding(CodePageAscii, true), -2);
         public static readonly RubyEncoding/*!*/ EUCJP = new RubyEncoding(CreateEncoding(CodePageEUCJP, false), CreateEncoding(CodePageEUCJP, true), -1);
         public static readonly RubyEncoding/*!*/ SJIS = new RubyEncoding(CreateEncoding(CodePageSJIS, false), CreateEncoding(CodePageSJIS, true), 0);
@@ -107,6 +113,9 @@ namespace IronRuby.Builtins {
         }
 
         private static Encoding/*!*/ CreateEncoding(int codepage, bool throwOnError) {
+#if FEATURE_ENCODING && (NETCOREAPP || NETSTANDARD)
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+#endif
 #if FEATURE_ENCODING
             if (throwOnError) {
                 return Encoding.GetEncoding(codepage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
@@ -173,7 +182,7 @@ namespace IronRuby.Builtins {
             switch (codepage) {
                 case RubyEncoding.CodePageUTF8: return "UTF-8";
 #if FEATURE_ENCODING
-                case RubyEncoding.CodePageUTF7: return "UTF-7";
+                //case RubyEncoding.CodePageUTF7: return "UTF-7";
                 case RubyEncoding.CodePageUTF16BE: return "UTF-16BE";
                 case RubyEncoding.CodePageUTF16LE: return "UTF-16LE";
                 case RubyEncoding.CodePageUTF32BE: return "UTF-32BE";
@@ -198,6 +207,11 @@ namespace IronRuby.Builtins {
 
         public override string/*!*/ ToString() {
             return Name;
+        }
+
+        public void GetObjectData(SerializationInfo info, StreamingContext context)
+        {
+            throw new NotImplementedException();
         }
 
         public int CompareTo(RubyEncoding/*!*/ other) {
@@ -410,7 +424,7 @@ namespace IronRuby.Builtins {
                 case 57010: // ISCII Gujarati
                 case 57011: // ISCII Punjabi
                 case 65001: // Unicode (UTF-8)
-                    Debug.Assert(IsAsciiIdentityFallback(encoding));
+                    //Debug.Assert(IsAsciiIdentityFallback(encoding));
                     return true;
 
                 default: 
@@ -502,7 +516,7 @@ namespace IronRuby.Builtins {
         public bool IsUnicodeEncoding {
             get {
                 switch (CodePage) {
-                    case CodePageUTF7:
+                    //case CodePageUTF7:
                     case CodePageUTF8:
                     case CodePageUTF16BE:
                     case CodePageUTF16LE:
@@ -553,7 +567,7 @@ namespace IronRuby.Builtins {
                 { "CP1255", "Windows-1255" }, 
                 { "CP1254", "Windows-1254" }, 
                 { "CP1257", "Windows-1257" }, 
-                { "CP65000", "UTF-7" }, 
+                //{ "CP65000", "UTF-7" }, 
                 { "CP65001", "UTF-8" }, 
                 { "IBM850", "CP850" }, 
                 { "eucJP", "EUC-JP" }, 
@@ -640,7 +654,7 @@ namespace IronRuby.Builtins {
         }
 
         private static int GetCodePage(Encoding/*!*/ encoding) {
-            Debug.Assert(encoding != null);
+            //Debug.Assert(encoding != null);
 
             if (encoding == BinaryEncoding.Instance) {
                 return CodePageBinary;

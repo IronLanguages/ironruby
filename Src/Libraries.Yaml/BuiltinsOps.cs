@@ -21,10 +21,11 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Runtime.InteropServices;
+using Range = IronRuby.Builtins.Range;
 
 namespace IronRuby.StandardLibrary.Yaml {
 

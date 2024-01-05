@@ -32,6 +32,7 @@ using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Conversions;
+using Microsoft.Scripting.Actions;
 
 namespace IronRuby.Runtime {
     [Flags]
@@ -138,7 +139,6 @@ namespace IronRuby.Runtime {
         internal Loader(RubyContext/*!*/ context) {
             Assert.NotNull(context);
             _context = context;
-
             _toStrStorage = new ConversionStorage<MutableString>(context);
             _loadPaths = MakeLoadPaths(context.RubyOptions);
             _loadedFiles = new RubyArray();
@@ -179,11 +179,17 @@ namespace IronRuby.Runtime {
             } else {
 #if DEBUG
                 // For developer use, add Src/StdLib
-                string devStdLib = "../../Src/StdLib";
-                if (Directory.Exists(devStdLib))
+                string devStdLib = "../../../Src/StdLib/";
+
+                var rubyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                string fullPath = Path.GetFullPath(Path.Combine(rubyDir, devStdLib));
+
+                if (Directory.Exists(fullPath))
+                {
                     path = devStdLib;
+                }
 #else
-                path = "../Lib";
+                path = "./Lib";
 #endif
                 isFullPath = false;
             }
@@ -408,7 +414,10 @@ namespace IronRuby.Runtime {
                 LoadLibrary(initializerType, false);
             } else {
                 // load namespaces:
-                try {
+                try
+                {
+                    TopNamespaceTracker tnt = new TopNamespaceTracker(DomainManager);
+                    tnt.LoadAssembly(assembly);
                     DomainManager.LoadAssembly(assembly);
                 } catch (Exception e) {
                     if (throwOnError) {

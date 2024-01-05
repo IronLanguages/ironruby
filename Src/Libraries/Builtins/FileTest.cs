@@ -14,7 +14,7 @@
  * ***************************************************************************/
 #if FEATURE_FILESYSTEM
 
-#if CLR2
+#if CLR2 || NETSTANDARD
 using Microsoft.Scripting.Utils;
 #endif
 

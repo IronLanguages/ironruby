@@ -1,18 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+<Project DefaultTargets="Build">
 
   <PropertyGroup>
-    <BuildFlavour Condition=" '$(BuildFlavour)' == '' ">Debug</BuildFlavour>
-    <MainPlatform Condition=" '$(MainPlatform)' == '' ">net45</MainPlatform>
+    <BuildFlavour Condition=" '$(BuildFlavour)' == '' ">$(Configuration)</BuildFlavour>
+    <MainPlatform Condition=" '$(MainPlatform)' == '' ">net462</MainPlatform>
     <MainBuildPrefix Condition=" '$(MainBuildPrefix)' == '' "></MainBuildPrefix>
-    <Mono Condition="'$(OS)' != 'Windows_NT'">true</Mono>
 
+    <NetTarget>net6.0</NetTarget>
+    <FrameworkTarget>net462</FrameworkTarget>
     <RootDir>$(MSBuildThisFileDirectory)</RootDir>
     <Solution>$(RootDir)\Ruby.sln</Solution>
     <UtilDir>$(RootDir)\Util</UtilDir>
     <ReferenceDir>$(RootDir)\Util\References</ReferenceDir>
     <BinDir>$(RootDir)\bin</BinDir>
     <BuildSysDir>$(RootDir)\Build</BuildSysDir>
+    <NoWarn>$(NoWarn);SYSLIB0003;CS0649;</NoWarn>
   </PropertyGroup>
     
   <Import Project="$(BuildSysDir)\Versioning.targets" />
@@ -30,15 +32,12 @@
       BinDir=$(BinDir);
       StageDir=$(StageDir);
       BuildSysDir=$(BuildSysDir);
-      Mono=$(Mono);
       MainPlatform=$(MainPlatform)
     </BuildProperties>
   </PropertyGroup>
   
   <PropertyGroup>
-    <NuGet>$(UtilDir)\NuGet\nuget.exe</NuGet>
-    <NuGet Condition=" '$(Mono)' != '' ">mono $(NuGet)</NuGet>
-    
+    <NuGet>dotnet</NuGet>
     <NuGetConfig>$(RootDir)\NuGet.config</NuGetConfig>
 
     <Zip Condition="'$(OS)' == 'Windows_NT'">$(UtilDir)\Misc\zip.exe</Zip>
@@ -51,15 +50,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ReferencedPlatform Include="net35">
-      <BuildPrefix>v2</BuildPrefix>
-    </ReferencedPlatform>
-    <ReferencedPlatform Include="net40">
+    <ReferencedPlatform Include="net462">
       <BuildPrefix></BuildPrefix>
     </ReferencedPlatform>
-    <!-- Mono 3.2 is missing necessary bits for 4.5. -->
-    <ReferencedPlatform Include="net45" Condition=" '$(Mono)' != 'true' ">
-      <BuildPrefix>v45</BuildPrefix>
+    <ReferencedPlatform Include="net6.0">
+      <BuildPrefix></BuildPrefix>
+    </ReferencedPlatform>
+    <ReferencedPlatform Include="netstandard2.0">
+      <BuildPrefix></BuildPrefix>
     </ReferencedPlatform>
   </ItemGroup>
 
@@ -67,11 +65,6 @@
     <MainStageFiles Include="$(RootDir)\README.md" />
     <MainStageFiles Include="$(RootDir)\LICENSE" />
   </ItemGroup>
-
-  <Target Name="_EnsureNuGetConfig"
-          Condition=" !Exists('$(NuGetConfig)') ">
-    <Touch Files="$(NuGetConfig)" AlwaysCreate="true" />
-  </Target>
   
   <Target Name="_MakeReferenceDir"
           Condition=" !Exists('$(ReferenceDir)') ">
@@ -88,22 +81,32 @@
                     Parameters="$(DlrVersion)" />
   </Target>
 
-  <Target Name="RestoreReferences"
-            DependsOnTargets="_EnsureNuGetConfig;_MakeReferenceDir;_MakePackagesConfig"
-            Inputs="$(RootDir)\packages.config;$(RootDir)\NuGet.config"
-            Outputs="$(ReferenceDir)\updated">
-    <Exec Command="$(NuGet) restore packages.config -PackagesDirectory &quot;$(ReferenceDir)&quot; -ConfigFile &quot;$(NuGetConfig)&quot;" WorkingDirectory="$(RootDir)" />
-    <Touch Files="$(ReferenceDir)\updated" AlwaysCreate="true" />
+  <Target Name="RestoreReferences">
+    <Exec Command="dotnet restore Ruby.sln" />
   </Target>
   
-  <Target Name="Build" DependsOnTargets="RestoreReferences">
-    <MSBuild 
+  <Target Name="Build" DependsOnTargets="Bootstrap">
+    <MSBuild
       Projects="$(Solution)" 
       Targets="Build"
-      Properties="$(BuildProperties);ReferencedPlatform=%(ReferencedPlatform.Identity);Configuration=%(ReferencedPlatform.BuildPrefix)$(BuildFlavour)" />
+      Properties="$(BuildProperties);ReferencedPlatform=%(ReferencedPlatform.Identity);Configuration=$(BuildFlavour)" />
   </Target>
 
-  <Target Name="Rebuild" DependsOnTargets="RestoreReferences">
+  <Target Name="BuildNet" DependsOnTargets="Bootstrap">
+    <MSBuild
+      Projects="$(Solution)" 
+      Targets="Build"
+      Properties="$(BuildProperties);ReferencedPlatform=%(ReferencedPlatform.Identity);Configuration=$(BuildFlavour);TargetFramework=$(NetTarget)" />
+  </Target>
+
+  <Target Name="BuildFramework" DependsOnTargets="Bootstrap">
+    <MSBuild
+      Projects="$(Solution)" 
+      Targets="Build"
+      Properties="$(BuildProperties);ReferencedPlatform=%(ReferencedPlatform.Identity);Configuration=$(BuildFlavour);TargetFramework=$(FrameworkTarget)" />
+  </Target>
+
+  <Target Name="Rebuild" DependsOnTargets="Bootstrap">
     <MSBuild 
       Projects="$(Solution)" 
       Targets="Rebuild" 
@@ -128,38 +131,6 @@
       Properties="$(BuildProperties);ReferencedPlatform=%(ReferencedPlatform.Identity);Configuration=%(ReferencedPlatform.BuildPrefix)$(BuildFlavour);Staging=true" />
   </Target>
 
-  <Target Name="_CopyDlrPlatformReferences" DependsOnTargets="_PlatformStage">
-    <ItemGroup>
-      <DlrPlatformReferenceFiles
-          Include="$(BinDir)\%(ReferencedPlatform.BuildPrefix)$(BuildFlavour)\Microsoft.Scripting.*"
-          Exclude="$(BinDir)\%(ReferencedPlatform.BuildPrefix)$(BuildFlavour)\*.pdb">
-          <PlatformDestination>%(ReferencedPlatform.Identity)</PlatformDestination>
-      </DlrPlatformReferenceFiles>
-      <DlrPlatformReferenceFiles
-          Include="$(BinDir)\%(ReferencedPlatform.BuildPrefix)$(BuildFlavour)\Microsoft.Dynamic.*"
-          Exclude="$(BinDir)\%(ReferencedPlatform.BuildPrefix)$(BuildFlavour)\*.pdb">
-          <PlatformDestination>%(ReferencedPlatform.Identity)</PlatformDestination>
-      </DlrPlatformReferenceFiles>
-    </ItemGroup>
-    <Copy SourceFiles="@(DlrPlatformReferenceFiles)"
-          DestinationFiles="@(DlrPlatformReferenceFiles->'$(StageDir)\Platforms\%(PlatformDestination)\%(Filename)%(Extension)')" />
-  </Target>
-
-  <Target Name="_CopyDlrMainReferences" DependsOnTargets="_MakeStageDir">
-    <ItemGroup>
-      <DlrMainReferenceFiles
-          Include="$(BinDir)\$(MainBuildPrefix)$(BuildFlavour)\Microsoft.Scripting.Core.dll"
-          Condition=" Exists('$(BinDir)\$(MainPlatform)$(BuildFlavour)\Microsoft.Scripting.Core.dll')" />
-      <DlrMainReferenceFiles
-          Include="$(BinDir)\$(MainBuildPrefix)$(BuildFlavour)\Microsoft.Scripting.dll" />
-      <DlrMainReferenceFiles
-          Include="$(BinDir)\$(MainBuildPrefix)$(BuildFlavour)\Microsoft.Dynamic.dll" />
-    </ItemGroup>
-    
-    <Copy SourceFiles="@(DlrMainReferenceFiles)"
-          DestinationFolder="$(StageDir)" />
-  </Target>
-
   <Target Name="_CopyMainStageFiles" DependsOnTargets="_MakeStageDir">
     <Copy SourceFiles="@(MainStageFiles)" DestinationFolder="$(StageDir)" />
   </Target>
@@ -171,7 +142,9 @@
   </Target>
 
   <Target Name="_ZipStdLib" DependsOnTargets="_CopyStdLib">
-    <Exec Command="$(Zip) -9 -r &quot;$(StageDir)\..\IronRuby.StdLib-$(PackageVersion).zip&quot; &quot;Lib&quot;" WorkingDirectory="$(StageDir)" />
+    <ZipDirectory
+        SourceDirectory="$(StageDir)\Lib"
+        DestinationFile="$(StageDir)\..\IronRuby.StdLib-$(PackageVersion).zip" />
   </Target>
 
   <Target Name="_RemoveDocFiles" DependsOnTargets="_PlatformStage">
@@ -186,8 +159,6 @@
     <StageDependsOn>
       _MakeStageDir;
       _PlatformStage;
-      _CopyDlrPlatformReferences;
-      _CopyDlrMainReferences;
       _CopyMainStageFiles;
       _CopyStdLib;
       _ZipStdLib;
@@ -202,15 +173,6 @@
   <Target Name="MakePackageDir">
     <MakeDir Directories="$(PackageDir)" Condition="!Exists('$(PackageDir)')" />
   </Target>
-
-  <ItemGroup>
-    <Package Include="IronPython">
-      <NuSpecDir>$(RootDir)</NuSpecDir>
-    </Package>
-    <Package Include="IronPython.StdLib">
-      <NuSpecDir>$(RootDir)</NuSpecDir>
-    </Package>
-  </ItemGroup>
 
   <PropertyGroup>
     <NuSpecInputs>@(Package->'%(Package.NuSpecDir)\%(Package.Identity).nuspec')</NuSpecInputs>

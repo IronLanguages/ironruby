@@ -275,7 +275,7 @@ namespace IronRuby.StandardLibrary.ParseTree {
                     Literal litEnd = node.End as Literal;
 
                     if (!isCondition && litBegin != null && litEnd != null && litBegin.Value is int && litBegin.Value is int) {
-                        _result = MakeNode(NodeKind.lit, new Range((int)litBegin.Value, (int)litEnd.Value, node.IsExclusive));
+                        _result = MakeNode(NodeKind.lit, new Builtins.Range((int)litBegin.Value, (int)litEnd.Value, node.IsExclusive));
                     } else {
                         var range = MakeNode(isCondition ? 
                             (node.IsExclusive ? NodeKind.flip3 : NodeKind.flip2) :

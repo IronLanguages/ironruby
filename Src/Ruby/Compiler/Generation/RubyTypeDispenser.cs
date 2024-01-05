@@ -24,6 +24,7 @@ using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using System.Globalization;
+using System.Reflection;
 
 namespace IronRuby.Compiler.Generation {
     internal static class RubyTypeDispenser {
@@ -43,7 +44,7 @@ namespace IronRuby.Compiler.Generation {
             AddBuiltinType(typeof(MutableString), typeof(MutableString.Subclass), true);
             AddBuiltinType(typeof(Proc), typeof(Proc.Subclass), true);
             AddBuiltinType(typeof(RubyRegex), typeof(RubyRegex.Subclass), true);
-            AddBuiltinType(typeof(Range), typeof(Range.Subclass), true);
+            AddBuiltinType(typeof(IronRuby.Builtins.Range), typeof(IronRuby.Builtins.Range.Subclass), true);
             AddBuiltinType(typeof(Hash), typeof(Hash.Subclass), true);
             AddBuiltinType(typeof(RubyArray), typeof(RubyArray.Subclass), true);
             AddBuiltinType(typeof(MatchData), typeof(MatchData.Subclass), true);
@@ -109,9 +110,18 @@ namespace IronRuby.Compiler.Generation {
 
 #if FEATURE_REFEMIT
             string typeName = GetName(baseType);
-            TypeBuilder tb = Snippets.Shared.DefinePublicType(typeName, baseType);
+#if NET462_OR_GREATER
+            AssemblyName aName = new AssemblyName(typeName);
+            var builder = AppDomain.CurrentDomain.DefineDynamicAssembly(aName, AssemblyBuilderAccess.Run);
+            ModuleBuilder mb = builder.DefineDynamicModule(aName.Name, true);
+            TypeBuilder tb = mb.DefineType(typeName, TypeAttributes.Public, baseType);
+            //TypeBuilder tb = Snippets.Shared.DefinePublicType(typeName, baseType);
+#else
+            //TypeBuilder tb = Snippets.Shared.DefinePublicType(typeName, baseType);
+            var ab = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("Testing.Core"), AssemblyBuilderAccess.Run);
+            var tb = ab.DefineDynamicModule("Testing.Core").DefineType(typeName, TypeAttributes.Public, baseType);
             Utils.Log(typeName, "TYPE_BUILDER");
-
+#endif
             IFeatureBuilder[] features = new IFeatureBuilder[typeInfo.Features.Count];
             RubyTypeEmitter emitter = new RubyTypeEmitter(tb);
 

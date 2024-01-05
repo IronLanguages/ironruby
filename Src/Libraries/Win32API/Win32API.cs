@@ -15,7 +15,7 @@
 // debug only:
 // #define USE_SNIPPETS
 
-#if !SILVERLIGHT && !WIN8 && !ANDROID && !WP75
+
 #if FEATURE_CORE_DLR
 using System.Linq.Expressions;
 #else
@@ -80,9 +80,9 @@ namespace IronRuby.StandardLibrary.Win32API {
         }
 
         private Win32API/*!*/ Reinitialize(IntPtr function, ArgType[] signature, ArgType returnType) {
-            if (IntPtr.Size != 4) {
-                throw new NotSupportedException("Win32API is not supported in 64-bit process");
-            }
+            // if (IntPtr.Size != 4) {
+            //     throw new NotSupportedException("Win32API is not supported in 64-bit process");
+            // }
 
             Debug.Assert(function != IntPtr.Zero && signature != null);
             _function = function;
@@ -370,16 +370,25 @@ namespace IronRuby.StandardLibrary.Win32API {
                 parameterTypes[1 + i] = ToNativeType(_signature[i]);
             }
 
-#if USE_SNIPPETS
+#if NET
             TypeGen tg = Snippets.Shared.DefineType("calli", typeof(object), false, false);
             MethodBuilder dm = tg.TypeBuilder.DefineMethod("calli", CompilerHelpers.PublicStatic, returnType, parameterTypes);
 #else
             DynamicMethod dm = new DynamicMethod("calli", returnType, parameterTypes, DynamicModule);
 #endif
-
             var il = dm.GetILGenerator();
+            #if NET
+            // TODO: Find a better way to do this. Right now, we are calling non-public method on SignatureHelper.
+            // We may get a public version of this GetMethodSigHelper overload along with the Reflection.Emit updates
+            // in .NET 9, so it's worth circling back - but at least we can count on this working as-is in .NET 6.0-8.0.
+            var t = typeof(SignatureHelper);
+            var sigHelper = t.GetMethod("GetMethodSigHelper", 
+                BindingFlags.Static | BindingFlags.NonPublic, 
+                [typeof(CallingConvention), typeof(Type)]);
+            var signature = (SignatureHelper)sigHelper.Invoke(null, [CallingConventions.Standard, returnType]);
+            #else 
             var signature = SignatureHelper.GetMethodSigHelper(CallingConvention.Winapi, returnType);
-
+            #endif
             // calli args:
             for (int i = 1; i < parameterTypes.Length; i++) {
                 il.Emit(OpCodes.Ldarg, i);
@@ -391,7 +400,7 @@ namespace IronRuby.StandardLibrary.Win32API {
             il.Emit(OpCodes.Calli, signature);
             il.Emit(OpCodes.Ret);
 
-#if USE_SNIPPETS
+#if NET
             return _calliStub = tg.TypeBuilder.CreateType().GetMethod("calli");
 #else
             return _calliStub = dm;
@@ -412,17 +421,22 @@ namespace IronRuby.StandardLibrary.Win32API {
                         if (_dynamicModule == null) {
                             var attributes = new[] { 
                                 new CustomAttributeBuilder(typeof(UnverifiableCodeAttribute).GetConstructor(ReflectionUtils.EmptyTypes), new object[0]),
-                                //PermissionSet(SecurityAction.Demand, Unrestricted = true)
+#if NETFRAMEWORK
                                 new CustomAttributeBuilder(typeof(PermissionSetAttribute).GetConstructor(new Type[] { typeof(SecurityAction) }), 
                                     new object[]{ SecurityAction.Demand },
                                     new PropertyInfo[] { typeof(PermissionSetAttribute).GetProperty("Unrestricted") }, 
                                     new object[] { true }
                                 )
+#endif 
                             };
 
                             string name = typeof(Win32API).Namespace + ".DynamicAssembly";
+#if NET
+                            var assembly = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(name), AssemblyBuilderAccess.Run, attributes);
+#else
                             var assembly = AppDomain.CurrentDomain.DefineDynamicAssembly(new AssemblyName(name), AssemblyBuilderAccess.Run, attributes);
                             assembly.DefineVersionInfoResource();
+#endif
                             _dynamicModule = assembly.DefineDynamicModule(name);
                         }
                     }
@@ -435,4 +449,3 @@ namespace IronRuby.StandardLibrary.Win32API {
 #endregion
     }
 }
-#endif

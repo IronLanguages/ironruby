@@ -20,7 +20,7 @@ using IronRuby.Runtime;
 namespace IronRuby.Builtins {
     
     [RubyClass("TrueClass")]
-    public static class TrueClass : Object {
+    public static class TrueClass {
         #region Public Instance Methods
 
         [RubyMethodAttribute("to_s")]

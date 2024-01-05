@@ -22,13 +22,13 @@ using Microsoft.Scripting.Ast;
 using System;
 using System.Collections.Generic;
 using System.Dynamic;
+using System.Numerics;
 using System.Reflection;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Actions.Calls;
-using Microsoft.Scripting.Math;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 

@@ -86,7 +86,12 @@ namespace IronRuby.Builtins {
             var mstr = toStringResult as MutableString ?? RubyUtils.ObjectToMutableString(_immediateClass.Context, toStringResult);
             return mstr.ToString();
         }
-
+#if !FEATURE_SERIALIZATION
+        public void GetObjectData(SerializationInfo info, StreamingContext context)
+        {
+            throw new System.NotImplementedException();
+        }
+#endif
         public override bool Equals(object other) {
             if (ReferenceEquals(this, other)) {
                 // Handle this directly here. Otherwise it can cause infinite recurion when running
@@ -125,7 +130,7 @@ namespace IronRuby.Builtins {
             return base.GetHashCode();
         }
 
-        #endregion
+#endregion
 
         #region IRubyObject
 

@@ -15,6 +15,7 @@
 #if FEATURE_CRYPTOGRAPHY
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -22,7 +23,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using Crypto = System.Security.Cryptography;
@@ -223,15 +224,20 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 byte[] data = new byte[bits >> 3];
                 var generator = new Crypto.RNGCryptoServiceProvider();
                 generator.GetBytes(data);
-
+                
                 uint[] transformed = new uint[data.Length >> 2];
                 int j = 0;
                 for (int i = 0; i < transformed.Length; ++i) {
                     transformed[i] = data[j] + (uint)(data[j + 1] << 8) + (uint)(data[j + 2] << 16) + (uint)(data[j + 3] << 24);
                     j += 4;
                 }
-
-                return new BigInteger(1, transformed);
+                
+                List<byte> bytes = new List<byte>();
+                foreach (uint value in transformed)
+                {
+                    bytes.AddRange(BitConverter.GetBytes(value));
+                }
+                return new BigInteger(bytes.ToArray());
             }
         }
 

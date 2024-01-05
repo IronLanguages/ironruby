@@ -25,7 +25,8 @@ using System.IO;
 
 internal sealed class Host : RubyConsoleHost {
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1031:DoNotCatchGeneralExceptionTypes")]
-    private static void OnCancelKey(ConsoleCancelEventArgs ev, RubyContext context, Thread mainThread) {
+    private static void OnCancelKey(ConsoleCancelEventArgs ev, RubyContext context, Thread mainThread)
+    {
         if (ev.SpecialKey == ConsoleSpecialKey.ControlC) {
             ev.Cancel = true;
             Action handler = context.InterruptSignalHandler;

@@ -18,10 +18,10 @@ using IronRuby.Builtins;
 using System.Text;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.Numerics;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Math;
 using IronRuby.Compiler;
 
 namespace IronRuby.Tests {

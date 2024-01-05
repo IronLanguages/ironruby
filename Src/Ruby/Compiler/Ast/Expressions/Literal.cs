@@ -20,7 +20,7 @@ using MSA = Microsoft.Scripting.Ast;
 #endif
 
 using Microsoft.Scripting;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 

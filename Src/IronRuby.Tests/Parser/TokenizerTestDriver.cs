@@ -298,7 +298,7 @@ namespace IronRuby.Tests {
                     break;
 
                 case Tokens.BigInteger:
-                    output.Write("{0}BI", value.BigInteger.ToString(10));
+                    output.Write("{0}BI", value.BigInteger.ToString());
                     break;
 
                 case Tokens.RegexpEnd:

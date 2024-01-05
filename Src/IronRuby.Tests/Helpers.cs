@@ -29,6 +29,7 @@ using Microsoft.Scripting.Utils;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
 using IronRuby.Builtins;
+using System.Numerics;
 
 namespace IronRuby.Tests {
 
@@ -455,5 +456,40 @@ namespace IronRuby.Tests {
         }
 
         #endregion
+    }
+
+    public static class BigIntegerExtensions
+    {
+        // Extension method for BigInteger
+        public static string ToString(this BigInteger number, int toBase)
+        {
+            if (toBase < 2 || toBase > 36)
+            {
+                throw new ArgumentException("Base must be in the range 2-36");
+            }
+
+            if (number == 0)
+            {
+                return "0";
+            }
+
+            string result = "";
+            bool isNegative = number < 0;
+            number = BigInteger.Abs(number);
+
+            while (number > 0)
+            {
+                BigInteger remainder;
+                number = BigInteger.DivRem(number, toBase, out remainder);
+                result = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[(int)remainder] + result;
+            }
+
+            if (isNegative)
+            {
+                result = "-" + result;
+            }
+
+            return result;
+        }
     }
 }

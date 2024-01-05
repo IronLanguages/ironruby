@@ -30,7 +30,7 @@ using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime.Conversions {
@@ -87,7 +87,7 @@ namespace IronRuby.Runtime.Conversions {
             // nullable int (see Array#fill, Sockets:ConvertToSocketFlag, Kernel#open(perm=nil), File.chown, IO#read)
 
             // TODO: do we want to use a default protocol for enums?
-            if (parameterType.IsEnum()) {
+            if (parameterType.IsEnum) {
                 return null;
             }
 

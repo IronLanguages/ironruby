@@ -64,9 +64,9 @@ namespace IronRuby.Compiler {
         private static MethodInfo _CompareException;
         public static MethodInfo/*!*/ CompareSplattedExceptions { get { return _CompareSplattedExceptions ?? (_CompareSplattedExceptions = CallInstruction.CacheFunc<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RubyScope, System.Collections.IList, System.Boolean>(RubyOps.CompareSplattedExceptions)); } }
         private static MethodInfo _CompareSplattedExceptions;
-        public static MethodInfo/*!*/ ConvertBignumToFixnum { get { return _ConvertBignumToFixnum ?? (_ConvertBignumToFixnum = CallInstruction.CacheFunc<Microsoft.Scripting.Math.BigInteger, System.Int32>(RubyOps.ConvertBignumToFixnum)); } }
+        public static MethodInfo/*!*/ ConvertBignumToFixnum { get { return _ConvertBignumToFixnum ?? (_ConvertBignumToFixnum = CallInstruction.CacheFunc<System.Numerics.BigInteger, System.Int32>(RubyOps.ConvertBignumToFixnum)); } }
         private static MethodInfo _ConvertBignumToFixnum;
-        public static MethodInfo/*!*/ ConvertBignumToFloat { get { return _ConvertBignumToFloat ?? (_ConvertBignumToFloat = CallInstruction.CacheFunc<Microsoft.Scripting.Math.BigInteger, System.Double>(RubyOps.ConvertBignumToFloat)); } }
+        public static MethodInfo/*!*/ ConvertBignumToFloat { get { return _ConvertBignumToFloat ?? (_ConvertBignumToFloat = CallInstruction.CacheFunc<System.Numerics.BigInteger, System.Double>(RubyOps.ConvertBignumToFloat)); } }
         private static MethodInfo _ConvertBignumToFloat;
         public static MethodInfo/*!*/ ConvertDoubleToFixnum { get { return _ConvertDoubleToFixnum ?? (_ConvertDoubleToFixnum = CallInstruction.CacheFunc<System.Double, System.Int32>(RubyOps.ConvertDoubleToFixnum)); } }
         private static MethodInfo _ConvertDoubleToFixnum;
@@ -513,7 +513,7 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ToArrayValidator;
         public static MethodInfo/*!*/ ToAValidator { get { return _ToAValidator ?? (_ToAValidator = CallInstruction.CacheFunc<System.String, System.Object, System.Collections.IList>(RubyOps.ToAValidator)); } }
         private static MethodInfo _ToAValidator;
-        public static MethodInfo/*!*/ ToBignumValidator { get { return _ToBignumValidator ?? (_ToBignumValidator = CallInstruction.CacheFunc<System.String, System.Object, Microsoft.Scripting.Math.BigInteger>(RubyOps.ToBignumValidator)); } }
+        public static MethodInfo/*!*/ ToBignumValidator { get { return _ToBignumValidator ?? (_ToBignumValidator = CallInstruction.CacheFunc<System.String, System.Object, System.Numerics.BigInteger>(RubyOps.ToBignumValidator)); } }
         private static MethodInfo _ToBignumValidator;
         public static MethodInfo/*!*/ ToByteValidator { get { return _ToByteValidator ?? (_ToByteValidator = CallInstruction.CacheFunc<System.String, System.Object, System.Byte>(RubyOps.ToByteValidator)); } }
         private static MethodInfo _ToByteValidator;

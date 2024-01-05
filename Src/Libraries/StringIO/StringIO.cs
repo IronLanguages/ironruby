@@ -22,7 +22,7 @@ using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Utils;
 using System;
 using System.IO;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using System.Diagnostics;
 using System.Collections;
 

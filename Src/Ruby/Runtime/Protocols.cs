@@ -23,7 +23,7 @@ using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Collections.Generic;
@@ -61,7 +61,7 @@ namespace IronRuby.Runtime {
             if (x >= Int32.MinValue && x <= Int32.MaxValue) {
                 return ScriptingRuntimeHelpers.Int32ToObject((int)x);
             } else {
-                return BigInteger.Create(x);
+                return new BigInteger(x);
             }
         }
 
@@ -70,7 +70,7 @@ namespace IronRuby.Runtime {
             if (x <= Int32.MaxValue) {
                 return ScriptingRuntimeHelpers.Int32ToObject((int)x);
             } else {
-                return BigInteger.Create(x);
+                return new BigInteger(x);
             }
         }
 
@@ -79,7 +79,7 @@ namespace IronRuby.Runtime {
             if (x <= Int32.MaxValue) {
                 return ScriptingRuntimeHelpers.Int32ToObject((int)x);
             } else {
-                return BigInteger.Create(x);
+                return new BigInteger(x);
             }
         }
 
@@ -87,7 +87,7 @@ namespace IronRuby.Runtime {
             if (x >= Int32.MinValue && x <= Int32.MaxValue) {
                 return ScriptingRuntimeHelpers.Int32ToObject(Decimal.ToInt32(x));
             }
-            return BigInteger.Create(x);
+            return new BigInteger(x);
         }
 
         public static object Normalize(object x) {

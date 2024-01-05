@@ -70,13 +70,13 @@ namespace IronRuby.Builtins {
         }
 
         internal class RubyThreadInfo {
-            private static readonly Dictionary<int, RubyThreadInfo> _mapping = new Dictionary<int, RubyThreadInfo>();
+            private static readonly Dictionary<int, RubyThreadInfo> _mapping = new();
             private readonly Dictionary<RubySymbol, object> _threadLocalStorage;
             private ThreadGroup _group;
             private readonly Thread _thread;
             private bool _blocked;
             private bool _abortOnException;
-            private AutoResetEvent _runSignal = new AutoResetEvent(false);
+            private readonly AutoResetEvent _runSignal = new(false);
             private bool _isSleeping;
 
             private RubyThreadInfo(Thread thread) {
@@ -104,8 +104,7 @@ namespace IronRuby.Builtins {
             internal object this[RubySymbol/*!*/ key] {
                 get {
                     lock (_threadLocalStorage) {
-                        object result;
-                        if (!_threadLocalStorage.TryGetValue(key, out result)) {
+                        if (!_threadLocalStorage.TryGetValue(key, out var result)) {
                             result = null;
                         }
                         return result;
@@ -130,8 +129,8 @@ namespace IronRuby.Builtins {
 
             internal RubyArray GetKeys() {
                 lock (_threadLocalStorage) {
-                    RubyArray result = new RubyArray(_threadLocalStorage.Count);
-                    foreach (RubySymbol key in _threadLocalStorage.Keys) {
+                    RubyArray result = new(_threadLocalStorage.Count);
+                    foreach (var key in _threadLocalStorage.Keys) {
                         result.Add(key);
                     }
                     return result;
@@ -139,19 +138,11 @@ namespace IronRuby.Builtins {
             }
 
             internal ThreadGroup Group {
-                get {
-                    return _group;
-                }
-                set {
-                    Interlocked.Exchange(ref _group, value);
-                }
+                get => _group;
+                set => Interlocked.Exchange(ref _group, value);
             }
 
-            internal Thread Thread {
-                get {
-                    return _thread;
-                }
-            }
+            internal Thread Thread => _thread;
 
             internal Exception Exception { get; set; }
             internal object Result { get; set; }
@@ -159,22 +150,16 @@ namespace IronRuby.Builtins {
             internal bool ExitRequested { get; set; }
             
             internal bool Blocked {
-                get {
-                    return _blocked;
-                }
+                get => _blocked;
                 set {
-                    System.Diagnostics.Debug.Assert(Thread.CurrentThread == _thread);
+                    Debug.Assert(Thread.CurrentThread == _thread);
                     _blocked = value;
                 }
             }
 
             internal bool AbortOnException {
-                get {
-                    return _abortOnException;
-                }
-                set {
-                    _abortOnException = value;
-                }
+                get => _abortOnException;
+                set => _abortOnException = value;
             }
 
             internal static RubyThreadInfo[] Threads {
@@ -338,7 +323,7 @@ namespace IronRuby.Builtins {
 
             if (!(self.ThreadState == ThreadState.AbortRequested || self.ThreadState == ThreadState.Aborted)) {
                 double ms = seconds * 1000;
-                int timeout = (ms < Int32.MinValue || ms > Int32.MaxValue) ? Timeout.Infinite : (int)ms;
+                int timeout = (ms < int.MinValue || ms > int.MaxValue) ? Timeout.Infinite : (int)ms;
                 if (!self.Join(timeout)) {
                     return null;
                 }
@@ -523,7 +508,6 @@ namespace IronRuby.Builtins {
             return self;
         }
 #endif
-
         private static RubyThreadStatus GetStatus(Thread thread) {
             ThreadState state = thread.ThreadState;
             RubyThreadInfo info = RubyThreadInfo.FromThread(thread);

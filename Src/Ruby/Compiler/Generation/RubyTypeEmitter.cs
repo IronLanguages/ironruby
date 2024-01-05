@@ -116,7 +116,8 @@ namespace IronRuby.Compiler.Generation {
             return typeof(RubyTypeEmitter).GetMethod("GetConversionSite").MakeGenericMethod(toType);
         }
 
-        protected override FieldInfo GetConversionSiteField(Type toType) {
+        protected override FieldInfo GetConversionSiteField(Type toType)
+        {
             return AllocateDynamicSite(
                 new Type[] { typeof(CallSite), typeof(RubyContext), typeof(object), toType },
                 (site) => Expression.Assign(
@@ -130,7 +131,7 @@ namespace IronRuby.Compiler.Generation {
             );
         }
 
-        #endregion
+#endregion
 
         protected override void EmitImplicitContext(ILGen il) {
             il.EmitLoadArg(0);

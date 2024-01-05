@@ -22,7 +22,6 @@ using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Generation;
 using Microsoft.Scripting;
 using System.Diagnostics;
@@ -1027,7 +1026,7 @@ namespace IronRuby.Builtins {
                 return self.Context.GetModule(arrayType);
             }
 
-            if (!type.IsGenericTypeDefinition()) {
+            if (!type.IsGenericTypeDefinition) {
                 if (provided > 0) {
                     throw RubyExceptions.CreateArgumentError("`{0}' is not a generic type definition", self.Name);
                 }
@@ -1052,7 +1051,7 @@ namespace IronRuby.Builtins {
 
             Type type = self.TypeTracker.Type;
 
-            if (!type.IsGenericTypeDefinition()) {
+            if (!type.IsGenericTypeDefinition) {
                 if (genericArity > 0) {
                     throw RubyExceptions.CreateArgumentError("`{0}' is not a generic type definition", self.Name);
                 }

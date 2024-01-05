@@ -21,7 +21,7 @@ using Microsoft.Scripting.Runtime;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using System.Runtime.InteropServices;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 
 namespace IronRuby.StandardLibrary.Sockets {
     [RubyClass("IPSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]

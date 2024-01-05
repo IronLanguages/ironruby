@@ -16,7 +16,7 @@
 using System;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Globalization;
@@ -461,7 +461,7 @@ namespace IronRuby.Builtins {
             }
 
             double selfFloat = self.ToFloat64();
-            BigInteger div = BigInteger.Create(selfFloat / other);
+            BigInteger div = new BigInteger(selfFloat / other);
             double mod = selfFloat % other;
 
             return RubyOps.MakeArray2(Protocols.Normalize(div), mod);

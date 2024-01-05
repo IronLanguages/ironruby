@@ -28,10 +28,11 @@ using IronRuby.Compiler;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Math;
-using Microsoft.Scripting.Utils;
+using System.Numerics;
+//using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 using Microsoft.Scripting.Runtime;
+using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime.Conversions {
     using Ast = Expression;
@@ -75,11 +76,11 @@ namespace IronRuby.Runtime.Conversions {
                     return Convertibility.NotConvertible;
                 }
 
-                if (toType.IsGenericType() && toType.GetGenericTypeDefinition() == typeof(Nullable<>)) {
+                if (toType.IsGenericType && toType.GetGenericTypeDefinition() == typeof(Nullable<>)) {
                     return Convertibility.AlwaysConvertible;
                 }
 
-                if (!toType.IsValueType()) {
+                if (!toType.IsValueType) {
                     // null convertible to any reference type:
                     return Convertibility.AlwaysConvertible;
                 } else if (toType == typeof(bool)) {
@@ -176,7 +177,7 @@ namespace IronRuby.Runtime.Conversions {
             }
 
             // A COM object can potentially be converted to the given interface, but might also be not so use this only as the last resort:
-            if (TypeUtils.IsComObjectType(fromType) && toType.IsInterface()) {
+            if (fromType.IsCOMObject && toType.IsInterface) {
                 return Convertibility.AlwaysConvertible;
             }
 
@@ -240,7 +241,7 @@ namespace IronRuby.Runtime.Conversions {
 
             if (toType == typeof(bool)) {
                 Debug.Assert(fromType != typeof(bool));
-                return fromType.IsValueType() ? AstUtils.Constant(true) : Ast.NotEqual(expr, AstUtils.Constant(null));
+                return fromType.IsValueType ? AstUtils.Constant(true) : Ast.NotEqual(expr, AstUtils.Constant(null));
             }
 
             // TODO:
@@ -358,7 +359,7 @@ namespace IronRuby.Runtime.Conversions {
             throw RubyExceptions.CreateRangeError("number too big to convert into System::UInt32");
         }
 
-        internal static Int64 ToInt64(BigInteger value) {
+        internal static Int64 ToInt64(System.Numerics.BigInteger value) {
             Int64 result;
             if (value.AsInt64(out result)) {
                 return result;

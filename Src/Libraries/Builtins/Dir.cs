@@ -204,7 +204,7 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
-
+        
         [RubyMethod("mkdir", RubyMethodAttributes.PublicSingleton)]
         public static int MakeDirectory(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname, [Optional]object permissions) {
             var platform = self.Context.Platform;
@@ -226,7 +226,14 @@ namespace IronRuby.Builtins {
             }
             return 0;
         }
-
+        
+        [RubyMethod("home", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString HomeDirectory(RubyClass self)
+        {
+            var path = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return self.Context.EncodePath(RubyUtils.CanonicalizePath(path));
+        }
+        
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
         public static object Open(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname) {
             RubyDir rd = new RubyDir(self, Protocols.CastToPath(toPath, dirname));

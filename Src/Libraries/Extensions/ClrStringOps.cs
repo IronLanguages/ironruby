@@ -372,7 +372,9 @@ namespace IronRuby.Builtins {
             if (@base == 1 || @base < 0 || @base > 36) {
                 throw RubyExceptions.CreateArgumentError("illegal radix {0}", @base);
             }
-            return Tokenizer.ParseInteger(self, @base).ToObject();
+            var integer = Tokenizer.ParseInteger(self, @base);
+            var obj = integer.ToObject();
+            return obj;
         }
 
         [RubyMethod("hex")]

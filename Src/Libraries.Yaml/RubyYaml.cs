@@ -25,6 +25,7 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Collections.Generic;
 using System.Diagnostics;
+using Range = IronRuby.Builtins.Range;
 
 namespace IronRuby.StandardLibrary.Yaml {
 

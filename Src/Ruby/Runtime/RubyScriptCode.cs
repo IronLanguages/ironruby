@@ -88,7 +88,7 @@ namespace IronRuby.Runtime {
         private object Run(Scope/*!*/ scope, bool bindGlobals) {
             RubyScope localScope;
             RubyContext context = (RubyContext)LanguageContext;
-
+            
             switch (_kind) {
                 case TopScopeFactoryKind.Hosted:
                     localScope = RubyTopLevelScope.CreateHostedTopLevelScope(scope, context, bindGlobals);
@@ -127,7 +127,7 @@ namespace IronRuby.Runtime {
 #endif
             if (noAdaptiveCompilation) {
                 Delegate result = lambda.Compile();
-#if !WIN8
+#if !WIN8 && !NETCOREAPP && !NETSTANDARD
                 // DLR closures should not be used:
                 Debug.Assert(!(result.Target is Closure) || ((Closure)result.Target).Locals == null);
 #endif
@@ -154,7 +154,8 @@ namespace IronRuby.Runtime {
                 }
             }
 #endif
-            return CompilerHelpers.CompileToMethod(lambda, new CustomGenerator(), false);
+            return lambda.Compile(new CustomGenerator());
+            //return CompilerHelpers.CompileToMethod(lambda, new CustomGenerator(), false);
         }
 #endif
     }

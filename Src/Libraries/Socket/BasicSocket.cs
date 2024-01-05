@@ -28,7 +28,7 @@ using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.StandardLibrary.FileControl;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using IronRuby.Runtime.Calls;
 using System.Globalization;
 using IronRuby.Compiler;
@@ -606,7 +606,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             BigInteger bignum;
             if (hostName is int) {
                 return ConvertToHostString((int)hostName);
-            } else if (!ReferenceEquals(bignum = hostName as BigInteger, null)) {
+            } else if (!ReferenceEquals(bignum = (BigInteger)hostName, null)) {
                 return ConvertToHostString(bignum);
             } else if (hostName != null) {
                 return ConvertToHostString(Protocols.CastToString(stringCast, hostName));
@@ -629,7 +629,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 return true;
             }
 
-            var bignum = value as BigInteger;
+            var bignum = (BigInteger)value;
             if ((object)bignum != null) {
                 if (!bignum.AsInt32(out result)) {
                     throw RubyExceptions.CreateRangeError("bignum too big to convert into `long'");

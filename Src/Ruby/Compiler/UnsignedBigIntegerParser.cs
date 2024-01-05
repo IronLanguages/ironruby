@@ -15,8 +15,10 @@
 
 using System;
 using System.Diagnostics;
+using System.Linq;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Math; 
+using System.Numerics;
+using System.Collections.Generic;
 
 namespace IronRuby.Compiler {
 
@@ -72,7 +74,12 @@ namespace IronRuby.Compiler {
                 ReadOctalTriword(result, i, DigitsPerWord);
             }
 
-            return new BigInteger(+1, result);
+            List<byte> bytes = new List<byte>();
+            foreach (uint value in result)
+            {
+                bytes.AddRange(BitConverter.GetBytes(value));
+            }
+            return new BigInteger(bytes.ToArray());
         }
 
         private void ReadOctalTriword(uint[]/*!*/ result, int i, int digits) {
@@ -132,7 +139,12 @@ namespace IronRuby.Compiler {
                 count = MultiplyAdd(result, count, wordBase, ReadWord(digitsPerWord, @base));
             }
 
-            return new BigInteger(+1, result);
+            List<byte> bytes = new List<byte>();
+            foreach (uint value in result)
+            {
+                bytes.AddRange(BitConverter.GetBytes(value));
+            }
+            return new BigInteger(bytes.ToArray());
         }
 
         private int GetResultSize(int digitCount, uint @base) {
@@ -164,7 +176,12 @@ namespace IronRuby.Compiler {
                 result[i] = ReadBinaryWord(digitsPerWord, bitsPerDigit);
             }
 
-            return new BigInteger(+1, result);
+            List<byte> bytes = new List<byte>();
+            foreach (uint value in result)
+            {
+                bytes.AddRange(BitConverter.GetBytes(value));
+            }
+            return new BigInteger(bytes.ToArray());
         }
 
         // data = data * x + carry

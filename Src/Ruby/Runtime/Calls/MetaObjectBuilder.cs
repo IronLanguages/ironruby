@@ -26,9 +26,9 @@ using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
+using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime.Calls {
     using Ast = Expression;
@@ -205,7 +205,7 @@ namespace IronRuby.Runtime.Calls {
         public void AddTypeRestriction(Type/*!*/ type, Expression/*!*/ expression) {
             if (_treatRestrictionsAsConditions) {
                 AddCondition(Ast.TypeEqual(expression, type));
-            } else if (expression.Type != type || !type.IsSealed()) {
+            } else if (expression.Type != type || !type.IsSealed) {
                 Add(BindingRestrictions.GetTypeRestriction(expression, type));
             }
         }
@@ -261,7 +261,7 @@ namespace IronRuby.Runtime.Calls {
             
                 // Ruby objects (get the method directly to prevent interface dispatch):
                 MethodInfo classGetter = type.GetMethod(Methods.IRubyObject_get_ImmediateClass.Name, BindingFlags.Public | BindingFlags.Instance);
-                if (type.IsVisible() && classGetter != null && classGetter.ReturnType == typeof(RubyClass)) {
+                if (type.IsVisible && classGetter != null && classGetter.ReturnType == typeof(RubyClass)) {
                     AddCondition(
                         // (#{type})target.ImmediateClass.Version.Method == #{immediateClass.Version.Method}
                         Ast.Equal(

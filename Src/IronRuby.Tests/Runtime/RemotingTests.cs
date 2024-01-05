@@ -12,7 +12,7 @@
  *
  *
  * ***************************************************************************/
-
+#if NET462_OR_GREATER
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -62,3 +62,4 @@ namespace IronRuby.Tests {
         }
     }
 }
+#endif

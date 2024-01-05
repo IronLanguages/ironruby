@@ -14,7 +14,7 @@
 //  Copyright (c) Microsoft Corporation.
 
 using System;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using IronRuby.Compiler;
 
 namespace IronRuby.StandardLibrary.Yaml {

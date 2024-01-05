@@ -28,12 +28,12 @@ using System.Dynamic;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Math;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Collections;
 using IronRuby.Runtime;
 using System.Collections.Generic;
+using System.Numerics;
 
 namespace IronRuby.Tests {
     #region Custom binders

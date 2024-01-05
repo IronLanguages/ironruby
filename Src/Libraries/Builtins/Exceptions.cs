@@ -18,9 +18,11 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.Remoting;
 using System.Security;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
+
+#if FEATURE_REMOTING
+using System.Runtime.Remoting;
+#endif
 
 namespace IronRuby.Builtins {
 
@@ -189,28 +191,26 @@ namespace IronRuby.Builtins {
             // Exception.Data requires the value to be Serializable. We workaround this using an array
             // of size 1 since System.Array is serializable. This will allow the exception to be marshalled.
             // If the value cannot actually be marshalled, it will fail only if the value is later accessed.
-#if SILVERLIGHT
-            result.Data[typeof(NoMethodErrorOps)] = new object[1] { args };
-#else
+#if FEATURE_REMOTING
             result.Data[typeof(NoMethodErrorOps)] = new ObjectHandle[1] { new ObjectHandle(args) };
+#else
+            result.Data[typeof(NoMethodErrorOps)] = new object[1] { args };
 #endif
             return result;
         }
 
         [RubyMethod("args")]
         public static object GetArguments(MissingMethodException/*!*/ self) {
-#if SILVERLIGHT
-            object[] args = self.Data[typeof(NoMethodErrorOps)] as object[];
-            if (args == null) {
-                return null;
-            }
-            return args[0];
-#else
+#if FEATURE_REMOTING
             ObjectHandle[] args = self.Data[typeof(NoMethodErrorOps)] as ObjectHandle[];
-            if (args == null) {
+            if (args == null)
+            {
                 return null;
             }
             return args[0].Unwrap();
+#else
+            object[] args = self.Data[typeof(NoMethodErrorOps)] as object[];
+            return args?[0];
 #endif
         }
     }
@@ -335,11 +335,7 @@ namespace IronRuby.Builtins {
             }
 
             var message = MutableString.CreateAscii("Unknown Error");
-#if SILVERLIGHT
-            ExternalException result = new ExternalException(RubyExceptions.MakeMessage(ref message, "Unknown Error"));
-#else
             ExternalException result = new ExternalException(RubyExceptions.MakeMessage(ref message, "Unknown Error"), errorCode);
-#endif
             RubyExceptionData.InitializeException(result, message);
             return result;
         }

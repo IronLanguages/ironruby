@@ -581,7 +581,7 @@ namespace IronRuby.Builtins {
 
             _classVariables = (module._classVariables != null) ? new Dictionary<string, object>(module._classVariables) : null;
             _mixins = ArrayUtils.Copy(module._mixins);
-
+            
             // dependentModules - skip
             // tracker - skip, .NET members not copied
             
@@ -1134,6 +1134,7 @@ namespace IronRuby.Builtins {
                     return true;
                 }
             }
+            
 
             storage = default(ConstantStorage);
             return false;

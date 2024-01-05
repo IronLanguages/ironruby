@@ -19,12 +19,12 @@ using Microsoft.Scripting.Runtime;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Ast;
 using IronRuby.Builtins;
-using Microsoft.Scripting.Math;
 using System.Reflection;
 using System.Reflection.Emit;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Generation;
 using System.Collections.Generic;
+using System.Numerics;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 

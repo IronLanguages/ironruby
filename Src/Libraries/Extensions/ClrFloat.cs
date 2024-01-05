@@ -15,7 +15,7 @@
 
 using System;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Generation;
 
@@ -922,7 +922,7 @@ namespace IronRuby.Builtins {
                 }
                 return System.Convert.ToInt32(value);
             } catch (OverflowException) {
-                return BigInteger.Create(value);
+                return new BigInteger(value);
             }
         }
 

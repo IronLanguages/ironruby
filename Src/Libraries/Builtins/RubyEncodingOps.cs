@@ -94,17 +94,17 @@ namespace IronRuby.Builtins {
         // TODO: lazy encoding load?
 
         [RubyConstant]
-        public static readonly RubyEncoding UTF_7 = RubyEncoding.GetRubyEncoding(Encoding.UTF7);
-
+        public static readonly RubyEncoding UTF_7 = RubyEncoding.GetRubyEncoding(65001);
+        
         [RubyConstant]
         public static readonly RubyEncoding UTF_16BE = RubyEncoding.GetRubyEncoding(Encoding.BigEndianUnicode);
-
+        
         [RubyConstant]
         public static readonly RubyEncoding UTF_16LE = RubyEncoding.GetRubyEncoding(Encoding.Unicode);
-
+        
         [RubyConstant]
         public static readonly RubyEncoding UTF_32BE = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF32BE);
-
+        
         [RubyConstant]
         public static readonly RubyEncoding UTF_32LE = RubyEncoding.GetRubyEncoding(Encoding.UTF32);
 

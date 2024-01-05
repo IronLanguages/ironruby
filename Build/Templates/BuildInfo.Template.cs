@@ -22,6 +22,20 @@ internal static class BuildInfo {{
         false;
 #endif
 
+internal const bool IsNetCore =
+#if NETCOREAPP
+        true;
+#else
+        false;
+#endif
+
+internal const bool IsNetStandard =
+#if NETSTANDARD
+        true;
+#else
+        false;
+#endif
+
     internal const bool IsSilverlight =
 #if SILVERLIGHT
         true;

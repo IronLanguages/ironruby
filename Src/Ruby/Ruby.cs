@@ -25,6 +25,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Hosting;
 using IronRuby.Runtime;
@@ -48,12 +49,21 @@ namespace IronRuby {
     /// a host that doesn't depend on a particular language and can host any DLR based language.
     /// </remarks>
     public static class Ruby {
+#if FEATURE_ENCODING && (NETCOREAPP || NETSTANDARD)
+        static Ruby()
+        {
+            System.Diagnostics.Debug.Assert(true);
+            //Console.WriteLine("Registering provider");
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        }
+#endif
         /// <summary>
         /// Creates a new script runtime configured using .NET configuration files.
         /// A default IronRuby configuration is added if not found anywhere in the .NET configuration files.
         /// </summary>
         /// <returns>A runtime that is capable of running IronRuby scripts and scripts of other languages specified in the .NET configuration files.</returns>
         public static ScriptRuntime/*!*/ CreateRuntime() {
+            System.Diagnostics.Debug.Assert(true);
             var setup = ScriptRuntimeSetup.ReadConfiguration();
             setup.AddRubySetup();
             return new ScriptRuntime(setup);

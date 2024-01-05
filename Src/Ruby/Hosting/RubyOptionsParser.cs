@@ -38,7 +38,7 @@ namespace IronRuby.Hosting {
         private RubyEncoding _defaultEncoding;
         private bool _disableRubyGems;
 
-#if DEBUG && !SILVERLIGHT
+#if DEBUG && !SILVERLIGHT && !NETSTANDARD
         private ConsoleTraceListener _debugListener;
 
         private sealed class CustomTraceFilter : TraceFilter {
@@ -63,13 +63,13 @@ namespace IronRuby.Hosting {
             string[] categories = arg.Split(new[] { ';', ','}, StringSplitOptions.RemoveEmptyEntries);
 
             if (categories.Length == 0 && !enable) {
-                Debug.Listeners.Clear();
+                Trace.Listeners.Clear();
                 return;
             }
 
             if (_debugListener == null) {
                 _debugListener = new ConsoleTraceListener { IndentSize = 4, Filter = new CustomTraceFilter { EnableAll = categories.Length == 0 } };
-                Debug.Listeners.Add(_debugListener);
+                Trace.Listeners.Add(_debugListener);
             } 
          
             foreach (var category in categories) {
@@ -202,7 +202,7 @@ namespace IronRuby.Hosting {
 
                 #endregion
 
-#if DEBUG && !SILVERLIGHT
+#if DEBUG && !SILVERLIGHT && !NETSTANDARD
                 case "-DT*":
                     SetTraceFilter(String.Empty, false);
                     break;

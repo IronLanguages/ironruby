@@ -28,7 +28,8 @@ using IronRuby.Runtime.Calls;
 using IronRuby.Compiler.Generation;
 using System.Runtime.CompilerServices;
 using System.Collections.Generic;
-using Microsoft.Scripting.Utils;
+using System.Linq;
+
 
 namespace IronRuby.Builtins {
     using Ast = Expression;
@@ -95,13 +96,20 @@ namespace IronRuby.Builtins {
             var result = MutableString.CreateMutable(context.GetIdentifierEncoding());
             result.Append("#<TypeGroup: ");
 
-            bool isFirst = true;
-            foreach (var entry in self.TypesByArity.ToSortedList((x, y) => x.Key - y.Key)) {
-                Type type = entry.Value;
+            // Sorting the dictionary by key using LINQ and iterating
+            var sortedTypesByArity = self.TypesByArity.OrderBy(entry => entry.Key);
 
-                if (!isFirst) {
+            var isFirst = true;
+            foreach (var entry in sortedTypesByArity)
+            {
+                var type = entry.Value;
+
+                if (!isFirst)
+                {
                     result.Append(", ");
-                } else {
+                }
+                else
+                {
                     isFirst = false;
                 }
 
@@ -124,7 +132,7 @@ namespace IronRuby.Builtins {
         [Emitted]
         public static RubyClass/*!*/ GetNonGenericClass(RubyContext/*!*/ context, TypeGroup/*!*/ typeGroup) {
             Type type = GetNonGenericType(typeGroup);
-            if (type.IsInterface()) {
+            if (type.IsInterface) {
                 throw RubyExceptions.CreateTypeError("cannot instantiate an interface");
             }
             return context.GetClass(type);
@@ -169,7 +177,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("superclass")]
         public static RubyClass GetSuperclass(RubyContext/*!*/ context, TypeGroup/*!*/ self) {
             Type type = GetNonGenericType(self);
-            return type.IsInterface() ? null : context.GetClass(type).SuperClass;
+            return type.IsInterface ? null : context.GetClass(type).SuperClass;
         }
 
         // ARGS: N

@@ -45,9 +45,9 @@ namespace IronRuby.Hosting {
         }
 
         public static string GetLogo() {
-            return String.Format(CultureInfo.InvariantCulture,
+            return string.Format(CultureInfo.InvariantCulture,
                 "IronRuby {1} on {2}{0}Copyright (c) Microsoft Corporation. All rights reserved.{0}{0}",
-                Environment.NewLine, IronRuby.CurrentVersion.DisplayVersion, RubyContext.MakeRuntimeDesriptionString());
+                Environment.NewLine, CurrentVersion.DisplayVersion, RubyContext.RuntimeDescriptionString);
         }
 
         protected override int? TryInteractiveAction() {

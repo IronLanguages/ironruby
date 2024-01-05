@@ -20,6 +20,7 @@ using Microsoft.Scripting.Ast;
 #endif
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -46,7 +47,6 @@ namespace IronRuby.Compiler.Generation {
         private readonly Type _baseType;
         private int _site;
         private readonly List<Expression> _dynamicSiteFactories;
-
         protected ClsTypeEmitter(TypeBuilder tb) {
             _tb = tb;
             _baseType = tb.BaseType;
@@ -181,7 +181,7 @@ namespace IronRuby.Compiler.Generation {
         }
 
         public FieldInfo AllocateDynamicSite(Type[] signature, Func<FieldInfo, Expression> factory) {
-            FieldInfo site = _tb.DefineField("site$" + _site++, CompilerHelpers.MakeCallSiteType(signature), FieldAttributes.Private | FieldAttributes.Static);
+            FieldInfo site = _tb.DefineField("site$" + _site++, CompilerHelpers.MakeCallSiteType(signature), FieldAttributes.Public | FieldAttributes.Static);
             _dynamicSiteFactories.Add(factory(site));
             return site;
         }
@@ -225,7 +225,7 @@ namespace IronRuby.Compiler.Generation {
                 il.EmitCall(target.FieldType, "Invoke");
             } else {
                 var site = GetConversionSiteField(toType);
-
+                
                 // Emit the site invoke
                 il.EmitFieldGet(site);
                 FieldInfo target = site.FieldType.GetDeclaredField("Target");
@@ -289,31 +289,34 @@ namespace IronRuby.Compiler.Generation {
         }
 
         public Type FinishType() {
-            if (_dynamicSiteFactories.Count > 0) {
-                GetCCtor();
+            _cctor.Emit(OpCodes.Ret);
+            //Type result = _tb.CreateType();
+            Type result = _tb.CreateTypeInfo().AsType();
+            foreach (BinaryExpression bexp in _dynamicSiteFactories)
+            {
+                var fie = bexp.Left as MemberExpression;
+                var f = fie.Member as FieldInfo;
+                // get the name of the field from the builder so we can use it to
+                // extract the field from the final type
+                FieldInfo field = result.GetField(f.Name);
+                
+                // now, the right side of the binEx is a call expression that creates the site
+                // we need to compile it and store the result in the field
+                var lambda = Expression.Lambda(bexp.Right);
+                var site = lambda.Compile();
+                // need to run the site to get its value
+                var siteValue = site.DynamicInvoke();
+                // now, store the site in. the field
+                field.SetValue(null, siteValue);
             }
+#if NETSTANDARD
+            //AppContext.SetSwitch("Lokad.ILPack.AssemblyGenerator.ReplaceCoreLibWithNetStandard", true);
+            //var gen = new AssemblyGenerator();
+            //gen.GenerateAssembly(result.Assembly, "exported.dll");
 
-            if (_cctor != null) {
-                if (_dynamicSiteFactories.Count > 0) { 
-                    MethodBuilder createSitesImpl = _tb.DefineMethod(
-                        "<create_dynamic_sites>", MethodAttributes.Private | MethodAttributes.Static, typeof(void), ReflectionUtils.EmptyTypes
-                    );
-
-                    _dynamicSiteFactories.Add(Expression.Empty());
-                    var lambda = Expression.Lambda(Expression.Block(_dynamicSiteFactories));
-#if WIN8
-                    ((dynamic)lambda).CompileToMethod(createSitesImpl);
 #else
-                    lambda.CompileToMethod(createSitesImpl);
+            //(_tb.Assembly as AssemblyBuilder).Save($"exported.dll");
 #endif
-                    _cctor.EmitCall(createSitesImpl);
-
-                    _dynamicSiteFactories.Clear();
-                }
-
-                _cctor.Emit(OpCodes.Ret);
-            }
-            Type result = _tb.CreateType();
             return result;
         }
 
@@ -322,11 +325,7 @@ namespace IronRuby.Compiler.Generation {
             return new ILGen(il);
         }
 
-#if WIN8 // TODO: what is ReservedMask?
-        protected const MethodAttributes MethodAttributesToEraseInOveride = MethodAttributes.Abstract | (MethodAttributes)0xD000;
-#else
         protected const MethodAttributes MethodAttributesToEraseInOveride = MethodAttributes.Abstract | MethodAttributes.ReservedMask;
-#endif
 
         protected ILGen DefineMethodOverride(MethodAttributes extra, MethodInfo decl, out MethodBuilder impl) {
             impl = ReflectionUtils.DefineMethodOverride(_tb, extra, decl);
@@ -416,6 +415,13 @@ namespace IronRuby.Compiler.Generation {
                 rf.FixReturn(il);
             }
         }
+
+        /// <summary>
+        /// Generates stub to receive the CLR call and then call the dynamic language code.
+        /// This code is same as StubGenerator.cs in the Microsoft.Scripting, except it
+        /// accepts ILGen instead of Compiler.
+        /// </summary>
+        
 
         private void EmitContext(ILGen/*!*/ il, bool context) {
             if (context) {
