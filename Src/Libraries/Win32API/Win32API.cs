@@ -24,18 +24,17 @@ using Microsoft.Scripting.Ast;
 
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.ComponentModel;
-using System.Globalization;
 using System.Threading;
 using System.Diagnostics;
 using System.Reflection.Emit;
 using System.Reflection;
 using System.Security;
-using System.Security.Permissions;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Dynamic;
-
+using System.Security.Permissions;
 using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -353,7 +352,29 @@ namespace IronRuby.StandardLibrary.Win32API {
 #endregion
 
 #region Calli Stubs
+#if NET
+        // cache of signature helpers by return type
+        private static Dictionary<Type, Func<CallingConvention, Type, SignatureHelper>> _sigHelpers = new();
+        private static Func<CallingConvention, Type, SignatureHelper> SigHelperFor(Type returnType) 
+        {
+            // TODO: Find a better way to do this. Right now, we are calling non-public method on SignatureHelper.
+            // We may get a public version of this GetMethodSigHelper overload along with the Reflection.Emit updates
+            // in .NET 9, so it's worth circling back - but at least we can count on this working as-is in .NET 6.0-8.0.
+            if (_sigHelpers.TryGetValue(returnType, out var helper))
+            {
+                return _sigHelpers[returnType];
+            }
 
+            var t = typeof(SignatureHelper);
+            var sigHelperMethod = t.GetMethod("GetMethodSigHelper", BindingFlags.Static | BindingFlags.NonPublic, 
+                    [typeof(CallingConvention), typeof(Type)]) 
+                    ?? throw new Exception("Could not find GetMethodSigHelper method on SignatureHelper");
+            
+            var sigHelper = sigHelperMethod.CreateDelegate<Func<CallingConvention, Type, SignatureHelper>>();
+            _sigHelpers[returnType]  = sigHelper;
+            return sigHelper;
+        }
+#endif
         private MethodInfo/*!*/ EmitCalliStub() {
             if (_calliStub != null) {
                 return _calliStub;
@@ -377,15 +398,9 @@ namespace IronRuby.StandardLibrary.Win32API {
             DynamicMethod dm = new DynamicMethod("calli", returnType, parameterTypes, DynamicModule);
 #endif
             var il = dm.GetILGenerator();
-            #if NET
-            // TODO: Find a better way to do this. Right now, we are calling non-public method on SignatureHelper.
-            // We may get a public version of this GetMethodSigHelper overload along with the Reflection.Emit updates
-            // in .NET 9, so it's worth circling back - but at least we can count on this working as-is in .NET 6.0-8.0.
-            var t = typeof(SignatureHelper);
-            var sigHelper = t.GetMethod("GetMethodSigHelper", 
-                BindingFlags.Static | BindingFlags.NonPublic, 
-                [typeof(CallingConvention), typeof(Type)]);
-            var signature = (SignatureHelper)sigHelper.Invoke(null, [CallingConventions.Standard, returnType]);
+#if NET
+            var signatureHelper = SigHelperFor(returnType);
+            var signature = signatureHelper(CallingConvention.Winapi, returnType);
             #else 
             var signature = SignatureHelper.GetMethodSigHelper(CallingConvention.Winapi, returnType);
             #endif
@@ -420,12 +435,12 @@ namespace IronRuby.StandardLibrary.Win32API {
                     lock (_lock) {
                         if (_dynamicModule == null) {
                             var attributes = new[] { 
-                                new CustomAttributeBuilder(typeof(UnverifiableCodeAttribute).GetConstructor(ReflectionUtils.EmptyTypes), new object[0]),
+                                new CustomAttributeBuilder(typeof(UnverifiableCodeAttribute).GetConstructor([]), new object[0]),
 #if NETFRAMEWORK
-                                new CustomAttributeBuilder(typeof(PermissionSetAttribute).GetConstructor(new Type[] { typeof(SecurityAction) }), 
-                                    new object[]{ SecurityAction.Demand },
-                                    new PropertyInfo[] { typeof(PermissionSetAttribute).GetProperty("Unrestricted") }, 
-                                    new object[] { true }
+                                new CustomAttributeBuilder(typeof(PermissionSetAttribute).GetConstructor([ typeof(SecurityAction) ]), 
+                                    [ SecurityAction.Demand ],
+                                    [ typeof(PermissionSetAttribute).GetProperty("Unrestricted") ], 
+                                    [ true ]
                                 )
 #endif 
                             };

@@ -47,15 +47,15 @@ module RbConfig
   
   # cpu, os
   cpu_and_os = RUBY_PLATFORM.split('-')
-  abort("Could not parse RUBY_PLATFORM") if cpu_and_os.size != 2
-  CONFIG["host_cpu"] = CONFIG["target_cpu"] = (cpu_and_os[0] == "i386") ? "i686" : cpu_and_os[0]
+  abort("Could not parse RUBY_PLATFORM") if cpu_and_os.size != 3
+  CONFIG["host_cpu"] = CONFIG["target_cpu"] = cpu_and_os[0]
   CONFIG["host_os"] = CONFIG["target_os"] =  cpu_and_os[1]
   
   # architecture
   clr_version = "#{System::Environment.Version.Major}.#{System::Environment.Version.Minor}"
   CONFIG["arch"] = arch = "universal-dotnet#{clr_version}" # Not strictly true. For example, while running a .NET 2.0 version of IronRuby on .NET 4
   
-  # std lib
+  # std libs
   CONFIG["ruby_version"] = stdlib_version = "1.9.1"               # std library version
   CONFIG["RUBY_BASE_NAME"] = ruby_base_name = "ruby"              # directory name
   CONFIG["datadir"] = datadir = "#{prefix}/share"

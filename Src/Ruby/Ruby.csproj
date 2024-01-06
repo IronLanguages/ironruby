@@ -2,7 +2,7 @@
   <PropertyGroup>
       <TargetFrameworks>net462;net6.0</TargetFrameworks>
       <Nullable>disable</Nullable>
-      <LangVersion>10</LangVersion>
+      <LangVersion>12</LangVersion>
   </PropertyGroup>
   <ItemGroup>
     <AssemblyAttribute Include="System.CLSCompliantAttribute">
@@ -37,9 +37,10 @@
         <PackageReference Condition="$(TargetFramework) == 'net6.0'" Include="System.Reflection.Emit" Version="4.7.0" />
         <PackageReference Include="System.Security.Permissions" Version="8.0.0" />
     </ItemGroup>
-    
+
     <Import Project="$(BeforeTargetFiles)" />
     <Target Name="BeforeBuild" DependsOnTargets="$(BeforeTargets);GenerateCurrentVersion" />
     <Import Project="$(AfterTargetFiles)" />
     <Target Name="AfterBuild" DependsOnTargets="$(AfterTargets)" />
+
 </Project>

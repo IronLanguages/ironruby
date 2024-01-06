@@ -43,6 +43,7 @@ using Microsoft.Scripting.Utils;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 
 namespace IronRuby.Runtime {
     [ReflectionCached]
@@ -617,22 +618,30 @@ namespace IronRuby.Runtime {
 
         internal static string/*!*/ RuntimeDescriptionString => RuntimeInformation.FrameworkDescription;
 
-        private static MutableString/*!*/ MakePlatformString() {
-            switch (Environment.OSVersion.Platform) {
-                case PlatformID.MacOSX:
-                    return MutableString.CreateAscii("i386-darwin");
-                
-                case PlatformID.Unix:
-                    return MutableString.CreateAscii("i386-linux"); 
+        private static MutableString/*!*/ MakePlatformString()
+        {
+            var framework = RuntimeInformation.FrameworkDescription;
+            var version = Environment.Version;
+            string tag = framework switch
+            {
+                { } f when f.Contains("Mono") => $"mono{version.Major}.{version.Minor}",
+                { } f when f.Contains("Framework") => $"net{version.Major}{version.Minor}{version.Revision}",
+                _ => $"net{version.Major}.{version.Minor}"
+            };
+            
+            var arch = RuntimeInformation.ProcessArchitecture;
+            var osIs = RuntimeInformation.IsOSPlatform;
+            var identifier = osIs switch {
+                {} when osIs(OSPlatform.Windows) => $"{arch}-mswin32-{tag}",
+                {} when osIs(OSPlatform.Linux) => $"{arch}-linux-{tag}",
+                {} when osIs(OSPlatform.OSX) => $"{arch}-darwin-{tag}",
+                #if NET
+                {} when osIs(OSPlatform.FreeBSD) => $"{arch}-freebsd-{tag}",
+                #endif
+                _ => "unknown"
+            };
 
-                case PlatformID.Win32NT:
-                case PlatformID.Win32S:
-                case PlatformID.Win32Windows:
-                    return MutableString.CreateAscii("i386-mswin32");
-
-                default:
-                    return MutableString.CreateAscii("unknown");
-            }
+            return MutableString.CreateAscii(identifier);
         }
 
         private void InitializeFileDescriptors(SharedIO/*!*/ io) {
