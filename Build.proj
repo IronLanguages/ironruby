@@ -2,7 +2,7 @@
 <Project DefaultTargets="Build">
 
   <PropertyGroup>
-    <BuildFlavour Condition=" '$(BuildFlavour)' == '' ">$(Configuration)</BuildFlavour>
+    <BuildFlavour Condition=" '$(BuildFlavour)' == '' ">Debug</BuildFlavour>
     <MainPlatform Condition=" '$(MainPlatform)' == '' ">net462</MainPlatform>
     <MainBuildPrefix Condition=" '$(MainBuildPrefix)' == '' "></MainBuildPrefix>
 

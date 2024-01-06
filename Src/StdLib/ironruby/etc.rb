@@ -1,11 +1,11 @@
 # ****************************************************************************
 #
-# Copyright (c) Microsoft Corporation. 
+# Copyright (c) Microsoft Corporation.
 #
-# This source code is subject to terms and conditions of the Apache License, Version 2.0. A 
-# copy of the license can be found in the License.html file at the root of this distribution. If 
-# you cannot locate the  Apache License, Version 2.0, please send an email to 
-# ironruby@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+# This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+# copy of the license can be found in the License.html file at the root of this distribution. If
+# you cannot locate the  Apache License, Version 2.0, please send an email to
+# ironruby@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
 # by the terms of the Apache License, Version 2.0.
 #
 # You must not remove this notice, or any other, from this software.
@@ -25,19 +25,19 @@ module Etc
       def getlogin
         ENV['USERNAME']
       end
-    
+
       def endgrent(*args)
         nil
       end
 
-      [:endpwent, :getgrent, :getgrgid, :getgrnam, :getpwent, 
+      [:endpwent, :getgrent, :getgrgid, :getgrnam, :getpwent,
        :getpwnam, :getpwuid, :group, :passwd, :setgrent,
        :setpwent].each do |method|
         alias_method method, :endgrent
       end
     else
-      load_assembly 'Mono.Posix'
- 
+      load_assembly 'Mono.Posix.NETStandard'
+
       def endgrent
         Mono::Unix::Native::Syscall.endgrent
         nil
@@ -109,7 +109,7 @@ module Etc
           # Get the first passwd, then loop until the last, yielding the current passwd.
           pw = getpwent
           until pw.nil?
-            yield pw 
+            yield pw
             pw = getpwent
           end
 
@@ -148,4 +148,3 @@ module Etc
     end
   end
 end
-
