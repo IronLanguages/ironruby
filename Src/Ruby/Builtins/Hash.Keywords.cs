@@ -36,11 +36,22 @@ namespace IronRuby.Builtins {
         /// gets no bucket array unless something probes it later (LinkPendingBuckets).
         /// </summary>
         internal static Hash/*!*/ CreateKeywordArguments(IEqualityComparer<object>/*!*/ comparer, int capacity) {
+            var result = CreateUnlinked(comparer, capacity);
+            result.IsKeywordArguments = true;
+            return result;
+        }
+
+        /// <summary>
+        /// An empty hash with room for <paramref name="capacity"/> Symbol keys, to be filled with
+        /// <see cref="AppendUnlinked"/>: a keyword-call hash, or a hash literal whose keys are all
+        /// Symbol literals. No bucket array until something probes (LinkPendingBuckets); two keys,
+        /// the commonest literal, get an entry array of exactly two (2 is prime, as FastMod wants).
+        /// </summary>
+        internal static Hash/*!*/ CreateUnlinked(IEqualityComparer<object>/*!*/ comparer, int capacity) {
             var result = new Hash(comparer, 0);
-            int size = GetPrime(capacity);
+            int size = (capacity == 2) ? 2 : GetPrime(capacity);
             result._entries = new Entry[size];
             result._fastModMultiplier = UInt64.MaxValue / (uint)size + 1;
-            result.IsKeywordArguments = true;
             return result;
         }
 

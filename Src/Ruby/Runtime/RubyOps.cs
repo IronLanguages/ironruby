@@ -1845,6 +1845,36 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        // `{a: x}`, `{a: x, b: y}` and `{a: x, b: y, c: z}`: a hash literal with Symbol literals for
+        // keys, built the way the keyword hashes above are - no item array, none of SetHashElement's
+        // String/nil key conversions (a Symbol needs none), and no bucket array until the hash is
+        // first probed.
+
+        [Emitted]
+        public static Hash/*!*/ MakeSymbolHash1(RubyScope/*!*/ scope, object key1, object value1) {
+            var result = Hash.CreateUnlinked(scope.RubyContext.EqualityComparer, 1);
+            result.AppendUnlinked(key1, value1);
+            return result;
+        }
+
+        [Emitted]
+        public static Hash/*!*/ MakeSymbolHash2(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2) {
+            var result = Hash.CreateUnlinked(scope.RubyContext.EqualityComparer, 2);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
+            return result;
+        }
+
+        [Emitted]
+        public static Hash/*!*/ MakeSymbolHash3(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2,
+            object key3, object value3) {
+            var result = Hash.CreateUnlinked(scope.RubyContext.EqualityComparer, 3);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
+            result.AppendUnlinked(key3, value3);
+            return result;
+        }
+
         /// <summary>True for the hash a call site built out of keyword syntax.</summary>
         [Emitted]
         public static bool IsKeywordArgumentsHash(object obj) {

@@ -60,6 +60,9 @@ namespace IronRuby.Compiler.Ast {
             if (_isKeywordArguments && _maplets.Length <= 3 && HasSymbolLiteralKeys()) {
                 return TransformKeywordArguments(gen);
             }
+            if (!_isKeywordArguments && _maplets.Length > 0 && _maplets.Length <= 3 && HasSymbolLiteralKeys()) {
+                return TransformSymbolHash(gen);
+            }
             var items = gen.TransformMapletsToExpressions(_maplets);
             return _isKeywordArguments ? gen.MakeKeywordArgumentsHashOpCall(items) : gen.MakeHashOpCall(items);
         }
@@ -88,6 +91,21 @@ namespace IronRuby.Compiler.Ast {
                 case 1: return Methods.MakeKeywordArgumentsHash1.OpCall(args);
                 case 2: return Methods.MakeKeywordArgumentsHash2.OpCall(args);
                 default: return Methods.MakeKeywordArgumentsHash3.OpCall(args);
+            }
+        }
+
+        // `{a: x, b: y}`: a literal with Symbol literal keys, the same way (RubyOps.MakeSymbolHash2).
+        private MSA.Expression/*!*/ TransformSymbolHash(AstGenerator/*!*/ gen) {
+            var args = new ReadOnlyCollectionBuilder<MSA.Expression>(1 + 2 * _maplets.Length);
+            args.Add(gen.CurrentScopeVariable);
+            foreach (var maplet in _maplets) {
+                args.Add(AstUtils.Box(maplet.Key.TransformRead(gen)));
+                args.Add(AstUtils.Box(maplet.Value.TransformRead(gen)));
+            }
+            switch (_maplets.Length) {
+                case 1: return Methods.MakeSymbolHash1.OpCall(args);
+                case 2: return Methods.MakeSymbolHash2.OpCall(args);
+                default: return Methods.MakeSymbolHash3.OpCall(args);
             }
         }
     }
