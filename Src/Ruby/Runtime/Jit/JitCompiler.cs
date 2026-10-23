@@ -58,7 +58,7 @@ namespace IronRuby.Runtime.Jit {
     }
 
     internal sealed class JitCompiler {
-        internal const int MaxNodes = 400;
+        internal const int MaxNodes = 2000;
 
         private readonly MethodDeclaration _ast;
         private readonly RubyContext/*!*/ _context;
