@@ -20,8 +20,10 @@ using MSA = Microsoft.Scripting.Ast;
 #endif
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using IronRuby.Runtime;
@@ -189,11 +191,32 @@ namespace IronRuby.Compiler.Ast {
         public static MSA.Expression/*!*/ GetVariableAccessor(MSA.Expression/*!*/ tupleVariable, int tupleFieldIndex) {
             MSA.Expression accessor = tupleVariable;
 
-            foreach (var property in MutableTuple.GetAccessPath(tupleVariable.Type, tupleFieldIndex)) {
+            foreach (var property in GetAccessPath(tupleVariable.Type, tupleFieldIndex)) {
                 accessor = Ast.Property(accessor, property);
             }
 
             return accessor;
+        }
+
+        // The properties that reach each slot of a locals tuple type, looked up once per type and
+        // slot. MutableTuple.GetAccessPath finds them by name every time, and every local variable
+        // reference the compiler transforms asks for one - a method with a hundred locals spent
+        // most of its transform there.
+        private static readonly ConcurrentDictionary<Type, PropertyInfo[][]>/*!*/ _accessPaths =
+            new ConcurrentDictionary<Type, PropertyInfo[][]>();
+
+        private static PropertyInfo/*!*/[]/*!*/ GetAccessPath(Type/*!*/ tupleType, int index) {
+            PropertyInfo[][] paths = _accessPaths.GetOrAdd(tupleType, t => new PropertyInfo[MutableTuple.GetSize(t)][]);
+            if ((uint)index >= (uint)paths.Length) {
+                // what MutableTuple.GetAccessPath says about a slot the tuple does not have
+                return new List<PropertyInfo>(MutableTuple.GetAccessPath(tupleType, index)).ToArray();
+            }
+            PropertyInfo[] path = Volatile.Read(ref paths[index]);
+            if (path == null) {
+                path = new List<PropertyInfo>(MutableTuple.GetAccessPath(tupleType, index)).ToArray();
+                Volatile.Write(ref paths[index], path);
+            }
+            return path;
         }
 
         public MSA.Expression/*!*/ MakeLocalsStorage() {

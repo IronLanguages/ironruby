@@ -1154,13 +1154,40 @@ namespace IronRuby.Runtime.Jit {
             return true;
         }
 
+        // RequireBuiltin's answers so far in this compile. IsBuiltinMethod resolves the method and
+        // reads custom attributes, and a long arithmetic body asks the same few questions hundreds
+        // of times (ruby-bench's 30k_variables: most of the time it took to specialize). A body
+        // asks about a handful of (type, operator) pairs, so a list searched from the front does;
+        // a Dictionary keyed by a (JT, string) tuple cost the first compile 2-3 ms of instantiating
+        // and JIT-compiling the generic code for that key.
+        private sealed class BuiltinAnswer {
+            internal readonly JT Type;
+            internal readonly string/*!*/ Operator;
+            internal readonly bool Ok;
+            internal readonly BuiltinAnswer Next;
+            internal BuiltinAnswer(JT type, string/*!*/ op, bool ok, BuiltinAnswer next) {
+                Type = type; Operator = op; Ok = ok; Next = next;
+            }
+        }
+        private BuiltinAnswer _builtinAnswers;
+
         /// <summary>`op' called on a receiver of type t is the built-in method; bail out if not.</summary>
         private void RequireBuiltin(JT t, string/*!*/ op) {
-            bool ok = (t == JT.Bool)
-                ? IsBuiltinMethod(ClassOfType(t, true), op) && IsBuiltinMethod(ClassOfType(t, false), op)
-                : IsBuiltinMethod(ClassOfType(t, false), op);
-            // BasicObject#!= answers by calling ==.
-            if (ok && op == "!=") { RequireBuiltin(t, "=="); }
+            BuiltinAnswer answer = _builtinAnswers;
+            while (answer != null && (answer.Type != t || !String.Equals(answer.Operator, op))) {
+                answer = answer.Next;
+            }
+            bool ok;
+            if (answer != null) {
+                ok = answer.Ok;
+            } else {
+                ok = (t == JT.Bool)
+                    ? IsBuiltinMethod(ClassOfType(t, true), op) && IsBuiltinMethod(ClassOfType(t, false), op)
+                    : IsBuiltinMethod(ClassOfType(t, false), op);
+                // BasicObject#!= answers by calling ==.
+                if (ok && op == "!=") { RequireBuiltin(t, "=="); }
+                _builtinAnswers = new BuiltinAnswer(t, op, ok, _builtinAnswers);
+            }
             if (!ok) { throw Bail("operator " + op + " on " + t + " is not the built-in one"); }
         }
 
