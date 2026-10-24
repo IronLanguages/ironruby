@@ -160,6 +160,7 @@ namespace IronRuby.Runtime.Jit {
             // a numeric use of the variable is specialized for (JitCompiler.NumericIVar).
             MSA.ParameterExpression self = null;
             Func<string, JT> ivarProfile = null;
+            Func<string, string> attrProfile = null;
             if (selfArgIndex >= 0 && selfArgIndex < args.Length) {
                 object liveSelf = args[selfArgIndex];
                 self = Ast.Parameter(typeof(object), "#self");
@@ -168,11 +169,14 @@ namespace IronRuby.Runtime.Jit {
                     if (!context.TryGetInstanceVariable(liveSelf, name, out value)) { return JT.Obj; }
                     return (value is int) ? JT.Int : (value is long) ? JT.Lng : (value is double) ? JT.Dbl : JT.Obj;
                 };
+                // and which of self's methods are attr_readers, and of what (JitCompiler.EmitCall)
+                RubyClass selfClass = JitRuntime.ClassOf(context, liveSelf);
+                attrProfile = name => JitRuntime.SelfAttrSite.ReaderVariable(selfClass, name);
             }
 
             List<JitLoopSlot> slots;
             bool canDeopt;
-            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, out slots, out canDeopt);
+            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, out slots, out canDeopt);
             if (body == null || slots.Count == 0) {
                 if (OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter gave up (body={0} slots={1})", body != null, slots == null ? -1 : slots.Count); }
                 return null;

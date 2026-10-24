@@ -168,8 +168,17 @@ namespace IronRuby.Runtime.Jit {
         // unbound and the loop may not touch self or an instance variable.
         private readonly Func<string, JT> _ivarProfile;
 
+        // Loop mode: the instance variable a method name reads on the loop's self if that method
+        // is an attr_reader there, else null (see EmitCall). Null when the loop has no self.
+        private readonly Func<string, string> _attrProfile;
+
+        // The attribute reads EmitCall turned into instance variable reads, and the variable each
+        // reads, so that NumericIVar can type them the way it types the variable itself.
+        private Dictionary<MethodCall, string> _attrReads;
+
         private JitCompiler(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context, int scopeDepth,
-            Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self, Func<string, JT> ivarProfile) {
+            Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self, Func<string, JT> ivarProfile,
+            Func<string, string> attrProfile) {
             _ast = null;
             _loop = loop;
             _context = context;
@@ -180,6 +189,7 @@ namespace IronRuby.Runtime.Jit {
             _paramNames = new string[0];
             _self = self ?? Ast.Parameter(typeof(object), "#self");
             _ivarProfile = (self != null) ? ivarProfile : null;
+            _attrProfile = (self != null) ? attrProfile : null;
             PushScope();
         }
 
@@ -192,16 +202,16 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, out List<JitLoopSlot> slots, out bool canDeopt) {
-            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, out slots, out canDeopt);
+            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, null, out slots, out canDeopt);
         }
 
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self,
-            Func<string, JT> ivarProfile, out List<JitLoopSlot> slots, out bool canDeopt) {
+            Func<string, JT> ivarProfile, Func<string, string> attrProfile, out List<JitLoopSlot> slots, out bool canDeopt) {
 
             slots = null;
             canDeopt = false;
-            var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile);
+            var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile);
             MSA.Expression body;
             try {
                 JT type;
@@ -1032,6 +1042,22 @@ namespace IronRuby.Runtime.Jit {
                 );
             }
 
+            // `x' or `self.x' in an outlined loop, where x is an attr_reader on the loop's self: the
+            // instance variable read the reader does, and no call. JitRuntime.ReadSelfAttr checks
+            // self's class and the global method version on each read and deopts when either has
+            // moved; a read is not observable, so the iteration stays restartable.
+            if (argc == 0 && _attrProfile != null && (node.Target == null || node.Target is SelfReference)) {
+                string variableName = _attrProfile(node.MethodName);
+                if (variableName != null) {
+                    _canDeopt = true;
+                    if (_attrReads == null) { _attrReads = new Dictionary<MethodCall, string>(); }
+                    _attrReads[node] = variableName;
+                    type = JT.Obj;
+                    return Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context), _self,
+                        Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName)));
+                }
+            }
+
             // Binary operators on Fixnum/Float.
             if (node.Target != null && argc == 1) {
                 JT lt, rt;
@@ -1061,9 +1087,12 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private MSA.Expression/*!*/ NumericIVar(RExpr/*!*/ node, MSA.Expression/*!*/ e, ref JT type) {
             var ivar = node as InstanceVariable;
-            if (type != JT.Obj || ivar == null || _ivarProfile == null) { return e; }
+            string name = (ivar != null) ? ivar.Name : null;
+            var call = node as MethodCall;
+            if (call != null && _attrReads != null) { _attrReads.TryGetValue(call, out name); }
+            if (type != JT.Obj || name == null || _ivarProfile == null) { return e; }
             string guard;
-            switch (_ivarProfile(ivar.Name)) {
+            switch (_ivarProfile(name)) {
                 case JT.Int: type = JT.Int; guard = "GuardInt"; break;
                 case JT.Lng: type = JT.Lng; guard = "GuardLong"; break;
                 case JT.Dbl: type = JT.Dbl; guard = "GuardDouble"; break;

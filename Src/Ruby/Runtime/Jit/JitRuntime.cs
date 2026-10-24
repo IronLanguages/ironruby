@@ -350,6 +350,65 @@ namespace IronRuby.Runtime.Jit {
             return RubyOps.ReadInstanceVariable(context, self, site);
         }
 
+        /// <summary>
+        /// `x' or `self.x' in an outlined loop where x was, on the loop's self, an attr_reader when
+        /// the loop was compiled (JitCompiler.EmitCall): one `x' each.
+        /// </summary>
+        public sealed class SelfAttrSite {
+            internal readonly string/*!*/ Name;
+            internal readonly string/*!*/ VariableName;
+            internal readonly InstanceVariableSite/*!*/ Variable;
+
+            // The class the reader was last found on, under which global method version. Replaced
+            // as a whole, so a racing reader sees one consistent pair.
+            private sealed class Binding {
+                internal readonly RubyClass/*!*/ Class;
+                internal readonly int Version;
+                internal Binding(RubyClass/*!*/ cls, int version) { Class = cls; Version = version; }
+            }
+            private volatile Binding _bound;
+
+            internal SelfAttrSite(string/*!*/ name, string/*!*/ variableName) {
+                Name = name;
+                VariableName = variableName;
+                Variable = new InstanceVariableSite(variableName);
+            }
+
+            internal bool IsBoundTo(RubyClass/*!*/ cls) {
+                var b = _bound;
+                return b != null && b.Class == cls && b.Version == RubyModule.GlobalMethodVersion;
+            }
+
+            /// <summary>Whether Name is, on cls, the attr_reader of VariableName.</summary>
+            internal bool Bind(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                if (ReaderVariable(cls, Name) != VariableName) { return false; }
+                _bound = new Binding(cls, version);
+                return true;
+            }
+
+            /// <summary>The instance variable `name' reads on cls, if it is an attr_reader there.</summary>
+            internal static string ReaderVariable(RubyClass/*!*/ cls, string/*!*/ name) {
+                var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
+                var reader = resolved.Found ? resolved.Info as IronRuby.Runtime.Calls.RubyAttributeReaderInfo : null;
+                return (reader != null) ? reader.InstanceVariableName : null;
+            }
+        }
+
+        /// <summary>
+        /// The read an attr_reader does, as long as the method `site' names is still that reader on
+        /// self's class: re-checked against the class and the global method version on every read,
+        /// so a redefinition, a singleton method or a different self deopts to the generic loop,
+        /// which then makes the call. A read is not observable, so the deopt is invisible.
+        /// </summary>
+        public static object ReadSelfAttr(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
+            RubyClass cls = ClassOf(context, self);
+            if (!site.IsBoundTo(cls) && !site.Bind(cls)) {
+                throw Deopt();
+            }
+            return RubyOps.ReadInstanceVariable(context, self, site.Variable);
+        }
+
         public static object SetIVar(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {
             var obj = self as RubyObject;
             if (obj != null) {

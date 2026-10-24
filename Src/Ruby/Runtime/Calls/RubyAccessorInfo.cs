@@ -27,7 +27,7 @@ namespace IronRuby.Runtime.Calls {
     public abstract class RubyAttributeAccessorInfo : RubyMemberInfo {
         private readonly string/*!*/ _instanceVariableName;
 
-        protected string/*!*/ InstanceVariableName { get { return _instanceVariableName; } }
+        protected internal string/*!*/ InstanceVariableName { get { return _instanceVariableName; } }
 
         protected RubyAttributeAccessorInfo(RubyMemberFlags flags, RubyModule/*!*/ declaringModule, string/*!*/ variableName)
             : base(flags, declaringModule) {
