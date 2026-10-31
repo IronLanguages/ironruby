@@ -176,6 +176,10 @@ namespace IronRuby.Builtins {
         private CallSite<Func<CallSite, object, object, object>> _classInheritedCallbackSite;
 
         internal void ClassInheritedEvent(RubyClass/*!*/ subClass) {
+            if (Context.IsDefaultHook(this, Symbols.Inherited)) {
+                return;
+            }
+
             if (_classInheritedCallbackSite == null) {
                 Interlocked.CompareExchange(
                     ref _classInheritedCallbackSite,
@@ -200,7 +204,7 @@ namespace IronRuby.Builtins {
 
             // not called on singleton classes:
             if (IsSingletonClass) {
-                Context.Send(ref _singletonMethodAddedCallbackSite, Symbols.SingletonMethodAdded, _singletonClassOf, name);
+                Context.CallHook(ref _singletonMethodAddedCallbackSite, Symbols.SingletonMethodAdded, _singletonClassOf, name);
             } else {
                 base.MethodAdded(name);
             }
@@ -210,7 +214,7 @@ namespace IronRuby.Builtins {
             Assert.NotNull(name);
 
             if (IsSingletonClass) {
-                Context.Send(ref _singletonMethodRemovedCallbackSite, Symbols.SingletonMethodRemoved, _singletonClassOf, name);
+                Context.CallHook(ref _singletonMethodRemovedCallbackSite, Symbols.SingletonMethodRemoved, _singletonClassOf, name);
             } else {
                 base.MethodRemoved(name);
             }
@@ -220,7 +224,7 @@ namespace IronRuby.Builtins {
             Assert.NotNull(name);
 
             if (IsSingletonClass) {
-                Context.Send(ref _singletonMethodUndefinedCallbackSite, Symbols.SingletonMethodUndefined, _singletonClassOf, name);
+                Context.CallHook(ref _singletonMethodUndefinedCallbackSite, Symbols.SingletonMethodUndefined, _singletonClassOf, name);
             } else {
                 base.MethodUndefined(name);
             }

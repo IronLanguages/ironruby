@@ -381,7 +381,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         public void ConstantAdded(string/*!*/ name) {
             Assert.NotNull(name);
-            Context.Send(ref _constantAddedCallbackSite, Symbols.ConstantAdded, this, name);
+            Context.CallHook(ref _constantAddedCallbackSite, Symbols.ConstantAdded, this, name);
         }
 
         // Ruby 1.8: called after method is added, except for alias_method which calls it before
@@ -390,21 +390,21 @@ namespace IronRuby.Builtins {
             Assert.NotNull(name);
             Debug.Assert(!IsSingletonClass);
 
-            Context.Send(ref _methodAddedCallbackSite, Symbols.MethodAdded, this, name);
+            Context.CallHook(ref _methodAddedCallbackSite, Symbols.MethodAdded, this, name);
         }
 
         internal virtual void MethodRemoved(string/*!*/ name) {
             Assert.NotNull(name);
             Debug.Assert(!IsSingletonClass);
 
-            Context.Send(ref _methodRemovedCallbackSite, Symbols.MethodRemoved, this, name);
+            Context.CallHook(ref _methodRemovedCallbackSite, Symbols.MethodRemoved, this, name);
         }
 
         internal virtual void MethodUndefined(string/*!*/ name) {
             Assert.NotNull(name);
             Debug.Assert(!IsSingletonClass);
 
-            Context.Send(ref _methodUndefinedCallbackSite, Symbols.MethodUndefined, this, name);
+            Context.CallHook(ref _methodUndefinedCallbackSite, Symbols.MethodUndefined, this, name);
         }
 
         #endregion
