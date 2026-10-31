@@ -233,6 +233,41 @@ warm { |i| sp_narrow(i) }
 t('narrow(2**21) out of Int32') { sp_narrow(2**21) }
 t('narrow(-2**21)') { sp_narrow(-2**21) }
 
+# ---------------------------------------------------------------- 3b. deopting entries, large bodies
+
+def sp_always_deopts(n)
+  # out of Int64 for every n but 0, so the entry deopts until it is retired
+  x = n * 65536
+  x = x * 65536
+  x * 65536 * 65536
+end
+
+def sp_rarely_deopts(n)
+  # out of Int64 only for n > 2097151
+  n * n * n
+end
+
+# A body far past the old 400-node limit.
+eval("def sp_big(x)\n  s = x\n" + (0...120).map { |i| "  s = s + (s / 7) - #{i}\n" }.join + "  s\nend")
+
+puts
+puts '--- 3b. an entry that keeps deopting, one that rarely does, a large body ---'
+warm { |i| sp_always_deopts(i) }
+warm { |i| sp_always_deopts(i) }
+t('always-deopting entry, after many deopts') { sp_always_deopts(3) }
+t('always-deopting entry, the one value that fits') { sp_always_deopts(0) }
+t('always-deopting entry, negative') { sp_always_deopts(-5) }
+r = 0
+warm { |i| r ^= sp_rarely_deopts(i == 100 || i == 110 ? 3_000_000 + i : i) }
+t('rarely-deopting entry, mixed results') { r }
+t('rarely-deopting entry, small') { sp_rarely_deopts(1000) }
+t('rarely-deopting entry, out of Int64') { sp_rarely_deopts(2_097_152) }
+warm { |i| sp_big(i) }
+t('big body, small') { sp_big(1000) }
+t('big body, out of Int64') { sp_big(2**60) }
+t('big body, Bignum argument') { sp_big(2**70) }
+t('big body, Float argument') { sp_big(1.5) }
+
 # ---------------------------------------------------------------- 4. division
 
 def sp_div(a, b)

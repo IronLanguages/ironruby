@@ -203,6 +203,58 @@ namespace IronRuby.Runtime.Jit {
             Invalidate();
         }
 
+        // ---- deopt rate ----------------------------------------------------------------------
+        // A deopt costs a CLR exception, about 15-30 us, on top of the generic call it falls back
+        // to, so an entry that deopts on every call (arithmetic that always outgrows Int64, say)
+        // made its method several times slower than not specializing it at all, for as long as
+        // the program ran. A deopt now and then, though, is paid for by what the typed body saves
+        // on the other calls: for a 20-statement arithmetic body, deopting on one call in K,
+        // staying specialized broke even with the generic body at K = 25-30 and was 1.5x faster
+        // at K = 64. So what retires an entry is the rate: MaxDeopts deopts within DeoptWindow
+        // entries into the typed body - one call in 32 deopting - and the method then keeps its
+        // generic body for good. A recompile would not help: the deopts come from the values the
+        // body computes, not from a guard a new specialization could fix.
+        internal const int MaxDeopts = 16;
+        private const long DeoptWindow = MaxDeopts * 32;
+
+        // Entries into the typed body, counted by an entry that can deopt (BuildEntry). Not
+        // interlocked: a lost increment only blurs a rate. A sealed holder of its own, because
+        // the entry reaches it through the closure's constant array and a cast to a sealed
+        // class is a type-handle compare where one to JitStub is a helper call.
+        internal sealed class EntryCounter {
+            public long Value;
+            internal static readonly System.Reflection.FieldInfo/*!*/ ValueField = typeof(EntryCounter).GetField("Value");
+        }
+        private readonly EntryCounter/*!*/ _entries = new EntryCounter();
+        private long _windowStart;
+        private int _windowDeopts;
+
+        private MSA.Expression/*!*/ CountEntry() {
+            return Ast.PreIncrementAssign(Ast.Field(Ast.Constant(_entries), EntryCounter.ValueField));
+        }
+
+        /// <summary>
+        /// Called by an entry (and the direct entry) when the typed body deopted and the call is
+        /// being re-run generically: retires the entry once deopts are not rare (see MaxDeopts).
+        /// </summary>
+        internal void OnDeopt() {
+            if (_givenUp) { return; }
+            long entries = _entries.Value;
+            if (entries - _windowStart > DeoptWindow) {
+                _windowStart = entries;
+                _windowDeopts = 0;
+            }
+            if (++_windowDeopts < MaxDeopts) { return; }
+            _givenUp = true;
+            JitRuntime.DeoptRetired++;
+            if (JitRuntime.Verbose) {
+                Console.Error.WriteLine("[jit] retired {0}/{1} arity {2}: {3} deopts in {4} calls",
+                    _declaringModule.Name ?? "main", _ast.Name, _arity, _windowDeopts, entries - _windowStart);
+            }
+            _direct = null;
+            Install(_generic);
+        }
+
         private bool TrySpecialize() {
             if (JitRuntime.Disabled || _context.HasRefinements) { return false; }
 
@@ -374,13 +426,17 @@ namespace IronRuby.Runtime.Jit {
             if (code.CanDeopt) {
                 // The generic body runs after the handler, not inside it: an exception it raises
                 // from within a catch block would leave the frames outside this one out of its
-                // backtrace.
+                // backtrace. The entry counts its calls of the typed body (see OnDeopt).
                 var result = Ast.Variable(typeof(object), "#result");
                 var deopted = Ast.Constant(Deopted, typeof(object));
                 fast = Ast.Block(typeof(object), new[] { result },
+                    CountEntry(),
                     Ast.TryCatch(
                         Ast.Assign(result, fast),
-                        Ast.Catch(typeof(JitDeoptException), Ast.Assign(result, deopted))
+                        Ast.Catch(typeof(JitDeoptException), Ast.Block(
+                            Ast.Call(JitRuntime.M("EntryDeopted"), Ast.Constant(this, typeof(object))),
+                            Ast.Assign(result, deopted)
+                        ))
                     ),
                     Ast.Condition(Ast.ReferenceEqual(result, deopted), GenericCall(self, blk, args), result, typeof(object))
                 );
@@ -470,7 +526,14 @@ namespace IronRuby.Runtime.Jit {
             }
             var noDirect = Ast.Field(null, typeof(JitKeywordCall).GetField("NoDirect"));
             if (code.CanDeopt) {
-                fast = Ast.TryCatch(fast, Ast.Catch(typeof(JitDeoptException), noDirect));
+                fast = Ast.Block(
+                    CountEntry(),
+                    fast
+                );
+                fast = Ast.TryCatch(fast, Ast.Catch(typeof(JitDeoptException), Ast.Block(
+                    Ast.Call(JitRuntime.M("EntryDeopted"), Ast.Constant(this, typeof(object))),
+                    noDirect
+                )));
             }
             var body = Ast.Condition(test, fast, noDirect, typeof(object));
 
