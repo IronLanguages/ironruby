@@ -654,13 +654,28 @@ class Rational < Numeric
   # rb_convert_type_with_id(val, T_RATIONAL, "Rational", :to_r). Every test has to
   # survive a BasicObject, which answers neither #nil?, #class nor #respond_to? - and
   # which MRI converts perfectly well when it has a #to_r.
+  #
+  # A Rational is answered as it is, without a #to_r: rb_convert_type_with_id returns a
+  # value of the wanted type untouched. That is the common case - Rational(r, n) with a
+  # Rational r, as in ActiveSupport's Time#change - and it must not reach
+  # __ir_responds_to__, which gives the value a singleton class to ask: hundreds of
+  # microseconds for every new Rational. An Integer or a Float has no singleton class,
+  # so it is asked #respond_to? directly, as __ir_responds_to__ does after a TypeError.
   def self.__to_rational__(value)
-    name = nil.equal?(value) ? 'nil' : __ir_class_of__(value)
-    unless __ir_responds_to__(value, :to_r)
+    return value if ::Rational === value
+    responds =
+      if ::Integer === value || ::Float === value
+        value.respond_to?(:to_r)
+      else
+        __ir_responds_to__(value, :to_r)
+      end
+    unless responds
+      name = nil.equal?(value) ? 'nil' : __ir_class_of__(value)
       ::Kernel.raise(::TypeError, "can't convert #{name} into Rational")
     end
     result = value.to_r
     unless ::Rational === result
+      name = nil.equal?(value) ? 'nil' : __ir_class_of__(value)
       ::Kernel.raise(::TypeError,
         "can't convert #{name} into Rational (#{name}#to_r gives #{__ir_conversion_result_name__(result)})")
     end
