@@ -671,6 +671,7 @@ namespace IronRuby.Builtins {
             private void CheckDumpable(object/*!*/ obj) {
                 if (obj is Proc || obj is RubyMethod || obj is UnboundMethod ||
                     obj is IronRuby.StandardLibrary.Threading.RubyMutex ||
+                    obj is IronRuby.StandardLibrary.Monitors.RubyMonitor ||
                     obj is System.Threading.Thread || obj is Binding) {
 
                     throw RubyExceptions.CreateTypeError("no _dump_data is defined for class {0}",
