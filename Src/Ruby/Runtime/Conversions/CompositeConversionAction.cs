@@ -66,8 +66,8 @@ namespace IronRuby.Runtime.Conversions {
         // the rules its binder has bound for other sites; with an action of its own - Make used to create one per call -
         // every site bound each rule anew (30 binds at `ir -e 1' for ToPathToStr alone, about a quarter of a millisecond
         // each on the R2R host). The action handed out last is kept here, the way ProtocolConversionAction<TSelf>.Make
-        // keeps one, since library methods ask for it on every call.
-        private static readonly CompositeConversionAction[]/*!*/ _LastMade = new CompositeConversionAction[(int)CompositeConversion.ToHashToStr + 1];
+        // keeps one, since library methods ask for it on every call. One slot per conversion (the values count up from 0).
+        private static readonly CompositeConversionAction[]/*!*/ _LastMade = new CompositeConversionAction[Enum.GetValues(typeof(CompositeConversion)).Length];
 
         public static CompositeConversionAction/*!*/ Make(RubyContext/*!*/ context, CompositeConversion/*!*/ conversion) {
             CompositeConversionAction last = _LastMade[(int)conversion];
@@ -80,6 +80,7 @@ namespace IronRuby.Runtime.Conversions {
 
         /// <summary>
         /// A new action - for <see cref="RubyMetaBinderFactory"/>, which keeps one per runtime. Everyone else calls Make.
+        /// A null <paramref name="context"/> makes the shared action (<see cref="MakeShared"/>), of shared components.
         /// </summary>
         internal static CompositeConversionAction/*!*/ Create(RubyContext context, CompositeConversion/*!*/ conversion) {
             switch (conversion) {
