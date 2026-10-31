@@ -268,6 +268,51 @@ t('big body, out of Int64') { sp_big(2**60) }
 t('big body, Bignum argument') { sp_big(2**70) }
 t('big body, Float argument') { sp_big(1.5) }
 
+# ---------------------------------------------------------------- 3c. a retired entry tried again, threads
+
+def sp_phase(x)
+  # out of Int64 for x >= 2**40: the entry is retired while setup passes such values, and tried
+  # again once the calls with small ones have gone on for a while
+  a = x * 3 + 1
+  b = a * 5 - x
+  c = b * 7 + a
+  d = c - b * 2
+  d * 4096 + a
+end
+
+def sp_threads(n)
+  # specialized by whichever of several threads reaches the threshold first
+  n * n * n * n
+end
+
+puts
+puts '--- 3c. a retired entry tried again; threads warming one method ---'
+r = 0
+200.times { |i| r ^= sp_phase(2**60 + i) }
+t('phase 1: every call out of Int64') { r }
+r = 0
+i = 0
+while i < 300_000
+  r += sp_phase(i & 1023)
+  i += 1
+end
+t('phase 2: 300k small calls') { r }
+def sp_phase_bump; 1; end
+sp_phase_bump
+def sp_phase_bump; 2; end   # a method table change: the entry tried again is stale now
+t('after a method table change') { [sp_phase(5), sp_phase(2**50)] }
+r = 0
+warm { |k| r += sp_phase(k) }
+t('specialized again') { r }
+t('out of Int64 again') { sp_phase(2**62) }
+r = 0
+200.times { |k| r ^= sp_phase(k.even? ? 2**61 + k : k) }
+t('phases mixed') { r }
+ths = (0...6).map { |k| Thread.new { s = 0; 3000.times { |j| s ^= sp_threads(k * 1_000_000 + j) }; s } }
+t('threads, results') { ths.map(&:value) }
+ths = (0...6).map { |k| Thread.new { s = 0; 3000.times { |j| s += sp_threads(j & 255) }; s } }
+t('threads, small results') { ths.map(&:value) }
+
 # ---------------------------------------------------------------- 4. division
 
 def sp_div(a, b)

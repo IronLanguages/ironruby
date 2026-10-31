@@ -85,7 +85,26 @@ namespace IronRuby.Runtime.Jit {
         private readonly int[]/*!*/ _argKind;       // 0 = unseen, 1 = int, 2 = double, 3 = other/mixed, 4 = long
         private RubyClass _receiverClass;
         private bool _polymorphicReceiver;
-        private volatile bool _givenUp;
+
+        // ---- state -------------------------------------------------------------------------
+        // Profiling:   the fast slot is empty; the trampoline profiles each call (Profile).
+        // Specialized: the fast slot holds _current's entry.
+        // Cooling:     _current was retired for deopting too often (OnDeopt); the fast slot holds
+        //              the counted generic body (CoolingBody) until _current is tried again (CoolDownCheck).
+        // Settled:     the fast slot holds the generic body for good (GiveUp).
+        // Every change of state is made under _sync. A callback from an entry (EntryDeopted,
+        // EntryStale) names its specialization and changes nothing unless that one is current, so
+        // an older entry that another thread is still running cannot undo what replaced it.
+        private const int Profiling = 0, Specialized = 1, Cooling = 2, Settled = 3;
+        private volatile int _state;
+        private Specialization _current;
+        private readonly object/*!*/ _sync = new object();
+        // 1 while a thread is in TrySpecialize. The threads that reach the threshold meanwhile -
+        // they keep profiling, the fast slot being empty - run the generic body instead of
+        // compiling the same method again (a race the base already had: one method specialized
+        // 8 times over by 8 threads, and the last to finish installed its entry over whatever
+        // had happened to the first one since).
+        private int _compiling;
 
         protected JitStub(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule, Delegate/*!*/ generic, int arity,
             JitKeywords keywords) {
@@ -102,10 +121,36 @@ namespace IronRuby.Runtime.Jit {
 
         protected abstract void Install(Delegate/*!*/ entry);
         internal abstract Delegate/*!*/ Trampoline { get; }
+        // The stand-in for a retired entry: the generic body behind a countdown of _coolCalls.
+        protected abstract Delegate/*!*/ CoolingBody { get; }
+
+        /// <summary>
+        /// One specialization of the method: its entries, and the deopt counts OnDeopt keeps for
+        /// it. The entry hands it to EntryDeopted and EntryStale, so that a callback says which
+        /// specialization it came from. Sealed, because the entry counts its calls through it,
+        /// reaching it through the closure's constant array: a cast to a sealed class is a
+        /// type-handle compare where one to JitStub is a helper call.
+        /// </summary>
+        internal sealed class Specialization {
+            // Entries into the typed body, counted by an entry that can deopt (BuildEntry). Not
+            // interlocked: a lost increment only blurs a rate.
+            public long Calls;
+            internal static readonly System.Reflection.FieldInfo/*!*/ CallsField = typeof(Specialization).GetField("Calls");
+
+            internal readonly JitStub/*!*/ Stub;
+            internal Delegate Entry;
+            internal Func<object, object, object, object, object, object, object> Direct;
+            internal long WindowStart;
+            internal int WindowDeopts;
+
+            internal Specialization(JitStub/*!*/ stub) {
+                Stub = stub;
+            }
+        }
 
         /// <summary>Called by the trampoline on every call until the method is specialized.</summary>
         protected void Profile(object self, object[] args) {
-            if (_givenUp) { return; }
+            if (_state != Profiling) { return; }
 
             if (_keywords != null) {
                 // what the prologue binds the keywords to, if it binds them at all
@@ -129,12 +174,18 @@ namespace IronRuby.Runtime.Jit {
             if (++_calls < Threshold) { return; }
             _calls = 0;
 
+            if (Interlocked.CompareExchange(ref _compiling, 1, 0) != 0) { return; }
             try {
+                // A thread that read the empty fast slot before another one installed an entry
+                // can get here after that one has let go of _compiling.
+                if (_state != Profiling) { return; }
                 if (!TrySpecialize()) {
                     GiveUp();
                 }
             } catch (Exception) {
                 GiveUp();
+            } finally {
+                Volatile.Write(ref _compiling, 0);
             }
         }
 
@@ -158,7 +209,9 @@ namespace IronRuby.Runtime.Jit {
         /// case, so that path has to cost one delegate hop and nothing else.
         /// </summary>
         private void GiveUp() {
-            _givenUp = true;
+            lock (_sync) {
+                Settle();
+            }
             // Every method that gets here passed JitScreen, so each one is either a genuinely
             // type-dependent refusal or the screen and JitCompiler.Emit having drifted apart.
             // Name it, so a count that creeps up can be traced to the construct responsible.
@@ -167,17 +220,14 @@ namespace IronRuby.Runtime.Jit {
                 Console.Error.WriteLine("[jit] declined {0}/{1} arity {2} (passed the pre-screen)",
                     _declaringModule.Name ?? "main", _ast.Name, _arity);
             }
-            _direct = null;
-            Install(_generic);
         }
 
-        /// <summary>Deoptimize: drop the specialized entry and let profiling start over.</summary>
-        internal void Invalidate() {
-            JitRuntime.Invalidations++;
+        // Under _sync: the generic body, for good.
+        private void Settle() {
+            _state = Settled;
+            _current = null;
             _direct = null;
-            // A method that was already declined must not fall back into profiling here.
-            Install(_givenUp ? _generic : null);
-            _calls = 0;
+            Install(_generic);
         }
 
         // How many times a method is specialized again after a method table change made its entry
@@ -192,15 +242,21 @@ namespace IronRuby.Runtime.Jit {
         /// through the failed guard into the generic body: profile again and specialize under the
         /// new version instead, or settle on the generic body once that has happened too often.
         /// </summary>
-        internal void VersionChanged() {
-            if (_givenUp) { return; }
-            if (++_respecializations > MaxRespecializations) {
-                _givenUp = true;
+        internal void VersionChanged(Specialization/*!*/ spec) {
+            lock (_sync) {
+                if (_state != Specialized || spec != _current) { return; }
+                if (++_respecializations > MaxRespecializations) {
+                    Settle();
+                    return;
+                }
+                // deoptimize: drop the specialized entry and let profiling start over
+                JitRuntime.Invalidations++;
+                _current = null;
                 _direct = null;
-                Install(_generic);
-                return;
+                _calls = 0;
+                _state = Profiling;
+                Install(null);
             }
-            Invalidate();
         }
 
         // ---- deopt rate ----------------------------------------------------------------------
@@ -211,48 +267,85 @@ namespace IronRuby.Runtime.Jit {
         // on the other calls: for a 20-statement arithmetic body, deopting on one call in K,
         // staying specialized broke even with the generic body at K = 25-30 and was 1.5x faster
         // at K = 64. So what retires an entry is the rate: MaxDeopts deopts within DeoptWindow
-        // entries into the typed body - one call in 32 deopting - and the method then keeps its
-        // generic body for good. A recompile would not help: the deopts come from the values the
-        // body computes, not from a guard a new specialization could fix.
+        // entries into the typed body - one call in 32 deopting.
+        //
+        // A retired entry is tried again later, because the deopts may come from one phase of the
+        // input - large values while a program sets up, small ones for the millions of calls after
+        // that - and retiring it for good then made a 10-statement method 3x slower for the rest of
+        // the process. The method keeps its compiled entry and runs the generic body until both
+        // CoolCheckCalls generic calls and a cool-down have passed; the cool-down starts at
+        // CoolDownMs and doubles at each retirement. A retry that fails again costs one more window
+        // of deopts, about 0.5 ms, against a cool-down of at least 8 ms; after MaxRetirements the
+        // method keeps its generic body for good.
         internal const int MaxDeopts = 16;
         private const long DeoptWindow = MaxDeopts * 32;
+        private const int MaxRetirements = 8;
+        private const int CoolDownMs = 8;
+        private const int CoolCheckCalls = 1024;
 
-        // Entries into the typed body, counted by an entry that can deopt (BuildEntry). Not
-        // interlocked: a lost increment only blurs a rate. A sealed holder of its own, because
-        // the entry reaches it through the closure's constant array and a cast to a sealed
-        // class is a type-handle compare where one to JitStub is a helper call.
-        internal sealed class EntryCounter {
-            public long Value;
-            internal static readonly System.Reflection.FieldInfo/*!*/ ValueField = typeof(EntryCounter).GetField("Value");
-        }
-        private readonly EntryCounter/*!*/ _entries = new EntryCounter();
-        private long _windowStart;
-        private int _windowDeopts;
+        private int _retirements;
+        private long _coolUntil;          // Stopwatch timestamp: the end of the cool-down
+        protected int _coolCalls;         // generic calls until CoolDownCheck looks at the time
 
-        private MSA.Expression/*!*/ CountEntry() {
-            return Ast.PreIncrementAssign(Ast.Field(Ast.Constant(_entries), EntryCounter.ValueField));
+        private static MSA.Expression/*!*/ CountEntry(Specialization/*!*/ spec) {
+            return Ast.PreIncrementAssign(Ast.Field(Ast.Constant(spec), Specialization.CallsField));
         }
 
         /// <summary>
         /// Called by an entry (and the direct entry) when the typed body deopted and the call is
         /// being re-run generically: retires the entry once deopts are not rare (see MaxDeopts).
         /// </summary>
-        internal void OnDeopt() {
-            if (_givenUp) { return; }
-            long entries = _entries.Value;
-            if (entries - _windowStart > DeoptWindow) {
-                _windowStart = entries;
-                _windowDeopts = 0;
+        internal void OnDeopt(Specialization/*!*/ spec) {
+            if (_state != Specialized || spec != _current) { return; }
+            long calls = spec.Calls;
+            if (calls - spec.WindowStart > DeoptWindow) {
+                spec.WindowStart = calls;
+                spec.WindowDeopts = 0;
             }
-            if (++_windowDeopts < MaxDeopts) { return; }
-            _givenUp = true;
-            JitRuntime.DeoptRetired++;
-            if (JitRuntime.Verbose) {
-                Console.Error.WriteLine("[jit] retired {0}/{1} arity {2}: {3} deopts in {4} calls",
-                    _declaringModule.Name ?? "main", _ast.Name, _arity, _windowDeopts, entries - _windowStart);
+            if (++spec.WindowDeopts < MaxDeopts) { return; }
+
+            lock (_sync) {
+                if (_state != Specialized || spec != _current) { return; }
+                JitRuntime.DeoptRetired++;
+                bool final = ++_retirements > MaxRetirements;
+                if (JitRuntime.Verbose) {
+                    Console.Error.WriteLine("[jit] retired {0}/{1} arity {2}: {3} deopts in {4} calls{5}",
+                        _declaringModule.Name ?? "main", _ast.Name, _arity, spec.WindowDeopts, calls - spec.WindowStart,
+                        final ? ", for good" : String.Format(", retry in {0} ms", CoolDownMs << (_retirements - 1)));
+                }
+                if (final) {
+                    Settle();
+                    return;
+                }
+                _direct = null;
+                _coolUntil = Stopwatch.GetTimestamp() + (Stopwatch.Frequency * CoolDownMs / 1000) * (1L << (_retirements - 1));
+                _coolCalls = CoolCheckCalls;
+                _state = Cooling;
+                Install(CoolingBody);
             }
-            _direct = null;
-            Install(_generic);
+        }
+
+        /// <summary>
+        /// Called by the cooling stand-in every CoolCheckCalls calls: puts the retired entry back
+        /// once its cool-down is over.
+        /// </summary>
+        protected void CoolDownCheck() {
+            lock (_sync) {
+                if (_state != Cooling) { return; }
+                _coolCalls = CoolCheckCalls;
+                if (Stopwatch.GetTimestamp() < _coolUntil) { return; }
+
+                var spec = _current;
+                spec.WindowStart = spec.Calls;
+                spec.WindowDeopts = 0;
+                JitRuntime.DeoptRetried++;
+                if (JitRuntime.Verbose) {
+                    Console.Error.WriteLine("[jit] retrying {0}/{1} arity {2}", _declaringModule.Name ?? "main", _ast.Name, _arity);
+                }
+                _state = Specialized;
+                _direct = spec.Direct;
+                Install(spec.Entry);
+            }
         }
 
         private bool TrySpecialize() {
@@ -299,11 +392,21 @@ namespace IronRuby.Runtime.Jit {
                 callee = code.Lambda;
             }
 
-            var entry = BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null);
-            Install(entry.Compile());
+            var spec = new Specialization(this);
+            spec.Entry = BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec).Compile();
             if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
                 _keywords.Count <= JitKeywordCall.MaxKeywords) {
-                _direct = BuildDirectEntry(code, callee, version).Compile();
+                spec.Direct = BuildDirectEntry(code, callee, version, spec).Compile();
+            }
+
+            lock (_sync) {
+                // Nothing but this thread, which holds _compiling, takes the stub out of Profiling;
+                // the test is only there to keep it that way.
+                if (_state != Profiling) { return true; }
+                _current = spec;
+                _state = Specialized;
+                Install(spec.Entry);
+                _direct = spec.Direct;
             }
 
             JitRuntime.CompileTicks += Stopwatch.GetTimestamp() - start;
@@ -328,7 +431,8 @@ namespace IronRuby.Runtime.Jit {
 
         // ---- entry lambda ------------------------------------------------------------------
 
-        private MSA.LambdaExpression/*!*/ BuildEntry(JitCode/*!*/ code, MSA.Expression/*!*/ callee, int version, RubyClass pinnedClass) {
+        private MSA.LambdaExpression/*!*/ BuildEntry(JitCode/*!*/ code, MSA.Expression/*!*/ callee, int version, RubyClass pinnedClass,
+            Specialization/*!*/ spec) {
             var self = Ast.Parameter(typeof(object), "self");
             var blk = Ast.Parameter(typeof(Proc), "block");
             var args = new MSA.ParameterExpression[_arity];
@@ -430,11 +534,11 @@ namespace IronRuby.Runtime.Jit {
                 var result = Ast.Variable(typeof(object), "#result");
                 var deopted = Ast.Constant(Deopted, typeof(object));
                 fast = Ast.Block(typeof(object), new[] { result },
-                    CountEntry(),
+                    CountEntry(spec),
                     Ast.TryCatch(
                         Ast.Assign(result, fast),
                         Ast.Catch(typeof(JitDeoptException), Ast.Block(
-                            Ast.Call(JitRuntime.M("EntryDeopted"), Ast.Constant(this, typeof(object))),
+                            Ast.Call(JitRuntime.M("EntryDeopted"), Ast.Constant(spec, typeof(object))),
                             Ast.Assign(result, deopted)
                         ))
                     ),
@@ -457,7 +561,7 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version)),
                 body,
                 Ast.Block(
-                    Ast.Call(JitRuntime.M("EntryStale"), Ast.Constant(this, typeof(object))),
+                    Ast.Call(JitRuntime.M("EntryStale"), Ast.Constant(spec, typeof(object))),
                     GenericCall(self, blk, args)
                 ),
                 typeof(object)
@@ -476,7 +580,7 @@ namespace IronRuby.Runtime.Jit {
         /// deopt - answers NoDirect, and the caller then makes the call the ordinary way.
         /// </summary>
         private MSA.Expression<Func<object, object, object, object, object, object, object>>/*!*/ BuildDirectEntry(JitCode/*!*/ code,
-            MSA.Expression/*!*/ callee, int version) {
+            MSA.Expression/*!*/ callee, int version, Specialization/*!*/ spec) {
 
             var self = Ast.Parameter(typeof(object), "self");
             var slots = new MSA.ParameterExpression[JitKeywordCall.MaxPositional + JitKeywordCall.MaxKeywords];
@@ -527,11 +631,11 @@ namespace IronRuby.Runtime.Jit {
             var noDirect = Ast.Field(null, typeof(JitKeywordCall).GetField("NoDirect"));
             if (code.CanDeopt) {
                 fast = Ast.Block(
-                    CountEntry(),
+                    CountEntry(spec),
                     fast
                 );
                 fast = Ast.TryCatch(fast, Ast.Catch(typeof(JitDeoptException), Ast.Block(
-                    Ast.Call(JitRuntime.M("EntryDeopted"), Ast.Constant(this, typeof(object))),
+                    Ast.Call(JitRuntime.M("EntryDeopted"), Ast.Constant(spec, typeof(object))),
                     noDirect
                 )));
             }
@@ -649,6 +753,7 @@ namespace IronRuby.Runtime.Jit {
         private volatile Func<object, Proc, object> _fast;
         private readonly Func<object, Proc, object>/*!*/ _gen;
         private readonly Func<object, Proc, object>/*!*/ _tramp;
+        private Func<object, Proc, object> _cool;
 
         internal JitStub0(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
             : base(ast, context, m, generic, 0, keywords) {
@@ -658,6 +763,12 @@ namespace IronRuby.Runtime.Jit {
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
         protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object>)entry; }
+        protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
+
+        private object Cool(object self, Proc block) {
+            if (--_coolCalls <= 0) { CoolDownCheck(); }
+            return _gen(self, block);
+        }
 
         private object Call(object self, Proc block) {
             var f = _fast;
@@ -672,6 +783,7 @@ namespace IronRuby.Runtime.Jit {
         private volatile Func<object, Proc, object, object> _fast;
         private readonly Func<object, Proc, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object>/*!*/ _tramp;
+        private Func<object, Proc, object, object> _cool;
 
         internal JitStub1(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
             : base(ast, context, m, generic, 1, keywords) {
@@ -681,6 +793,12 @@ namespace IronRuby.Runtime.Jit {
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
         protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object>)entry; }
+        protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
+
+        private object Cool(object self, Proc block, object a0) {
+            if (--_coolCalls <= 0) { CoolDownCheck(); }
+            return _gen(self, block, a0);
+        }
 
         private object Call(object self, Proc block, object a0) {
             var f = _fast;
@@ -695,6 +813,7 @@ namespace IronRuby.Runtime.Jit {
         private volatile Func<object, Proc, object, object, object> _fast;
         private readonly Func<object, Proc, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object>/*!*/ _tramp;
+        private Func<object, Proc, object, object, object> _cool;
 
         internal JitStub2(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
             : base(ast, context, m, generic, 2, keywords) {
@@ -704,6 +823,12 @@ namespace IronRuby.Runtime.Jit {
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
         protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object>)entry; }
+        protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
+
+        private object Cool(object self, Proc block, object a0, object a1) {
+            if (--_coolCalls <= 0) { CoolDownCheck(); }
+            return _gen(self, block, a0, a1);
+        }
 
         private object Call(object self, Proc block, object a0, object a1) {
             var f = _fast;
@@ -718,6 +843,7 @@ namespace IronRuby.Runtime.Jit {
         private volatile Func<object, Proc, object, object, object, object> _fast;
         private readonly Func<object, Proc, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object>/*!*/ _tramp;
+        private Func<object, Proc, object, object, object, object> _cool;
 
         internal JitStub3(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
             : base(ast, context, m, generic, 3, keywords) {
@@ -727,6 +853,12 @@ namespace IronRuby.Runtime.Jit {
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
         protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object>)entry; }
+        protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
+
+        private object Cool(object self, Proc block, object a0, object a1, object a2) {
+            if (--_coolCalls <= 0) { CoolDownCheck(); }
+            return _gen(self, block, a0, a1, a2);
+        }
 
         private object Call(object self, Proc block, object a0, object a1, object a2) {
             var f = _fast;
@@ -741,6 +873,7 @@ namespace IronRuby.Runtime.Jit {
         private volatile Func<object, Proc, object, object, object, object, object> _fast;
         private readonly Func<object, Proc, object, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object, object>/*!*/ _tramp;
+        private Func<object, Proc, object, object, object, object, object> _cool;
 
         internal JitStub4(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
             : base(ast, context, m, generic, 4, keywords) {
@@ -750,6 +883,12 @@ namespace IronRuby.Runtime.Jit {
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
         protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object>)entry; }
+        protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
+
+        private object Cool(object self, Proc block, object a0, object a1, object a2, object a3) {
+            if (--_coolCalls <= 0) { CoolDownCheck(); }
+            return _gen(self, block, a0, a1, a2, a3);
+        }
 
         private object Call(object self, Proc block, object a0, object a1, object a2, object a3) {
             var f = _fast;
@@ -764,6 +903,7 @@ namespace IronRuby.Runtime.Jit {
         private volatile Func<object, Proc, object, object, object, object, object, object> _fast;
         private readonly Func<object, Proc, object, object, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object, object, object>/*!*/ _tramp;
+        private Func<object, Proc, object, object, object, object, object, object> _cool;
 
         internal JitStub5(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
             : base(ast, context, m, generic, 5, keywords) {
@@ -773,6 +913,12 @@ namespace IronRuby.Runtime.Jit {
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
         protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object, object>)entry; }
+        protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
+
+        private object Cool(object self, Proc block, object a0, object a1, object a2, object a3, object a4) {
+            if (--_coolCalls <= 0) { CoolDownCheck(); }
+            return _gen(self, block, a0, a1, a2, a3, a4);
+        }
 
         private object Call(object self, Proc block, object a0, object a1, object a2, object a3, object a4) {
             var f = _fast;
@@ -787,6 +933,7 @@ namespace IronRuby.Runtime.Jit {
         private volatile Func<object, Proc, object, object, object, object, object, object, object> _fast;
         private readonly Func<object, Proc, object, object, object, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object, object, object, object>/*!*/ _tramp;
+        private Func<object, Proc, object, object, object, object, object, object, object> _cool;
 
         internal JitStub6(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
             : base(ast, context, m, generic, 6, keywords) {
@@ -796,6 +943,12 @@ namespace IronRuby.Runtime.Jit {
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
         protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object, object, object>)entry; }
+        protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
+
+        private object Cool(object self, Proc block, object a0, object a1, object a2, object a3, object a4, object a5) {
+            if (--_coolCalls <= 0) { CoolDownCheck(); }
+            return _gen(self, block, a0, a1, a2, a3, a4, a5);
+        }
 
         private object Call(object self, Proc block, object a0, object a1, object a2, object a3, object a4, object a5) {
             var f = _fast;

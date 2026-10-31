@@ -45,7 +45,7 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>
         /// Statistics, printed by -X:JITStats.
         /// </summary>
-        internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected, DeoptRetired;
+        internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected, DeoptRetired, DeoptRetried;
         internal static long CompileTicks;
 
         /// <summary>
@@ -77,8 +77,8 @@ namespace IronRuby.Runtime.Jit {
         internal static void HookStats() {
             if (!Verbose || System.Threading.Interlocked.Exchange(ref _statsHooked, 1) != 0) { return; }
             AppDomain.CurrentDomain.ProcessExit += (s, e) => {
-                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} retired={5} compile={6:F1}ms",
-                    Specialized, Rejected, ScreenRejected, Deopts, Invalidations, DeoptRetired,
+                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} retired={5} retried={6} compile={7:F1}ms",
+                    Specialized, Rejected, ScreenRejected, Deopts, Invalidations, DeoptRetired, DeoptRetried,
                     CompileTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
                 PrintScreenReasons();
             };
@@ -279,13 +279,15 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>A method entry's VersionOk failed: it is stale for good (see JitStub.VersionChanged).</summary>
-        public static void EntryStale(object/*!*/ stub) {
-            ((JitStub)stub).VersionChanged();
+        public static void EntryStale(object/*!*/ specialization) {
+            var spec = (JitStub.Specialization)specialization;
+            spec.Stub.VersionChanged(spec);
         }
 
         /// <summary>A method entry's typed body deopted (see JitStub.OnDeopt).</summary>
-        public static void EntryDeopted(object/*!*/ stub) {
-            ((JitStub)stub).OnDeopt();
+        public static void EntryDeopted(object/*!*/ specialization) {
+            var spec = (JitStub.Specialization)specialization;
+            spec.Stub.OnDeopt(spec);
         }
 
         /// <summary>An outlined loop was compiled under an older method version; build it again.</summary>
