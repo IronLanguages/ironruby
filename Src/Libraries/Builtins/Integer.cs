@@ -516,7 +516,10 @@ namespace IronRuby.Builtins {
         /// Iterates block self times, passing in values from zero to self - 1, where self is Fixnum.
         /// </summary>
         /// <returns>self</returns>
+        // Not inlined: a backtrace taken in the block has to show this frame ('Integer#times'), and the
+        // JIT would otherwise fold a forwarder this small into a compiled call-site rule.
         [RubyMethodAttribute("times")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object Times(BlockParam/*!*/ block, int self) {
             return (block != null) ? TimesImpl(block, self) : new Enumerator(self, "times");
         }
@@ -543,6 +546,7 @@ namespace IronRuby.Builtins {
         /// Dynamically invokes "&lt;" operator to check if we have reached self - 1.
         /// </remarks>
         [RubyMethodAttribute("times")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object Times(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam block, object/*!*/ self) {
             return (block != null) ? TimesImpl(lessThanStorage, addStorage, block, self) : 
                 new Enumerator(self, "times");
