@@ -219,11 +219,35 @@ namespace IronRuby.Compiler.Ast {
             return path;
         }
 
+        /// <summary>
+        /// A new locals tuple. One of more than MutableTuple.MaxSize slots is a tuple of tuples
+        /// (MutableTuple.MakeTupleType), and `new' makes only the outer one: the nested ones are
+        /// made here as well, or the first store into one of their slots - a method's 127th local
+        /// after its parameter - raises a NullReferenceException.
+        /// </summary>
+        private static MSA.Expression/*!*/ NewTuple(Type/*!*/ tupleType) {
+            Type[] items = tupleType.GetGenericArguments();
+            MSA.Expression[] args = null;
+            for (int i = 0; i < items.Length; i++) {
+                if (typeof(MutableTuple).IsAssignableFrom(items[i])) {
+                    if (args == null) { args = new MSA.Expression[items.Length]; }
+                    args[i] = NewTuple(items[i]);
+                }
+            }
+            if (args == null) {
+                return Ast.New(tupleType);
+            }
+            for (int i = 0; i < items.Length; i++) {
+                if (args[i] == null) { args[i] = AstUtils.Constant(null, items[i]); }
+            }
+            return Ast.New(tupleType.GetConstructor(items), args);
+        }
+
         public MSA.Expression/*!*/ MakeLocalsStorage() {
             // TODO: use a factory instead of Ast.New to improve interpreter perf:
             MSA.Expression result = Ast.Assign(
                 _localsTuple, 
-                LiftedVisibleVariableCount == 0 ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) : Ast.New(_localsTuple.Type)
+                LiftedVisibleVariableCount == 0 ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) : NewTuple(_localsTuple.Type)
             );
             
             if (_parameters != null) {
