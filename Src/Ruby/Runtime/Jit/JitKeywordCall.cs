@@ -52,6 +52,17 @@ namespace IronRuby.Runtime.Jit {
         // stops looking: resolving a name is far dearer than the hash it would save.
         private const int MaxMisses = 8;
 
+        // So does a site whose callee has no direct entry for it to call: a library method, a Ruby
+        // method the JIT declined, one whose signature the call does not fit. Asking costs a call the
+        // receiver's class - for an Integer, Float or String a table lookup - on top of the ordinary
+        // call it makes anyway, which made `2.5.round(half: :even)' 13-37% slower; so such a callee
+        // gets a few calls, and then the site makes the ordinary call behind one field test (Off).
+        // A Ruby method the JIT is still profiling has no direct entry yet either, but it gets one
+        // after JitStub.Threshold calls (counted over every site), so the site waits longer for it -
+        // for each method it resolves, since a new method version can mean profiling over again.
+        private const int MaxDeadCalls = 4;
+        private const int MaxUndecidedCalls = 4 * JitStub.Threshold;
+
         /// <summary>"Not called here: make the call the ordinary way."</summary>
         public static readonly object NoDirect = new object();
 
@@ -70,7 +81,15 @@ namespace IronRuby.Runtime.Jit {
 
         private volatile State _state;
         private int _misses;
-        private volatile bool _megamorphic;
+        private int _deadCalls;
+        private int _undecidedCalls;
+
+        /// <summary>
+        /// Set once the site has stopped looking for a direct entry. The compiled call tests it
+        /// before it calls <see cref="Invoke"/>, so from then on it costs that test and nothing else.
+        /// (A stale read only means one more call through Invoke, which tests it again.)
+        /// </summary>
+        public bool Off;
 
         private JitKeywordCall(RubyContext/*!*/ context, string/*!*/ name, int positional, RubySymbol/*!*/[]/*!*/ keys, bool publicOnly) {
             _context = context;
@@ -82,29 +101,31 @@ namespace IronRuby.Runtime.Jit {
 
         private static readonly MethodInfo/*!*/ InvokeMethod = typeof(JitKeywordCall).GetMethod("Invoke");
         private static readonly FieldInfo/*!*/ NoDirectField = typeof(JitKeywordCall).GetField("NoDirect");
+        private static readonly FieldInfo/*!*/ OffField = typeof(JitKeywordCall).GetField("Off");
 
         public static object Invoke(object/*!*/ site, object self, object p0, object p1, object k0, object k1, object k2) {
             return ((JitKeywordCall)site).Call(self, p0, p1, k0, k1, k2);
         }
 
         private object Call(object self, object p0, object p1, object k0, object k1, object k2) {
-            if (_megamorphic || JitRuntime.Disabled || _context.HasRefinements) { return NoDirect; }
+            if (Off || JitRuntime.Disabled || _context.HasRefinements) { return NoDirect; }
 
             RubyClass cls = JitRuntime.ClassOf(_context, self);
             int version = RubyModule.GlobalMethodVersion;
             State state = _state;
             if (state == null || state.Class != cls || state.Version != version) {
                 if (++_misses > MaxMisses) {
-                    _megamorphic = true;
+                    Off = true;
                     return NoDirect;
                 }
                 _state = state = Resolve(cls, version);
+                _undecidedCalls = 0;
             }
 
             JitStub stub = state.Stub;
-            if (stub == null) { return NoDirect; }
+            if (stub == null || stub.GivenUp) { return Fruitless(ref _deadCalls, MaxDeadCalls); }
             var direct = stub.Direct;
-            if (direct == null) { return NoDirect; }
+            if (direct == null) { return Fruitless(ref _undecidedCalls, MaxUndecidedCalls); }
 
             int[] slots = state.Slots;
             object d0 = null, d1 = null, d2 = null;
@@ -114,6 +135,11 @@ namespace IronRuby.Runtime.Jit {
                 case 1: d0 = Pick(stub, 0, slots[0], k0, k1, k2); break;
             }
             return direct(self, p0, p1, d0, d1, d2);
+        }
+
+        private object Fruitless(ref int count, int max) {
+            if (++count >= max) { Off = true; }
+            return NoDirect;
         }
 
         private static object Pick(JitStub/*!*/ stub, int declared, int slot, object k0, object k1, object k2) {
@@ -253,8 +279,12 @@ namespace IronRuby.Runtime.Jit {
 
             var result = Ast.Variable(typeof(object), "#kwresult");
             temps.Add(result);
-            body.Add(Ast.Assign(result, Ast.Call(InvokeMethod,
-                Ast.Constant(site, typeof(object)), selfTemp, p[0], p[1], k[0], k[1], k[2])));
+            body.Add(Ast.Assign(result, Ast.Condition(
+                Ast.Field(Ast.Constant(site), OffField),
+                Ast.Field(null, NoDirectField),
+                Ast.Call(InvokeMethod, Ast.Constant(site, typeof(object)), selfTemp, p[0], p[1], k[0], k[1], k[2]),
+                typeof(object)
+            )));
             body.Add(Ast.Condition(
                 Ast.ReferenceNotEqual(result, Ast.Field(null, NoDirectField)),
                 result,

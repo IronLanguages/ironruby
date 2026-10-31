@@ -68,6 +68,8 @@ namespace IronRuby.Runtime.Jit {
 
         internal Func<object, object, object, object, object, object, object> Direct { get { return _direct; } }
         internal JitKeywords Keywords { get { return _keywords; } }
+        // Declined for good: the generic body is all this method will ever run, so there is no Direct to wait for.
+        internal bool GivenUp { get { return _givenUp; } }
         internal int Positional { get { return _positional; } }
 
         // Optional parameters (after the mandatory ones, as in the generic delegate) have a literal

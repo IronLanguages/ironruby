@@ -751,6 +751,43 @@ class KwTarget
 end
 kt('kw receiver call, redefined') { kw_recv_call(KwTarget.new, 5) }
 
+# A site whose callee has no direct entry - a library method, a Ruby method the JIT does not
+# take - stops trying after a few calls. Whatever it meets after that it still calls the
+# ordinary way: another class's method, the callee redefined into one the JIT takes.
+def kw_recv_round(o)
+  o.round(half: :even)
+end
+class KwRounder
+  def round(half: :up)
+    [:rounder, half]
+  end
+end
+warm { |i| kw_recv_round(2.5) }
+kt('kw receiver call into a library method') { kw_recv_round(2.5) }
+kt('kw receiver call, then a Ruby method') { kw_recv_round(KwRounder.new) }
+kt('kw receiver call, then library methods again') { [kw_recv_round(3.5), kw_recv_round(Rational(5, 2))] }
+class KwDeclined
+  def no_kw_str(x, by: 2)
+    "#{x}" * by
+  end
+end
+def kw_recv_declined(o, x)
+  o.no_kw_str(x, by: 2)
+end
+kd = KwDeclined.new
+warm { |i| kw_recv_declined(kd, i) }
+kt('kw receiver call, declined method') { kw_recv_declined(kd, 5) }
+kt('kw receiver call, declined method, a String') { kw_recv_declined(kd, 'ab') }
+class KwDeclined
+  def no_kw_str(x, by: 2)
+    x * by
+  end
+end
+warm { |i| kw_recv_declined(kd, i) }
+kt('kw receiver call, declined method redefined') { kw_recv_declined(kd, 5) }
+kt('kw receiver call, declined method redefined, Float') { kw_recv_declined(kd, 0.5) }
+kt('kw receiver call, declined method redefined, overflow') { kw_recv_declined(kd, 2**62) }
+
 def sp_kw_add(left:, right:)
   left - right
 end
