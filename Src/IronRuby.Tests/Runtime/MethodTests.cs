@@ -849,7 +849,7 @@ class X; end
 
 c,d,x = C.new,D.new,X.new
 
-# test visibility caching:
+# test visibility caching (instance_eval makes no singleton class - Ruby 3.2 - so c is reported as an instance):
 2.times do
   [[d,c], [c,d], [x,c], [x,d]].each do |s,r| 
     s.instance_eval { r.foo } rescue p $! 
@@ -858,11 +858,11 @@ end
 "), @"
 foo
 foo
-#<NoMethodError: protected method 'foo' called for #<C:*>>
+#<NoMethodError: protected method 'foo' called for an instance of C>
 mm
 foo
 foo
-#<NoMethodError: protected method 'foo' called for #<C:*>>
+#<NoMethodError: protected method 'foo' called for an instance of C>
 mm
 ", OutputFlags.Match);
         }

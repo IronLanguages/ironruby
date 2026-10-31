@@ -890,8 +890,8 @@ namespace IronRuby.Runtime {
 
                     case ScopeKind.BlockModule:
                         BlockParam blockParam = ((RubyBlockScope)scope).BlockFlowControl;
-                        Debug.Assert(blockParam.MethodLookupModule != null);
-                        return blockParam.MethodLookupModule;
+                        Debug.Assert(blockParam.IsModuleEval);
+                        return blockParam.GetMethodLookupModule(scope.SelfObject);
                 }
 
                 scope = scope.Parent;
@@ -1413,7 +1413,7 @@ var closureScope = scope as RubyClosureScope;
                     return ScopeKind.BlockMethod;
                 }
 
-                if (_blockFlowControl.MethodLookupModule == null) {
+                if (!_blockFlowControl.IsModuleEval) {
                     return ScopeKind.Block; 
                 }
 

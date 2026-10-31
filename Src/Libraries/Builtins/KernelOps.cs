@@ -1034,6 +1034,46 @@ namespace IronRuby.Builtins {
                 new Binding(scope), (block != null) ? block.Proc : null);
         }
 
+        /// <summary>
+        /// The prelude's "does obj answer this message" (the conversions in rational.rb and complex.rb ask it of
+        /// whatever they are handed - a BasicObject included, which has no #respond_to?): true if obj has the method
+        /// in any visibility, otherwise what its #respond_to? says if it has a public or protected one. An object
+        /// that can have no singleton class (an Integer, a Float, a Symbol, a frozen String) is asked #respond_to?.
+        /// The lookup is the one `class &lt;&lt; obj; self; end.method_defined?' made, but on the class obj has - its
+        /// singleton class only if it already has one: making one to ask through gave every value converted (each
+        /// Rational of every Time#subsec) a class of its own, which each call site it reached then had to bind afresh.
+        /// </summary>
+        [RubyMethod("__ir_responds_to__", RubyMethodAttributes.PrivateInstance)]
+        public static bool RespondsTo(ConversionStorage<string>/*!*/ stringCast, RespondToStorage/*!*/ respondToStorage,
+            object self, object obj, object methodName) {
+
+            var context = respondToStorage.Context;
+            var respondToSite = respondToStorage.GetCallSite();
+            if (!RubyUtils.CanDefineSingletonMethod(obj)) {
+                return Protocols.IsTrue(respondToSite.Target(respondToSite, obj, methodName));
+            }
+
+            // method_defined? || private_method_defined?, as Module#method_defined? answers them:
+            string name = Protocols.CastToSymbol(stringCast, methodName);
+            RubyClass cls = context.GetImmediateClassOf(obj);
+            if (GetDefinedVisibility(cls, name) != RubyMethodVisibility.None) {
+                return true;
+            }
+
+            var respondTo = GetDefinedVisibility(cls, "respond_to?");
+            return (respondTo == RubyMethodVisibility.Public || respondTo == RubyMethodVisibility.Protected) &&
+                Protocols.IsTrue(respondToSite.Target(respondToSite, obj, methodName));
+        }
+
+        private static RubyMethodVisibility GetDefinedVisibility(RubyClass/*!*/ cls, string/*!*/ name) {
+            var method = cls.GetMethodLookup(name);
+            if (!method.Found) {
+                return RubyMethodVisibility.None;
+            }
+            var libraryMethod = method.Info as RubyLibraryMethodInfo;
+            return (libraryMethod != null && libraryMethod.IsNotImplemented) ? RubyMethodVisibility.None : method.Visibility;
+        }
+
         [RubyMethod("__ir_clone_with_freeze__", RubyMethodAttributes.PrivateInstance)]
         public static object/*!*/ CloneWithFreeze(
             CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ initializeCopyStorage,

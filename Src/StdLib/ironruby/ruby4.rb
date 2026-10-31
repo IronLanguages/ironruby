@@ -24,20 +24,8 @@ module Kernel
       "can't convert #{obj.class} into #{name} (#{obj.class}##{method} gives #{__ir_conversion_result_name__(converted)})")
   end
 
-  # A BasicObject has none of Kernel's methods to ask with - not even #respond_to? -
-  # so its own singleton class is asked instead, which answers for anything it or its
-  # ancestors define. An Integer or a Symbol has no singleton class to ask at all, but
-  # it does have Kernel, so it is asked directly.
-  private def __ir_responds_to__(obj, method)
-    singleton = begin
-      class << obj; self; end
-    rescue ::TypeError
-      return obj.respond_to?(method)
-    end
-
-    return true if singleton.method_defined?(method) || singleton.private_method_defined?(method)
-    singleton.method_defined?(:respond_to?) && obj.respond_to?(method)
-  end
+  # __ir_responds_to__(obj, method) is KernelOps.RespondsTo: it asks the class obj has
+  # without making obj a singleton class to ask through.
 
   # The class of an object that may not answer #class: a BasicObject has none, and MRI's
   # conversion messages name its class all the same.

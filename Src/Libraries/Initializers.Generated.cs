@@ -4642,6 +4642,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.LazyGrepV)
             );
             
+            DefineLibraryMethod(module, "__ir_responds_to__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.RespondToStorage, System.Object, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.RespondsTo)
+            );
+            
             DefineLibraryMethod(module, "__ir_set_hidden_ivar__", 0x52, 
                 0x00000004U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubySymbol, System.Object, System.Object>(IronRuby.Builtins.KernelOps.SetHiddenInstanceVariable)

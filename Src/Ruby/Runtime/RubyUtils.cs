@@ -1459,9 +1459,18 @@ namespace IronRuby.Runtime {
             // block looks methods up through the dummy singleton standing in front of their
             // class instead. It sits directly below the class, so a private method of Integer
             // is still reached; a `def' landing in it raises, which is what MRI does too.
+            //
+            // MRI makes the singleton class of an object only when the block defines something into it (see
+            // BlockParam.SetLazySingletonMethodLookup); a module's is always there.
             RubyModule lookupModule;
             if (RubyUtils.HasSingletonClass(self)) {
-                lookupModule = block.RubyContext.GetOrCreateSingletonClass(self);
+                var context = block.RubyContext;
+                if (self is RubyModule) {
+                    lookupModule = context.GetOrCreateSingletonClass(self);
+                } else {
+                    RubyClass immediate = context.GetImmediateClassOf(self);
+                    lookupModule = immediate.IsSingletonClass ? immediate : null;
+                }
             } else {
                 lookupModule = block.RubyContext.GetImmediateClassOf(self).GetDummySingletonClass();
             }
@@ -1471,9 +1480,14 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        private static bool EvaluateBlock(BlockParam/*!*/ block, RubyModule/*!*/ module, object self, object[] args, out object result) {
-            Assert.NotNull(block, module);
-            block.MethodLookupModule = module;
+        // A null module: the singleton class of self, made when a definition needs it.
+        private static bool EvaluateBlock(BlockParam/*!*/ block, RubyModule module, object self, object[] args, out object result) {
+            Assert.NotNull(block);
+            if (module != null) {
+                block.MethodLookupModule = module;
+            } else {
+                block.SetLazySingletonMethodLookup();
+            }
 
             if (args != null) {
                 result = RubyOps.Yield(args, null, self, block);
