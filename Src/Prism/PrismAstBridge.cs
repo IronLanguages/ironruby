@@ -2003,11 +2003,6 @@ namespace IronRuby.Prism {
         private Arguments _zsuperArguments;
 
         /// <summary>
-        ///   def m(a, b: 1, **rest); super; end   =>   super(a, **{b: b}.merge(rest))
-        /// The keyword values are read at the call site, so a body that reassigns one passes the
-        /// new value, as MRI does. Returns null when there are no keywords to rebuild.
-        /// </summary>
-        /// <summary>
         /// The positional parameters of a generally-lowered signature, read back by name.
         /// Returns null if one of them has no name to read it back by, in which case the
         /// original argument list kept aside by the prologue is forwarded instead.
@@ -2038,31 +2033,47 @@ namespace IronRuby.Prism {
             return result;
         }
 
+        /// <summary>
+        ///   def m(a, b: 1, **rest); super; end   =>   super(a, **rest.merge({b: b}))
+        ///   def m(a, **rest); super; end         =>   super(a, **rest)
+        ///   def m(a, **nil); super; end          =>   super(a)
+        /// The keyword values are read at the call site, so a body that reassigns one (or the
+        /// rest) passes the new value, as MRI does. Forwarding the hidden trailing hash instead
+        /// would pass the keywords as they arrived - and when none did, its `{}` as one more
+        /// positional argument, where MRI's `**` passes nothing. Returns null when the
+        /// positional parameters cannot be read back.
+        /// </summary>
         private Arguments ZSuperArguments(Pm.ParametersNode/*!*/ node, List<Expression> positional) {
-            if (positional == null || node.Keywords.Length == 0) {
+            if (positional == null) {
                 return null;
             }
 
             var span = Span(node);
-            var maplets = new List<Maplet>();
-            foreach (var keyword in node.Keywords) {
-                string name = keyword is Pm.RequiredKeywordParameterNode required
-                    ? required.Name
-                    : ((Pm.OptionalKeywordParameterNode)keyword).Name;
-                maplets.Add(new Maplet(new SymbolLiteral(name, _encoding, span),
-                    CurrentScope.ResolveOrAddVariable(name, span), span));
+            Expression hash = null;
+            if (node.Keywords.Length > 0) {
+                var maplets = new List<Maplet>();
+                foreach (var keyword in node.Keywords) {
+                    string name = keyword is Pm.RequiredKeywordParameterNode required
+                        ? required.Name
+                        : ((Pm.OptionalKeywordParameterNode)keyword).Name;
+                    maplets.Add(new Maplet(new SymbolLiteral(name, _encoding, span),
+                        CurrentScope.ResolveOrAddVariable(name, span), span));
+                }
+                hash = new HashConstructor(maplets.ToArray(), span);
             }
 
-            Expression hash = new HashConstructor(maplets.ToArray(), span);
-            if (node.KeywordRest is Pm.KeywordRestParameterNode keywordRest && keywordRest.Name != null) {
+            if (node.KeywordRest is Pm.KeywordRestParameterNode keywordRest) {
                 // MRI orders the forwarded hash rest-first: `def m(b: 1, **rest)` called with
-                // z: 2 supers with {z: 2, b: 1}
-                hash = new MethodCall(CurrentScope.ResolveOrAddVariable(keywordRest.Name, span), "merge",
-                    new Arguments(hash), span);
+                // z: 2 supers with {z: 2, b: 1}. An anonymous `**` is bound to a hidden local.
+                Expression rest = CurrentScope.ResolveOrAddVariable(keywordRest.Name ?? AnonymousKeywordRestName, span);
+                hash = (hash != null) ? new MethodCall(rest, "merge", new Arguments(hash), span) : rest;
             }
 
             var arguments = new List<Expression>(positional);
-            arguments.Add(new KeywordArgumentSplat(hash));
+            if (hash != null) {
+                // `**` passes nothing at all for an empty hash, and a copy of any other
+                arguments.Add(new KeywordArgumentSplat(hash));
+            }
             return new Arguments(arguments.ToArray());
         }
 
@@ -2230,6 +2241,10 @@ namespace IronRuby.Prism {
                 // (a lambda is as strict as a method about this; a plain block is not)
                 if ((isMethod || !autoSplat) && optional.Count == 0 && unsplat == null) {
                     prologue = RefuseKeywords(optional, mandatory, span);
+                    if (isMethod) {
+                        // `super` must not forward the hash taken only to be refused
+                        _zsuperArguments = ZSuperArguments(node, new List<Expression>(mandatory));
+                    }
                 }
             } else if (node.KeywordRest != null) {
                 throw Unsupported(node.KeywordRest);

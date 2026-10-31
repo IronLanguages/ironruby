@@ -147,6 +147,50 @@ C.foo
         }
 
         /// <summary>
+        /// A parameterless super in a method with **rest, ** or **nil forwards the keywords as `**rest' would - read
+        /// from the locals, so a reassigned rest passes its new value, and nothing at all when there are none -
+        /// rather than the hidden trailing hash the keywords arrived in, whose `{}' was one positional argument
+        /// too many for a parent without keywords. The output is CRuby's.
+        /// </summary>
+        [Options(Prism = true)]
+        public void SuperParameterlessKeywordRest1() {
+            TestOutput(@"
+class P
+  def m(h = :none) h end
+  def r(*a) a end
+  def k(**kw) kw end
+end
+class C < P
+  def m(**kw) super end
+  def r(a, **) super end
+  def k(b: 1, **rest) super end
+end
+class D < P
+  def m(**nil) super end
+  def r(a, b = 2, **kw) kw = {y: a}; super end
+end
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+p s(C.new.m), s(C.new.m(a: 1)), s(C.new.r(1)), s(C.new.r(1, z: 2)), s(C.new.k), s(C.new.k(z: 2))
+p s(D.new.m), s(D.new.r(1)), s(D.new.r(1, 3, q: 4))
+class E < StandardError; def initialize(**kw) super end; end
+p E.new.message
+", @"
+:none
+[:hash, [:a, 1]]
+[1]
+[1, [:hash, [:z, 2]]]
+[:hash, [:b, 1]]
+[:hash, [:z, 2], [:b, 1]]
+:none
+[1, 2, [:hash, [:y, 1]]]
+[1, 3, [:hash, [:y, 1]]]
+""E""
+");
+        }
+
+        /// <summary>
         /// Calls to super with block and no arguments (was bug in parser/AST).
         /// </summary>
         public void Super2() {
