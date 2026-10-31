@@ -77,6 +77,11 @@ namespace IronRuby.Runtime.Jit {
 
             if (JitRuntime.Disabled || context.HasRefinements) { return null; }
 
+            // What the prologue's version guard compares against: read before the compiler
+            // resolves anything (see JitStub.TrySpecialize), so that a method table change racing
+            // with the compile leaves the copy stale rather than right for good.
+            int version = RubyModule.GlobalMethodVersion;
+
             var argsParameter = Ast.Parameter(typeof(object[]), "#args");
             var exit = Ast.Label(typeof(object), "#osr-jit-exit");
             var tuples = new Dictionary<int, MSA.ParameterExpression>();
@@ -204,7 +209,7 @@ namespace IronRuby.Runtime.Jit {
             // fails it fails it on every later entry, so it asks to be rebuilt under the new
             // version rather than counting as one more deopt towards retiring the loop.
             prologue.Add(Ast.IfThen(
-                Ast.Not(Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(RubyModule.GlobalMethodVersion))),
+                Ast.Not(Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version))),
                 Ast.Return(exit, Ast.Call(JitRuntime.M("OsrVersionStale")))
             ));
 

@@ -217,6 +217,13 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
+            // The method version the entry guards on is read before compiling, so that it is never
+            // newer than what the compiler resolved against - each built-in operator it checks, and
+            // the self-call check below. Read after, a method redefined (on another thread) while a
+            // large body compiled would be inside the snapshot, and the entry would go on running
+            // the operator it replaced.
+            int version = RubyModule.GlobalMethodVersion;
+
             long start = Stopwatch.GetTimestamp();
             var code = JitCompiler.TryCompile(_ast, _context, types, _keywords);
             if (code == null) { return false; }
@@ -226,8 +233,6 @@ namespace IronRuby.Runtime.Jit {
                 if (_receiverClass == null || _polymorphicReceiver) { return false; }
                 if (!SelfCallResolvesHere(_receiverClass)) { return false; }
             }
-
-            int version = RubyModule.GlobalMethodVersion;
 
             // The typed body only has to exist as a delegate of its own when it calls itself: the
             // direct self-call goes through SelfCell. Otherwise the entry invokes the lambda
