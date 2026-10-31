@@ -44,12 +44,14 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// An empty hash with room for <paramref name="capacity"/> Symbol keys, to be filled with
         /// <see cref="AppendUnlinked"/>: a keyword-call hash, or a hash literal whose keys are all
-        /// Symbol literals. No bucket array until something probes (LinkPendingBuckets); two keys,
-        /// the commonest literal, get an entry array of exactly two (2 is prime, as FastMod wants).
+        /// Symbol literals. No bucket array until something probes (LinkPendingBuckets). The entry
+        /// array is the usual GetPrime size, 3 for up to three keys: an exact fit of two for a
+        /// two-key literal saved 16 bytes, but made the hash's first added key a resize, and
+        /// `h = {a: x, b: y}; h[:c] = z' then 1.37x slower than with room for the third key.
         /// </summary>
         internal static Hash/*!*/ CreateUnlinked(IEqualityComparer<object>/*!*/ comparer, int capacity) {
             var result = new Hash(comparer, 0);
-            int size = (capacity == 2) ? 2 : GetPrime(capacity);
+            int size = GetPrime(capacity);
             result._entries = new Entry[size];
             result._fastModMultiplier = UInt64.MaxValue / (uint)size + 1;
             return result;
