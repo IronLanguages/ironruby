@@ -344,5 +344,30 @@ p s
 [true, true, true, false, true]
 ");
         }
+
+        /// <summary>
+        /// A hook's call interns the name it is passed, and the runtime leaves the call out for a default hook: the name
+        /// still has to be interned, since CRuby's Symbol.all_symbols lists every constant and method name. Constant names
+        /// from eval'd code, const_set with a String and Struct.new reach no other place that would intern them. The
+        /// expected output is CRuby 4.0's.
+        /// </summary>
+        [Options(Prism = true)]
+        public void Hooks4() {
+            TestOutput(@"
+interned = -> s { Symbol.all_symbols.any? { |y| y.to_s == s } }
+names = []
+n = ""Zq"" + ""EvalClass""; eval(""class #{n}; end""); names << n
+n = ""Zq"" + ""EvalModule""; eval(""module #{n}; end""); names << n
+n = ""Zq"" + ""EvalConst""; eval(""#{n} = 1""); names << n
+n = ""Zq"" + ""CsetStr""; Object.const_set(n, 2); names << n
+n = ""Zq"" + ""StructName""; Struct.new(n, :a); names << n
+n = ""Zq"" + ""ModConst""; Module.new.const_set(n, 3); names << n
+n = ""zq"" + ""_attr""; Class.new { attr_accessor n }; names << n << n + ""=""
+n = ""zq"" + ""_sdef""; $o = Object.new; eval(""def $o.#{n}; end""); names << n
+p names.map(&interned)
+", @"
+[true, true, true, true, true, true, true, true, true]
+");
+        }
     }
 }

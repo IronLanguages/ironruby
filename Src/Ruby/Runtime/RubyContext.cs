@@ -2854,6 +2854,11 @@ namespace IronRuby.Runtime {
         /// Freezes the string the symbol holds on.
         /// </summary>
         public RubySymbol/*!*/ CreateSymbol(MutableString/*!*/ str, bool clone) {
+            bool created;
+            return CreateSymbol(str, clone, out created);
+        }
+
+        private RubySymbol/*!*/ CreateSymbol(MutableString/*!*/ str, bool clone, out bool created) {
             // A symbol whose name is ASCII-only is US-ASCII whatever the string it was interned
             // from was tagged with, so that "abc".b.to_sym.equal?(:abc) and the encoding does
             // not depend on which spelling happened to reach the symbol table first. An
@@ -2866,7 +2871,8 @@ namespace IronRuby.Runtime {
 
             RubySymbol result;
             lock (SymbolsLock) {
-                if (!_symbols.TryGetValue(str, out result)) {
+                created = !_symbols.TryGetValue(str, out result);
+                if (created) {
                     result = new RubySymbol((clone ? str.Clone() : str).Freeze(), _symbols.Count + RubySymbol.MinId, _runtimeId);
                     _symbols.Add(str, result);
                 }
@@ -4580,13 +4586,30 @@ namespace IronRuby.Runtime {
 
         /// <summary>
         /// Calls <paramref name="hook"/> - method_added, const_added and the like - on <paramref name="target"/>,
-        /// unless it would run the built-in method, which does nothing (see <see cref="IsDefaultHook"/>).
+        /// unless it would run the built-in method, which does nothing (see <see cref="IsDefaultHook"/>). The name is
+        /// interned either way, as the call would intern it.
         /// </summary>
         internal void CallHook(ref CallSite<Func<CallSite, object, object, object>> site, RubyClass.Hook hook,
             object target, string/*!*/ memberName) {
 
             if (!IsDefaultHook(target, hook)) {
                 Send(ref site, RubyClass.HookNames[(int)hook], target, memberName);
+            } else if (!_identifierSymbols.ContainsKey(memberName)) {
+                InternHookName(memberName);
+            }
+        }
+
+        /// <summary>
+        /// Interns the name a left-out hook call would have passed: the call would have interned it, and for a constant
+        /// nothing else may, while CRuby's Symbol.all_symbols lists every constant and method name. A name that had a symbol
+        /// already is filed in the identifier cache (<see cref="StringifyIdentifier"/>), so that from then on it costs
+        /// a lookup. A new one is not: every class and module name is one, and filing each costs more than it saves.
+        /// </summary>
+        private void InternHookName(string/*!*/ name) {
+            bool created;
+            RubySymbol symbol = CreateSymbol(MutableString.CreateMutable(name, GetIdentifierEncoding()), false, out created);
+            if (!created) {
+                _identifierSymbols.TryAdd(name, symbol);
             }
         }
 
