@@ -132,16 +132,20 @@ namespace IronRuby.Runtime.Jit {
         /// type-handle compare where one to JitStub is a helper call.
         /// </summary>
         internal sealed class Specialization {
-            // Entries into the typed body, counted by an entry that can deopt (BuildEntry). Not
-            // interlocked: a lost increment only blurs a rate.
-            public long Calls;
-            internal static readonly System.Reflection.FieldInfo/*!*/ CallsField = typeof(Specialization).GetField("Calls");
+            // While a deopt window is open (OnDeopt): the entries into the typed body still left
+            // in it, counted down by an entry that can deopt (BuildEntry). Zero otherwise, and then
+            // the entry only reads it, so threads calling a method that does not deopt write
+            // nothing they share. Not interlocked: a lost decrement only blurs a rate.
+            public int Countdown;
+            internal static readonly System.Reflection.FieldInfo/*!*/ CountdownField = typeof(Specialization).GetField("Countdown");
 
             internal readonly JitStub/*!*/ Stub;
             internal Delegate Entry;
             internal Func<object, object, object, object, object, object, object> Direct;
-            internal long WindowStart;
             internal int WindowDeopts;
+            // The least a deopt of the open window cost, throw to catch, in Stopwatch ticks; 0 if
+            // none was timed (OnDeopt).
+            internal long DeoptCost;
 
             internal Specialization(JitStub/*!*/ stub) {
                 Stub = stub;
@@ -260,14 +264,35 @@ namespace IronRuby.Runtime.Jit {
         }
 
         // ---- deopt rate ----------------------------------------------------------------------
-        // A deopt costs a CLR exception, about 15-30 us, on top of the generic call it falls back
-        // to, so an entry that deopts on every call (arithmetic that always outgrows Int64, say)
-        // made its method several times slower than not specializing it at all, for as long as
-        // the program ran. A deopt now and then, though, is paid for by what the typed body saves
-        // on the other calls: for a 20-statement arithmetic body, deopting on one call in K,
-        // staying specialized broke even with the generic body at K = 25-30 and was 1.5x faster
-        // at K = 64. So what retires an entry is the rate: MaxDeopts deopts within DeoptWindow
-        // entries into the typed body - one call in 32 deopting.
+        // A deopt costs a CLR exception, about 10 us, on top of the generic call it falls back to,
+        // so an entry that deopts on every call (arithmetic that always outgrows Int64, say) made
+        // its method several times slower than not specializing it at all, for as long as the
+        // program ran. A deopt now and then, though, is paid for by what the typed body saves on
+        // the other calls, and how rare a deopt has to be for that depends on the body: deopting
+        // on 1 call in K, a chain of Integer statements broke even with its generic body at K of
+        // about 34 for 3 statements, 14 for 20, 8 for 40, 4 for 80 and 3 for 160. No one rate is
+        // right for all of them; retiring at 1 call in 32, the first policy here, made a
+        // 40-statement body 2x slower than the base, which never retires an entry.
+        //
+        // So the stub measures. The first deopt in a while opens a window of DeoptWindow entries
+        // into the typed body, which the entry counts down (Countdown), and each deopt in it is
+        // timed from the throw to the entry's catch. At the window's MaxDeopts'th deopt - n
+        // deopts, the first one opening the window, over m entries - the entry is retired if
+        //     (n - 1) * deopt > 1.25 * (m - (n - 1)) * generic
+        // with deopt the least a deopt has taken in any window and generic the least median of the
+        // generic calls Cool timed: while the entry was retired or, before it ever was, in a short
+        // Probe once the generic body is compiled (the light compiler interprets its first calls
+        // and compiles it in the background), repeated a few times as the runtime warms up. That
+        // is the break-even of staying specialized as if the typed body cost nothing, with a
+        // margin. A real one costs something, so the rule retires an entry only when its deopts
+        // cost more than the whole generic body would on the calls that do not deopt: it keeps
+        // some that lose a little (20 statements deopting on 1 call in 10-14), as the base keeps
+        // them all, and does not retire one that pays its way. The least readings are the ones
+        // to compare, because the two are timed at different moments, and either comes out up
+        // to twice as high now and then - deopts took 10 us in most windows of a run and 16-23 us
+        // in bursts of others, which retired entries that paid for themselves. A window that
+        // runs out first just closes, and the entry counts nothing until the next deopt: a method
+        // that does not deopt writes nothing on its calls that the threads calling it share.
         //
         // A retired entry is tried again later, because the deopts may come from one phase of the
         // input - large values while a program sets up, small ones for the millions of calls after
@@ -275,59 +300,170 @@ namespace IronRuby.Runtime.Jit {
         // the process. The method keeps its compiled entry and runs the generic body until both
         // CoolCheckCalls generic calls and a cool-down have passed; the cool-down starts at
         // CoolDownMs and doubles at each retirement. A retry that fails again costs one more window
-        // of deopts, about 0.5 ms, against a cool-down of at least 8 ms; after MaxRetirements the
+        // of deopts, about 0.2 ms, against a cool-down of at least 8 ms; after MaxRetirements the
         // method keeps its generic body for good.
         internal const int MaxDeopts = 16;
-        private const long DeoptWindow = MaxDeopts * 32;
+        private const int DeoptWindow = MaxDeopts * 64;
         private const int MaxRetirements = 8;
         private const int CoolDownMs = 8;
         private const int CoolCheckCalls = 1024;
+        private const int CoolSampleMask = 7;    // Cool times one generic call in 8, at random
+        private const int ProbeCalls = 2 * MaxDeopts;  // and every one in a probe
+        private const int MaxProbes = 6;
+        private const int ProbeIntervalMs = 100;
+        private const int MaxProbeDelays = 8;
 
         private int _retirements;
         private long _coolUntil;          // Stopwatch timestamp: the end of the cool-down
         protected int _coolCalls;         // generic calls until CoolDownCheck looks at the time
+        // The latest generic calls Cool timed (a ring of MaxDeopts), which ones it times, and the
+        // least median of them taken when the entry was put back; in Stopwatch ticks.
+        private long[] _coolSamples;
+        private int _coolSampleCount;
+        private int _coolMask;
+        private uint _coolRandom = 0x9E3779B9;
+        private long _genericCost;
+        private long _deoptCost;          // the least a deopt took in any window, in Stopwatch ticks
+        private int _probes;
+        private long _probeAfter;         // Stopwatch timestamp: no probe before it
+        // Set once the light compiler has compiled the generic body (Wrap), or from the start if it was
+        // never interpreted. A probe waits for it, for at most MaxProbeDelays windows.
+        private volatile bool _genericCompiled;
+        private int _probeDelays;
 
         private static MSA.Expression/*!*/ CountEntry(Specialization/*!*/ spec) {
-            return Ast.PreIncrementAssign(Ast.Field(Ast.Constant(spec), Specialization.CallsField));
+            var countdown = Ast.Field(Ast.Constant(spec), Specialization.CountdownField);
+            return Ast.IfThen(Ast.GreaterThan(countdown, Ast.Constant(0)), Ast.PreDecrementAssign(countdown));
         }
 
         /// <summary>
         /// Called by an entry (and the direct entry) when the typed body deopted and the call is
-        /// being re-run generically: retires the entry once deopts are not rare (see MaxDeopts).
+        /// being re-run generically, with what the exception cost (-1 if unknown): retires the
+        /// entry once its deopts cost more than its typed body saves (see MaxDeopts).
         /// </summary>
-        internal void OnDeopt(Specialization/*!*/ spec) {
+        internal void OnDeopt(Specialization/*!*/ spec, long deoptCost) {
             if (_state != Specialized || spec != _current) { return; }
-            long calls = spec.Calls;
-            if (calls - spec.WindowStart > DeoptWindow) {
-                spec.WindowStart = calls;
-                spec.WindowDeopts = 0;
+            if (spec.Countdown <= 0) {
+                // the first deopt in a while: open a window
+                spec.WindowDeopts = 1;
+                spec.DeoptCost = (deoptCost > 0) ? deoptCost : 0;
+                spec.Countdown = DeoptWindow;
+                return;
             }
+            // Not interlocked, like the rest of a window: a deopt racing with another on a second
+            // thread can lose its count or its cost, which only blurs a rate.
+            if (deoptCost > 0 && (spec.DeoptCost == 0 || deoptCost < spec.DeoptCost)) { spec.DeoptCost = deoptCost; }
             if (++spec.WindowDeopts < MaxDeopts) { return; }
+
+            int entries = DeoptWindow - spec.Countdown;
+            int deopts = spec.WindowDeopts - 1;
+            if (spec.DeoptCost > 0 && (_deoptCost == 0 || spec.DeoptCost < _deoptCost)) { _deoptCost = spec.DeoptCost; }
+            long deopt = _deoptCost;
+            long generic = _genericCost;
+            // close the window; the next deopt opens another
+            spec.Countdown = 0;
+            if (deopt <= 0) { return; }
+            if (generic <= 0 || 4 * deopts * deopt <= 5 * (entries - deopts) * generic) {
+                if (generic > 0 && JitRuntime.Verbose) {
+                    Console.Error.WriteLine("[jit] kept {0}/{1} arity {2}: {3} deopts in {4} calls ({5})",
+                        _declaringModule.Name ?? "main", _ast.Name, _arity, spec.WindowDeopts, entries, Costs(deopt, generic));
+                }
+                // Time the generic body: it has not been yet, or it may have got faster since - the
+                // runtime methods it calls start out in the CLR's quick first-tier code, which is
+                // replaced some 100 ms on.
+                if (_probes < MaxProbes && Stopwatch.GetTimestamp() >= _probeAfter && (_genericCompiled || ++_probeDelays > MaxProbeDelays)) {
+                    Probe(spec, entries, deopt);
+                }
+                return;
+            }
 
             lock (_sync) {
                 if (_state != Specialized || spec != _current) { return; }
                 JitRuntime.DeoptRetired++;
                 bool final = ++_retirements > MaxRetirements;
                 if (JitRuntime.Verbose) {
-                    Console.Error.WriteLine("[jit] retired {0}/{1} arity {2}: {3} deopts in {4} calls{5}",
-                        _declaringModule.Name ?? "main", _ast.Name, _arity, spec.WindowDeopts, calls - spec.WindowStart,
+                    Console.Error.WriteLine("[jit] retired {0}/{1} arity {2}: {3} deopts in {4} calls ({5}){6}",
+                        _declaringModule.Name ?? "main", _ast.Name, _arity, spec.WindowDeopts, entries, Costs(deopt, generic),
                         final ? ", for good" : String.Format(", retry in {0} ms", CoolDownMs << (_retirements - 1)));
                 }
                 if (final) {
                     Settle();
                     return;
                 }
-                _direct = null;
-                _coolUntil = Stopwatch.GetTimestamp() + (Stopwatch.Frequency * CoolDownMs / 1000) * (1L << (_retirements - 1));
-                _coolCalls = CoolCheckCalls;
-                _state = Cooling;
-                Install(CoolingBody);
+                StartCooling(Stopwatch.GetTimestamp() + (Stopwatch.Frequency * CoolDownMs / 1000) * (1L << (_retirements - 1)),
+                    CoolCheckCalls, CoolSampleMask);
             }
         }
 
         /// <summary>
-        /// Called by the cooling stand-in every CoolCheckCalls calls: puts the retired entry back
-        /// once its cool-down is over.
+        /// Time the generic body: run it for ProbeCalls calls, timing each, then put the entry back.
+        /// A probe costs what the typed body would have saved on those calls; there are at most
+        /// MaxProbes, ProbeIntervalMs apart and then twice as far each time.
+        /// </summary>
+        private void Probe(Specialization/*!*/ spec, int entries, long deopt) {
+            lock (_sync) {
+                if (_state != Specialized || spec != _current || _probes >= MaxProbes) { return; }
+                _probeAfter = Stopwatch.GetTimestamp() + (Stopwatch.Frequency * ProbeIntervalMs / 1000) * (1L << _probes);
+                _probes++;
+                if (JitRuntime.Verbose) {
+                    Console.Error.WriteLine("[jit] timing the generic body of {0}/{1} arity {2}: {3} deopts in {4} calls (deopt {5:F1} us){6}",
+                        _declaringModule.Name ?? "main", _ast.Name, _arity, spec.WindowDeopts, entries, deopt * 1e6 / Stopwatch.Frequency,
+                        _genericCompiled ? "" : ", not known to be compiled");
+                }
+                StartCooling(0, ProbeCalls, 0);
+            }
+        }
+
+        // Under _sync: the generic body until `until' and `calls' generic calls have passed, timing
+        // the calls Cool picks with `mask'.
+        private void StartCooling(long until, int calls, int mask) {
+            _direct = null;
+            _coolUntil = until;
+            _coolCalls = calls;
+            _coolMask = mask;
+            _coolSamples ??= new long[MaxDeopts];
+            _coolSampleCount = 0;
+            _state = Cooling;
+            Install(CoolingBody);
+        }
+
+        private static long Median(long[]/*!*/ costs, int count) {
+            var sorted = new long[count];
+            Array.Copy(costs, sorted, count);
+            Array.Sort(sorted);
+            return sorted[count / 2];
+        }
+
+        private static string/*!*/ Costs(long deopt, long generic) {
+            return String.Format("deopt {0:F1} us, generic {1:F2} us",
+                deopt * 1e6 / Stopwatch.Frequency, generic * 1e6 / Stopwatch.Frequency);
+        }
+
+        /// <summary>
+        /// Whether the cooling stand-in is to time this call: one in CoolSampleMask + 1, picked at
+        /// random so that the calls timed are not in step with a pattern of the program's own.
+        /// </summary>
+        protected bool CoolPick() {
+            uint r = _coolRandom;
+            r ^= r << 13; r ^= r >> 17; r ^= r << 5;
+            _coolRandom = r;
+            return (r & _coolMask) == 0;
+        }
+
+        /// <summary>Called by the cooling stand-in with the start of a generic call it timed.</summary>
+        protected void CoolSample(long start) {
+            long cost = Stopwatch.GetTimestamp() - start;
+            var samples = _coolSamples;
+            int i = _coolSampleCount;
+            if (samples != null) {
+                samples[i & (MaxDeopts - 1)] = cost;
+                _coolSampleCount = i + 1;
+            }
+        }
+
+        /// <summary>
+        /// Called by the cooling stand-in every CoolCheckCalls calls (ProbeCalls in a probe): puts
+        /// the entry back once its cool-down is over.
         /// </summary>
         protected void CoolDownCheck() {
             lock (_sync) {
@@ -335,12 +471,17 @@ namespace IronRuby.Runtime.Jit {
                 _coolCalls = CoolCheckCalls;
                 if (Stopwatch.GetTimestamp() < _coolUntil) { return; }
 
+                if (_coolSampleCount > 0) {
+                    long median = Median(_coolSamples, Math.Min(_coolSampleCount, MaxDeopts));
+                    if (_genericCost == 0 || median < _genericCost) { _genericCost = median; }
+                }
                 var spec = _current;
-                spec.WindowStart = spec.Calls;
+                spec.Countdown = 0;
                 spec.WindowDeopts = 0;
                 JitRuntime.DeoptRetried++;
                 if (JitRuntime.Verbose) {
-                    Console.Error.WriteLine("[jit] retrying {0}/{1} arity {2}", _declaringModule.Name ?? "main", _ast.Name, _arity);
+                    Console.Error.WriteLine("[jit] retrying {0}/{1} arity {2} (generic {3:F2} us)", _declaringModule.Name ?? "main", _ast.Name, _arity,
+                        _genericCost * 1e6 / Stopwatch.Frequency);
                 }
                 _state = Specialized;
                 _direct = spec.Direct;
@@ -530,7 +671,8 @@ namespace IronRuby.Runtime.Jit {
             if (code.CanDeopt) {
                 // The generic body runs after the handler, not inside it: an exception it raises
                 // from within a catch block would leave the frames outside this one out of its
-                // backtrace. The entry counts its calls of the typed body (see OnDeopt).
+                // backtrace. While a deopt window is open the entry counts its calls of the typed
+                // body (see OnDeopt).
                 var result = Ast.Variable(typeof(object), "#result");
                 var deopted = Ast.Constant(Deopted, typeof(object));
                 fast = Ast.Block(typeof(object), new[] { result },
@@ -740,6 +882,12 @@ namespace IronRuby.Runtime.Jit {
             stub._hasDefault = hasDefault;
             stub._defaults = defaults;
             stub._storedOnly = storedOnly;
+            var light = generic.Target as Microsoft.Scripting.Interpreter.LightLambda;
+            if (light != null) {
+                light.Compile += (sender, e) => stub._genericCompiled = true;
+            } else {
+                stub._genericCompiled = true;
+            }
             return stub.Trampoline;
         }
 
@@ -767,7 +915,11 @@ namespace IronRuby.Runtime.Jit {
 
         private object Cool(object self, Proc block) {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
-            return _gen(self, block);
+            if (!CoolPick()) { return _gen(self, block); }
+            long start = Stopwatch.GetTimestamp();
+            object result = _gen(self, block);
+            CoolSample(start);
+            return result;
         }
 
         private object Call(object self, Proc block) {
@@ -797,7 +949,11 @@ namespace IronRuby.Runtime.Jit {
 
         private object Cool(object self, Proc block, object a0) {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
-            return _gen(self, block, a0);
+            if (!CoolPick()) { return _gen(self, block, a0); }
+            long start = Stopwatch.GetTimestamp();
+            object result = _gen(self, block, a0);
+            CoolSample(start);
+            return result;
         }
 
         private object Call(object self, Proc block, object a0) {
@@ -827,7 +983,11 @@ namespace IronRuby.Runtime.Jit {
 
         private object Cool(object self, Proc block, object a0, object a1) {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
-            return _gen(self, block, a0, a1);
+            if (!CoolPick()) { return _gen(self, block, a0, a1); }
+            long start = Stopwatch.GetTimestamp();
+            object result = _gen(self, block, a0, a1);
+            CoolSample(start);
+            return result;
         }
 
         private object Call(object self, Proc block, object a0, object a1) {
@@ -857,7 +1017,11 @@ namespace IronRuby.Runtime.Jit {
 
         private object Cool(object self, Proc block, object a0, object a1, object a2) {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
-            return _gen(self, block, a0, a1, a2);
+            if (!CoolPick()) { return _gen(self, block, a0, a1, a2); }
+            long start = Stopwatch.GetTimestamp();
+            object result = _gen(self, block, a0, a1, a2);
+            CoolSample(start);
+            return result;
         }
 
         private object Call(object self, Proc block, object a0, object a1, object a2) {
@@ -887,7 +1051,11 @@ namespace IronRuby.Runtime.Jit {
 
         private object Cool(object self, Proc block, object a0, object a1, object a2, object a3) {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
-            return _gen(self, block, a0, a1, a2, a3);
+            if (!CoolPick()) { return _gen(self, block, a0, a1, a2, a3); }
+            long start = Stopwatch.GetTimestamp();
+            object result = _gen(self, block, a0, a1, a2, a3);
+            CoolSample(start);
+            return result;
         }
 
         private object Call(object self, Proc block, object a0, object a1, object a2, object a3) {
@@ -917,7 +1085,11 @@ namespace IronRuby.Runtime.Jit {
 
         private object Cool(object self, Proc block, object a0, object a1, object a2, object a3, object a4) {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
-            return _gen(self, block, a0, a1, a2, a3, a4);
+            if (!CoolPick()) { return _gen(self, block, a0, a1, a2, a3, a4); }
+            long start = Stopwatch.GetTimestamp();
+            object result = _gen(self, block, a0, a1, a2, a3, a4);
+            CoolSample(start);
+            return result;
         }
 
         private object Call(object self, Proc block, object a0, object a1, object a2, object a3, object a4) {
@@ -947,7 +1119,11 @@ namespace IronRuby.Runtime.Jit {
 
         private object Cool(object self, Proc block, object a0, object a1, object a2, object a3, object a4, object a5) {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
-            return _gen(self, block, a0, a1, a2, a3, a4, a5);
+            if (!CoolPick()) { return _gen(self, block, a0, a1, a2, a3, a4, a5); }
+            long start = Stopwatch.GetTimestamp();
+            object result = _gen(self, block, a0, a1, a2, a3, a4, a5);
+            CoolSample(start);
+            return result;
         }
 
         private object Call(object self, Proc block, object a0, object a1, object a2, object a3, object a4, object a5) {

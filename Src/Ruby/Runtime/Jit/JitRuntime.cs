@@ -237,8 +237,14 @@ namespace IronRuby.Runtime.Jit {
 
         internal static Exception Deopt() {
             Deopts++;
+            _deoptThrown = System.Diagnostics.Stopwatch.GetTimestamp();
             return JitDeoptException.Instance;
         }
+
+        // When this thread last threw a deopt, for the method entry that catches it to know what
+        // the exception cost (EntryDeopted). Zero once taken.
+        [ThreadStatic]
+        private static long _deoptThrown;
 
         // ---- safe points -----------------------------------------------------------------
 
@@ -286,8 +292,11 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>A method entry's typed body deopted (see JitStub.OnDeopt).</summary>
         public static void EntryDeopted(object/*!*/ specialization) {
+            long caught = System.Diagnostics.Stopwatch.GetTimestamp();
+            long thrown = _deoptThrown;
+            _deoptThrown = 0;
             var spec = (JitStub.Specialization)specialization;
-            spec.Stub.OnDeopt(spec);
+            spec.Stub.OnDeopt(spec, (thrown != 0) ? caught - thrown : -1);
         }
 
         /// <summary>An outlined loop was compiled under an older method version; build it again.</summary>

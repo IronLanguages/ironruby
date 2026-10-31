@@ -313,6 +313,63 @@ t('threads, results') { ths.map(&:value) }
 ths = (0...6).map { |k| Thread.new { s = 0; 3000.times { |j| s += sp_threads(j & 255) }; s } }
 t('threads, small results') { ths.map(&:value) }
 
+# ---------------------------------------------------------------- 3d. deopting now and then: windows, probes
+
+def sp_sometimes(x)
+  # out of Int64 for x >= 2**40: deopting on some calls, the entry has its deopts timed, the
+  # generic body timed in a probe, and is kept or retired by what they cost
+  a = x * 7 + 3
+  a * 4096 * 4096 + x
+end
+
+def sp_kw_sometimes(a, k: 3)
+  # the same through a keyword method's direct entry
+  a * k * 65536 * 65536
+end
+
+def sp_div_sometimes(a, b)
+  # a zero divisor deopts, and the generic body re-run then raises
+  a * 3 + a / b
+end
+
+puts
+puts '--- 3d. deopting now and then: windows, probes, threads ---'
+[2, 5, 9, 33].each do |k|
+  r = 0
+  i = 0
+  while i < 20_000
+    r += sp_sometimes(i % k == 0 ? 2**41 + i : i)
+    i += 1
+  end
+  t("1 call in #{k} out of Int64") { r }
+end
+t('then small') { sp_sometimes(12345) }
+t('then out of Int64') { sp_sometimes(2**50) }
+ths = (0...4).map { |k| Thread.new { s = 0; 20_000.times { |j| s += sp_sometimes(j % (k + 2) == 0 ? 2**42 + j : j) }; s } }
+t('threads deopting at different rates') { ths.map(&:value) }
+r = 0
+i = 0
+while i < 20_000
+  r += sp_kw_sometimes(i, k: (i % 4 == 0 ? 2**30 : 3))
+  i += 1
+end
+t('keyword method, 1 call in 4 out of Int64') { r }
+t('keyword method, default') { sp_kw_sometimes(7) }
+t('keyword method, out of Int64') { sp_kw_sometimes(2**20, k: 2**20) }
+r = 0
+errors = 0
+i = 0
+while i < 20_000
+  begin
+    r += sp_div_sometimes(i, i % 3 == 0 ? 0 : 7)
+  rescue ZeroDivisionError
+    errors += 1
+  end
+  i += 1
+end
+t('zero divisor on 1 call in 3') { [r, errors] }
+t('zero divisor, then fine') { sp_div_sometimes(100, 7) }
+
 # ---------------------------------------------------------------- 4. division
 
 def sp_div(a, b)
