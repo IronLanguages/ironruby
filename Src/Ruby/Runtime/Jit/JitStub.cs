@@ -118,7 +118,9 @@ namespace IronRuby.Runtime.Jit {
                 object kw = args[_positional];
                 if (_keywords.Matches(kw)) {
                     for (int j = 0; j < _keywords.Count; j++) {
-                        Observe(_positional + j, _keywords.Value(kw, j));
+                        // an omitted keyword whose default the typed body evaluates has no type to see
+                        object v = _keywords.Value(kw, j);
+                        if (v != RubyOps.DefaultArgument) { Observe(_positional + j, v); }
                     }
                 }
             }
@@ -271,10 +273,26 @@ namespace IronRuby.Runtime.Jit {
                     case 1: types[i] = JT.Int; break;
                     case 2: types[i] = JT.Dbl; break;
                     case 4: types[i] = JT.Lng; break;
+                    // never passed: the typed body types the keyword by its default
+                    case 0: types[i] = PassedBoxed(i) ? JT.None : JT.Obj; break;
                     default: types[i] = JT.Obj; break;
                 }
             }
             return types;
+        }
+
+        /// <summary>
+        /// A keyword whose default the typed body evaluates (JitKeywords.DefaultExprs): the body takes the
+        /// boxed value, or RubyOps.DefaultArgument, which the entry's type guard lets through.
+        /// </summary>
+        private bool PassedBoxed(int i) {
+            return _keywords != null && i >= _positional && _keywords.HasDefaultExpr(i - _positional);
+        }
+
+        private MSA.Expression/*!*/ AllowDefault(int i, MSA.Expression/*!*/ value, MSA.Expression/*!*/ guard) {
+            return PassedBoxed(i)
+                ? Ast.OrElse(Ast.ReferenceEqual(value, Ast.Field(null, typeof(RubyOps).GetField("DefaultArgument"))), guard)
+                : guard;
         }
 
         /// <summary>
@@ -408,17 +426,18 @@ namespace IronRuby.Runtime.Jit {
 
             for (int i = 0; i < _typedCount; i++) {
                 switch (code.ParameterTypes[i]) {
-                    case JT.Int: test = And(test, Ast.TypeIs(values[i], typeof(int))); break;
-                    case JT.Dbl: test = And(test, Ast.TypeIs(values[i], typeof(double))); break;
+                    case JT.Int: test = And(test, AllowDefault(i, values[i], Ast.TypeIs(values[i], typeof(int)))); break;
+                    case JT.Dbl: test = And(test, AllowDefault(i, values[i], Ast.TypeIs(values[i], typeof(double)))); break;
                     // An Integer parameter carried as a long accepts either representation: a
                     // value in Int32 range arrives as an Int32 and only a larger one as an Int64.
-                    case JT.Lng: test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), values[i])); break;
+                    case JT.Lng: test = And(test, AllowDefault(i, values[i], Ast.Call(JitRuntime.M("IsIntegral"), values[i]))); break;
                 }
             }
 
             var typedArgs = new MSA.Expression[_typedCount + 1];
             typedArgs[0] = self;
             for (int i = 0; i < _typedCount; i++) {
+                if (PassedBoxed(i)) { typedArgs[i + 1] = values[i]; continue; }
                 switch (code.ParameterTypes[i]) {
                     case JT.Int: typedArgs[i + 1] = Ast.Unbox(values[i], typeof(int)); break;
                     case JT.Dbl: typedArgs[i + 1] = Ast.Unbox(values[i], typeof(double)); break;
@@ -510,21 +529,22 @@ namespace IronRuby.Runtime.Jit {
             for (int i = 0; i < _typedCount; i++) {
                 switch (code.ParameterTypes[i]) {
                     case JT.Int:
-                        test = And(test, Ast.TypeIs(values[i], typeof(int)));
+                        test = And(test, AllowDefault(i, values[i], Ast.TypeIs(values[i], typeof(int))));
                         typedArgs[i + 1] = Ast.Unbox(values[i], typeof(int));
                         break;
                     case JT.Dbl:
-                        test = And(test, Ast.TypeIs(values[i], typeof(double)));
+                        test = And(test, AllowDefault(i, values[i], Ast.TypeIs(values[i], typeof(double))));
                         typedArgs[i + 1] = Ast.Unbox(values[i], typeof(double));
                         break;
                     case JT.Lng:
-                        test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), values[i]));
+                        test = And(test, AllowDefault(i, values[i], Ast.Call(JitRuntime.M("IsIntegral"), values[i])));
                         typedArgs[i + 1] = Ast.Call(JitRuntime.M("ToLong"), values[i]);
                         break;
                     default:
                         typedArgs[i + 1] = values[i];
                         break;
                 }
+                if (PassedBoxed(i)) { typedArgs[i + 1] = values[i]; }
             }
 
             MSA.Expression fast = Ast.Invoke(callee, typedArgs);

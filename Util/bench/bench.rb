@@ -513,6 +513,7 @@ end
 class OptTarget
   def opt(x, y = x); y; end
   def opt_sym(x, mode = :fast); mode; end
+  def kw_expr(a:, b: a); b; end
 end
 
 # a call leaving out an optional parameter whose default is an expression
@@ -525,6 +526,12 @@ end
 bench("call_opt_sym") do
   o = OptTarget.new; i = 0; m = n(2_000_000)
   while i < m; o.opt_sym(i); i += 1; end
+end
+
+# a keyword call leaving out a keyword whose default is an expression
+bench("call_kw_default") do
+  o = OptTarget.new; i = 0; m = n(1_000_000)
+  while i < m; o.kw_expr(a: i); i += 1; end
 end
 
 name = ARGV[0]

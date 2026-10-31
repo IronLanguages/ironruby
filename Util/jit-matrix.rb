@@ -449,7 +449,7 @@ def no_kw_rest(a:, **rest)
   a + rest.size
 end
 
-def no_kw_default_expr(a:, b: a + 1)
+def sp_kw_default_expr(a:, b: a + 1)
   a + b
 end
 
@@ -523,10 +523,69 @@ kt('kw local reassigned') { [sp_kw_assign(a: 3), sp_kw_assign(a: 3, b: 4)] }
 
 warm { |i| no_kw_rest(a: i, z: 1) }
 kt('kw **rest') { [no_kw_rest(a: 1), no_kw_rest(a: 1, b: 2, c: 3)] }
-warm { |i| no_kw_default_expr(a: i) }
-kt('kw default reads a parameter') { [no_kw_default_expr(a: 1), no_kw_default_expr(a: 1, b: 5)] }
+warm { |i| sp_kw_default_expr(a: i) }
+kt('kw default reads a parameter') { [sp_kw_default_expr(a: 1), sp_kw_default_expr(a: 1, b: 5)] }
 warm { |i| no_kw_default_string(a: i) }
 kt('kw String default') { no_kw_default_string(a: 1) }
+
+# Keyword defaults the typed body evaluates itself, in declaration order.
+def sp_kw_sym(a, mode: :fast)
+  mode
+end
+
+def sp_kw_list(x:, list: [x])
+  list
+end
+
+def sp_kw_chain(a:, b: a * 2, c: b + 1)
+  a + b + c
+end
+
+def sp_kw_ivar_default(x:, y: @kw_default)
+  y
+end
+
+def sp_kw_seen(a:, b: (@kw_seen = a))
+  b
+end
+
+def sp_kw_square(a:, b: a * a)
+  b
+end
+
+def sp_kw_div(a:, b: 10 / a)
+  b
+end
+
+def no_kw_assign_default(a:, b: (t = a), c: 1)
+  [b, c, t]
+end
+
+warm { |i| sp_kw_sym(i) }
+kt('kw Symbol default') { [sp_kw_sym(1), sp_kw_sym(1, mode: :slow), sp_kw_sym(1).equal?(:fast)] }
+warm { |i| sp_kw_list(x: i) }
+kt('kw Array default') { [sp_kw_list(x: 1), sp_kw_list(x: 1, list: 2)] }
+kt('kw Array default is a new Array each time') { sp_kw_list(x: 1).equal?(sp_kw_list(x: 1)) }
+warm { |i| sp_kw_chain(a: i); sp_kw_chain(a: i, c: 1) }
+kt('kw chain') { [sp_kw_chain(a: 1), sp_kw_chain(a: 1, b: 5), sp_kw_chain(a: 1, c: 7), sp_kw_chain(a: 1, b: 5, c: 7)] }
+kt('kw chain, Float b') { sp_kw_chain(a: 1, b: 0.5) }
+kt('kw chain, String a') { sp_kw_chain(a: 'x') }
+kt('kw chain, overflow') { sp_kw_chain(a: 2**62) }
+kt('kw chain, unknown') { sp_kw_chain(a: 1, d: 2) }
+kt('kw chain, missing') { sp_kw_chain(b: 1) }
+warm { |i| sp_kw_ivar_default(x: i) }
+kt('kw ivar default, unset') { sp_kw_ivar_default(x: 1) }
+@kw_default = :set
+kt('kw ivar default, set') { [sp_kw_ivar_default(x: 1), sp_kw_ivar_default(x: 1, y: 2)] }
+warm { |i| sp_kw_seen(a: i) }
+kt('kw default writes an ivar') { [sp_kw_seen(a: 7), @kw_seen, sp_kw_seen(a: 8, b: 9), @kw_seen] }
+warm { |i| sp_kw_square(a: i) }
+kt('kw default overflows') { [sp_kw_square(a: 3), sp_kw_square(a: 2**40), sp_kw_square(a: 2**40, b: 1)] }
+warm { |i| sp_kw_div(a: i + 1) }
+kt('kw default divides by zero') { sp_kw_div(a: 0) }
+kt('kw default divides, given') { sp_kw_div(a: 0, b: 1) }
+warm { |i| no_kw_assign_default(a: i) }
+kt('kw default assigns a local') { [no_kw_assign_default(a: 1), no_kw_assign_default(a: 1, b: 2)] }
 
 # A keyword initializer: an instance variable store is a typed body too.
 class KwIvars
@@ -594,6 +653,26 @@ def kc.sp_kw_scale(x, by: 2)
 end
 kt('kw call, a singleton method') { kc.go(5) }
 kt('kw call, another instance') { KwCaller.new.go(5) }
+
+# ... and leaving out a keyword whose default the typed body evaluates
+class KwDefaultCaller
+  def sp_kw_two(x, a: 1, b: a + x)
+    x * a - b
+  end
+
+  def go(x)
+    sp_kw_two(x, a: 5)
+  end
+
+  def go_both(x)
+    sp_kw_two(x, b: 2, a: 3)
+  end
+end
+kd = KwDefaultCaller.new
+warm { |i| kd.go(i); kd.go_both(i) }
+kt('kw call leaving out an expression default') { [kd.go(4), kd.go_both(4)] }
+kt('kw call leaving out an expression default, Float') { kd.go(0.5) }
+kt('kw call leaving out an expression default, overflow') { kd.go(2**61) }
 
 def sp_kw_add(left:, right:)
   left - right

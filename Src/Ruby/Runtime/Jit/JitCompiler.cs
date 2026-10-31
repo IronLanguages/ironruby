@@ -141,6 +141,8 @@ namespace IronRuby.Runtime.Jit {
             var optional = ast.Parameters.Optional;
             int expected = mandatory.Length + ((keywords != null) ? keywords.Count : (_supplied >= 0) ? _supplied : optional.Length);
             _paramNames = new string[paramTypes.Length];
+            _paramExprs = new MSA.ParameterExpression[paramTypes.Length];
+            _resolvedTypes = (JT[])paramTypes.Clone();
             if (paramTypes.Length != expected) { throw JitBailout.Instance; }
             for (int i = 0; i < paramTypes.Length; i++) {
                 string name;
@@ -153,11 +155,23 @@ namespace IronRuby.Runtime.Jit {
                 }
                 if (_vars[0].ContainsKey(name)) { throw JitBailout.Instance; }
                 _paramNames[i] = name;
+                if (keywords != null && i >= mandatory.Length && keywords.HasDefaultExpr(i - mandatory.Length)) {
+                    // the boxed value or RubyOps.DefaultArgument; the local is bound by EmitKeywordDefaults
+                    _paramExprs[i] = Ast.Parameter(typeof(object), "?" + name);
+                    continue;
+                }
                 var p = Ast.Parameter(ClrType(paramTypes[i]), name);
+                _paramExprs[i] = p;
                 _vars[0].Add(name, p);
                 _types[0].Add(name, paramTypes[i]);
             }
         }
+
+        // The typed body's lambda parameters, and the types its entry unboxes and checks them to: a
+        // keyword whose default the body evaluates is a boxed parameter, its type the local's (which
+        // EmitKeywordDefaults decides when the profile has none).
+        private readonly MSA.ParameterExpression[] _paramExprs;
+        private JT[] _resolvedTypes;
 
         // ---- loop mode -------------------------------------------------------------------
         // -X:OSR points the same emitter at a `while' loop rather than a method body. The
@@ -367,7 +381,7 @@ namespace IronRuby.Runtime.Jit {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied);
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
-                c._selfDelegateType = DelegateType(paramTypes, c._selfReturn);
+                c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
                 if (c._selfDelegateType == null) { return null; }
 
                 JT actual;
@@ -411,7 +425,7 @@ namespace IronRuby.Runtime.Jit {
                 parameters.Add(c._self);
                 var functionScope = new List<MSA.ParameterExpression>(c._declared[0]);
                 for (int i = 0; i < c._paramNames.Length; i++) {
-                    var p = c._vars[0][c._paramNames[i]];
+                    var p = c._paramExprs[i];
                     parameters.Add(p);
                     functionScope.Remove(p);
                 }
@@ -422,12 +436,23 @@ namespace IronRuby.Runtime.Jit {
                     Lambda = Ast.Lambda(c._selfDelegateType, body, "jit$" + ast.Name, parameters),
                     SelfCell = c._selfCell,
                     ReturnType = actual,
-                    ParameterTypes = paramTypes,
+                    ParameterTypes = c._resolvedTypes,
                     CanDeopt = c._canDeopt || c._ivarWrite,
                     EmittedSelfCall = c._selfCall,
                 };
             }
             return null;
+        }
+
+        /// <summary>The CLR shape of the typed body's parameters: a keyword whose default it evaluates is boxed.</summary>
+        private static JT[]/*!*/ LambdaParameterTypes(JT[]/*!*/ paramTypes, JitKeywords keywords, MethodDeclaration/*!*/ ast) {
+            if (keywords == null || keywords.DefaultExprs == null) { return paramTypes; }
+            var result = (JT[])paramTypes.Clone();
+            int first = ast.Parameters.Mandatory.Length;
+            for (int j = 0; j < keywords.Count && first + j < result.Length; j++) {
+                if (keywords.HasDefaultExpr(j)) { result[first + j] = JT.Obj; }
+            }
+            return result;
         }
 
         /// <summary>Func&lt;object self, T1..Tn, TRet&gt;.</summary>
@@ -458,7 +483,13 @@ namespace IronRuby.Runtime.Jit {
             }
             if (_keywords != null) {
                 // the keyword prologue is what the entry did; the parameters hold its result
-                return EmitStatements(body.Statements, _keywords.PrologueLength, out type);
+                var bind = EmitKeywordDefaults();
+                var statements = EmitStatements(body.Statements, _keywords.PrologueLength, out type);
+                if (bind != null) {
+                    bind.Add(statements);
+                    statements = Ast.Block(ClrType(type), bind);
+                }
+                return statements;
             }
             var defaults = EmitOmittedDefaults();
             var result = EmitInitialIVars(body.Statements, out type) ?? EmitStatements(body.Statements, out type);
@@ -483,6 +514,47 @@ namespace IronRuby.Runtime.Jit {
             for (int i = _supplied; i < optional.Length; i++) {
                 JT ignored;
                 parts.Add(EmitAssignment(optional[i], out ignored));
+            }
+            return parts;
+        }
+
+        // Set while a keyword default is emitted: it may not assign a local (one bound after it, say).
+        private bool _inKeywordDefault;
+
+        /// <summary>
+        /// The keywords whose default the body evaluates, in declaration order: each local is the value
+        /// the call passed, or - RubyOps.DefaultArgument - its default. Its type is what the profile saw
+        /// passed (which the entry checks), or the default's own type if nothing was ever passed.
+        /// </summary>
+        private List<MSA.Expression> EmitKeywordDefaults() {
+            if (_keywords.DefaultExprs == null) { return null; }
+            int first = _ast.Parameters.Mandatory.Length;
+            var parts = new List<MSA.Expression>();
+            var defaultArgument = Ast.Field(null, typeof(RubyOps).GetField("DefaultArgument"));
+            for (int j = 0; j < _keywords.Count; j++) {
+                if (!_keywords.HasDefaultExpr(j)) { continue; }
+                int i = first + j;
+                _inKeywordDefault = true;
+                JT dt;
+                var d = Emit(_keywords.DefaultExprs[j], out dt);
+                _inKeywordDefault = false;
+                if (dt == JT.None || dt == JT.Never) { throw Bail("keyword default without a value"); }
+
+                JT pt = _paramTypes[i];
+                JT lt = (pt == JT.None) ? dt : (pt == dt) ? pt : (IsInteger(pt) && IsInteger(dt)) ? JT.Lng : JT.Obj;
+                if (lt == JT.Bool || lt == JT.None) { lt = JT.Obj; }
+                _resolvedTypes[i] = lt;
+
+                var p = _paramExprs[i];
+                MSA.Expression passed;
+                switch (lt) {
+                    case JT.Int: passed = Ast.Unbox(p, typeof(int)); break;
+                    case JT.Dbl: passed = Ast.Unbox(p, typeof(double)); break;
+                    case JT.Lng: passed = Ast.Call(JitRuntime.M("ToLong"), p); break;
+                    default: passed = p; break;
+                }
+                var local = Declare(_paramNames[i], lt);
+                parts.Add(Ast.Assign(local, Ast.Condition(Ast.ReferenceEqual(p, defaultArgument), Coerce(d, dt, lt), passed, ClrType(lt))));
             }
             return parts;
         }
@@ -799,6 +871,7 @@ namespace IronRuby.Runtime.Jit {
 
             var target = node.Left as LocalVariable;
             if (target == null || (_loop == null && target.DefinitionLexicalDepth != _scopeDepth)) { throw JitBailout.Instance; }
+            if (_inKeywordDefault) { throw Bail("keyword default assigns a local"); }
 
             JT rhsType;
             var rhs = Emit(node.Right, out rhsType);
@@ -1338,6 +1411,9 @@ namespace IronRuby.Runtime.Jit {
 
         private readonly JitKeywords _keywords;
 
+        // walking a keyword default, which may not assign a local (JitCompiler.EmitKeywordDefaults)
+        private bool _inKeywordDefault;
+
         private JitScreen(MethodDeclaration/*!*/ ast, JitKeywords keywords) {
             _scopeDepth = ast.DefinedScope.Depth;
             _methodName = ast.Name;
@@ -1370,6 +1446,13 @@ namespace IronRuby.Runtime.Jit {
                     foreach (var optional in ast.Parameters.Optional) {
                         if (!s.Walk(optional.Right)) { ok = false; break; }
                     }
+                } else if (ok && keywords.DefaultExprs != null) {
+                    // the keyword defaults the typed body evaluates (JitCompiler.EmitKeywordDefaults)
+                    s._inKeywordDefault = true;
+                    foreach (var expr in keywords.DefaultExprs) {
+                        if (expr != null && !s.Walk(expr)) { ok = false; break; }
+                    }
+                    s._inKeywordDefault = false;
                 }
             } catch (Exception) {
                 // A screen that throws must not take the process down with it; it just means the
@@ -1476,7 +1559,7 @@ namespace IronRuby.Runtime.Jit {
                     return Walk(assign.Right);
                 }
                 var target = assign.Left as LocalVariable;
-                if (target == null || target.DefinitionLexicalDepth != _scopeDepth) { return No(node); }
+                if (target == null || target.DefinitionLexicalDepth != _scopeDepth || _inKeywordDefault) { return No(node); }
                 _otherUses.Add(target.Name);
                 return (op != null) ? WalkOperand(assign.Right) : Walk(assign.Right);
             }
