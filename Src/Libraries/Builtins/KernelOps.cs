@@ -339,6 +339,43 @@ namespace IronRuby.Builtins {
             return site.Target(site, scope.RubyContext.KernelModule, numerator, denominator);
         }
 
+        // The Rational class of the context that last asked (one per process in practice).
+        private static RubyClass _rationalClass;
+
+        private static RubyClass GetRationalClass(RubyContext/*!*/ context) {
+            RubyClass cls = _rationalClass;
+            if (cls != null && cls.Context == context) {
+                return cls;
+            }
+            object value;
+            cls = context.ObjectClass.TryGetConstant(null, "Rational", out value) ? value as RubyClass : null;
+            // rational.rb's Rational: a Ruby subclass of Numeric whose instances are plain Numerics
+            if (cls == null || cls.IsSingletonClass || cls.Name != "Rational" || cls.GetUnderlyingSystemType() != typeof(Numeric)) {
+                return null;
+            }
+            _rationalClass = cls;
+            return cls;
+        }
+
+        /// <summary>
+        /// rational.rb's Rational.__new_internal__ (MRI's nurat_s_new_internal, which a C function like
+        /// Time#subsec calls without going through Kernel#Rational): a frozen Rational with the given parts,
+        /// which must already be canonical - in lowest terms, the denominator positive. Returns null when
+        /// the Rational class is not there to make one (rational.rb not loaded yet).
+        /// </summary>
+        internal static object CreateCanonicalRational(RubyContext/*!*/ context, BigInteger numerator, BigInteger denominator) {
+            Debug.Assert(denominator.Sign > 0 && BigInteger.GreatestCommonDivisor(numerator, denominator).IsOne);
+            RubyClass cls = GetRationalClass(context);
+            if (cls == null) {
+                return null;
+            }
+            var result = new Numeric(cls);
+            context.SetInstanceVariable(result, "@numerator", Protocols.Normalize(numerator));
+            context.SetInstanceVariable(result, "@denominator", Protocols.Normalize(denominator));
+            result.Freeze();
+            return result;
+        }
+
         #endregion
 
         #region binding, block_given?, local_variables, caller, callcc, 1.9: __callee__, __method__

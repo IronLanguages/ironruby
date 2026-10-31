@@ -69,11 +69,14 @@ namespace IronRuby.Builtins {
             return context.ResolveMethod(obj, name, VisibilityContext.AllVisible).Found;
         }
 
+        // MRI's time.c makes these Rationals itself (quov, rb_rational_new) rather than calling
+        // Kernel#Rational, and an ExactNum is already in lowest terms, so the Rational is made
+        // directly: Time#subsec runs on every TZInfo period lookup ActiveSupport does.
         internal static object MakeRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, ExactNum value) {
 
-            return KernelOps.ToRational(storage, scope,
-                Protocols.Normalize(value.Numerator), Protocols.Normalize(value.Denominator));
+            return KernelOps.CreateCanonicalRational(scope.RubyContext, value.Numerator, value.Denominator)
+                ?? KernelOps.ToRational(storage, scope, Protocols.Normalize(value.Numerator), Protocols.Normalize(value.Denominator));
         }
 
         #endregion
