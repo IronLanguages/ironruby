@@ -7304,6 +7304,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.RubyProcess.WaitPidPrimitive)
             );
             
+            DefineLibraryMethod(module, "clock_gettime", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyProcess.ClockGetTime)
+            );
+            
             DefineLibraryMethod(module, "egid", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.Builtins.RubyProcess.EffectiveGroupId)

@@ -8645,6 +8645,8 @@ module Process
   # Process.times returns this; MRI names the struct under Process as well as Struct.
   Tms = Struct::Tms unless const_defined?(:Tms)
 
+  # Process.clock_gettime is C# (RubyProcess.ClockGetTime); this is what a build without
+  # the C# Process module has.
   unless respond_to?(:clock_gettime)
     # .NET's Stopwatch is the monotonic source; Time.now covers the wall clock.
     def self.clock_gettime(clock_id = CLOCK_MONOTONIC, unit = :float_second)
