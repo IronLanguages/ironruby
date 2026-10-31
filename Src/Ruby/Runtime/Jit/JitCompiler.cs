@@ -116,11 +116,18 @@ namespace IronRuby.Runtime.Jit {
         // positional ones, and the body starts after the prologue that binds them (JitKeywords).
         private readonly JitKeywords _keywords;
 
-        private JitCompiler(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords) {
+        // A body for calls that pass exactly this many of the optional parameters (JitStub's per-count
+        // bodies): those are typed parameters, and the body starts by evaluating the defaults of the
+        // rest, in order, as assignments to their locals. -1: every optional parameter is a typed
+        // parameter, the entry having filled in the omitted ones' literal defaults.
+        private readonly int _supplied = -1;
+
+        private JitCompiler(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords, int supplied) {
             _ast = ast;
             _context = context;
             _paramTypes = paramTypes;
             _keywords = keywords;
+            _supplied = (keywords == null) ? supplied : -1;
             _scopeDepth = ast.DefinedScope.Depth;
             _self = Ast.Parameter(typeof(object), "#self");
             PushScope();
@@ -132,7 +139,7 @@ namespace IronRuby.Runtime.Jit {
             // one, then the optional ones, whose defaults the entry has already filled in (JitStub) -
             // or, for a method with keywords, the mandatory ones and then its keyword locals.
             var optional = ast.Parameters.Optional;
-            int expected = mandatory.Length + ((keywords != null) ? keywords.Count : optional.Length);
+            int expected = mandatory.Length + ((keywords != null) ? keywords.Count : (_supplied >= 0) ? _supplied : optional.Length);
             _paramNames = new string[paramTypes.Length];
             if (paramTypes.Length != expected) { throw JitBailout.Instance; }
             for (int i = 0; i < paramTypes.Length; i++) {
@@ -343,13 +350,21 @@ namespace IronRuby.Runtime.Jit {
         }
 
         internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords) {
+            return TryCompile(ast, context, paramTypes, keywords, -1);
+        }
+
+        /// <summary>
+        /// <paramref name="supplied"/>: compile the body for calls that pass this many of the optional
+        /// parameters, evaluating the other defaults itself; -1 for the body that takes them all.
+        /// </summary>
+        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords, int supplied) {
             // The self-recursive call needs the method's return type before the body has been
             // typed. Guess, compile, and re-run once if the guess was wrong.
             // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
             // how many there can be; a guess that does not settle is rejected.
             JT guess = JT.None;
             for (int round = 0; round < 5; round++) {
-                var c = new JitCompiler(ast, context, paramTypes, keywords);
+                var c = new JitCompiler(ast, context, paramTypes, keywords, supplied);
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(paramTypes, c._selfReturn);
@@ -445,7 +460,41 @@ namespace IronRuby.Runtime.Jit {
                 // the keyword prologue is what the entry did; the parameters hold its result
                 return EmitStatements(body.Statements, _keywords.PrologueLength, out type);
             }
-            return EmitInitialIVars(body.Statements, out type) ?? EmitStatements(body.Statements, out type);
+            var defaults = EmitOmittedDefaults();
+            var result = EmitInitialIVars(body.Statements, out type) ?? EmitStatements(body.Statements, out type);
+            if (defaults != null) {
+                defaults.Add(result);
+                result = Ast.Block(ClrType(type), defaults);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// A per-count body (_supplied): the defaults of the optional parameters the call left out,
+        /// left to right, each an assignment to its local - which is what the generic prologue does,
+        /// except that it first sets the local to nil, which only a default reading its own or a later
+        /// parameter could see; such a read finds no local here and bails.
+        /// </summary>
+        private List<MSA.Expression> EmitOmittedDefaults() {
+            if (_supplied < 0) { return null; }
+            var optional = _ast.Parameters.Optional;
+            if (_supplied >= optional.Length) { return null; }
+            var parts = new List<MSA.Expression>(optional.Length - _supplied + 1);
+            for (int i = _supplied; i < optional.Length; i++) {
+                JT ignored;
+                parts.Add(EmitAssignment(optional[i], out ignored));
+            }
+            return parts;
+        }
+
+        /// <summary>An omitted optional parameter of a per-count body: a local its default was assigned to.</summary>
+        private bool IsOmittedOptional(string/*!*/ name) {
+            if (_supplied < 0) { return false; }
+            var optional = _ast.Parameters.Optional;
+            for (int i = _supplied; i < optional.Length; i++) {
+                if (((LocalVariable)optional[i].Left).Name == name) { return true; }
+            }
+            return false;
         }
 
         // ---- an initializer's opening run of `@x = v' --------------------------------------
@@ -529,9 +578,11 @@ namespace IronRuby.Runtime.Jit {
                 object v = literal.Value;
                 return v == null || v is bool || v is int || v is long || v is double;
             }
-            // Nothing before the run assigns a local, so a parameter still holds its argument.
+            // Nothing before the run assigns a local but the omitted optionals' defaults, so a parameter
+            // still holds its argument, and an omitted optional its default.
             var local = value as LocalVariable;
-            return local != null && local.DefinitionLexicalDepth == _scopeDepth && Array.IndexOf(_paramNames, local.Name) >= 0;
+            return local != null && local.DefinitionLexicalDepth == _scopeDepth &&
+                (Array.IndexOf(_paramNames, local.Name) >= 0 || IsOmittedOptional(local.Name));
         }
 
         private MSA.Expression/*!*/ EmitStatements(Statements/*!*/ statements, int start, out JT type) {
@@ -577,6 +628,15 @@ namespace IronRuby.Runtime.Jit {
 
             var literal = node as Literal;
             if (literal != null) { return EmitLiteral(literal, out type); }
+
+            // `:name': the Symbol the generic body would load, the same object on every evaluation
+            var symbol = node as SymbolLiteral;
+            if (symbol != null) {
+                var name = symbol.Value as string;
+                if (name == null) { throw Bail("symbol literal"); }
+                type = JT.Obj;
+                return Ast.Constant(_context.CreateSymbol(name, symbol.Encoding), typeof(object));
+            }
 
             var local = node as LocalVariable;
             if (local != null) { return EmitLocalRead(local, out type); }
@@ -1305,6 +1365,12 @@ namespace IronRuby.Runtime.Jit {
             bool ok;
             try {
                 ok = (keywords != null) ? s.WalkMethodBody(ast.Body, keywords.PrologueLength) : s.WalkBody(ast.Body);
+                if (ok && keywords == null) {
+                    // the defaults a per-count body evaluates (JitCompiler.EmitOmittedDefaults)
+                    foreach (var optional in ast.Parameters.Optional) {
+                        if (!s.Walk(optional.Right)) { ok = false; break; }
+                    }
+                }
             } catch (Exception) {
                 // A screen that throws must not take the process down with it; it just means the
                 // method is not wrapped.
@@ -1353,7 +1419,7 @@ namespace IronRuby.Runtime.Jit {
         /// self', `x ? a : b' on nil - and those are common enough to be worth ruling out.
         /// </summary>
         private bool WalkCondition(RExpr/*!*/ node) {
-            if (node is InstanceVariable || node is SelfReference) { return No(node); }
+            if (node is InstanceVariable || node is SelfReference || node is SymbolLiteral) { return No(node); }
             var literal = node as Literal;
             if (literal != null && literal.Value == null) { return No(node); }
             return Walk(node);
@@ -1365,7 +1431,7 @@ namespace IronRuby.Runtime.Jit {
         /// or a nil/true/false literal never is - `@count + 1' is refused whatever gets profiled.
         /// </summary>
         private bool WalkOperand(RExpr/*!*/ node) {
-            if (node is InstanceVariable || node is SelfReference) { return No(node); }
+            if (node is InstanceVariable || node is SelfReference || node is SymbolLiteral) { return No(node); }
             var literal = node as Literal;
             if (literal != null && !(literal.Value is int || literal.Value is long || literal.Value is double)) { return No(node); }
             return Walk(node);
@@ -1385,6 +1451,7 @@ namespace IronRuby.Runtime.Jit {
                 object v = literal.Value;
                 return (v is int || v is long || v is double || v is bool || v == null) || No(node);
             }
+            if (node is SymbolLiteral) { return true; }
 
             var local = node as LocalVariable;
             if (local != null) {

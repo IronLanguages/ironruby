@@ -508,6 +508,25 @@ bench("then_call") do
   while i < m; i.then { |y| y * 2 }; i += 1; end
 end
 
+# ---------------------------------------------------------------- optional parameters
+
+class OptTarget
+  def opt(x, y = x); y; end
+  def opt_sym(x, mode = :fast); mode; end
+end
+
+# a call leaving out an optional parameter whose default is an expression
+bench("call_opt_default") do
+  o = OptTarget.new; i = 0; m = n(2_000_000)
+  while i < m; o.opt(i); i += 1; end
+end
+
+# the same with a Symbol default
+bench("call_opt_sym") do
+  o = OptTarget.new; i = 0; m = n(2_000_000)
+  while i < m; o.opt_sym(i); i += 1; end
+end
+
 name = ARGV[0]
 unless BENCH.key?(name)
   if name == "--list"

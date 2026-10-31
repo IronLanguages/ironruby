@@ -606,6 +606,117 @@ def sp_kw_add(left:, right: 100)
 end
 kt('kw add redefined with a default') { sp_kw_add(left: 2) }
 
+# ---------------------------------------------------------------- 8c. optional parameters
+
+# A default that is not a nil/true/false/Integer/Float literal: one typed body per number of
+# optional arguments a call passes, each evaluating the omitted defaults itself, in order.
+def sp_opt_param(a, b = a)
+  a + b
+end
+
+def sp_opt_chain(a, b = a + 1, c = b * 2)
+  a + b + c
+end
+
+def sp_opt_sym(a, mode = :fast)
+  mode
+end
+
+def sp_opt_array(a, b = [a])
+  b
+end
+
+def sp_opt_ivar(a, b = @opt_default)
+  b
+end
+
+def sp_opt_ivar_write(a, b = (@opt_seen = a))
+  b
+end
+
+def sp_opt_square(a, b = a * a)
+  b
+end
+
+def sp_opt_rec(n, acc = 0)
+  return acc if n == 0
+  sp_opt_rec(n - 1, acc + n)
+end
+
+def sp_opt_div(a, b = 10 / a)
+  b
+end
+
+def no_opt_self(a, b = b)
+  b
+end
+
+class OptInit
+  def initialize(x, y = x, z = :none)
+    @x = x
+    @y = y
+    @z = z
+  end
+
+  def triple
+    [@x, @y, @z]
+  end
+end
+
+puts
+puts '--- 8c. optional parameters ---'
+warm { |i| sp_opt_param(i); sp_opt_param(i, 1) }
+t('opt default reads a parameter') { [sp_opt_param(3), sp_opt_param(3, 4)] }
+t('opt default, Float') { [sp_opt_param(1.5), sp_opt_param(1.5, 2)] }
+t('opt default, String') { [sp_opt_param('a'), sp_opt_param('a', 'b')] }
+t('opt default, overflow') { sp_opt_param(2**62) }
+t('opt default, too many') { sp_opt_param(1, 2, 3) }
+t('opt default, too few') { sp_opt_param }
+warm { |i| sp_opt_chain(i); sp_opt_chain(i, 2); sp_opt_chain(i, 2, 3) }
+t('opt chain') { [sp_opt_chain(1), sp_opt_chain(1, 5), sp_opt_chain(1, 5, 7)] }
+t('opt chain, Float in the middle') { sp_opt_chain(1, 0.5) }
+warm { |i| sp_opt_sym(i) }
+t('opt Symbol default') { [sp_opt_sym(1), sp_opt_sym(1, :slow), sp_opt_sym(1).equal?(:fast)] }
+warm { |i| sp_opt_array(i) }
+t('opt Array default') { [sp_opt_array(1), sp_opt_array(1, 2)] }
+t('opt Array default is a new Array each time') { sp_opt_array(1).equal?(sp_opt_array(1)) }
+warm { |i| sp_opt_ivar(i) }
+t('opt ivar default, unset') { sp_opt_ivar(1) }
+@opt_default = 42
+t('opt ivar default, set') { [sp_opt_ivar(1), sp_opt_ivar(1, 2)] }
+warm { |i| sp_opt_ivar_write(i) }
+t('opt default writes an ivar') { [sp_opt_ivar_write(7), @opt_seen, sp_opt_ivar_write(8, 9), @opt_seen] }
+warm { |i| sp_opt_square(i) }
+t('opt default overflows') { [sp_opt_square(3), sp_opt_square(2**40), sp_opt_square(2**40, 1)] }
+warm { |i| sp_opt_rec(i % 20); sp_opt_rec(i % 20, 1) }
+t('opt self-recursion') { [sp_opt_rec(10), sp_opt_rec(10, 5), sp_opt_rec(100)] }
+warm { |i| sp_opt_div(i + 1) }
+t('opt default divides by zero') { sp_opt_div(0) }
+t('opt default divides, given') { sp_opt_div(0, 1) }
+warm { |i| no_opt_self(i) }
+t('opt default reads itself') { [no_opt_self(1), no_opt_self(1, 2)] }
+warm { |i| OptInit.new(i); OptInit.new(i, 2); OptInit.new(i, 2, 3) }
+t('opt initialize') { [OptInit.new(1).triple, OptInit.new(1, 2).triple, OptInit.new(1, 2, 3).triple] }
+t('opt initialize of a frozen object') { o = OptInit.new(1).freeze; o.send(:initialize, 5) }
+def sp_opt_param(a, b = a * 10)
+  a - b
+end
+t('opt redefined') { [sp_opt_param(3), sp_opt_param(3, 1)] }
+warm { |i| sp_opt_param(i) }
+t('opt redefined, hot again') { [sp_opt_param(3), sp_opt_param(3, 1)] }
+class OptInitSub < OptInit
+  def initialize(x, y = x + 100)
+    super
+  end
+end
+warm { |i| OptInitSub.new(i) }
+t('opt zsuper passes the defaulted value') { [OptInitSub.new(1).triple, OptInitSub.new(1, 2).triple] }
+
+def sp_opt_plus(a, b = 1 + a)
+  b
+end
+warm { |i| sp_opt_plus(i) }
+
 # ---------------------------------------------------------------- 8. Integer#+ redefined
 
 def sp_plus(a, b)
@@ -639,6 +750,9 @@ warm { |i| sp_lt(i, 50) }
 t('plus after redefinition, hot again') { sp_plus(2, 3) }
 t('lt after redefinition, hot again') { sp_lt(2, 3) }
 t('fib after redefinition') { sp_fib(12) }
+t('opt default after + redefinition') { [sp_opt_plus(3), sp_opt_plus(1), sp_opt_plus(3, 0)] }
+warm { |i| sp_opt_plus(i) }
+t('opt default after + redefinition, hot again') { [sp_opt_plus(3), sp_opt_plus(1)] }
 # First turning hot AFTER the redefinition: the operator the body would inline is not
 # Integer's built-in one any more.
 def no_plus_late(a, b)
