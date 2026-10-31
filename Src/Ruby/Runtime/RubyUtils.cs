@@ -1929,6 +1929,14 @@ namespace IronRuby.Runtime {
         /// blocks on nothing.  Thread.handle_interrupt's :on_blocking only delivers at the former.
         /// </summary>
         public static void CheckAsyncException(bool atBlockingCall) {
+            // Everything below - a fiber being reclaimed, a parked signal, a parked finalizer, an
+            // exception parked by Thread#raise / #kill - is counted in _safePointRequests while it is
+            // outstanding, so with none of it there is nothing to look up. Mutex#lock and Monitor#enter
+            // come through here on every call.
+            if (Volatile.Read(ref _safePointRequests) == 0) {
+                return;
+            }
+
             // Reclamation runs CLR cleanup only. Do not enter Ruby signal/finalizer callbacks
             // or replace the unwind signal with a pending asynchronous exception.
             if (_reclaimingFiber) {
