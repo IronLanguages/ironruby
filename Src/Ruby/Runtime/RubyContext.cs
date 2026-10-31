@@ -4579,40 +4579,39 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// Calls the hook <paramref name="hookName"/> - method_added, const_added and the like - on <paramref name="target"/>,
+        /// Calls <paramref name="hook"/> - method_added, const_added and the like - on <paramref name="target"/>,
         /// unless it would run the built-in method, which does nothing (see <see cref="IsDefaultHook"/>).
         /// </summary>
-        internal void CallHook(ref CallSite<Func<CallSite, object, object, object>> site, string/*!*/ hookName,
+        internal void CallHook(ref CallSite<Func<CallSite, object, object, object>> site, RubyClass.Hook hook,
             object target, string/*!*/ memberName) {
 
-            if (!IsDefaultHook(target, hookName)) {
-                Send(ref site, hookName, target, memberName);
+            if (!IsDefaultHook(target, hook)) {
+                Send(ref site, RubyClass.HookNames[(int)hook], target, memberName);
             }
         }
 
         /// <summary>
-        /// True if calling the hook <paramref name="hookName"/> on <paramref name="target"/> would run the built-in method
+        /// True if calling <paramref name="hook"/> on <paramref name="target"/> would run the built-in method
         /// (Module#method_added, Module#const_added, Class#inherited, BasicObject#singleton_method_added, ...), which is
         /// empty. The runtime then leaves the call out: it does nothing, and making it would bind a rule in the hook's call
         /// site - one per new class or module, since each has a site of its own.
         /// </summary>
         /// <remarks>
         /// The hook is resolved the way its call site resolves it - an implicit-self call, so every visibility, no
-        /// refinements - from the receiver's immediate class, through that class's lookup cache. A hook defined, aliased
+        /// refinements - from the receiver's immediate class, through that class's lookup cache; the class keeps its answer
+        /// for as long as its method version stays the same (<see cref="RubyClass.IsDefaultHook"/>). A hook defined, aliased
         /// or copied anywhere in the receiver's ancestry (its singleton class, a module extended, included or prepended,
         /// a Module or Class subclass) is found instead of the built-in one, and an undefined hook is not found at all:
         /// either way the call is made, and goes where it always went (to method_missing for an undefined one). An empty
         /// library method of another arity (BasicObject#initialize copied under a hook's name) would raise, so it is called.
         /// While :c_call is traced the call is made too: CRuby reports the default hook to a TracePoint, and the rule does.
         /// </remarks>
-        internal bool IsDefaultHook(object target, string/*!*/ hookName) {
+        internal bool IsDefaultHook(object target, RubyClass.Hook hook) {
             if (TracePoint.CCallTracing) {
                 return false;
             }
 
-            CachedMethodLookup lookup = GetImmediateClassOf(target).GetMethodLookup(hookName);
-            var method = lookup.Info as RubyLibraryMethodInfo;
-            return lookup.Found && method != null && method.IsEmptyUnary;
+            return GetImmediateClassOf(target).IsDefaultHook(hook);
         }
 
         /// <summary>

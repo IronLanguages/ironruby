@@ -471,6 +471,8 @@ namespace IronRuby.Tests {
                 CaseEquals2,
                 Hooks1,
                 Hooks2,
+                Hooks3,
+                MethodLookupCacheFull1,
 
                 ClrFields1,
                 ClrFields2,

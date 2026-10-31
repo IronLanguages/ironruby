@@ -225,5 +225,124 @@ p events
 []
 ");
         }
+
+        /// <summary>
+        /// A class keeps what it found for each hook while its method version stays the same, so a hook that appears
+        /// after the class was asked must bump that version: one added to a module already included into Class, Kernel's
+        /// singleton_method_added, a superclass's singleton hook. A class whose method lookup cache is full keeps its
+        /// answers too. The expected output is CRuby 4.0's.
+        /// </summary>
+        [Options(Prism = true)]
+        public void Hooks3() {
+            TestOutput(@"
+$log = []
+class Foo; def a; end; X = 1; def self.s; end; end
+class Bar < Foo; end
+o = Object.new; def o.w; end
+
+# 1. a hook added later to a module that is already included into Class
+module LateM; end
+class Class; include LateM; end
+class Foo; def c; end; end
+module LateM
+  def method_added(n) = ($log << [:LateM, self, n]; super)
+end
+class Foo; def d; end; end
+class Bar; def e; end; end
+module LateM; remove_method :method_added; end
+class Foo; def f; end; end
+p $log; $log.clear
+
+# 2. Kernel#singleton_method_added defined after singleton classes were asked
+o2 = Object.new; def o2.x; end
+module Kernel
+  def singleton_method_added(n) = ($log << [:Kernel_sma, n] if $on)
+end
+$on = true
+def o2.y; end
+def o.z; end
+class Foo; def self.t; end; end
+$on = false
+p $log; $log.clear
+
+# 3. a superclass's singleton hook defined after the subclass was asked
+class Sup; end
+class Sub < Sup; def a; end; K1 = 1; end
+def Sup.method_added(n) = $log << [:Sup, self, n]
+def Sup.const_added(n) = $log << [:Sup_const, self, n]
+class Sub; def b; end; K2 = 2; end
+class << Sup; remove_method :method_added; end
+class Sub; def c; end; K3 = 3; end
+p $log; $log.clear
+
+# 4. a class whose method lookup cache is full before its hooks are asked
+Full = Class.new
+300.times { |i| Full.respond_to?(:""zz#{i}"") }
+Full.class_eval { def a; end }
+def Full.method_added(n) = $log << [:Full, n]
+Full.class_eval { def b; end; alias_method :c, :b }
+class << Full; remove_method :method_added; end
+Full.class_eval { def d; end }
+class << Full; undef_method :method_added; end
+begin
+  Full.class_eval { def e; end }
+rescue NoMethodError => e
+  $log << [:nme, e.name]
+end
+p $log; $log.clear
+", @"
+[[:LateM, Foo, :d], [:LateM, Bar, :e]]
+[[:Kernel_sma, :y], [:Kernel_sma, :z], [:Kernel_sma, :t]]
+[[:Sup, Sub, :b], [:Sup_const, Sub, :K2], [:Sup_const, Sub, :K3]]
+[[:Full, :b], [:Full, :c], [:nme, :method_added]]
+");
+        }
+
+        /// <summary>
+        /// A class's method lookup cache holds at most 256 names. A method found once it is full is not filed, but its
+        /// version is reported all the same, since the method is registered for invalidation either way: #respond_to?
+        /// folds the answer into a rule, and a hook's answer is kept (<see cref="Hooks3"/>). Both go stale with the
+        /// method version. The expected output is CRuby 4.0's.
+        /// </summary>
+        [Options(Prism = true)]
+        public void MethodLookupCacheFull1() {
+            TestOutput(@"
+H = Class.new
+300.times { |i| H.respond_to?(:""zz#{i}"") }
+def H.foo; end
+r = []
+def chk(r) = r << [H.respond_to?(:foo), H.respond_to?(:bar), H.respond_to?(:inspect)]
+3.times { chk(r) }
+class << H; remove_method :foo; end
+chk(r)
+def H.bar; end
+chk(r)
+module M; def foo; end; end
+H.extend(M)
+chk(r)
+class Object; def self.baz; end; end
+r << H.respond_to?(:baz)
+class << H; private :bar; end
+chk(r)
+class Module; undef_method :inspect; end rescue r << :err
+chk(r)
+p r
+# respond_to? on instances of a class whose table is full
+K = Class.new
+o = K.new
+300.times { |i| o.respond_to?(:""yy#{i}"") }
+class K; def kk; end; end
+s = []
+3.times { s << o.respond_to?(:kk) }
+class K; remove_method :kk; end
+s << o.respond_to?(:kk)
+class K; def kk; end; end
+s << o.respond_to?(:kk)
+p s
+", @"
+[[true, false, true], [true, false, true], [true, false, true], [false, false, true], [false, true, true], [true, true, true], true, [true, false, true], [true, false, false]]
+[true, true, true, false, true]
+");
+        }
     }
 }
