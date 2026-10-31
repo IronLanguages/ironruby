@@ -176,9 +176,15 @@ namespace IronRuby.Runtime.Jit {
         // reads, so that NumericIVar can type them the way it types the variable itself.
         private Dictionary<MethodCall, string> _attrReads;
 
+        // Loop mode: a local's tuple slot - the expression that reads it, and what it holds right
+        // now - without binding it to a typed slot (see EmitCall). The locals read this way, which
+        // the loop then must not write: a write would go to a typed slot this read does not see.
+        private readonly Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> _peekLocal;
+        private List<LocalVariable> _peeked;
+
         private JitCompiler(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context, int scopeDepth,
             Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self, Func<string, JT> ivarProfile,
-            Func<string, string> attrProfile) {
+            Func<string, string> attrProfile, Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal) {
             _ast = null;
             _loop = loop;
             _context = context;
@@ -190,6 +196,7 @@ namespace IronRuby.Runtime.Jit {
             _self = self ?? Ast.Parameter(typeof(object), "#self");
             _ivarProfile = (self != null) ? ivarProfile : null;
             _attrProfile = (self != null) ? attrProfile : null;
+            _peekLocal = peekLocal;
             PushScope();
         }
 
@@ -202,16 +209,17 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, out List<JitLoopSlot> slots, out bool canDeopt) {
-            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, null, out slots, out canDeopt);
+            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, null, null, out slots, out canDeopt);
         }
 
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self,
-            Func<string, JT> ivarProfile, Func<string, string> attrProfile, out List<JitLoopSlot> slots, out bool canDeopt) {
+            Func<string, JT> ivarProfile, Func<string, string> attrProfile,
+            Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal, out List<JitLoopSlot> slots, out bool canDeopt) {
 
             slots = null;
             canDeopt = false;
-            var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile);
+            var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal);
             MSA.Expression body;
             try {
                 JT type;
@@ -222,6 +230,13 @@ namespace IronRuby.Runtime.Jit {
             // A deopt restores the locals to what they were at the top of the iteration and
             // hands the loop back, so the iteration is re-run: it must not have been observable.
             if (c._canDeopt && !c._pure) { return null; }
+            // An attribute receiver read straight from its tuple slot must not also be a typed
+            // slot the loop writes (EmitCall).
+            if (c._peeked != null) {
+                foreach (var local in c._peeked) {
+                    if (c._vars[0].ContainsKey(c.Key(local))) { return null; }
+                }
+            }
             slots = c._slots;
             // the back-edge safe point hands the loop back through the deopt
             // catch, so the catch is always needed - but it fires at the top of an iteration,
@@ -1054,7 +1069,35 @@ namespace IronRuby.Runtime.Jit {
                     _attrReads[node] = variableName;
                     type = JT.Obj;
                     return Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context), _self,
-                        Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName)));
+                        Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName, false)));
+                }
+            }
+
+            // `o.x' in an outlined loop, o a local holding an object whose x is an attr_reader: the
+            // same read, of o as it is in its tuple slot (the loop may not write o), typed by what
+            // the variable holds in o right now - a guarded unboxing for an Integer or a Float.
+            var receiverLocal = node.Target as LocalVariable;
+            if (argc == 0 && receiverLocal != null && _peekLocal != null) {
+                MSA.ParameterExpression bound;
+                JT boundType;
+                if (!TryLookup(Key(receiverLocal), out bound, out boundType)) {
+                    var peek = _peekLocal(receiverLocal);
+                    object live = peek.HasValue ? peek.Value.Value : null;
+                    string variableName = (live != null)
+                        ? JitRuntime.SelfAttrSite.ReaderVariable(JitRuntime.ClassOf(_context, live), node.MethodName, true) : null;
+                    if (variableName != null) {
+                        _canDeopt = true;
+                        if (_peeked == null) { _peeked = new List<LocalVariable>(); }
+                        _peeked.Add(receiverLocal);
+                        MSA.Expression read = Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context), peek.Value.Key,
+                            Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName, true)));
+                        object value;
+                        _context.TryGetInstanceVariable(live, variableName, out value);
+                        string guard = (value is int) ? "GuardInt" : (value is long) ? "GuardLong" : (value is double) ? "GuardDouble" : null;
+                        if (guard == null) { type = JT.Obj; return read; }
+                        type = (value is int) ? JT.Int : (value is long) ? JT.Lng : JT.Dbl;
+                        return Ast.Call(JitRuntime.M(guard), read);
+                    }
                 }
             }
 

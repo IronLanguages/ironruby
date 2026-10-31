@@ -88,7 +88,9 @@ namespace IronRuby.Runtime.Jit {
             var tupleInit = new List<MSA.Expression>();
             var tupleGuards = new List<MSA.Expression>();
 
-            Func<LocalVariable, JT, JitLoopSlot> bind = (local, hint) => {
+            // A local's tuple slot: the expression that addresses it in the copy, and what it holds
+            // now. Null if the local's tuple was not passed.
+            Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peek = local => {
                 int depth = local.DefinitionLexicalDepth;
                 int argIndex;
                 if (!tupleArgIndex.TryGetValue(depth, out argIndex) || argIndex >= args.Length) {
@@ -108,18 +110,24 @@ namespace IronRuby.Runtime.Jit {
                         Ast.Convert(Ast.ArrayIndex(argsParameter, Ast.Constant(argIndex)), tupleType)));
                 }
 
-                object current;
-                MSA.Expression accessor;
                 try {
-                    accessor = ScopeBuilder.GetVariableAccessor(tuple, local.ClosureIndex);
+                    MSA.Expression accessor = ScopeBuilder.GetVariableAccessor(tuple, local.ClosureIndex);
                     // Read the live value down the very path the emitted code will use.
-                    current = tupleValue;
+                    object value = tupleValue;
                     foreach (var property in MutableTuple.GetAccessPath(tupleValue.GetType(), local.ClosureIndex)) {
-                        current = property.GetValue(current, null);
+                        value = property.GetValue(value, null);
                     }
+                    return new KeyValuePair<MSA.Expression, object>(accessor, value);
                 } catch (Exception) {
                     return null;
                 }
+            };
+
+            Func<LocalVariable, JT, JitLoopSlot> bind = (local, hint) => {
+                var peeked = peek(local);
+                if (!peeked.HasValue) { return null; }
+                object current = peeked.Value.Value;
+                MSA.Expression accessor = peeked.Value.Key;
 
                 JT type;
                 bool writeFirst = (hint == JT.Int || hint == JT.Lng || hint == JT.Dbl);
@@ -171,12 +179,12 @@ namespace IronRuby.Runtime.Jit {
                 };
                 // and which of self's methods are attr_readers, and of what (JitCompiler.EmitCall)
                 RubyClass selfClass = JitRuntime.ClassOf(context, liveSelf);
-                attrProfile = name => JitRuntime.SelfAttrSite.ReaderVariable(selfClass, name);
+                attrProfile = name => JitRuntime.SelfAttrSite.ReaderVariable(selfClass, name, false);
             }
 
             List<JitLoopSlot> slots;
             bool canDeopt;
-            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, out slots, out canDeopt);
+            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, out slots, out canDeopt);
             if (body == null || slots.Count == 0) {
                 if (OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter gave up (body={0} slots={1})", body != null, slots == null ? -1 : slots.Count); }
                 return null;

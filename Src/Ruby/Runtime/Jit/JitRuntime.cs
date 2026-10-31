@@ -351,13 +351,15 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// `x' or `self.x' in an outlined loop where x was, on the loop's self, an attr_reader when
-        /// the loop was compiled (JitCompiler.EmitCall): one `x' each.
+        /// `x', `self.x' or `o.x' in an outlined loop where x was, on the receiver, an attr_reader when
+        /// the loop was compiled (JitCompiler.EmitCall): one per such call.
         /// </summary>
         public sealed class SelfAttrSite {
             internal readonly string/*!*/ Name;
             internal readonly string/*!*/ VariableName;
             internal readonly InstanceVariableSite/*!*/ Variable;
+            // `o.x' with an explicit receiver other than self can only call a public x.
+            internal readonly bool PublicOnly;
 
             // The class the reader was last found on, under which global method version. Replaced
             // as a whole, so a racing reader sees one consistent pair.
@@ -368,8 +370,9 @@ namespace IronRuby.Runtime.Jit {
             }
             private volatile Binding _bound;
 
-            internal SelfAttrSite(string/*!*/ name, string/*!*/ variableName) {
+            internal SelfAttrSite(string/*!*/ name, string/*!*/ variableName, bool publicOnly) {
                 Name = name;
+                PublicOnly = publicOnly;
                 VariableName = variableName;
                 Variable = new InstanceVariableSite(variableName);
             }
@@ -382,16 +385,19 @@ namespace IronRuby.Runtime.Jit {
             /// <summary>Whether Name is, on cls, the attr_reader of VariableName.</summary>
             internal bool Bind(RubyClass/*!*/ cls) {
                 int version = RubyModule.GlobalMethodVersion;
-                if (ReaderVariable(cls, Name) != VariableName) { return false; }
+                if (ReaderVariable(cls, Name, PublicOnly) != VariableName) { return false; }
                 _bound = new Binding(cls, version);
                 return true;
             }
 
-            /// <summary>The instance variable `name' reads on cls, if it is an attr_reader there.</summary>
-            internal static string ReaderVariable(RubyClass/*!*/ cls, string/*!*/ name) {
+            /// <summary>
+            /// The instance variable `name' reads on cls, if it is an attr_reader there (a public one,
+            /// if <paramref name="publicOnly"/>).
+            /// </summary>
+            internal static string ReaderVariable(RubyClass/*!*/ cls, string/*!*/ name, bool publicOnly) {
                 var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
                 var reader = resolved.Found ? resolved.Info as IronRuby.Runtime.Calls.RubyAttributeReaderInfo : null;
-                return (reader != null) ? reader.InstanceVariableName : null;
+                return (reader != null && (!publicOnly || reader.IsPublic)) ? reader.InstanceVariableName : null;
             }
         }
 
@@ -402,9 +408,21 @@ namespace IronRuby.Runtime.Jit {
         /// which then makes the call. A read is not observable, so the deopt is invisible.
         /// </summary>
         public static object ReadSelfAttr(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
-            RubyClass cls = ClassOf(context, self);
+            var obj = self as RubyObject;
+            RubyClass cls = (obj != null) ? obj.ImmediateClass : ClassOf(context, self);
             if (!site.IsBoundTo(cls) && !site.Bind(cls)) {
                 throw Deopt();
+            }
+            if (obj != null) {
+                // RubyOps.ReadInstanceVariable's fast path, the RubyObject test already made
+                var data = obj._instanceData;
+                if (data == null) { return null; }
+                object[] slots = data._ivars;
+                var entry = site.Variable.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                    return RubyInstanceData.GetSlot(slots, entry.Index);
+                }
+                return data.GetInstanceVariable(site.Variable);
             }
             return RubyOps.ReadInstanceVariable(context, self, site.Variable);
         }
