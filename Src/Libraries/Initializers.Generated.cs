@@ -2977,6 +2977,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Object, System.Object>(IronRuby.Builtins.HashOps.SetDefaultValue)
             );
             
+            DefineLibraryMethod(module, "hash", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Builtins.Hash, System.Int32>(IronRuby.Builtins.HashOps.GetHashCode)
+            );
+            
             DefineLibraryMethod(module, "initialize", 0x52, 
                 0x00000000U, 0x00000000U, 0x00000000U, 0x00000001U, 
                 new Func<IronRuby.Builtins.Hash, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Initialize), 
@@ -8944,7 +8949,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "fetch", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Collections.Generic.IDictionary<System.Object, System.Object>, System.Object, System.Object, System.Object>(IronRuby.Builtins.IDictionaryOps.Fetch)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BlockParam, System.Collections.Generic.IDictionary<System.Object, System.Object>, System.Object, System.Object, System.Object>(IronRuby.Builtins.IDictionaryOps.Fetch)
             );
             
             DefineLibraryMethod(module, "flatten", 0x51, 
@@ -9323,7 +9328,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "hash", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<System.Int32>, System.Collections.IList, System.Int32>(IronRuby.Builtins.IListOps.GetHashCode)
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Collections.IList, System.Int32>(IronRuby.Builtins.IListOps.GetHashCode)
             );
             
             DefineLibraryMethod(module, "include?", 0x51, 

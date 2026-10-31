@@ -530,9 +530,10 @@ namespace IronRuby.Builtins {
             return RubyArray.Equals(eqlStorage, self, other);
         }
 
+        // See StructuralHash: how the elements are folded, and arrays and hashes that contain themselves.
         [RubyMethod("hash")]
-        public static int GetHashCode(UnaryOpStorage/*!*/ hashStorage, ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self) {
-            return RubyArray.GetHashCode(hashStorage, fixnumCast, self);
+        public static int GetHashCode(UnaryOpStorage/*!*/ hashStorage, ConversionStorage<IntegerValue>/*!*/ toInt, IList/*!*/ self) {
+            return StructuralHash.GetArrayHash(hashStorage, toInt, self);
         }
 
         #endregion
