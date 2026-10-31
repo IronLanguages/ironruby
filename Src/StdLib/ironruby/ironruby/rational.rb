@@ -995,6 +995,18 @@ module Kernel
   # nurat_f_rational. Rational(x) and Rational(x, nil) are different calls - the second
   # is a TypeError - so the arity is read off *args rather than from a default.
   def Rational(*args, exception: true)
+    # Rational(Integer, Integer) and Rational(Rational, Integer) - ActiveSupport's
+    # Time#change makes one of each for every Time#advance - go straight to what
+    # __convert__ ends with for them: __canonicalize__, and the Rational itself or its
+    # quotient.
+    if args.size == 2 && true.equal?(exception)
+      a1 = args[0]
+      a2 = args[1]
+      if ::Integer === a2
+        return ::Rational.__canonicalize__(a1, a2) if ::Integer === a1
+        return (a2 == 1 ? a1 : a1 / a2) if ::Rational === a1
+      end
+    end
     if args.size < 1 || args.size > 2
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)")
     end
