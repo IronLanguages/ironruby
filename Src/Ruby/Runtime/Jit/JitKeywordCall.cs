@@ -22,7 +22,9 @@
  * whatever ArgumentError there is to raise.
  *
  * A receiverless call may call a method of any visibility, so resolving the name on the
- * receiver's class with every visibility allowed is what the call site does too. Calls
+ * receiver's class with every visibility allowed is what the call site does too. A call with
+ * an explicit receiver (other than `self') goes direct only to a public method; a private or
+ * protected one makes the ordinary call, which raises or checks the caller as it always did. Calls
  * where refinements could be in play are never sent this way (JitRuntime.Disabled,
  * RubyContext.HasRefinements), and neither is anything once tracing is on.
  *
@@ -57,6 +59,7 @@ namespace IronRuby.Runtime.Jit {
         private readonly string/*!*/ _name;
         private readonly int _positional;
         private readonly RubySymbol/*!*/[]/*!*/ _keys;      // in the order the call passes them
+        private readonly bool _publicOnly;                  // an explicit receiver: only a public method is called directly
 
         private sealed class State {
             internal RubyClass Class;
@@ -69,11 +72,12 @@ namespace IronRuby.Runtime.Jit {
         private int _misses;
         private volatile bool _megamorphic;
 
-        private JitKeywordCall(RubyContext/*!*/ context, string/*!*/ name, int positional, RubySymbol/*!*/[]/*!*/ keys) {
+        private JitKeywordCall(RubyContext/*!*/ context, string/*!*/ name, int positional, RubySymbol/*!*/[]/*!*/ keys, bool publicOnly) {
             _context = context;
             _name = name;
             _positional = positional;
             _keys = keys;
+            _publicOnly = publicOnly;
         }
 
         private static readonly MethodInfo/*!*/ InvokeMethod = typeof(JitKeywordCall).GetMethod("Invoke");
@@ -131,6 +135,7 @@ namespace IronRuby.Runtime.Jit {
                 var resolved = cls.ResolveMethod(_name, VisibilityContext.AllVisible);
                 var info = resolved.Found ? resolved.Info as RubyMethodInfo : null;
                 if (info == null) { return state; }
+                if (_publicOnly && info.Visibility != RubyMethodVisibility.Public) { return state; }
 
                 var stub = info.GetDelegate().Target as JitStub;
                 if (stub == null || stub.Keywords == null || stub.Positional != _positional) { return state; }
@@ -161,11 +166,12 @@ namespace IronRuby.Runtime.Jit {
         // ---- compilation of the call ---------------------------------------------------------
 
         /// <summary>
-        /// The call `name(p0, p1, k: v, ...)' with the inline cache in front of it, or null when the
-        /// call does not have that shape.
+        /// The call `name(p0, p1, k: v, ...)' - or `receiver.name(...)', <paramref name="self"/> being the
+        /// receiver then and <paramref name="implicitSelf"/> false - with the inline cache in front of it,
+        /// or null when the call does not have that shape.
         /// </summary>
         internal static MSA.Expression TryTransform(AstGenerator/*!*/ gen, string/*!*/ methodName, MSA.Expression/*!*/ self,
-            Arguments arguments) {
+            Arguments arguments, bool implicitSelf) {
 
             var options = gen.Context.RubyOptions;
             if (!options.Jit || options.EnableTracing || options.Profile || JitRuntime.Disabled) { return null; }
@@ -192,7 +198,7 @@ namespace IronRuby.Runtime.Jit {
                 if (exprs[i] is SplattedArgument || exprs[i] is HashConstructor) { return null; }
             }
 
-            var site = new JitKeywordCall(gen.Context, methodName, positional, keys);
+            var site = new JitKeywordCall(gen.Context, methodName, positional, keys, !implicitSelf);
 
             // The arguments are evaluated once, in source order, into temporaries both paths share.
             var temps = new List<MSA.ParameterExpression>();
@@ -243,7 +249,7 @@ namespace IronRuby.Runtime.Jit {
                 siteBuilder.Add(p[i]);
             }
             siteBuilder.Add(makeHash);
-            var ordinary = siteBuilder.MakeCallAction(methodName, true);
+            var ordinary = siteBuilder.MakeCallAction(methodName, implicitSelf);
 
             var result = Ast.Variable(typeof(object), "#kwresult");
             temps.Add(result);

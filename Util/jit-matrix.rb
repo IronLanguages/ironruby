@@ -674,6 +674,83 @@ kt('kw call leaving out an expression default') { [kd.go(4), kd.go_both(4)] }
 kt('kw call leaving out an expression default, Float') { kd.go(0.5) }
 kt('kw call leaving out an expression default, overflow') { kd.go(2**61) }
 
+# A keyword call with an explicit receiver goes direct only to a public method.
+class KwTarget
+  def sp_kw_pub(x, by: 2)
+    x * by
+  end
+
+  def sp_kw_priv(x, by: 2)
+    x * by
+  end
+  private :sp_kw_priv
+
+  def sp_kw_prot(x, by: 2)
+    x * by
+  end
+  protected :sp_kw_prot
+
+  def call_prot(o, x)
+    o.sp_kw_prot(x, by: 3)
+  end
+end
+class KwTargetSub < KwTarget
+  def sp_kw_pub(x, by: 2)
+    [:sub, x, by]
+  end
+end
+class KwGhost
+  def method_missing(name, *args, **kw)
+    [name, args, kw]
+  end
+end
+def kw_recv_call(o, x)
+  o.sp_kw_pub(x, by: 3)
+end
+def kw_recv_priv(o, x)
+  o.sp_kw_priv(x, by: 3)
+end
+def kw_recv_prot(o, x)
+  o.sp_kw_prot(x, by: 3)
+end
+def kw_recv_safe(o, x)
+  o&.sp_kw_pub(x, by: 3)
+end
+$kw_order = []
+def kw_recv_order(o)
+  ($kw_order << :recv; o).sp_kw_pub(($kw_order << :arg; 4), by: ($kw_order << :kw; 5))
+end
+kr = KwTarget.new
+warm { |i| kw_recv_call(kr, i); kw_recv_safe(kr, i) }
+kt('kw receiver call') { kw_recv_call(kr, 5) }
+kt('kw receiver call, Float') { kw_recv_call(kr, 0.5) }
+kt('kw receiver call, overflow') { kw_recv_call(kr, 2**62) }
+kt('kw receiver call, a String') { kw_recv_call(kr, 'ab') }
+kt('kw receiver call, a subclass') { kw_recv_call(KwTargetSub.new, 5) }
+kt('kw receiver call, the class again') { kw_recv_call(kr, 5) }
+kt('kw receiver call to method_missing') { kw_recv_call(KwGhost.new, 5) }
+kt('kw receiver call on nil') { kw_recv_call(nil, 5) }
+kt('kw receiver safe call') { [kw_recv_safe(kr, 5), kw_recv_safe(nil, 5)] }
+warm { |i| kr.send(:sp_kw_priv, i, by: 1); kr.call_prot(kr, i) }
+kt('kw receiver call, private') { kw_recv_priv(kr, 5) }
+kt('kw receiver call, protected from outside') { kw_recv_prot(kr, 5) }
+kt('kw receiver call, protected from inside') { kr.call_prot(KwTarget.new, 5) }
+warm { |i| kw_recv_order(kr) }
+$kw_order = []
+kt('kw receiver call, evaluation order') { [kw_recv_order(kr), $kw_order] }
+$kw_order = []
+kt('kw receiver call, evaluation order on overflow') { [kw_recv_order(Class.new(KwTarget) { def sp_kw_pub(x, by: 2) = x * by * 2**62 }.new), $kw_order] }
+def kr.sp_kw_pub(x, by: 2)
+  :singleton
+end
+kt('kw receiver call, a singleton method') { kw_recv_call(kr, 5) }
+class KwTarget
+  def sp_kw_pub(x, by: 2)
+    x - by
+  end
+end
+kt('kw receiver call, redefined') { kw_recv_call(KwTarget.new, 5) }
+
 def sp_kw_add(left:, right:)
   left - right
 end
