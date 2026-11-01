@@ -85,13 +85,20 @@ STDLIB="-X:StdLib=$S/ironruby:$S/ruby/4.0:$S/ruby/1.9.1"
 
 # Warm start (Util/warm/README.md): IR_SERVER=start keeps a pool of IronRuby processes with the
 # runtime and the prelude already loaded, and IR_SERVER=1 runs the program in one of them -
-# `ir -e 1` in ~0.05 s instead of ~0.8 s. Whenever the pool cannot serve a request (none running,
-# none idle, startup inputs such as RUBYOPT or -I that differ from the pool's) the client execs
-# exactly the command below instead.
+# `ir -e 1` in ~0.015 s instead of ~0.9 s; IR_SERVER=auto also starts a pool when none is running.
+# Whenever the pool cannot serve a request (none running, none idle, startup inputs such as
+# RUBYOPT or -I that differ from the pool's) the client execs exactly the command below instead.
 case "$IR_SERVER" in
   ""|0) ;;
   start|stop|restart|status)
     exec "$IR_ROOT/Util/warm/ir-server.sh" "$IR_SERVER" "$IR_BIN" -X:UsePrism "$STDLIB" ;;
+  auto)
+    # as 1, and when no pool is running, start one in the background for the invocations to come
+    [ -x "$IR_ROOT/Util/warm/bin/ir-client" ] || "$IR_ROOT/Util/warm/build.sh" >/dev/null 2>&1
+    if [ -x "$IR_ROOT/Util/warm/bin/ir-client" ]; then
+      exec "$IR_ROOT/Util/warm/bin/ir-client" --auto "$IR_ROOT/Util/warm/ir-server.sh" 2 \
+        "$IR_BIN" -X:UsePrism "$STDLIB" "$@"
+    fi ;;
   *)
     if [ -x "$IR_ROOT/Util/warm/bin/ir-client" ]; then
       exec "$IR_ROOT/Util/warm/bin/ir-client" "$IR_BIN" -X:UsePrism "$STDLIB" "$@"

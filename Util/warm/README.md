@@ -9,6 +9,7 @@ hands one of them the invocation, and that process runs it as if it had just bee
 IR_CONFIG=R2R IR_SERVER=start ./ir.sh        # start a pool for this build (IR_SERVER_POOL=K, default 2)
 IR_SERVER=1 ./ir.sh -e 'puts 1'              # warm when the pool can serve it, cold otherwise
 export IR_SERVER=1                           # every ir.sh from this shell, and the ones its programs run
+export IR_SERVER=auto                        # as 1, and the first ir.sh without a pool starts one in the background
 IR_SERVER=status ./ir.sh                     # also: stop, restart
 ```
 
@@ -19,7 +20,7 @@ pool's goes cold.
 
 | Variable | Meaning |
 |---|---|
-| `IR_SERVER` | `1` runs warm if possible; `start`, `stop`, `restart` and `status` manage the pool |
+| `IR_SERVER` | `1` runs warm if possible; `auto` also starts a pool in the background when none is running (that invocation runs cold); `start`, `stop`, `restart` and `status` manage the pool |
 | `IR_SERVER_POOL` | number of idle workers to keep (default 2); each one costs about 70 MB PSS (120 MB RSS) |
 | `IR_SERVER_SOCKET` | socket path; the default is `$XDG_RUNTIME_DIR` or `/tmp`, `ironruby-warm-<uid>-<hash of binary>.sock` |
 | `IR_SERVER_LOG` | broker log (default `<socket>.log`); workers log why they declined a request |
@@ -45,23 +46,30 @@ pool's goes cold.
   DLR's cached console streams, sets ARGV, `$0` and the per-program options, and runs the
   program. It exits afterwards and is never reused.
 
-## Measured (R2R host; 8-core shared box, bench-lock core; best of 11, interleaved)
+## Measured (R2R host; 8-core shared box, bench-lock core; best and median of 11, interleaved; pool of 4 on other cores)
 
 | | cold (find3, d96bab0e) | warm |
 |---|---|---|
-| `-e 1`, wall | 0.896 s | 0.015 s |
-| `-e 'puts 1'`, first output | 0.869 s | 0.010 s |
-| `Util/warm/print.rb`, first output / wall | 0.923 / 0.942 s | 0.011 / 0.034 s |
-| `require "set"; require "json"`, wall | 1.045 s | 0.202 s |
-| `Util/bench/bench.rb --list`, first output / wall | 1.001 / 1.023 s | 0.087 / 0.116 s |
+| `-e 1`, wall | 0.912 s (median 0.952) | 0.015 s (0.017) |
+| `-e 'puts 1'`, first output | 0.979 s (1.234) | 0.013 s (0.026) |
+| `Util/warm/print.rb`, first output | 0.905 s (0.966) | 0.011 s (0.011) |
+| `Util/warm/print.rb`, wall | 0.963 s (0.993) | 0.033 s (0.037) |
+| `require "set"; require "json"`, wall | 1.100 s (1.317) | 0.216 s (0.281) |
+| `... ; puts 1`, first output | 1.044 s (1.080) | 0.197 s (0.206) |
+| `Util/bench/bench.rb --list`, first output | 0.974 s (1.017) | 0.084 s (0.092) |
+| `Util/bench/bench.rb --list`, wall | 1.085 s (1.202) | 0.103 s (0.145) |
 | peak RSS (of the worker) | 116-123 MB | 114-123 MB |
+
+What a warm program still pays for is its own code: `require "json"` loads and compiles
+json (about 0.2 s), and print.rb binds its call sites for the first time.
 
 Of the 15 ms for a warm `-e 1`, the worker spends about 6 ms from request to exit (2 ms
 parsing, 1 ms committing, 3 ms compiling, running and shutting down). Process exit and reaping
 take about 7 ms, which `IR_SERVER_EXIT=early` skips; `ir.sh` takes about 1 ms and the client
 0.3 ms. Each request still costs one warm-up (about 1 CPU-second), paid ahead of time on
 whatever cores the broker runs on. So warm start helps latency, not throughput: 20 back-to-back
-`-e 1` take 6.6 s with K=4 (23.6 s cold), and 17 of them waited for a refill.
+`-e 1` took 6.6 s with K=4, 10 of them waiting for a refill (16.9 s with K=2, 23.6 s cold), on a
+box with a load average of 6-9.
 
 ## Semantics: what differs from a cold start, and how it is handled
 

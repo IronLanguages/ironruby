@@ -2,6 +2,7 @@
  * ir-client: the `ir` a warm-start broker serves (Util/warm/README.md).
  *
  *   ir-client IR_BINARY ARGS...
+ *   ir-client --auto SERVER_SCRIPT N IR_BINARY ARGS...
  *
  * Connects to the broker's socket and hands an already initialized IronRuby process what a
  * freshly exec'ed IR_BINARY ARGS... would have found in its own process - argv, environment,
@@ -10,6 +11,10 @@
  * exits the same way. Whenever the warm path is not possible - no broker, no idle worker, a
  * request the pool was not started for - it execs IR_BINARY ARGS... instead, which is exactly
  * what ir.sh would have done without it.
+ *
+ * --auto (IR_SERVER=auto in ir.sh): when no broker is listening, start one in the background -
+ * `sh SERVER_SCRIPT start IR_BINARY` and the first N of ARGS, the pool's own command line - and run
+ * this invocation cold; the ones after it find the pool.
  *
  * Environment: IR_SERVER_SOCKET (default: $XDG_RUNTIME_DIR or /tmp, then
  * ironruby-warm-<uid>-<hash of IR_BINARY>.sock), IR_SERVER_VERBOSE=1 says on stderr why a
@@ -143,6 +148,32 @@ static int inherited_descriptor(void) {
     return found;
 }
 
+/* Starts `sh SCRIPT start BINARY POOL_ARGS...` detached (its own session, stdio on /dev/null)
+   and returns at once; the broker it starts binds the socket, and a second one that loses the
+   race exits. */
+static void start_server(const char *script, char **pool_argv, int pool_args) {
+    pid_t pid = fork();
+    if (pid < 0) return;
+    if (pid == 0) {
+        if (fork() != 0) _exit(0);              /* the grandchild is nobody's to wait for */
+        setsid();
+        int null = open("/dev/null", O_RDWR);
+        if (null >= 0) { dup2(null, 0); dup2(null, 1); dup2(null, 2); if (null > 2) close(null); }
+        sigprocmask(SIG_SETMASK, &original_mask, NULL);
+        char *args[64];
+        int n = 0;
+        args[n++] = "sh";
+        args[n++] = (char *)script;
+        args[n++] = "start";
+        for (int i = 0; i <= pool_args && n < 63; i++) args[n++] = pool_argv[i];
+        args[n] = NULL;
+        execv("/bin/sh", args);
+        _exit(127);
+    }
+    waitpid(pid, NULL, 0);
+    if (verbose) fprintf(stderr, "ir-client: starting a pool in the background\n");
+}
+
 /* ---- signals ---- */
 
 static void on_signal(int sig) {
@@ -228,6 +259,15 @@ int main(int argc, char **argv) {
         puts(path);
         return 0;
     }
+    const char *auto_script = NULL;
+    int auto_pool_args = 0;
+    if (strcmp(argv[1], "--auto") == 0 && argc >= 5) {
+        auto_script = argv[2];
+        auto_pool_args = atoi(argv[3]);
+        argv += 3;
+        argc -= 3;
+        if (auto_pool_args < 0 || auto_pool_args > argc - 2) auto_pool_args = 0;
+    }
     cold_argv = argv + 1;
     const char *v = getenv("IR_SERVER_VERBOSE");
     verbose = v && *v && strcmp(v, "0") != 0;
@@ -267,7 +307,10 @@ int main(int argc, char **argv) {
     addr.sun_family = AF_UNIX;
     if (strlen(socket_path) >= sizeof addr.sun_path) cold("socket path too long");
     strcpy(addr.sun_path, socket_path);
-    if (connect(sock, (struct sockaddr *)&addr, sizeof addr) < 0) cold("no broker");
+    if (connect(sock, (struct sockaddr *)&addr, sizeof addr) < 0) {
+        if (auto_script) start_server(auto_script, cold_argv, auto_pool_args);
+        cold("no broker");
+    }
 
     /* Only a broker of our own user gets our environment and descriptors. */
     struct ucred cred;
