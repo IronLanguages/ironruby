@@ -23,8 +23,11 @@
  *
  * A receiverless call may call a method of any visibility, so resolving the name on the
  * receiver's class with every visibility allowed is what the call site does too. A call with
- * an explicit receiver (other than `self') goes direct only to a public method; a private or
- * protected one makes the ordinary call, which raises or checks the caller as it always did. Calls
+ * an explicit receiver (other than `self') resolves the name with only public methods visible,
+ * and so goes direct only to a method that is public where the lookup finds it: `private :m'
+ * in a subclass, a singleton class or an including class leaves a forwarder there that hides
+ * the inherited public m, as it does from the ordinary call. A private or protected method
+ * makes the ordinary call, which raises or checks the caller as it always did. Calls
  * where refinements could be in play are never sent this way (JitRuntime.Disabled,
  * RubyContext.HasRefinements), and neither is anything once tracing is on.
  *
@@ -99,6 +102,8 @@ namespace IronRuby.Runtime.Jit {
             _publicOnly = publicOnly;
         }
 
+        private static readonly VisibilityContext PublicOnly = new VisibilityContext(RubyMethodAttributes.Public);
+
         private static readonly MethodInfo/*!*/ InvokeMethod = typeof(JitKeywordCall).GetMethod("Invoke");
         private static readonly FieldInfo/*!*/ NoDirectField = typeof(JitKeywordCall).GetField("NoDirect");
         private static readonly FieldInfo/*!*/ OffField = typeof(JitKeywordCall).GetField("Off");
@@ -158,10 +163,12 @@ namespace IronRuby.Runtime.Jit {
         private State/*!*/ Resolve(RubyClass/*!*/ cls, int version) {
             var state = new State { Class = cls, Version = version };
             try {
-                var resolved = cls.ResolveMethod(_name, VisibilityContext.AllVisible);
+                // A forwarder that `private :m' or `protected :m' left in a subclass resolves to the
+                // inherited m, still public itself: the forwarder's own visibility is what hides it,
+                // and only a lookup that sees nothing but public methods asks about it.
+                var resolved = cls.ResolveMethod(_name, _publicOnly ? PublicOnly : VisibilityContext.AllVisible);
                 var info = resolved.Found ? resolved.Info as RubyMethodInfo : null;
                 if (info == null) { return state; }
-                if (_publicOnly && info.Visibility != RubyMethodVisibility.Public) { return state; }
 
                 var stub = info.GetDelegate().Target as JitStub;
                 if (stub == null || stub.Keywords == null || stub.Positional != _positional) { return state; }

@@ -751,6 +751,51 @@ class KwTarget
 end
 kt('kw receiver call, redefined') { kw_recv_call(KwTarget.new, 5) }
 
+# `private :m' (or protected) in a subclass, a singleton class or an including class hides an
+# inherited public m from a receiver call - the direct one too, once m is specialized - and
+# `public :m' there shows an inherited private one.
+class KwHidePriv < KwTarget; private :sp_kw_pub; end
+class KwHideProt < KwTarget; protected :sp_kw_pub; end
+class KwShowPub < KwTarget; public :sp_kw_priv; end
+kw_hidden = KwTarget.new
+class << kw_hidden; private :sp_kw_pub; end
+def kw_hide_priv(o, x) = o.sp_kw_pub(x, by: 3)
+def kw_hide_prot(o, x) = o.sp_kw_pub(x, by: 3)
+def kw_hide_single(o, x) = o.sp_kw_pub(x, by: 3)
+def kw_show_pub(o, x) = o.sp_kw_priv(x, by: 3)
+kw_open = KwTarget.new
+warm { |i| kw_hide_priv(kw_open, i); kw_hide_prot(kw_open, i); kw_hide_single(kw_open, i); kw_show_pub(KwShowPub.new, i) }
+kt('kw receiver call, made private in a subclass') { kw_hide_priv(KwHidePriv.new, 5) }
+kt('kw receiver call, made protected in a subclass') { kw_hide_prot(KwHideProt.new, 5) }
+kt('kw receiver call, made private in a singleton class') { kw_hide_single(kw_hidden, 5) }
+kt('kw receiver call, made public in a subclass') { kw_show_pub(KwShowPub.new, 5) }
+kt('kw receiver call, the public one again') { [kw_hide_priv(kw_open, 5), kw_hide_single(kw_open, 5)] }
+class KwFactory
+  def self.sp_kw_build(x, by: 2)
+    x * by
+  end
+end
+class KwFactorySub < KwFactory; private_class_method :sp_kw_build; end
+def kw_build(c, x)
+  c.sp_kw_build(x, by: 3)
+end
+warm { |i| kw_build(KwFactory, i) }
+kt('kw receiver call, private_class_method in a subclass') { kw_build(KwFactorySub, 5) }
+kt('kw receiver call, the class method again') { kw_build(KwFactory, 5) }
+module KwApi
+  def sp_kw_api(x, by: 2)
+    x * by
+  end
+end
+class KwApiOpen; include KwApi; end
+class KwApiHidden; include KwApi; private :sp_kw_api; end
+def kw_api(o, x)
+  o.sp_kw_api(x, by: 3)
+end
+warm { |i| kw_api(KwApiOpen.new, i) }
+kt('kw receiver call, module method made private') { kw_api(KwApiHidden.new, 5) }
+kt('kw receiver call, module method still public') { kw_api(KwApiOpen.new, 5) }
+
 # A site whose callee has no direct entry - a library method, a Ruby method the JIT does not
 # take - stops trying after a few calls. Whatever it meets after that it still calls the
 # ordinary way: another class's method, the callee redefined into one the JIT takes.
