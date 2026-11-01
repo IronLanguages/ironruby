@@ -309,7 +309,19 @@ namespace IronRuby.Builtins {
 
         // { constant-name -> (source path, source line) }; lazily allocated, only holds constants
         // whose definition site is known (Module#const_source_location).
-        private Dictionary<string, KeyValuePair<string, int>> _constantLocations;
+        private Dictionary<string, ConstantLocation> _constantLocations;
+
+        // A class rather than a KeyValuePair<string, int>: a Dictionary whose values are a struct is
+        // System.Private.CoreLib code ReadyToRun cannot precompile, JIT-compiled at startup otherwise.
+        private sealed class ConstantLocation {
+            internal readonly string/*!*/ SourcePath;
+            internal readonly int SourceLine;
+
+            internal ConstantLocation(string/*!*/ sourcePath, int sourceLine) {
+                SourcePath = sourcePath;
+                SourceLine = sourceLine;
+            }
+        }
 
         // method table:
         private MemberTableState _methodsState = MemberTableState.Uninitialized;
@@ -832,7 +844,7 @@ namespace IronRuby.Builtins {
             _constantEncodings = (module._constantEncodings != null) ?
                 new Dictionary<string, RubyEncoding>(module._constantEncodings) : null;
             _constantLocations = (module._constantLocations != null) ?
-                new Dictionary<string, KeyValuePair<string, int>>(module._constantLocations) : null;
+                new Dictionary<string, ConstantLocation>(module._constantLocations) : null;
 
             // copy namespace members:
             if (module._namespaceTracker != null) {
@@ -1637,9 +1649,9 @@ namespace IronRuby.Builtins {
             }
 
             if (_constantLocations == null) {
-                _constantLocations = new Dictionary<string, KeyValuePair<string, int>>();
+                _constantLocations = new Dictionary<string, ConstantLocation>();
             }
-            _constantLocations[name] = new KeyValuePair<string, int>(sourcePath, sourceLine);
+            _constantLocations[name] = new ConstantLocation(sourcePath, sourceLine);
         }
 
         public bool TryGetConstantLocation(string/*!*/ name, out string sourcePath, out int sourceLine) {
@@ -1652,10 +1664,10 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            KeyValuePair<string, int> location;
+            ConstantLocation location;
             if (_constantLocations != null && _constantLocations.TryGetValue(name, out location)) {
-                sourcePath = location.Key;
-                sourceLine = location.Value;
+                sourcePath = location.SourcePath;
+                sourceLine = location.SourceLine;
                 return true;
             }
             sourcePath = null;

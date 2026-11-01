@@ -284,7 +284,17 @@ namespace IronRuby.Runtime {
         }
 
         private static bool HasNoSurrogates(string s) {
-            return s != null && s.AsSpan().IndexOfAnyInRange((char)0xD800, (char)0xDFFF) < 0;
+            if (s == null) {
+                return false;
+            }
+            // A plain loop rather than IndexOfAnyInRange: that generic method has no precompiled code and its JIT
+            // compilation (~2 ms) takes longer than this loop does over the whole prelude.
+            foreach (char c in s) {
+                if (char.IsSurrogate(c)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
