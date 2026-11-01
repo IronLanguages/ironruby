@@ -1,3 +1,23 @@
+diff --git a/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs b/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs
+index df05e1e..f39ecda 100644
+--- a/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs
++++ b/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs
+@@ -91,7 +91,14 @@ namespace Microsoft.Scripting.Actions {
+ 
+         private static Type LoadType(Assembly assem, string fullTypeName) {
+             Assert.NotNull(assem, fullTypeName);
+-            Type type = assem.GetType(fullTypeName);
++            Type type;
++            try {
++                type = assem.GetType(fullTypeName);
++            } catch (Exception e) when (e is TypeLoadException || e is System.IO.FileNotFoundException || e is System.IO.FileLoadException || e is BadImageFormatException) {
++                // The type names are read from metadata (AssemblyTypeNames.GetTypeNames), so a listed type can
++                // fail to load - a base type in a missing assembly. GetExportedTypes used to skip such types.
++                return null;
++            }
+             // We should ignore nested types. They will be loaded when the containing type is loaded
+             Debug.Assert(type is null || !type.IsNested());
+             return type;
 diff --git a/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs b/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs
 index e3f1d76..327fda6 100644
 --- a/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs
@@ -27,6 +47,78 @@ index d6f82e2..294b018 100644
          }
  
          protected void OptionValueRequired(string optionName, string value) {
+diff --git a/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs b/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
+index dfb0ee4..89730b4 100644
+--- a/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
++++ b/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
+@@ -51,11 +51,67 @@ namespace Microsoft.Scripting.Runtime {
+ 
+     internal static class AssemblyTypeNames {
+         public static IEnumerable<TypeName> GetTypeNames(Assembly assem, bool includePrivateTypes) {
++#if NET
++            // The names come from the assembly's metadata. GetExportedTypes/GetForwardedTypes answer the
++            // same names, but load every public type to do it - thousands for System.Private.CoreLib, ~20 ms
++            // of a process that only asks the namespace tree whether some name is a namespace.
++            if (!includePrivateTypes) {
++                var names = TryGetPublicTypeNamesFromMetadata(assem);
++                if (names is not null) {
++                    return names;
++                }
++            }
++#endif
+             return from t in ReflectionUtils.GetAllTypesFromAssembly(assem, includePrivateTypes)
+                    where !t.IsNested
+                    select new TypeName(t);
+         }
+ 
++#if NET
++        /// <summary>
++        /// The top-level public types the assembly defines and the top-level types it forwards, as
++        /// GetExportedTypes and GetForwardedTypes list them, read from the metadata tables without
++        /// loading any type. Null when the assembly has no raw metadata to read (a dynamic assembly).
++        /// </summary>
++        private static unsafe List<TypeName> TryGetPublicTypeNamesFromMetadata(Assembly assem) {
++            if (assem.IsDynamic) {
++                return null;
++            }
++
++            System.Reflection.Metadata.MetadataReader reader;
++            try {
++                if (!System.Reflection.Metadata.AssemblyExtensions.TryGetRawMetadata(assem, out byte* blob, out int length)) {
++                    return null;
++                }
++                reader = new System.Reflection.Metadata.MetadataReader(blob, length);
++            } catch (Exception) {
++                return null;
++            }
++
++            var result = new List<TypeName>();
++            foreach (var handle in reader.TypeDefinitions) {
++                var type = reader.GetTypeDefinition(handle);
++                // public and not nested (a nested type's visibility is one of the Nested* values)
++                if ((type.Attributes & TypeAttributes.VisibilityMask) == TypeAttributes.Public) {
++                    result.Add(new TypeName(NamespaceOrNull(reader.GetString(type.Namespace)), reader.GetString(type.Name)));
++                }
++            }
++
++            foreach (var handle in reader.ExportedTypes) {
++                var exported = reader.GetExportedType(handle);
++                // a nested forwarder's implementation is the forwarder of the type it is nested in
++                if (exported.IsForwarder && exported.Implementation.Kind == System.Reflection.Metadata.HandleKind.AssemblyReference) {
++                    result.Add(new TypeName(NamespaceOrNull(reader.GetString(exported.Namespace)), reader.GetString(exported.Name)));
++                }
++            }
++
++            return result;
++        }
++
++        // Type.Namespace is null for a type in the global namespace; the metadata has an empty string.
++        private static string NamespaceOrNull(string ns) => ns.Length == 0 ? null : ns;
++#endif
++
+         private static IEnumerable<TypeName> GetTypeNames(string[] namespaces, string[][] types) {
+             Debug.Assert(namespaces.Length == types.Length);
+ 
 diff --git a/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs b/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
 index 91c46fa..e47fe19 100644
 --- a/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
