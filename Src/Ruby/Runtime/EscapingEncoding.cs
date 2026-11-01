@@ -272,6 +272,21 @@ namespace IronRuby.Runtime {
             return false;
         }
 
+        // Encoding's own string overloads copy the string into a char[] first - twice for GetBytes(string), which is how
+        // every source file reaches prism (3 MB of the 60 MB `ir -e 1` allocates). Without surrogates there is nothing
+        // unpaired, and the inner encoding answers as the char[] overloads below would.
+        public override int GetByteCount(string/*!*/ s) {
+            return HasNoSurrogates(s) ? _inner.GetByteCount(s) : base.GetByteCount(s);
+        }
+
+        public override byte[]/*!*/ GetBytes(string/*!*/ s) {
+            return HasNoSurrogates(s) ? _inner.GetBytes(s) : base.GetBytes(s);
+        }
+
+        private static bool HasNoSurrogates(string s) {
+            return s != null && s.AsSpan().IndexOfAnyInRange((char)0xD800, (char)0xDFFF) < 0;
+        }
+
         public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
             if (!ContainsUnpaired(chars, index, count)) {
                 return _inner.GetByteCount(chars, index, count);

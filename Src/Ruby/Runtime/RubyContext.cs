@@ -4316,9 +4316,10 @@ namespace IronRuby.Runtime {
                 // them, so they have to survive being read: they are decoded to the escapes
                 // RubyEncoding.EscapingEncoding turns back into the same bytes, which is what the
                 // parser is handed. Decoding them strictly threw a bare DecoderFallbackException.
-                var bytes = new MemoryStream();
-                stream.CopyTo(bytes);
-                var data = bytes.ToArray();
+                // the stream seeks (see GetSourceReader above), so the rest of it is read into an array of its size
+                // rather than grown in a MemoryStream and copied out
+                var data = new byte[checked((int)(stream.Length - stream.Position))];
+                stream.ReadExactly(data);
                 string text;
                 try {
                     text = encoding.GetString(data);
