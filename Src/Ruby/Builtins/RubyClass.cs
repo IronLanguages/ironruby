@@ -588,26 +588,46 @@ namespace IronRuby.Builtins {
             RubyMemberInfo result = null;
             bool skipHidden = false;
 
-            if (ForEachAncestor((module) => {
-                if (modulesToSkip > 0) {
-                    modulesToSkip--;
-                    return false;
+            // ForEachAncestor's walk (prepends, the module, its mixins; then the superclass) without its closure,
+            // which was allocated for every method definition
+            for (RubyClass c = this; c != null; c = c.SuperClass) {
+                foreach (RubyModule p in c.Prepends) {
+                    if (IsOverriddenIn(p, name, ref modulesToSkip, ref skipHidden, ref result)) {
+                        return DefinedOrNull(result);
+                    }
                 }
-
-                // Skips modules whose method tables are not initialized as well as CLR methods that are not yet loaded to method tables.
-                // We can do so because such methods were not used in any cache.
-                //
-                // Skips super-forwarder since the forwarded super ancestor would be used in a site/group, not the forwarder itself.
-                // If the forwarded ancestor is overridden the forwarder will forward to the override.
-                //
-                // Skips "hidden" sentinels and hidden non-removable methods.
-                return module.TryGetDefinedMethod(name, ref skipHidden, out result) && !result.IsSuperForwarder;
-            })) {
-                // includes private methods:
-                return result != null && !result.IsUndefined ? result : null;
+                if (IsOverriddenIn(c, name, ref modulesToSkip, ref skipHidden, ref result)) {
+                    return DefinedOrNull(result);
+                }
+                foreach (RubyModule m in c.Mixins) {
+                    if (IsOverriddenIn(m, name, ref modulesToSkip, ref skipHidden, ref result)) {
+                        return DefinedOrNull(result);
+                    }
+                }
             }
 
             return null;
+        }
+
+        private static bool IsOverriddenIn(RubyModule/*!*/ module, string/*!*/ name, ref int modulesToSkip, ref bool skipHidden, ref RubyMemberInfo result) {
+            if (modulesToSkip > 0) {
+                modulesToSkip--;
+                return false;
+            }
+
+            // Skips modules whose method tables are not initialized as well as CLR methods that are not yet loaded to method tables.
+            // We can do so because such methods were not used in any cache.
+            //
+            // Skips super-forwarder since the forwarded super ancestor would be used in a site/group, not the forwarder itself.
+            // If the forwarded ancestor is overridden the forwarder will forward to the override.
+            //
+            // Skips "hidden" sentinels and hidden non-removable methods.
+            return module.TryGetDefinedMethod(name, ref skipHidden, out result) && !result.IsSuperForwarder;
+        }
+
+        private static RubyMemberInfo DefinedOrNull(RubyMemberInfo result) {
+            // includes private methods:
+            return result != null && !result.IsUndefined ? result : null;
         }
 
         // Returns max level in which a group has been invalidated.

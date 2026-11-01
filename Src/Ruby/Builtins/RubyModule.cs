@@ -2529,25 +2529,15 @@ namespace IronRuby.Builtins {
             bool skipHidden = false;
             bool foundCallerSelf = false;
             MethodResolutionResult result;
-            List<RubyModule> refinementBuffer = (refinements != null && !refinements.IsEmpty) ? new List<RubyModule>() : null;
 
-            if (ForEachAncestor((module) => {
-                if (refinementBuffer != null) {
-                    refinementBuffer.Clear();
-                    refinements.GetRefinementsOf(module, refinementBuffer);
-                    foreach (RubyModule refinement in refinementBuffer) {
-                        // a refinement is not in anyone's ancestors, so nothing else initializes it
-                        refinement.InitializeMethodsNoLock();
-                        owner = refinement;
-                        if (refinement.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
-                            return true;
-                        }
-                    }
-                }
-                owner = module;
-                foundCallerSelf |= module == visibility.Class;
-                return module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info);
-            })) {
+            // Without refinements, the walk without a closure: this is the lookup every call site's binding does,
+            // and the closure's captured locals were allocated on every call (which is also why the walk with
+            // refinements is a method of its own).
+            bool found = (refinements != null && !refinements.IsEmpty) ?
+                FindMethodWithRefinementsNoLock(name, options, visibility, refinements, ref skipHidden, ref foundCallerSelf, out info, out owner) :
+                FindMethodInAncestorsNoLock(name, (options & MethodLookup.Virtual) != 0, visibility.Class, ref skipHidden, ref foundCallerSelf, out info, out owner);
+
+            if (found) {
                 if (info == null || info.IsUndefined) {
                     result = MethodResolutionResult.NotFound;
                 } else if (!IsMethodVisible(info, owner, visibility, foundCallerSelf)) {
@@ -2575,6 +2565,80 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        private bool FindMethodWithRefinementsNoLock(string/*!*/ name, MethodLookup options, VisibilityContext visibility,
+            RefinementActivation/*!*/ refinements, ref bool skipHiddenRef, ref bool foundCallerSelfRef, out RubyMemberInfo infoOut, out RubyModule ownerOut) {
+
+            RubyMemberInfo info = null;
+            RubyModule owner = null;
+            bool skipHidden = skipHiddenRef;
+            bool foundCallerSelf = foundCallerSelfRef;
+            var refinementBuffer = new List<RubyModule>();
+
+            bool found = ForEachAncestor((module) => {
+                refinementBuffer.Clear();
+                refinements.GetRefinementsOf(module, refinementBuffer);
+                foreach (RubyModule refinement in refinementBuffer) {
+                    // a refinement is not in anyone's ancestors, so nothing else initializes it
+                    refinement.InitializeMethodsNoLock();
+                    owner = refinement;
+                    if (refinement.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
+                        return true;
+                    }
+                }
+                owner = module;
+                foundCallerSelf |= module == visibility.Class;
+                return module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info);
+            });
+
+            skipHiddenRef = skipHidden;
+            foundCallerSelfRef = foundCallerSelf;
+            infoOut = info;
+            ownerOut = owner;
+            return found;
+        }
+
+        /// <summary>
+        /// What ResolveMethodNoLock's ForEachAncestor walk does when no refinement is active: the ancestors in method
+        /// resolution order (see ForEachAncestor and RubyClass.ForEachAncestor) until one defines the method, noting
+        /// whether the caller's class was passed on the way.
+        /// </summary>
+        private bool FindMethodInAncestorsNoLock(string/*!*/ name, bool virtualLookup, RubyModule callerClass,
+            ref bool skipHidden, ref bool foundCallerSelf, out RubyMemberInfo info, out RubyModule owner) {
+
+            info = null;
+            owner = null;
+            if (IsClass) {
+                for (RubyClass c = (RubyClass)this; c != null; c = c.SuperClass) {
+                    if (c.FindMethodInDeclaredAncestorsNoLock(name, virtualLookup, callerClass, ref skipHidden, ref foundCallerSelf, ref info, ref owner)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            return FindMethodInDeclaredAncestorsNoLock(name, virtualLookup, callerClass, ref skipHidden, ref foundCallerSelf, ref info, ref owner);
+        }
+
+        private bool FindMethodInDeclaredAncestorsNoLock(string/*!*/ name, bool virtualLookup, RubyModule callerClass,
+            ref bool skipHidden, ref bool foundCallerSelf, ref RubyMemberInfo info, ref RubyModule owner) {
+
+            foreach (RubyModule p in _prepends) {
+                owner = p;
+                foundCallerSelf |= p == callerClass;
+                if (p.TryGetMethod(name, ref skipHidden, virtualLookup, out info)) return true;
+            }
+
+            owner = this;
+            foundCallerSelf |= this == callerClass;
+            if (TryGetMethod(name, ref skipHidden, virtualLookup, out info)) return true;
+
+            foreach (RubyModule m in _mixins) {
+                owner = m;
+                foundCallerSelf |= m == callerClass;
+                if (m.TryGetMethod(name, ref skipHidden, virtualLookup, out info)) return true;
+            }
+            return false;
+        }
+
         private bool IsMethodVisible(RubyMemberInfo/*!*/ method, RubyModule/*!*/ owner, VisibilityContext visibility, bool foundCallerSelf) {
             // Visibility not constrained by a class:
             // - call with implicit self => all methods are visible.
@@ -2588,12 +2652,17 @@ namespace IronRuby.Builtins {
                 if (foundCallerSelf) {
                     return true;
                 }
-                // walk ancestors from caller's self class (visibilityContext)
-                // until the method owner is found or this module is found (this module is a descendant of the owner):
-                return visibility.Class.ForEachAncestor((module) => module == owner || module == this);
+                return IsProtectedMethodVisible(owner, visibility.Class);
             } 
 
             return method.Visibility == RubyMethodVisibility.Public;
+        }
+
+        // A method of its own so that the closure's captured parameter is not allocated on every visibility check.
+        private bool IsProtectedMethodVisible(RubyModule/*!*/ owner, RubyModule/*!*/ callerClass) {
+            // walk ancestors from caller's self class (visibilityContext)
+            // until the method owner is found or this module is found (this module is a descendant of the owner):
+            return callerClass.ForEachAncestor((module) => module == owner || module == this);
         }
 
         // skip one method in the method resolution order (MRO)
