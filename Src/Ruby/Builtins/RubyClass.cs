@@ -1197,6 +1197,12 @@ namespace IronRuby.Builtins {
         }
 
         private static IEnumerable<MethodInfo/*!*/>/*!*/ GetClrMethods(Type/*!*/ type, BindingFlags bindingFlags, bool inherited, string/*!*/ name) {
+            // Declared methods only, of a name the type does not declare: nothing, and no need to reflect over all of the
+            // type's methods (what _clrMethodsByName does on its first lookup in a type) to find that out - the misses of
+            // TryGetClrMember (see MayDeclareFieldOrEvent) are almost every lookup.
+            if (!inherited && !DeclaredMemberNames.MayDeclareMethod(type, name)) {
+                return Enumerable.Empty<MethodInfo>();
+            }
             return _clrMethodsByName.GetMembers(type, name, inherited).WithBindingFlags(bindingFlags);
         }
 

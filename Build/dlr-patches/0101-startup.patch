@@ -334,6 +334,91 @@ index dfb0ee4..89730b4 100644
          private static IEnumerable<TypeName> GetTypeNames(string[] namespaces, string[][] types) {
              Debug.Assert(namespaces.Length == types.Length);
  
+diff --git a/src/core/Microsoft.Dynamic/Utils/DeclaredMemberNames.cs b/src/core/Microsoft.Dynamic/Utils/DeclaredMemberNames.cs
+new file mode 100644
+index 0000000..b53c31d
+--- /dev/null
++++ b/src/core/Microsoft.Dynamic/Utils/DeclaredMemberNames.cs
+@@ -0,0 +1,79 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the Apache 2.0 License.
++// See the LICENSE file in the project root for more information.
++
++using System;
++using System.Collections.Generic;
++using System.Reflection;
++using System.Runtime.CompilerServices;
++
++namespace Microsoft.Scripting.Utils {
++    /// <summary>
++    /// Answers whether a type declares a method of a given name from the assembly's metadata tables, without
++    /// reflecting over the type: a language that looks names up as CLR members of each class in a hierarchy mostly
++    /// asks about names nothing declares, and reflecting a type's methods to find that out creates a MethodInfo for
++    /// every one of them (hundreds for Int32 and its generic-math interfaces).
++    /// </summary>
++    public static class DeclaredMemberNames {
++#if NET
++        private sealed class Names {
++            internal readonly HashSet<string> Methods; // null: unknown
++            internal Names(HashSet<string> methods) { Methods = methods; }
++        }
++
++        private sealed class Reader {
++            internal readonly System.Reflection.Metadata.MetadataReader Value; // null: no metadata to read
++            internal Reader(System.Reflection.Metadata.MetadataReader value) { Value = value; }
++        }
++
++        private static readonly ConditionalWeakTable<Type, Names> _names = new ConditionalWeakTable<Type, Names>();
++        private static readonly ConditionalWeakTable<Assembly, Reader> _readers = new ConditionalWeakTable<Assembly, Reader>();
++#endif
++
++        /// <summary>
++        /// False if <paramref name="type"/> itself (not a base type) declares no method named <paramref name="name"/>,
++        /// of any visibility, static or instance; true if it does or if that cannot be told without reflection.
++        /// </summary>
++        public static bool MayDeclareMethod(Type type, string name) {
++#if NET
++            var methods = _names.GetValue(type, static t => new Names(ReadMethodNames(t))).Methods;
++            return methods is null || methods.Contains(name);
++#else
++            return true;
++#endif
++        }
++
++#if NET
++        private static HashSet<string> ReadMethodNames(Type type) {
++            try {
++                if (type.HasElementType || type.IsGenericParameter || type.Module != type.Assembly.ManifestModule) {
++                    return null;
++                }
++                int token = type.MetadataToken;
++                if ((token >> 24) != 0x02) { // not a TypeDef
++                    return null;
++                }
++                var reader = _readers.GetValue(type.Assembly, static a => new Reader(CreateReader(a))).Value;
++                if (reader is null) {
++                    return null;
++                }
++                var definition = reader.GetTypeDefinition(System.Reflection.Metadata.Ecma335.MetadataTokens.TypeDefinitionHandle(token & 0xFFFFFF));
++                var names = new HashSet<string>(StringComparer.Ordinal);
++                foreach (var handle in definition.GetMethods()) {
++                    names.Add(reader.GetString(reader.GetMethodDefinition(handle).Name));
++                }
++                return names;
++            } catch (Exception) {
++                return null;
++            }
++        }
++
++        private static unsafe System.Reflection.Metadata.MetadataReader CreateReader(Assembly assembly) {
++            if (assembly.IsDynamic || !System.Reflection.Metadata.AssemblyExtensions.TryGetRawMetadata(assembly, out byte* blob, out int length)) {
++                return null;
++            }
++            return new System.Reflection.Metadata.MetadataReader(blob, length);
++        }
++#endif
++    }
++}
 diff --git a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs b/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
 index 42f3361..792be96 100644
 --- a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
