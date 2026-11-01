@@ -55,16 +55,25 @@ namespace IronRuby.Runtime.Jit {
         // stops looking: resolving a name is far dearer than the hash it would save.
         private const int MaxMisses = 8;
 
-        // So does a site whose callee has no direct entry for it to call: a library method, a Ruby
-        // method the JIT declined, one whose signature the call does not fit. Asking costs a call the
-        // receiver's class - for an Integer, Float or String a table lookup - on top of the ordinary
-        // call it makes anyway, which made `2.5.round(half: :even)' 13-37% slower; so such a callee
-        // gets a few calls, and then the site makes the ordinary call behind one field test (Off).
-        // A Ruby method the JIT is still profiling has no direct entry yet either, but it gets one
-        // after JitStub.Threshold calls (counted over every site), so the site waits longer for it -
-        // for each method it resolves, since a new method version can mean profiling over again.
+        // A site with an explicit receiver whose callee has no direct entry for it to call - a
+        // library method, a Ruby method the JIT declined, one whose signature the call does not
+        // fit - goes quiet instead. Asking costs a call and the receiver's class - for an Integer,
+        // Float or String a table lookup - on top of the ordinary call it makes anyway, which made
+        // `2.5.round(half: :even)' 13-37% slower; so such a callee gets a few calls, and then the
+        // site makes the ordinary call behind two field tests (Off, QuietAt) until the method
+        // version changes. A redefinition can give the name a method the JIT takes, so the site
+        // then resolves it again and gives it the same few calls; MaxMisses bounds how often that
+        // can happen. A Ruby method the JIT is still profiling has no direct entry yet either, but
+        // it gets one after JitStub.Threshold calls (counted over every site), so the site waits
+        // longer for it.
+        //
+        // A receiverless site never goes quiet: its receiver is self, whose class is cheap to
+        // find, and the same site meets another class whenever an inherited method runs on an
+        // instance of another subclass - one whose method the JIT may well have taken. It keeps
+        // asking, as it did before receiver calls were sent this way, and only MaxMisses stops it.
         private const int MaxDeadCalls = 4;
         private const int MaxUndecidedCalls = 4 * JitStub.Threshold;
+        private const int NotQuiet = int.MinValue;
 
         /// <summary>"Not called here: make the call the ordinary way."</summary>
         public static readonly object NoDirect = new object();
@@ -88,11 +97,20 @@ namespace IronRuby.Runtime.Jit {
         private int _undecidedCalls;
 
         /// <summary>
-        /// Set once the site has stopped looking for a direct entry. The compiled call tests it
-        /// before it calls <see cref="Invoke"/>, so from then on it costs that test and nothing else.
-        /// (A stale read only means one more call through Invoke, which tests it again.)
+        /// Set once the site has stopped looking for a direct entry for good (MaxMisses). The compiled
+        /// call tests it, and <see cref="QuietAt"/>, before it calls <see cref="Invoke"/>, so from then on
+        /// it costs those tests and nothing else. (A stale read only means one more call through
+        /// Invoke, which tests them again.)
         /// </summary>
         public bool Off;
+
+        /// <summary>
+        /// The method version under which the site found nothing to call directly (MaxDeadCalls,
+        /// MaxUndecidedCalls), or NotQuiet: it stays out of <see cref="Invoke"/> while
+        /// RubyModule.GlobalMethodVersion is still that. Only a site with an explicit receiver
+        /// sets it, and only its compiled call tests it.
+        /// </summary>
+        public int QuietAt = NotQuiet;
 
         private JitKeywordCall(RubyContext/*!*/ context, string/*!*/ name, int positional, RubySymbol/*!*/[]/*!*/ keys, bool publicOnly) {
             _context = context;
@@ -105,8 +123,10 @@ namespace IronRuby.Runtime.Jit {
         private static readonly VisibilityContext PublicOnly = new VisibilityContext(RubyMethodAttributes.Public);
 
         private static readonly MethodInfo/*!*/ InvokeMethod = typeof(JitKeywordCall).GetMethod("Invoke");
+        private static readonly PropertyInfo/*!*/ GlobalMethodVersionProperty = typeof(RubyModule).GetProperty("GlobalMethodVersion");
         private static readonly FieldInfo/*!*/ NoDirectField = typeof(JitKeywordCall).GetField("NoDirect");
         private static readonly FieldInfo/*!*/ OffField = typeof(JitKeywordCall).GetField("Off");
+        private static readonly FieldInfo/*!*/ QuietAtField = typeof(JitKeywordCall).GetField("QuietAt");
 
         public static object Invoke(object/*!*/ site, object self, object p0, object p1, object k0, object k1, object k2) {
             return ((JitKeywordCall)site).Call(self, p0, p1, k0, k1, k2);
@@ -115,8 +135,10 @@ namespace IronRuby.Runtime.Jit {
         private object Call(object self, object p0, object p1, object k0, object k1, object k2) {
             if (Off || JitRuntime.Disabled || _context.HasRefinements) { return NoDirect; }
 
-            RubyClass cls = JitRuntime.ClassOf(_context, self);
             int version = RubyModule.GlobalMethodVersion;
+            if (QuietAt == version) { return NoDirect; }
+
+            RubyClass cls = JitRuntime.ClassOf(_context, self);
             State state = _state;
             if (state == null || state.Class != cls || state.Version != version) {
                 if (++_misses > MaxMisses) {
@@ -124,13 +146,15 @@ namespace IronRuby.Runtime.Jit {
                     return NoDirect;
                 }
                 _state = state = Resolve(cls, version);
+                // what the site is waiting for is this resolution's to give
+                _deadCalls = 0;
                 _undecidedCalls = 0;
             }
 
             JitStub stub = state.Stub;
-            if (stub == null || stub.GivenUp) { return Fruitless(ref _deadCalls, MaxDeadCalls); }
+            if (stub == null || stub.GivenUp) { return Fruitless(ref _deadCalls, MaxDeadCalls, version); }
             var direct = stub.Direct;
-            if (direct == null) { return Fruitless(ref _undecidedCalls, MaxUndecidedCalls); }
+            if (direct == null) { return Fruitless(ref _undecidedCalls, MaxUndecidedCalls, version); }
 
             int[] slots = state.Slots;
             object d0 = null, d1 = null, d2 = null;
@@ -142,8 +166,8 @@ namespace IronRuby.Runtime.Jit {
             return direct(self, p0, p1, d0, d1, d2);
         }
 
-        private object Fruitless(ref int count, int max) {
-            if (++count >= max) { Off = true; }
+        private object Fruitless(ref int count, int max, int version) {
+            if (_publicOnly && ++count >= max) { QuietAt = version; }
             return NoDirect;
         }
 
@@ -286,8 +310,14 @@ namespace IronRuby.Runtime.Jit {
 
             var result = Ast.Variable(typeof(object), "#kwresult");
             temps.Add(result);
+            var siteConstant = Ast.Constant(site);
+            MSA.Expression skip = Ast.Field(siteConstant, OffField);
+            if (!implicitSelf) {
+                skip = Ast.OrElse(skip,
+                    Ast.Equal(Ast.Field(siteConstant, QuietAtField), Ast.Property(null, GlobalMethodVersionProperty)));
+            }
             body.Add(Ast.Assign(result, Ast.Condition(
-                Ast.Field(Ast.Constant(site), OffField),
+                skip,
                 Ast.Field(null, NoDirectField),
                 Ast.Call(InvokeMethod, Ast.Constant(site, typeof(object)), selfTemp, p[0], p[1], k[0], k[1], k[2]),
                 typeof(object)
