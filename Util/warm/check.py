@@ -256,6 +256,7 @@ def run(argv, opts, warm):
 
 
 def pty_run(argv, warm, keys=b'', delay=1.5):
+    # keys go once the program says "ready" (if it does), or after the delay otherwise
     """Runs ir in a new session on a pseudo-terminal, as an interactive shell would: the slave
     is the controlling terminal and the child is its foreground process group."""
     env = dict(BASE_ENV)
@@ -277,7 +278,9 @@ def pty_run(argv, warm, keys=b'', delay=1.5):
     sent = not keys
     start = time.time()
     while time.time() < deadline:
-        if not sent and time.time() - start > delay:
+        waits = b'ready' in ' '.join(argv).encode()
+        if not sent and ((waits and b'ready' in out) or (not waits and time.time() - start > delay)):
+            time.sleep(0.1)
             os.write(master, keys)
             sent = True
         r, _, _ = select.select([master], [], [], 0.05)
