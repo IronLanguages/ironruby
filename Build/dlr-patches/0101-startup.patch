@@ -1,0 +1,14 @@
+diff --git a/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs b/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs
+index e3f1d76..327fda6 100644
+--- a/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs
++++ b/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs
+@@ -79,7 +79,8 @@ namespace Microsoft.Scripting.Actions {
+ 
+                 _packageAssemblies.Add(assem);
+                 UpdateSubtreeIds();
+-                PublishComTypes(assem);
++                // Not PublishComTypes(assem): nothing reads the COM type cache it fills, and scanning every type
++                // of every loaded assembly (GetExportedTypes) was ~2% of a Ruby process's startup.
+             }
+ 
+             return true;
