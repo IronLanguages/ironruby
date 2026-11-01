@@ -100,7 +100,7 @@ namespace IronRuby.Runtime.Jit {
         /// Set once the site has stopped looking for a direct entry for good (MaxMisses). The compiled
         /// call tests it, and <see cref="QuietAt"/>, before it calls <see cref="Invoke"/>, so from then on
         /// it costs those tests and nothing else. (A stale read only means one more call through
-        /// Invoke, which tests them again.)
+        /// Invoke, which tests Off again and otherwise finds the same nothing to call.)
         /// </summary>
         public bool Off;
 
@@ -135,9 +135,8 @@ namespace IronRuby.Runtime.Jit {
         private object Call(object self, object p0, object p1, object k0, object k1, object k2) {
             if (Off || JitRuntime.Disabled || _context.HasRefinements) { return NoDirect; }
 
+            // (QuietAt is the compiled call's to test: it does not call this while it is current.)
             int version = RubyModule.GlobalMethodVersion;
-            if (QuietAt == version) { return NoDirect; }
-
             RubyClass cls = JitRuntime.ClassOf(_context, self);
             State state = _state;
             if (state == null || state.Class != cls || state.Version != version) {
@@ -152,9 +151,13 @@ namespace IronRuby.Runtime.Jit {
             }
 
             JitStub stub = state.Stub;
-            if (stub == null || stub.GivenUp) { return Fruitless(ref _deadCalls, MaxDeadCalls, version); }
-            var direct = stub.Direct;
-            if (direct == null) { return Fruitless(ref _undecidedCalls, MaxUndecidedCalls, version); }
+            var direct = (stub != null) ? stub.Direct : null;
+            if (direct == null) {
+                // a stub the JIT gave up on never gets an entry; one it is still profiling may
+                return (stub == null || stub.GivenUp)
+                    ? Fruitless(ref _deadCalls, MaxDeadCalls, version)
+                    : Fruitless(ref _undecidedCalls, MaxUndecidedCalls, version);
+            }
 
             int[] slots = state.Slots;
             object d0 = null, d1 = null, d2 = null;
