@@ -453,6 +453,29 @@ namespace IronRuby.Runtime {
             get { return _options; }
         }
 
+        /// <summary>
+        /// How many times the interpreter runs a lambda, loop or call-site rule before it compiles it
+        /// to IL, in a thread-pool task: a full-optimization JIT of a DynamicMethod, about a millisecond
+        /// each. The code the core prelude runs while it loads (ruby4.rb, rbconfig, RubyGems) is mostly
+        /// one-shot, yet some 170 of its blocks and rules cross the default threshold of 32 and get
+        /// compiled: ~0.3 billion instructions on pool threads (12% of `ir -e 1`, a fifth of its CPU
+        /// time) that compete with the main thread for the CPU, to speed up code that never runs again.
+        /// So code compiled and sites bound while the prelude loads count to StartupCompilationThreshold
+        /// instead; everything after that, and any explicit -X:CompilationThreshold, is unaffected.
+        /// Prelude code that turns out hot in the program still gets compiled, after more runs.
+        /// </summary>
+        internal int CompilationThreshold {
+            get {
+                int threshold = _options.CompilationThreshold;
+                return threshold < 0 && _loader is not null && _loader.LoadingCorePrelude ? StartupCompilationThreshold : threshold;
+            }
+        }
+
+        // 200 keeps all but ~50 of the startup compiles away. Higher values (1000 removes them all) push
+        // compiles of rules the program later shares with the prelude - Float#* and friends, through the
+        // binders' rule caches - into the program's first few hundred milliseconds instead.
+        internal const int StartupCompilationThreshold = 200;
+
         internal RubyScope/*!*/ EmptyScope {
             get { return _emptyScope; }
         }

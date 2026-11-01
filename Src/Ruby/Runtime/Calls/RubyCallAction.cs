@@ -340,7 +340,7 @@ namespace IronRuby.Runtime.Calls {
             _PendingVersionSet = versionSet;
             _PendingVersionSetOwner = this;
             try {
-                result = this.LightBind<T>(args, Context.Options.CompilationThreshold);
+                result = this.LightBind<T>(args, Context.CompilationThreshold);
             } finally {
                 _PendingVersionSet = null;
                 _PendingVersionSetOwner = null;

@@ -106,7 +106,7 @@ namespace IronRuby.Runtime.Calls {
                 return result;
             }
 
-            result = this.LightBind<T>(args, context.Options.CompilationThreshold);
+            result = this.LightBind<T>(args, context.CompilationThreshold);
             CacheTarget(result);
             return result;
         }

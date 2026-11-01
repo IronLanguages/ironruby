@@ -1225,6 +1225,14 @@ namespace IronRuby.Runtime {
             get { return _corePreludeThread == Thread.CurrentThread; }
         }
 
+        // Set while the core prelude (gem_prelude.rb and everything it requires, or ruby4.rb) loads,
+        // on whichever thread: RubyContext.CompilationThreshold reads it.
+        private volatile bool _loadingCorePrelude;
+
+        internal bool LoadingCorePrelude {
+            get { return _loadingCorePrelude; }
+        }
+
         /// <summary>
         /// Requires the core prelude - gem_prelude.rb, or ruby4.rb under --disable-gems - and then
         /// lists the features MRI has in $" from the start.
@@ -1234,6 +1242,7 @@ namespace IronRuby.Runtime {
             if (direct) {
                 _corePreludeThread = Thread.CurrentThread;
             }
+            _loadingCorePrelude = true;
             // The prelude's hot code is mostly not the program's: compiling it on another thread while the prelude
             // loads only competes with the loading (the compilations of `ir -e 1' took ~180 ms of CPU). What is
             // still hot once the program runs is compiled then (see BackgroundCompilation).
@@ -1241,6 +1250,7 @@ namespace IronRuby.Runtime {
             try {
                 LoadFile(globalScope, self, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
             } finally {
+                _loadingCorePrelude = false;
                 if (direct) {
                     _corePreludeThread = null;
                 }
