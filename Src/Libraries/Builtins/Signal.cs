@@ -75,11 +75,6 @@ namespace IronRuby.Builtins {
                     });
             }
 
-            if (number == SignalInterrupt) {
-                var proc = command as Proc;
-                context.InterruptSignalHandler = (proc != null) ? new Action(() => proc.Call(null)) : null;
-            }
-
             // MRI runs trap handlers on the main thread at an interrupt check, not on whatever
             // thread the signal landed on. PosixSignals parks them; this is where the main thread
             // is named and where the safe point that drains them is hooked up.
@@ -101,10 +96,23 @@ namespace IronRuby.Builtins {
             // No try/catch around the call: PosixSignals runs handlers on the main thread at a
             // safe point, so an exception out of one propagates there by itself, which is where
             // MRI raises it too.
-            return PosixSignals.Trap(number, command, signalNumber =>
+            object previous = PosixSignals.Trap(number, command, signalNumber =>
                 site.Target(site, command, ScriptingRuntimeHelpers.Int32ToObject(signalNumber)),
                 defaultInvoke
             );
+
+            if (number == SignalInterrupt) {
+                // The console's Ctrl-C hook (Console.CancelKeyPress) runs InterruptSignalHandler on
+                // .NET's signal thread. Where PosixSignals has a registration of its own for SIGINT,
+                // that one already runs the handler, on the main thread: dispatching it from the hook
+                // too ran a trap(:INT) block twice, once on the wrong thread, and raised a second
+                // Interrupt into a program already unwinding from the first.
+                var proc = command as Proc;
+                context.InterruptSignalHandler = (proc != null && !PosixSignals.IsRegistered(number))
+                    ? new Action(() => proc.Call(null))
+                    : null;
+            }
+            return previous;
         }
 
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
