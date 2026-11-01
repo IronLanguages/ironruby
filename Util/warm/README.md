@@ -74,7 +74,8 @@ really warm. Current result: 0 failures, 2 known gaps.
 | exit status | the broker reports the real wait status; the client exits with the same code or dies of the same signal (no core) |
 | `exec` from the script | the worker is replaced; the broker still reports how the new program ended |
 | `at_exit`, exceptions, `exit!`, `abort` | they run in the worker exactly as in a cold process (same output and status) |
-| signals | the client forwards INT TERM HUP QUIT USR1 USR2 WINCH ALRM CONT TSTP TTIN TTOU and the rest; Ctrl-C on a terminal reaches the client's process group, and the client forwards it; Ctrl-Z stops both; SIGKILL of the client kills the worker (it watches the connection); signals ignored at exec (nohup) are ignored in the worker too |
+| signals | the client forwards INT TERM HUP QUIT USR1 USR2 WINCH ALRM CONT TSTP TTIN TTOU and the rest; Ctrl-C on a terminal reaches the client's process group, and the client forwards it; Ctrl-Z stops both; SIGKILL of the client kills the worker (it watches the connection); signals ignored at exec (nohup) are ignored in the worker too; the signal mask a parent blocked at exec is not carried over |
+| job control | **gap**: the worker is not in the terminal's session, so a warm program in a background job is not stopped by SIGTTIN/SIGTTOU when it reads (or, with `stty tostop`, writes) the terminal; SIGSTOP sent to the client (or the program stopping itself) does not show the shell a stopped job |
 | SIGINT double dispatch | fixed in `Signal.trap` (a cold-start bug too: a `trap(:INT)` block ran twice, once off the main thread); the worker keeps the prelude's Ctrl-C handler, as a cold start does |
 | `Process.ppid` | reports the client's parent, not the broker |
 | `Process.pid`, `getpgrp`, `getsid` | **gap**: they are the worker's own; signals sent to either pid reach the program, but `$$` is not the pid the parent saw, and `kill 0` targets the worker's own process group |
