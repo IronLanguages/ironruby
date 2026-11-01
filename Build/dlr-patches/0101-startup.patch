@@ -47,6 +47,102 @@ index d6f82e2..294b018 100644
          }
  
          protected void OptionValueRequired(string optionName, string value) {
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.ReadyToRun.cs b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.ReadyToRun.cs
+new file mode 100644
+index 0000000..13cb1bf
+--- /dev/null
++++ b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.ReadyToRun.cs
+@@ -0,0 +1,90 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the Apache 2.0 License.
++// See the LICENSE file in the project root for more information.
++
++using System.Reflection;
++using System.Runtime.CompilerServices;
++
++namespace Microsoft.Scripting.Interpreter {
++    public partial class CallInstruction {
++        /// <summary>
++        /// Never called. ReadyToRun compiles a generic instantiation only when it sees it built with exact type
++        /// arguments, and SlowCreate builds a call instruction with MakeGenericType: every instruction whose signature
++        /// mixes reference types with bool or int then JIT-compiled its shape's shared code at run time - 30-odd
++        /// shapes and ~140 methods while IronRuby's prelude loads, each a quarter millisecond of tier-0 JIT. Each shape
++        /// below, built with object for its reference types, has crossgen2 compile the code every reference-type
++        /// instantiation of that shape shares. FastCreate already covers the shapes of only object and primitives.
++        /// The list is the shapes a Ruby process uses at startup, plus every mix of object, bool and int up to three
++        /// type arguments.
++        /// </summary>
++        [MethodImpl(MethodImplOptions.NoInlining)]
++        private static void RootReadyToRunInstantiations() {
++            Root(new ActionCallInstruction<bool, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, int>(default(MethodInfo)));
++            Root(new ActionCallInstruction<bool, bool, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<bool, int, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<bool, object, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<bool, object, int>(default(MethodInfo)));
++            Root(new ActionCallInstruction<bool, object, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, bool, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, int, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, object, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, object, int>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, object, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, bool, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, bool, int>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, bool, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, int, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, int, int>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, int, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, object, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, object, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, object, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, bool, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, bool, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, int, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, int, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, int, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, int?>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, bool, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, bool, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, int, object, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, object, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, object, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, int, object, object, object, object, object, object, object>(default(MethodInfo)));
++        }
++
++        [MethodImpl(MethodImplOptions.NoInlining)]
++        private static void Root(CallInstruction instruction) {
++            System.GC.KeepAlive(instruction);
++        }
++    }
++}
 diff --git a/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs b/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
 index dfb0ee4..89730b4 100644
 --- a/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
