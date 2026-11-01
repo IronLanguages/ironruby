@@ -223,9 +223,10 @@ namespace IronRuby.Prism {
                     return null;
                 }
 
-                var match = _magicComment.Match(text);
-                if (match.Success) {
-                    return match.Groups[1].Value;
+                // "# CoDiNg: bIg5" too; no Regex, building one (RegexOptions.Compiled) was 8 ms of startup
+                string name = Tokenizer.MatchCodingComment(text);
+                if (name != null) {
+                    return name;
                 }
 
                 // Only a shebang lets the comment slip to the second line.
@@ -236,11 +237,6 @@ namespace IronRuby.Prism {
             }
             return null;
         }
-
-        private static readonly System.Text.RegularExpressions.Regex _magicComment =
-            new System.Text.RegularExpressions.Regex(
-                @"coding\s*[:=]\s*([A-Za-z0-9_\-]+)",
-                System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase); // "# CoDiNg: bIg5" too
 
         private static RubyEncoding/*!*/ ResolveEncoding(string name, SourceUnit sourceUnit) {
             if (String.IsNullOrEmpty(name)) {

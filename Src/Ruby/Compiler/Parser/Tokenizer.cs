@@ -4157,7 +4157,8 @@ namespace IronRuby.Compiler {
 
         #region TryParseEncodingHeader
 
-        private const string EncodingHeaderPattern = @"^[#].*?coding\s*[:=]\s*(?<encoding>[a-z0-9_-]+)";
+        // The header is matched by hand rather than with the regex ^[#].*?coding\s*[:=]\s*(?<encoding>[a-z0-9_-]+)
+        // (case-insensitive): building that Regex was a few ms of every process's startup.
 
         // reads case insensitively, doesn't rewind the reader if the content doesn't match, doesn't read a line unless it starts with '#':
         // ([#][!].*(\r|\n|\r\n))?
@@ -4181,14 +4182,47 @@ namespace IronRuby.Compiler {
                 line = reader.ReadLine();
             }
 
-            var regex = new Regex(EncodingHeaderPattern, RegexOptions.IgnoreCase);
-            var match = regex.Match(line);
-            if (match.Success) {
-                encodingName = match.Groups["encoding"].Value;
-                return encodingName.Length > 0;
-            }
+            encodingName = MatchCodingComment(line);
+            return encodingName != null;
+        }
 
-            return false;
+        /// <summary>
+        /// The encoding name of the leftmost match of <c>coding\s*[:=]\s*([A-Za-z0-9_-]+)</c> in <paramref name="line"/>,
+        /// "coding" matched ASCII-case-insensitively, or null - what the magic-comment regexes answered, without
+        /// building a Regex.
+        /// </summary>
+        internal static string MatchCodingComment(string/*!*/ line) {
+            for (int i = 0; i + 6 <= line.Length; i++) {
+                if (!IsAsciiIgnoreCase(line, i, "coding")) {
+                    continue;
+                }
+                int j = i + 6;
+                while (j < line.Length && Char.IsWhiteSpace(line[j])) j++;
+                if (j >= line.Length || (line[j] != ':' && line[j] != '=')) {
+                    continue;
+                }
+                j++;
+                while (j < line.Length && Char.IsWhiteSpace(line[j])) j++;
+                int start = j;
+                while (j < line.Length && IsCodingNameChar(line[j])) j++;
+                if (j > start) {
+                    return line.Substring(start, j - start);
+                }
+            }
+            return null;
+        }
+
+        private static bool IsAsciiIgnoreCase(string/*!*/ str, int index, string/*!*/ lowerAscii) {
+            for (int k = 0; k < lowerAscii.Length; k++) {
+                char c = str[index + k];
+                if (c >= 'A' && c <= 'Z') c = (char)(c + ('a' - 'A'));
+                if (c != lowerAscii[k]) return false;
+            }
+            return true;
+        }
+
+        private static bool IsCodingNameChar(char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
         }
 
         #endregion

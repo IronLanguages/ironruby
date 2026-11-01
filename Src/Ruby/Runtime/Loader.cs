@@ -470,7 +470,11 @@ namespace IronRuby.Runtime {
             return true;
         }
 
-        private static Regex _AssemblyNameRegex = new Regex(@"
+        // Built on first use: every require asks TryParseAssemblyName, and almost no path has the '=' an
+        // assembly name needs, so most processes never need the Regex (4 ms of the Loader's cctor).
+        private static Regex _assemblyNameRegex;
+
+        private static Regex/*!*/ AssemblyNameRegex => _assemblyNameRegex ??= new Regex(@"
             \s*((?<type>[\w.+]+)\s*,)?\s* # type name
             (?<assembly>
               [^,=]+\s*                   # assembly name
@@ -480,8 +484,8 @@ namespace IronRuby.Runtime {
         );
 
         internal static bool TryParseAssemblyName(string/*!*/ path, out string typeName, out string assemblyName) {
-            Match match = _AssemblyNameRegex.Match(path);
-            if (match.Success) {
+            Match match = (path.IndexOf('=') >= 0) ? AssemblyNameRegex.Match(path) : null;
+            if (match != null && match.Success) {
                 Group typeGroup = match.Groups["type"];
                 Group assemblyGroup = match.Groups["assembly"];
                 Debug.Assert(assemblyGroup.Success);
