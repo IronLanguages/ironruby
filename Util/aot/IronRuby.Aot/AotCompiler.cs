@@ -46,6 +46,9 @@ namespace IronRuby.Aot {
         private readonly Dictionary<FieldInfo, bool> _siteFieldsUnused = new();
         private readonly Dictionary<string, string> _frameOwners = new();
         private readonly List<string> _entryPoints = new();
+        private readonly List<MethodBuilder> _entryMethods = new();
+        // method name -> (IL offset, line) pairs, in emit order: the startup library's line table
+        private readonly Dictionary<string, List<int>> _lines = new();
         private Dictionary<object, FieldInfo> _wellKnownStatics;
         private int _fieldCounter;
         public readonly Dictionary<string, int> Stats = new();
@@ -56,6 +59,9 @@ namespace IronRuby.Aot {
         /// (IronRuby.Startup.dll, see PrecompiledCode.TryRegisterStartupLibrary).
         /// </summary>
         public readonly bool Library;
+
+        /// <summary>A library's "name=mvid" of the host assemblies it is compiled for (see PrecompiledFilesAttribute.Assemblies).</summary>
+        public string[] DependencyIds;
 
         public AotCompiler(RubyContext context, string assemblyName, bool library = false) {
             _context = context;
@@ -74,6 +80,14 @@ namespace IronRuby.Aot {
 
         public void Compile(string mainFile, IList<string> files, string outputPath) {
             var paths = files.Select(Path.GetFullPath).ToArray();
+            if (Library) {
+                IronRuby.Aot.Compiler.LambdaCompiler.LineRecorder = (method, offset, line) => {
+                    if (!_lines.TryGetValue(method, out var list)) _lines[method] = list = new List<int>();
+                    // one entry per offset: the last sequence point emitted there wins
+                    if (list.Count >= 2 && list[list.Count - 2] == offset) { list[list.Count - 1] = line; return; }
+                    list.Add(offset); list.Add(line);
+                };
+            }
             for (int i = 0; i < paths.Length; i++) {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 var unit = _context.CreateFileUnit(paths[i]);
@@ -88,6 +102,7 @@ namespace IronRuby.Aot {
                 // the name is what the backtrace builder decodes into "file:line:in '<main>'"
                 var method = _type.DefineMethod(lambda.Name, MethodAttributes.Public | MethodAttributes.Static);
                 _entryPoints.Add(lambda.Name);
+                _entryMethods.Add(method);
                 ExpressionCompiler.CompileToMethod(rewritten, method);
                 Console.Error.WriteLine($"compiled {paths[i]} in {sw.ElapsedMilliseconds} ms");
                 if (Environment.GetEnvironmentVariable("IR_AOT_CHECK_BRANCHES") == "1") CheckBranches();
@@ -106,10 +121,14 @@ namespace IronRuby.Aot {
 
             if (Library) {
                 if (chunks != 0) throw new NotSupportedException("a startup library initializes its constants lazily");
+                IronRuby.Aot.Compiler.LambdaCompiler.LineRecorder = null;
                 _type.SetCustomAttribute(new CustomAttributeBuilder(
                     typeof(PrecompiledFilesAttribute).GetConstructors()[0],
-                    new object[] { paths, _entryPoints.ToArray(), paths.Select(PrecompiledCode.HashFile).ToArray() }));
+                    new object[] { paths, _entryPoints.ToArray(), paths.Select(PrecompiledCode.HashFile).ToArray(), DependencyIds ?? new string[0] }));
                 _type.CreateType();
+                DefineStartupIndex();
+                Count("line table: methods", _lines.Count);
+                Count("line table: entries", _lines.Values.Sum(l => l.Count / 2));
                 Save(outputPath, PEHeaderBuilder.CreateLibraryHeader(), default);
                 return;
             }
@@ -133,6 +152,41 @@ namespace IronRuby.Aot {
             Count("init chunks", chunks);
 
             Save(outputPath, PEHeaderBuilder.CreateExecutableHeader(), MetadataTokens.MethodDefinitionHandle(main.MetadataToken));
+        }
+
+        /// <summary>
+        /// RubyStartupIndex, a small class next to RubyStartup, so the loader reaches the library without reflecting
+        /// over RubyStartup's thousands of methods:
+        ///   Entries(): a delegate per file's top level, in PrecompiledFilesAttribute order;
+        ///   Lines(): the line table, "method\u0001offset,line,offset,line...\n" per method (there is no PDB).
+        /// </summary>
+        private void DefineStartupIndex() {
+            var index = ((ModuleBuilder)_type.Module).DefineType("RubyStartupIndex",
+                TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
+            var funcType = typeof(Func<RubyScope, object, object>);
+            var entries = index.DefineMethod("Entries", MethodAttributes.Public | MethodAttributes.Static, funcType.MakeArrayType(), Type.EmptyTypes);
+            var il = entries.GetILGenerator();
+            il.Emit(OpCodes.Ldc_I4, _entryMethods.Count);
+            il.Emit(OpCodes.Newarr, funcType);
+            for (int i = 0; i < _entryMethods.Count; i++) {
+                il.Emit(OpCodes.Dup);
+                il.Emit(OpCodes.Ldc_I4, i);
+                il.Emit(OpCodes.Ldnull);
+                il.Emit(OpCodes.Ldftn, _entryMethods[i]);
+                il.Emit(OpCodes.Newobj, funcType.GetConstructor(new[] { typeof(object), typeof(IntPtr) }));
+                il.Emit(OpCodes.Stelem_Ref);
+            }
+            il.Emit(OpCodes.Ret);
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var kv in _lines) {
+                sb.Append(kv.Key).Append('\u0001').Append(string.Join(",", kv.Value)).Append('\n');
+            }
+            var lines = index.DefineMethod("Lines", MethodAttributes.Public | MethodAttributes.Static, typeof(string), Type.EmptyTypes);
+            il = lines.GetILGenerator();
+            il.Emit(OpCodes.Ldstr, sb.ToString());
+            il.Emit(OpCodes.Ret);
+            index.CreateType();
         }
 
         private void Save(string outputPath, PEHeaderBuilder header, MethodDefinitionHandle entryPoint) {
@@ -491,27 +545,92 @@ namespace IronRuby.Aot {
         #endregion
 
         /// <summary>
-        /// Frame labels ("Counter#bump", "Object#fib") that the runtime works out from the
-        /// declaring module when the `def' runs; here they come from the lexical nesting.
+        /// Frame labels ("Gem::Requirement#parse", "Gem::Requirement.create") that the runtime works out from
+        /// the declaring module when the `def' runs; here they come from the lexical nesting. A qualified
+        /// class name (class Gem::Requirement) is resolved the way the constant lookup most likely does it:
+        /// its first segment against the enclosing modules, then against the modules compiled so far, and
+        /// otherwise at the top level.
         /// </summary>
         private sealed class FrameLabelWalker : Walker {
             private readonly Dictionary<string, string> _owners;
-            private readonly Stack<string> _modules = new();
+            // full module paths, innermost last; null for a module whose name is not a constant path
+            private readonly List<string> _modules = new();
+            // whether each entry of _modules is `class << self' (methods in it are singleton methods)
+            private readonly List<bool> _singleton = new();
+            private static readonly HashSet<string> _known = new();
             public FrameLabelWalker(Dictionary<string, string> owners) { _owners = owners; }
 
-            public override bool Enter(ClassDefinition node) { _modules.Push(node.QualifiedName.Name); return true; }
-            public override void Exit(ClassDefinition node) { _modules.Pop(); }
-            public override bool Enter(ModuleDefinition node) { _modules.Push(node.QualifiedName.Name); return true; }
-            public override void Exit(ModuleDefinition node) { _modules.Pop(); }
-            public override bool Enter(SingletonDefinition node) { _modules.Push(null); return true; }
-            public override void Exit(SingletonDefinition node) { _modules.Pop(); }
+            private string Enclosing => _modules.Count == 0 ? null : _modules[_modules.Count - 1];
+
+            private static List<string> Segments(ConstantVariable c, out bool global) {
+                var result = new List<string>();
+                global = false;
+                for (IronRuby.Compiler.Ast.Expression q = null; c != null; c = q as ConstantVariable) {
+                    result.Insert(0, c.Name);
+                    q = null;
+                    if (c.IsGlobal) { global = true; break; }
+                    if (c.Qualifier == null) break;
+                    q = c.Qualifier as ConstantVariable;
+                    if (q == null) return null; // a computed qualifier
+                }
+                return result;
+            }
+
+            private string Resolve(ConstantVariable name) {
+                var segments = Segments(name, out bool global);
+                if (segments == null) return null;
+                string rest = string.Join("::", segments);
+                if (global) return rest;
+                if (segments.Count == 1) {
+                    return Enclosing == null ? rest : Enclosing + "::" + rest;
+                }
+                string first = segments[0];
+                for (int i = _modules.Count - 1; i >= 0; i--) {
+                    string m = _modules[i];
+                    if (m == null) continue;
+                    if (m == first || m.EndsWith("::" + first, StringComparison.Ordinal)) {
+                        return m + rest.Substring(first.Length);
+                    }
+                    if (_known.Contains(m + "::" + first)) {
+                        return m + "::" + rest;
+                    }
+                }
+                return rest;
+            }
+
+            private void Push(string path, bool singleton) {
+                _modules.Add(path);
+                _singleton.Add(singleton);
+                if (path != null) _known.Add(path);
+            }
+
+            private void Pop() {
+                _modules.RemoveAt(_modules.Count - 1);
+                _singleton.RemoveAt(_singleton.Count - 1);
+            }
+
+            public override bool Enter(ClassDefinition node) { Push(Resolve(node.QualifiedName), false); return true; }
+            public override void Exit(ClassDefinition node) { Pop(); }
+            public override bool Enter(ModuleDefinition node) { Push(Resolve(node.QualifiedName), false); return true; }
+            public override void Exit(ModuleDefinition node) { Pop(); }
+            public override bool Enter(SingletonDefinition node) {
+                // class << self: the module itself, its methods singleton ones; class << obj: unknown
+                Push(node.Singleton is SelfReference ? Enclosing : null, node.Singleton is SelfReference);
+                return true;
+            }
+            public override void Exit(SingletonDefinition node) { Pop(); }
 
             public override bool Enter(MethodDefinition node) {
-                string owner = _modules.Count == 0 ? "Object" : string.Join("::", _modules.Reverse().Where(m => m != null));
-                bool singleton = node.Target != null || (_modules.Count > 0 && _modules.Peek() == null);
-                string label = singleton
-                    ? (node.Target is SelfReference && owner.Length > 0 ? owner + "." + node.Name : node.Name)
-                    : (owner.Length > 0 ? owner + "#" + node.Name : node.Name);
+                string owner = _modules.Count == 0 ? "Object" : Enclosing;
+                bool inSingletonClass = _singleton.Count > 0 && _singleton[_singleton.Count - 1];
+                string label;
+                if (node.Target != null) {
+                    label = node.Target is SelfReference && owner != null && owner != "Object" ? owner + "." + node.Name : node.Name;
+                } else if (inSingletonClass) {
+                    label = owner != null ? owner + "." + node.Name : node.Name;
+                } else {
+                    label = owner != null ? owner + "#" + node.Name : node.Name;
+                }
                 _owners[LocationKey(node)] = label;
                 return true;
             }

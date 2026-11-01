@@ -27,8 +27,11 @@ namespace IronRuby.Runtime {
 
         public static bool TryGet(MethodBase/*!*/ method, out RubyMethodDebugInfo info) {
             lock (_Infos) {
-                return _Infos.TryGetValue(method.Name, out info);
+                if (_Infos.TryGetValue(method.Name, out info)) {
+                    return true;
+                }
             }
+            return IronRuby.Runtime.Precompiled.PrecompiledCode.TryGetDebugInfo(method, out info);
         }
 
         public static RubyMethodDebugInfo GetOrCreate(string/*!*/ methodName) {

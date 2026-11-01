@@ -53,8 +53,23 @@ namespace IronRuby.Aot {
             Directory.CreateDirectory(outDir);
             string dll = Path.Combine(outDir, "IronRuby.Startup.dll");
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            host ??= Path.Combine(FindRepoRoot(AppContext.BaseDirectory), "Src", "Console", "bin", "R2R", tfm);
+            // the host's own builds of the assemblies the saved IL calls: the library is only used with exactly these
+            var ids = new List<string>();
+            foreach (var name in DependencyNames) {
+                string file = Path.Combine(host, name + ".dll");
+                if (!File.Exists(file)) {
+                    Console.Error.WriteLine($"{file} not found: --host names the directory of the ir that is to load the library");
+                    return 2;
+                }
+                using var pe = new PEReader(File.OpenRead(file));
+                var md = pe.GetMetadataReader();
+                ids.Add(name + "=" + md.GetGuid(md.GetModuleDefinition().Mvid));
+            }
             var context = AotHost.CreateContext(out _);
-            var compiler = new AotCompiler(context, "IronRuby.Startup", library: true) { OutputDirectory = Path.GetFullPath(outDir) };
+            var compiler = new AotCompiler(context, "IronRuby.Startup", library: true) {
+                OutputDirectory = Path.GetFullPath(outDir), DependencyIds = ids.ToArray()
+            };
             compiler.Compile(null, files, dll);
             Console.Error.WriteLine($"wrote {dll} ({new FileInfo(dll).Length:N0} bytes, {files.Count} files) in {sw.ElapsedMilliseconds} ms");
             foreach (var kv in compiler.Stats.OrderBy(kv => kv.Key)) {
@@ -70,8 +85,6 @@ namespace IronRuby.Aot {
                 }
             }
             if (r2r) {
-                string root = FindRepoRoot(AppContext.BaseDirectory);
-                host ??= Path.Combine(root, "Src", "Console", "bin", "R2R", tfm);
                 string framework = Directory.GetDirectories("/usr/local/dotnet/shared/Microsoft.NETCore.App")
                     .Where(d => Path.GetFileName(d).StartsWith(major + ".", StringComparison.Ordinal)).OrderBy(d => d).Last();
                 foreach (var asm in outputs) {
@@ -80,6 +93,8 @@ namespace IronRuby.Aot {
             }
             return 0;
         }
+
+        private static readonly string[] DependencyNames = { "IronRuby", "IronRuby.Libraries", "Microsoft.Dynamic", "Microsoft.Scripting" };
 
         private static readonly HashSet<string> FrameworkPrefixes = new() { "System", "Microsoft.Win32", "Microsoft.CSharp", "Microsoft.VisualBasic", "netstandard", "mscorlib" };
 

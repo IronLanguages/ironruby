@@ -39,11 +39,18 @@ namespace IronRuby.Runtime.Precompiled {
     /// </summary>
     [AttributeUsage(AttributeTargets.Class)]
     public sealed class PrecompiledFilesAttribute : Attribute {
-        public PrecompiledFilesAttribute(string[] files, string[] entryPoints, string[] hashes) {
+        public PrecompiledFilesAttribute(string[] files, string[] entryPoints, string[] hashes, string[] assemblies) {
             Files = files;
             EntryPoints = entryPoints;
             Hashes = hashes;
+            Assemblies = assemblies;
         }
+
+        /// <summary>
+        /// "name=mvid" of each assembly the library was compiled against (IronRuby, its libraries, the DLR): the saved
+        /// IL calls into them and binds their binders by name, so a rebuild of any of them makes the library stale.
+        /// </summary>
+        public string[] Assemblies { get; }
 
         /// <summary>Full paths of the files compiled in.</summary>
         public string[] Files { get; }
@@ -163,13 +170,19 @@ namespace IronRuby.Runtime.Precompiled {
         #region Startup library
 
         /// <summary>
-        /// FNV-1a over the file's bytes, as hex: what the startup library records for each file, so that
+        /// A hash of the file's bytes, as hex: what the startup library records for each file, so that
         /// a file edited since is parsed again rather than run from stale code.
         /// </summary>
         public static string/*!*/ HashFile(string/*!*/ path) {
             byte[] bytes = File.ReadAllBytes(path);
+            // FNV-1a over 8-byte words, then the tail bytes: a change detector, not a cryptographic hash
             ulong h = 14695981039346656037UL;
-            for (int i = 0; i < bytes.Length; i++) {
+            var words = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, ulong>(new ReadOnlySpan<byte>(bytes));
+            for (int i = 0; i < words.Length; i++) {
+                h = (h ^ words[i]) * 1099511628211UL;
+                h ^= h >> 29;
+            }
+            for (int i = words.Length * 8; i < bytes.Length; i++) {
                 h = (h ^ bytes[i]) * 1099511628211UL;
             }
             return bytes.Length.ToString("x") + "-" + h.ToString("x16");
@@ -232,18 +245,35 @@ namespace IronRuby.Runtime.Precompiled {
             }
 
             bool timed = PhaseTimer.Enter(PhaseTimer.Precompiled);
+            var watch = Trace ? Stopwatch.StartNew() : null;
+            long hashTicks = 0;
             try {
                 Assembly assembly = Assembly.LoadFrom(path);
                 Type program = assembly.GetType("RubyStartup", false);
+                Type index = assembly.GetType("RubyStartupIndex", false);
                 var info = program != null ? program.GetCustomAttribute<PrecompiledFilesAttribute>() : null;
-                if (info == null) {
+                if (info == null || index == null || !AssembliesMatch(info.Assemblies)) {
+                    if (Trace) {
+                        Console.Error.WriteLine("IronRuby.Startup: compiled against other assemblies, not used: " + path);
+                    }
                     return;
                 }
+                // through RubyStartupIndex: reflecting over RubyStartup itself would load its thousands of methods
+                var entries = ((Func<Func<RubyScope, object, object>[]>)index.GetMethod("Entries").CreateDelegate(
+                    typeof(Func<Func<RubyScope, object, object>[]>)))();
+                _lineTableSource = (Func<string>)index.GetMethod("Lines").CreateDelegate(typeof(Func<string>));
+                _startupType = program;
                 _context = context;
+                if (Trace) {
+                    Console.Error.WriteLine("IronRuby.Startup: loaded " + path + " in " + watch.Elapsed.TotalMilliseconds.ToString("F1") + " ms");
+                }
                 for (int i = 0; i < info.Files.Length; i++) {
                     string file = info.Files[i];
                     try {
-                        if (!File.Exists(file) || HashFile(file) != info.Hashes[i]) {
+                        long h0 = Stopwatch.GetTimestamp();
+                        bool stale = !File.Exists(file) || HashFile(file) != info.Hashes[i];
+                        hashTicks += Stopwatch.GetTimestamp() - h0;
+                        if (stale) {
                             if (Trace) {
                                 Console.Error.WriteLine("IronRuby.Startup: stale, not used: " + file);
                             }
@@ -252,9 +282,7 @@ namespace IronRuby.Runtime.Precompiled {
                     } catch (Exception) {
                         continue;
                     }
-                    var target = (Func<RubyScope, object, object>)program.GetMethod(info.EntryPoints[i], BindingFlags.Public | BindingFlags.Static)
-                        .CreateDelegate(typeof(Func<RubyScope, object, object>));
-                    context.Loader.RegisterPrecompiledFile(file, new RubyScriptCode(target, context.CreateFileUnit(file), TopScopeFactoryKind.File));
+                    context.Loader.RegisterPrecompiledFile(file, new RubyScriptCode(entries[i], context.CreateFileUnit(file), TopScopeFactoryKind.File));
                 }
             } catch (Exception e) {
                 // a broken or mismatched library only costs the speedup
@@ -263,7 +291,90 @@ namespace IronRuby.Runtime.Precompiled {
                 }
             } finally {
                 PhaseTimer.Exit(timed);
+                if (Trace) {
+                    Console.Error.WriteLine("IronRuby.Startup: registered in " + watch.Elapsed.TotalMilliseconds.ToString("F1") + " ms, hashing " +
+                        (hashTicks * 1000.0 / Stopwatch.Frequency).ToString("F1") + " ms");
+                }
             }
+        }
+
+        private static bool AssembliesMatch(string[] assemblies) {
+            if (assemblies == null) {
+                return false;
+            }
+            // all of them are loaded by now: the runtime is up and running the prelude
+            var loaded = AppDomain.CurrentDomain.GetAssemblies();
+            foreach (string entry in assemblies) {
+                int eq = entry.IndexOf('=');
+                string name = entry.Substring(0, eq), mvid = entry.Substring(eq + 1);
+                bool found = false;
+                foreach (var a in loaded) {
+                    if (!a.IsDynamic && a.GetName().Name == name) {
+                        if (a.ManifestModule.ModuleVersionId.ToString() != mvid) {
+                            return false;
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        #endregion
+
+        #region Line table
+
+        private static Type _startupType;
+        private static Func<string> _lineTableSource;
+        private static System.Collections.Generic.Dictionary<string, RubyMethodDebugInfo> _lineTable;
+
+        /// <summary>
+        /// The IL offset to line map of a method of the startup library (it has no PDB): what the backtrace builder
+        /// reads for a compiled frame. Decoded from RubyStartupIndex.Lines() when the first such frame is formatted.
+        /// </summary>
+        internal static bool TryGetDebugInfo(MethodBase/*!*/ method, out RubyMethodDebugInfo info) {
+            info = null;
+            if (_startupType == null || method.DeclaringType != _startupType) {
+                return false;
+            }
+            var table = _lineTable;
+            if (table == null) {
+                table = new System.Collections.Generic.Dictionary<string, RubyMethodDebugInfo>();
+                string text = _lineTableSource();
+                int pos = 0;
+                while (pos < text.Length) {
+                    int nameEnd = text.IndexOf('\u0001', pos);
+                    int lineEnd = text.IndexOf('\n', nameEnd);
+                    var methodInfo = new RubyMethodDebugInfo();
+                    int p = nameEnd + 1;
+                    while (p < lineEnd) {
+                        int comma = text.IndexOf(',', p);
+                        int next = text.IndexOf(',', comma + 1);
+                        if (next < 0 || next > lineEnd) {
+                            next = lineEnd;
+                        }
+                        methodInfo.AddMapping(ParseInt(text, p, comma), ParseInt(text, comma + 1, next));
+                        p = next + 1;
+                    }
+                    table[text.Substring(pos, nameEnd - pos)] = methodInfo;
+                    pos = lineEnd + 1;
+                }
+                Interlocked.CompareExchange(ref _lineTable, table, null);
+                table = _lineTable;
+            }
+            return table.TryGetValue(method.Name, out info);
+        }
+
+        private static int ParseInt(string/*!*/ text, int start, int end) {
+            int result = 0;
+            for (int i = start; i < end; i++) {
+                result = result * 10 + (text[i] - '0');
+            }
+            return result;
         }
 
         #endregion
