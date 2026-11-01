@@ -11,8 +11,11 @@
 # not JIT'd at startup. A profile older than the code only loses some of that; methods it
 # names that no longer exist are ignored.
 #
-# Tools: dotnet-trace (`dotnet tool install -g dotnet-trace`) and dotnet-pgo
-# (`dotnet tool install -g dotnet-pgo --prerelease`), or DOTNET_PGO=<path to dotnet-pgo.dll>.
+# Tools: dotnet-trace (`dotnet tool install -g dotnet-trace`) and dotnet-pgo, which is not on
+# nuget.org but on the .NET team's public dotnet8 feed:
+#   dotnet tool install -g dotnet-pgo --version 8.0.0-rc.2.23479.6 \
+#     --add-source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet8/nuget/v3/index.json
+# or DOTNET_PGO=<path to dotnet-pgo.dll> (tools/net8.0/any/ in that package).
 set -e
 IR_ROOT="$(dirname "$(dirname "$(readlink -f "$0")")")"
 export DOTNET_ROOT="${DOTNET_ROOT:-/usr/local/dotnet}"
