@@ -4,7 +4,14 @@
 #
 #   RUBY_EXE=./ir.sh ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language
 #
-IR_ROOT="$(dirname "$(readlink -f "$0")")"
+# The directory ir.sh is really in. `cd -P` in a subshell is a fork without an exec, a
+# millisecond and a half cheaper than dirname+readlink - which is a tenth of a warm start
+# (IR_SERVER below); a symlinked ir.sh, or one found on PATH, still goes through readlink.
+IR_ROOT=
+case "$0" in
+  */*) [ -L "$0" ] || IR_ROOT="$(cd -P -- "${0%/*}" 2>/dev/null && pwd)" ;;
+esac
+[ -n "$IR_ROOT" ] || IR_ROOT="$(dirname "$(readlink -f "$0")")"
 
 # apphost needs DOTNET_ROOT when the SDK isn't on the default search path
 if [ -z "$DOTNET_ROOT" ] && [ -x /usr/local/dotnet/dotnet ]; then
