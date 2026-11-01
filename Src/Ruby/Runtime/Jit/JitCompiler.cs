@@ -739,24 +739,10 @@ namespace IronRuby.Runtime.Jit {
             }
 
             var and = node as AndExpression;
-            if (and != null) {
-                type = JT.Bool;
-                var l = EmitCondition(and.Left);
-                PushScope();
-                var r = EmitCondition(and.Right);
-                if (PopScope().Count > 0) { throw JitBailout.Instance; }
-                return Ast.AndAlso(l, r);
-            }
+            if (and != null) { return EmitAndOr(and.Left, and.Right, true, out type); }
 
             var or = node as OrExpression;
-            if (or != null) {
-                type = JT.Bool;
-                var l = EmitCondition(or.Left);
-                PushScope();
-                var r = EmitCondition(or.Right);
-                if (PopScope().Count > 0) { throw JitBailout.Instance; }
-                return Ast.OrElse(l, r);
-            }
+            if (or != null) { return EmitAndOr(or.Left, or.Right, false, out type); }
 
             var ivar = node as InstanceVariable;
             if (ivar != null) {
@@ -1130,6 +1116,19 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private MSA.Expression/*!*/ EmitCondition(RExpr/*!*/ node, out JT t) {
+            // `a && b' / `a || b' tested for truth: only the truth of the operands matters
+            var and = node as AndExpression;
+            var or = node as OrExpression;
+            if (and != null || or != null) {
+                if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
+                t = JT.Bool;
+                var l = EmitCondition((and != null) ? and.Left : or.Left);
+                PushScope();
+                var r = EmitCondition((and != null) ? and.Right : or.Right);
+                if (PopScope().Count > 0) { throw JitBailout.Instance; }
+                return (and != null) ? Ast.AndAlso(l, r) : Ast.OrElse(l, r);
+            }
+
             var e = Emit(node, out t);
             switch (t) {
                 case JT.Bool: return e;
@@ -1138,6 +1137,34 @@ namespace IronRuby.Runtime.Jit {
                 case JT.Dbl: return Ast.Block(e, Ast.Constant(true));
                 default: throw Bail("condition of type " + t);
             }
+        }
+
+        /// <summary>
+        /// `a && b' / `a || b' as a value: a when it decides the outcome - a falsy a for &&, a
+        /// truthy one for || - and b otherwise. `n && n + 1' is n + 1, not true, and `n || 7' is n.
+        /// The left operand has to be Bool or numeric, as a condition's has (a number is always
+        /// truthy); the value's type is what the two outcomes merge to.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitAndOr(RExpr/*!*/ left, RExpr/*!*/ right, bool isAnd, out JT type) {
+            JT lt;
+            var l = Emit(left, out lt);
+            var value = Ast.Variable(ClrType(lt), "#andor");
+            MSA.Expression truth;
+            switch (lt) {
+                case JT.Bool: truth = value; break;
+                case JT.Int:
+                case JT.Lng:
+                case JT.Dbl: truth = Ast.Constant(true); break;
+                default: throw Bail("&& / || operand of type " + lt);
+            }
+
+            PushScope();
+            JT rt;
+            var r = Emit(right, out rt);
+            if (PopScope().Count > 0) { throw JitBailout.Instance; }
+
+            var result = isAnd ? Join(truth, r, rt, value, lt, out type) : Join(truth, value, lt, r, rt, out type);
+            return Ast.Block(ClrType(type), new[] { value }, Ast.Assign(value, l), result);
         }
 
         // ---- calls -------------------------------------------------------------------------

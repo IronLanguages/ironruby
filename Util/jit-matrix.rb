@@ -171,6 +171,84 @@ t('Int32 or Int64 - classes') { [0, 30000].map { |v| sp_int_or_long(v).class } }
 warm { |i| sp_ret_after_assign(i % 9) }
 t('Integer or Float after an assignment') { [2, 20].map { |v| sp_ret_after_assign(v) } }
 
+# `a && b' / `a || b' as a value is one of the operands, not true/false; as a condition only
+# their truth counts.
+def sp_and_value(a)
+  a && a + 1
+end
+
+def sp_and_assigned(a)
+  b = a && a * 2
+  b
+end
+
+def sp_cmp_and_value(a)
+  a > 0 && a + 1
+end
+
+def sp_cmp_or_value(a)
+  a > 0 || a - 1
+end
+
+def sp_or_value(a)
+  a || 7
+end
+
+def sp_float_and_value(a)
+  a > 1.0 && a * 2.0
+end
+
+def sp_bool_and_or(a)
+  (a > 0 && a < 10) || a == -5
+end
+
+def sp_and_condition(a)
+  if a > 0 && a + 1
+    :yes
+  else
+    :no
+  end
+end
+
+def sp_or_overflow(a)
+  a > 0 && a * 2**40
+end
+
+def sp_opt_and(a, b = a && a + 1)
+  b
+end
+
+def sp_opt_or(a, b = (a || 7))
+  b
+end
+
+def sp_opt_cmp_and(a, b = (a > 0 && a))
+  b
+end
+
+def sp_kw_and(a, k: a && a * 3)
+  k
+end
+
+puts
+puts '--- 2b. && and || keep the operand ---'
+warm { |i| sp_and_value(i); sp_and_assigned(i); sp_cmp_and_value(i - 60); sp_cmp_or_value(i - 60); sp_or_value(i) }
+t('n && n + 1') { [sp_and_value(1), sp_and_value(2**62)] }
+t('b = n && n * 2') { sp_and_assigned(3) }
+t('n > 0 && n + 1') { [sp_cmp_and_value(4), sp_cmp_and_value(-4)] }
+t('n > 0 || n - 1') { [sp_cmp_or_value(4), sp_cmp_or_value(-4)] }
+t('n || 7') { [sp_or_value(4), sp_or_value(nil), sp_or_value(false)] }
+warm { |i| sp_float_and_value(i * 0.1); sp_bool_and_or(i - 60); sp_and_condition(i - 60); sp_or_overflow(i - 60) }
+t('x > 1.0 && x * 2.0') { [sp_float_and_value(1.5), sp_float_and_value(0.5)] }
+t('(a && b) || c on Bools') { [-5, 0, 5, 50].map { |v| sp_bool_and_or(v) } }
+t('&& as a condition') { [sp_and_condition(3), sp_and_condition(-3)] }
+t('&& with an overflowing right operand') { [sp_or_overflow(2**30), sp_or_overflow(-1)] }
+warm { |i| sp_opt_and(i); sp_opt_or(i); sp_opt_cmp_and(i - 60); sp_kw_and(i) }
+t('optional default n && n + 1') { [sp_opt_and(1), sp_opt_and(1, :given), sp_opt_and(nil)] }
+t('optional default (n || 7)') { [sp_opt_or(1), sp_opt_or(nil), sp_opt_or(false, 2)] }
+t('optional default (n > 0 && n)') { [sp_opt_cmp_and(5), sp_opt_cmp_and(-5)] }
+t('keyword default n && n * 3') { [sp_kw_and(2), sp_kw_and(2, k: 0), sp_kw_and(nil)] }
+
 # ---------------------------------------------------------------- 3. overflow
 
 def sp_sq(n)
