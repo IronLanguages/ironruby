@@ -386,6 +386,28 @@ Known differences: a `require` LoadError's backtrace lacks one `Kernel#require` 
 library-method frame is dropped by the backtrace builder; the IL and R2R builds already
 disagree on that frame without the library).
 
+Where the time goes with the library (`IR_PHASE_TIMES=1`, 5 alternating runs each, bench-lock):
+the prelude takes 530-560 ms instead of 650-690 ms. Parsing, bridging, transforming and
+LightCompiling the startup files (about 270 ms) are gone, and JIT time falls from 200-220 ms to
+130-140 ms. But the rest of the run grows from 230-270 ms to 310-330 ms. Part of that is work that
+moved: the precompiled code creates its binders and call sites when it first runs them, where the
+interpreted path did that during transform. The other part is native runtime time under the
+precompiled frames, about 40 ms in the sample profile (ReadyToRun fixups, type and static-base
+loads). Binding (1,950 binds) is unchanged at 210-235 ms inclusive.
+
+Also measured, and not worth pursuing:
+
+- Crossgen'ing the host's IronRuby, DLR and Prism assemblies and the library as one version
+  bubble (`--inputbubble`, one image each) changes nothing: `ir -e 1` best/median 0.705/0.823 s
+  without the bubble, 0.715/0.810 s with it, and RSS grows by 3 MB.
+- The prism parse cache (`IR_PRISM_CACHE`, commit "Prototype: cache prism's serialized output")
+  saves at most the native parse, 24-27 ms over the 32 startup files without the library. That
+  was not measurable in wall time at N=11, and with the library there is almost nothing left to
+  parse.
+- Lazy def bodies (c7957991) are already on at d96bab0e. Without the library, turning them off
+  (`IR_EAGER_DEF_BODIES=1`) costs 50-85 ms. With the library, def bodies are precompiled IL, so
+  the question does not arise.
+
 ## Limits and next steps (rough effort)
 
 - **Next: ReadyToRun follow-up.** `--r2r` exists and is measured above (3.75 s / 1.50 s CPU
