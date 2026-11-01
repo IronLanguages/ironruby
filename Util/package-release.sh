@@ -12,6 +12,12 @@
 #
 # The build is self-contained, so it runs on a machine with no .NET installed, and
 # ReadyToRun, so IronRuby's own assemblies start as native code (see publish-r2r.sh).
+# Being self-contained, it can be one composite ReadyToRun image of the framework and
+# IronRuby together, compiled with the startup profile Build/startup.mibc
+# (Util/make-startup-mibc.sh): the generic instantiations startup makes over framework
+# types are then precompiled too, so `ir -e 1` JITs ~140 methods instead of ~570 and
+# starts ~9% faster (0.94 -> 0.85 s), for ~10 MB more RSS and 107 MB instead of 95 MB
+# on disk. IR_COMPOSITE=0 builds the per-assembly images instead.
 # irubyc still needs the .NET SDK, as it does from a checkout.
 #
 # It needs what a normal build needs: ../dlr with Build/dlr-patches applied, and
@@ -30,10 +36,22 @@ STAGE="$OUT/$NAME"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/Src"
 
+composite=
+if [ "${IR_COMPOSITE:-1}" != 0 ]; then
+  composite="-p:PublishReadyToRunComposite=true -p:IronRubyStartupProfile=true"
+fi
+# The SDK keeps its ReadyToRun output in obj/.../R2R and reuses whatever is there and newer
+# than the IL. A composite build leaves component stubs there, which a per-assembly publish
+# (this script with IR_COMPOSITE=0, or the R2R host every Linux Release build makes) would
+# take as compiled and ship without the composite image: so start and end with it empty.
+r2r_obj="$IR_ROOT/Src/Console/obj/Release/$IR_TFM/$RID/R2R"
+rm -rf "$r2r_obj"
 dotnet publish "$IR_ROOT/Src/Console/Ruby.Console.csproj" \
   -c Release -r "$RID" --self-contained true -f "$IR_TFM" \
   -p:IronRubyTargetFrameworks="$IR_TFM" -p:PublishReadyToRun=true \
+  $composite \
   -o "$STAGE/Src/Console/bin/Release/$IR_TFM"
+rm -rf "$r2r_obj"
 rm -f "$STAGE/Src/Console/bin/Release/$IR_TFM"/*.pdb
 
 case "$RID" in

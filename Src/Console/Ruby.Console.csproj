@@ -41,6 +41,15 @@
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>
+  <!-- IronRubyStartupProfile=true (Util/package-release.sh) has crossgen2 compile with Build/startup.mibc, a profile of
+       the methods startup runs (Util/make-startup-mibc.sh). It pays off in a composite image of IronRuby and the
+       framework (PublishReadyToRunComposite, self-contained only), where the generic instantiations startup makes
+       over framework types become precompilable: `ir -e 1` then JITs ~140 methods instead of ~570 and runs 8% fewer
+       instructions than in the self-contained per-assembly R2R build. In the framework-dependent host it changes next
+       to nothing (1%), so the R2R host does not use it. -->
+  <ItemGroup Condition="'$(IronRubyStartupProfile)' == 'true' and Exists('$(MSBuildThisFileDirectory)..\..\Build\startup.mibc')">
+    <PublishReadyToRunPgoFiles Include="$(MSBuildThisFileDirectory)..\..\Build\startup.mibc" />
+  </ItemGroup>
   <!-- A Release build on Linux also produces the ReadyToRun host (Util/publish-r2r.sh), which ir.sh runs by default:
        it starts about a third faster. The publish is a RuntimeIdentifier build of its own, so the target stays out of
        it, and IronRubyNestedR2R stops a publish from running it again. A failed publish only warns: the IL build is
