@@ -98,9 +98,10 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>
         /// Set once the site has stopped looking for a direct entry for good (MaxMisses). The compiled
-        /// call tests it, and <see cref="QuietAt"/>, before it calls <see cref="Invoke"/>, so from then on
-        /// it costs those tests and nothing else. (A stale read only means one more call through
-        /// Invoke, which tests Off again and otherwise finds the same nothing to call.)
+        /// call of a receiver site tests it, and <see cref="QuietAt"/>, before it calls <see cref="Invoke"/>,
+        /// so from then on it costs those tests and nothing else; a receiverless one leaves the test to
+        /// Invoke. (A stale read only means one more call through Invoke, which tests Off again and
+        /// otherwise finds the same nothing to call.)
         /// </summary>
         public bool Off;
 
@@ -313,18 +314,22 @@ namespace IronRuby.Runtime.Jit {
 
             var result = Ast.Variable(typeof(object), "#kwresult");
             temps.Add(result);
-            var siteConstant = Ast.Constant(site);
-            MSA.Expression skip = Ast.Field(siteConstant, OffField);
+            MSA.Expression invoke = Ast.Call(InvokeMethod, Ast.Constant(site, typeof(object)), selfTemp, p[0], p[1], k[0], k[1], k[2]);
             if (!implicitSelf) {
-                skip = Ast.OrElse(skip,
-                    Ast.Equal(Ast.Field(siteConstant, QuietAtField), Ast.Property(null, GlobalMethodVersionProperty)));
+                // A receiver site that went quiet is not to cost a call (MaxDeadCalls). A receiverless
+                // one never goes quiet, and Invoke tests Off itself, so it pays nothing in front of it.
+                var siteConstant = Ast.Constant(site);
+                invoke = Ast.Condition(
+                    Ast.OrElse(
+                        Ast.Field(siteConstant, OffField),
+                        Ast.Equal(Ast.Field(siteConstant, QuietAtField), Ast.Property(null, GlobalMethodVersionProperty))
+                    ),
+                    Ast.Field(null, NoDirectField),
+                    invoke,
+                    typeof(object)
+                );
             }
-            body.Add(Ast.Assign(result, Ast.Condition(
-                skip,
-                Ast.Field(null, NoDirectField),
-                Ast.Call(InvokeMethod, Ast.Constant(site, typeof(object)), selfTemp, p[0], p[1], k[0], k[1], k[2]),
-                typeof(object)
-            )));
+            body.Add(Ast.Assign(result, invoke));
             body.Add(Ast.Condition(
                 Ast.ReferenceNotEqual(result, Ast.Field(null, NoDirectField)),
                 result,
