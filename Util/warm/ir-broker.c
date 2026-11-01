@@ -114,7 +114,8 @@ static void spawn_worker(void) {
         signal(SIGPIPE, SIG_DFL);
         /* Its own process group: a program that signals its group (kill 0) must not hit the pool. */
         setpgid(0, 0);
-        int null = open("/dev/null", O_RDWR);
+        /* close-on-exec: only its dups on 0 and 1 may reach the worker (and the programs it starts) */
+        int null = open("/dev/null", O_RDWR | O_CLOEXEC);
         int target = 3;
         if (sv[1] == target) {
             fcntl(target, F_SETFD, 0);
