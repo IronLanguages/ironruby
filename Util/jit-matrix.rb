@@ -211,7 +211,7 @@ def sp_and_condition(a)
 end
 
 def sp_or_overflow(a)
-  a > 0 && a * 2**40
+  a > 0 && a * a * a
 end
 
 def sp_opt_and(a, b = a && a + 1)
@@ -242,7 +242,7 @@ warm { |i| sp_float_and_value(i * 0.1); sp_bool_and_or(i - 60); sp_and_condition
 t('x > 1.0 && x * 2.0') { [sp_float_and_value(1.5), sp_float_and_value(0.5)] }
 t('(a && b) || c on Bools') { [-5, 0, 5, 50].map { |v| sp_bool_and_or(v) } }
 t('&& as a condition') { [sp_and_condition(3), sp_and_condition(-3)] }
-t('&& with an overflowing right operand') { [sp_or_overflow(2**30), sp_or_overflow(-1)] }
+t('&& with an overflowing right operand') { [sp_or_overflow(2**30), sp_or_overflow(-1), sp_or_overflow(2**20), sp_or_overflow(3)] }
 warm { |i| sp_opt_and(i); sp_opt_or(i); sp_opt_cmp_and(i - 60); sp_kw_and(i) }
 t('optional default n && n + 1') { [sp_opt_and(1), sp_opt_and(1, :given), sp_opt_and(nil)] }
 t('optional default (n || 7)') { [sp_opt_or(1), sp_opt_or(nil), sp_opt_or(false, 2)] }
