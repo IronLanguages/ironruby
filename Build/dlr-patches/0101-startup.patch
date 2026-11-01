@@ -326,10 +326,10 @@ index d239963..55f5787 100644
                  // Kick off the compile on another thread so this one can keep going
                  new Task(_delegateCreator.Compile, null).Start();
 diff --git a/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs b/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
-index dfb0ee4..89730b4 100644
+index dfb0ee4..9e35f27 100644
 --- a/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
 +++ b/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
-@@ -51,11 +51,67 @@ namespace Microsoft.Scripting.Runtime {
+@@ -51,11 +51,70 @@ namespace Microsoft.Scripting.Runtime {
  
      internal static class AssemblyTypeNames {
          public static IEnumerable<TypeName> GetTypeNames(Assembly assem, bool includePrivateTypes) {
@@ -355,7 +355,7 @@ index dfb0ee4..89730b4 100644
 +        /// GetExportedTypes and GetForwardedTypes list them, read from the metadata tables without
 +        /// loading any type. Null when the assembly has no raw metadata to read (a dynamic assembly).
 +        /// </summary>
-+        private static unsafe List<TypeName> TryGetPublicTypeNamesFromMetadata(Assembly assem) {
++        private static unsafe IEnumerable<TypeName> TryGetPublicTypeNamesFromMetadata(Assembly assem) {
 +            if (assem.IsDynamic) {
 +                return null;
 +            }
@@ -370,12 +370,17 @@ index dfb0ee4..89730b4 100644
 +                return null;
 +            }
 +
-+            var result = new List<TypeName>();
++            // An iterator of this assembly rather than a List<TypeName>: TypeName is a struct, and List's code for it
++            // would be JIT-compiled (ReadyToRun cannot precompile System.Private.CoreLib generics over our types).
++            return EnumeratePublicTypeNames(reader);
++        }
++
++        private static IEnumerable<TypeName> EnumeratePublicTypeNames(System.Reflection.Metadata.MetadataReader reader) {
 +            foreach (var handle in reader.TypeDefinitions) {
 +                var type = reader.GetTypeDefinition(handle);
 +                // public and not nested (a nested type's visibility is one of the Nested* values)
 +                if ((type.Attributes & TypeAttributes.VisibilityMask) == TypeAttributes.Public) {
-+                    result.Add(new TypeName(NamespaceOrNull(reader.GetString(type.Namespace)), reader.GetString(type.Name)));
++                    yield return new TypeName(NamespaceOrNull(reader.GetString(type.Namespace)), reader.GetString(type.Name));
 +                }
 +            }
 +
@@ -383,11 +388,9 @@ index dfb0ee4..89730b4 100644
 +                var exported = reader.GetExportedType(handle);
 +                // a nested forwarder's implementation is the forwarder of the type it is nested in
 +                if (exported.IsForwarder && exported.Implementation.Kind == System.Reflection.Metadata.HandleKind.AssemblyReference) {
-+                    result.Add(new TypeName(NamespaceOrNull(reader.GetString(exported.Namespace)), reader.GetString(exported.Name)));
++                    yield return new TypeName(NamespaceOrNull(reader.GetString(exported.Namespace)), reader.GetString(exported.Name));
 +                }
 +            }
-+
-+            return result;
 +        }
 +
 +        // Type.Namespace is null for a type in the global namespace; the metadata has an empty string.
@@ -525,3 +528,43 @@ index 91c46fa..e47fe19 100644
                  return Stream.Null;
              }
              return new FileStream(path, mode, access, share, bufferSize);
+diff --git a/src/core/Microsoft.Scripting/Utils/AssemblyQualifiedTypeName.cs b/src/core/Microsoft.Scripting/Utils/AssemblyQualifiedTypeName.cs
+index 134f888..d22ef19 100644
+--- a/src/core/Microsoft.Scripting/Utils/AssemblyQualifiedTypeName.cs
++++ b/src/core/Microsoft.Scripting/Utils/AssemblyQualifiedTypeName.cs
+@@ -6,8 +6,11 @@ using System;
+ using System.Reflection;
+ 
+ namespace Microsoft.Scripting.Utils {
++    // A class, not a struct: it keys DlrConfiguration's language table, and a Dictionary keyed by a struct of this
++    // assembly is System.Private.CoreLib code that ReadyToRun cannot precompile - a dozen methods JIT-compiled in
++    // every process that creates a ScriptRuntime.
+     [Serializable]
+-    internal readonly struct AssemblyQualifiedTypeName : IEquatable<AssemblyQualifiedTypeName> {
++    internal sealed class AssemblyQualifiedTypeName : IEquatable<AssemblyQualifiedTypeName> {
+         public readonly string TypeName;
+         public readonly AssemblyName AssemblyName;
+ 
+@@ -56,8 +59,8 @@ namespace Microsoft.Scripting.Utils {
+             }
+         }
+ 
+-        public bool Equals(AssemblyQualifiedTypeName other) =>
+-            TypeName == other.TypeName && AssemblyName.FullName == other.AssemblyName.FullName;
++        public bool Equals(AssemblyQualifiedTypeName? other) =>
++            other is not null && TypeName == other.TypeName && AssemblyName.FullName == other.AssemblyName.FullName;
+ 
+         public override bool Equals(object? obj) =>
+             obj is AssemblyQualifiedTypeName name && Equals(name);
+@@ -70,8 +73,9 @@ namespace Microsoft.Scripting.Utils {
+             return TypeName + ", " + AssemblyName.FullName;
+         }
+ 
+-        public static bool operator ==(in AssemblyQualifiedTypeName name, in AssemblyQualifiedTypeName other) => name.Equals(other);
++        public static bool operator ==(AssemblyQualifiedTypeName? name, AssemblyQualifiedTypeName? other) =>
++            name is null ? other is null : name.Equals(other);
+ 
+-        public static bool operator !=(in AssemblyQualifiedTypeName name, in AssemblyQualifiedTypeName other) => !name.Equals(other);
++        public static bool operator !=(AssemblyQualifiedTypeName? name, AssemblyQualifiedTypeName? other) => !(name == other);
+     }
+ }
