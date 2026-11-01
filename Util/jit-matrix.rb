@@ -171,6 +171,84 @@ t('Int32 or Int64 - classes') { [0, 30000].map { |v| sp_int_or_long(v).class } }
 warm { |i| sp_ret_after_assign(i % 9) }
 t('Integer or Float after an assignment') { [2, 20].map { |v| sp_ret_after_assign(v) } }
 
+# `a && b' / `a || b' as a value is one of the operands, not true/false; as a condition only
+# their truth counts.
+def sp_and_value(a)
+  a && a + 1
+end
+
+def sp_and_assigned(a)
+  b = a && a * 2
+  b
+end
+
+def sp_cmp_and_value(a)
+  a > 0 && a + 1
+end
+
+def sp_cmp_or_value(a)
+  a > 0 || a - 1
+end
+
+def sp_or_value(a)
+  a || 7
+end
+
+def sp_float_and_value(a)
+  a > 1.0 && a * 2.0
+end
+
+def sp_bool_and_or(a)
+  (a > 0 && a < 10) || a == -5
+end
+
+def sp_and_condition(a)
+  if a > 0 && a + 1
+    :yes
+  else
+    :no
+  end
+end
+
+def sp_or_overflow(a)
+  a > 0 && a * a * a
+end
+
+def sp_opt_and(a, b = a && a + 1)
+  b
+end
+
+def sp_opt_or(a, b = (a || 7))
+  b
+end
+
+def sp_opt_cmp_and(a, b = (a > 0 && a))
+  b
+end
+
+def sp_kw_and(a, k: a && a * 3)
+  k
+end
+
+puts
+puts '--- 2b. && and || keep the operand ---'
+warm { |i| sp_and_value(i); sp_and_assigned(i); sp_cmp_and_value(i - 60); sp_cmp_or_value(i - 60); sp_or_value(i) }
+t('n && n + 1') { [sp_and_value(1), sp_and_value(2**62)] }
+t('b = n && n * 2') { sp_and_assigned(3) }
+t('n > 0 && n + 1') { [sp_cmp_and_value(4), sp_cmp_and_value(-4)] }
+t('n > 0 || n - 1') { [sp_cmp_or_value(4), sp_cmp_or_value(-4)] }
+t('n || 7') { [sp_or_value(4), sp_or_value(nil), sp_or_value(false)] }
+warm { |i| sp_float_and_value(i * 0.1); sp_bool_and_or(i - 60); sp_and_condition(i - 60); sp_or_overflow(i - 60) }
+t('x > 1.0 && x * 2.0') { [sp_float_and_value(1.5), sp_float_and_value(0.5)] }
+t('(a && b) || c on Bools') { [-5, 0, 5, 50].map { |v| sp_bool_and_or(v) } }
+t('&& as a condition') { [sp_and_condition(3), sp_and_condition(-3)] }
+t('&& with an overflowing right operand') { [sp_or_overflow(2**30), sp_or_overflow(-1), sp_or_overflow(2**20), sp_or_overflow(3)] }
+warm { |i| sp_opt_and(i); sp_opt_or(i); sp_opt_cmp_and(i - 60); sp_kw_and(i) }
+t('optional default n && n + 1') { [sp_opt_and(1), sp_opt_and(1, :given), sp_opt_and(nil)] }
+t('optional default (n || 7)') { [sp_opt_or(1), sp_opt_or(nil), sp_opt_or(false, 2)] }
+t('optional default (n > 0 && n)') { [sp_opt_cmp_and(5), sp_opt_cmp_and(-5)] }
+t('keyword default n && n * 3') { [sp_kw_and(2), sp_kw_and(2, k: 0), sp_kw_and(nil)] }
+
 # ---------------------------------------------------------------- 3. overflow
 
 def sp_sq(n)
@@ -586,7 +664,7 @@ def no_kw_rest(a:, **rest)
   a + rest.size
 end
 
-def no_kw_default_expr(a:, b: a + 1)
+def sp_kw_default_expr(a:, b: a + 1)
   a + b
 end
 
@@ -660,10 +738,69 @@ kt('kw local reassigned') { [sp_kw_assign(a: 3), sp_kw_assign(a: 3, b: 4)] }
 
 warm { |i| no_kw_rest(a: i, z: 1) }
 kt('kw **rest') { [no_kw_rest(a: 1), no_kw_rest(a: 1, b: 2, c: 3)] }
-warm { |i| no_kw_default_expr(a: i) }
-kt('kw default reads a parameter') { [no_kw_default_expr(a: 1), no_kw_default_expr(a: 1, b: 5)] }
+warm { |i| sp_kw_default_expr(a: i) }
+kt('kw default reads a parameter') { [sp_kw_default_expr(a: 1), sp_kw_default_expr(a: 1, b: 5)] }
 warm { |i| no_kw_default_string(a: i) }
 kt('kw String default') { no_kw_default_string(a: 1) }
+
+# Keyword defaults the typed body evaluates itself, in declaration order.
+def sp_kw_sym(a, mode: :fast)
+  mode
+end
+
+def sp_kw_list(x:, list: [x])
+  list
+end
+
+def sp_kw_chain(a:, b: a * 2, c: b + 1)
+  a + b + c
+end
+
+def sp_kw_ivar_default(x:, y: @kw_default)
+  y
+end
+
+def sp_kw_seen(a:, b: (@kw_seen = a))
+  b
+end
+
+def sp_kw_square(a:, b: a * a)
+  b
+end
+
+def sp_kw_div(a:, b: 10 / a)
+  b
+end
+
+def no_kw_assign_default(a:, b: (t = a), c: 1)
+  [b, c, t]
+end
+
+warm { |i| sp_kw_sym(i) }
+kt('kw Symbol default') { [sp_kw_sym(1), sp_kw_sym(1, mode: :slow), sp_kw_sym(1).equal?(:fast)] }
+warm { |i| sp_kw_list(x: i) }
+kt('kw Array default') { [sp_kw_list(x: 1), sp_kw_list(x: 1, list: 2)] }
+kt('kw Array default is a new Array each time') { sp_kw_list(x: 1).equal?(sp_kw_list(x: 1)) }
+warm { |i| sp_kw_chain(a: i); sp_kw_chain(a: i, c: 1) }
+kt('kw chain') { [sp_kw_chain(a: 1), sp_kw_chain(a: 1, b: 5), sp_kw_chain(a: 1, c: 7), sp_kw_chain(a: 1, b: 5, c: 7)] }
+kt('kw chain, Float b') { sp_kw_chain(a: 1, b: 0.5) }
+kt('kw chain, String a') { sp_kw_chain(a: 'x') }
+kt('kw chain, overflow') { sp_kw_chain(a: 2**62) }
+kt('kw chain, unknown') { sp_kw_chain(a: 1, d: 2) }
+kt('kw chain, missing') { sp_kw_chain(b: 1) }
+warm { |i| sp_kw_ivar_default(x: i) }
+kt('kw ivar default, unset') { sp_kw_ivar_default(x: 1) }
+@kw_default = :set
+kt('kw ivar default, set') { [sp_kw_ivar_default(x: 1), sp_kw_ivar_default(x: 1, y: 2)] }
+warm { |i| sp_kw_seen(a: i) }
+kt('kw default writes an ivar') { [sp_kw_seen(a: 7), @kw_seen, sp_kw_seen(a: 8, b: 9), @kw_seen] }
+warm { |i| sp_kw_square(a: i) }
+kt('kw default overflows') { [sp_kw_square(a: 3), sp_kw_square(a: 2**40), sp_kw_square(a: 2**40, b: 1)] }
+warm { |i| sp_kw_div(a: i + 1) }
+kt('kw default divides by zero') { sp_kw_div(a: 0) }
+kt('kw default divides, given') { sp_kw_div(a: 0, b: 1) }
+warm { |i| no_kw_assign_default(a: i) }
+kt('kw default assigns a local') { [no_kw_assign_default(a: 1), no_kw_assign_default(a: 1, b: 2)] }
 
 # A keyword initializer: an instance variable store is a typed body too.
 class KwIvars
@@ -732,6 +869,185 @@ end
 kt('kw call, a singleton method') { kc.go(5) }
 kt('kw call, another instance') { KwCaller.new.go(5) }
 
+# ... and leaving out a keyword whose default the typed body evaluates
+class KwDefaultCaller
+  def sp_kw_two(x, a: 1, b: a + x)
+    x * a - b
+  end
+
+  def go(x)
+    sp_kw_two(x, a: 5)
+  end
+
+  def go_both(x)
+    sp_kw_two(x, b: 2, a: 3)
+  end
+end
+kd = KwDefaultCaller.new
+warm { |i| kd.go(i); kd.go_both(i) }
+kt('kw call leaving out an expression default') { [kd.go(4), kd.go_both(4)] }
+kt('kw call leaving out an expression default, Float') { kd.go(0.5) }
+kt('kw call leaving out an expression default, overflow') { kd.go(2**61) }
+
+# A keyword call with an explicit receiver goes direct only to a public method.
+class KwTarget
+  def sp_kw_pub(x, by: 2)
+    x * by
+  end
+
+  def sp_kw_priv(x, by: 2)
+    x * by
+  end
+  private :sp_kw_priv
+
+  def sp_kw_prot(x, by: 2)
+    x * by
+  end
+  protected :sp_kw_prot
+
+  def call_prot(o, x)
+    o.sp_kw_prot(x, by: 3)
+  end
+end
+class KwTargetSub < KwTarget
+  def sp_kw_pub(x, by: 2)
+    [:sub, x, by]
+  end
+end
+class KwGhost
+  def method_missing(name, *args, **kw)
+    [name, args, kw]
+  end
+end
+def kw_recv_call(o, x)
+  o.sp_kw_pub(x, by: 3)
+end
+def kw_recv_priv(o, x)
+  o.sp_kw_priv(x, by: 3)
+end
+def kw_recv_prot(o, x)
+  o.sp_kw_prot(x, by: 3)
+end
+def kw_recv_safe(o, x)
+  o&.sp_kw_pub(x, by: 3)
+end
+$kw_order = []
+def kw_recv_order(o)
+  ($kw_order << :recv; o).sp_kw_pub(($kw_order << :arg; 4), by: ($kw_order << :kw; 5))
+end
+kr = KwTarget.new
+warm { |i| kw_recv_call(kr, i); kw_recv_safe(kr, i) }
+kt('kw receiver call') { kw_recv_call(kr, 5) }
+kt('kw receiver call, Float') { kw_recv_call(kr, 0.5) }
+kt('kw receiver call, overflow') { kw_recv_call(kr, 2**62) }
+kt('kw receiver call, a String') { kw_recv_call(kr, 'ab') }
+kt('kw receiver call, a subclass') { kw_recv_call(KwTargetSub.new, 5) }
+kt('kw receiver call, the class again') { kw_recv_call(kr, 5) }
+kt('kw receiver call to method_missing') { kw_recv_call(KwGhost.new, 5) }
+kt('kw receiver call on nil') { kw_recv_call(nil, 5) }
+kt('kw receiver safe call') { [kw_recv_safe(kr, 5), kw_recv_safe(nil, 5)] }
+warm { |i| kr.send(:sp_kw_priv, i, by: 1); kr.call_prot(kr, i) }
+kt('kw receiver call, private') { kw_recv_priv(kr, 5) }
+kt('kw receiver call, protected from outside') { kw_recv_prot(kr, 5) }
+kt('kw receiver call, protected from inside') { kr.call_prot(KwTarget.new, 5) }
+warm { |i| kw_recv_order(kr) }
+$kw_order = []
+kt('kw receiver call, evaluation order') { [kw_recv_order(kr), $kw_order] }
+$kw_order = []
+kt('kw receiver call, evaluation order on overflow') { [kw_recv_order(Class.new(KwTarget) { def sp_kw_pub(x, by: 2) = x * by * 2**62 }.new), $kw_order] }
+def kr.sp_kw_pub(x, by: 2)
+  :singleton
+end
+kt('kw receiver call, a singleton method') { kw_recv_call(kr, 5) }
+class KwTarget
+  def sp_kw_pub(x, by: 2)
+    x - by
+  end
+end
+kt('kw receiver call, redefined') { kw_recv_call(KwTarget.new, 5) }
+
+# `private :m' (or protected) in a subclass, a singleton class or an including class hides an
+# inherited public m from a receiver call - the direct one too, once m is specialized - and
+# `public :m' there shows an inherited private one.
+class KwHidePriv < KwTarget; private :sp_kw_pub; end
+class KwHideProt < KwTarget; protected :sp_kw_pub; end
+class KwShowPub < KwTarget; public :sp_kw_priv; end
+kw_hidden = KwTarget.new
+class << kw_hidden; private :sp_kw_pub; end
+def kw_hide_priv(o, x) = o.sp_kw_pub(x, by: 3)
+def kw_hide_prot(o, x) = o.sp_kw_pub(x, by: 3)
+def kw_hide_single(o, x) = o.sp_kw_pub(x, by: 3)
+def kw_show_pub(o, x) = o.sp_kw_priv(x, by: 3)
+kw_open = KwTarget.new
+warm { |i| kw_hide_priv(kw_open, i); kw_hide_prot(kw_open, i); kw_hide_single(kw_open, i); kw_show_pub(KwShowPub.new, i) }
+kt('kw receiver call, made private in a subclass') { kw_hide_priv(KwHidePriv.new, 5) }
+kt('kw receiver call, made protected in a subclass') { kw_hide_prot(KwHideProt.new, 5) }
+kt('kw receiver call, made private in a singleton class') { kw_hide_single(kw_hidden, 5) }
+kt('kw receiver call, made public in a subclass') { kw_show_pub(KwShowPub.new, 5) }
+kt('kw receiver call, the public one again') { [kw_hide_priv(kw_open, 5), kw_hide_single(kw_open, 5)] }
+class KwFactory
+  def self.sp_kw_build(x, by: 2)
+    x * by
+  end
+end
+class KwFactorySub < KwFactory; private_class_method :sp_kw_build; end
+def kw_build(c, x)
+  c.sp_kw_build(x, by: 3)
+end
+warm { |i| kw_build(KwFactory, i) }
+kt('kw receiver call, private_class_method in a subclass') { kw_build(KwFactorySub, 5) }
+kt('kw receiver call, the class method again') { kw_build(KwFactory, 5) }
+module KwApi
+  def sp_kw_api(x, by: 2)
+    x * by
+  end
+end
+class KwApiOpen; include KwApi; end
+class KwApiHidden; include KwApi; private :sp_kw_api; end
+def kw_api(o, x)
+  o.sp_kw_api(x, by: 3)
+end
+warm { |i| kw_api(KwApiOpen.new, i) }
+kt('kw receiver call, module method made private') { kw_api(KwApiHidden.new, 5) }
+kt('kw receiver call, module method still public') { kw_api(KwApiOpen.new, 5) }
+
+# A site whose callee has no direct entry - a library method, a Ruby method the JIT does not
+# take - stops trying after a few calls. Whatever it meets after that it still calls the
+# ordinary way: another class's method, the callee redefined into one the JIT takes.
+def kw_recv_round(o)
+  o.round(half: :even)
+end
+class KwRounder
+  def round(half: :up)
+    [:rounder, half]
+  end
+end
+warm { |i| kw_recv_round(2.5) }
+kt('kw receiver call into a library method') { kw_recv_round(2.5) }
+kt('kw receiver call, then a Ruby method') { kw_recv_round(KwRounder.new) }
+kt('kw receiver call, then library methods again') { [kw_recv_round(3.5), kw_recv_round(Rational(5, 2))] }
+class KwDeclined
+  def no_kw_str(x, by: 2)
+    "#{x}" * by
+  end
+end
+def kw_recv_declined(o, x)
+  o.no_kw_str(x, by: 2)
+end
+kd = KwDeclined.new
+warm { |i| kw_recv_declined(kd, i) }
+kt('kw receiver call, declined method') { kw_recv_declined(kd, 5) }
+kt('kw receiver call, declined method, a String') { kw_recv_declined(kd, 'ab') }
+class KwDeclined
+  def no_kw_str(x, by: 2)
+    x * by
+  end
+end
+warm { |i| kw_recv_declined(kd, i) }
+kt('kw receiver call, declined method redefined') { kw_recv_declined(kd, 5) }
+kt('kw receiver call, declined method redefined, Float') { kw_recv_declined(kd, 0.5) }
+kt('kw receiver call, declined method redefined, overflow') { kw_recv_declined(kd, 2**62) }
+
 def sp_kw_add(left:, right:)
   left - right
 end
@@ -742,6 +1058,117 @@ def sp_kw_add(left:, right: 100)
   left + right
 end
 kt('kw add redefined with a default') { sp_kw_add(left: 2) }
+
+# ---------------------------------------------------------------- 8c. optional parameters
+
+# A default that is not a nil/true/false/Integer/Float literal: one typed body per number of
+# optional arguments a call passes, each evaluating the omitted defaults itself, in order.
+def sp_opt_param(a, b = a)
+  a + b
+end
+
+def sp_opt_chain(a, b = a + 1, c = b * 2)
+  a + b + c
+end
+
+def sp_opt_sym(a, mode = :fast)
+  mode
+end
+
+def sp_opt_array(a, b = [a])
+  b
+end
+
+def sp_opt_ivar(a, b = @opt_default)
+  b
+end
+
+def sp_opt_ivar_write(a, b = (@opt_seen = a))
+  b
+end
+
+def sp_opt_square(a, b = a * a)
+  b
+end
+
+def sp_opt_rec(n, acc = 0)
+  return acc if n == 0
+  sp_opt_rec(n - 1, acc + n)
+end
+
+def sp_opt_div(a, b = 10 / a)
+  b
+end
+
+def no_opt_self(a, b = b)
+  b
+end
+
+class OptInit
+  def initialize(x, y = x, z = :none)
+    @x = x
+    @y = y
+    @z = z
+  end
+
+  def triple
+    [@x, @y, @z]
+  end
+end
+
+puts
+puts '--- 8c. optional parameters ---'
+warm { |i| sp_opt_param(i); sp_opt_param(i, 1) }
+t('opt default reads a parameter') { [sp_opt_param(3), sp_opt_param(3, 4)] }
+t('opt default, Float') { [sp_opt_param(1.5), sp_opt_param(1.5, 2)] }
+t('opt default, String') { [sp_opt_param('a'), sp_opt_param('a', 'b')] }
+t('opt default, overflow') { sp_opt_param(2**62) }
+t('opt default, too many') { sp_opt_param(1, 2, 3) }
+t('opt default, too few') { sp_opt_param }
+warm { |i| sp_opt_chain(i); sp_opt_chain(i, 2); sp_opt_chain(i, 2, 3) }
+t('opt chain') { [sp_opt_chain(1), sp_opt_chain(1, 5), sp_opt_chain(1, 5, 7)] }
+t('opt chain, Float in the middle') { sp_opt_chain(1, 0.5) }
+warm { |i| sp_opt_sym(i) }
+t('opt Symbol default') { [sp_opt_sym(1), sp_opt_sym(1, :slow), sp_opt_sym(1).equal?(:fast)] }
+warm { |i| sp_opt_array(i) }
+t('opt Array default') { [sp_opt_array(1), sp_opt_array(1, 2)] }
+t('opt Array default is a new Array each time') { sp_opt_array(1).equal?(sp_opt_array(1)) }
+warm { |i| sp_opt_ivar(i) }
+t('opt ivar default, unset') { sp_opt_ivar(1) }
+@opt_default = 42
+t('opt ivar default, set') { [sp_opt_ivar(1), sp_opt_ivar(1, 2)] }
+warm { |i| sp_opt_ivar_write(i) }
+t('opt default writes an ivar') { [sp_opt_ivar_write(7), @opt_seen, sp_opt_ivar_write(8, 9), @opt_seen] }
+warm { |i| sp_opt_square(i) }
+t('opt default overflows') { [sp_opt_square(3), sp_opt_square(2**40), sp_opt_square(2**40, 1)] }
+warm { |i| sp_opt_rec(i % 20); sp_opt_rec(i % 20, 1) }
+t('opt self-recursion') { [sp_opt_rec(10), sp_opt_rec(10, 5), sp_opt_rec(100)] }
+warm { |i| sp_opt_div(i + 1) }
+t('opt default divides by zero') { sp_opt_div(0) }
+t('opt default divides, given') { sp_opt_div(0, 1) }
+warm { |i| no_opt_self(i) }
+t('opt default reads itself') { [no_opt_self(1), no_opt_self(1, 2)] }
+warm { |i| OptInit.new(i); OptInit.new(i, 2); OptInit.new(i, 2, 3) }
+t('opt initialize') { [OptInit.new(1).triple, OptInit.new(1, 2).triple, OptInit.new(1, 2, 3).triple] }
+t('opt initialize of a frozen object') { o = OptInit.new(1).freeze; o.send(:initialize, 5) }
+def sp_opt_param(a, b = a * 10)
+  a - b
+end
+t('opt redefined') { [sp_opt_param(3), sp_opt_param(3, 1)] }
+warm { |i| sp_opt_param(i) }
+t('opt redefined, hot again') { [sp_opt_param(3), sp_opt_param(3, 1)] }
+class OptInitSub < OptInit
+  def initialize(x, y = x + 100)
+    super
+  end
+end
+warm { |i| OptInitSub.new(i) }
+t('opt zsuper passes the defaulted value') { [OptInitSub.new(1).triple, OptInitSub.new(1, 2).triple] }
+
+def sp_opt_plus(a, b = 1 + a)
+  b
+end
+warm { |i| sp_opt_plus(i) }
 
 # ---------------------------------------------------------------- 8. Integer#+ redefined
 
@@ -776,6 +1203,9 @@ warm { |i| sp_lt(i, 50) }
 t('plus after redefinition, hot again') { sp_plus(2, 3) }
 t('lt after redefinition, hot again') { sp_lt(2, 3) }
 t('fib after redefinition') { sp_fib(12) }
+t('opt default after + redefinition') { [sp_opt_plus(3), sp_opt_plus(1), sp_opt_plus(3, 0)] }
+warm { |i| sp_opt_plus(i) }
+t('opt default after + redefinition, hot again') { [sp_opt_plus(3), sp_opt_plus(1)] }
 # First turning hot AFTER the redefinition: the operator the body would inline is not
 # Integer's built-in one any more.
 def no_plus_late(a, b)

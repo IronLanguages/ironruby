@@ -90,13 +90,17 @@ namespace IronRuby.Builtins {
         /// compared by identity (see <see cref="TryGetValueByIdentity"/>): a **rest parameter.
         /// </summary>
         internal Hash/*!*/ CopyWithoutKeywords(object/*!*/[]/*!*/ names) {
+            Entry[] entries = _entries;
+            int count = _count;
+            if (AllKeysAreSymbols()) {
+                return CopyUnlinkedWithout(names);
+            }
+
             var result = new Hash(_comparer, _liveCount);
             result._defaultProc = _defaultProc;
             result._defaultValue = DefaultValue;
             result._comparesByIdentity = _comparesByIdentity;
 
-            Entry[] entries = _entries;
-            int count = _count;
             for (int i = _start; i < count; i++) {
                 if (entries[i].Next == TombstoneNext) {
                     continue;
@@ -111,6 +115,136 @@ namespace IronRuby.Builtins {
                 }
             }
             return result;
+        }
+
+        private bool AllKeysAreSymbols() {
+            Entry[] entries = _entries;
+            int count = _count;
+            for (int i = _start; i < count; i++) {
+                if (entries[i].Next != TombstoneNext && !(entries[i].Key is RubySymbol)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// <see cref="CopyWithoutKeywords"/> for a hash whose keys are all Symbols: they cannot be
+        /// equal to each other, so the copy takes the entries - hash codes included, the comparer
+        /// being the same - without a bucket array, which the first probe builds
+        /// (LinkPendingBuckets), as a keyword call's own hash is made (<see cref="CreateKeywordArguments"/>).
+        /// A **rest parameter is mostly passed on or read through, so it often never gets one.
+        /// </summary>
+        private Hash/*!*/ CopyUnlinkedWithout(object/*!*/[]/*!*/ names) {
+            var result = new Hash(_comparer, 0);
+            result._defaultProc = _defaultProc;
+            result._defaultValue = DefaultValue;
+            result._comparesByIdentity = _comparesByIdentity;
+
+            int live = _liveCount;
+            if (live == 0) {
+                return result;
+            }
+            int size = GetPrime(live);
+            Entry[] target = new Entry[size];
+            Entry[] entries = _entries;
+            int count = _count;
+            int n = 0;
+            for (int i = _start; i < count; i++) {
+                if (entries[i].Next == TombstoneNext) {
+                    continue;
+                }
+                object key = entries[i].Key;
+                int j = 0;
+                while (j < names.Length && names[j] != key) {
+                    j++;
+                }
+                if (j < names.Length) {
+                    continue;
+                }
+                ref Entry e = ref target[n++];
+                e.HashCode = entries[i].HashCode;
+                e.Next = -1;
+                e.Key = key;
+                e.Value = entries[i].Value;
+            }
+            if (n > 0) {
+                result._entries = target;
+                result._fastModMultiplier = UInt64.MaxValue / (uint)size + 1;
+                result._count = n;
+                result._liveCount = n;
+                result._version++;
+                result._stamp++;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// A copy of this hash's entries marked as keyword arguments and laid out as a keyword call's
+        /// own hash is (<see cref="CreateKeywordArguments"/>, no bucket array): what `**h` passes on.
+        /// Null unless every key is a Symbol - so the keys need no check for duplicates - and the
+        /// comparer is <paramref name="comparer"/>, whose hash codes the entries then already hold;
+        /// the caller copies by inserting instead.
+        /// </summary>
+        internal Hash TryCopyAsKeywordArguments(IEqualityComparer<object>/*!*/ comparer) {
+            int live = _liveCount;
+            if (live == 0 || _comparer != comparer) {
+                return null;
+            }
+
+            if (!AllKeysAreSymbols()) {
+                return null;
+            }
+
+            var result = CreateKeywordArguments(comparer, live);
+            Entry[] entries = _entries;
+            int count = _count;
+            Entry[] target = result._entries;
+            int n = 0;
+            for (int i = _start; i < count; i++) {
+                if (entries[i].Next == TombstoneNext) {
+                    continue;
+                }
+                ref Entry e = ref target[n++];
+                e.HashCode = entries[i].HashCode;
+                e.Next = -1;
+                e.Key = entries[i].Key;
+                e.Value = entries[i].Value;
+            }
+            result._count = n;
+            result._liveCount = n;
+            result._version++;
+            result._stamp++;
+            return result;
+        }
+
+        /// <summary>
+        /// True when <paramref name="other"/> holds the very key and value objects this hash holds, in
+        /// the same order. Compared by reference: false may also mean equal but not the same objects.
+        /// </summary>
+        internal bool HasSameEntries(Hash/*!*/ other) {
+            if (other._liveCount != _liveCount) {
+                return false;
+            }
+            Entry[] a = _entries, b = other._entries;
+            int i = _start, n = _count;
+            int j = other._start, m = other._count;
+            while (true) {
+                while (i < n && a[i].Next == TombstoneNext) {
+                    i++;
+                }
+                while (j < m && b[j].Next == TombstoneNext) {
+                    j++;
+                }
+                if (i >= n || j >= m) {
+                    return i >= n && j >= m;
+                }
+                if (a[i].Key != b[j].Key || a[i].Value != b[j].Value) {
+                    return false;
+                }
+                i++;
+                j++;
+            }
         }
 
         /// <summary>

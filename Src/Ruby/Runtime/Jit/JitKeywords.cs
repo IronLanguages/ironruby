@@ -22,8 +22,12 @@
  * the prologue would have bound them without raising. Any call the prologue would complain
  * about (a missing or unknown keyword, a Hash passed positionally, keywords landing in the
  * last positional) fails that check and runs the generic body, which raises the error MRI
- * raises. A default that is not a plain literal (it could have side effects, or depend on
- * another parameter), and **rest, are not recognized: such a method is never wrapped.
+ * raises. A default that is a nil/true/false/Integer/Float literal or a Symbol is a constant
+ * the entry fills in. Any other default (`b: a + 1', `list: []') is left to the typed body: the
+ * entry hands it RubyOps.DefaultArgument for an omitted one, and the body evaluates the default
+ * itself, in declaration order, before its own statements (JitCompiler.EmitKeywordDefaults) - unless
+ * the default assigns a local, which could be a keyword bound after it. **rest is not recognized:
+ * such a method is never wrapped.
  *
  * ***************************************************************************/
 
@@ -52,6 +56,14 @@ namespace IronRuby.Runtime.Jit {
         internal int[]/*!*/ Positions;
         internal object[]/*!*/ Defaults;
         internal bool[]/*!*/ Required;
+        // Per keyword: the default the typed body evaluates (its Defaults entry is then
+        // RubyOps.DefaultArgument), or null. Null when no keyword has one.
+        internal RExpr[] DefaultExprs;
+
+        /// <summary>A keyword whose default the typed body evaluates: its typed parameter is the boxed value or RubyOps.DefaultArgument.</summary>
+        internal bool HasDefaultExpr(int index) {
+            return DefaultExprs != null && DefaultExprs[index] != null;
+        }
 
         internal int Count { get { return LocalNames.Length; } }
 
@@ -121,6 +133,8 @@ namespace IronRuby.Runtime.Jit {
             var positions = new List<int>();
             var defaults = new List<object>();
             var required = new List<bool>();
+            var defaultExprs = new List<RExpr>();
+            bool anyDefaultExpr = false;
             while (i < n) {
                 var bind = statements[i] as SimpleAssignmentExpression;
                 if (bind == null || bind.Operation != null) { break; }
@@ -131,13 +145,21 @@ namespace IronRuby.Runtime.Jit {
                 if (read.RequiredCountOrPosition != locals.Count) { return null; }
 
                 object defaultValue = null;
+                RExpr defaultExpr = null;
                 if (read.DefaultValue != null) {
                     // A literal is the same value every time and evaluating it does nothing.
                     var literal = read.DefaultValue as Literal;
-                    if (literal == null) { return null; }
-                    object v = literal.Value;
-                    if (!(v == null || v is int || v is double || v is bool)) { return null; }
-                    defaultValue = v;
+                    var symbol = read.DefaultValue as SymbolLiteral;
+                    object v = (literal != null) ? literal.Value : null;
+                    if (literal != null && (v == null || v is int || v is double || v is bool)) {
+                        defaultValue = v;
+                    } else if (symbol != null && symbol.Value is string) {
+                        defaultValue = context.CreateSymbol((string)symbol.Value, symbol.Encoding);
+                    } else {
+                        defaultValue = RubyOps.DefaultArgument;
+                        defaultExpr = read.DefaultValue;
+                        anyDefaultExpr = true;
+                    }
                 }
 
                 locals.Add(local.Name);
@@ -145,6 +167,7 @@ namespace IronRuby.Runtime.Jit {
                 positions.Add(read.RequiredCountOrPosition);
                 defaults.Add(defaultValue);
                 required.Add(read.DefaultValue == null);
+                defaultExprs.Add(defaultExpr);
                 i++;
             }
             if (locals.Count != names.Length) { return null; }
@@ -160,6 +183,7 @@ namespace IronRuby.Runtime.Jit {
             result.Positions = positions.ToArray();
             result.Defaults = defaults.ToArray();
             result.Required = required.ToArray();
+            result.DefaultExprs = anyDefaultExpr ? defaultExprs.ToArray() : null;
             return result;
         }
 

@@ -68,6 +68,8 @@ namespace IronRuby.Runtime.Jit {
 
         internal Func<object, object, object, object, object, object, object> Direct { get { return _direct; } }
         internal JitKeywords Keywords { get { return _keywords; } }
+        // Declined for good: the generic body is all this method will ever run, so there is no Direct to wait for.
+        internal bool GivenUp { get { return _state == Settled; } }
         internal int Positional { get { return _positional; } }
 
         // Optional parameters (after the mandatory ones, as in the generic delegate) have a literal
@@ -75,6 +77,12 @@ namespace IronRuby.Runtime.Jit {
         // entry and the profiler replace with the value. _hasDefault is null with no optionals.
         private bool[] _hasDefault;
         private object[] _defaults;
+
+        // A method with an optional parameter whose default is not such a literal gets one typed body
+        // per number of optional arguments a call passes (JitCompiler's `supplied'), each evaluating the
+        // defaults of the rest itself. _countsSeen has bit k set once a call passed k of them.
+        private int _perCountMandatory = -1;
+        private int _countsSeen;
 
         // Parameters the body only ever stores into an instance variable: kept as the boxed
         // objects they arrived as, whatever their type (JitScreen's otherUses).
@@ -161,11 +169,20 @@ namespace IronRuby.Runtime.Jit {
                 object kw = args[_positional];
                 if (_keywords.Matches(kw)) {
                     for (int j = 0; j < _keywords.Count; j++) {
-                        Observe(_positional + j, _keywords.Value(kw, j));
+                        // an omitted keyword whose default the typed body evaluates has no type to see
+                        object v = _keywords.Value(kw, j);
+                        if (v != RubyOps.DefaultArgument) { Observe(_positional + j, v); }
                     }
                 }
             }
-            for (int i = 0; i < _positional; i++) {
+            int observed = _positional;
+            if (_perCountMandatory >= 0) {
+                // the omitted optional arguments are a suffix; only the passed ones have a type
+                observed = _perCountMandatory;
+                while (observed < _positional && args[observed] != RubyOps.DefaultArgument) { observed++; }
+                _countsSeen |= 1 << (observed - _perCountMandatory);
+            }
+            for (int i = 0; i < observed; i++) {
                 if (_hasDefault != null && _hasDefault[i] && args[i] == RubyOps.DefaultArgument) {
                     args[i] = _defaults[i];
                 }
@@ -491,17 +508,9 @@ namespace IronRuby.Runtime.Jit {
 
         private bool TrySpecialize() {
             if (JitRuntime.Disabled || _context.HasRefinements) { return false; }
+            if (_perCountMandatory >= 0) { return TrySpecializePerCount(); }
 
-            var types = new JT[_typedCount];
-            for (int i = 0; i < _typedCount; i++) {
-                if (_storedOnly != null && _storedOnly[i]) { types[i] = JT.Obj; continue; }
-                switch (_argKind[i]) {
-                    case 1: types[i] = JT.Int; break;
-                    case 2: types[i] = JT.Dbl; break;
-                    case 4: types[i] = JT.Lng; break;
-                    default: types[i] = JT.Obj; break;
-                }
-            }
+            var types = ProfiledTypes(_typedCount);
 
             // The method version the entry guards on is read before compiling, so that it is never
             // newer than what the compiler resolved against - each built-in operator it checks, and
@@ -555,6 +564,99 @@ namespace IronRuby.Runtime.Jit {
             if (JitRuntime.Verbose) {
                 Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} -> {3}{4}",
                     _declaringModule.Name ?? "main", _ast.Name, _arity, code.ReturnType, needsClassGuard ? " (self-call)" : "");
+            }
+            return true;
+        }
+
+        private JT[]/*!*/ ProfiledTypes(int count) {
+            var types = new JT[count];
+            for (int i = 0; i < count; i++) {
+                if (_storedOnly != null && _storedOnly[i]) { types[i] = JT.Obj; continue; }
+                switch (_argKind[i]) {
+                    case 1: types[i] = JT.Int; break;
+                    case 2: types[i] = JT.Dbl; break;
+                    case 4: types[i] = JT.Lng; break;
+                    // never passed: the typed body types the keyword by its default
+                    case 0: types[i] = PassedBoxed(i) ? JT.None : JT.Obj; break;
+                    default: types[i] = JT.Obj; break;
+                }
+            }
+            return types;
+        }
+
+        /// <summary>
+        /// A keyword whose default the typed body evaluates (JitKeywords.DefaultExprs): the body takes the
+        /// boxed value, or RubyOps.DefaultArgument, which the entry's type guard lets through.
+        /// </summary>
+        private bool PassedBoxed(int i) {
+            return _keywords != null && i >= _positional && _keywords.HasDefaultExpr(i - _positional);
+        }
+
+        private MSA.Expression/*!*/ AllowDefault(int i, MSA.Expression/*!*/ value, MSA.Expression/*!*/ guard) {
+            return PassedBoxed(i)
+                ? Ast.OrElse(Ast.ReferenceEqual(value, Ast.Field(null, typeof(RubyOps).GetField("DefaultArgument"))), guard)
+                : guard;
+        }
+
+        /// <summary>
+        /// One typed body for each number of optional arguments the calls so far have passed; a call
+        /// passing a number no body was compiled for runs the generic body.
+        /// </summary>
+        private bool TrySpecializePerCount() {
+            // read before compiling, as in TrySpecialize
+            int version = RubyModule.GlobalMethodVersion;
+
+            long start = Stopwatch.GetTimestamp();
+            int optionalCount = _positional - _perCountMandatory;
+            var codes = new JitCode[optionalCount + 1];
+            var callees = new MSA.Expression[optionalCount + 1];
+            bool any = false, pinned = false;
+            for (int k = 0; k <= optionalCount; k++) {
+                if ((_countsSeen & (1 << k)) == 0) { continue; }
+                var code = JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, k);
+                if (code == null) { continue; }
+                if (code.EmittedSelfCall) {
+                    if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass)) { continue; }
+                    pinned = true;
+                }
+                codes[k] = code;
+                any = true;
+            }
+            if (!any) { return false; }
+
+            for (int k = 0; k <= optionalCount; k++) {
+                var code = codes[k];
+                if (code == null) { continue; }
+                // as in TrySpecialize: a body of its own only when it calls itself
+                if (code.EmittedSelfCall) {
+                    Delegate typed = code.Lambda.Compile();
+                    code.SelfCell.Value = typed;
+                    callees[k] = Ast.Constant(typed, typed.GetType());
+                } else {
+                    callees[k] = code.Lambda;
+                }
+            }
+
+            // one Specialization for all the bodies: they retire, cool down and go stale together
+            var spec = new Specialization(this);
+            spec.Entry = BuildPerCountEntry(codes, callees, version, pinned ? _receiverClass : null, spec).Compile();
+
+            lock (_sync) {
+                // as in TrySpecialize
+                if (_state != Profiling) { return true; }
+                _current = spec;
+                _state = Specialized;
+                Install(spec.Entry);
+            }
+
+            JitRuntime.CompileTicks += Stopwatch.GetTimestamp() - start;
+            JitRuntime.Specialized++;
+            if (JitRuntime.Verbose) {
+                for (int k = 0; k <= optionalCount; k++) {
+                    if (codes[k] == null) { continue; }
+                    Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} passing {3} optional -> {4}{5}",
+                        _declaringModule.Name ?? "main", _ast.Name, _arity, k, codes[k].ReturnType, codes[k].EmittedSelfCall ? " (self-call)" : "");
+                }
             }
             return true;
         }
@@ -640,17 +742,18 @@ namespace IronRuby.Runtime.Jit {
 
             for (int i = 0; i < _typedCount; i++) {
                 switch (code.ParameterTypes[i]) {
-                    case JT.Int: test = And(test, Ast.TypeIs(values[i], typeof(int))); break;
-                    case JT.Dbl: test = And(test, Ast.TypeIs(values[i], typeof(double))); break;
+                    case JT.Int: test = And(test, AllowDefault(i, values[i], Ast.TypeIs(values[i], typeof(int)))); break;
+                    case JT.Dbl: test = And(test, AllowDefault(i, values[i], Ast.TypeIs(values[i], typeof(double)))); break;
                     // An Integer parameter carried as a long accepts either representation: a
                     // value in Int32 range arrives as an Int32 and only a larger one as an Int64.
-                    case JT.Lng: test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), values[i])); break;
+                    case JT.Lng: test = And(test, AllowDefault(i, values[i], Ast.Call(JitRuntime.M("IsIntegral"), values[i]))); break;
                 }
             }
 
             var typedArgs = new MSA.Expression[_typedCount + 1];
             typedArgs[0] = self;
             for (int i = 0; i < _typedCount; i++) {
+                if (PassedBoxed(i)) { typedArgs[i + 1] = values[i]; continue; }
                 switch (code.ParameterTypes[i]) {
                     case JT.Int: typedArgs[i + 1] = Ast.Unbox(values[i], typeof(int)); break;
                     case JT.Dbl: typedArgs[i + 1] = Ast.Unbox(values[i], typeof(double)); break;
@@ -747,21 +850,22 @@ namespace IronRuby.Runtime.Jit {
             for (int i = 0; i < _typedCount; i++) {
                 switch (code.ParameterTypes[i]) {
                     case JT.Int:
-                        test = And(test, Ast.TypeIs(values[i], typeof(int)));
+                        test = And(test, AllowDefault(i, values[i], Ast.TypeIs(values[i], typeof(int))));
                         typedArgs[i + 1] = Ast.Unbox(values[i], typeof(int));
                         break;
                     case JT.Dbl:
-                        test = And(test, Ast.TypeIs(values[i], typeof(double)));
+                        test = And(test, AllowDefault(i, values[i], Ast.TypeIs(values[i], typeof(double))));
                         typedArgs[i + 1] = Ast.Unbox(values[i], typeof(double));
                         break;
                     case JT.Lng:
-                        test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), values[i]));
+                        test = And(test, AllowDefault(i, values[i], Ast.Call(JitRuntime.M("IsIntegral"), values[i])));
                         typedArgs[i + 1] = Ast.Call(JitRuntime.M("ToLong"), values[i]);
                         break;
                     default:
                         typedArgs[i + 1] = values[i];
                         break;
                 }
+                if (PassedBoxed(i)) { typedArgs[i + 1] = values[i]; }
             }
 
             MSA.Expression fast = Ast.Invoke(callee, typedArgs);
@@ -787,6 +891,106 @@ namespace IronRuby.Runtime.Jit {
             all[0] = self;
             Array.Copy(slots, 0, all, 1, slots.Length);
             return Ast.Lambda<Func<object, object, object, object, object, object, object>>(body, DirectEntryNamePrefix + _ast.Name, all);
+        }
+
+        /// <summary>
+        /// BuildEntry for per-count bodies: which arguments are RubyOps.DefaultArgument picks the body
+        /// (a call leaves out a suffix of the optional parameters), then the same guards as BuildEntry's
+        /// over the arguments that body takes.
+        /// </summary>
+        private MSA.LambdaExpression/*!*/ BuildPerCountEntry(JitCode[]/*!*/ codes, MSA.Expression[]/*!*/ callees, int version, RubyClass pinnedClass,
+            Specialization/*!*/ spec) {
+            var self = Ast.Parameter(typeof(object), "self");
+            var blk = Ast.Parameter(typeof(Proc), "block");
+            var args = new MSA.ParameterExpression[_arity];
+            for (int i = 0; i < _arity; i++) {
+                args[i] = Ast.Parameter(typeof(object), "a" + i);
+            }
+
+            MSA.Expression body = null;
+            for (int k = codes.Length - 1; k >= 0; k--) {
+                MSA.Expression arm = (codes[k] != null)
+                    ? BuildPerCountArm(codes[k], callees[k], self, blk, args, _perCountMandatory + k, pinnedClass, spec)
+                    : GenericCall(self, blk, args);
+                body = (body == null) ? arm : Ast.Condition(
+                    Ast.ReferenceEqual(args[_perCountMandatory + k], Ast.Field(null, typeof(RubyOps).GetField("DefaultArgument"))),
+                    arm, body, typeof(object));
+            }
+
+            body = Ast.Condition(
+                Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version)),
+                body,
+                Ast.Block(
+                    Ast.Call(JitRuntime.M("EntryStale"), Ast.Constant(spec, typeof(object))),
+                    GenericCall(self, blk, args)
+                ),
+                typeof(object)
+            );
+
+            var all = new MSA.ParameterExpression[_arity + 2];
+            all[0] = self;
+            all[1] = blk;
+            Array.Copy(args, 0, all, 2, _arity);
+            return Ast.Lambda(_generic.GetType(), body, EntryNamePrefix + _ast.Name, all);
+        }
+
+        private MSA.Expression/*!*/ BuildPerCountArm(JitCode/*!*/ code, MSA.Expression/*!*/ callee, MSA.ParameterExpression/*!*/ self,
+            MSA.ParameterExpression/*!*/ blk, MSA.ParameterExpression[]/*!*/ args, int count, RubyClass pinnedClass,
+            Specialization/*!*/ spec) {
+
+            MSA.Expression test = null;
+            if (pinnedClass != null && code.EmittedSelfCall) {
+                test = And(test, Ast.ReferenceEqual(
+                    Ast.Call(JitRuntime.M("ClassOf"), Ast.Constant(_context), self),
+                    Ast.Constant(pinnedClass, typeof(RubyClass))));
+            }
+            var typedArgs = new MSA.Expression[count + 1];
+            typedArgs[0] = self;
+            for (int i = 0; i < count; i++) {
+                switch (code.ParameterTypes[i]) {
+                    case JT.Int:
+                        test = And(test, Ast.TypeIs(args[i], typeof(int)));
+                        typedArgs[i + 1] = Ast.Unbox(args[i], typeof(int));
+                        break;
+                    case JT.Dbl:
+                        test = And(test, Ast.TypeIs(args[i], typeof(double)));
+                        typedArgs[i + 1] = Ast.Unbox(args[i], typeof(double));
+                        break;
+                    case JT.Lng:
+                        test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), args[i]));
+                        typedArgs[i + 1] = Ast.Call(JitRuntime.M("ToLong"), args[i]);
+                        break;
+                    default:
+                        typedArgs[i + 1] = args[i];
+                        break;
+                }
+            }
+
+            MSA.Expression fast = Ast.Invoke(callee, typedArgs);
+            if (code.ReturnType == JT.Lng) {
+                fast = Ast.Call(JitRuntime.M("NarrowLong"), fast);
+            } else if (fast.Type != typeof(object)) {
+                fast = Ast.Convert(fast, typeof(object));
+            }
+
+            if (code.CanDeopt) {
+                // as in BuildEntry: the generic body runs after the handler, not inside it, and the
+                // deopts count towards retiring the entry (OnDeopt)
+                var result = Ast.Variable(typeof(object), "#result");
+                var deopted = Ast.Constant(Deopted, typeof(object));
+                fast = Ast.Block(typeof(object), new[] { result },
+                    CountEntry(spec),
+                    Ast.TryCatch(
+                        Ast.Assign(result, fast),
+                        Ast.Catch(typeof(JitDeoptException), Ast.Block(
+                            Ast.Call(JitRuntime.M("EntryDeopted"), Ast.Constant(spec, typeof(object))),
+                            Ast.Assign(result, deopted)
+                        ))
+                    ),
+                    Ast.Condition(Ast.ReferenceEqual(result, deopted), GenericCall(self, blk, args), result, typeof(object))
+                );
+            }
+            return (test != null) ? Ast.Condition(test, fast, GenericCall(self, blk, args), typeof(object)) : fast;
         }
 
         private static MSA.Expression/*!*/ And(MSA.Expression left, MSA.Expression/*!*/ right) {
@@ -826,20 +1030,30 @@ namespace IronRuby.Runtime.Jit {
             // effect and cannot see the other parameters, so the entry may fill it in up front.
             // Keyword parameters arrive in one trailing optional parameter (see JitKeywords); a method
             // with keywords has no other optional one (PrismAstBridge lowers that mix to a splat).
+            // Any other default makes it a method with per-count bodies (TrySpecializePerCount), which
+            // evaluate the defaults the call left out themselves; JitScreen checks that they can.
             JitKeywords keywords = null;
             bool[] hasDefault = null;
             object[] defaults = null;
+            bool perCount = false;
             if (ps.Optional.Length > 0 && (keywords = JitKeywords.TryRecognize(ast, context)) == null) {
                 hasDefault = new bool[arity];
                 defaults = new object[arity];
                 for (int i = 0; i < ps.Optional.Length; i++) {
                     var opt = ps.Optional[i];
+                    if (!(opt.Left is LocalVariable)) { return generic; }
                     var literal = opt.Right as Literal;
-                    if (!(opt.Left is LocalVariable) || literal == null) { return generic; }
-                    object v = literal.Value;
-                    if (!(v == null || v is bool || v is int || v is double)) { return generic; }
+                    object v = (literal != null) ? literal.Value : null;
+                    if (literal == null || !(v == null || v is bool || v is int || v is double)) {
+                        perCount = true;
+                        continue;
+                    }
                     hasDefault[mandatoryCount + i] = true;
                     defaults[mandatoryCount + i] = v;
+                }
+                if (perCount) {
+                    hasDefault = null;
+                    defaults = null;
                 }
             }
             // Tracing and coverage need the real frame.
@@ -881,6 +1095,7 @@ namespace IronRuby.Runtime.Jit {
             }
             stub._hasDefault = hasDefault;
             stub._defaults = defaults;
+            if (perCount) { stub._perCountMandatory = mandatoryCount; }
             stub._storedOnly = storedOnly;
             var light = generic.Target as Microsoft.Scripting.Interpreter.LightLambda;
             if (light != null) {

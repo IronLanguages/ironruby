@@ -31,12 +31,16 @@ namespace IronRuby.Compiler.Ast {
     /// h's entries go into the keyword hash built so far (see RubyOps.MergeKeywordSplat) when h is
     /// a Hash or nil. Anything else takes <see cref="Converted"/> - `hash.merge(h || {})`, which
     /// applies #to_hash - as every `**h` used to, at the price of a Ruby-level Hash#merge.
+    ///
+    /// Without Converted (<see cref="HashOnly"/>) h has to be a Hash, and anything else - nil too -
+    /// raises TypeError, as MRI's parameterless super does for `def m(k: 1, **rest)` once the body
+    /// has set rest to something else.
     /// </summary>
     public partial class KeywordSplatMerge : Expression {
         // `temp = <hash so far>` and `temp2 = <h>`, the temporaries Converted reads
         private readonly Expression/*!*/ _hash;
         private readonly Expression/*!*/ _splatted;
-        private readonly Expression/*!*/ _converted;
+        private readonly Expression _converted;
 
         public Expression/*!*/ Hash {
             get { return _hash; }
@@ -46,7 +50,8 @@ namespace IronRuby.Compiler.Ast {
             get { return _splatted; }
         }
 
-        public Expression/*!*/ Converted {
+        /// <summary>Null for <see cref="HashOnly"/>.</summary>
+        public Expression Converted {
             get { return _converted; }
         }
 
@@ -58,7 +63,26 @@ namespace IronRuby.Compiler.Ast {
             _converted = converted;
         }
 
+        private KeywordSplatMerge(Expression/*!*/ hash, Expression/*!*/ splatted, SourceSpan location)
+            : base(location) {
+            Assert.NotNull(hash, splatted);
+            _hash = hash;
+            _splatted = splatted;
+        }
+
+        /// <summary>
+        /// <paramref name="splatted"/>'s entries into <paramref name="hash"/>, the keyword hash being built,
+        /// where splatted must be a Hash: neither is read twice, so neither needs a temporary.
+        /// </summary>
+        internal static KeywordSplatMerge/*!*/ HashOnly(Expression/*!*/ hash, Expression/*!*/ splatted, SourceSpan location) {
+            return new KeywordSplatMerge(hash, splatted, location);
+        }
+
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+            if (_converted == null) {
+                return Methods.MergeKeywordHash.OpCall(gen.CurrentScopeVariable,
+                    AstUtils.Box(_hash.TransformRead(gen)), AstUtils.Box(_splatted.TransformRead(gen)));
+            }
             return Ast.Coalesce(
                 Methods.MergeKeywordSplat.OpCall(gen.CurrentScopeVariable,
                     AstUtils.Box(_hash.TransformRead(gen)), AstUtils.Box(_splatted.TransformRead(gen))),
