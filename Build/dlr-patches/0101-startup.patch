@@ -12,3 +12,31 @@ index e3f1d76..327fda6 100644
              }
  
              return true;
+diff --git a/src/core/Microsoft.Dynamic/Hosting/Shell/ConsoleHostOptionsParser.cs b/src/core/Microsoft.Dynamic/Hosting/Shell/ConsoleHostOptionsParser.cs
+index d6f82e2..294b018 100644
+--- a/src/core/Microsoft.Dynamic/Hosting/Shell/ConsoleHostOptionsParser.cs
++++ b/src/core/Microsoft.Dynamic/Hosting/Shell/ConsoleHostOptionsParser.cs
+@@ -117,7 +117,9 @@ namespace Microsoft.Scripting.Hosting.Shell {
+                 name = null;
+             }
+ 
+-            name = name?.ToLower(CultureInfo.InvariantCulture);
++            // ToLowerInvariant, not ToLower(CultureInfo.InvariantCulture): the latter's TextInfo asks ICU for a collator
++            // (~15 ms at startup) just to learn that ASCII casing is the invariant one.
++            name = name?.ToLowerInvariant();
+         }
+ 
+         protected void OptionValueRequired(string optionName, string value) {
+diff --git a/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs b/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
+index 91c46fa..e47fe19 100644
+--- a/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
++++ b/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
+@@ -112,7 +112,7 @@ namespace Microsoft.Scripting {
+         // TODO: better APIs
+         public virtual Stream OpenFileStream(string path, FileMode mode = FileMode.OpenOrCreate, FileAccess access = FileAccess.ReadWrite, FileShare share = FileShare.Read, int bufferSize = 8192) {
+ #if FEATURE_FILESYSTEM
+-            if (string.Equals("nul", path, StringComparison.InvariantCultureIgnoreCase)) {
++            if (string.Equals("nul", path, StringComparison.OrdinalIgnoreCase)) { // ordinal: a culture compare loads an ICU collator
+                 return Stream.Null;
+             }
+             return new FileStream(path, mode, access, share, bufferSize);

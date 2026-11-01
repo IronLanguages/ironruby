@@ -1012,7 +1012,7 @@ namespace IronRuby.Builtins {
                         }
 
                         if (method.IsStatic == _isSingletonClass) {
-                            if (method.Name.StartsWith("get_")) {
+                            if (method.Name.StartsWith("get_", StringComparison.Ordinal)) {
                                 var propertyName = method.Name.Substring(4);
                                 yield return propertyName;
 
@@ -1021,7 +1021,7 @@ namespace IronRuby.Builtins {
                                 }
                             }
 
-                            if (method.Name.StartsWith("set_")) {
+                            if (method.Name.StartsWith("set_", StringComparison.Ordinal)) {
                                 var propertyName = method.Name.Substring(4);
                                 yield return propertyName + "=";
 
