@@ -1029,8 +1029,20 @@ namespace IronRuby.Runtime {
             }
 
             var sourceUnit = language.CreateFileUnit(path, RubyEncoding.Ascii.Encoding, SourceCodeKind.File);
+            List<string> log = SourceFileLog;
+            if (log != null) {
+                lock (log) {
+                    log.Add(fullPath);
+                }
+            }
             return new ResolvedFile(sourceUnit, fullPath, extensionAppended ? extension : null);
         }
+
+        /// <summary>
+        /// When set, every source file the loader resolves is added to it - the prelude's own files too,
+        /// which never show in $". A warm-start worker (Hosting/WarmStart.cs) watches them for changes.
+        /// </summary>
+        internal List<string> SourceFileLog { get; set; }
 
         private List<string>/*!*/ GetExtensionsOfExistingFiles(string/*!*/ path, IEnumerable<string>/*!*/ extensions) {
             // all extensions that could be appended to the path to get an existing file:

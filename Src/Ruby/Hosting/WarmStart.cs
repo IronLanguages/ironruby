@@ -211,9 +211,22 @@ namespace IronRuby.Hosting {
                 }
             }
             var names = new List<string>();
+            var files = new List<string>();
             foreach (object file in context.Loader.GetLoadedFiles()) {
-                string path = file as string ?? (file as MutableString)?.ToString();
-                if (path != null && Path.IsPathRooted(path)) {
+                files.Add(file as string ?? (file as MutableString)?.ToString());
+            }
+            // the prelude's files, which $" leaves out, and anything loaded rather than required
+            List<string> resolved = context.Loader.SourceFileLog;
+            context.Loader.SourceFileLog = null;
+            if (resolved != null) {
+                lock (resolved) {
+                    files.AddRange(resolved);
+                }
+            }
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string file in files) {
+                string path = (file != null && Path.IsPathRooted(file)) ? Path.GetFullPath(file) : null;
+                if (path != null && seen.Add(path)) {
                     stamps.Add(new KeyValuePair<string, DateTime>(path, GetStamp(path)));
                     // the name require found it under, which a directory in front of its own would shadow
                     foreach (string dir in loadPaths) {
@@ -225,14 +238,20 @@ namespace IronRuby.Hosting {
                 }
             }
             _loadedFeatureNames = names;
-            foreach (var assembly in new[] { typeof(RubyContext).Assembly, Assembly.GetEntryAssembly() }) {
-                if (assembly != null && !String.IsNullOrEmpty(assembly.Location)) {
-                    stamps.Add(new KeyValuePair<string, DateTime>(assembly.Location, GetStamp(assembly.Location)));
+            // The runtime itself: every assembly and native library of the build (a rebuild replaces
+            // them; IronRuby.Libraries.dll may not have been loaded yet).
+            string baseDirectory = AppContext.BaseDirectory;
+            try {
+                foreach (string file in Directory.GetFiles(baseDirectory)) {
+                    if (file.EndsWith(".dll", StringComparison.Ordinal) || file.EndsWith(".so", StringComparison.Ordinal)) {
+                        stamps.Add(new KeyValuePair<string, DateTime>(file, GetStamp(file)));
+                    }
                 }
+            } catch (Exception) {
+                // stamps of the scripts only
             }
-            string libraries = Path.Combine(AppContext.BaseDirectory, "IronRuby.Libraries.dll");
-            stamps.Add(new KeyValuePair<string, DateTime>(libraries, GetStamp(libraries)));
             _loadedFileStamps = stamps;
+            Log("watching " + stamps.Count + " files for changes");
         }
 
         private static DateTime GetStamp(string path) {
@@ -713,6 +732,39 @@ namespace IronRuby.Hosting {
             ConsoleStream.ResetStandardDescriptors();
         }
 
+        private static readonly string[] _consoleFields = {
+            "s_in", "s_out", "s_error", "_isStdInRedirected", "_isStdOutRedirected", "_isStdErrRedirected",
+            "s_isOutTextWriterRedirected", "s_isErrorTextWriterRedirected",
+        };
+
+        private static readonly string[] _sharedIOFields = {
+            "_inputStream", "_outputStream", "_errorStream", "_inputReader", "_outputWriter", "_errorWriter", "_inputEncoding",
+        };
+
+        /// <summary>
+        /// Whether every private field ResetConsole puts back exists in this runtime (.NET 8's System.Console,
+        /// the DLR's SharedIO). A worker on a runtime where one is missing would run programs with
+        /// streams still bound to the broker's /dev/null, so it never offers itself.
+        /// </summary>
+        internal static string FindMissingConsoleField() {
+            const BindingFlags statics = BindingFlags.Static | BindingFlags.NonPublic;
+            foreach (var name in _consoleFields) {
+                if (typeof(Console).GetField(name, statics) == null) {
+                    return "System.Console." + name;
+                }
+            }
+            Type pal = typeof(Console).Assembly.GetType("System.ConsolePal");
+            if (pal == null || pal.GetField("s_stdInReader", statics) == null) {
+                return "System.ConsolePal.s_stdInReader";
+            }
+            foreach (var name in _sharedIOFields) {
+                if (typeof(SharedIO).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic) == null) {
+                    return "SharedIO." + name;
+                }
+            }
+            return null;
+        }
+
         internal static void LogConsoleState() {
             if (!_debug) {
                 return;
@@ -869,12 +921,19 @@ namespace IronRuby.Hosting {
         private int RunWarmWorker() {
             var context = (RubyContext)HostingHelpers.GetLanguageContext(Engine);
             WarmStart.Log("runtime ready");
+            context.Loader.SourceFileLog = new List<string>();
             context.PrepareWarmStart();
             WarmStart.RecordLoadedFiles(context);
             WarmStart.Log("prelude loaded");
             WarmUpRequestPath(context);
             WarmStart.Log("request path warmed up");
             WarmStart.LogConsoleState();
+            string missing = WarmStart.FindMissingConsoleField();
+            if (missing != null) {
+                // the broker gives up after three workers that die warming up; clients then start cold
+                WarmStart.Log("cannot serve requests: this runtime has no " + missing, true);
+                return 1;
+            }
             WarmStart.SignalReady();
 
             while (true) {
