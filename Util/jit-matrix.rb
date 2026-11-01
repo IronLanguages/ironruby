@@ -1165,6 +1165,19 @@ end
 warm { |i| OptInitSub.new(i) }
 t('opt zsuper passes the defaulted value') { [OptInitSub.new(1).triple, OptInitSub.new(1, 2).triple] }
 
+# Per-count bodies are one specialization (JitStub.Specialization): their deopts count towards
+# retiring the entry, and the entry is cooled down and tried again like any other.
+def sp_opt_deopts(a, b = a * a)
+  # out of Int64 for a >= 55109 when b is left out
+  b * b
+end
+warm { |i| sp_opt_deopts(i); sp_opt_deopts(i, i) }
+r = 0
+20.times { |j| warm { |i| r += sp_opt_deopts(100_000 + 120 * j + i) } }
+t('opt per-count entry that keeps deopting') { r }
+t('opt per-count entry, small again') { [sp_opt_deopts(3), sp_opt_deopts(3, 4), sp_opt_deopts(-7)] }
+t('opt per-count entry, out of Int64, given') { sp_opt_deopts(1, 2**40) }
+
 def sp_opt_plus(a, b = 1 + a)
   b
 end
