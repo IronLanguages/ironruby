@@ -1047,6 +1047,24 @@ warm { |i| kw_recv_declined(kd, i) }
 kt('kw receiver call, declined method redefined') { kw_recv_declined(kd, 5) }
 kt('kw receiver call, declined method redefined, Float') { kw_recv_declined(kd, 0.5) }
 kt('kw receiver call, declined method redefined, overflow') { kw_recv_declined(kd, 2**62) }
+# A callee whose entry deopts until it is retired: while it cools down it has no direct entry,
+# and the receiver site waits for it to come back rather than going quiet (JitStub.IsCooling).
+class KwCooling
+  def sp_kw_cool(x, by: 3)
+    x * by * x * by
+  end
+end
+def kw_recv_cool(o, x)
+  o.sp_kw_cool(x, by: 3)
+end
+kc = KwCooling.new
+warm { |i| kw_recv_cool(kc, i) }
+r = 0
+20.times { |j| warm { |i| r += kw_recv_cool(kc, 2_000_000_000 + 120 * j + i) } }
+kt('kw receiver call, callee retired for deopting') { r }
+r = 0
+20.times { warm { |i| r += kw_recv_cool(kc, i) } }
+kt('kw receiver call, callee tried again') { [r, kw_recv_cool(kc, 5), kc.sp_kw_cool(5, by: 2), kc.sp_kw_cool(5)] }
 
 def sp_kw_add(left:, right:)
   left - right

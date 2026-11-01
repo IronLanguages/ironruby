@@ -70,6 +70,8 @@ namespace IronRuby.Runtime.Jit {
         internal JitKeywords Keywords { get { return _keywords; } }
         // Declined for good: the generic body is all this method will ever run, so there is no Direct to wait for.
         internal bool GivenUp { get { return _state == Settled; } }
+        // Retired for a while (OnDeopt, Probe): the entry, and Direct with it, comes back after the cool-down.
+        internal bool IsCooling { get { return _state == Cooling; } }
         internal int Positional { get { return _positional; } }
 
         // Optional parameters (after the mandatory ones, as in the generic delegate) have a literal

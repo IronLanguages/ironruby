@@ -154,6 +154,10 @@ namespace IronRuby.Runtime.Jit {
             JitStub stub = state.Stub;
             var direct = (stub != null) ? stub.Direct : null;
             if (direct == null) {
+                // An entry retired for deopting (or having its generic body timed) is put back once it
+                // has cooled down, and its direct entry with it: not a call to count towards quiet,
+                // which would last until the next method-table change, long after the entry is back.
+                if (stub != null && stub.IsCooling) { return NoDirect; }
                 // a stub the JIT gave up on never gets an entry; one it is still profiling may
                 return (stub == null || stub.GivenUp)
                     ? Fruitless(ref _deadCalls, MaxDeadCalls, version)
