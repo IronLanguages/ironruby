@@ -27,6 +27,16 @@ using IronRuby.Runtime;
 using System.Globalization;
 
 namespace IronRuby.Compiler.Generation {
+    /// <summary>
+    /// For the ahead-of-time generated subclasses of other assemblies (IronRuby.Libraries); see
+    /// RubyTypeDispenser.AddPrebuiltType.
+    /// </summary>
+    public static class PrebuiltSubclasses {
+        public static void Register(Type/*!*/ clsBaseType, Type/*!*/ rubyType) {
+            RubyTypeDispenser.AddPrebuiltType(clsBaseType, rubyType);
+        }
+    }
+
     internal static class RubyTypeDispenser {
 
         private static readonly Publisher<TypeDescription/*!*/, Type/*!*/>/*!*/ _newTypes;
@@ -49,6 +59,23 @@ namespace IronRuby.Compiler.Generation {
             AddBuiltinType(typeof(RubyArray), typeof(RubyArray.Subclass), true);
             AddBuiltinType(typeof(MatchData), typeof(MatchData.Subclass), true);
             AddBuiltinType(typeof(RubyIO), typeof(RubyIO.Subclass), true);
+
+            // Without dynamic code (NativeAOT) CreateType cannot emit: use the subclasses generated
+            // ahead of time for the CLR types behind library classes (Util/aot/gen-subclasses.rb).
+            if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported) {
+                AotSubclasses.Register(AddPrebuiltType);
+            }
+        }
+
+        /// <summary>
+        /// Registers <paramref name="rubyType"/>, a CLR subclass of <paramref name="clsBaseType"/> that
+        /// implements IRubyObject, as the type of Ruby subclasses of the class backed by the base type.
+        /// </summary>
+        internal static void AddPrebuiltType(Type/*!*/ clsBaseType, Type/*!*/ rubyType) {
+            lock (_typeFeatures) {
+                AddBuiltinType(clsBaseType, rubyType, false);
+                AddBuiltinType(clsBaseType, rubyType, true);
+            }
         }
       
         internal static Type/*!*/ GetOrCreateType(Type/*!*/ baseType, IList<Type/*!*/>/*!*/ interfaces, bool noOverrides) {

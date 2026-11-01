@@ -570,6 +570,11 @@ namespace IronRuby.Runtime {
             }
 
             Type type = method.DeclaringType;
+            // System.Linq.Expressions' object[] delegate thunks in a JIT process without dynamic code
+            if (type == null && !System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported &&
+                method.Name.StartsWith("Thunk", StringComparison.Ordinal)) {
+                return false;
+            }
             if (type != null) {
                 if (type.Assembly == typeof(RubyOps).Assembly || type.Namespace != null && 
                     (type.Namespace.StartsWith("IronRuby.StandardLibrary", StringComparison.Ordinal) ||
@@ -587,19 +592,28 @@ namespace IronRuby.Runtime {
                     return false;
                 }
 
-                // Without dynamic code (NativeAOT) the DLR hands rules whose delegate type has no
-                // native thunk to System.Linq.Expressions' interpreter, and calls methods with value
-                // types in their signature by reflection, which rethrows the callee's exception
-                // through ExceptionDispatchInfo. Neither frame is there in a JIT process.
-                if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported &&
-                    (type == typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo) ||
-                     type.Namespace != null && type.Namespace.StartsWith("System.Linq.Expressions", StringComparison.Ordinal))) {
+                // Without dynamic code (NativeAOT, or IsDynamicCodeSupported=false in a JIT process)
+                // the DLR hands rules whose delegate type has no native thunk to System.Linq.Expressions'
+                // interpreter, whose delegates call it through thunks in System.Dynamic.Utils and by
+                // reflection, and it calls methods with value types in their signature by reflection,
+                // which rethrows the callee's exception through ExceptionDispatchInfo. None of these
+                // frames is there when rules are compiled.
+                if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported && IsNoDynamicCodeHelperFrame(type)) {
                     return false;
                 }
             }
 
             // TODO: check loaded assemblies?
             return true;
+        }
+
+        private static bool IsNoDynamicCodeHelperFrame(Type/*!*/ type) {
+            if (type == typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo) || type == typeof(RuntimeMethodHandle)) {
+                return true;
+            }
+            string ns = type.Namespace;
+            return ns != null && (ns.StartsWith("System.Linq.Expressions", StringComparison.Ordinal) ||
+                ns == "System.Dynamic.Utils" || ns == "System.Reflection");
         }
 
         // TODO: partial trust
