@@ -484,7 +484,7 @@ namespace IronRuby.Builtins {
         private readonly TzFile _file;          // null unless backed by zoneinfo or a POSIX rule
         private readonly TimeZoneInfo _clrZone; // null unless backed by a .NET zone
         private readonly long _fixedOffset;     // seconds east of UTC
-        private readonly string/*!*/ _name;
+        private string _name;                   // null for the machine's zone until it is asked for (see Name)
 
         public static readonly RubyTimeZone/*!*/ Utc = new RubyTimeZone(null, null, 0, "UTC");
 
@@ -537,7 +537,10 @@ namespace IronRuby.Builtins {
         internal static RubyTimeZone/*!*/ Machine() {
             TzFile file = TzFile.TryLoadFile("/etc/localtime");
             if (file != null) {
-                return new RubyTimeZone(file, null, 0, System.TimeZoneInfo.Local.Id);
+                // The name is TimeZoneInfo.Local.Id, but that is looked up only when it is needed (see Name):
+                // TimeZoneInfo.Local parses the zone file again and has ICU format its display name, about
+                // 15 ms of every process that reads the clock, and the zoneinfo abbreviations answer #zone.
+                return new RubyTimeZone(file, null, 0, null);
             }
             return FromTimeZoneInfo(System.TimeZoneInfo.Local);
         }
@@ -601,7 +604,7 @@ namespace IronRuby.Builtins {
                 // .NET has no abbreviations, only names such as "W. Europe Daylight Time"
                 return _clrZone.DaylightName;
             }
-            return _name;
+            return Name;
         }
 
         internal bool IsDaylightSavingTime(long unixSeconds) {
@@ -612,7 +615,7 @@ namespace IronRuby.Builtins {
         }
 
         internal string/*!*/ Name {
-            get { return _name; }
+            get { return _name ?? (_name = System.TimeZoneInfo.Local.Id); }
         }
     }
 }
