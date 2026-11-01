@@ -69,8 +69,11 @@ namespace IronRuby.Compiler.Ast {
 
             MSA.Expression invoke;
             KeywordArgumentSplat keywordSplat = TrailingKeywordSplat();
+            string[] evalParameters;
             if (keywordSplat != null) {
                 invoke = TransformKeywordSplatCall(gen, blockArgVariable, keywordSplat);
+            } else if ((evalParameters = EvalParametersEndingInKeywords(gen)) != null) {
+                invoke = TransformEvalKeywordsCall(gen, blockArgVariable, evalParameters);
             } else {
                 invoke = TransformCall(gen, blockArgVariable);
             }
@@ -181,6 +184,43 @@ namespace IronRuby.Compiler.Ast {
             }
 
             return MakeKeywordsCall(gen, blockArgVariable, temps, body, values, splatted, keywordSplat.TransformToArgument(gen));
+        }
+
+        // The name PrismAstBridge.LowerKeywords gives the hidden trailing parameter that a method with
+        // keyword parameters takes the keywords in.
+        private const string KeywordsParameterName = "?kw?";
+
+        /// <summary>
+        /// The parameter names a parameterless `super` in an eval'd string reads its arguments by, when
+        /// the last of them is the hidden keyword parameter; null otherwise.
+        /// </summary>
+        private string[] EvalParametersEndingInKeywords(AstGenerator/*!*/ gen) {
+            if (!HasImplicitArguments || gen.CurrentMethod.Parameters != null || gen.CompilerOptions.TopLevelHasUnsplatParameter) {
+                return null;
+            }
+            string[] names = gen.CompilerOptions.TopLevelParameterNames;
+            return (names != null && names.Length > 0 && names[names.Length - 1] == KeywordsParameterName) ? names : null;
+        }
+
+        /// <summary>
+        /// `eval("super")` in a method with keyword parameters: the parameters are read back by name, and
+        /// the hidden keyword one is passed the way `**` passes a hash - nothing at all when it is empty, a
+        /// copy otherwise - rather than as one more positional argument. When the call passed no keywords
+        /// it holds the method's own empty default, which the parent is not to see. Otherwise it holds the
+        /// keywords as they arrived, so a change the body made to a **rest is not seen here.
+        /// </summary>
+        private MSA.Expression/*!*/ TransformEvalKeywordsCall(AstGenerator/*!*/ gen, MSA.Expression/*!*/ blockArgVariable,
+            string/*!*/[]/*!*/ names) {
+
+            int count = names.Length - 1;
+            var values = new MSA.Expression[count];
+            for (int i = 0; i < count; i++) {
+                values[i] = Methods.GetLocalVariable.OpCall(gen.CurrentScopeVariable, AstUtils.Constant(names[i]));
+            }
+            var keywords = Methods.KeywordSplatArgument.OpCall(gen.CurrentScopeVariable,
+                Methods.GetLocalVariable.OpCall(gen.CurrentScopeVariable, AstUtils.Constant(names[count])));
+            return MakeKeywordsCall(gen, blockArgVariable, new List<MSA.ParameterExpression>(), new List<MSA.Expression>(),
+                values, new bool[count], keywords);
         }
 
         /// <summary>

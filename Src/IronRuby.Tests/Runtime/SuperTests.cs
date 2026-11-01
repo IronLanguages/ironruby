@@ -243,6 +243,39 @@ nil
         }
 
         /// <summary>
+        /// eval("super") in a method with keyword parameters passes the hidden parameter the keywords arrived in as
+        /// `**` would - nothing at all for an empty one - not as one more positional argument. The output is CRuby's.
+        /// </summary>
+        [Options(Prism = true)]
+        public void SuperEvalKeywords1() {
+            TestOutput(@"
+class P
+  def m(h = :none) h end
+  def n(*a, **k) [a, k] end
+  def w(a, h = :none) [a, h] end
+end
+class C < P
+  def m(**kw) eval('super') end
+  def n(**kw) eval('super') end
+  def w(a, **kw) eval('super') end
+end
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+p s(C.new.m), s(C.new.m(x: 1))
+p s(C.new.n), s(C.new.n(x: 1))
+p s(C.new.w(1)), s(C.new.w(1, x: 1))
+", @"
+:none
+[:hash, [:x, 1]]
+[[], [:hash]]
+[[], [:hash, [:x, 1]]]
+[1, :none]
+[1, [:hash, [:x, 1]]]
+");
+        }
+
+        /// <summary>
         /// Calls to super with block and no arguments (was bug in parser/AST).
         /// </summary>
         public void Super2() {
