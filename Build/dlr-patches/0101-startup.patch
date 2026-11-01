@@ -151,10 +151,10 @@ index 0000000..2dcaa39
 +}
 diff --git a/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.ReadyToRun.cs b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.ReadyToRun.cs
 new file mode 100644
-index 0000000..13cb1bf
+index 0000000..1b6af5e
 --- /dev/null
 +++ b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.ReadyToRun.cs
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,153 @@
 +// Licensed to the .NET Foundation under one or more agreements.
 +// The .NET Foundation licenses this file to you under the Apache 2.0 License.
 +// See the LICENSE file in the project root for more information.
@@ -237,6 +237,69 @@ index 0000000..13cb1bf
 +            Root(new FuncCallInstruction<object, object, object, object, object, bool, object>(default(MethodInfo)));
 +            Root(new FuncCallInstruction<object, object, object, object, object, int, object>(default(MethodInfo)));
 +            Root(new FuncCallInstruction<object, object, int, object, object, object, object, object, object, object>(default(MethodInfo)));
++        }
++
++        /// <summary>
++        /// Never called either. A language caches the instructions of its runtime helpers with CacheFunc/CacheAction
++        /// (IronRuby's ReflectionCache does, for some 240 helpers): generic methods of this assembly that the language's
++        /// own ReadyToRun image cannot hold the code of, so each canonical shape the calls use was JIT-compiled. These
++        /// are the shapes IronRuby uses, with object for the reference types.
++        /// </summary>
++        [MethodImpl(MethodImplOptions.NoInlining)]
++        private static void RootCacheInstantiations() {
++            CacheAction<object>(null);
++            CacheAction<int, long>(null);
++            CacheAction<object, object>(null);
++            CacheAction<object, int, int>(null);
++            CacheAction<object, object, int>(null);
++            CacheAction<object, object, object>(null);
++            CacheAction<object, object, object, int>(null);
++            CacheAction<object, object, object, object>(null);
++            CacheAction<object, object, object, object, object>(null);
++            CacheFunc<object>(null);
++            CacheFunc<double, int>(null);
++            CacheFunc<int, object>(null);
++            CacheFunc<long, int>(null);
++            CacheFunc<object, bool>(null);
++            CacheFunc<object, double>(null);
++            CacheFunc<object, int>(null);
++            CacheFunc<object, object>(null);
++            CacheFunc<int, int, object>(null);
++            CacheFunc<int, object, object>(null);
++            CacheFunc<object, bool, bool>(null);
++            CacheFunc<object, int, object>(null);
++            CacheFunc<object, object, bool>(null);
++            CacheFunc<object, object, byte>(null);
++            CacheFunc<object, object, double>(null);
++            CacheFunc<object, object, int>(null);
++            CacheFunc<object, object, long>(null);
++            CacheFunc<object, object, object>(null);
++            CacheFunc<object, object, short>(null);
++            CacheFunc<object, object, uint>(null);
++            CacheFunc<object, int, int, object>(null);
++            CacheFunc<object, int, object, object>(null);
++            CacheFunc<object, object, int, bool>(null);
++            CacheFunc<object, object, int, object>(null);
++            CacheFunc<object, object, object, bool>(null);
++            CacheFunc<object, object, object, object>(null);
++            CacheFunc<object, object, int, bool, bool>(null);
++            CacheFunc<object, object, int, int, object>(null);
++            CacheFunc<object, object, object, bool, bool>(null);
++            CacheFunc<object, object, object, bool, object>(null);
++            CacheFunc<object, object, object, int, bool>(null);
++            CacheFunc<object, object, object, int, object>(null);
++            CacheFunc<object, object, object, object, bool>(null);
++            CacheFunc<object, object, object, object, object>(null);
++            CacheFunc<object, object, object, object, bool, object>(null);
++            CacheFunc<object, object, object, object, int, object>(null);
++            CacheFunc<object, object, object, object, object, object>(null);
++            CacheFunc<object, object, object, object, int, object, object>(null);
++            CacheFunc<object, object, object, object, object, int, object>(null);
++            CacheFunc<object, object, object, object, object, object, object>(null);
++            CacheFunc<object, object, object, object, object, int, object, object>(null);
++            CacheFunc<object, object, object, object, object, object, object, object>(null);
++            CacheFunc<object, object, object, object, object, object, object, object, object>(null);
++            CacheFunc<object, object, int, object, object, object, object, object, object, object>(null);
 +        }
 +
 +        [MethodImpl(MethodImplOptions.NoInlining)]
