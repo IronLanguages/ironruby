@@ -243,6 +243,96 @@ nil
         }
 
         /// <summary>
+        /// The parameterless super of a method whose only keyword parameter is **rest passes the parent the hash the call
+        /// passed while the rest still holds exactly that, and lets go of it as it does: a second super, one in a loop, an
+        /// eval'd one, and one after the body changed the rest each pass a copy, so whatever a parent keeps or changes -
+        /// a positional Hash parameter, Array#push - is its own. The output is CRuby's.
+        /// </summary>
+        [Options(Prism = true)]
+        public void SuperKeywordRestPassOn1() {
+            TestOutput(@"
+class P
+  def m(h = :none) h[:p] = (h[:p] || 0) + 1 if h.is_a?(Hash); h end
+  def k(**kw) kw[:pk] = 1; kw end
+end
+class C < P
+  def m(**kw) r1 = super; r2 = super; [r1, r2, kw, r1.equal?(r2)] end
+  def k(**kw) r = super; [r, kw] end
+end
+class L < P
+  def m(**kw) (1..2).map { super } end
+end
+class E < P
+  def m(**kw) r = super; [r, eval('super'), r.equal?(eval('super'))] end
+end
+class M < P
+  def m(**kw) kw[:q] = 2; super end
+end
+class AA < Array
+  def push(**kw) super; super; self end
+end
+class A3; def initialize(**o) @o = o end; attr_reader :o; end
+class B3 < A3; def initialize(**o) super end; end
+class C3 < B3; def initialize(**o) super; o[:after] = 1 end; end
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+p s(C.new.m(q: 1)), s(C.new.m)
+p s(C.new.k(q: 1)), s(C.new.k)
+p s(L.new.m(q: 1))
+p s(E.new.m(q: 1))
+p s(M.new.m(q: 1))
+a = AA.new.push(x: 1)
+p a[0].equal?(a[1])
+p s(C3.new(a: 1).o)
+", @"
+[[:hash, [:q, 1], [:p, 1]], [:hash, [:q, 1], [:p, 1]], [:hash, [:q, 1]], false]
+[:none, :none, [:hash], true]
+[[:hash, [:q, 1], [:pk, 1]], [:hash, [:q, 1]]]
+[[:hash, [:pk, 1]], [:hash]]
+[[:hash, [:q, 1], [:p, 1]], [:hash, [:q, 1], [:p, 1]]]
+[[:hash, [:q, 1], [:p, 1]], [:hash, [:q, 1], [:p, 1]], false]
+[:hash, [:q, 2], [:p, 1]]
+false
+[:hash, [:a, 1]]
+");
+        }
+
+        /// <summary>
+        /// A parameterless super after the body set the **rest to something else: with named keywords it has to be a
+        /// Hash still (TypeError otherwise, nil included); a lone **rest goes as `**rest` would, nil passing nothing and
+        /// anything else through #to_hash. MRI's rules, and its output.
+        /// </summary>
+        [Options(Prism = true)]
+        public void SuperParameterlessKeywordRest2() {
+            TestOutput(@"
+class O; def to_hash = {z: 9}; end
+class P; def m(*a, **k) [a, k] end; def n(*a, **k) [a, k] end; def o(*a, **k) [a, k] end; end
+class C < P
+  def m(a, b: 1, **r) r = O.new; super end
+  def n(a, **r) r = O.new; super end
+  def o(a, **r) r = 5; super end
+end
+class D < P
+  def m(a, b: 1, **r) r = nil; super end
+  def n(a, **r) r = nil; super end
+  def o(a, **r) r = {'s' => 1}; super end
+end
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+[C, D].each { |c| %i[m n o].each { |m| p((s(c.new.send(m, 1)) rescue [$!.class, $!.message])) } }
+", @"
+[TypeError, ""wrong argument type O (expected Hash)""]
+[[1], [:hash, [:z, 9]]]
+[TypeError, ""no implicit conversion of Integer into Hash""]
+[TypeError, ""wrong argument type nil (expected Hash)""]
+[[1], [:hash]]
+[[1], [:hash, [""s"", 1]]]
+");
+        }
+
+        /// <summary>
         /// A **rest parameter of a call that passed no keywords takes over the empty default the hidden keyword
         /// parameter was given, instead of copying it: it is still a new, plain hash on every call, in a method,
         /// a proc, a lambda, a define_method block and a signature with optional and rest positionals, and
@@ -294,7 +384,8 @@ false
         /// <summary>
         /// eval("super") in a method with keyword parameters passes the hidden parameter the keywords arrived in as
         /// `**` would - nothing at all for an empty one - not as one more positional argument. Without keywords that is
-        /// the **rest itself (it took the empty default over), so it sees what the body put in it. The output is CRuby's.
+        /// the **rest itself (it took the empty default over), and after a parameterless super passed the keywords on
+        /// it is the **rest too, so both see what the body put in it. The output is CRuby's.
         /// </summary>
         [Options(Prism = true)]
         public void SuperEvalKeywords1() {
@@ -302,12 +393,14 @@ false
 class P
   def m(h = :none) h end
   def n(*a, **k) [a, k] end
+  def q(*a, **k) [a, k] end
   def w(a, h = :none) [a, h] end
 end
 class C < P
   def m(**kw) eval('super') end
   def n(**kw) eval('super') end
   def o(**kw) kw[:y] = 2; eval('super') end
+  def q(**kw) r = super; kw[:y] = 2; [r, eval('super')] end
   def w(a, **kw) eval('super') end
 end
 class P; def o(h = :none) h end; end
@@ -317,6 +410,7 @@ end
 p s(C.new.m), s(C.new.m(x: 1))
 p s(C.new.n), s(C.new.n(x: 1))
 p s(C.new.o)
+p s(C.new.q(x: 1))
 p s(C.new.w(1)), s(C.new.w(1, x: 1))
 ", @"
 :none
@@ -324,6 +418,7 @@ p s(C.new.w(1)), s(C.new.w(1, x: 1))
 [[], [:hash]]
 [[], [:hash, [:x, 1]]]
 [:hash, [:y, 2]]
+[[[], [:hash, [:x, 1]]], [[], [:hash, [:x, 1], [:y, 2]]]]
 [1, :none]
 [1, [:hash, [:x, 1]]]
 ");

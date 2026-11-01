@@ -206,6 +206,35 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// True when <paramref name="other"/> holds the very key and value objects this hash holds, in
+        /// the same order. Compared by reference: false may also mean equal but not the same objects.
+        /// </summary>
+        internal bool HasSameEntries(Hash/*!*/ other) {
+            if (other._liveCount != _liveCount) {
+                return false;
+            }
+            Entry[] a = _entries, b = other._entries;
+            int i = _start, n = _count;
+            int j = other._start, m = other._count;
+            while (true) {
+                while (i < n && a[i].Next == TombstoneNext) {
+                    i++;
+                }
+                while (j < m && b[j].Next == TombstoneNext) {
+                    j++;
+                }
+                if (i >= n || j >= m) {
+                    return i >= n && j >= m;
+                }
+                if (a[i].Key != b[j].Key || a[i].Value != b[j].Value) {
+                    return false;
+                }
+                i++;
+                j++;
+            }
+        }
+
+        /// <summary>
         /// The value stored under <paramref name="key"/>, which must be a key that is equal only to
         /// itself (a Symbol). Entry <paramref name="hint"/> is tried first: callers mostly pass
         /// keywords in the order they are declared in.

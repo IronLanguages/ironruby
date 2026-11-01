@@ -526,6 +526,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _MatchLastInputLine;
         public static MethodInfo/*!*/ MatchString { get { return _MatchString ?? (_MatchString = CallInstruction.CacheFunc<IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, IronRuby.Runtime.RubyScope, System.Object>(RubyOps.MatchString)); } }
         private static MethodInfo _MatchString;
+        public static MethodInfo/*!*/ MergeKeywordHash { get { return _MergeKeywordHash ?? (_MergeKeywordHash = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>(RubyOps.MergeKeywordHash)); } }
+        private static MethodInfo _MergeKeywordHash;
         public static MethodInfo/*!*/ MergeKeywordSplat { get { return _MergeKeywordSplat ?? (_MergeKeywordSplat = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>(RubyOps.MergeKeywordSplat)); } }
         private static MethodInfo _MergeKeywordSplat;
         public static MethodInfo/*!*/ MethodBreak { get { return _MethodBreak ?? (_MethodBreak = CallInstruction.CacheAction<System.Object>(RubyOps.MethodBreak)); } }
@@ -552,6 +554,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ObjectToMutableString;
         public static MethodInfo/*!*/ ObjectToString { get { return _ObjectToString ?? (_ObjectToString = CallInstruction.CacheFunc<IronRuby.Runtime.IRubyObject, System.String>(RubyOps.ObjectToString)); } }
         private static MethodInfo _ObjectToString;
+        public static MethodInfo/*!*/ PassOnKeywordRest { get { return _PassOnKeywordRest ?? (_PassOnKeywordRest = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.Object, IronRuby.Builtins.Hash>(RubyOps.PassOnKeywordRest)); } }
+        private static MethodInfo _PassOnKeywordRest;
         public static MethodInfo/*!*/ PopKeywordArguments { get { return _PopKeywordArguments ?? (_PopKeywordArguments = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.Hash>(RubyOps.PopKeywordArguments)); } }
         private static MethodInfo _PopKeywordArguments;
         public static MethodInfo/*!*/ PrintInteractiveResult { get { return _PrintInteractiveResult ?? (_PrintInteractiveResult = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString>(RubyOps.PrintInteractiveResult)); } }

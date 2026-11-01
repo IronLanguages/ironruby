@@ -1706,6 +1706,19 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// <see cref="MergeKeywordSplat"/> for a <paramref name="splatted"/> that has to be a Hash - nil
+        /// included, anything else raises TypeError - and a <paramref name="keywords"/> that is one: what
+        /// the parameterless super of `def m(k: 1, **rest)` does with rest (KeywordSplatMerge.HashOnly).
+        /// </summary>
+        [Emitted]
+        public static object/*!*/ MergeKeywordHash(RubyScope/*!*/ scope, object keywords, object splatted) {
+            if (!(splatted is Hash)) {
+                throw RubyExceptions.CreateUnexpectedTypeError(scope.RubyContext, splatted, "Hash");
+            }
+            return MergeKeywordSplat(scope, keywords, splatted);
+        }
+
+        /// <summary>
         /// `f(**h)` with h a Hash or nil: what <see cref="SplatKeywordHash"/> makes of it. Null for
         /// anything else, which the call site first converts with #to_hash (by way of Hash#merge).
         /// </summary>
@@ -1759,6 +1772,26 @@ namespace IronRuby.Runtime {
                 copy.IsKeywordArguments = true;
             }
             return copy;
+        }
+
+        /// <summary>
+        /// The `**rest' a parameterless `super' passes in `def m(a, **rest)' (see KeywordArgumentSplat.PassingOn):
+        /// <see cref="KeywordSplatArgument"/> of <paramref name="rest"/>, except that while rest still holds the
+        /// very entries the call passed - the usual case - the hash the call passed them in,
+        /// <paramref name="keywords"/>, is passed on instead of a copy. That hash is the call's own (see
+        /// <see cref="ClearKeywordArguments"/>), and the method has bound its parameters from it and stops
+        /// holding it as it passes it on, so the parent may keep it or change it. Not when it is rest itself -
+        /// the empty default rest took over (<see cref="MakeKeywordRest"/>), or a hash the method already
+        /// passed on.
+        /// </summary>
+        [Emitted]
+        public static Hash PassOnKeywordRest(RubyScope/*!*/ scope, object rest, object keywords) {
+            var given = keywords as Hash;
+            var hash = rest as Hash;
+            if (given != null && hash != null && given != hash && given.IsKeywordArguments && given.HasSameEntries(hash)) {
+                return (given.Count > 0) ? given : null;
+            }
+            return KeywordSplatArgument(scope, rest);
         }
 
         [Emitted]

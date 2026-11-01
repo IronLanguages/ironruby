@@ -47,6 +47,10 @@ namespace IronRuby.Compiler.Ast {
         // when h is neither a Hash nor nil - `{}.merge(temporary)`, which applies #to_hash.
         private readonly Expression _converted;
 
+        // The hidden keyword parameter of the method whose parameterless `super' this splats the
+        // **rest of (see PassingOn).
+        private readonly LocalVariable _keywords;
+
         public KeywordArgumentSplat(Expression/*!*/ hash)
             : base(hash) {
         }
@@ -60,6 +64,23 @@ namespace IronRuby.Compiler.Ast {
         public KeywordArgumentSplat(Expression/*!*/ hash, Expression/*!*/ converted)
             : base(hash) {
             _converted = converted;
+        }
+
+        private KeywordArgumentSplat(Expression/*!*/ hash, Expression/*!*/ converted, LocalVariable/*!*/ keywords)
+            : this(hash, converted) {
+            _keywords = keywords;
+        }
+
+        /// <summary>
+        /// The `**rest' of `super(a, **rest)', which a parameterless `super' in `def m(a, **rest)' is
+        /// (PrismAstBridge.ZSuperArguments): while rest holds exactly what the call passed, the hash the
+        /// call passed it in - <paramref name="keywords"/>, the hidden parameter - goes to the parent
+        /// instead of a copy (RubyOps.PassOnKeywordRest), as the forwarded hidden parameter always did.
+        /// The method lets go of it once it has passed it on: the parameter is set to rest, so that
+        /// another `super' (a loop, a second one), or an eval'd one, passes a copy of rest instead.
+        /// </summary>
+        internal static KeywordArgumentSplat/*!*/ PassingOn(Expression/*!*/ hash, Expression/*!*/ converted, LocalVariable/*!*/ keywords) {
+            return new KeywordArgumentSplat(hash, converted, keywords);
         }
 
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
@@ -78,6 +99,32 @@ namespace IronRuby.Compiler.Ast {
         /// hash and one without (SuperCall), instead of one splatting what TransformRead makes.
         /// </summary>
         internal MSA.Expression/*!*/ TransformToArgument(AstGenerator/*!*/ gen) {
+            if (_keywords != null) {
+                var rest = Ast.Variable(typeof(object), "#kwrest");
+                var given = Ast.Variable(typeof(object), "#kwgiven");
+                var passed = Ast.Variable(typeof(Hash), "#kwpassed");
+                return Ast.Block(typeof(Hash), new[] { rest, given, passed },
+                    Ast.Assign(rest, AstUtils.Box(Argument.TransformRead(gen))),
+                    Ast.Assign(given, AstUtils.Box(_keywords.TransformRead(gen))),
+                    Ast.Assign(passed, Ast.Condition(
+                        Ast.OrElse(
+                            Ast.ReferenceEqual(rest, AstUtils.Constant(null)),
+                            Ast.TypeIs(rest, typeof(IDictionary<object, object>))
+                        ),
+                        Methods.PassOnKeywordRest.OpCall(gen.CurrentScopeVariable, rest, given),
+                        Methods.KeywordSplatArgument.OpCall(gen.CurrentScopeVariable, AstUtils.Box(_converted.TransformRead(gen))),
+                        typeof(Hash)
+                    )),
+                    Ast.IfThen(
+                        Ast.AndAlso(
+                            Ast.ReferenceNotEqual(passed, AstUtils.Constant(null)),
+                            Ast.ReferenceEqual(passed, given)
+                        ),
+                        _keywords.TransformWrite(gen, rest)
+                    ),
+                    passed
+                );
+            }
             if (_converted != null) {
                 var value = Ast.Variable(typeof(object), "#kwsplat");
                 return Ast.Block(typeof(Hash), new[] { value },

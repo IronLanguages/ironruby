@@ -2003,11 +2003,27 @@ namespace IronRuby.Prism {
         private Arguments _zsuperArguments;
 
         /// <summary>
+        /// Whether every positional parameter has a name <see cref="ZSuperPositionalArguments"/> can
+        /// read it back by: no destructuring, no anonymous `*`.
+        /// </summary>
+        private static bool CanReadBackPositionals(Pm.ParametersNode/*!*/ node) {
+            foreach (var required in node.Requireds) {
+                if (!(required is Pm.RequiredParameterNode)) return false;
+            }
+            if (node.Rest != null && !(node.Rest is Pm.RestParameterNode rest && rest.Name != null)) return false;
+            foreach (var post in node.Posts) {
+                if (!(post is Pm.RequiredParameterNode)) return false;
+            }
+            return true;
+        }
+
+        /// <summary>
         /// The positional parameters of a generally-lowered signature, read back by name.
         /// Returns null if one of them has no name to read it back by, in which case the
         /// original argument list kept aside by the prologue is forwarded instead.
         /// </summary>
         private List<Expression> ZSuperPositionalArguments(Pm.ParametersNode/*!*/ node) {
+            if (!CanReadBackPositionals(node)) return null;
             var result = new List<Expression>();
 
             foreach (var required in node.Requireds) {
@@ -2034,14 +2050,21 @@ namespace IronRuby.Prism {
         }
 
         /// <summary>
-        ///   def m(a, b: 1, **rest); super; end   =>   super(a, **rest.merge({b: b}))
+        ///   def m(a, b: 1, **rest); super; end   =>   super(a, **rest, b: b)
+        ///   def m(a, b: 1); super; end           =>   super(a, b: b)
         ///   def m(a, **rest); super; end         =>   super(a, **rest)
         ///   def m(a, **nil); super; end          =>   super(a)
         /// The keyword values are read at the call site, so a body that reassigns one (or the
         /// rest) passes the new value, as MRI does. Forwarding the hidden trailing hash instead
         /// would pass the keywords as they arrived - and when none did, its `{}` as one more
-        /// positional argument, where MRI's `**` passes nothing. Returns null when the
-        /// positional parameters cannot be read back.
+        /// positional argument, where MRI's `**` passes nothing. The hash of the named keywords
+        /// is the call's own and never empty, so it is passed as it is, with a rest merged into
+        /// it first - which, as in MRI, has to be a Hash still. A lone `**rest` passes nothing
+        /// for an empty hash (SuperCall makes that two plain call sites), and otherwise the hash
+        /// the call passed while rest still holds just that, a copy of rest once it does not
+        /// (KeywordArgumentSplat.PassingOn); a rest set to something else goes through #to_hash.
+        /// None of these adds a local to the method, which every method would carry, super or
+        /// not. Returns null when the positional parameters cannot be read back.
         /// </summary>
         private Arguments ZSuperArguments(Pm.ParametersNode/*!*/ node, List<Expression> positional) {
             if (positional == null) {
@@ -2049,7 +2072,14 @@ namespace IronRuby.Prism {
             }
 
             var span = Span(node);
-            Expression hash = null;
+            var arguments = new List<Expression>(positional);
+
+            Expression rest = null;
+            if (node.KeywordRest is Pm.KeywordRestParameterNode keywordRest) {
+                // an anonymous `**` is bound to a hidden local
+                rest = CurrentScope.ResolveOrAddVariable(keywordRest.Name ?? AnonymousKeywordRestName, span);
+            }
+
             if (node.Keywords.Length > 0) {
                 var maplets = new List<Maplet>();
                 foreach (var keyword in node.Keywords) {
@@ -2059,20 +2089,27 @@ namespace IronRuby.Prism {
                     maplets.Add(new Maplet(new SymbolLiteral(name, _encoding, span),
                         CurrentScope.ResolveOrAddVariable(name, span), span));
                 }
-                hash = new HashConstructor(maplets.ToArray(), span);
-            }
-
-            if (node.KeywordRest is Pm.KeywordRestParameterNode keywordRest) {
-                // MRI orders the forwarded hash rest-first: `def m(b: 1, **rest)` called with
-                // z: 2 supers with {z: 2, b: 1}. An anonymous `**` is bound to a hidden local.
-                Expression rest = CurrentScope.ResolveOrAddVariable(keywordRest.Name ?? AnonymousKeywordRestName, span);
-                hash = (hash != null) ? new MethodCall(rest, "merge", new Arguments(hash), span) : rest;
-            }
-
-            var arguments = new List<Expression>(positional);
-            if (hash != null) {
-                // `**` passes nothing at all for an empty hash, and a copy of any other
-                arguments.Add(new KeywordArgumentSplat(hash));
+                Expression hash = new HashConstructor(maplets.ToArray(), true, span);
+                if (rest != null) {
+                    // MRI orders the forwarded hash rest-first: `def m(b: 1, **rest)` called with
+                    // z: 2 supers with {z: 2, b: 1}. It also wants rest to be a Hash still (TypeError
+                    // otherwise, nil included), so there is no #to_hash fallback and no temporary for
+                    // one: a temporary is one more local in every such method, super or not.
+                    hash = KeywordSplatMerge.HashOnly(
+                        KeywordSplatMerge.HashOnly(new HashConstructor(new Maplet[0], true, span), rest, span), hash, span);
+                }
+                arguments.Add(hash);
+            } else if (rest != null) {
+                // A lone **rest goes the way `**rest` does - nil passes nothing, anything else but a
+                // Hash through #to_hash, as in MRI - and that fallback reads the local again rather
+                // than a temporary.
+                var converted = new MethodCall(new HashConstructor(new Maplet[0], true, span), "merge",
+                    new Arguments(new OrExpression(rest, new HashConstructor(new Maplet[0], span), span)), span);
+                // the hidden parameter the keywords arrived in (LowerKeywords, LowerGeneralParameters)
+                var keywords = CurrentScope.ResolveVariable("?kw?");
+                arguments.Add(keywords != null
+                    ? KeywordArgumentSplat.PassingOn(rest, converted, keywords)
+                    : new KeywordArgumentSplat(rest, converted));
             }
             return new Arguments(arguments.ToArray());
         }
@@ -2315,8 +2352,10 @@ namespace IronRuby.Prism {
             // arrived - trailing keyword hash included - and let SuperCall splat that.
             // Only a method needs it: a `super` in a block forwards the arguments of the
             // method the block is in (SuperCall reads gen.CurrentMethod.Parameters).
+            // A signature whose positionals can all be read back by name has `super` rebuilt from
+            // them instead (ZSuperArguments, below), and does not pay for this copy on every call.
             LocalVariable superArgs = null;
-            if (isMethod) {
+            if (isMethod && !CanReadBackPositionals(node)) {
                 superArgs = CurrentScope.AddVariable("?superargs?", span);
                 statements.Add(new SimpleAssignmentExpression(superArgs,
                     SplatParameterRead.Copy(args, span), null, span));
@@ -2391,6 +2430,7 @@ namespace IronRuby.Prism {
 
             if (isMethod) {
                 _zsuperArguments = ZSuperArguments(node, ZSuperPositionalArguments(node));
+                System.Diagnostics.Debug.Assert((_zsuperArguments == null) == (superArgs != null));
             }
 
             LocalVariable blockParam = null;
