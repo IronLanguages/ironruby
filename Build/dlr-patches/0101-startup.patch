@@ -32,6 +32,60 @@ index e3f1d76..327fda6 100644
              }
  
              return true;
+diff --git a/src/core/Microsoft.Dynamic/Generation/CompilerHelpers.cs b/src/core/Microsoft.Dynamic/Generation/CompilerHelpers.cs
+index 2d6935f..90ca8f1 100644
+--- a/src/core/Microsoft.Dynamic/Generation/CompilerHelpers.cs
++++ b/src/core/Microsoft.Dynamic/Generation/CompilerHelpers.cs
+@@ -388,11 +388,47 @@ namespace Microsoft.Scripting.Generation {
+         #region Type Conversions
+ 
+         public static MethodInfo GetImplicitConverter(Type fromType, Type toType) {
+-            return GetConverter(fromType, fromType, toType, "op_Implicit") ?? GetConverter(toType, fromType, toType, "op_Implicit");
++            return GetCachedConverter(fromType, toType, false);
+         }
+ 
+         public static MethodInfo GetExplicitConverter(Type fromType, Type toType) {
+-            return GetConverter(fromType, fromType, toType, "op_Explicit") ?? GetConverter(toType, fromType, toType, "op_Explicit");
++            return GetCachedConverter(fromType, toType, true);
++        }
++
++        // (from, to, explicit) -> the user-defined conversion operator, or null for none (almost every pair).
++        // The overload resolver asks about each argument/parameter type pair it cannot assign, again for every
++        // call site it binds, and each answer walks both types' hierarchies for op_Implicit/op_Explicit through
++        // four reflection queries per ancestor (methods, properties, events, fields).
++        // (Keyed by reference types only: a value-type key would be one more generic instantiation to JIT.)
++        private static readonly Dictionary<Type, Dictionary<Type, MethodInfo>> _implicitConverters = new(), _explicitConverters = new();
++
++        private static MethodInfo GetCachedConverter(Type fromType, Type toType, bool isExplicit) {
++            if (fromType.IsCollectible || toType.IsCollectible) {
++                return FindConverter(fromType, toType, isExplicit);
++            }
++
++            var cache = isExplicit ? _explicitConverters : _implicitConverters;
++            Dictionary<Type, MethodInfo> byTarget;
++            MethodInfo result;
++            lock (cache) {
++                if (cache.TryGetValue(fromType, out byTarget) && byTarget.TryGetValue(toType, out result)) {
++                    return result;
++                }
++            }
++
++            result = FindConverter(fromType, toType, isExplicit);
++            lock (cache) {
++                if (!cache.TryGetValue(fromType, out byTarget)) {
++                    cache[fromType] = byTarget = new Dictionary<Type, MethodInfo>();
++                }
++                byTarget[toType] = result;
++            }
++            return result;
++        }
++
++        private static MethodInfo FindConverter(Type fromType, Type toType, bool isExplicit) {
++            string name = isExplicit ? "op_Explicit" : "op_Implicit";
++            return GetConverter(fromType, fromType, toType, name) ?? GetConverter(toType, fromType, toType, name);
+         }
+ 
+         private static MethodInfo GetConverter(Type type, Type fromType, Type toType, string opMethodName) {
 diff --git a/src/core/Microsoft.Dynamic/Hosting/Shell/ConsoleHostOptionsParser.cs b/src/core/Microsoft.Dynamic/Hosting/Shell/ConsoleHostOptionsParser.cs
 index d6f82e2..294b018 100644
 --- a/src/core/Microsoft.Dynamic/Hosting/Shell/ConsoleHostOptionsParser.cs
