@@ -1185,7 +1185,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if ((bindingFlags & BindingFlags.Instance) != 0) {
+            if ((bindingFlags & BindingFlags.Instance) != 0 && HasClrExtensionMethods()) {
                 var extensions = GetClrExtensionMethods(type, memberName);
                 var altExtensions = (altName) != null ? GetClrExtensionMethods(type, altMemberName) : Enumerable.Empty<ExtensionMethodInfo>();
 
@@ -1204,6 +1204,20 @@ namespace IronRuby.Builtins {
                 return Enumerable.Empty<MethodInfo>();
             }
             return _clrMethodsByName.GetMembers(type, name, inherited).WithBindingFlags(bindingFlags);
+        }
+
+        // Whether this class or a module it mixes in has had CLR extension methods added (using_clr_extensions).
+        // Without any, the LINQ over ExtensionMethodInfo - a struct, so its iterator code is JIT-compiled - is skipped.
+        private bool HasClrExtensionMethods() {
+            if (_extensionMethods != null) {
+                return true;
+            }
+            foreach (var mixin in Mixins) {
+                if (mixin._extensionMethods != null) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private IEnumerable<ExtensionMethodInfo>/*!*/ GetClrExtensionMethods(Type/*!*/ type, string/*!*/ name) {
