@@ -206,7 +206,8 @@ namespace IronRuby.Compiler.Ast {
         /// `eval("super")` in a method with keyword parameters: the parameters are read back by name, and
         /// the hidden keyword one is passed the way `**` passes a hash - nothing at all when it is empty, a
         /// copy otherwise - rather than as one more positional argument. When the call passed no keywords
-        /// it holds the method's own empty default, which the parent is not to see. Otherwise it holds the
+        /// it holds the method's own empty default, or the **rest parameter that took that default over
+        /// (RubyOps.MakeKeywordRest), neither of which the parent is to see. Otherwise it holds the
         /// keywords as they arrived, so a change the body made to a **rest is not seen here.
         /// </summary>
         private MSA.Expression/*!*/ TransformEvalKeywordsCall(AstGenerator/*!*/ gen, MSA.Expression/*!*/ blockArgVariable,

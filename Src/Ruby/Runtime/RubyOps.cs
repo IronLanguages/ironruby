@@ -1834,6 +1834,19 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// The default of a method's or block's hidden keyword parameter: the call passed no keywords.
+        /// Like <see cref="MakeKeywordArgumentsHash0"/>, and marked as a hash no one else holds
+        /// (Hash.IsOmittedKeywords), which a **rest parameter then takes over (<see cref="MakeKeywordRest"/>).
+        /// </summary>
+        [Emitted]
+        public static Hash/*!*/ MakeOmittedKeywordArguments(RubyScope/*!*/ scope) {
+            var result = MakeHash0(scope);
+            result.IsKeywordArguments = true;
+            result.IsOmittedKeywords = true;
+            return result;
+        }
+
         // `f(a: x)`, `f(a: x, b: y)` and `f(a: x, b: y, c: z)` with Symbol literals for keys, the
         // usual keyword call: no item array to allocate, and none of the conversions
         // SetHashElement applies to a String or nil key. A repeated key keeps the last value, as
@@ -1924,7 +1937,9 @@ namespace IronRuby.Runtime {
             if (last >= 0 && IsKeywordArgumentsHash(list[last])) {
                 return (Hash)list.TakeLast();
             }
-            return MakeHash0(scope);
+            var omitted = MakeHash0(scope);
+            omitted.IsOmittedKeywords = true;
+            return omitted;
         }
 
         /// <summary>A block's single Array argument, which it auto-splats.</summary>
@@ -1985,11 +2000,19 @@ namespace IronRuby.Runtime {
 
         /// <summary>
         /// The **rest parameter: a new hash with whatever the call passed beyond the declared
-        /// <paramref name="names"/>. It is a copy, so the method may change it freely.
+        /// <paramref name="names"/>. It is a copy, so the method may change it freely. When the call
+        /// passed no keywords at all, the empty default the method made for itself is that new hash
+        /// already: nobody else holds it (Hash.IsOmittedKeywords), so it is taken over, not copied.
         /// </summary>
         [Emitted]
         public static Hash/*!*/ MakeKeywordRest(object keywords, RubySymbol/*!*/[]/*!*/ names) {
-            return ((Hash)keywords).CopyWithoutKeywords(names);
+            var hash = (Hash)keywords;
+            if (hash.IsOmittedKeywords && hash.Count == 0) {
+                hash.IsOmittedKeywords = false;
+                hash.IsKeywordArguments = false;
+                return hash;
+            }
+            return hash.CopyWithoutKeywords(names);
         }
 
         /// <summary>

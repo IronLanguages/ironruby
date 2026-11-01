@@ -243,8 +243,58 @@ nil
         }
 
         /// <summary>
+        /// A **rest parameter of a call that passed no keywords takes over the empty default the hidden keyword
+        /// parameter was given, instead of copying it: it is still a new, plain hash on every call, in a method,
+        /// a proc, a lambda, a define_method block and a signature with optional and rest positionals, and
+        /// passing it on positionally passes a Hash, not keywords. The output is CRuby's.
+        /// </summary>
+        [Options(Prism = true)]
+        public void KeywordRestOmitted1() {
+            TestOutput(@"
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+def r(**kw) kw end
+a = r; a[:a] = 1
+p s(r), a.equal?(r), s(a)
+def t2(*a, **k) [a, k] end
+def pass2(**kw) t2(kw) end
+def pass3(**kw) t2(**kw) end
+p s(pass2), s(pass3), s(pass2(q: 1)), s(pass3(q: 1))
+pr = proc { |**kw| kw[:z] = 1; kw }
+x = pr.call; y = pr.call
+p s(x), x.equal?(y)
+l = lambda { |a, **kw| kw[a] = a; kw }
+p s(l.(1)), s(l.(2)), s(l.(3, b: 4))
+def g(a, b = 2, *c, **kw) kw[:q] = a; kw end
+p s(g(1)), s(g(2)), s(g(3, z: 1))
+class D; define_method(:dm) { |**kw| kw[:d] = 1; kw }; end
+p s(D.new.dm), s(D.new.dm)
+", @"
+[:hash]
+false
+[:hash, [:a, 1]]
+[[[:hash]], [:hash]]
+[[], [:hash]]
+[[[:hash, [:q, 1]]], [:hash]]
+[[], [:hash, [:q, 1]]]
+[:hash, [:z, 1]]
+false
+[:hash, [1, 1]]
+[:hash, [2, 2]]
+[:hash, [:b, 4], [3, 3]]
+[:hash, [:q, 1]]
+[:hash, [:q, 2]]
+[:hash, [:z, 1], [:q, 3]]
+[:hash, [:d, 1]]
+[:hash, [:d, 1]]
+");
+        }
+
+        /// <summary>
         /// eval("super") in a method with keyword parameters passes the hidden parameter the keywords arrived in as
-        /// `**` would - nothing at all for an empty one - not as one more positional argument. The output is CRuby's.
+        /// `**` would - nothing at all for an empty one - not as one more positional argument. Without keywords that is
+        /// the **rest itself (it took the empty default over), so it sees what the body put in it. The output is CRuby's.
         /// </summary>
         [Options(Prism = true)]
         public void SuperEvalKeywords1() {
@@ -257,19 +307,23 @@ end
 class C < P
   def m(**kw) eval('super') end
   def n(**kw) eval('super') end
+  def o(**kw) kw[:y] = 2; eval('super') end
   def w(a, **kw) eval('super') end
 end
+class P; def o(h = :none) h end; end
 def s(x)
   x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
 end
 p s(C.new.m), s(C.new.m(x: 1))
 p s(C.new.n), s(C.new.n(x: 1))
+p s(C.new.o)
 p s(C.new.w(1)), s(C.new.w(1, x: 1))
 ", @"
 :none
 [:hash, [:x, 1]]
 [[], [:hash]]
 [[], [:hash, [:x, 1]]]
+[:hash, [:y, 2]]
 [1, :none]
 [1, [:hash, [:x, 1]]]
 ");

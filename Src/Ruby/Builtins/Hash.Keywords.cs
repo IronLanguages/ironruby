@@ -77,13 +77,17 @@ namespace IronRuby.Builtins {
         /// compared by identity (see <see cref="TryGetValueByIdentity"/>): a **rest parameter.
         /// </summary>
         internal Hash/*!*/ CopyWithoutKeywords(object/*!*/[]/*!*/ names) {
+            Entry[] entries = _entries;
+            int count = _count;
+            if (AllKeysAreSymbols()) {
+                return CopyUnlinkedWithout(names);
+            }
+
             var result = new Hash(_comparer, _liveCount);
             result._defaultProc = _defaultProc;
             result._defaultValue = DefaultValue;
             result._comparesByIdentity = _comparesByIdentity;
 
-            Entry[] entries = _entries;
-            int count = _count;
             for (int i = _start; i < count; i++) {
                 if (entries[i].Next == TombstoneNext) {
                     continue;
@@ -109,6 +113,57 @@ namespace IronRuby.Builtins {
                 }
             }
             return true;
+        }
+
+        /// <summary>
+        /// <see cref="CopyWithoutKeywords"/> for a hash whose keys are all Symbols: they cannot be
+        /// equal to each other, so the copy takes the entries - hash codes included, the comparer
+        /// being the same - without a bucket array, which the first probe builds
+        /// (LinkPendingBuckets), as a keyword call's own hash is made (<see cref="CreateKeywordArguments"/>).
+        /// A **rest parameter is mostly passed on or read through, so it often never gets one.
+        /// </summary>
+        private Hash/*!*/ CopyUnlinkedWithout(object/*!*/[]/*!*/ names) {
+            var result = new Hash(_comparer, 0);
+            result._defaultProc = _defaultProc;
+            result._defaultValue = DefaultValue;
+            result._comparesByIdentity = _comparesByIdentity;
+
+            int live = _liveCount;
+            if (live == 0) {
+                return result;
+            }
+            int size = GetPrime(live);
+            Entry[] target = new Entry[size];
+            Entry[] entries = _entries;
+            int count = _count;
+            int n = 0;
+            for (int i = _start; i < count; i++) {
+                if (entries[i].Next == TombstoneNext) {
+                    continue;
+                }
+                object key = entries[i].Key;
+                int j = 0;
+                while (j < names.Length && names[j] != key) {
+                    j++;
+                }
+                if (j < names.Length) {
+                    continue;
+                }
+                ref Entry e = ref target[n++];
+                e.HashCode = entries[i].HashCode;
+                e.Next = -1;
+                e.Key = key;
+                e.Value = entries[i].Value;
+            }
+            if (n > 0) {
+                result._entries = target;
+                result._fastModMultiplier = UInt64.MaxValue / (uint)size + 1;
+                result._count = n;
+                result._liveCount = n;
+                result._version++;
+                result._stamp++;
+            }
+            return result;
         }
 
         /// <summary>

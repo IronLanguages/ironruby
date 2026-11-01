@@ -50,6 +50,7 @@ namespace IronRuby.Builtins {
         private const uint IsUntrustedFlag = 4;
         private const uint IsKeywordArgumentsFlag = 8;
         private const uint IsRuby2KeywordsHashFlag = 16;
+        private const uint IsOmittedKeywordsFlag = 32;
 
         private bool _comparesByIdentity;
 
@@ -285,6 +286,17 @@ namespace IronRuby.Builtins {
         public bool IsRuby2KeywordsHash {
             get { return (_flags & IsRuby2KeywordsHashFlag) != 0; }
             set { _flags = (_flags & ~IsRuby2KeywordsHashFlag) | (value ? IsRuby2KeywordsHashFlag : 0); }
+        }
+
+        /// <summary>
+        /// True for the empty hash a method or block made for itself because its caller passed no
+        /// keywords: the default of its hidden keyword parameter (RubyOps.MakeOmittedKeywordArguments).
+        /// Nothing else ever holds it, so a **rest parameter takes it over instead of copying it
+        /// (RubyOps.MakeKeywordRest), which clears this. No copy carries it.
+        /// </summary>
+        internal bool IsOmittedKeywords {
+            get { return (_flags & IsOmittedKeywordsFlag) != 0; }
+            set { _flags = (_flags & ~IsOmittedKeywordsFlag) | (value ? IsOmittedKeywordsFlag : 0); }
         }
 
         void IRubyObjectState.Freeze() {
