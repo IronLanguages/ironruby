@@ -19,6 +19,7 @@
  * Build: cc -O2 -static -o ir-client ir-client.c
  */
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sched.h>
@@ -123,6 +124,23 @@ static void controlling_tty(char *out, size_t size) {
     }
     if (major >= 136 && major <= 143) snprintf(out, size, "/dev/pts/%u", (major - 136) * 256 + minor);
     else out[0] = 0;
+}
+
+/* The first descriptor above 2 that an exec would pass on, or -1. */
+static int inherited_descriptor(void) {
+    DIR *d = opendir("/proc/self/fd");
+    if (!d) return -1;
+    int self = dirfd(d), found = -1;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+        int fd = atoi(e->d_name);
+        if (fd <= 2 || fd == self) continue;
+        int flags = fcntl(fd, F_GETFD);
+        if (flags >= 0 && !(flags & FD_CLOEXEC)) { found = fd; break; }
+    }
+    closedir(d);
+    return found;
 }
 
 /* ---- signals ---- */
@@ -232,6 +250,14 @@ int main(int argc, char **argv) {
 
     for (int fd = 0; fd < 3; fd++) {
         if (fcntl(fd, F_GETFD) < 0) cold("a standard descriptor is closed");
+    }
+    /* A cold `ir` inherits every descriptor not marked close-on-exec (`3<file`, a make jobserver,
+       systemd's LISTEN_FDS); the worker gets 0, 1 and 2, and its own runtime holds the low numbers. */
+    int extra = inherited_descriptor();
+    if (extra >= 0) {
+        char why[64];
+        snprintf(why, sizeof why, "descriptor %d is inherited", extra);
+        cold(why);
     }
 
     sock = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);

@@ -344,7 +344,7 @@ int main(int argc, char **argv) {
 
     int lfd = bind_socket(sock);
     if (log) {
-        logf = fopen(log, "a");
+        logf = fopen(log, "ae");       /* close-on-exec: workers get the log as stderr only */
     } else if (!detach) {
         logf = stderr;
     }

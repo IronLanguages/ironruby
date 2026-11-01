@@ -132,6 +132,8 @@ CASES = [
     ('big output', ['-e', '200000.times { |i| puts i }']),
     ('system/backtick/spawn', ['-e', 'system("echo hi"); p $?.exitstatus; puts `echo there`; pid = spawn("sh", "-c", "exit 5"); Process.wait(pid); p $?.exitstatus; p system("exit 2"), $?.exitstatus']),
     ('child stdin', ['-e', 'system("cat")'], {'stdin': b'piped to the child\n'}),
+    ('inherited fd', ['-e', 'IO.for_fd(5, "w").puts("to fd 5") rescue p $!.class'], {'passfd': 5, 'expect': 'cold'}),
+    ('no extra fds', ['-e', 'p (3..20).count { |fd| IO.for_fd(fd, autoclose: false) rescue nil }']),
     ('exec', ['-e', 'puts "before"; $stdout.flush; exec "sh", "-c", "echo from exec; exit 6"']),
     ('fork', ['-e', 'begin; pid = fork { puts "child" }; Process.wait(pid); puts "parent"; rescue NotImplementedError => e; p e.class; end']),
     ('IO.popen', ['-e', 'IO.popen(["sh", "-c", "echo popen; echo err >&2"]) { |io| p io.read }']),
@@ -191,8 +193,16 @@ def run(argv, opts, warm):
     if opts.get('pidcheck'):
         # the program compares against the pid ir.sh runs as: sh -c 'exec ...' keeps it
         cmd = ['sh', '-c', 'HARNESS_CHILD=$$ exec "$0" "$@"', IR] + argv
+    pass_fds = ()
+    if 'passfd' in opts:
+        r, w = os.pipe()
+        os.dup2(w, opts['passfd'])
+        os.close(w)
+        pass_fds = (opts['passfd'],)
     p = subprocess.Popen(cmd, stdin=stdin, stdout=stdout, stderr=stderr, env=env,
-                         cwd=opts.get('cwd', IR_ROOT), preexec_fn=pre)
+                         cwd=opts.get('cwd', IR_ROOT), preexec_fn=pre, pass_fds=pass_fds)
+    if pass_fds:
+        os.close(opts['passfd'])
     if 'kill' in opts:
         # wait for "ready", then signal what the parent started
         line = p.stdout.readline()
@@ -202,6 +212,9 @@ def run(argv, opts, warm):
         out = line + out
     else:
         out, err = p.communicate(stdin_data if stdin_data else None, timeout=120)
+    if pass_fds:
+        out = (out or b'') + b'[fd] ' + os.read(r, 4096)
+        os.close(r)
     if out_file:
         out_file.seek(0)
         out = out_file.read()
