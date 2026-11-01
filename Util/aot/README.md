@@ -327,6 +327,65 @@ null in that case when dynamic code is unsupported. The binder then builds an or
 (interpreted) rule. Calls with `int` arguments therefore lose the fast dispatcher. Normal
 builds are unaffected, because the check is behind `!IsDynamicCodeSupported`.
 
+## D. The startup library (`IronRuby.Startup.dll`)
+
+Part A's compiler, aimed at `ir`'s own startup: `IronRuby.Aot startup` compiles the Ruby files
+every `ir` process loads (`startup-files.txt`: ruby4.rb, rbconfig, gem_prelude, rubygems and the
+rest of `ir -e 1`, plus `rubygems/path_support.rb` and a few commonly required libraries such as
+json, set, pp, optparse, fileutils, time) into a library that sits next to IronRuby.dll in the
+R2R host's directory. Requiring one of its files then runs the compiled top level instead of
+parsing, bridging, transforming and LightCompiling the source.
+
+```sh
+dotnet build Src/Console/Ruby.Console.csproj -c Release -p:DlrSourceDir=... # publishes the R2R host
+DLR_SOURCE_DIR=... Util/aot/build-startup.sh   # builds IronRuby.Aot (net10.0) and installs the library
+IR_CONFIG=R2R ./ir.sh -e 1                     # uses it; IR_STARTUP_DLL=none turns it off
+IR_STARTUP_DLL_TRACE=1 IR_CONFIG=R2R ./ir.sh -e 1   # what it registered, what is still parsed
+```
+
+How it stays correct:
+
+- The library records the MVIDs of the host's IronRuby, Microsoft.Dynamic and
+  Microsoft.Scripting, and is ignored as a whole if they differ (rerun build-startup.sh after
+  each host build). It records a hash of each file's source, checked when the file is first
+  required; an edited file is compiled from source.
+- It is only used by the first runtime of a process (its static fields hold that runtime's
+  objects), and not under `-d`, coverage, profiling, tracing or frozen-string-literal options,
+  nor for `load(file, true)`.
+- There is no PDB: the compiler records each sequence point's IL offset and the library carries
+  the line table (`RubyStartupIndex.Lines()`), which the backtrace builder reads. Frame labels
+  are worked out from the qualified lexical nesting (`Gem::Requirement.parse`). Backtraces
+  through rubygems code match the interpreted ones.
+- `const_set`/`autoload` called from precompiled top-level code record no caller location
+  (as for C-defined constants in MRI): a CLR stack walk per call cost 50 ms over the
+  prelude's `const_set` loops.
+- Each file's code is a class of its own (`RubyStartup<i>`), loaded when the file first runs.
+
+What it does not change: call sites. Every dynamic site of the saved code is a static
+`CallSite<T>` made with the runtime's binder, and binds on first execution exactly as in
+interpreted code (1,948 binds and 729 rule builds for `ir -e 1`, against 1,922 and 667).
+Binding is now the largest part of the prelude: about 240 ms inclusive, of which 75-105 ms is
+LightCompiling the 729 rules. Rules are not one-shot: only 156 run once, 215 two to five
+times, 234 six to 31 times and 122 often enough to be compiled to IL.
+
+Measured on d96bab0e + this, R2R host, bench-lock, best/median of 21 (`-e 1`) or 15:
+
+| | base | library |
+|---|---|---|
+| `ir -e 1` | 0.848 / 0.906 s, 116 MB | 0.752 / 0.795 s, 122 MB |
+| `-e 'require "set"; require "json"'` | 1.073 / 1.127 s, 121 MB | 0.884 / 0.982 s, 124 MB |
+| `Util/bench/bench.rb --list` | 1.033 / 1.268 s, 123 MB | 0.918 / 1.044 s, 126 MB |
+
+The library is 30 MB (ReadyToRun) for 46 files. spec/language passes with it (80 files, 2934
+examples, 5563 expectations, 0 failures, 0 errors). Steady state over Util/bench is unchanged
+except `enum_next_gen` (10-20 % slower) and `fiber_switch` (about 5 %), whose hot paths run
+through precompiled prelude methods; `-X:JIT` cannot specialize a precompiled method (it has
+no AST body), though the methods on those paths take blocks and are not eligible anyway.
+
+Known differences: a `require` LoadError's backtrace lacks one `Kernel#require` frame (the
+library-method frame is dropped by the backtrace builder; the IL and R2R builds already
+disagree on that frame without the library).
+
 ## Limits and next steps (rough effort)
 
 - **Next: ReadyToRun follow-up.** `--r2r` exists and is measured above (3.75 s / 1.50 s CPU
@@ -371,3 +430,4 @@ glob does not apply it to normal builds.
 | `NativeProgram/` | the part C build |
 | `samples/` | the Ruby samples |
 | `build-samples.sh`, `measure.py` | reproduction and measurement scripts |
+| `build-startup.sh`, `startup-files.txt`, `IronRuby.Aot/StartupCommand.cs` | part D, the startup library; its load-time side is `Src/Ruby/Runtime/PrecompiledCode.cs` |
