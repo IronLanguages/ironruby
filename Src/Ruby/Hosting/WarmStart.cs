@@ -98,7 +98,12 @@ namespace IronRuby.Hosting {
         }
 
         internal static void Log(string message) {
-            if (_debug) {
+            Log(message, false);
+        }
+
+        /// <summary>To the broker's log; always when <paramref name="always"/>, otherwise only with IR_WARM_DEBUG.</summary>
+        internal static void Log(string message, bool always) {
+            if (_debug || always) {
                 try {
                     var bytes = Encoding.UTF8.GetBytes(String.Format("[warm {0} +{1}ms] {2}\n", Environment.ProcessId, _clock.ElapsedMilliseconds, message));
                     write(_logFd, bytes, (IntPtr)bytes.Length);
@@ -122,9 +127,16 @@ namespace IronRuby.Hosting {
                 // pick the binary (checked separately) or configure warm start itself
                 return false;
             }
-            return name.StartsWith("RUBY", StringComparison.Ordinal) ||      // RUBYOPT, RUBYLIB, RUBYPATH, RUBY_*
-                name.StartsWith("GEM_", StringComparison.Ordinal) ||          // GEM_HOME, GEM_PATH, GEM_SPEC_CACHE ...
+            // Not RUBYPATH: only -S reads it, as the request's command line is parsed (and ir.sh prepends
+            // to it, so a program that runs ir.sh again would always start cold). Not RUBY_* either:
+            // IronRuby reads none of MRI's RUBY_GC_*, RUBY_THREAD_* ..., and mspec passes RUBY_EXE and
+            // RUBY_FLAGS to every ruby it starts.
+            return name == "RUBYOPT" || name == "RUBYLIB" ||
+                name.StartsWith("RUBYGEMS_", StringComparison.Ordinal) ||     // RUBYGEMS_GEMDEPS ...
+                name.StartsWith("GEM", StringComparison.Ordinal) ||           // GEM_HOME, GEM_PATH, GEM_SPEC_CACHE, GEMRC ...
                 name.StartsWith("BUNDLE", StringComparison.Ordinal) ||
+                name.StartsWith("LD_", StringComparison.Ordinal) ||           // the dynamic loader reads LD_PRELOAD, LD_LIBRARY_PATH ... once
+                name.StartsWith("MALLOC_", StringComparison.Ordinal) || name == "GLIBC_TUNABLES" ||
                 name.StartsWith("DOTNET_", StringComparison.Ordinal) ||       // CLR knobs, read once at CLR startup
                 name.StartsWith("COMPlus_", StringComparison.Ordinal) ||
                 name.StartsWith("CORECLR_", StringComparison.Ordinal) ||
@@ -421,7 +433,8 @@ namespace IronRuby.Hosting {
         }
 
         internal static void Decline(Request/*!*/ request, string/*!*/ reason) {
-            Log("declined: " + reason);
+            // why a client went cold, for whoever looks after the pool (and clients say so with IR_SERVER_VERBOSE)
+            Log("declined: " + reason, true);
             var text = Encoding.UTF8.GetBytes(reason);
             var message = new byte[5 + text.Length];
             message[0] = (byte)'F';
