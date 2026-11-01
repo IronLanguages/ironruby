@@ -285,6 +285,7 @@ namespace IronRuby.Hosting {
             public byte[] Affinity;
             public string Cwd;
             public string[] Argv;
+            public string TerminalPath;       // the client's controlling terminal (ttyname of /dev/tty), or empty
             public readonly Dictionary<string, string> Environment = new Dictionary<string, string>(StringComparer.Ordinal);
             public bool InvalidText;
             public int[] Descriptors;
@@ -358,7 +359,7 @@ namespace IronRuby.Hosting {
             }
 
             var request = new Request { Descriptors = fds };
-            var reader = new Reader(buffer, 8);
+            var reader = new Reader(buffer, 8, total);
             request.ClientPid = reader.Int32();
             request.ClientParentPid = reader.Int32();
             request.Umask = reader.Int32();
@@ -383,17 +384,24 @@ namespace IronRuby.Hosting {
                     request.Environment.Add(entry.Substring(0, eq), entry.Substring(eq + 1));
                 }
             }
+            request.TerminalPath = reader.AtEnd ? "" : reader.Text(ref request.InvalidText);
             return request;
         }
 
         private sealed class Reader {
             private static readonly Encoding _strict = new UTF8Encoding(false, true);
             private readonly byte[] _data;
+            private readonly int _end;
             private int _position;
 
-            public Reader(byte[] data, int position) {
+            public Reader(byte[] data, int position, int end) {
                 _data = data;
                 _position = position;
+                _end = end;
+            }
+
+            public bool AtEnd {
+                get { return _position >= _end; }
             }
 
             public int Int32() {
@@ -513,6 +521,13 @@ namespace IronRuby.Hosting {
 
             // The program's parent is the client's: Process.ppid must not name the broker.
             RubyContext.ReportedParentProcessId = request.ClientParentPid;
+
+            // This process has no controlling terminal, so /dev/tty does not open; IO.console
+            // (io/console.rb) opens the client's terminal by its name instead.
+            object io;
+            if (!String.IsNullOrEmpty(request.TerminalPath) && context.ObjectClass.TryGetConstant(null, "IO", out io)) {
+                context.SetInstanceVariable(io, "@__warm_console__", MutableString.Create(request.TerminalPath, RubyEncoding.UTF8));
+            }
 
             ResetConsole(context.DomainManager.SharedIO);
             StartConnectionWatch();

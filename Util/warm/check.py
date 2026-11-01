@@ -300,8 +300,8 @@ def pty_run(argv, warm, keys=b'', delay=1.5):
 PTY_CASES = [
     ('tty', ['-e', 'p $stdin.tty?, $stdout.tty?, $stderr.tty?, $stdout.sync']),
     ('tty winsize', ['-e', 'require "io/console"; p $stdout.winsize'], b''),
-    ('IO.console', ['-e', 'require "io/console"; p IO.console.class'], b'', 'gap: no controlling terminal: /dev/tty, IO.console'),
-    ('/dev/tty', ['-e', 'File.open("/dev/tty", "w") { |f| f.puts "via tty" }; p :ok'], b'', 'gap: no controlling terminal: /dev/tty, IO.console'),
+    ('IO.console', ['-e', 'require "io/console"; c = IO.console; p c.class, c.winsize, c.tty?']),
+    ('/dev/tty', ['-e', 'File.open("/dev/tty", "w") { |f| f.puts "via tty" }; p :ok'], b'', 'gap: no controlling terminal, so /dev/tty does not open (ENXIO)'),
     ('tty gets', ['-e', 'p gets'], b'typed\n'),
     ('tty EOF', ['-e', 'p $stdin.read'], b'abc\n\x04'),
     ('Ctrl-C', ['-e', '$stdout.sync = true; trap(:INT) { puts "INT"; exit 2 }; puts "ready"; sleep 5'], b'\x03'),

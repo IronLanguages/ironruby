@@ -30,6 +30,7 @@
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -95,6 +96,33 @@ static void default_socket(char *out, size_t size, const char *binary) {
     if (!dir || !*dir) dir = "/tmp";
     if (!realpath(binary, resolved)) snprintf(resolved, sizeof resolved, "%s", binary);
     snprintf(out, size, "%s/ironruby-warm-%u-%08x.sock", dir, (unsigned)getuid(), fnv1a(resolved));
+}
+
+/* The path of our controlling terminal (/dev/pts/3), or "". ttyname() of /dev/tty only says
+   "/dev/tty", so the device comes from /proc/self/stat and the name from whichever standard
+   descriptor is that terminal, or from the pseudo-terminal numbering. */
+static void controlling_tty(char *out, size_t size) {
+    out[0] = 0;
+    char stat[1024];
+    int fd = open("/proc/self/stat", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    ssize_t n = read(fd, stat, sizeof stat - 1);
+    close(fd);
+    if (n <= 0) return;
+    stat[n] = 0;
+    char *p = strrchr(stat, ')');           /* after "pid (comm)": state ppid pgrp session tty_nr */
+    if (!p) return;
+    char state;
+    int ppid, pgrp, session;
+    unsigned tty_nr;
+    if (sscanf(p + 1, " %c %d %d %d %u", &state, &ppid, &pgrp, &session, &tty_nr) != 5 || tty_nr == 0) return;
+    unsigned major = (tty_nr >> 8) & 0xfff, minor = (tty_nr & 0xff) | ((tty_nr >> 12) & 0xfff00);
+    for (int i = 0; i < 3; i++) {
+        struct stat st;
+        if (isatty(i) && fstat(i, &st) == 0 && st.st_rdev == makedev(major, minor) && ttyname_r(i, out, size) == 0) return;
+    }
+    if (major >= 136 && major <= 143) snprintf(out, size, "/dev/pts/%u", (major - 136) * 256 + minor);
+    else out[0] = 0;
 }
 
 /* ---- signals ---- */
@@ -278,6 +306,11 @@ int main(int argc, char **argv) {
     for (char **e = environ; *e; e++) envc++;
     put32(envc);
     for (char **e = environ; *e; e++) putstr(*e);
+
+    /* The worker has no controlling terminal; IO.console opens ours by name. */
+    char tty_path[256];
+    controlling_tty(tty_path, sizeof tty_path);
+    putstr(tty_path);
 
     int32_t body = (int32_t)(len - 8);
     memcpy(buf + 4, &body, 4);
