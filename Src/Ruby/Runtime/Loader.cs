@@ -1234,12 +1234,17 @@ namespace IronRuby.Runtime {
             if (direct) {
                 _corePreludeThread = Thread.CurrentThread;
             }
+            // The prelude's hot code is mostly not the program's: compiling it on another thread while the prelude
+            // loads only competes with the loading (the compilations of `ir -e 1' took ~180 ms of CPU). What is
+            // still hot once the program runs is compiled then (see BackgroundCompilation).
+            var holdCompilation = Microsoft.Scripting.Interpreter.BackgroundCompilation.HoldBack();
             try {
                 LoadFile(globalScope, self, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
             } finally {
                 if (direct) {
                     _corePreludeThread = null;
                 }
+                holdCompilation.Dispose();
             }
             ProvideCoreFeatures();
         }

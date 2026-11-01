@@ -101,6 +101,54 @@ index d6f82e2..294b018 100644
          }
  
          protected void OptionValueRequired(string optionName, string value) {
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/BackgroundCompilation.cs b/src/core/Microsoft.Dynamic/Interpreter/BackgroundCompilation.cs
+new file mode 100644
+index 0000000..2dcaa39
+--- /dev/null
++++ b/src/core/Microsoft.Dynamic/Interpreter/BackgroundCompilation.cs
+@@ -0,0 +1,42 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the Apache 2.0 License.
++// See the LICENSE file in the project root for more information.
++
++using System;
++using System.Threading;
++
++namespace Microsoft.Scripting.Interpreter {
++    /// <summary>
++    /// Lets a host hold back the compilations the interpreter starts on another thread once an interpreted lambda
++    /// or rule has run often enough (LightLambda, CachedBindingInfo). While held back, a lambda or rule that reaches
++    /// its threshold is not compiled but given its threshold again: it keeps being interpreted and is compiled if it
++    /// stays hot after the hold ends. Meant for work a host knows to be one-off - a language loading its prelude: the
++    /// code that runs hot there is mostly not what the program runs hot, the compilations compete with the work for
++    /// the CPU, and a short program is over before they finish. Synchronous compilation (a threshold of 0 or 1) and
++    /// loop compilation are not affected.
++    /// </summary>
++    public static class BackgroundCompilation {
++        private static int _holdDepth;
++
++        /// <summary>
++        /// Holds back background compilations until the returned object is disposed. Holds nest and may be taken by
++        /// different threads; compilations resume when the last one is released.
++        /// </summary>
++        public static IDisposable HoldBack() {
++            Interlocked.Increment(ref _holdDepth);
++            return new Hold();
++        }
++
++        internal static bool IsHeldBack => Volatile.Read(ref _holdDepth) > 0;
++
++        private sealed class Hold : IDisposable {
++            private int _released;
++
++            public void Dispose() {
++                if (Interlocked.Exchange(ref _released, 1) == 0) {
++                    Interlocked.Decrement(ref _holdDepth);
++                }
++            }
++        }
++    }
++}
 diff --git a/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.ReadyToRun.cs b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.ReadyToRun.cs
 new file mode 100644
 index 0000000..13cb1bf
@@ -197,6 +245,23 @@ index 0000000..13cb1bf
 +        }
 +    }
 +}
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs b/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
+index d239963..55f5787 100644
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
+@@ -180,6 +180,12 @@ namespace Microsoft.Scripting.Interpreter {
+                     _delegateCreator.Compile(null);
+                     return TryGetCompiled();
+                 } 
++
++                if (BackgroundCompilation.IsHeldBack) {
++                    // count again: compiled if it is still hot once the hold is released
++                    _compilationThreshold = _interpreter._compilationThreshold;
++                    return false;
++                }
+                 
+                 // Kick off the compile on another thread so this one can keep going
+                 new Task(_delegateCreator.Compile, null).Start();
 diff --git a/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs b/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
 index dfb0ee4..89730b4 100644
 --- a/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
@@ -269,6 +334,36 @@ index dfb0ee4..89730b4 100644
          private static IEnumerable<TypeName> GetTypeNames(string[] namespaces, string[][] types) {
              Debug.Assert(namespaces.Length == types.Length);
  
+diff --git a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs b/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
+index 42f3361..792be96 100644
+--- a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
++++ b/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
+@@ -225,9 +225,11 @@ namespace Microsoft.Scripting.Utils {
+         public readonly DynamicMetaObjectBinder/*!*/ Binder;
+         public int CompilationThreshold;
+ 
++        public readonly int InitialCompilationThreshold;
++
+         public CachedBindingInfo(DynamicMetaObjectBinder binder, int compilationThreshold) {
+             Binder = binder;
+-            CompilationThreshold = compilationThreshold;
++            CompilationThreshold = InitialCompilationThreshold = compilationThreshold;
+         }
+ 
+         public abstract bool CheckCompiled();
+@@ -245,6 +247,12 @@ namespace Microsoft.Scripting.Utils {
+         }
+ 
+         public override bool CheckCompiled() {
++            if (Target is not null && Microsoft.Scripting.Interpreter.BackgroundCompilation.IsHeldBack) {
++                // count again: compiled if it is still hot once the hold is released (see BackgroundCompilation)
++                CompilationThreshold = InitialCompilationThreshold;
++                return true;
++            }
++
+             if (Target is not null) {
+                 // start compiling the target if no one else has
+                 var lambda = Interlocked.Exchange(ref Target, null);
 diff --git a/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs b/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
 index 91c46fa..e47fe19 100644
 --- a/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
