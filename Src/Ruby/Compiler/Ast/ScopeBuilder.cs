@@ -20,8 +20,10 @@ using MSA = Microsoft.Scripting.Ast;
 #endif
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using IronRuby.Runtime;
@@ -189,18 +191,63 @@ namespace IronRuby.Compiler.Ast {
         public static MSA.Expression/*!*/ GetVariableAccessor(MSA.Expression/*!*/ tupleVariable, int tupleFieldIndex) {
             MSA.Expression accessor = tupleVariable;
 
-            foreach (var property in MutableTuple.GetAccessPath(tupleVariable.Type, tupleFieldIndex)) {
+            foreach (var property in GetAccessPath(tupleVariable.Type, tupleFieldIndex)) {
                 accessor = Ast.Property(accessor, property);
             }
 
             return accessor;
         }
 
+        // The properties that reach each slot of a locals tuple type, looked up once per type and
+        // slot. MutableTuple.GetAccessPath finds them by name every time, and every local variable
+        // reference the compiler transforms asks for one - a method with a hundred locals spent
+        // most of its transform there.
+        private static readonly ConcurrentDictionary<Type, PropertyInfo[][]>/*!*/ _accessPaths =
+            new ConcurrentDictionary<Type, PropertyInfo[][]>();
+
+        private static PropertyInfo/*!*/[]/*!*/ GetAccessPath(Type/*!*/ tupleType, int index) {
+            PropertyInfo[][] paths = _accessPaths.GetOrAdd(tupleType, t => new PropertyInfo[MutableTuple.GetSize(t)][]);
+            if ((uint)index >= (uint)paths.Length) {
+                // what MutableTuple.GetAccessPath says about a slot the tuple does not have
+                return new List<PropertyInfo>(MutableTuple.GetAccessPath(tupleType, index)).ToArray();
+            }
+            PropertyInfo[] path = Volatile.Read(ref paths[index]);
+            if (path == null) {
+                path = new List<PropertyInfo>(MutableTuple.GetAccessPath(tupleType, index)).ToArray();
+                Volatile.Write(ref paths[index], path);
+            }
+            return path;
+        }
+
+        /// <summary>
+        /// A new locals tuple. One of more than MutableTuple.MaxSize slots is a tuple of tuples
+        /// (MutableTuple.MakeTupleType), and `new' makes only the outer one: the nested ones are
+        /// made here as well, or the first store into one of their slots - a method's 127th local
+        /// after its parameter - raises a NullReferenceException.
+        /// </summary>
+        private static MSA.Expression/*!*/ NewTuple(Type/*!*/ tupleType) {
+            Type[] items = tupleType.GetGenericArguments();
+            MSA.Expression[] args = null;
+            for (int i = 0; i < items.Length; i++) {
+                if (typeof(MutableTuple).IsAssignableFrom(items[i])) {
+                    if (args == null) { args = new MSA.Expression[items.Length]; }
+                    args[i] = NewTuple(items[i]);
+                }
+            }
+            if (args == null) {
+                return Ast.New(tupleType);
+            }
+            for (int i = 0; i < items.Length; i++) {
+                if (args[i] == null) { args[i] = AstUtils.Constant(null, items[i]); }
+            }
+            return Ast.New(tupleType.GetConstructor(items), args);
+        }
+
         public MSA.Expression/*!*/ MakeLocalsStorage() {
             // TODO: use a factory instead of Ast.New to improve interpreter perf:
             MSA.Expression result = Ast.Assign(
                 _localsTuple, 
-                LiftedVisibleVariableCount == 0 ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) : Ast.New(_localsTuple.Type)
+                LiftedVisibleVariableCount == 0 ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) : NewTuple(_localsTuple.Type)
             );
             
             if (_parameters != null) {

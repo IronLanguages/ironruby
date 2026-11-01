@@ -36,11 +36,24 @@ namespace IronRuby.Builtins {
         /// gets no bucket array unless something probes it later (LinkPendingBuckets).
         /// </summary>
         internal static Hash/*!*/ CreateKeywordArguments(IEqualityComparer<object>/*!*/ comparer, int capacity) {
+            var result = CreateUnlinked(comparer, capacity);
+            result.IsKeywordArguments = true;
+            return result;
+        }
+
+        /// <summary>
+        /// An empty hash with room for <paramref name="capacity"/> Symbol keys, to be filled with
+        /// <see cref="AppendUnlinked"/>: a keyword-call hash, or a hash literal whose keys are all
+        /// Symbol literals. No bucket array until something probes (LinkPendingBuckets). The entry
+        /// array is the usual GetPrime size, 3 for up to three keys: an exact fit of two for a
+        /// two-key literal saved 16 bytes, but made the hash's first added key a resize, and
+        /// `h = {a: x, b: y}; h[:c] = z' then 1.37x slower than with room for the third key.
+        /// </summary>
+        internal static Hash/*!*/ CreateUnlinked(IEqualityComparer<object>/*!*/ comparer, int capacity) {
             var result = new Hash(comparer, 0);
             int size = GetPrime(capacity);
             result._entries = new Entry[size];
             result._fastModMultiplier = UInt64.MaxValue / (uint)size + 1;
-            result.IsKeywordArguments = true;
             return result;
         }
 

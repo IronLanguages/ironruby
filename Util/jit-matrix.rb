@@ -233,6 +233,143 @@ warm { |i| sp_narrow(i) }
 t('narrow(2**21) out of Int32') { sp_narrow(2**21) }
 t('narrow(-2**21)') { sp_narrow(-2**21) }
 
+# ---------------------------------------------------------------- 3b. deopting entries, large bodies
+
+def sp_always_deopts(n)
+  # out of Int64 for every n but 0, so the entry deopts until it is retired
+  x = n * 65536
+  x = x * 65536
+  x * 65536 * 65536
+end
+
+def sp_rarely_deopts(n)
+  # out of Int64 only for n > 2097151
+  n * n * n
+end
+
+# A body far past the old 400-node limit.
+eval("def sp_big(x)\n  s = x\n" + (0...120).map { |i| "  s = s + (s / 7) - #{i}\n" }.join + "  s\nend")
+
+puts
+puts '--- 3b. an entry that keeps deopting, one that rarely does, a large body ---'
+warm { |i| sp_always_deopts(i) }
+warm { |i| sp_always_deopts(i) }
+t('always-deopting entry, after many deopts') { sp_always_deopts(3) }
+t('always-deopting entry, the one value that fits') { sp_always_deopts(0) }
+t('always-deopting entry, negative') { sp_always_deopts(-5) }
+r = 0
+warm { |i| r ^= sp_rarely_deopts(i == 100 || i == 110 ? 3_000_000 + i : i) }
+t('rarely-deopting entry, mixed results') { r }
+t('rarely-deopting entry, small') { sp_rarely_deopts(1000) }
+t('rarely-deopting entry, out of Int64') { sp_rarely_deopts(2_097_152) }
+warm { |i| sp_big(i) }
+t('big body, small') { sp_big(1000) }
+t('big body, out of Int64') { sp_big(2**60) }
+t('big body, Bignum argument') { sp_big(2**70) }
+t('big body, Float argument') { sp_big(1.5) }
+
+# ---------------------------------------------------------------- 3c. a retired entry tried again, threads
+
+def sp_phase(x)
+  # out of Int64 for x >= 2**40: the entry is retired while setup passes such values, and tried
+  # again once the calls with small ones have gone on for a while
+  a = x * 3 + 1
+  b = a * 5 - x
+  c = b * 7 + a
+  d = c - b * 2
+  d * 4096 + a
+end
+
+def sp_threads(n)
+  # specialized by whichever of several threads reaches the threshold first
+  n * n * n * n
+end
+
+puts
+puts '--- 3c. a retired entry tried again; threads warming one method ---'
+r = 0
+200.times { |i| r ^= sp_phase(2**60 + i) }
+t('phase 1: every call out of Int64') { r }
+r = 0
+i = 0
+while i < 300_000
+  r += sp_phase(i & 1023)
+  i += 1
+end
+t('phase 2: 300k small calls') { r }
+def sp_phase_bump; 1; end
+sp_phase_bump
+def sp_phase_bump; 2; end   # a method table change: the entry tried again is stale now
+t('after a method table change') { [sp_phase(5), sp_phase(2**50)] }
+r = 0
+warm { |k| r += sp_phase(k) }
+t('specialized again') { r }
+t('out of Int64 again') { sp_phase(2**62) }
+r = 0
+200.times { |k| r ^= sp_phase(k.even? ? 2**61 + k : k) }
+t('phases mixed') { r }
+ths = (0...6).map { |k| Thread.new { s = 0; 3000.times { |j| s ^= sp_threads(k * 1_000_000 + j) }; s } }
+t('threads, results') { ths.map(&:value) }
+ths = (0...6).map { |k| Thread.new { s = 0; 3000.times { |j| s += sp_threads(j & 255) }; s } }
+t('threads, small results') { ths.map(&:value) }
+
+# ---------------------------------------------------------------- 3d. deopting now and then: windows, probes
+
+def sp_sometimes(x)
+  # out of Int64 for x >= 2**40: deopting on some calls, the entry has its deopts timed, the
+  # generic body timed in a probe, and is kept or retired by what they cost
+  a = x * 7 + 3
+  a * 4096 * 4096 + x
+end
+
+def sp_kw_sometimes(a, k: 3)
+  # the same through a keyword method's direct entry
+  a * k * 65536 * 65536
+end
+
+def sp_div_sometimes(a, b)
+  # a zero divisor deopts, and the generic body re-run then raises
+  a * 3 + a / b
+end
+
+puts
+puts '--- 3d. deopting now and then: windows, probes, threads ---'
+[2, 5, 9, 33].each do |k|
+  r = 0
+  i = 0
+  while i < 20_000
+    r += sp_sometimes(i % k == 0 ? 2**41 + i : i)
+    i += 1
+  end
+  t("1 call in #{k} out of Int64") { r }
+end
+t('then small') { sp_sometimes(12345) }
+t('then out of Int64') { sp_sometimes(2**50) }
+ths = (0...4).map { |k| Thread.new { s = 0; 20_000.times { |j| s += sp_sometimes(j % (k + 2) == 0 ? 2**42 + j : j) }; s } }
+t('threads deopting at different rates') { ths.map(&:value) }
+r = 0
+i = 0
+while i < 20_000
+  r += sp_kw_sometimes(i, k: (i % 4 == 0 ? 2**30 : 3))
+  i += 1
+end
+t('keyword method, 1 call in 4 out of Int64') { r }
+t('keyword method, default') { sp_kw_sometimes(7) }
+t('keyword method, out of Int64') { sp_kw_sometimes(2**20, k: 2**20) }
+r = 0
+errors = 0
+i = 0
+while i < 20_000
+  begin
+    r += sp_div_sometimes(i, i % 3 == 0 ? 0 : 7)
+  rescue ZeroDivisionError
+    errors += 1
+  end
+  i += 1
+end
+t('zero divisor on 1 call in 3') { [r, errors] }
+t('zero divisor, then fine') { sp_div_sometimes(100, 7) }
+
 # ---------------------------------------------------------------- 4. division
 
 def sp_div(a, b)

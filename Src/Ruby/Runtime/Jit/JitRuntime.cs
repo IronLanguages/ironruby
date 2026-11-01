@@ -45,7 +45,7 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>
         /// Statistics, printed by -X:JITStats.
         /// </summary>
-        internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected;
+        internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected, DeoptRetired, DeoptRetried;
         internal static long CompileTicks;
 
         /// <summary>
@@ -77,8 +77,8 @@ namespace IronRuby.Runtime.Jit {
         internal static void HookStats() {
             if (!Verbose || System.Threading.Interlocked.Exchange(ref _statsHooked, 1) != 0) { return; }
             AppDomain.CurrentDomain.ProcessExit += (s, e) => {
-                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} compile={5:F1}ms",
-                    Specialized, Rejected, ScreenRejected, Deopts, Invalidations,
+                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} retired={5} retried={6} compile={7:F1}ms",
+                    Specialized, Rejected, ScreenRejected, Deopts, Invalidations, DeoptRetired, DeoptRetried,
                     CompileTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
                 PrintScreenReasons();
             };
@@ -237,8 +237,14 @@ namespace IronRuby.Runtime.Jit {
 
         internal static Exception Deopt() {
             Deopts++;
+            _deoptThrown = System.Diagnostics.Stopwatch.GetTimestamp();
             return JitDeoptException.Instance;
         }
+
+        // When this thread last threw a deopt, for the method entry that catches it to know what
+        // the exception cost (EntryDeopted). Zero once taken.
+        [ThreadStatic]
+        private static long _deoptThrown;
 
         // ---- safe points -----------------------------------------------------------------
 
@@ -279,8 +285,18 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>A method entry's VersionOk failed: it is stale for good (see JitStub.VersionChanged).</summary>
-        public static void EntryStale(object/*!*/ stub) {
-            ((JitStub)stub).VersionChanged();
+        public static void EntryStale(object/*!*/ specialization) {
+            var spec = (JitStub.Specialization)specialization;
+            spec.Stub.VersionChanged(spec);
+        }
+
+        /// <summary>A method entry's typed body deopted (see JitStub.OnDeopt).</summary>
+        public static void EntryDeopted(object/*!*/ specialization) {
+            long caught = System.Diagnostics.Stopwatch.GetTimestamp();
+            long thrown = _deoptThrown;
+            _deoptThrown = 0;
+            var spec = (JitStub.Specialization)specialization;
+            spec.Stub.OnDeopt(spec, (thrown != 0) ? caught - thrown : -1);
         }
 
         /// <summary>An outlined loop was compiled under an older method version; build it again.</summary>
@@ -348,6 +364,83 @@ namespace IronRuby.Runtime.Jit {
         // path as the interpreter's and the DLR compiler's (see RubyInstanceData).
         public static object GetIVar(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
             return RubyOps.ReadInstanceVariable(context, self, site);
+        }
+
+        /// <summary>
+        /// `x', `self.x' or `o.x' in an outlined loop where x was, on the receiver, an attr_reader when
+        /// the loop was compiled (JitCompiler.EmitCall): one per such call.
+        /// </summary>
+        public sealed class SelfAttrSite {
+            internal readonly string/*!*/ Name;
+            internal readonly string/*!*/ VariableName;
+            internal readonly InstanceVariableSite/*!*/ Variable;
+            // `o.x' with an explicit receiver other than self can only call a public x.
+            internal readonly bool PublicOnly;
+
+            // The class the reader was last found on, under which global method version. Replaced
+            // as a whole, so a racing reader sees one consistent pair.
+            private sealed class Binding {
+                internal readonly RubyClass/*!*/ Class;
+                internal readonly int Version;
+                internal Binding(RubyClass/*!*/ cls, int version) { Class = cls; Version = version; }
+            }
+            private volatile Binding _bound;
+
+            internal SelfAttrSite(string/*!*/ name, string/*!*/ variableName, bool publicOnly) {
+                Name = name;
+                PublicOnly = publicOnly;
+                VariableName = variableName;
+                Variable = new InstanceVariableSite(variableName);
+            }
+
+            internal bool IsBoundTo(RubyClass/*!*/ cls) {
+                var b = _bound;
+                return b != null && b.Class == cls && b.Version == RubyModule.GlobalMethodVersion;
+            }
+
+            /// <summary>Whether Name is, on cls, the attr_reader of VariableName.</summary>
+            internal bool Bind(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                if (ReaderVariable(cls, Name, PublicOnly) != VariableName) { return false; }
+                _bound = new Binding(cls, version);
+                return true;
+            }
+
+            /// <summary>
+            /// The instance variable `name' reads on cls, if it is an attr_reader there (a public one,
+            /// if <paramref name="publicOnly"/>).
+            /// </summary>
+            internal static string ReaderVariable(RubyClass/*!*/ cls, string/*!*/ name, bool publicOnly) {
+                var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
+                var reader = resolved.Found ? resolved.Info as IronRuby.Runtime.Calls.RubyAttributeReaderInfo : null;
+                return (reader != null && (!publicOnly || reader.IsPublic)) ? reader.InstanceVariableName : null;
+            }
+        }
+
+        /// <summary>
+        /// The read an attr_reader does, as long as the method `site' names is still that reader on
+        /// self's class: re-checked against the class and the global method version on every read,
+        /// so a redefinition, a singleton method or a different self deopts to the generic loop,
+        /// which then makes the call. A read is not observable, so the deopt is invisible.
+        /// </summary>
+        public static object ReadSelfAttr(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
+            var obj = self as RubyObject;
+            RubyClass cls = (obj != null) ? obj.ImmediateClass : ClassOf(context, self);
+            if (!site.IsBoundTo(cls) && !site.Bind(cls)) {
+                throw Deopt();
+            }
+            if (obj != null) {
+                // RubyOps.ReadInstanceVariable's fast path, the RubyObject test already made
+                var data = obj._instanceData;
+                if (data == null) { return null; }
+                object[] slots = data._ivars;
+                var entry = site.Variable.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                    return RubyInstanceData.GetSlot(slots, entry.Index);
+                }
+                return data.GetInstanceVariable(site.Variable);
+            }
+            return RubyOps.ReadInstanceVariable(context, self, site.Variable);
         }
 
         public static object SetIVar(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {

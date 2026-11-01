@@ -500,6 +500,12 @@ namespace IronRuby.Compiler {
         private static MethodInfo _MakePrivateMethodCalledError;
         public static MethodInfo/*!*/ MakeProtectedMethodCalledError { get { return _MakeProtectedMethodCalledError ?? (_MakeProtectedMethodCalledError = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Exception>(RubyOps.MakeProtectedMethodCalledError)); } }
         private static MethodInfo _MakeProtectedMethodCalledError;
+        public static MethodInfo/*!*/ MakeSymbolHash1 { get { return _MakeSymbolHash1 ?? (_MakeSymbolHash1 = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.Object, IronRuby.Builtins.Hash>(RubyOps.MakeSymbolHash1)); } }
+        private static MethodInfo _MakeSymbolHash1;
+        public static MethodInfo/*!*/ MakeSymbolHash2 { get { return _MakeSymbolHash2 ?? (_MakeSymbolHash2 = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object, System.Object, IronRuby.Builtins.Hash>(RubyOps.MakeSymbolHash2)); } }
+        private static MethodInfo _MakeSymbolHash2;
+        public static MethodInfo/*!*/ MakeSymbolHash3 { get { return _MakeSymbolHash3 ?? (_MakeSymbolHash3 = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object, System.Object, System.Object, System.Object, IronRuby.Builtins.Hash>(RubyOps.MakeSymbolHash3)); } }
+        private static MethodInfo _MakeSymbolHash3;
         public static MethodInfo/*!*/ MakeTopLevelSuperException { get { return _MakeTopLevelSuperException ?? (_MakeTopLevelSuperException = CallInstruction.CacheFunc<System.Exception>(RubyOps.MakeTopLevelSuperException)); } }
         private static MethodInfo _MakeTopLevelSuperException;
         public static MethodInfo/*!*/ MakeTypeConversionError { get { return _MakeTypeConversionError ?? (_MakeTypeConversionError = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.Object, System.Type, System.Exception>(RubyOps.MakeTypeConversionError)); } }
