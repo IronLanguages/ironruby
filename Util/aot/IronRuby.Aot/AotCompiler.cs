@@ -40,7 +40,10 @@ namespace IronRuby.Aot {
     internal sealed class AotCompiler {
         private readonly RubyContext _context;
         private readonly PersistedAssemblyBuilder _assembly;
-        private readonly TypeBuilder _type;
+        // the type the current file's methods and constant fields go to: one per file in a library, so that
+        // loading a file's code loads only that file's fields (RubyStartup<i>)
+        private TypeBuilder _type;
+        private readonly ModuleBuilder _module;
         private readonly List<KeyValuePair<FieldBuilder, Expression>> _constants = new();
         private readonly Dictionary<object, Expression> _constantFields = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<FieldInfo, bool> _siteFieldsUnused = new();
@@ -67,8 +70,8 @@ namespace IronRuby.Aot {
             _context = context;
             Library = library;
             _assembly = new PersistedAssemblyBuilder(new AssemblyName(assemblyName), typeof(object).Assembly);
-            var module = _assembly.DefineDynamicModule(assemblyName);
-            _type = module.DefineType(library ? "RubyStartup" : "RubyProgram", TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
+            var module = _module = _assembly.DefineDynamicModule(assemblyName);
+            _type = module.DefineType(library ? "RubyStartup0" : "RubyProgram", TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
         }
 
         private void Count(string what, int n = 1) {
@@ -90,6 +93,11 @@ namespace IronRuby.Aot {
             }
             for (int i = 0; i < paths.Length; i++) {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
+                if (Library && i > 0) {
+                    _type = _module.DefineType("RubyStartup" + i, TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
+                    // a field of another file's type would load that type too
+                    _constantFields.Clear();
+                }
                 var unit = _context.CreateFileUnit(paths[i]);
                 bool isMain = mainFile != null && paths[i] == Path.GetFullPath(mainFile);
                 var options = new RubyCompilerOptions(_context.RubyOptions) { FactoryKind = isMain ? TopScopeFactoryKind.Main : TopScopeFactoryKind.File };
@@ -104,6 +112,7 @@ namespace IronRuby.Aot {
                 _entryPoints.Add(lambda.Name);
                 _entryMethods.Add(method);
                 ExpressionCompiler.CompileToMethod(rewritten, method);
+                if (Library) _type.CreateType();
                 Console.Error.WriteLine($"compiled {paths[i]} in {sw.ElapsedMilliseconds} ms");
                 if (Environment.GetEnvironmentVariable("IR_AOT_CHECK_BRANCHES") == "1") CheckBranches();
             }
@@ -122,11 +131,9 @@ namespace IronRuby.Aot {
             if (Library) {
                 if (chunks != 0) throw new NotSupportedException("a startup library initializes its constants lazily");
                 IronRuby.Aot.Compiler.LambdaCompiler.LineRecorder = null;
-                _type.SetCustomAttribute(new CustomAttributeBuilder(
+                DefineStartupIndex(new CustomAttributeBuilder(
                     typeof(PrecompiledFilesAttribute).GetConstructors()[0],
                     new object[] { paths, _entryPoints.ToArray(), paths.Select(PrecompiledCode.HashFile).ToArray(), DependencyIds ?? new string[0] }));
-                _type.CreateType();
-                DefineStartupIndex();
                 Count("line table: methods", _lines.Count);
                 Count("line table: entries", _lines.Values.Sum(l => l.Count / 2));
                 Save(outputPath, PEHeaderBuilder.CreateLibraryHeader(), default);
@@ -155,28 +162,30 @@ namespace IronRuby.Aot {
         }
 
         /// <summary>
-        /// RubyStartupIndex, a small class next to RubyStartup, so the loader reaches the library without reflecting
-        /// over RubyStartup's thousands of methods:
-        ///   Entries(): a delegate per file's top level, in PrecompiledFilesAttribute order;
+        /// RubyStartupIndex, the library's small entry class (the files' code is in RubyStartup&lt;i&gt;, one class per
+        /// file, which is loaded when the file is), carrying the PrecompiledFilesAttribute:
+        ///   Entry(i): the delegate of file i's top level, in PrecompiledFilesAttribute order;
         ///   Lines(): the line table, "method\u0001offset,line,offset,line...\n" per method (there is no PDB).
         /// </summary>
-        private void DefineStartupIndex() {
-            var index = ((ModuleBuilder)_type.Module).DefineType("RubyStartupIndex",
+        private void DefineStartupIndex(CustomAttributeBuilder files) {
+            var index = _module.DefineType("RubyStartupIndex",
                 TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
+            index.SetCustomAttribute(files);
             var funcType = typeof(Func<RubyScope, object, object>);
-            var entries = index.DefineMethod("Entries", MethodAttributes.Public | MethodAttributes.Static, funcType.MakeArrayType(), Type.EmptyTypes);
-            var il = entries.GetILGenerator();
-            il.Emit(OpCodes.Ldc_I4, _entryMethods.Count);
-            il.Emit(OpCodes.Newarr, funcType);
+            var entry = index.DefineMethod("Entry", MethodAttributes.Public | MethodAttributes.Static, funcType, new[] { typeof(int) });
+            var il = entry.GetILGenerator();
+            var labels = _entryMethods.Select(_ => il.DefineLabel()).ToArray();
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Switch, labels);
+            il.Emit(OpCodes.Ldnull);
+            il.Emit(OpCodes.Ret);
             for (int i = 0; i < _entryMethods.Count; i++) {
-                il.Emit(OpCodes.Dup);
-                il.Emit(OpCodes.Ldc_I4, i);
+                il.MarkLabel(labels[i]);
                 il.Emit(OpCodes.Ldnull);
                 il.Emit(OpCodes.Ldftn, _entryMethods[i]);
                 il.Emit(OpCodes.Newobj, funcType.GetConstructor(new[] { typeof(object), typeof(IntPtr) }));
-                il.Emit(OpCodes.Stelem_Ref);
+                il.Emit(OpCodes.Ret);
             }
-            il.Emit(OpCodes.Ret);
 
             var sb = new System.Text.StringBuilder();
             foreach (var kv in _lines) {

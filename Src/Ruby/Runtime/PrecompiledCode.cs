@@ -248,20 +248,19 @@ namespace IronRuby.Runtime.Precompiled {
             var watch = Trace ? Stopwatch.StartNew() : null;
             try {
                 Assembly assembly = Assembly.LoadFrom(path);
-                Type program = assembly.GetType("RubyStartup", false);
                 Type index = assembly.GetType("RubyStartupIndex", false);
-                var info = program != null ? program.GetCustomAttribute<PrecompiledFilesAttribute>() : null;
-                if (info == null || index == null || !AssembliesMatch(info.Assemblies)) {
+                var info = index != null ? index.GetCustomAttribute<PrecompiledFilesAttribute>() : null;
+                if (info == null || !AssembliesMatch(info.Assemblies)) {
                     if (Trace) {
                         Console.Error.WriteLine("IronRuby.Startup: compiled against other assemblies, not used: " + path);
                     }
                     return;
                 }
-                // through RubyStartupIndex: reflecting over RubyStartup itself would load its thousands of methods
-                var entries = ((Func<Func<RubyScope, object, object>[]>)index.GetMethod("Entries").CreateDelegate(
-                    typeof(Func<Func<RubyScope, object, object>[]>)))();
+                // each file's code is a class of its own (RubyStartup<i>), loaded when the file first runs
+                var entry = (Func<int, Func<RubyScope, object, object>>)index.GetMethod("Entry").CreateDelegate(
+                    typeof(Func<int, Func<RubyScope, object, object>>));
                 _lineTableSource = (Func<string>)index.GetMethod("Lines").CreateDelegate(typeof(Func<string>));
-                _startupType = program;
+                _startupAssembly = assembly;
                 _context = context;
                 if (Trace) {
                     Console.Error.WriteLine("IronRuby.Startup: loaded " + path + " in " + watch.Elapsed.TotalMilliseconds.ToString("F1") + " ms");
@@ -281,7 +280,10 @@ namespace IronRuby.Runtime.Precompiled {
                         }
                         return current;
                     };
-                    context.Loader.RegisterPrecompiledFile(file, new RubyScriptCode(entries[i], context.CreateFileUnit(file), TopScopeFactoryKind.File), isCurrent);
+                    int fileIndex = i;
+                    Func<RubyScope, object, object> target = null;
+                    Func<RubyScope, object, object> lazyTarget = (scope, self) => (target ?? (target = entry(fileIndex)))(scope, self);
+                    context.Loader.RegisterPrecompiledFile(file, new RubyScriptCode(lazyTarget, context.CreateFileUnit(file), TopScopeFactoryKind.File), isCurrent);
                 }
             } catch (Exception e) {
                 // a broken or mismatched library only costs the speedup
@@ -326,7 +328,7 @@ namespace IronRuby.Runtime.Precompiled {
 
         #region Line table
 
-        private static Type _startupType;
+        private static Assembly _startupAssembly;
         private static Func<string> _lineTableSource;
         private static System.Collections.Generic.Dictionary<string, RubyMethodDebugInfo> _lineTable;
 
@@ -336,7 +338,7 @@ namespace IronRuby.Runtime.Precompiled {
         /// </summary>
         internal static bool TryGetDebugInfo(MethodBase/*!*/ method, out RubyMethodDebugInfo info) {
             info = null;
-            if (_startupType == null || method.DeclaringType != _startupType) {
+            if (_startupAssembly == null || method.DeclaringType == null || method.DeclaringType.Assembly != _startupAssembly) {
                 return false;
             }
             var table = _lineTable;
