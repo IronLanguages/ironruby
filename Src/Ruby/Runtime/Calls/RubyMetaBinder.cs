@@ -65,9 +65,11 @@ namespace IronRuby.Runtime.Calls {
         public sealed override T BindDelegate<T>(CallSite<T> site, object[] args) {
             bool timed = PhaseTimer.Enter(PhaseTimer.Bind);
             long start = PhaseTimer.BindTrace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+            if (timed) PhaseTimer.EnterBindInclusive();
             try {
                 return BindDelegateNoTiming(site, args);
             } finally {
+                if (timed) PhaseTimer.ExitBindInclusive();
                 PhaseTimer.Exit(timed);
                 if (PhaseTimer.BindTrace) {
                     PhaseTimer.TraceBind(this, args, start);

@@ -10,7 +10,7 @@
 #
 # The compiler needs .NET 10 (PersistedAssemblyBuilder), so this builds IronRuby for net10.0 as well;
 # the library it writes is retargeted to the host's framework. It records the identity (MVID) of the
-# host's IronRuby, IronRuby.Libraries and DLR assemblies, and of each source file's contents: a host
+# host's IronRuby and DLR assemblies, and of each source file's contents: a host
 # rebuilt since, or an edited file, is not run from stale code (the file is compiled from source; the
 # library as a whole is ignored when the assemblies differ). So rerun this after each host rebuild.
 IR_ROOT="$(dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")"

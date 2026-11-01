@@ -30,3 +30,21 @@
 ../../Src/StdLib/ruby/4.0/rubygems/util.rb
 ../../Src/StdLib/ruby/4.0/rubygems/version.rb
 ../../Src/StdLib/ruby/4.0/rubygems/win_platform.rb
+# Loaded by the first require of anything outside the startup set (gem activation)
+../../Src/StdLib/ruby/4.0/rubygems/path_support.rb
+# Commonly required standard library (each is only checked against its source when required)
+../../Src/StdLib/ironruby/json.rb
+../../Src/StdLib/ironruby/set.rb
+../../Src/StdLib/ironruby/stringio.rb
+../../Src/StdLib/ironruby/strscan.rb
+../../Src/StdLib/ironruby/io/console.rb
+../../Src/StdLib/ironruby/date.rb
+../../Src/StdLib/ironruby/date/format.rb
+../../Src/StdLib/ruby/4.0/fileutils.rb
+../../Src/StdLib/ruby/4.0/optparse.rb
+../../Src/StdLib/ruby/4.0/pp.rb
+../../Src/StdLib/ruby/4.0/prettyprint.rb
+../../Src/StdLib/ruby/4.0/tempfile.rb
+../../Src/StdLib/ruby/4.0/delegate.rb
+../../Src/StdLib/ruby/4.0/tmpdir.rb
+../../Src/StdLib/ruby/4.0/time.rb

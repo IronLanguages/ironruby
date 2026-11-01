@@ -47,7 +47,7 @@ namespace IronRuby.Runtime.Precompiled {
         }
 
         /// <summary>
-        /// "name=mvid" of each assembly the library was compiled against (IronRuby, its libraries, the DLR): the saved
+        /// "name=mvid" of each assembly the library was compiled against (IronRuby and the DLR): the saved
         /// IL calls into them and binds their binders by name, so a rebuild of any of them makes the library stale.
         /// </summary>
         public string[] Assemblies { get; }
@@ -246,7 +246,6 @@ namespace IronRuby.Runtime.Precompiled {
 
             bool timed = PhaseTimer.Enter(PhaseTimer.Precompiled);
             var watch = Trace ? Stopwatch.StartNew() : null;
-            long hashTicks = 0;
             try {
                 Assembly assembly = Assembly.LoadFrom(path);
                 Type program = assembly.GetType("RubyStartup", false);
@@ -268,21 +267,21 @@ namespace IronRuby.Runtime.Precompiled {
                     Console.Error.WriteLine("IronRuby.Startup: loaded " + path + " in " + watch.Elapsed.TotalMilliseconds.ToString("F1") + " ms");
                 }
                 for (int i = 0; i < info.Files.Length; i++) {
-                    string file = info.Files[i];
-                    try {
-                        long h0 = Stopwatch.GetTimestamp();
-                        bool stale = !File.Exists(file) || HashFile(file) != info.Hashes[i];
-                        hashTicks += Stopwatch.GetTimestamp() - h0;
-                        if (stale) {
-                            if (Trace) {
-                                Console.Error.WriteLine("IronRuby.Startup: stale, not used: " + file);
-                            }
-                            continue;
+                    string file = info.Files[i], hash = info.Hashes[i];
+                    // checked when the file is first loaded: most of a library's files may never be
+                    Func<bool> isCurrent = () => {
+                        bool current;
+                        try {
+                            current = File.Exists(file) && HashFile(file) == hash;
+                        } catch (Exception) {
+                            current = false;
                         }
-                    } catch (Exception) {
-                        continue;
-                    }
-                    context.Loader.RegisterPrecompiledFile(file, new RubyScriptCode(entries[i], context.CreateFileUnit(file), TopScopeFactoryKind.File));
+                        if (!current && Trace) {
+                            Console.Error.WriteLine("IronRuby.Startup: stale, not used: " + file);
+                        }
+                        return current;
+                    };
+                    context.Loader.RegisterPrecompiledFile(file, new RubyScriptCode(entries[i], context.CreateFileUnit(file), TopScopeFactoryKind.File), isCurrent);
                 }
             } catch (Exception e) {
                 // a broken or mismatched library only costs the speedup
@@ -292,8 +291,7 @@ namespace IronRuby.Runtime.Precompiled {
             } finally {
                 PhaseTimer.Exit(timed);
                 if (Trace) {
-                    Console.Error.WriteLine("IronRuby.Startup: registered in " + watch.Elapsed.TotalMilliseconds.ToString("F1") + " ms, hashing " +
-                        (hashTicks * 1000.0 / Stopwatch.Frequency).ToString("F1") + " ms");
+                    Console.Error.WriteLine("IronRuby.Startup: registered in " + watch.Elapsed.TotalMilliseconds.ToString("F1") + " ms");
                 }
             }
         }

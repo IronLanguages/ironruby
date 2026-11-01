@@ -131,7 +131,7 @@ namespace IronRuby.Aot.Runtime {
                 } else {
                     // a precompiled library file: `require` still resolves it on the load path,
                     // then runs this code instead of compiling what it found there
-                    _context.Loader.RegisterPrecompiledFile(path, new RubyScriptCode(target, _context.CreateFileUnit(path), TopScopeFactoryKind.File));
+                    _context.Loader.RegisterPrecompiledFile(path, new RubyScriptCode(target, _context.CreateFileUnit(path), TopScopeFactoryKind.File), null);
                 }
             }
             if (trace != null) {

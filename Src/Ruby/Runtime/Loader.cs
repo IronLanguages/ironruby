@@ -91,11 +91,18 @@ namespace IronRuby.Runtime {
 
         private struct CompiledFile {
             public readonly ScriptCode/*!*/ CompiledCode;
+            // a precompiled file not yet checked against its source (see RegisterPrecompiledFile), or null
+            public readonly Func<bool> IsCurrent;
 
-            public CompiledFile(ScriptCode/*!*/ compiledCode) {
+            public CompiledFile(ScriptCode/*!*/ compiledCode)
+                : this(compiledCode, null) {
+            }
+
+            public CompiledFile(ScriptCode/*!*/ compiledCode, Func<bool> isCurrent) {
                 Assert.NotNull(compiledCode);
 
                 CompiledCode = compiledCode;
+                IsCurrent = isCurrent;
             }
         }
 
@@ -321,13 +328,15 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Makes require/load of <paramref name="fullPath"/> run <paramref name="code"/> instead of
         /// compiling the file's source. The file is still resolved on the load path as usual.
+        /// <paramref name="isCurrent"/>, if given, is asked the first time the file is loaded whether the
+        /// code still matches the source; if not, the file is compiled from source as any other.
         /// </summary>
-        internal void RegisterPrecompiledFile(string/*!*/ fullPath, ScriptCode/*!*/ code) {
+        internal void RegisterPrecompiledFile(string/*!*/ fullPath, ScriptCode/*!*/ code, Func<bool> isCurrent) {
             lock (_compiledFileMutex) {
                 if (_compiledFiles == null) {
                     _compiledFiles = new Dictionary<string, CompiledFile>();
                 }
-                _compiledFiles[Platform.GetFullPath(fullPath)] = new CompiledFile(code);
+                _compiledFiles[Platform.GetFullPath(fullPath)] = new CompiledFile(code, isCurrent);
                 _hasPrecompiledFiles = true;
             }
         }
@@ -343,7 +352,17 @@ namespace IronRuby.Runtime {
                     _compiledFiles = LoadCompiledCode();
                 }
 
-                return _compiledFiles.TryGetValue(fullPath, out compiledFile);
+                if (!_compiledFiles.TryGetValue(fullPath, out compiledFile)) {
+                    return false;
+                }
+                if (compiledFile.IsCurrent != null) {
+                    if (!compiledFile.IsCurrent()) {
+                        _compiledFiles.Remove(fullPath);
+                        return false;
+                    }
+                    _compiledFiles[fullPath] = compiledFile = new CompiledFile(compiledFile.CompiledCode);
+                }
+                return true;
             }
         }
 
@@ -1262,6 +1281,7 @@ namespace IronRuby.Runtime {
                 _corePreludeThread = Thread.CurrentThread;
             }
             _loadingCorePrelude = true;
+            PhaseTimer.MarkPrelude(true);
             // The prelude's hot code is mostly not the program's: compiling it on another thread while the prelude
             // loads only competes with the loading (the compilations of `ir -e 1' took ~180 ms of CPU). What is
             // still hot once the program runs is compiled then (see BackgroundCompilation).
@@ -1270,6 +1290,7 @@ namespace IronRuby.Runtime {
                 LoadFile(globalScope, self, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
             } finally {
                 _loadingCorePrelude = false;
+                PhaseTimer.MarkPrelude(false);
                 if (direct) {
                     _corePreludeThread = null;
                 }

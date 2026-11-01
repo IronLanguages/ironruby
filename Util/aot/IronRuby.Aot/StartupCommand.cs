@@ -94,7 +94,8 @@ namespace IronRuby.Aot {
             return 0;
         }
 
-        private static readonly string[] DependencyNames = { "IronRuby", "IronRuby.Libraries", "Microsoft.Dynamic", "Microsoft.Scripting" };
+        // what the saved IL references: IronRuby.Libraries is not among them (library methods are reached through binders)
+        private static readonly string[] DependencyNames = { "IronRuby", "Microsoft.Dynamic", "Microsoft.Scripting" };
 
         private static readonly HashSet<string> FrameworkPrefixes = new() { "System", "Microsoft.Win32", "Microsoft.CSharp", "Microsoft.VisualBasic", "netstandard", "mscorlib" };
 

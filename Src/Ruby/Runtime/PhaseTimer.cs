@@ -43,6 +43,24 @@ namespace IronRuby.Runtime {
         [ThreadStatic]
         internal static string BindKind;
 
+        // inclusive time of outermost binds on the timed thread
+        private static int _bindNesting;
+        private static long _bindInclusiveTicks, _bindOuterStart;
+        private static int _bindOuterCount;
+
+        public static void EnterBindInclusive() {
+            if (Enabled && _thread == Environment.CurrentManagedThreadId && _bindNesting++ == 0) {
+                _bindOuterStart = Stopwatch.GetTimestamp();
+                _bindOuterCount++;
+            }
+        }
+
+        public static void ExitBindInclusive() {
+            if (Enabled && _thread == Environment.CurrentManagedThreadId && --_bindNesting == 0) {
+                _bindInclusiveTicks += Stopwatch.GetTimestamp() - _bindOuterStart;
+            }
+        }
+
         public static void TraceBind(object binder, object[] args, long start) {
             double us = (Stopwatch.GetTimestamp() - start) * 1e6 / Stopwatch.Frequency;
             object target = args.Length > 1 ? args[1] : (args.Length > 0 ? args[0] : null);
@@ -92,17 +110,46 @@ namespace IronRuby.Runtime {
             _depth--;
         }
 
+        // milliseconds since the process started (Linux: /proc/uptime against /proc/self/stat; 10 ms resolution)
+        private static double _preludeStart, _preludeEnd;
+
+        private static double SinceProcessStart() {
+            try {
+                string stat = System.IO.File.ReadAllText("/proc/self/stat");
+                string[] fields = stat.Substring(stat.LastIndexOf(')') + 2).Split(' ');
+                double startTicks = double.Parse(fields[19], System.Globalization.CultureInfo.InvariantCulture);
+                double uptime = double.Parse(System.IO.File.ReadAllText("/proc/uptime").Split(' ')[0], System.Globalization.CultureInfo.InvariantCulture);
+                return (uptime - startTicks / 100.0) * 1000.0;
+            } catch (Exception) {
+                return -1;
+            }
+        }
+
+        public static void MarkPrelude(bool start) {
+            if (Enabled) {
+                if (start) {
+                    _preludeStart = SinceProcessStart();
+                } else {
+                    _preludeEnd = SinceProcessStart();
+                }
+            }
+        }
+
         private static void Report() {
             long now = Stopwatch.GetTimestamp();
             _ticks[_stack[_depth]] += now - _last;
             _last = now;
             var sb = new StringBuilder();
+            sb.AppendFormat("[phase] wall (10 ms resolution): prelude starts at {0:F0} ms, ends at {1:F0} ms, exit at {2:F0} ms after process start\n",
+                _preludeStart, _preludeEnd, SinceProcessStart());
             double total = (now - _start) * 1000.0 / Stopwatch.Frequency;
             sb.AppendFormat("[phase] total {0,8:F1} ms since the first phase\n", total);
             for (int i = 0; i < Count; i++) {
                 double ms = _ticks[i] * 1000.0 / Stopwatch.Frequency;
                 sb.AppendFormat("[phase] {0,8:F1} ms {1,5:F1}% {2,7} x  {3}\n", ms, 100 * ms / total, _counts[i], _Names[i]);
             }
+            sb.AppendFormat("[phase] binding, inclusive of everything under it: {0:F1} ms in {1} outermost binds\n",
+                _bindInclusiveTicks * 1000.0 / Stopwatch.Frequency, _bindOuterCount);
             sb.AppendFormat("[phase] JIT: {0} methods, {1:F1} ms; GC: {2} gen0, {3} gen1, {4} gen2; allocated {5:F1} MB\n",
                 System.Runtime.JitInfo.GetCompiledMethodCount(false), System.Runtime.JitInfo.GetCompilationTime(false).TotalMilliseconds,
                 GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2), GC.GetTotalAllocatedBytes() / 1048576.0);
