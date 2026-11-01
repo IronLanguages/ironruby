@@ -100,6 +100,56 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        private bool AllKeysAreSymbols() {
+            Entry[] entries = _entries;
+            int count = _count;
+            for (int i = _start; i < count; i++) {
+                if (entries[i].Next != TombstoneNext && !(entries[i].Key is RubySymbol)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// A copy of this hash's entries marked as keyword arguments and laid out as a keyword call's
+        /// own hash is (<see cref="CreateKeywordArguments"/>, no bucket array): what `**h` passes on.
+        /// Null unless every key is a Symbol - so the keys need no check for duplicates - and the
+        /// comparer is <paramref name="comparer"/>, whose hash codes the entries then already hold;
+        /// the caller copies by inserting instead.
+        /// </summary>
+        internal Hash TryCopyAsKeywordArguments(IEqualityComparer<object>/*!*/ comparer) {
+            int live = _liveCount;
+            if (live == 0 || _comparer != comparer) {
+                return null;
+            }
+
+            if (!AllKeysAreSymbols()) {
+                return null;
+            }
+
+            var result = CreateKeywordArguments(comparer, live);
+            Entry[] entries = _entries;
+            int count = _count;
+            Entry[] target = result._entries;
+            int n = 0;
+            for (int i = _start; i < count; i++) {
+                if (entries[i].Next == TombstoneNext) {
+                    continue;
+                }
+                ref Entry e = ref target[n++];
+                e.HashCode = entries[i].HashCode;
+                e.Next = -1;
+                e.Key = entries[i].Key;
+                e.Value = entries[i].Value;
+            }
+            result._count = n;
+            result._liveCount = n;
+            result._version++;
+            result._stamp++;
+            return result;
+        }
+
         /// <summary>
         /// The value stored under <paramref name="key"/>, which must be a key that is equal only to
         /// itself (a Symbol). Entry <paramref name="hint"/> is tried first: callers mostly pass

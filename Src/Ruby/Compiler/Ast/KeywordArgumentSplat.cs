@@ -19,9 +19,13 @@ using MSA = System.Linq.Expressions;
 using MSA = Microsoft.Scripting.Ast;
 #endif
 
+using System.Collections.Generic;
+using IronRuby.Builtins;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
+    using Ast = MSA.Expression;
+
     /// <summary>
     /// A call-site keyword-argument hash that was written with at least one `**` splat, e.g.
     /// `f(1, **opts)` or `f(**a, **b)`.
@@ -66,6 +70,30 @@ namespace IronRuby.Compiler.Ast {
                 );
             }
             return Methods.SplatKeywordHash.OpCall(gen.CurrentScopeVariable, AstUtils.Box(Argument.TransformRead(gen)));
+        }
+
+        /// <summary>
+        /// The hash this splat passes as the one argument it is, typed <see cref="Hash"/>: null when it
+        /// passes nothing at all. For a call that is compiled as two plain call sites, one with the
+        /// hash and one without (SuperCall), instead of one splatting what TransformRead makes.
+        /// </summary>
+        internal MSA.Expression/*!*/ TransformToArgument(AstGenerator/*!*/ gen) {
+            if (_converted != null) {
+                var value = Ast.Variable(typeof(object), "#kwsplat");
+                return Ast.Block(typeof(Hash), new[] { value },
+                    Ast.Assign(value, AstUtils.Box(Argument.TransformRead(gen))),
+                    Ast.Condition(
+                        Ast.OrElse(
+                            Ast.ReferenceEqual(value, AstUtils.Constant(null)),
+                            Ast.TypeIs(value, typeof(IDictionary<object, object>))
+                        ),
+                        Methods.KeywordSplatArgument.OpCall(gen.CurrentScopeVariable, value),
+                        Methods.KeywordSplatArgument.OpCall(gen.CurrentScopeVariable, AstUtils.Box(_converted.TransformRead(gen))),
+                        typeof(Hash)
+                    )
+                );
+            }
+            return Methods.KeywordSplatArgument.OpCall(gen.CurrentScopeVariable, AstUtils.Box(Argument.TransformRead(gen)));
         }
     }
 }

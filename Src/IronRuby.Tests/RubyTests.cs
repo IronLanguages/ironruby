@@ -670,6 +670,7 @@ namespace IronRuby.Tests {
                 SuperParameterless2B,
                 SuperParameterless3,
                 SuperParameterlessKeywordRest1,
+                SuperKeywordSplat1,
                 Super2,
                 SuperToAttribute1,
                 SuperAndMethodMissing1,

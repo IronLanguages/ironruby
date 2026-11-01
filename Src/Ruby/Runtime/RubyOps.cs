@@ -1716,9 +1716,27 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static RubyArray/*!*/ SplatKeywordHash(RubyScope/*!*/ scope, object hash) {
+            var keywords = KeywordSplatArgument(scope, hash);
+            if (keywords == null) {
+                return new RubyArray(0);
+            }
+
+            var result = new RubyArray(1);
+            result.Add(keywords);
+            return result;
+        }
+
+        /// <summary>
+        /// `f(**h)` with h a Hash or nil, as the one argument it passes: null when it passes none at
+        /// all (nil, or an empty Hash), and a copy marked as keyword arguments otherwise. A call
+        /// site that tests for null and passes the hash plainly (SuperCall) avoids the one-or-zero
+        /// element array <see cref="SplatKeywordHash"/> makes and the splatted call it takes.
+        /// </summary>
+        [Emitted]
+        public static Hash KeywordSplatArgument(RubyScope/*!*/ scope, object hash) {
             // `f(**nil)` passes no keywords at all
             if (hash == null) {
-                return new RubyArray(0);
+                return null;
             }
 
             var dict = hash as IDictionary<object, object>;
@@ -1727,19 +1745,20 @@ namespace IronRuby.Runtime {
             }
 
             if (dict.Count == 0) {
-                return new RubyArray(0);
+                return null;
             }
 
             // MRI copies: the callee's **rest must not alias the hash the caller splatted
-            var copy = new Hash(scope.RubyContext.EqualityComparer, dict.Count);
-            foreach (var entry in dict) {
-                copy[entry.Key] = entry.Value;
+            var source = dict as Hash;
+            var copy = (source != null) ? source.TryCopyAsKeywordArguments(scope.RubyContext.EqualityComparer) : null;
+            if (copy == null) {
+                copy = new Hash(scope.RubyContext.EqualityComparer, dict.Count);
+                foreach (var entry in dict) {
+                    copy[entry.Key] = entry.Value;
+                }
+                copy.IsKeywordArguments = true;
             }
-            copy.IsKeywordArguments = true;
-
-            var result = new RubyArray(1);
-            result.Add(copy);
-            return result;
+            return copy;
         }
 
         [Emitted]
@@ -2094,6 +2113,18 @@ namespace IronRuby.Runtime {
         public static RubyArray/*!*/ AddItem(RubyArray/*!*/ array, object item) {
             array.Add(item);
             return array;
+        }
+
+        /// <summary>
+        /// `[*list, item]` as a new array of the size it ends up: what `super(*rest, **kw)` passes
+        /// splatted when kw is not empty (SuperCall).
+        /// </summary>
+        [Emitted]
+        public static RubyArray/*!*/ SplatAppendItem(IList/*!*/ list, object item) {
+            var result = new RubyArray(list.Count + 1);
+            result.AddRange(list);
+            result.Add(item);
+            return result;
         }
 
         [Emitted]

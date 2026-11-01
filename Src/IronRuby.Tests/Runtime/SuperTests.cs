@@ -191,6 +191,58 @@ p E.new.message
         }
 
         /// <summary>
+        /// `super(a, **h)`, and a parameterless super in a method with **rest, pass h through one of two plain call
+        /// sites: nothing at all when it is empty, and a copy when it is not - so what the parent does to the hash is
+        /// its own - and through #to_hash or not at all when the rest was reassigned to something else. The
+        /// arguments are evaluated in source order. The output is CRuby's.
+        /// </summary>
+        [Options(Prism = true)]
+        public void SuperKeywordSplat1() {
+            TestOutput(@"
+class P
+  def m(h = :none) h end
+  def r(*a, **kw) [a, kw] end
+  def w(h = nil) h[:w] = 1 if h; h end
+  def lg(x) ($log ||= []) << x; x end
+end
+class C < P
+  def m(**kw) super(**kw) end
+  def r(*a, **kw) super(*a, **kw) end
+  def w(**kw) r = super; [r, kw] end
+end
+class D < P
+  def r(a, k: 1, **rest) super end
+  def w(**kw) kw = nil; super end
+end
+class E < P
+  def r(a) super(lg(a), **lg({x: 1})) end
+end
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+p s(C.new.m), s(C.new.m(a: 1))
+p s(C.new.r(1, 2)), s(C.new.r(1, 2, z: 3)), s(C.new.r)
+p s(C.new.w), s(C.new.w(a: 1))
+p s(D.new.r(1)), s(D.new.r(1, z: 2, k: 3))
+p s(D.new.w(a: 1))
+p s(E.new.r(5)), s($log)
+", @"
+:none
+[:hash, [:a, 1]]
+[[1, 2], [:hash]]
+[[1, 2], [:hash, [:z, 3]]]
+[[], [:hash]]
+[nil, [:hash]]
+[[:hash, [:a, 1], [:w, 1]], [:hash, [:a, 1]]]
+[[1], [:hash, [:k, 1]]]
+[[1], [:hash, [:z, 2], [:k, 3]]]
+nil
+[[5], [:hash, [:x, 1]]]
+[5, [:hash, [:x, 1]]]
+");
+        }
+
+        /// <summary>
         /// Calls to super with block and no arguments (was bug in parser/AST).
         /// </summary>
         public void Super2() {
