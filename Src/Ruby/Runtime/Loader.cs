@@ -803,7 +803,8 @@ namespace IronRuby.Runtime {
 
 #if FEATURE_FILESYSTEM
             CompiledFile compiledFile;
-            if (TryGetCompiledFile(fullPath, out compiledFile)) {
+            // a saved or precompiled top level is a file's, not the anonymous module `load(file, true)' wraps it in
+            if ((flags & LoadFlags.LoadIsolated) == 0 && TryGetCompiledFile(fullPath, out compiledFile)) {
                 Utils.Log(String.Format("{0}: {1}", ++_cacheHitCount, sourceUnit.Path), "LOAD_CACHED");
 
                 return compiledFile.CompiledCode;
