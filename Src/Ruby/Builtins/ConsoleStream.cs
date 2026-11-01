@@ -133,6 +133,17 @@ namespace IronRuby.Builtins {
         private static Stream _rawOutput, _rawError;
 
         /// <summary>
+        /// Forgets what was found out about descriptors 0, 1 and 2: a warm-start worker
+        /// (Hosting/WarmStart.cs) has just put different ones there.
+        /// </summary>
+        internal static void ResetStandardDescriptors() {
+            _rawInput = null;
+            _rawInputChecked = false;
+            _rawOutput = null;
+            _rawError = null;
+        }
+
+        /// <summary>
         /// On Unix .NET's own standard-output stream emulates SIG_IGN for SIGPIPE by swallowing EPIPE
         /// outright, so `ruby -e 'loop { puts :ok }' | head -1` never notices that its reader is gone
         /// and spins forever instead of dying the way CRuby does.  A FileStream over the very same

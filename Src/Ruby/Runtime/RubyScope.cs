@@ -1530,7 +1530,14 @@ var closureScope = scope as RubyClosureScope;
                 context.ObjectClass.SetConstant("TOPLEVEL_BINDING", new Binding(scope) { SourcePath = "<main>", SourceLine = 0 });
                 if (context.RubyOptions.RequirePaths != null) {
                     bool first = true;
+                    // a warm-start worker loaded these into this very scope ahead of time
+                    int loaded = context.TakeWarmLoadedRequirePaths();
                     foreach (var path in context.RubyOptions.RequirePaths) {
+                        if (loaded > 0) {
+                            loaded--;
+                            first = false;
+                            continue;
+                        }
                         // the first is the core prelude (gem_prelude.rb or ruby4.rb)
                         if (first && (path == "gem_prelude.rb" || path == "ruby4.rb")) {
                             context.Loader.LoadCorePrelude(globalScope, rubyGlobalScope.MainObject, path);

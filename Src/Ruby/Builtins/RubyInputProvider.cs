@@ -59,6 +59,19 @@ namespace IronRuby.Builtins {
             get { return _context; }
         }
 
+        /// <summary>
+        /// ARGV becomes a warm-start request's arguments (Hosting/WarmStart.cs). The array object stays the
+        /// same: the prelude's ARGF holds on to it.
+        /// </summary>
+        internal void ReplaceCommandLineArguments(ICollection<string>/*!*/ arguments, RubyEncoding/*!*/ encoding) {
+            _commandLineArguments.Clear();
+            foreach (var arg in arguments) {
+                ExpandArgument(_commandLineArguments, arg, encoding);
+            }
+            _lastInputLineNumber = 0;
+            _currentFileIndex = -1;
+        }
+
         public object/*!*/ Singleton {
             get { return _singleton; }
             // set by environment initializer:

@@ -74,5 +74,21 @@ fi
 RUBYPATH="$S/bin${RUBYPATH:+:$RUBYPATH}"
 export RUBYPATH
 
-exec "$IR_BIN" -X:UsePrism \
-  "-X:StdLib=$S/ironruby:$S/ruby/4.0:$S/ruby/1.9.1" "$@"
+STDLIB="-X:StdLib=$S/ironruby:$S/ruby/4.0:$S/ruby/1.9.1"
+
+# Warm start (Util/warm/README.md): IR_SERVER=start keeps a pool of IronRuby processes with the
+# runtime and the prelude already loaded, and IR_SERVER=1 runs the program in one of them -
+# `ir -e 1` in ~0.05 s instead of ~0.8 s. Whenever the pool cannot serve a request (none running,
+# none idle, startup inputs such as RUBYOPT or -I that differ from the pool's) the client execs
+# exactly the command below instead.
+case "$IR_SERVER" in
+  ""|0) ;;
+  start|stop|restart|status)
+    exec "$IR_ROOT/Util/warm/ir-server.sh" "$IR_SERVER" "$IR_BIN" -X:UsePrism "$STDLIB" ;;
+  *)
+    if [ -x "$IR_ROOT/Util/warm/bin/ir-client" ]; then
+      exec "$IR_ROOT/Util/warm/bin/ir-client" "$IR_BIN" -X:UsePrism "$STDLIB" "$@"
+    fi ;;
+esac
+
+exec "$IR_BIN" -X:UsePrism "$STDLIB" "$@"

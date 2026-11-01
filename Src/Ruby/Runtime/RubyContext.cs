@@ -605,6 +605,7 @@ namespace IronRuby.Runtime {
             : base(manager) {
             ContractUtils.RequiresNotNull(manager, "manager");
             _options = new RubyOptions(options);
+            _constructionOptions = options;
             if (_options.ObjectSpace) {
                 ObjectSpaceObjects = new ObjectSpaceRegistry();
             }
@@ -3739,6 +3740,84 @@ namespace IronRuby.Runtime {
             return (RubyGlobalScope)globalScope.SetExtension(ContextId, result);
         }
 
+        #region Warm start (Hosting/WarmStart.cs)
+
+        // The options dictionary the context was created with; a warm-start request swaps in a copy
+        // that differs only in what is per program (MainFile, Arguments, RequiredPaths).
+        private readonly IDictionary<string, object> _constructionOptions;
+
+        // The main script's global scope, created ahead of time with the core prelude (and the pool's
+        // -r libraries) already loaded into it, and how many of RequirePaths that covered.
+        private Scope _warmMainScope;
+        private int _warmLoadedRequirePaths;
+
+        /// <summary>
+        /// Does now what the main script would do first as it starts to run: creates its top-level
+        /// scope, which loads the core prelude - ruby4.rb, RubyGems - and the -r libraries.
+        /// </summary>
+        internal void PrepareWarmStart() {
+            var scope = new Scope();
+            RubyTopLevelScope.CreateTopLevelScope(scope, this, true);
+            _warmMainScope = scope;
+            _warmLoadedRequirePaths = (RubyOptions.RequirePaths != null) ? RubyOptions.RequirePaths.Count : 0;
+        }
+
+        internal Scope TakeWarmMainScope() {
+            Scope scope = _warmMainScope;
+            _warmMainScope = null;
+            return scope;
+        }
+
+        /// <summary>The number of RequirePaths already loaded into the warm main scope (taken once).</summary>
+        internal int TakeWarmLoadedRequirePaths() {
+            int count = _warmLoadedRequirePaths;
+            _warmLoadedRequirePaths = 0;
+            return count;
+        }
+
+        /// <summary>
+        /// Makes this context the one a cold start of the request's command line would have created.
+        /// Everything else in the options has been checked to be the same as the pool's.
+        /// </summary>
+        internal void ApplyWarmStartRequest(string mainFile, ICollection<string>/*!*/ arguments, IList<string> requirePaths,
+            object searchPaths, IList<string> extraLoadPaths) {
+            var options = new Dictionary<string, object>();
+            if (_constructionOptions != null) {
+                foreach (var entry in _constructionOptions) {
+                    options[entry.Key] = entry.Value;
+                }
+            }
+            options["MainFile"] = mainFile;
+            options["Arguments"] = new List<string>(arguments).ToArray();
+            options["RequiredPaths"] = requirePaths;
+            if (searchPaths != null) {
+                options["SearchPaths"] = searchPaths;
+            }
+            _options = new RubyOptions(options);
+
+            // -I directories go in front of $LOAD_PATH, in order, where Loader.MakeLoadPaths puts them.
+            if (extraLoadPaths != null) {
+                lock (_loader.LoadPaths) {
+                    for (int i = 0; i < extraLoadPaths.Count; i++) {
+                        _loader.LoadPaths.Insert(i, EncodePath(extraLoadPaths[i]));
+                    }
+                }
+            }
+
+            CommandLineProgramPath = (mainFile != null) ? EncodePath(mainFile) : null;
+            _inputProvider.ReplaceCommandLineArguments(_options.Arguments, _options.LocaleEncoding);
+
+            // The prelude keeps the $0 the program started with for Process.argv0; it was nil then.
+            object process;
+            if (ObjectClass.TryGetConstant(null, "Process", out process) && process is RubyModule processModule &&
+                processModule.TryRemoveConstant("ORIGINAL_ARGV0", out _)) {
+                processModule.SetConstant("ORIGINAL_ARGV0",
+                    (CommandLineProgramPath != null) ? (object)CommandLineProgramPath.Clone().Freeze() : null);
+            }
+        }
+
+        #endregion
+
         /// <summary>
         /// The main script did not parse. MRI reports that as it parses, before the at_exit handlers run.
         /// </summary>
@@ -3790,7 +3869,7 @@ namespace IronRuby.Runtime {
                     // up - an at_exit handler, say - is in place even when the script does not parse.
                     // Here they are loaded as the script starts running, so do it now instead.
                     if (RubyOptions.RequirePaths != null) {
-                        RubyTopLevelScope.CreateTopLevelScope(new Scope(), this, true);
+                        RubyTopLevelScope.CreateTopLevelScope(TakeWarmMainScope() ?? new Scope(), this, true);
                     }
                     throw;
                 }
@@ -3801,7 +3880,12 @@ namespace IronRuby.Runtime {
                     Console.Out.Flush();
                     return 0;
                 }
-                code.Run();
+                Scope warmScope = TakeWarmMainScope();
+                if (warmScope != null) {
+                    code.Run(warmScope);
+                } else {
+                    code.Run();
+                }
             } catch (SystemExit e) {
                 return e.Status;
             }

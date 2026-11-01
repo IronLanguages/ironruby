@@ -82,10 +82,15 @@ internal sealed class Host : RubyConsoleHost {
     [STAThread]
     [RubyStackTraceHidden]
     static int Main(string[] args) {
+        // A process the warm-start broker started (Util/warm): see IronRuby.Hosting.WarmStart.
+        WarmStart.InitializeFromEnvironment();
+
         if (Array.IndexOf(args, "-X:UsePrism") >= 0) {
             args = Array.FindAll(args, a => a != "-X:UsePrism");
             RubyContext.AlternativeParser = IronRuby.Prism.PrismAstBridge.Parse;
         }
-        return new Host().Run(args);
+        int status = new Host().Run(args);
+        WarmStart.ReportExit(status);
+        return status;
     }
 }
