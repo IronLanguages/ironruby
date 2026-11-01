@@ -2762,6 +2762,15 @@ namespace IronRuby.Builtins {
         }
 
         private bool TryGetClrMember(string/*!*/ name, bool virtualLookup, out RubyMemberInfo method) {
+            bool timed = PhaseTimer.Enter(PhaseTimer.ClrMember);
+            try {
+                return TryGetClrMemberNoTiming(name, virtualLookup, out method);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
+        }
+
+        private bool TryGetClrMemberNoTiming(string/*!*/ name, bool virtualLookup, out RubyMemberInfo method) {
             // Skip hidden CLR overloads.
             // Skip lookup on types that are not visible, that are interfaces or generic type definitions.
             if (_typeTracker != null && !IsModuleType(_typeTracker.Type)) {

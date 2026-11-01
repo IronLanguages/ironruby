@@ -70,7 +70,13 @@ namespace IronRuby.Runtime {
         private ScriptCodeFunc/*!*/ Target {
             get {
                 if (_target == null) {
-                    var compiledMethod = (ScriptCodeFunc)CompileLambda(_code, SourceUnit.LanguageContext);
+                    bool timed = PhaseTimer.Enter(PhaseTimer.LightCompileTop);
+                    ScriptCodeFunc compiledMethod;
+                    try {
+                        compiledMethod = (ScriptCodeFunc)CompileLambda(_code, SourceUnit.LanguageContext);
+                    } finally {
+                        PhaseTimer.Exit(timed);
+                    }
                     Interlocked.CompareExchange(ref _target, compiledMethod, null);
                 }
                 return _target;
@@ -110,6 +116,10 @@ namespace IronRuby.Runtime {
                     throw Assert.Unreachable;                
             }
 
+            if (_code == null) {
+                // compiled ahead of time (IronRuby.Startup.dll): see PrecompiledCode.IsRunningOnThread
+                return Precompiled.PrecompiledCode.Run(_target, localScope);
+            }
             return Target(localScope, localScope.SelfObject);
         }
 

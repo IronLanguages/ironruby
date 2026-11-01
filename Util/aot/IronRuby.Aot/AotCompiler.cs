@@ -22,6 +22,7 @@ using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
 using IronRuby.Aot.Runtime;
+using IronRuby.Runtime.Precompiled;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Ast;
@@ -49,11 +50,19 @@ namespace IronRuby.Aot {
         private int _fieldCounter;
         public readonly Dictionary<string, int> Stats = new();
 
-        public AotCompiler(RubyContext context, string assemblyName) {
+        /// <summary>
+        /// A library rather than a program: no main file and no entry point; the files are listed in a
+        /// PrecompiledFilesAttribute with the hashes of their sources, for IronRuby's loader to pick up
+        /// (IronRuby.Startup.dll, see PrecompiledCode.TryRegisterStartupLibrary).
+        /// </summary>
+        public readonly bool Library;
+
+        public AotCompiler(RubyContext context, string assemblyName, bool library = false) {
             _context = context;
+            Library = library;
             _assembly = new PersistedAssemblyBuilder(new AssemblyName(assemblyName), typeof(object).Assembly);
             var module = _assembly.DefineDynamicModule(assemblyName);
-            _type = module.DefineType("RubyProgram", TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
+            _type = module.DefineType(library ? "RubyStartup" : "RubyProgram", TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
         }
 
         private void Count(string what, int n = 1) {
@@ -68,7 +77,7 @@ namespace IronRuby.Aot {
             for (int i = 0; i < paths.Length; i++) {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 var unit = _context.CreateFileUnit(paths[i]);
-                bool isMain = paths[i] == Path.GetFullPath(mainFile);
+                bool isMain = mainFile != null && paths[i] == Path.GetFullPath(mainFile);
                 var options = new RubyCompilerOptions(_context.RubyOptions) { FactoryKind = isMain ? TopScopeFactoryKind.Main : TopScopeFactoryKind.File };
                 var ast = IronRuby.Prism.PrismAstBridge.Parse(unit, options, ErrorSink.Default);
                 if (ast == null) throw new InvalidOperationException("syntax error in " + paths[i]);
@@ -95,6 +104,16 @@ namespace IronRuby.Aot {
                 ExpressionCompiler.CompileToMethod(init, _type.DefineMethod("__init" + chunks, MethodAttributes.Public | MethodAttributes.Static));
             }
 
+            if (Library) {
+                if (chunks != 0) throw new NotSupportedException("a startup library initializes its constants lazily");
+                _type.SetCustomAttribute(new CustomAttributeBuilder(
+                    typeof(PrecompiledFilesAttribute).GetConstructors()[0],
+                    new object[] { paths, _entryPoints.ToArray(), paths.Select(PrecompiledCode.HashFile).ToArray() }));
+                _type.CreateType();
+                Save(outputPath, PEHeaderBuilder.CreateLibraryHeader(), default);
+                return;
+            }
+
             // Main(string[] args) => AotRuntime.Main(typeof(RubyProgram), args)
             var main = _type.DefineMethod("Main", MethodAttributes.Public | MethodAttributes.Static, typeof(int), new[] { typeof(string[]) });
             var il = main.GetILGenerator();
@@ -113,13 +132,17 @@ namespace IronRuby.Aot {
             Count("constant fields initialized at load time", _constants.Count);
             Count("init chunks", chunks);
 
+            Save(outputPath, PEHeaderBuilder.CreateExecutableHeader(), MetadataTokens.MethodDefinitionHandle(main.MetadataToken));
+        }
+
+        private void Save(string outputPath, PEHeaderBuilder header, MethodDefinitionHandle entryPoint) {
             var metadata = _assembly.GenerateMetadata(out BlobBuilder ilStream, out BlobBuilder fieldData);
             var peBuilder = new ManagedPEBuilder(
-                header: PEHeaderBuilder.CreateExecutableHeader(),
+                header: header,
                 metadataRootBuilder: new MetadataRootBuilder(metadata),
                 ilStream: ilStream,
                 mappedFieldData: fieldData,
-                entryPoint: MetadataTokens.MethodDefinitionHandle(main.MetadataToken));
+                entryPoint: entryPoint);
             var blob = new BlobBuilder();
             peBuilder.Serialize(blob);
             using (var fs = File.Create(outputPath)) {
@@ -232,7 +255,7 @@ namespace IronRuby.Aot {
             return _persistedDelegates[inMemory] = result;
         }
 
-        private Expression ContextExpression => Expression.Property(null, typeof(AotRuntime).GetProperty("Context"));
+        private Expression ContextExpression => Expression.Property(null, typeof(PrecompiledCode).GetProperty("Context"));
 
         /// <summary>A static CallSite field for a dynamic site: `CallSite<T>.Create(binder)` at load time.</summary>
         private Expression SiteField(Type delegateType, CallSiteBinder binder) {
@@ -329,7 +352,7 @@ namespace IronRuby.Aot {
                     var postField = dispatcher.GetType().GetField("_postCount", BindingFlags.NonPublic | BindingFlags.Instance);
                     if (postField != null) postCount = (int)postField.GetValue(dispatcher);
                     int attributes = (int)(BlockSignatureAttributes)_dispatcherAttributes.GetValue(dispatcher);
-                    return Expression.Call(typeof(AotRuntime).GetMethod("CreateBlockDispatcher"),
+                    return Expression.Call(typeof(PrecompiledCode).GetMethod("CreateBlockDispatcher"),
                         Expression.Constant(dispatcher.ParameterCount), Expression.Constant(postCount), Expression.Constant(attributes),
                         Expression.Constant(dispatcher.SourcePath, typeof(string)), Expression.Constant(dispatcher.SourceLine),
                         SerializeSignature(dispatcher.ParameterSignature));
@@ -337,7 +360,7 @@ namespace IronRuby.Aot {
 
                 case RubySymbol symbol:
                     hint = "sym";
-                    return Expression.Call(typeof(AotRuntime).GetMethod("Symbol"),
+                    return Expression.Call(typeof(PrecompiledCode).GetMethod("Symbol"),
                         ByteArray(symbol.String.ToByteArray()), ConstantField(symbol.Encoding, typeof(RubyEncoding)));
 
                 case string[] strings:
@@ -348,6 +371,34 @@ namespace IronRuby.Aot {
                     hint = "bytes";
                     return ByteArray(bytes);
 
+                case Array array when array.Rank == 1 && !value.GetType().GetElementType().IsValueType: {
+                    var elementType = value.GetType().GetElementType();
+                    hint = elementType.Name + "s";
+                    var items = new List<Expression>();
+                    foreach (var item in array) {
+                        items.Add(item == null ? Expression.Constant(null, elementType)
+                            : Census.IsLiteral(item, elementType) ? Expression.Constant(item, elementType)
+                            : ConvertTo(ConstantField(item, elementType), elementType));
+                    }
+                    return Expression.NewArrayInit(elementType, items);
+                }
+
+                case MutableString str when str.IsFrozen:
+                    // literal parts of an interpolated string: frozen, only ever copied from
+                    hint = "str";
+                    return Expression.Call(typeof(PrecompiledCode).GetMethod("FrozenString"),
+                        ByteArray(str.ToByteArray()), ConstantField(str.Encoding, typeof(RubyEncoding)));
+
+                case InstanceVariableSite ivar:
+                    hint = "ivar";
+                    return Expression.New(typeof(InstanceVariableSite).GetConstructor(new[] { typeof(string) }), Expression.Constant(ivar.Name));
+
+                case GlobalVariableSite gvar:
+                    hint = "gvar";
+                    return Expression.New(typeof(GlobalVariableSite).GetConstructor(new[] { typeof(string) }), Expression.Constant(gvar.Name));
+
+                case ExpressionQualifiedConstantSiteCache:
+                case ExpressionQualifiedIsDefinedConstantSiteCache:
                 case ConstantSiteCache:
                 case IsDefinedConstantSiteCache:
                     hint = "constcache";
@@ -375,6 +426,8 @@ namespace IronRuby.Aot {
             throw new NotSupportedException("cannot re-create a " + value.GetType().FullName + " at load time");
         }
 
+        private static Expression ConvertTo(Expression e, Type type) => e.Type == type ? e : Expression.Convert(e, type);
+
         private static Expression ByteArray(byte[] bytes) =>
             Expression.NewArrayInit(typeof(byte), bytes.Select(b => Expression.Constant(b)));
 
@@ -392,7 +445,7 @@ namespace IronRuby.Aot {
         private Expression SerializeSignature(RubyParameterSignature sig) {
             if (sig == null) return Expression.Constant(null, typeof(RubyParameterSignature));
             var ps = SigField<RubyParameterSignature.Parameter[]>(sig, "_parameters");
-            return Expression.Call(typeof(AotRuntime).GetMethod("Signature"),
+            return Expression.Call(typeof(PrecompiledCode).GetMethod("Signature"),
                 Strings(ps.Select(p => p.Kind)), Strings(ps.Select(p => p.Name)),
                 Expression.Constant(SigField<int>(sig, "_leadingCount")), Expression.Constant(SigField<int>(sig, "_optionalCount")),
                 Expression.Constant(SigField<int>(sig, "_postCount")), Expression.Constant(SigField<bool>(sig, "_hasRest")),
@@ -420,7 +473,7 @@ namespace IronRuby.Aot {
 
             var loc = ast.Location;
             int[] location = { loc.Start.Index, loc.Start.Line, loc.Start.Column, loc.End.Index, loc.End.Line, loc.End.Column };
-            var header = Expression.Call(typeof(AotRuntime).GetMethod("MethodHeader"),
+            var header = Expression.Call(typeof(PrecompiledCode).GetMethod("MethodHeader"),
                 Expression.Constant(ast.Name), Expression.Constant(ast.Target != null), Expression.Constant(ast.UsesBlock),
                 Expression.NewArrayInit(typeof(int), location.Select(i => Expression.Constant(i))),
                 Strings(ps.Mandatory.Select(m => ((LocalVariable)m).Name)), Expression.Constant(ps.LeadingMandatoryCount),
@@ -428,7 +481,7 @@ namespace IronRuby.Aot {
                 Expression.Constant(ps.Unsplat != null ? ((LocalVariable)ps.Unsplat).Name : null, typeof(string)),
                 Expression.Constant(ps.Block?.Name, typeof(string)),
                 SerializeSignature(ps.Signature));
-            return Expression.Call(typeof(AotRuntime).GetMethod("CreateMethodBody"),
+            return Expression.Call(typeof(PrecompiledCode).GetMethod("CreateMethodBody"),
                 header, Expression.Constant(body.Document?.FileName, typeof(string)),
                 ConstantField(AotHost.GetEncoding(body), typeof(RubyEncoding)), factory);
         }

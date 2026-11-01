@@ -813,7 +813,7 @@ namespace IronRuby.Runtime {
             // Nothing but the core prelude is running, and its frames are not in a backtrace: the
             // walk below would come back empty, after ~1ms, for each of the prelude's const_set calls
             // (Errno and Encoding make hundreds).
-            if (context.Loader.IsLoadingCorePrelude) {
+            if (context.Loader.IsLoadingCorePrelude || Precompiled.PrecompiledCode.IsRunningOnThread) {
                 return false;
             }
 

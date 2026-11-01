@@ -277,6 +277,15 @@ namespace IronRuby.Runtime.Calls {
         }
 
         private Delegate/*!*/ Compile(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            bool timed = PhaseTimer.Enter(_precompiled != null ? PhaseTimer.Precompiled : PhaseTimer.DefCompile);
+            try {
+                return CompileNoTiming(declaringScope, declaringModule);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
+        }
+
+        private Delegate/*!*/ CompileNoTiming(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
             if (_precompiled != null) {
                 return _precompiled(declaringScope, declaringModule);
             }
@@ -298,7 +307,13 @@ namespace IronRuby.Runtime.Calls {
                 _compiledWithoutDefinitionRefinements = true;
             }
 
-            MSA.LambdaExpression lambda = _ast.TransformBody(gen, declaringScope, declaringModule, definitionRefinements);
+            MSA.LambdaExpression lambda;
+            bool timed = PhaseTimer.Enter(PhaseTimer.DefTransform);
+            try {
+                lambda = _ast.TransformBody(gen, declaringScope, declaringModule, definitionRefinements);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
             var result = RubyScriptCode.CompileLambda(lambda, declaringScope.RubyContext);
 
             // -X:JIT: hand the generic body to the method JIT, which may put a profiling

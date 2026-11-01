@@ -791,6 +791,9 @@ namespace IronRuby.Runtime {
             } 
 
             Utils.Log(String.Format("{0}: {1}", ++_compiledFileCount, sourceUnit.Path), "LOAD_COMPILED");
+            if (IronRuby.Runtime.Precompiled.PrecompiledCode.Trace) {
+                Console.Error.WriteLine("IronRuby.Startup: compiling " + fullPath);
+            }
 #endif
 
             RubyCompilerOptions options = new RubyCompilerOptions(_context.RubyOptions) {
@@ -1250,6 +1253,10 @@ namespace IronRuby.Runtime {
         /// lists the features MRI has in $" from the start.
         /// </summary>
         internal void LoadCorePrelude(Scope/*!*/ globalScope, object self, string/*!*/ path) {
+#if FEATURE_FILESYSTEM
+            // the prelude, rubygems and the rest of startup compiled ahead of time, if there is such a library
+            IronRuby.Runtime.Precompiled.PrecompiledCode.TryRegisterStartupLibrary(_context);
+#endif
             bool direct = path == "ruby4.rb";
             if (direct) {
                 _corePreludeThread = Thread.CurrentThread;
