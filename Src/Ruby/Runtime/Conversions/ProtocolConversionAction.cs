@@ -447,12 +447,17 @@ namespace IronRuby.Runtime.Conversions {
         // answers every call of a process that has one runtime; a second runtime just misses.
         private static TSelf _lastMade;
 
-        public static TSelf/*!*/ Make(RubyContext/*!*/ context) {
+        /// <summary>
+        /// The runtime's action; with a null <paramref name="context"/> the shared one (<see cref="MakeShared"/>),
+        /// which a shared composite conversion is made of.
+        /// </summary>
+        public static TSelf/*!*/ Make(RubyContext context) {
             TSelf last = _lastMade;
             if (last != null && ReferenceEquals(last.Context, context)) {
                 return last;
             }
-            return _lastMade = context.MetaBinderFactory.Conversion<TSelf>();
+            var factory = (context != null) ? context.MetaBinderFactory : RubyMetaBinderFactory.Shared;
+            return _lastMade = factory.Conversion<TSelf>();
         }
 
         [Emitted]

@@ -966,6 +966,10 @@ namespace IronRuby.Runtime {
                     location.Start.Line, location.Start.Column - 1, location.End.Line, location.End.Column - 1);
             }
 
+            // Ruby 2.1+: def returns the method name as a symbol (enables `private def foo`). Interned before
+            // method_added, which interns the name as well: the hook then finds it in the identifier cache.
+            object result = scope.RubyContext.StringifyIdentifier(body.Name);
+
             method.DeclaringModule.MethodAdded(body.Name);
 
             if (moduleFunction) {
@@ -973,8 +977,7 @@ namespace IronRuby.Runtime {
                 method.DeclaringModule.GetOrCreateSingletonClass().MethodAdded(body.Name);
             }
 
-            // Ruby 2.1+: def returns the method name as a symbol (enables `private def foo`)
-            return scope.RubyContext.CreateSymbol(body.Name, RubyEncoding.UTF8);
+            return result;
         }
 
         // MRI's vm_init_redefined_flag: the core methods its instructions inline, by class.

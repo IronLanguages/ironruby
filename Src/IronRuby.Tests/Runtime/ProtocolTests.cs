@@ -20,6 +20,7 @@ using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
+using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Tests {
 
@@ -325,6 +326,25 @@ puts ""(#{c})""
 (#<C:0x*>)
 ", OutputFlags.Match);
 
+        }
+
+        /// <summary>
+        /// CompositeConversionAction.Make hands out one action per runtime and conversion, and MakeShared - what serialized
+        /// code calls - the shared one, made of shared component conversions (it used to throw NullReferenceException).
+        /// </summary>
+        public void CompositeConversionActions1() {
+            foreach (CompositeConversion conversion in Enum.GetValues(typeof(CompositeConversion))) {
+                var shared = CompositeConversionAction.MakeShared(conversion);
+                Assert(shared != null && shared.Context == null);
+                Assert(ReferenceEquals(shared, CompositeConversionAction.MakeShared(conversion)));
+
+                var action = CompositeConversionAction.Make(Context, conversion);
+                Assert(action != null && ReferenceEquals(action.Context, Context));
+                Assert(ReferenceEquals(action, CompositeConversionAction.Make(Context, conversion)));
+                Assert(ReferenceEquals(action, Context.MetaBinderFactory.CompositeConversion(conversion)));
+                Assert(ReferenceEquals(shared, CompositeConversionAction.MakeShared(conversion)));
+                Assert(!ReferenceEquals(action, shared));
+            }
         }
     }
 }

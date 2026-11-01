@@ -2878,6 +2878,11 @@ namespace IronRuby.Runtime {
         /// Freezes the string the symbol holds on.
         /// </summary>
         public RubySymbol/*!*/ CreateSymbol(MutableString/*!*/ str, bool clone) {
+            bool created;
+            return CreateSymbol(str, clone, out created);
+        }
+
+        private RubySymbol/*!*/ CreateSymbol(MutableString/*!*/ str, bool clone, out bool created) {
             // A symbol whose name is ASCII-only is US-ASCII whatever the string it was interned
             // from was tagged with, so that "abc".b.to_sym.equal?(:abc) and the encoding does
             // not depend on which spelling happened to reach the symbol table first. An
@@ -2890,7 +2895,8 @@ namespace IronRuby.Runtime {
 
             RubySymbol result;
             lock (SymbolsLock) {
-                if (!_symbols.TryGetValue(str, out result)) {
+                created = !_symbols.TryGetValue(str, out result);
+                if (created) {
                     result = new RubySymbol((clone ? str.Clone() : str).Freeze(), _symbols.Count + RubySymbol.MinId, _runtimeId);
                     _symbols.Add(str, result);
                 }
@@ -4762,6 +4768,59 @@ namespace IronRuby.Runtime {
             }
 
             return site.Target(site, target, EncodeIdentifier(memberName));
+        }
+
+        /// <summary>
+        /// Calls <paramref name="hook"/> - method_added, const_added and the like - on <paramref name="target"/>,
+        /// unless it would run the built-in method, which does nothing (see <see cref="IsDefaultHook"/>). The name is
+        /// interned either way, as the call would intern it.
+        /// </summary>
+        internal void CallHook(ref CallSite<Func<CallSite, object, object, object>> site, RubyClass.Hook hook,
+            object target, string/*!*/ memberName) {
+
+            if (!IsDefaultHook(target, hook)) {
+                Send(ref site, RubyClass.HookNames[(int)hook], target, memberName);
+            } else if (!_identifierSymbols.ContainsKey(memberName)) {
+                InternHookName(memberName);
+            }
+        }
+
+        /// <summary>
+        /// Interns the name a left-out hook call would have passed: the call would have interned it, and for a constant
+        /// nothing else may, while CRuby's Symbol.all_symbols lists every constant and method name. A name that had a symbol
+        /// already is filed in the identifier cache (<see cref="StringifyIdentifier"/>), so that from then on it costs
+        /// a lookup. A new one is not: every class and module name is one, and filing each costs more than it saves.
+        /// </summary>
+        private void InternHookName(string/*!*/ name) {
+            bool created;
+            RubySymbol symbol = CreateSymbol(MutableString.CreateMutable(name, GetIdentifierEncoding()), false, out created);
+            if (!created) {
+                _identifierSymbols.TryAdd(name, symbol);
+            }
+        }
+
+        /// <summary>
+        /// True if calling <paramref name="hook"/> on <paramref name="target"/> would run the built-in method
+        /// (Module#method_added, Module#const_added, Class#inherited, BasicObject#singleton_method_added, ...), which is
+        /// empty. The runtime then leaves the call out: it does nothing, and making it would bind a rule in the hook's call
+        /// site - one per new class or module, since each has a site of its own.
+        /// </summary>
+        /// <remarks>
+        /// The hook is resolved the way its call site resolves it - an implicit-self call, so every visibility, no
+        /// refinements - from the receiver's immediate class, through that class's lookup cache; the class keeps its answer
+        /// for as long as its method version stays the same (<see cref="RubyClass.IsDefaultHook"/>). A hook defined, aliased
+        /// or copied anywhere in the receiver's ancestry (its singleton class, a module extended, included or prepended,
+        /// a Module or Class subclass) is found instead of the built-in one, and an undefined hook is not found at all:
+        /// either way the call is made, and goes where it always went (to method_missing for an undefined one). An empty
+        /// library method of another arity (BasicObject#initialize copied under a hook's name) would raise, so it is called.
+        /// While :c_call is traced the call is made too: CRuby reports the default hook to a TracePoint, and the rule does.
+        /// </remarks>
+        internal bool IsDefaultHook(object target, RubyClass.Hook hook) {
+            if (TracePoint.CCallTracing) {
+                return false;
+            }
+
+            return GetImmediateClassOf(target).IsDefaultHook(hook);
         }
 
         /// <summary>

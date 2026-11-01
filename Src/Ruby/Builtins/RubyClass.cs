@@ -172,10 +172,79 @@ namespace IronRuby.Builtins {
             }
         }
         
+        #region Hooks
+
+        /// <summary>
+        /// The hooks the runtime calls on a module, a class or an object (<see cref="RubyContext.CallHook"/>).
+        /// </summary>
+        internal enum Hook {
+            MethodAdded,
+            MethodRemoved,
+            MethodUndefined,
+            SingletonMethodAdded,
+            SingletonMethodRemoved,
+            SingletonMethodUndefined,
+            ConstantAdded,
+            Inherited,
+        }
+
+        internal static readonly string/*!*/[]/*!*/ HookNames = new[] {
+            Symbols.MethodAdded,
+            Symbols.MethodRemoved,
+            Symbols.MethodUndefined,
+            Symbols.SingletonMethodAdded,
+            Symbols.SingletonMethodRemoved,
+            Symbols.SingletonMethodUndefined,
+            Symbols.ConstantAdded,
+            Symbols.Inherited,
+        };
+
+        // What IsDefaultHook answered for an object whose immediate class this is, valid while the method version is the
+        // one in the upper 32 bits: bit h is set once hook h has been resolved, bit 16 + h if it resolved to the built-in
+        // empty method. Every definition in a class asks, so a repeated question costs the version check alone - no
+        // lookup-cache hit, and no class-hierarchy lock for a class whose lookup cache is full. Replaced as a whole; two
+        // racing fills may drop each other's bits, which only costs a resolution later.
+        private long _hookAnswers;
+
+        /// <summary>
+        /// True if calling <paramref name="hook"/> on an object whose immediate class this is would run the built-in method,
+        /// which does nothing: the method an implicit-self call finds - every visibility, no refinements - is an empty library
+        /// method that takes one argument. See <see cref="RubyContext.IsDefaultHook"/>.
+        /// </summary>
+        internal bool IsDefaultHook(Hook hook) {
+            long answers = Volatile.Read(ref _hookAnswers);
+            if ((int)(answers >> 32) == Version.Method && (answers & (1L << (int)hook)) != 0) {
+                return (answers & (1L << (16 + (int)hook))) != 0;
+            }
+            return ResolveHook(hook);
+        }
+
+        private bool ResolveHook(Hook hook) {
+            int version;
+            CachedMethodLookup lookup = GetMethodLookup(HookNames[(int)hook], out version);
+            var method = lookup.Info as RubyLibraryMethodInfo;
+            bool isDefault = lookup.Found && method != null && method.IsEmptyUnary;
+
+            // The lookup's answer stays right while the version does (-1: it must not be kept).
+            if (version >= 0) {
+                long answers = Volatile.Read(ref _hookAnswers);
+                long bits = ((int)(answers >> 32) == version) ? answers & 0xffffffffL : 0;
+                bits |= (1L << (int)hook) | (isDefault ? 1L << (16 + (int)hook) : 0);
+                Volatile.Write(ref _hookAnswers, ((long)version << 32) | bits);
+            }
+            return isDefault;
+        }
+
+        #endregion
+
         // RubyClass, RubyClass -> object
         private CallSite<Func<CallSite, object, object, object>> _classInheritedCallbackSite;
 
         internal void ClassInheritedEvent(RubyClass/*!*/ subClass) {
+            if (Context.IsDefaultHook(this, Hook.Inherited)) {
+                return;
+            }
+
             if (_classInheritedCallbackSite == null) {
                 Interlocked.CompareExchange(
                     ref _classInheritedCallbackSite,
@@ -200,7 +269,7 @@ namespace IronRuby.Builtins {
 
             // not called on singleton classes:
             if (IsSingletonClass) {
-                Context.Send(ref _singletonMethodAddedCallbackSite, Symbols.SingletonMethodAdded, _singletonClassOf, name);
+                Context.CallHook(ref _singletonMethodAddedCallbackSite, Hook.SingletonMethodAdded, _singletonClassOf, name);
             } else {
                 base.MethodAdded(name);
             }
@@ -210,7 +279,7 @@ namespace IronRuby.Builtins {
             Assert.NotNull(name);
 
             if (IsSingletonClass) {
-                Context.Send(ref _singletonMethodRemovedCallbackSite, Symbols.SingletonMethodRemoved, _singletonClassOf, name);
+                Context.CallHook(ref _singletonMethodRemovedCallbackSite, Hook.SingletonMethodRemoved, _singletonClassOf, name);
             } else {
                 base.MethodRemoved(name);
             }
@@ -220,7 +289,7 @@ namespace IronRuby.Builtins {
             Assert.NotNull(name);
 
             if (IsSingletonClass) {
-                Context.Send(ref _singletonMethodUndefinedCallbackSite, Symbols.SingletonMethodUndefined, _singletonClassOf, name);
+                Context.CallHook(ref _singletonMethodUndefinedCallbackSite, Hook.SingletonMethodUndefined, _singletonClassOf, name);
             } else {
                 base.MethodUndefined(name);
             }

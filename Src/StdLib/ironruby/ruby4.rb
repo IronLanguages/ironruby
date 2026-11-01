@@ -5866,21 +5866,26 @@ module Errno
 
   ERRNO_CLASSES = {}
 
+  # Every class below is a new receiver, so a call like klass.const_set(...) would bind
+  # a rule of its own for each class - about 300 of them, for calls made once. Module's
+  # own methods called through bind_call share one rule. Nothing can have redefined
+  # them on these classes yet: this runs before any program code.
+  const_set_on = ::Module.instance_method(:const_set)
+  const_defined_on = ::Module.instance_method(:const_defined?)
+
   ERRNO_TABLE.each do |errno, (name, message)|
     if const_defined?(name, false)
       klass = const_get(name)
       # const_defined? without the second argument would find the enclosing Errno
       # module through the lexical scope, so restrict the lookup to the class.
-      klass.const_set(:Errno, errno) unless klass.const_defined?(:Errno, false)
-      klass.const_set(:Message, message) unless klass.const_defined?(:Message, false)
+      const_set_on.bind_call(klass, :Errno, errno) unless const_defined_on.bind_call(klass, :Errno, false)
+      const_set_on.bind_call(klass, :Message, message) unless const_defined_on.bind_call(klass, :Message, false)
     else
       klass = Class.new(SystemCallError)
       const_set(name, klass)
-      # A class made just now has no constants of its own, so there is nothing to ask it
-      # first - and asking is not free: every class is a new receiver for these call
-      # sites, so each question binds a rule of its own.
-      klass.const_set(:Errno, errno)
-      klass.const_set(:Message, message)
+      # A class made just now has no constants of its own: nothing to ask it first.
+      const_set_on.bind_call(klass, :Errno, errno)
+      const_set_on.bind_call(klass, :Message, message)
     end
     ERRNO_CLASSES[errno] ||= klass
   end

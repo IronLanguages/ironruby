@@ -125,7 +125,7 @@ namespace IronRuby.Runtime.Calls {
             lock (_conversionActions) {
                 CompositeConversionAction result;
                 if (!_compositeConversionActions.TryGetValue(key, out result)) {
-                    _compositeConversionActions.Add(key, result = CompositeConversionAction.Make(_context, conversion));
+                    _compositeConversionActions.Add(key, result = CompositeConversionAction.Create(_context, conversion));
                 }
                 return result;
             }

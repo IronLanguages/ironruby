@@ -125,6 +125,11 @@ namespace IronRuby.Builtins {
                 if (table == null || table.Version != version) {
                     entries = new Dictionary<string, CachedMethodLookup>(StringComparer.Ordinal);
                 } else if (table.Entries.Count >= MaxCachedMethodLookups) {
+                    // Not filed. A method found is registered for invalidation all the same (InvalidateSitesOnOverride),
+                    // so a caller may keep it as long as a filed answer; an absent name would need registering first.
+                    if (entry.Found) {
+                        publishedVersion = version;
+                    }
                     return entry;
                 } else {
                     entries = new Dictionary<string, CachedMethodLookup>(table.Entries, StringComparer.Ordinal);
