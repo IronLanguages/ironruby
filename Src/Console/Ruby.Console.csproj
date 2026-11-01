@@ -88,6 +88,14 @@
        still good, and ir.sh does not pick a host older than the build. -->
   <Target Name="IronRubyReadyToRunHost" AfterTargets="Build"
           Condition="'$(Configuration)' == 'Release' and '$(TargetFramework)' != '' and '$(RuntimeIdentifier)' == '' and '$(IronRubyNestedR2R)' != 'true' and '$(IronRubyR2R)' != 'false' and $([MSBuild]::IsOSPlatform('Linux'))">
-    <Exec ContinueOnError="WarnAndContinue" Command="&quot;$(DOTNET_HOST_PATH)&quot; publish &quot;$(MSBuildProjectFullPath)&quot; -c Release -r linux-x64 --self-contained false -f $(TargetFramework) -p:PublishReadyToRun=true -p:IronRubyNestedR2R=true -p:IronRubyTargetFrameworks=$(TargetFramework) -p:DlrSourceDir=&quot;$(DlrSourceDir)&quot; -o &quot;$(MSBuildProjectDirectory)/bin/R2R/$(TargetFramework)&quot; -nologo" />
+    <!-- The host is published next to the old one and swapped in only once the publish succeeded: a publish that
+         fails halfway (it has hit an IOException race in Src/Prism/bin/.../linux-x64) would otherwise leave a host
+         with some assemblies new and some old. One retry, since that race does not repeat. -->
+    <PropertyGroup>
+      <_IrR2RDir>$(MSBuildProjectDirectory)/bin/R2R/$(TargetFramework)</_IrR2RDir>
+      <_IrR2RNew>$(_IrR2RDir).new</_IrR2RNew>
+      <_IrR2RPublish>&quot;$(DOTNET_HOST_PATH)&quot; publish &quot;$(MSBuildProjectFullPath)&quot; -c Release -r linux-x64 --self-contained false -f $(TargetFramework) -p:PublishReadyToRun=true -p:IronRubyNestedR2R=true -p:IronRubyTargetFrameworks=$(TargetFramework) -p:DlrSourceDir=&quot;$(DlrSourceDir)&quot; -o &quot;$(_IrR2RNew)&quot; -nologo</_IrR2RPublish>
+    </PropertyGroup>
+    <Exec ContinueOnError="WarnAndContinue" Command="rm -rf &quot;$(_IrR2RNew)&quot; &amp;&amp; ( $(_IrR2RPublish) || $(_IrR2RPublish) ) &amp;&amp; rm -rf &quot;$(_IrR2RDir)&quot; &amp;&amp; mv &quot;$(_IrR2RNew)&quot; &quot;$(_IrR2RDir)&quot;" />
   </Target>
 </Project>
