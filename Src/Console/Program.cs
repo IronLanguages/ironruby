@@ -40,6 +40,18 @@ internal sealed class Host : RubyConsoleHost {
         }
     }
 
+    // NativeAOT: ScriptRuntimeSetup.ReadConfiguration() goes through System.Configuration, which is
+    // reflection all the way down and fails at startup there. ir has no app.config to read anyway,
+    // so without dynamic code the setup is built directly.
+    protected override ScriptRuntimeSetup CreateRuntimeSetup() {
+        if (System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported) {
+            return base.CreateRuntimeSetup();
+        }
+        var setup = new ScriptRuntimeSetup();
+        setup.LanguageSetups.Add(CreateLanguageSetup());
+        return setup;
+    }
+
     protected override IConsole CreateConsole(ScriptEngine engine, CommandLine commandLine, ConsoleOptions options) {
         IConsole console = base.CreateConsole(engine, commandLine, options);
 

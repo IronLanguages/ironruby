@@ -50,6 +50,38 @@
   <ItemGroup Condition="'$(IronRubyStartupProfile)' == 'true' and Exists('$(MSBuildThisFileDirectory)..\..\Build\startup.mibc')">
     <PublishReadyToRunPgoFiles Include="$(MSBuildThisFileDirectory)..\..\Build\startup.mibc" />
   </ItemGroup>
+  <!-- NativeAOT (experimental): one native executable, no JIT, everything interpreted.
+         dotnet publish Src/Console/Ruby.Console.csproj -c Release -r linux-x64 -f net8.0 -p:IronRubyNativeAot=true \
+           -p:DlrSourceDir=... -o Src/Console/bin/NativeAOT/net8.0       # then IR_CONFIG=NativeAOT ./ir.sh
+       Not -p:PublishAot=true: a global property reaches the DLR projects too, and their net462 and
+       netstandard2.0 targets fail restore with NETSDK1207. Needs the DLR patch
+       Build/dlr-patches/aot/0001-interpreter-only-without-dynamic-code.patch.
+       Nothing here applies to a normal build or to the R2R host. -->
+  <PropertyGroup Condition="'$(IronRubyNativeAot)' == 'true'">
+    <PublishAot>true</PublishAot>
+    <!-- IronRuby.Prism is an Exe project (it has a test driver); only its library half is used -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+    <!-- IronRuby's library initializers, binders and ReflectionCache find members by name at run
+         time and nothing in IronRuby is annotated for trimming: keep IronRuby and the DLR whole. -->
+    <TrimMode>partial</TrimMode>
+    <!-- NativeAOT bakes feature switches in at compile time; the SDK default (false) for this one
+         wins over the RuntimeHostConfigurationOption item above. -->
+    <EnableUnsafeUTF7Encoding>true</EnableUnsafeUTF7Encoding>
+    <SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(IronRubyNativeAot)' == 'true'">
+    <TrimmerRootAssembly Include="IronRuby" />
+    <TrimmerRootAssembly Include="IronRuby.Libraries" />
+    <TrimmerRootAssembly Include="IronRuby.Libraries.Yaml" />
+    <TrimmerRootAssembly Include="IronRuby.Prism" />
+    <TrimmerRootAssembly Include="Microsoft.Scripting" />
+    <TrimmerRootAssembly Include="Microsoft.Dynamic" />
+    <!-- .NET types Ruby code reaches through CLR interop, by reflection at run time -->
+    <TrimmerRootDescriptor Include="NativeAot.roots.xml" />
+    <!-- Microsoft.Scripting references it (app.config support), but privately, so it never reaches
+         the host's output; ILC refuses to compile a rooted assembly whose references are missing -->
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0" />
+  </ItemGroup>
   <!-- A Release build on Linux also produces the ReadyToRun host (Util/publish-r2r.sh), which ir.sh runs by default:
        it starts about a third faster. The publish is a RuntimeIdentifier build of its own, so the target stays out of
        it, and IronRubyNestedR2R stops a publish from running it again. A failed publish only warns: the IL build is

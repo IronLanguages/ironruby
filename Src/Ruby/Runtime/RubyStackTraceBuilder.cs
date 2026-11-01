@@ -586,6 +586,16 @@ namespace IronRuby.Runtime {
                 if (type == typeof(Thread)) {
                     return false;
                 }
+
+                // Without dynamic code (NativeAOT) the DLR hands rules whose delegate type has no
+                // native thunk to System.Linq.Expressions' interpreter, and calls methods with value
+                // types in their signature by reflection, which rethrows the callee's exception
+                // through ExceptionDispatchInfo. Neither frame is there in a JIT process.
+                if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported &&
+                    (type == typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo) ||
+                     type.Namespace != null && type.Namespace.StartsWith("System.Linq.Expressions", StringComparison.Ordinal))) {
+                    return false;
+                }
             }
 
             // TODO: check loaded assemblies?
