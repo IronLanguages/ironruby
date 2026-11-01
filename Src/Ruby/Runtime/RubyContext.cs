@@ -3742,6 +3742,12 @@ namespace IronRuby.Runtime {
 
         #region Warm start (Hosting/WarmStart.cs)
 
+        /// <summary>
+        /// What Process.ppid reports instead of getppid(2), or 0. A warm-start worker runs the program
+        /// of a client process that the program's real parent started; its own parent is the broker.
+        /// </summary>
+        public static int ReportedParentProcessId { get; internal set; }
+
         // The options dictionary the context was created with; a warm-start request swaps in a copy
         // that differs only in what is per program (MainFile, Arguments, RequiredPaths).
         private readonly IDictionary<string, object> _constructionOptions;
@@ -3762,6 +3768,68 @@ namespace IronRuby.Runtime {
             _warmLoadedRequirePaths = (RubyOptions.RequirePaths != null) ? RubyOptions.RequirePaths.Count : 0;
         }
 
+        /// <summary>
+        /// Language options that only shape how the main program is read and run - the -n -p -l -a
+        /// -0 -x -s -c loop and script switches, -w/-W0/-W1/-W2/-v verbosity, the backtrace limit - and
+        /// that a warm process can therefore take from the request (see ApplyProgramOptions). Any
+        /// other option has to be the pool's. Not on the list because loading the prelude depends on
+        /// them: -F (RubyGems splits strings, which warns once $; is set) and -i (argf.rb reads $-i
+        /// as it loads). Of the warning categories only the two that -w and -W<level> move may differ
+        /// (WarmStartWarningCategories): the prelude redefines methods, which -W:performance reports.
+        /// Util/warm/check.py compares each of them with a cold start.
+        /// </summary>
+        internal static readonly string[]/*!*/ WarmStartProgramOptions = new[] {
+            "LoopOverInput", "PrintEachLine", "AutoSplit", "ChopLines",
+            "NoInputRecordSeparator", "InputRecordSeparator",
+            "SkipToRubyShebang", "ScriptSwitches", "CheckSyntaxOnly",
+            "Verbosity", "WarningCategoryFlags", "BacktraceLimit",
+        };
+
+        internal static readonly string[]/*!*/ WarmStartWarningCategories = new[] {
+            "deprecated", "no-deprecated", "experimental", "no-experimental",
+        };
+
+        /// <summary>
+        /// Redoes what the constructor derived from WarmStartProgramOptions, where the request's
+        /// differ from the pool's. Loading the prelude does not depend on them: it neither reads nor
+        /// sets $/ or $\, and loads without a warning under -w.
+        /// </summary>
+        private void ApplyProgramOptions(RubyOptions/*!*/ pool) {
+            bool separatorChanged = _options.NoInputRecordSeparator != pool.NoInputRecordSeparator ||
+                _options.InputRecordSeparator != pool.InputRecordSeparator;
+            if (separatorChanged) {
+                _inputSeparator = _options.NoInputRecordSeparator ? null
+                    : CreateInputSeparator(_options.InputRecordSeparator ?? "\n").Freeze();
+            }
+            if (separatorChanged || _options.ChopLines != pool.ChopLines) {
+                _outputSeparator = _options.ChopLines ? _inputSeparator : null;
+            }
+            lock (GlobalVariablesLock) {
+                DefineGlobalVariableNoLock("-a", new ReadOnlyGlobalVariableInfo(_options.AutoSplit));
+                DefineGlobalVariableNoLock("-l", new ReadOnlyGlobalVariableInfo(_options.ChopLines));
+                DefineGlobalVariableNoLock("-p", new ReadOnlyGlobalVariableInfo(_options.PrintEachLine));
+            }
+            if (_options.Verbosity != pool.Verbosity) {
+                Verbose = (_options.Verbosity <= 0) ? null
+                    : (_options.Verbosity == 1) ? ScriptingRuntimeHelpers.False : ScriptingRuntimeHelpers.True;
+            }
+            if (!SameStrings(_options.WarningCategoryFlags, pool.WarningCategoryFlags)) {
+                InitializeWarningCategories();
+            }
+        }
+
+        private static bool SameStrings(IList<string>/*!*/ a, IList<string>/*!*/ b) {
+            if (a.Count != b.Count) {
+                return false;
+            }
+            for (int i = 0; i < a.Count; i++) {
+                if (a[i] != b[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         internal Scope TakeWarmMainScope() {
             Scope scope = _warmMainScope;
             _warmMainScope = null;
@@ -3780,7 +3848,7 @@ namespace IronRuby.Runtime {
         /// Everything else in the options has been checked to be the same as the pool's.
         /// </summary>
         internal void ApplyWarmStartRequest(string mainFile, ICollection<string>/*!*/ arguments, IList<string> requirePaths,
-            object searchPaths, IList<string> extraLoadPaths) {
+            object searchPaths, IList<string> extraLoadPaths, IDictionary<string, object>/*!*/ programOptions) {
             var options = new Dictionary<string, object>();
             if (_constructionOptions != null) {
                 foreach (var entry in _constructionOptions) {
@@ -3793,7 +3861,17 @@ namespace IronRuby.Runtime {
             if (searchPaths != null) {
                 options["SearchPaths"] = searchPaths;
             }
+            foreach (string name in WarmStartProgramOptions) {
+                object value;
+                if (programOptions.TryGetValue(name, out value)) {
+                    options[name] = value;
+                } else {
+                    options.Remove(name);
+                }
+            }
+            RubyOptions pool = _options;
             _options = new RubyOptions(options);
+            ApplyProgramOptions(pool);
 
             // -I directories go in front of $LOAD_PATH, in order, where Loader.MakeLoadPaths puts them.
             if (extraLoadPaths != null) {

@@ -565,7 +565,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("ppid", RubyMethodAttributes.PublicSingleton)]
         public static int GetParentPid(RubyModule/*!*/ self) {
-            return SysGetPpid();
+            // a warm-start worker's own parent is the broker, not what started the program
+            int reported = RubyContext.ReportedParentProcessId;
+            return (reported > 0) ? reported : SysGetPpid();
         }
 
         // setpgid

@@ -433,6 +433,11 @@ namespace IronRuby.Hosting {
             _connectionFd = -1;
         }
 
+        /// <summary>Whether the descriptor is a terminal.</summary>
+        internal static bool IsTerminal(int fd) {
+            return isatty(fd) == 1;
+        }
+
         internal static void ReturnToPool() {
             SendToBroker((byte)'I');
         }
@@ -471,6 +476,11 @@ namespace IronRuby.Hosting {
             umask(request.Umask);
             foreach (var limit in request.Limits) {
                 var value = new RLimit { Current = (ulong)limit[1], Maximum = (ulong)limit[2] };
+                if (limit[0] == RLIMIT_NOFILE) {
+                    // CoreCLR's PAL raises the soft descriptor limit to the hard one as it starts
+                    // (INIT_IncreaseDescriptorLimit); a cold `ir` sees that, not what it inherited.
+                    value.Current = value.Maximum;
+                }
                 RLimit current;
                 if (getrlimit((int)limit[0], out current) == 0 && (current.Current != value.Current || current.Maximum != value.Maximum)) {
                     if (setrlimit((int)limit[0], ref value) != 0) {
@@ -488,8 +498,50 @@ namespace IronRuby.Hosting {
                 setpriority(PRIO_PROCESS, tid, request.Nice);
             }
 
+            // The program's parent is the client's: Process.ppid must not name the broker.
+            RubyContext.ReportedParentProcessId = request.ClientParentPid;
+
             ResetConsole(context.DomainManager.SharedIO);
             StartConnectionWatch();
+        }
+
+        internal const int RLIMIT_DATA = 2, RLIMIT_STACK = 3, RLIMIT_NOFILE = 7, RLIMIT_AS = 9;
+
+        /// <summary>
+        /// Why the request's resource limits cannot be applied to this process the way a cold start
+        /// would have inherited them, or null. The stack size of the main thread is fixed at exec,
+        /// and the address-space and data limits decide whether the runtime starts at all (the GC
+        /// reserves its heap up front): those have to match. Any other limit is set as the program
+        /// starts, which only fails where the request raises a hard limit above this process's own.
+        /// </summary>
+        internal static string CheckLimits(Request/*!*/ request) {
+            bool privileged = geteuid() == 0;
+            foreach (var limit in request.Limits) {
+                RLimit current;
+                if (getrlimit((int)limit[0], out current) != 0) {
+                    continue;
+                }
+                bool same = current.Current == (ulong)limit[1] && current.Maximum == (ulong)limit[2];
+                switch ((int)limit[0]) {
+                    case RLIMIT_STACK:
+                        if (current.Current != (ulong)limit[1]) {
+                            return "a different stack size limit";
+                        }
+                        break;
+                    case RLIMIT_AS:
+                    case RLIMIT_DATA:
+                        if (!same) {
+                            return "a different memory limit (RLIMIT_" + (limit[0] == RLIMIT_AS ? "AS" : "DATA") + ")";
+                        }
+                        break;
+                    default:
+                        if (!privileged && (ulong)limit[2] > current.Maximum) {
+                            return "resource limit " + limit[0] + " above the pool's hard limit";
+                        }
+                        break;
+                }
+            }
+            return null;
         }
 
         // SIGHUP SIGINT SIGQUIT SIGUSR1 SIGUSR2 SIGALRM SIGTERM SIGTSTP SIGTTIN SIGTTOU SIGURG SIGXCPU SIGXFSZ SIGVTALRM SIGPROF SIGPWR
@@ -695,6 +747,8 @@ namespace IronRuby.Hosting {
         [DllImport("libc", SetLastError = true)] private static extern int dup2(int fd, int fd2);
         [DllImport("libc", SetLastError = true)] private static extern int fcntl(int fd, int cmd, int arg);
         [DllImport("libc")] private static extern int umask(int mask);
+        [DllImport("libc")] private static extern int geteuid();
+        [DllImport("libc")] private static extern int isatty(int fd);
         [DllImport("libc", SetLastError = true)] private static extern int getrlimit(int resource, out RLimit limit);
         [DllImport("libc", SetLastError = true)] private static extern int setrlimit(int resource, ref RLimit limit);
         [DllImport("libc", SetLastError = true)] private static extern int sched_setaffinity(int pid, IntPtr size, byte[] mask);
@@ -766,6 +820,7 @@ namespace IronRuby.Hosting {
         private ConsoleOptions _warmConsoleOptions;
         // -I directories (and only those) the request has in front of the pool's load path
         private List<string> _warmExtraLoadPaths;
+        private bool _warmStdinIsTerminal;
 
         private void SnapshotWarmOptions(ScriptRuntimeSetup/*!*/ runtimeSetup, LanguageSetup/*!*/ languageSetup, ConsoleOptions/*!*/ options) {
             _warmLanguageOptions = new Dictionary<string, object>(languageSetup.Options);
@@ -826,7 +881,8 @@ namespace IronRuby.Hosting {
                     GetValue(languageOptions, "Arguments") as ICollection<string> ?? new string[0],
                     GetValue(languageOptions, "RequiredPaths") as IList<string>,
                     GetValue(languageOptions, "SearchPaths"),
-                    _warmExtraLoadPaths
+                    _warmExtraLoadPaths,
+                    languageOptions
                 );
                 WarmStart.Log("running");
                 return RunWarmRequest(options);
@@ -886,12 +942,9 @@ namespace IronRuby.Hosting {
             if (reason != null) {
                 return reason;
             }
-            foreach (var limit in request.Limits) {
-                // the main thread's stack was sized at exec
-                const int RLIMIT_STACK = 3;
-                if (limit[0] == RLIMIT_STACK && !SameStackLimit(limit)) {
-                    return "a different stack size limit";
-                }
+            reason = WarmStart.CheckLimits(request);
+            if (reason != null) {
+                return reason;
             }
 
             var args = new List<string>(request.Argv.Skip(1));
@@ -911,6 +964,7 @@ namespace IronRuby.Hosting {
                 return "cannot enter " + request.Cwd;
             }
 
+            _warmStdinIsTerminal = request.Descriptors != null && WarmStart.IsTerminal(request.Descriptors[0]);
             reason = ParseRequest(args.ToArray(), out options, out languageOptions);
             if (reason != null) {
                 WarmStart.ReplaceEnvironment(savedEnvironment);
@@ -934,20 +988,6 @@ namespace IronRuby.Hosting {
         private static string ResolveLinks(string path) {
             var target = File.ResolveLinkTarget(path, true);
             return target != null ? target.FullName : path;
-        }
-
-        [DllImport("libc")]
-        private static extern int getrlimit(int resource, out WarmRLimit limit);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct WarmRLimit {
-            public ulong Current;
-            public ulong Maximum;
-        }
-
-        private static bool SameStackLimit(long[] limit) {
-            WarmRLimit current;
-            return getrlimit((int)limit[0], out current) == 0 && current.Current == (ulong)limit[1];
         }
 
         private string ParseRequest(string[]/*!*/ args, out RubyConsoleOptions options, out IDictionary<string, object> languageOptions) {
@@ -991,7 +1031,8 @@ namespace IronRuby.Hosting {
             }
 
             var diffs = new List<string>();
-            CompareOptions("language", _warmLanguageOptions, languageSetup.Options, new[] { "MainFile", "Arguments", "RequiredPaths", "SearchPaths" }, diffs);
+            CompareOptions("language", _warmLanguageOptions, languageSetup.Options,
+                new[] { "MainFile", "Arguments", "RequiredPaths", "SearchPaths" }.Concat(RubyContext.WarmStartProgramOptions).ToArray(), diffs);
             CompareOptions("runtime", _warmRuntimeOptions, runtimeSetup.Options, new string[0], diffs);
             if (runtimeSetup.DebugMode != _warmDebugMode || runtimeSetup.PrivateBinding != _warmPrivateBinding) {
                 diffs.Add("runtime setup");
@@ -1022,7 +1063,18 @@ namespace IronRuby.Hosting {
                 }
             }
 
+            foreach (object flag in (GetValue(languageSetup.Options, "WarningCategoryFlags") as IEnumerable) ?? new object[0]) {
+                if (Array.IndexOf(RubyContext.WarmStartWarningCategories, flag as string) < 0) {
+                    diffs.Add("-W:" + flag);
+                }
+            }
+
             CompareConsoleOptions(_warmConsoleOptions, options, diffs);
+            if (options.Command == null && options.FileName == null && _warmStdinIsTerminal) {
+                // .NET looked at descriptor 0 once, as the warm-up started (the native terminal
+                // state behind Console.ReadLine and ReadKey): on a terminal the REPL would echo twice.
+                diffs.Add("an interactive session");
+            }
             if (diffs.Count > 0) {
                 return "options differ from the pool's: " + String.Join(", ", diffs);
             }
@@ -1072,8 +1124,9 @@ namespace IronRuby.Hosting {
         }
 
         private static void CompareConsoleOptions(ConsoleOptions/*!*/ pool, ConsoleOptions/*!*/ request, List<string>/*!*/ diffs) {
-            // The program and where it runs are the request's own; everything else has to match.
-            var perRequest = new[] { "Command", "FileName", "ChangeDirectory", "RemainingArgs" };
+            // The program and where it runs are the request's own, and so is -v's banner in front of a
+            // program (alone, -v prints the version and exits: PrintVersion, Exit); everything else has to match.
+            var perRequest = new[] { "Command", "FileName", "ChangeDirectory", "RemainingArgs", "DisplayVersion" };
             for (Type type = pool.GetType(); type != null && type != typeof(object); type = type.BaseType) {
                 foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)) {
                     string name = field.Name.TrimStart('_');
@@ -1091,13 +1144,22 @@ namespace IronRuby.Hosting {
         }
 
         private int RunWarmRequest(RubyConsoleOptions/*!*/ options) {
+            // what Host.ParseOptions does in a cold start
             if (options.ChangeDirectory != null) {
                 Environment.CurrentDirectory = options.ChangeDirectory;
             }
+            if (options.DisplayVersion && (options.Command != null || options.FileName != null)) {
+                Console.WriteLine(RubyContext.MakeDescriptionString());
+            }
 
-            // ConsoleHost.RunCommandLine
+            // ConsoleHost.RunCommandLine. A cold start creates the console before the prelude runs,
+            // and the prelude's trap("INT", "DEFAULT") then replaces the Ctrl-C handler the console
+            // installs (Host.CreateConsole); here the prelude ran first, so its choice is put back.
+            var context = (RubyContext)HostingHelpers.GetLanguageContext(Engine);
+            Action interruptHandler = context.InterruptSignalHandler;
             CommandLine commandLine = CreateCommandLine();
             IConsole console = CreateConsole(Engine, commandLine, options);
+            context.InterruptSignalHandler = interruptHandler;
             if (options.HandleExceptions) {
                 try {
                     commandLine.Run(Engine, console, options);
