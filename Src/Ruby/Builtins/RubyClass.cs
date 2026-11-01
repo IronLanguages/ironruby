@@ -1380,10 +1380,35 @@ namespace IronRuby.Builtins {
                 altName != null && TryGetClrField(type, bindingFlags, inherited, isWrite, altName, out method);
         }
 
+        /// <summary>
+        /// The names of the fields and events <paramref name="type"/> declares, of any visibility, static or instance.
+        /// A method name that is not in a class's method table is looked up as a CLR member of each CLR class on the way
+        /// up the hierarchy, and nearly every such lookup misses: Object alone sees hundreds of names (`require',
+        /// `method_added', ...) while the prelude loads. RuntimeType.GetField and GetEvent populate the type's member
+        /// cache for each name they are asked, so the misses were ~13 ms of `ir -e 1'; a name not in this set is not
+        /// asked for at all.
+        /// </summary>
+        private static bool MayDeclareFieldOrEvent(Type/*!*/ type, string/*!*/ name) {
+            return _declaredFieldAndEventNames.GetValue(type, static t => {
+                var names = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var field in t.GetFields(BindingFlags.DeclaredOnly | ReflectionUtils.AllMembers)) {
+                    names.Add(field.Name);
+                }
+                foreach (var e in t.GetEvents(BindingFlags.DeclaredOnly | ReflectionUtils.AllMembers)) {
+                    names.Add(e.Name);
+                }
+                return names;
+            }).Contains(name);
+        }
+
+        private static readonly ConditionalWeakTable<Type, HashSet<string>> _declaredFieldAndEventNames = new ConditionalWeakTable<Type, HashSet<string>>();
+
         private bool TryGetClrField(Type/*!*/ type, BindingFlags bindingFlags, bool inherited, bool isWrite, string/*!*/ name, out RubyMemberInfo method) {
             FieldInfo fieldInfo;
             if (inherited) {
                 fieldInfo = type.GetInheritedFields(name).WithBindingFlags(bindingFlags).FirstOrDefault();
+            } else if (!MayDeclareFieldOrEvent(type, name)) {
+                fieldInfo = null;
             } else {
                 fieldInfo = type.GetDeclaredField(name).WithBindingFlags(bindingFlags);
             }
@@ -1410,6 +1435,8 @@ namespace IronRuby.Builtins {
             EventInfo eventInfo;
             if (inherited) {
                 eventInfo = type.GetInheritedEvents(name).WithBindingFlags(bindingFlags).FirstOrDefault();
+            } else if (!MayDeclareFieldOrEvent(type, name)) {
+                eventInfo = null;
             } else {
                 eventInfo = type.GetDeclaredEvent(name).WithBindingFlags(bindingFlags);
             }
