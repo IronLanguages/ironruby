@@ -1,7 +1,7 @@
 /* ****************************************************************************
  *
  * -X:JIT / -X:OSR: the emitter's object operations - constants, case/when, and the Array#[],
- * Hash#[], #[]=, #key? and #fetch intrinsics.
+ * #fetch and #[]= and Hash#[], #[]=, #key? and #fetch intrinsics.
  *
  * Each turns what the generic code does with a dynamic call into a test or a call of a helper
  * (JitIntrinsics.cs) that answers exactly what the library method would, or deopts. The library
@@ -647,7 +647,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// `h.key?(k)', `h.has_key?(k)', `h.fetch(k)', `h.fetch(k, default)' on an exact Hash, and
+        /// `h.key?(k)', `h.has_key?(k)' on an exact Hash, and `x.fetch(k)', `x.fetch(k, default)',
         /// `x.size', `x.length', `x.empty?' on an exact Array or Hash.
         /// </summary>
         private MSA.Expression/*!*/ EmitHashQuery(MethodCall/*!*/ node, out JT type) {
@@ -677,27 +677,35 @@ namespace IronRuby.Runtime.Jit {
             var key = Emit(args[0], out keyType);
             if (keyType == JT.Never || keyType == JT.None) { throw Bail(name + " of a value that jumps away"); }
             if (name == "fetch") {
-                if (!IsPreludeHashFetch() || !KeyLookupIsPlain()) { throw Bail("fetch is not the prelude's"); }
-            } else if (!IsPlainLibraryMethod(HashClass, name) || !KeyLookupIsPlain()) {
+                // Array#fetch (the library method) as well as Hash#fetch: `@list.fetch(i)' on a receiver
+                // the profile cannot see would otherwise deopt on every call
+                bool fetchArrays = IsPlainLibraryMethod(ArrayClass, "fetch");
+                bool fetchHashes = IsPreludeHashFetch() && KeyLookupIsPlain();
+                if (!fetchArrays && !fetchHashes) { throw Bail("fetch is neither Array's nor the prelude's"); }
+                RequireCollectionReceiver(node.Target, fetchArrays, fetchHashes, name);
+                type = JT.Obj;
+                bool intKey = (keyType == JT.Int);
+                var fetchKey = intKey ? key : Coerce(key, keyType, JT.Obj);
+                if (args.Length == 1) {
+                    return Ast.Call(JitRuntime.M(intKey ? "FetchInt" : "FetchObj"), recv, fetchKey,
+                        Ast.Constant(fetchArrays), Ast.Constant(fetchHashes));
+                }
+                // the arguments are evaluated before the call, the default included
+                JT defaultType;
+                var defaultValue = Emit(args[1], out defaultType);
+                if (defaultType == JT.Never || defaultType == JT.None) { throw Bail("fetch of a default that jumps away"); }
+                return Ast.Call(JitRuntime.M(intKey ? "FetchIntDefault" : "FetchObjDefault"), recv, fetchKey,
+                    Coerce(defaultValue, defaultType, JT.Obj), Ast.Constant(fetchArrays), Ast.Constant(fetchHashes));
+            }
+            if (!IsPlainLibraryMethod(HashClass, name) || !KeyLookupIsPlain()) {
                 throw Bail(name + " is not the built-in one");
             }
             RequireCollectionReceiver(node.Target, false, true, name);
 
-            if (name != "fetch") {
-                type = JT.Bool;
-                return (keyType == JT.Int)
-                    ? Ast.Call(JitRuntime.M("HashKeyInt"), recv, key)
-                    : Ast.Call(JitRuntime.M("HashKeyObj"), recv, Coerce(key, keyType, JT.Obj));
-            }
-            type = JT.Obj;
-            if (args.Length == 1) {
-                return Ast.Call(JitRuntime.M("FetchObj"), recv, Coerce(key, keyType, JT.Obj));
-            }
-            // the arguments are evaluated before the call, the default included
-            JT defaultType;
-            var defaultValue = Emit(args[1], out defaultType);
-            if (defaultType == JT.Never || defaultType == JT.None) { throw Bail("fetch of a default that jumps away"); }
-            return Ast.Call(JitRuntime.M("FetchObjDefault"), recv, Coerce(key, keyType, JT.Obj), Coerce(defaultValue, defaultType, JT.Obj));
+            type = JT.Bool;
+            return (keyType == JT.Int)
+                ? Ast.Call(JitRuntime.M("HashKeyInt"), recv, key)
+                : Ast.Call(JitRuntime.M("HashKeyObj"), recv, Coerce(key, keyType, JT.Obj));
         }
 
         /// <summary>

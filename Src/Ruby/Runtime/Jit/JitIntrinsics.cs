@@ -1,7 +1,7 @@
 /* ****************************************************************************
  *
  * -X:JIT / -X:OSR: the runtime half of the library intrinsics specialized code calls instead of
- * a dynamic call - case/when tests, and Array#[] / Hash#[], #[]=, #key?, #fetch.
+ * a dynamic call - case/when tests, Array#[], #fetch, #[]= and Hash#[], #[]=, #key?, #fetch.
  *
  * Every helper here answers exactly what the library method would, or deopts. None of them calls
  * Ruby code: where the library method would - a Hash's default proc, #hash or #eql? on a key the
@@ -365,25 +365,46 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
-        /// <summary>Hash#fetch(key): a miss raises, which the generic code does.</summary>
-        public static object FetchObj(object recv, object key) {
+        /// <summary>Array#fetch(index), Hash#fetch(key): a miss raises, which the generic code does.</summary>
+        public static object FetchObj(object recv, object key, bool arrays, bool hashes) {
             object value;
-            if (TryFetch(recv, key, out value)) { return value; }
+            if (TryFetch(recv, key, arrays, hashes, out value)) { return value; }
             throw Deopt();
         }
 
-        /// <summary>Hash#fetch(key, default).</summary>
-        public static object FetchObjDefault(object recv, object key, object defaultValue) {
+        /// <summary>Array#fetch(index, default), Hash#fetch(key, default).</summary>
+        public static object FetchObjDefault(object recv, object key, object defaultValue, bool arrays, bool hashes) {
             object value;
-            return TryFetch(recv, key, out value) ? value : defaultValue;
+            return TryFetch(recv, key, arrays, hashes, out value) ? value : defaultValue;
         }
 
+        /// <summary>FetchObj of an Integer index or key, without boxing it.</summary>
+        public static object FetchInt(object recv, int key, bool arrays, bool hashes) {
+            object value;
+            if (TryFetchInt(recv, key, arrays, hashes, out value)) { return value; }
+            throw Deopt();
+        }
+
+        /// <summary>FetchObjDefault of an Integer index or key, without boxing it.</summary>
+        public static object FetchIntDefault(object recv, int key, object defaultValue, bool arrays, bool hashes) {
+            object value;
+            return TryFetchInt(recv, key, arrays, hashes, out value) ? value : defaultValue;
+        }
+
+        /// <summary>
+        /// Whether the element or key is there, and if so its value. An Array index is counted from the
+        /// end when negative, as Array#fetch does; one that is not an Int32 the generic code converts
+        /// with to_int. A key the hash cannot find without calling Ruby deopts.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        private static bool TryFetch(object recv, object key, out object value) {
-            if (recv != null && recv.GetType() == typeof(Hash) && key != null) {
+        private static bool TryFetch(object recv, object key, bool arrays, bool hashes, out object value) {
+            if (key is int) {
+                return TryFetchInt(recv, (int)key, arrays, hashes, out value);
+            }
+            if (hashes && recv != null && recv.GetType() == typeof(Hash) && key != null) {
                 var hash = (Hash)recv;
                 int hashCode;
-                int i = (key is int) ? hash.JitFindFixnum((int)key, out hashCode) : hash.JitFind(key, out hashCode);
+                int i = hash.JitFind(key, out hashCode);
                 if (i >= 0) {
                     value = hash.JitValueAt(i);
                     return true;
@@ -391,6 +412,30 @@ namespace IronRuby.Runtime.Jit {
                 if (i != Hash.JitUndecided) {
                     value = null;
                     return false;
+                }
+            }
+            throw Deopt();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        private static bool TryFetchInt(object recv, int key, bool arrays, bool hashes, out object value) {
+            if (recv != null) {
+                Type t = recv.GetType();
+                if (t == typeof(RubyArray) && arrays) {
+                    return ((RubyArray)recv).JitTryGetElement(key, out value);
+                }
+                if (t == typeof(Hash) && hashes) {
+                    var hash = (Hash)recv;
+                    int hashCode;
+                    int i = hash.JitFindFixnum(key, out hashCode);
+                    if (i >= 0) {
+                        value = hash.JitValueAt(i);
+                        return true;
+                    }
+                    if (i != Hash.JitUndecided) {
+                        value = null;
+                        return false;
+                    }
                 }
             }
             throw Deopt();

@@ -1,6 +1,7 @@
 /* ****************************************************************************
  *
- * The element read the JIT's Array#[] intrinsic uses (Src/Ruby/Runtime/Jit/JitIntrinsics.cs).
+ * The element reads and writes the JIT's Array#[], #fetch and #[]= intrinsics use
+ * (Src/Ruby/Runtime/Jit/JitIntrinsics.cs).
  *
  * ***************************************************************************/
 
@@ -21,6 +22,23 @@ namespace IronRuby.Builtins {
                 return null;
             }
             return _content[_start + index];
+        }
+
+        /// <summary>
+        /// Array#fetch with an Integer index: the element, counted from the end when the index is
+        /// negative, or false when the index is out of range either way (IListOps.Fetch).
+        /// </summary>
+        internal bool JitTryGetElement(int index, out object value) {
+            int count = _count;
+            if (index < 0) {
+                index += count;
+            }
+            if ((uint)index < (uint)count) {
+                value = _content[_start + index];
+                return true;
+            }
+            value = null;
+            return false;
         }
 
         /// <summary>
