@@ -2,7 +2,7 @@
 # Builds IronRuby.Startup.dll - the Ruby code `ir` runs at every start (ruby4.rb, rbconfig, rubygems,
 # see startup-files.txt) compiled ahead of time to IL and ReadyToRun code - into a host's directory,
 # where IronRuby's loader picks it up: requiring one of its files then runs the compiled top level
-# instead of parsing, transforming and LightCompiling the source (`ir -e 1` ~12% faster).
+# instead of parsing, transforming and LightCompiling the source (`ir -e 1` ~17% faster).
 #
 # A Linux Release build runs this for the R2R host it publishes (Ruby.Console.csproj,
 # IronRubyReadyToRunHost; -p:IronRubyStartupLibrary=false leaves it out), and so does

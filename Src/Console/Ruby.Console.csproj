@@ -89,7 +89,7 @@
 
        The host gets the startup library too (Util/aot/build-startup.sh, IronRuby.Startup.dll): the Ruby code every
        start runs - the core prelude, rubygems and the rest - compiled ahead of time against exactly this host, so that
-       `ir -e 1` does not parse, transform and LightCompile it (~12% faster to start, ~30 MB on disk, ~4 MB more RSS).
+       `ir -e 1` does not parse, transform and LightCompile it (~17% faster to start, 32 MB on disk, ~6 MB more RSS).
        It needs the .NET 10 SDK and runtime; without them, or if it fails, the host goes without it, which costs only
        the speedup. -p:IronRubyStartupLibrary=false leaves it out. -->
   <PropertyGroup>
