@@ -139,6 +139,7 @@ namespace IronRuby.Aot {
                     // a field of another file's type would load that type too
                     _constantFields.Clear();
                     _rootedStrings.Clear();
+                    _boxedLiterals.Clear();
                 }
                 var unit = _context.CreateFileUnit(paths[i]);
                 bool isMain = mainFile != null && paths[i] == Path.GetFullPath(mainFile);
@@ -293,6 +294,16 @@ namespace IronRuby.Aot {
                 if (!node.CanReduce) {
                     throw new NotSupportedException("irreducible extension node " + node.GetType());
                 }
+                // A call site the interpreter would run gets the interpreter's site shape: every argument and the result
+                // an object (DynamicInstructionN.CreateUntypedInstruction). Reduced, it would be typed after its
+                // arguments ((CallSite, RubyScope, object, int) and so on): a delegate type, CallSite<T> and rule
+                // instantiations of its own that are JIT-compiled at startup (~110 methods for `ir -e 1'), rules its
+                // binder caches apart from the interpreted code's, and shared-rule records ahead of the program's own
+                // compiled code (see RuleVersionSet.MakeTest).
+                if (node is Microsoft.Scripting.Ast.LightDynamicExpression && node.Type == typeof(object) &&
+                    node.Reduce() is DynamicExpression reduced && reduced.Type == typeof(object) && reduced.Arguments.Count <= MaxUntypedSiteArguments) {
+                    return _c.UntypedDynamic(reduced.Binder, Visit(reduced.Arguments));
+                }
                 return Visit(node.Reduce());
             }
 
@@ -318,6 +329,44 @@ namespace IronRuby.Aot {
                     Expression.Assign(site, siteExpr),
                     Expression.Invoke(Expression.Field(site, "Target"), invokeArgs));
             }
+        }
+
+        // DynamicInstructionN.CreateUntypedInstruction's limit
+        private const int MaxUntypedSiteArguments = 15;
+
+        private static readonly Dictionary<int, Type> _untypedSiteTypes = new();
+        private readonly Dictionary<string, Expression> _boxedLiterals = new();
+
+        private Expression UntypedDynamic(CallSiteBinder binder, IList<Expression> args) {
+            if (!_untypedSiteTypes.TryGetValue(args.Count, out var delegateType)) {
+                var types = new Type[args.Count + 2];
+                types[0] = typeof(CallSite);
+                for (int i = 1; i < types.Length; i++) types[i] = typeof(object);
+                _untypedSiteTypes[args.Count] = delegateType = Expression.GetDelegateType(types);
+            }
+            Count("call sites in the interpreter's shape");
+            var siteExpr = SiteField(delegateType, binder);
+            var site = Expression.Variable(siteExpr.Type, "#site");
+            var invokeArgs = new List<Expression> { site };
+            foreach (var arg in args) {
+                invokeArgs.Add(arg.Type == typeof(object) ? arg : BoxArgument(arg));
+            }
+            return Expression.Block(typeof(object), new[] { site },
+                Expression.Assign(site, siteExpr),
+                Expression.Invoke(Expression.Field(site, "Target"), invokeArgs));
+        }
+
+        // a value-type literal is boxed once, into a static field; anything else as it comes
+        private Expression BoxArgument(Expression arg) {
+            if (arg is ConstantExpression c && c.Value != null && c.Type.IsValueType) {
+                var key = c.Type.FullName + ":" + c.Value;
+                if (!_boxedLiterals.TryGetValue(key, out var field)) {
+                    Count("boxed literal arguments");
+                    _boxedLiterals[key] = field = NewField(typeof(object), Expression.Convert(c, typeof(object)), "box");
+                }
+                return field;
+            }
+            return Expression.Convert(arg, typeof(object));
         }
 
         /// <summary>

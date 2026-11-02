@@ -24,6 +24,13 @@
 # copies the last library from the cache in Util/aot/IronRuby.Aot/obj/startup/.
 # Exit status: 0 installed, 3 skipped (no .NET 10), anything else failed.
 IR_ROOT="$(dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")"
+# One at a time: a build of both frameworks publishes their hosts in parallel, and both use the one
+# compiler. flock -o: the build servers and MSBuild nodes started below outlive this script, and must
+# not hold the lock.
+if [ -z "$IR_STARTUP_LOCKED" ] && command -v flock >/dev/null; then
+  mkdir -p "$IR_ROOT/Util/aot/IronRuby.Aot/obj"
+  IR_STARTUP_LOCKED=1 exec flock -o "$IR_ROOT/Util/aot/IronRuby.Aot/obj/.startup.lock" sh "$0" "$@"
+fi
 if [ -z "$DOTNET_ROOT" ] && [ -x /usr/local/dotnet/dotnet ]; then
   DOTNET_ROOT=/usr/local/dotnet
 fi
@@ -66,19 +73,15 @@ fi
 AOT_DIR=Util/aot/IronRuby.Aot
 AOT="$AOT_DIR/bin/Release/net10.0/IronRuby.Aot"
 CACHE="$IR_ROOT/$AOT_DIR/obj/startup/$TFM-${RID:-host}$( [ -f "$HOST/System.Private.CoreLib.dll" ] && echo -sc )${R2R:+-r2r}"
-mkdir -p "$AOT_DIR/obj"
-# one at a time: a build of both frameworks publishes their hosts in parallel, and both use the one compiler
-exec 9>"$AOT_DIR/obj/.startup.lock"
-command -v flock >/dev/null && flock 9
 
 props="-p:DlrSourceDir=$DLR -p:IronRubyTargetFrameworks=$TFM -p:IronRubyAotHostTfm=$TFM -p:IronRubyR2R=false"
 if [ "$BUILDREFS" = true ]; then
-  "$DOTNET" build "$AOT_DIR" -c Release -nologo -v:q $props || exit 1
+  "$DOTNET" build "$AOT_DIR" -c Release -nologo -v:q -nodeReuse:false $props || exit 1
 else
   # only the compiler itself: the IronRuby and DLR it runs are the Release build of this tree, and a restore of
   # their projects with other properties than the build's would rewrite their assets under a running build
-  "$DOTNET" restore "$AOT_DIR" --no-dependencies -nologo -v:q $props &&
-  "$DOTNET" build "$AOT_DIR" -c Release --no-restore -nologo -v:q -p:BuildProjectReferences=false $props || exit 1
+  "$DOTNET" restore "$AOT_DIR" --no-dependencies -nologo -v:q -nodeReuse:false $props &&
+  "$DOTNET" build "$AOT_DIR" -c Release --no-restore -nologo -v:q -nodeReuse:false -p:BuildProjectReferences=false $props || exit 1
 fi
 
 OUT="$(mktemp -d)"
