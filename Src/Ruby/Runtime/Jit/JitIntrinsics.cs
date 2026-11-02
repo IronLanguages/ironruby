@@ -267,10 +267,12 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>
         /// `b..e === v' / `b...e === v' with Integer bounds, v an object: Range#=== compares an
-        /// Integer, and a Float when Float#&lt;=&gt; is the library one; anything else deopts.
+        /// Integer, and a Float when Float#&lt;=&gt; is the library one; it is false for a value of a
+        /// kind in <paramref name="noCoerce"/>, which `b &lt;=&gt; v' answers nil for (checked when
+        /// compiled: JitCompiler.NoCoerce); anything else deopts.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        public static bool CaseIntRange(object value, int begin, int end, bool exclusive, bool floats) {
+        public static bool CaseIntRange(object value, int begin, int end, bool exclusive, bool floats, int noCoerce) {
             if (value is int) {
                 int v = (int)value;
                 return begin <= v && (exclusive ? v < end : v <= end);
@@ -282,6 +284,9 @@ namespace IronRuby.Runtime.Jit {
             if (floats && value is double) {
                 double v = (double)value;
                 return begin <= v && (exclusive ? v < end : v <= end);
+            }
+            if (((noCoerce >> CaseKind(value)) & 1) != 0) {
+                return false;
             }
             throw Deopt();
         }

@@ -404,7 +404,8 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>
         /// `b..e === v' / `b...e === v' with Integer literal bounds: Range#=== is `b &lt;= v &amp;&amp;
-        /// v &lt;= e' (or `&lt; e') through Integer#&lt;=&gt; and the subject's &lt;=&gt;.
+        /// v &lt;= e' (or `&lt; e') through Integer#&lt;=&gt; and the subject's &lt;=&gt;. For a subject
+        /// Integer#&lt;=&gt; cannot coerce, `b &lt;=&gt; v' is nil and the test false (see NoCoerce).
         /// </summary>
         private MSA.Expression/*!*/ EmitRangeTest(RangeExpression/*!*/ range, CaseSubject/*!*/ subject) {
             int b = RangeBound(range.Begin), e = RangeBound(range.End);
@@ -426,11 +427,32 @@ namespace IronRuby.Runtime.Jit {
                     return Ast.Condition(
                         Ast.TypeIs(v, typeof(int)),
                         InRange(Ast.Unbox(v, typeof(int)), Ast.Constant(b), Ast.Constant(e), exclusive),
-                        Ast.Call(JitRuntime.M("CaseIntRange"), v, Ast.Constant(b), Ast.Constant(e), Ast.Constant(exclusive), Ast.Constant(floats))
+                        Ast.Call(JitRuntime.M("CaseIntRange"), v, Ast.Constant(b), Ast.Constant(e), Ast.Constant(exclusive), Ast.Constant(floats),
+                            Ast.Constant(NoCoerceKinds()))
                     );
                 default:
                     throw Bail("when of a Range on a " + subject.Type);
             }
+        }
+
+        /// <summary>
+        /// Integer#&lt;=&gt; answers nil for an instance of cls without calling Ruby code
+        /// (Protocols.CoerceAndCompare): there is no #coerce to call, and nothing to ask first - respond_to?
+        /// and method_missing are the library ones, on the class and on any singleton class of an instance.
+        /// </summary>
+        private bool NoCoerce(RubyClass/*!*/ cls) {
+            return IsPlainLibraryMethod(cls, "respond_to?") && IsPlainLibraryMethod(cls, "method_missing")
+                && HasPlainInstances(cls, "coerce") && !cls.ResolveMethod("coerce", VisibilityContext.AllVisible).Found;
+        }
+
+        /// <summary>The kinds (JitRuntime.CaseKind) of subject CaseIntRange answers false for, as a mask.</summary>
+        private int NoCoerceKinds() {
+            int mask = 0;
+            foreach (int k in new[] { JitRuntime.KindNil, JitRuntime.KindTrue, JitRuntime.KindFalse, JitRuntime.KindSymbol,
+                JitRuntime.KindString, JitRuntime.KindArray, JitRuntime.KindHash }) {
+                if (NoCoerce(KindClass(k))) { mask |= 1 << k; }
+            }
+            return mask;
         }
 
         /// <summary>A bound of a when's range: an Integer literal, or a constant holding an Int32.</summary>

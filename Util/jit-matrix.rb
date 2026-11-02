@@ -1251,6 +1251,21 @@ def sp_case_float(x)
   end
 end
 
+# a range when reached by subjects that are not numbers: `1 <=> v' is nil for those that have no
+# #coerce, which the specialized test answers itself; one with a #coerce (or a method_missing or a
+# respond_to? that might find one) has it called, as many times as the generic code calls it
+def sp_case_range(v)
+  case v
+  when 1..5 then :small
+  when 0...100 then :below_hundred
+  when Integer then :int
+  when String then :str
+  else :other
+  end
+end
+JIT_RANGE_WARM = [3, 50, 200, "x", :s, nil, [1], { a: 1 }, true, false, 2.5, 7.5]
+$jit_coerced = 0
+
 def sp_case_sym(s)
   case s
   when :add then 1
@@ -1385,6 +1400,9 @@ t('case of an Integer, other types') { [sp_case_int(2**40), sp_case_int(2**70), 
 warm { |i| sp_case_float(i * 0.5) }
 t('case of a Float') { [0.0, 1.0, 1.5, 2.0, 2.5, -0.5, 0.0 / 0.0].map { |x| sp_case_float(x) } }
 t('case of a Float, other types') { [sp_case_float(1), sp_case_float(2), sp_case_float(:x)] }
+warm { |i| sp_case_range(JIT_RANGE_WARM[i % JIT_RANGE_WARM.size]) }
+t('case of a range, each kind') { JIT_MIX.map { |v| sp_case_range(v) } }
+t('case of a range, Floats and edges') { [0, 1, 5, 6, 99, 100, -1, 0.5, 1.0, 5.0, 5.5, 99.5].map { |v| sp_case_range(v) } }
 warm { |i| sp_case_sym([:add, :sub, :mul, :div, :mod][i % 5]) }
 t('case of a Symbol') { [:add, :sub, :mul, :div, :mod, "add", nil, 1].map { |s| sp_case_sym(s) } }
 warm { |i| sp_case_str(["foo", "bar", "baz", "qux"][i % 4]) }
@@ -1462,6 +1480,71 @@ class Range
   alias_method :===, :__jit_matrix_reqq
 end
 t('Range#=== restored') { [sp_case_int(100), sp_case_int(3)] }
+# what `1 <=> v' asks a subject Range#=== cannot compare: its #coerce, a method_missing standing in for
+# one, a respond_to? asked about one - each defined mid-run on a class whose instances the range test
+# answered false for itself, then hot again, then taken away
+class Symbol
+  def coerce(n)
+    $jit_coerced += 1
+    nil
+  end
+end
+t('Symbol#coerce defined') { [JIT_MIX.map { |v| sp_case_range(v) }, $jit_coerced] }
+warm { |i| sp_case_range(JIT_RANGE_WARM[i % JIT_RANGE_WARM.size]) }
+t('Symbol#coerce defined, hot again') { [JIT_MIX.map { |v| sp_case_range(v) }, $jit_coerced > 0] }
+class Symbol
+  remove_method :coerce
+end
+$jit_coerced = 0
+t('Symbol#coerce removed') { [JIT_MIX.map { |v| sp_case_range(v) }, $jit_coerced] }
+jit_coercing = "y".dup
+def jit_coercing.coerce(n)
+  $jit_coerced += 1
+  [n, 50]
+end
+t('a String with a singleton coerce') { [sp_case_range(jit_coercing), sp_case_range("x"), $jit_coerced] }
+warm { |i| sp_case_range(JIT_RANGE_WARM[i % JIT_RANGE_WARM.size]) }
+$jit_coerced = 0
+t('a String with a singleton coerce, hot again') { [sp_case_range(jit_coercing), sp_case_range("x"), $jit_coerced] }
+module JitCountCoerce
+  def method_missing(name, *args)
+    $jit_coerced += 1 if name == :coerce
+    super
+  end
+end
+class NilClass
+  include JitCountCoerce
+end
+class Array
+  include JitCountCoerce
+end
+$jit_coerced = 0
+t('a method_missing included into NilClass and Array') { [[nil, true, :s, [1]].map { |v| sp_case_range(v) }, $jit_coerced] }
+warm { |i| sp_case_range(JIT_RANGE_WARM[i % JIT_RANGE_WARM.size]) }
+$jit_coerced = 0
+t('a method_missing included, hot again') { [[nil, true, :s, [1]].map { |v| sp_case_range(v) }, $jit_coerced] }
+module JitCountCoerce
+  remove_method :method_missing
+end
+$jit_coerced = 0
+t('the included method_missing removed') { [[nil, true, :s, [1]].map { |v| sp_case_range(v) }, $jit_coerced] }
+class Hash
+  def respond_to?(name, priv = false)
+    $jit_coerced += 1 if name == :coerce
+    super
+  end
+end
+$jit_coerced = 0
+t('Hash#respond_to? defined') { [sp_case_range({ a: 1 }), sp_case_range([1]), $jit_coerced] }
+warm { |i| sp_case_range(JIT_RANGE_WARM[i % JIT_RANGE_WARM.size]) }
+$jit_coerced = 0
+t('Hash#respond_to? defined, hot again') { [sp_case_range({ a: 1 }), sp_case_range([1]), $jit_coerced] }
+class Hash
+  remove_method :respond_to?
+end
+$jit_coerced = 0
+t('Hash#respond_to? removed') { [sp_case_range({ a: 1 }), $jit_coerced] }
+t('<=> of an Integer and objects without #coerce') { [1 <=> nil, 1 <=> "a", 1 <=> :a, 1.5 <=> [1], "a" <=> 1, (1 + nil rescue $!.class), (1 < "a" rescue $!.class)] }
 class String
   alias_method :__jit_matrix_streqq, :===
   def ===(o)
