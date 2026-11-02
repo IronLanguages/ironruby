@@ -113,7 +113,8 @@ namespace IronRuby.Runtime.Calls {
             // binder. Leaving it out of the mask sent every bare `foo` to a rule of its own.
             if (Context == null ||
                 Signature.ResolveOnly ||
-                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall)) != 0) {
+                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSplattedArgument)) != 0 ||
+                Signature.HasSplattedArgument && Signature.HasRhsArgument) {
                 return null;
             }
 
@@ -167,15 +168,35 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            // a call through an alias has to tell the method its name (see RubyMethodInfo.BuildCallNoFlow)
+            // a call through an alias has to tell the method its name (see RubyMethodInfo.BuildCallNoFlow): the precompiled dispatchers
+            // of Ruby methods don't, a RubyMethodCallPlan does
             var rubyMethod = method.Info as RubyMethodInfo;
             if (rubyMethod != null && rubyMethod.DefinitionName != _methodName) {
-                return null;
+                if (passesKeywords && !rubyMethod.TakesOrRefusesKeywords) {
+                    return null;
+                }
+                return LibraryDispatcher.TryCreateRubyCall(site, delegateType, Signature, rubyMethod, targetClass, target, clrTest, version, args, null, _methodName);
             }
 
             // a method that takes or refuses keywords reads the hash as it is - nothing to unmark
             if (passesKeywords && (rubyMethod == null || !rubyMethod.TakesOrRefusesKeywords)) {
                 return null;
+            }
+
+            // A splatted call: of a Ruby or a library method, through the call its rule makes of the list's items (see TryCreateRubyCall,
+            // LibraryDispatcher.TryCreate). The other dispatchers take the site's arguments as they are.
+            if (Signature.HasSplattedArgument) {
+                if (rubyMethod != null) {
+                    return LibraryDispatcher.TryCreateRubyCall(site, delegateType, Signature, rubyMethod, targetClass, target, clrTest, version, args);
+                }
+                var splattedMethodCall = method.Info as RubyCustomMethodInfo;
+                if (splattedMethodCall != null && target is RubyMethod && splattedMethodCall.IsMethodCall) {
+                    return LibraryDispatcher.TryCreateMethodObjectCall(site, this, delegateType, Signature, (RubyMethod)target, targetClass, clrTest, version, args);
+                }
+                var splattedLibraryMethod = method.Info as RubyLibraryMethodInfo;
+                return (splattedLibraryMethod != null && !TracePoint.CCallTracing && !DispatchIntrinsics.IsSend(splattedLibraryMethod)) ?
+                    LibraryDispatcher.TryCreate(site, this, delegateType, Signature, splattedLibraryMethod, targetClass, target, clrTest, version, args) :
+                    null;
             }
 
             var dispatcher = method.Info.GetDispatcher(delegateType, Signature, target, version);
@@ -198,16 +219,30 @@ namespace IronRuby.Runtime.Calls {
                 return LibraryDispatcher.TryCreateRubyCall(site, delegateType, Signature, rubyMethod, targetClass, target, clrTest, version, args);
             }
 
+            // and so do those of a method define_method made of a block
+            if (method.Info is RubyLambdaMethodInfo) {
+                return LibraryDispatcher.TryCreateRubyCall(site, delegateType, Signature, method.Info, targetClass, target, clrTest, version, args);
+            }
+
             // The first calls of a library method from a site go without a rule. A rule built for a call is used for one
             // call more often than not - most of the prelude runs once - and building it costs more than many such calls.
-            // Kernel#send is bound as the call it makes (DispatchIntrinsics.TryBuildSend), and so are calls while c_call
-            // is traced (the rule reports the call). The same goes for Class#new of a plain Ruby class.
+            // Calls while c_call is traced get rules (the rule reports the call). Kernel#send of a symbol makes the call it makes
+            // (whose rule is that call, see DispatchIntrinsics.TryBuildSend) through a site of its own. The same goes for Class#new
+            // of a plain Ruby class.
             var custom = method.Info as RubyCustomMethodInfo;
+            if (custom != null && target is RubyMethod && !passesKeywords && custom.IsMethodCall) {
+                return LibraryDispatcher.TryCreateMethodObjectCall(site, this, delegateType, Signature, (RubyMethod)target, targetClass, clrTest, version, args);
+            }
+
             if (custom != null && custom.IsInstanceConstructor && target is RubyClass && !passesKeywords) {
                 return LibraryDispatcher.TryCreateConstruction(site, delegateType, Signature, (RubyClass)target, targetClass, version, args);
             }
 
             var libraryMethod = method.Info as RubyLibraryMethodInfo;
+            if (libraryMethod != null && !TracePoint.CCallTracing && DispatchIntrinsics.IsSend(libraryMethod) && !passesKeywords) {
+                return LibraryDispatcher.TryCreateSend(site, delegateType, Signature, targetClass, target, clrTest, version, args);
+            }
+
             if (libraryMethod != null && !TracePoint.CCallTracing && !DispatchIntrinsics.IsSend(libraryMethod)) {
                 return LibraryDispatcher.TryCreate(site, this, delegateType, Signature, libraryMethod, targetClass, target, clrTest, version, args);
             }

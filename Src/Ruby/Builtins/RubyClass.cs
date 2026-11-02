@@ -1633,7 +1633,7 @@ namespace IronRuby.Builtins {
             // Object#initialize and BasicObject#initialize: no arguments - construct (a RubyObject constructor, the same allocation)
             if (initializer is RubyLibraryMethodInfo) {
                 return (count == 0 && (initializer.DeclaringModule.IsObjectClass || initializer.DeclaringModule.IsBasicObjectClass)) ?
-                    new ObjectConstruction(this, version, null, 0) : null;
+                    new ObjectConstruction(this, version, (Delegate)null, 0) : null;
             }
 
             // a Ruby initializer: allocate and call it (BuildOverriddenInitializerCall), unless it is empty
@@ -1647,8 +1647,14 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
+            // one of optional parameters or a rest parameter is called as the rule calls it (RubyMethodInfo.BuildCallNoFlow):
             var parameters = method.Parameters;
-            if (parameters.Unsplat != null || parameters.Optional.Length > 0 || parameters.Mandatory.Length != count) {
+            if (parameters.Unsplat != null || parameters.Optional.Length > 0) {
+                var call = RubyMethodCallPlan.TryCreate(method, count, Symbols.Initialize);
+                return (call != null) ? new ObjectConstruction(this, version, call, count) : null;
+            }
+
+            if (parameters.Mandatory.Length != count) {
                 return null;
             }
 

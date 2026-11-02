@@ -20,6 +20,7 @@ using Microsoft.Scripting.Ast;
 #endif
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
@@ -935,10 +936,16 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal bool TryInvoke(RubyScope/*!*/ scope, object self, object blockArg, object[]/*!*/ args, out object result) {
+            // Method#call: the method is called on the Method's receiver
+            if (_methodObject != null && !_methodObject.TryGetReceiver(self, out self)) {
+                result = null;
+                return false;
+            }
+
             if (_rubyCall != null) {
                 // the rule passes the block and the arguments as they are (RubyMethodInfo.BuildCallNoFlow):
                 Proc rubyBlock = blockArg as Proc;
-                if (_budget.Remaining <= 0 || blockArg != null && rubyBlock == null) {
+                if (_budget.Remaining <= 0 || blockArg != null && rubyBlock == null || _splatCount >= 0 && (args = ExpandSplat(args)) == null) {
                     result = null;
                     return false;
                 }
@@ -952,14 +959,31 @@ namespace IronRuby.Runtime.Calls {
                 return true;
             }
 
-            if (_construction != null) {
-                if (_budget.Remaining <= 0 || !_construction.IsCurrent(args.Length)) {
+            if (_send != null) {
+                Proc sendBlock = blockArg as Proc;
+                if (_budget.Remaining <= 0 || blockArg != null && sendBlock == null || !_send.Matches(args)) {
                     result = null;
                     return false;
                 }
                 _budget.Remaining--;
                 try {
-                    result = _construction.Invoke(args);
+                    result = _send.Invoke(scope, self, sendBlock, args);
+                } catch (Exception e) {
+                    SaveInterpretedFrames(e);
+                    throw;
+                }
+                return true;
+            }
+
+            if (_construction != null) {
+                Proc initializerBlock = blockArg as Proc;
+                if (_budget.Remaining <= 0 || !_construction.IsCurrent(args.Length) || blockArg != null && initializerBlock == null) {
+                    result = null;
+                    return false;
+                }
+                _budget.Remaining--;
+                try {
+                    result = _construction.Invoke(args, initializerBlock);
                 } catch (Exception e) {
                     SaveInterpretedFrames(e);
                     throw;
@@ -968,7 +992,9 @@ namespace IronRuby.Runtime.Calls {
             }
 
             Proc block = blockArg as Proc;
-            if (_budget.Remaining <= 0 || blockArg != null && block == null || !Matches(block, args)) {
+            if (_budget.Remaining <= 0 || blockArg != null && block == null ||
+                _splatCount >= 0 && ((args = ExpandSplat(args)) == null || _splatCount > 0 && RubyOps.IsKeywordArgumentsHash(args[args.Length - 1])) ||
+                !Matches(block, args)) {
                 result = null;
                 return false;
             }
@@ -987,14 +1013,147 @@ namespace IronRuby.Runtime.Calls {
         private ObjectConstruction _construction;
 
         // a call of a Ruby method, instead of a library method call:
-        private RubyMethodCallPlan _rubyCall;
+        private RubyMemberCall _rubyCall;
+
+        // the call Kernel#send (or __send__) makes, instead of the call of send:
+        private SendCall _send;
+
+        // Method#call (#[], #===) of a Method object: the call is of its method, on its receiver (see MethodObjectCall)
+        private MethodObjectCall _methodObject;
+
+        // the receiver test is the Method object's: the call of #call resolved for its class
+        private void SetMethodObject(MethodObjectCall/*!*/ methodObject) {
+            _methodObject = methodObject;
+            _isRubyObject = methodObject.IsRubyObject;
+            _targetType = methodObject.MethodObjectType;
+            _bool = false;
+            _classVersion = methodObject.MethodClass.Version;
+            _clrTest = methodObject.ClrTest;
+            Version = methodObject.Version;
+        }
+
+        /// <summary>
+        /// Method#call (and #[], #===, the same rule generator) of a Method object made for a method of the kinds whose call does not
+        /// depend on the Method object (RubyMethod.BuildInvoke): the rule tests the Method's method, name and receiver's type and calls
+        /// the method on the receiver as a call of it would. The dispatcher makes that call as a dispatcher of a call of the method
+        /// would (a Ruby method's, a define_method one's, a library method's), with the receiver as self.
+        /// </summary>
+        internal static object TryCreateMethodObjectCall(CallSite/*!*/ site, RubyCallAction/*!*/ binder, Type/*!*/ delegateType,
+            RubyCallSignature signature, RubyMethod/*!*/ method, RubyClass/*!*/ methodClass, RubyCallAction.ClrReceiverTest clrTest, int version,
+            object[]/*!*/ args) {
+
+            var info = method.Info;
+            Type infoType = info.GetType();
+            if (method.IsMethodMissing || RubyCallAction.IsForeignObject(method.Target) ||
+                !(method is IRubyObject) && clrTest != RubyCallAction.ClrReceiverTest.Plain) {
+                return null;
+            }
+
+            var methodObject = new MethodObjectCall(method, methodClass, clrTest, version);
+            object receiver = method.Target;
+            RubyClass receiverClass = methodClass.Context.GetImmediateClassOf(receiver);
+
+            // the site's arguments with the receiver in the Method's place, which the resolver of a library method's overloads is given:
+            var receiverArgs = ArrayUtils.Copy(args);
+            receiverArgs[signature.HasScope ? 1 : 0] = receiver;
+
+            if (infoType == typeof(RubyLibraryMethodInfo)) {
+                var libraryMethod = (RubyLibraryMethodInfo)info;
+                if (TracePoint.CCallTracing || DispatchIntrinsics.IsSend(libraryMethod)) {
+                    return null;
+                }
+                return TryCreate(site, binder, delegateType, signature, libraryMethod, receiverClass, receiver, RubyCallAction.ClrReceiverTest.Plain,
+                    version, receiverArgs, methodObject);
+            } else if (infoType != typeof(RubyLambdaMethodInfo) && infoType != typeof(RubyMethodInfo)) {
+                return null;
+            }
+
+            // a Ruby method is called by the Method's name, an alias maybe
+            return TryCreateRubyCall(site, delegateType, signature, info, receiverClass, receiver, RubyCallAction.ClrReceiverTest.Plain, version,
+                receiverArgs, methodObject, method.Name);
+        }
+
+        /// <summary>
+        /// Kernel#send or BasicObject#__send__ of a symbol: the rule is the call of the method named that the send makes, with
+        /// implicit self (DispatchIntrinsics.TryBuildSend) on a test of the symbol; the dispatcher makes that call through a site of
+        /// its own (see <see cref="SendCall"/>), which binds it as any call is bound.
+        /// </summary>
+        internal static object TryCreateSend(CallSite/*!*/ site, Type/*!*/ delegateType, RubyCallSignature signature, RubyClass/*!*/ targetClass,
+            object target, RubyCallAction.ClrReceiverTest clrTest, int version, object[]/*!*/ args) {
+
+            bool isRubyObject = target is IRubyObject;
+            if (!isRubyObject && target != null && !(target is bool) && clrTest == RubyCallAction.ClrReceiverTest.None ||
+                RubyCallAction.IsForeignObject(target) || signature.HasSplattedArgument || signature.HasRhsArgument) {
+                return null;
+            }
+
+            int first = (signature.HasScope ? 2 : 1) + (signature.HasBlock ? 1 : 0);
+            int count = args.Length - first;
+            if (count < 1 || count > MaxLibraryArity || signature.HasBlock && args[first - 1] != null && !(args[first - 1] is Proc)) {
+                return null;
+            }
+
+            if (!MayDispatch(site, targetClass.Context)) {
+                return null;
+            }
+
+            var send = SendCall.TryCreate(targetClass.Context, signature, args[first] as RubySymbol, count - 1);
+            if (send == null) {
+                return null;
+            }
+
+            bool isUntyped = MethodDispatcher.UntypedFuncs.Contains(delegateType);
+            if (!isUntyped && !IsSiteDelegate(delegateType, signature)) {
+                return null;
+            }
+
+            var dispatcher = CreateDispatcher(count, signature.HasScope, signature.HasBlock);
+            dispatcher._budget = GetSiteBudget(site, targetClass.Context);
+            dispatcher._context = targetClass.Context;
+            dispatcher._send = send;
+            dispatcher._isRubyObject = isRubyObject;
+            dispatcher._targetType = (target != null) ? target.GetType() : null;
+            dispatcher._bool = (target is bool) ? (bool)target : false;
+            dispatcher._classVersion = targetClass.Version;
+            dispatcher._clrTest = (isRubyObject || target == null || target is bool) ? RubyCallAction.ClrReceiverTest.Plain : clrTest;
+            dispatcher.Version = version;
+
+            object result = dispatcher.CreateDelegate(isUntyped);
+            return (result.GetType() == delegateType) ? result : null;
+        }
+
+        // The length of the splatted list a call passes (see TryCreate, TryCreateRubyCall), -1 if the site splats none.
+        private int _splatCount = -1;
+
+        // The arguments of a splatted call, the list's items in place of the list, as its rule makes them (MetaObjectBuilder.
+        // AddSplattedArgumentTest, ArgsBuilder); null if the list is not of the length the rule was bound for.
+        private object[] ExpandSplat(object[]/*!*/ args) {
+            var list = args[args.Length - 1] as IList;
+            if (list == null) {
+                return null;
+            }
+            list = RubyOps.SplatRuby2Keywords(list);
+            if (list.Count != _splatCount) {
+                return null;
+            }
+            int simpleCount = args.Length - 1;
+            var result = new object[simpleCount + list.Count];
+            Array.Copy(args, result, simpleCount);
+            for (int i = 0; i < list.Count; i++) {
+                result[simpleCount + i] = list[i];
+            }
+            return result;
+        }
 
         /// <summary>
         /// A call of a Ruby method that the precompiled dispatchers of Ruby methods do not make (see <see cref="RubyMethodCallPlan"/>).
         /// </summary>
         /// <param name="clrTest">The test of a CLR object receiver (not nil, true or false) the rule would make.</param>
-        internal static object TryCreateRubyCall(CallSite/*!*/ site, Type/*!*/ delegateType, RubyCallSignature signature, RubyMethodInfo/*!*/ method,
-            RubyClass/*!*/ targetClass, object target, RubyCallAction.ClrReceiverTest clrTest, int version, object[]/*!*/ args) {
+        /// <param name="methodObject">A call of Method#call that calls the method, on <paramref name="target"/> (see <see cref="MethodObjectCall"/>).</param>
+        /// <param name="name">The name a Ruby method (RubyMethodInfo) is called by, if not its own: an alias.</param>
+        internal static object TryCreateRubyCall(CallSite/*!*/ site, Type/*!*/ delegateType, RubyCallSignature signature, RubyMemberInfo/*!*/ method,
+            RubyClass/*!*/ targetClass, object target, RubyCallAction.ClrReceiverTest clrTest, int version, object[]/*!*/ args,
+            MethodObjectCall methodObject = null, string name = null) {
 
             bool isRubyObject = target is IRubyObject;
             if (!isRubyObject && target != null && !(target is bool) && clrTest == RubyCallAction.ClrReceiverTest.None ||
@@ -1008,11 +1167,31 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
+            // A splatted call passes the items of the list the site's last argument is (ArgsBuilder.AddCallArguments) - after a
+            // trailing ruby2_keywords hash in it has been made keyword arguments again - and its rule holds for lists of that length:
+            int argumentCount = count;
+            int splatCount = -1;
+            if (signature.HasSplattedArgument) {
+                var list = (count > 0) ? args[args.Length - 1] as IList : null;
+                if (list == null || signature.HasRhsArgument) {
+                    return null;
+                }
+                splatCount = RubyOps.SplatRuby2Keywords(list).Count;
+                argumentCount = count - 1 + splatCount;
+            }
+
             if (!MayDispatch(site, targetClass.Context)) {
                 return null;
             }
 
-            var plan = RubyMethodCallPlan.TryCreate(method, count);
+            RubyMemberCall plan;
+            if (method is RubyMethodInfo) {
+                plan = RubyMethodCallPlan.TryCreate((RubyMethodInfo)method, argumentCount, name ?? ((RubyMethodInfo)method).DefinitionName);
+            } else if (method is RubyLambdaMethodInfo && splatCount < 0) {
+                plan = LambdaMethodCall.TryCreate((RubyLambdaMethodInfo)method, argumentCount);
+            } else {
+                plan = null;
+            }
             if (plan == null) {
                 return null;
             }
@@ -1028,12 +1207,17 @@ namespace IronRuby.Runtime.Calls {
             dispatcher._budget = GetSiteBudget(site, targetClass.Context);
             dispatcher._context = targetClass.Context;
             dispatcher._rubyCall = plan;
+            dispatcher._splatCount = splatCount;
             dispatcher._isRubyObject = isRubyObject;
             dispatcher._targetType = (target != null) ? target.GetType() : null;
             dispatcher._bool = (target is bool) ? (bool)target : false;
             dispatcher._classVersion = targetClass.Version;
             dispatcher._clrTest = (isRubyObject || target == null || target is bool) ? RubyCallAction.ClrReceiverTest.Plain : clrTest;
             dispatcher.Version = version;
+
+            if (methodObject != null) {
+                dispatcher.SetMethodObject(methodObject);
+            }
 
             object result = dispatcher.CreateDelegate(isUntyped);
             return (result.GetType() == delegateType) ? result : null;
@@ -1045,9 +1229,9 @@ namespace IronRuby.Runtime.Calls {
         internal static object TryCreateConstruction(CallSite/*!*/ site, Type/*!*/ delegateType, RubyCallSignature signature, RubyClass/*!*/ cls,
             RubyClass/*!*/ targetClass, int version, object[]/*!*/ args) {
 
-            int first = signature.HasScope ? 2 : 1;
+            int first = (signature.HasScope ? 2 : 1) + (signature.HasBlock ? 1 : 0);
             int count = args.Length - first;
-            if (signature.HasBlock || count < 0 || count > MaxLibraryArity || !MethodDispatcher.UntypedFuncs.Contains(delegateType) &&
+            if (count < 0 || count > MaxLibraryArity || !MethodDispatcher.UntypedFuncs.Contains(delegateType) &&
                 !IsSiteDelegate(delegateType, signature)) {
                 return null;
             }
@@ -1061,7 +1245,13 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            var dispatcher = CreateDispatcher(count, signature.HasScope, false);
+            // A block goes to a Ruby initializer (which the rule calls with the RFC frame a break from the block unwinds to, see
+            // ObjectConstruction.Invoke); the rule of a construction that calls none ignores it in ways of its own.
+            if (signature.HasBlock && (!construction.CallsInitializer || args[first - 1] != null && !(args[first - 1] is Proc))) {
+                return null;
+            }
+
+            var dispatcher = CreateDispatcher(count, signature.HasScope, signature.HasBlock);
             dispatcher._budget = GetSiteBudget(site, cls.Context);
             dispatcher._context = cls.Context;
             dispatcher._construction = construction;
@@ -1094,9 +1284,10 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <param name="clrTest">The test of a CLR object receiver (not nil, true or false) the rule would make.</param>
+        /// <param name="methodObject">A call of Method#call that calls the method, on <paramref name="target"/> (see <see cref="MethodObjectCall"/>).</param>
         internal static object TryCreate(CallSite/*!*/ site, RubyCallAction/*!*/ binder, Type/*!*/ delegateType, RubyCallSignature signature,
             RubyLibraryMethodInfo/*!*/ method, RubyClass/*!*/ targetClass, object target, RubyCallAction.ClrReceiverTest clrTest, int version,
-            object[]/*!*/ args) {
+            object[]/*!*/ args, MethodObjectCall methodObject = null) {
 
             if (!MayDispatch(site, targetClass.Context)) {
                 return null;
@@ -1128,8 +1319,31 @@ namespace IronRuby.Runtime.Calls {
             var callArgs = new object[count];
             Array.Copy(args, first, callArgs, 0, count);
 
-            var argTypes = new Type[count];
-            for (int i = 0; i < count; i++) {
+            // A splatted call passes the items of the list in its last argument, a trailing ruby2_keywords hash made keyword
+            // arguments again (see ExpandSplat); the resolver takes them as it takes arguments (RubyOverloadResolver.
+            // CreateActualArguments), and the rule holds for lists of that length. Keyword arguments are left to the rule.
+            int simpleCount = count;
+            int splatCount = -1;
+            if (signature.HasSplattedArgument) {
+                var list = (count > 0) ? callArgs[count - 1] as IList : null;
+                if (list == null || signature.HasRhsArgument) {
+                    return null;
+                }
+                list = RubyOps.SplatRuby2Keywords(list);
+                simpleCount = count - 1;
+                splatCount = list.Count;
+                var expanded = new object[simpleCount + splatCount];
+                Array.Copy(callArgs, expanded, simpleCount);
+                list.CopyTo(expanded, simpleCount);
+                if (splatCount > 0 && RubyOps.IsKeywordArgumentsHash(expanded[expanded.Length - 1])) {
+                    return null;
+                }
+                callArgs = expanded;
+            }
+            int argumentCount = callArgs.Length;
+
+            var argTypes = new Type[argumentCount];
+            for (int i = 0; i < argumentCount; i++) {
                 argTypes[i] = (callArgs[i] != null) ? callArgs[i].GetType() : null;
             }
 
@@ -1137,30 +1351,37 @@ namespace IronRuby.Runtime.Calls {
             bool[] restricted = null;
             if (method.MethodBases.Length == 1) {
                 plan = method.GetCallPlan(0);
-                if (plan != null && !plan.AcceptsShape(count, block)) {
+                if (plan != null && !plan.AcceptsShape(argumentCount, block)) {
                     plan = null;
                 }
                 if (plan != null) {
-                    // the site's parameter types: Func<CallSite, (scope)?, self, (block)?, arguments..., result>
+                    // the site's parameter types: Func<CallSite, (scope)?, self, (block)?, arguments..., result>; a splatted list's items
+                    // are objects
                     var siteTypes = GetDelegateTypeArguments(delegateType);
                     if (siteTypes.Length != first + count + 2) {
                         return null;
                     }
-                    restricted = new bool[count];
-                    for (int i = 0; i < count; i++) {
-                        restricted[i] = plan.RestrictsArgument(i, siteTypes[first + 1 + i]);
+                    restricted = new bool[argumentCount];
+                    for (int i = 0; i < argumentCount; i++) {
+                        restricted[i] = plan.RestrictsArgument(i, (i < simpleCount) ? siteTypes[first + 1 + i] : typeof(object));
                     }
                 }
             } else {
                 // The overload the resolver would pick, if that can be told by the parameter types alone, else asks it. Either way
-                // the choice is made for arguments of these types, and holds for a call that passes arguments of the same.
-                var selector = method.GetOverloadSelector();
-                int index = (selector != null) ? selector.Select(target, signature.HasBlock, block, callArgs) : -1;
-                if (index == -1) {
-                    index = method.GetResolvedOverload(binder, target, argTypes, signature.HasBlock, block != null, args);
+                // the choice is made for arguments of these types, and holds for a call that passes arguments of the same. A splatted
+                // call always asks the resolver, given the call as the rule is (the cache is of calls that splat nothing).
+                int index;
+                if (splatCount >= 0) {
+                    index = Resolve(binder, method, args);
+                } else {
+                    var selector = method.GetOverloadSelector();
+                    index = (selector != null) ? selector.Select(target, signature.HasBlock, block, callArgs) : -1;
+                    if (index == -1) {
+                        index = method.GetResolvedOverload(binder, target, argTypes, signature.HasBlock, block != null, args);
+                    }
                 }
                 plan = (index >= 0) ? method.GetCallPlan(index) : null;
-                if (plan != null && !plan.AcceptsShape(count, block)) {
+                if (plan != null && !plan.AcceptsShape(argumentCount, block)) {
                     plan = null;
                 }
             }
@@ -1181,6 +1402,7 @@ namespace IronRuby.Runtime.Calls {
             dispatcher._budget = GetSiteBudget(site, targetClass.Context);
             dispatcher._context = targetClass.Context;
             dispatcher._plan = plan;
+            dispatcher._splatCount = splatCount;
             dispatcher._hasBlock = signature.HasBlock;
             dispatcher._argTypes = argTypes;
             dispatcher._restricted = restricted;
@@ -1191,6 +1413,10 @@ namespace IronRuby.Runtime.Calls {
             dispatcher._classVersion = targetClass.Version;
             dispatcher._clrTest = (isRubyObject || target == null || target is bool) ? RubyCallAction.ClrReceiverTest.Plain : clrTest;
             dispatcher.Version = version;
+
+            if (methodObject != null) {
+                dispatcher.SetMethodObject(methodObject);
+            }
 
             object result = dispatcher.CreateDelegate(isUntyped);
             return (result.GetType() == delegateType) ? result : null;
@@ -1317,6 +1543,120 @@ namespace IronRuby.Runtime.Calls {
     }
 
     /// <summary>
+    /// The test of a Method object the rule of Method#call makes (RubyMethod.BuildInvoke) - of its method, its name, that it stands
+    /// for no method_missing, and of its receiver's exact type - and the receiver test of the call of #call itself (the Method's).
+    /// </summary>
+    internal sealed class MethodObjectCall {
+        private readonly RubyMemberInfo/*!*/ _info;
+        private readonly string/*!*/ _name;
+        private readonly Type _receiverType;
+
+        internal readonly Type/*!*/ MethodObjectType;
+        internal readonly bool IsRubyObject;
+        internal readonly RubyClass/*!*/ MethodClass;
+        internal readonly RubyCallAction.ClrReceiverTest ClrTest;
+        internal readonly int Version;
+
+        internal MethodObjectCall(RubyMethod/*!*/ method, RubyClass/*!*/ methodClass, RubyCallAction.ClrReceiverTest clrTest, int version) {
+            _info = method.Info;
+            _name = method.Name;
+            _receiverType = (method.Target != null) ? method.Target.GetType() : null;
+            MethodObjectType = method.GetType();
+            IsRubyObject = method is IRubyObject;
+            MethodClass = methodClass;
+            ClrTest = IsRubyObject ? RubyCallAction.ClrReceiverTest.Plain : clrTest;
+            Version = version;
+        }
+
+        /// <param name="self">The Method object, of the type tested (the dispatcher's receiver test).</param>
+        internal bool TryGetReceiver(object self, out object receiver) {
+            var method = (RubyMethod)self;
+            receiver = method.Target;
+            return ReferenceEquals(method.Info, _info) && method.Name == _name && !method.IsMethodMissing &&
+                (receiver != null ? receiver.GetType() == _receiverType : _receiverType == null);
+        }
+    }
+
+    /// <summary>
+    /// The call `obj.send(:name, args)' makes (see DispatchIntrinsics.TryBuildSend): of name, with the arguments after it, the block
+    /// and implicit self - so that a private method is called too - through a call site of the dispatcher's own, which is bound as any
+    /// site is (a dispatcher for its first calls, a rule once it is hot). The site's signature is the one the rule rewrites the call to
+    /// (CallArguments.RemoveSendMethodName). The dispatcher holds for calls that send the same symbol.
+    /// </summary>
+    internal sealed class SendCall {
+        private readonly RubySymbol/*!*/ _symbol;
+        private readonly CallSite/*!*/ _site;
+        private readonly bool _hasBlock;
+
+        private SendCall(RubySymbol/*!*/ symbol, CallSite/*!*/ site, bool hasBlock) {
+            _symbol = symbol;
+            _site = site;
+            _hasBlock = hasBlock;
+        }
+
+        /// <param name="count">The number of arguments after the name.</param>
+        internal static SendCall TryCreate(RubyContext/*!*/ context, RubyCallSignature signature, RubySymbol symbol, int count) {
+            // the calls TryBuildSend folds:
+            if (symbol == null || !signature.HasScope || signature.ResolveOnly || signature.IsVirtualCall || signature.IsSuperCall ||
+                signature.IsInteropCall || count > 4) {
+                return null;
+            }
+
+            var binder = RubyCallAction.Make(context, symbol.ToString(), new RubyCallSignature(count,
+                (signature.Flags & ~(RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall)) | RubyCallFlags.HasImplicitSelf
+            ));
+
+            CallSite site;
+            if (signature.HasBlock) {
+                switch (count) {
+                    case 0: site = CallSite<Func<CallSite, RubyScope, object, Proc, object>>.Create(binder); break;
+                    case 1: site = CallSite<Func<CallSite, RubyScope, object, Proc, object, object>>.Create(binder); break;
+                    case 2: site = CallSite<Func<CallSite, RubyScope, object, Proc, object, object, object>>.Create(binder); break;
+                    case 3: site = CallSite<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>.Create(binder); break;
+                    default: site = CallSite<Func<CallSite, RubyScope, object, Proc, object, object, object, object, object>>.Create(binder); break;
+                }
+            } else {
+                switch (count) {
+                    case 0: site = CallSite<Func<CallSite, RubyScope, object, object>>.Create(binder); break;
+                    case 1: site = CallSite<Func<CallSite, RubyScope, object, object, object>>.Create(binder); break;
+                    case 2: site = CallSite<Func<CallSite, RubyScope, object, object, object, object>>.Create(binder); break;
+                    case 3: site = CallSite<Func<CallSite, RubyScope, object, object, object, object, object>>.Create(binder); break;
+                    default: site = CallSite<Func<CallSite, RubyScope, object, object, object, object, object, object>>.Create(binder); break;
+                }
+            }
+            return new SendCall(symbol, site, signature.HasBlock);
+        }
+
+        // the rule's test of the name (the symbol is unique in its runtime):
+        internal bool Matches(object[]/*!*/ args) {
+            return args.Length > 0 && ReferenceEquals(args[0], _symbol);
+        }
+
+        /// <param name="args">The send's arguments: the name, then the arguments it passes.</param>
+        internal object Invoke(RubyScope/*!*/ scope, object self, Proc block, object[]/*!*/ args) {
+            var site = _site;
+            if (_hasBlock) {
+                switch (args.Length) {
+                    case 1: return ((CallSite<Func<CallSite, RubyScope, object, Proc, object>>)site).Target(site, scope, self, block);
+                    case 2: return ((CallSite<Func<CallSite, RubyScope, object, Proc, object, object>>)site).Target(site, scope, self, block, args[1]);
+                    case 3: return ((CallSite<Func<CallSite, RubyScope, object, Proc, object, object, object>>)site).Target(site, scope, self, block, args[1], args[2]);
+                    case 4: return ((CallSite<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>)site).Target(site, scope, self, block, args[1], args[2], args[3]);
+                    case 5: return ((CallSite<Func<CallSite, RubyScope, object, Proc, object, object, object, object, object>>)site).Target(site, scope, self, block, args[1], args[2], args[3], args[4]);
+                }
+            } else {
+                switch (args.Length) {
+                    case 1: return ((CallSite<Func<CallSite, RubyScope, object, object>>)site).Target(site, scope, self);
+                    case 2: return ((CallSite<Func<CallSite, RubyScope, object, object, object>>)site).Target(site, scope, self, args[1]);
+                    case 3: return ((CallSite<Func<CallSite, RubyScope, object, object, object, object>>)site).Target(site, scope, self, args[1], args[2]);
+                    case 4: return ((CallSite<Func<CallSite, RubyScope, object, object, object, object, object>>)site).Target(site, scope, self, args[1], args[2], args[3]);
+                    case 5: return ((CallSite<Func<CallSite, RubyScope, object, object, object, object, object, object>>)site).Target(site, scope, self, args[1], args[2], args[3], args[4]);
+                }
+            }
+            throw Assert.Unreachable;
+        }
+    }
+
+    /// <summary>
     /// What the rule RubyClass.BuildObjectConstructionNoFlow builds for Class#new of a plain Ruby class does: under the class's
     /// version (its initializer), allocate a RubyObject and call a Ruby initializer that takes the arguments given - or, the
     /// initializer being Object's (or BasicObject's) and there being no arguments, only allocate.
@@ -1325,8 +1665,10 @@ namespace IronRuby.Runtime.Calls {
         private readonly RubyClass/*!*/ _class;
         private readonly int _version;
 
-        // the initializer's body (Func<object, Proc, object x N, object>), null if it is not called:
+        // the initializer's body (Func<object, Proc, object x N, object>) of mandatory parameters only, or the call of one with optional
+        // or rest parameters; both null if it is not called:
         private readonly Delegate _initializer;
+        private readonly RubyMethodCallPlan _initializerCall;
         private readonly int _arity;
 
         internal ObjectConstruction(RubyClass/*!*/ cls, int version, Delegate initializer, int arity) {
@@ -1336,26 +1678,58 @@ namespace IronRuby.Runtime.Calls {
             _arity = arity;
         }
 
+        internal ObjectConstruction(RubyClass/*!*/ cls, int version, RubyMethodCallPlan/*!*/ initializerCall, int arity) {
+            _class = cls;
+            _version = version;
+            _initializerCall = initializerCall;
+            _arity = arity;
+        }
+
+        internal bool CallsInitializer {
+            get { return _initializer != null || _initializerCall != null; }
+        }
+
         internal bool IsCurrent(int count) {
             return _class.Version.Method == _version && count == _arity;
         }
 
-        internal object/*!*/ Invoke(object[]/*!*/ args) {
+        /// <param name="block">The block given to new, passed to the initializer (only a construction that calls one is given one).</param>
+        internal object Invoke(object[]/*!*/ args, Proc block) {
+            if (block == null) {
+                return Construct(args, null);
+            }
+
+            // RubyMethodInfo.RuleControlFlowBuilder: a break from the block unwinds to the frame of the call of new, which returns its value
+            var rfc = RubyOps.CreateRfcForMethod(block);
+            try {
+                return Construct(args, block);
+            } catch (MethodUnwinder unwinder) when (unwinder.TargetFrame == rfc) {
+                return unwinder.ReturnValue;
+            } finally {
+                RubyOps.LeaveMethodFrame(rfc);
+            }
+        }
+
+        private object/*!*/ Construct(object[]/*!*/ args, Proc block) {
             // PropagateRetrySingleton(instance = new RubyObject(class), instance.initialize(args)):
             var instance = new RubyObject(_class);
-            if (_initializer == null) {
+            if (!CallsInitializer) {
                 return instance;
             }
 
             object result;
-            switch (args.Length) {
-                case 0: result = ((Func<object, Proc, object>)_initializer)(instance, null); break;
-                case 1: result = ((Func<object, Proc, object, object>)_initializer)(instance, null, args[0]); break;
-                case 2: result = ((Func<object, Proc, object, object, object>)_initializer)(instance, null, args[0], args[1]); break;
-                case 3: result = ((Func<object, Proc, object, object, object, object>)_initializer)(instance, null, args[0], args[1], args[2]); break;
-                case 4: result = ((Func<object, Proc, object, object, object, object, object>)_initializer)(instance, null, args[0], args[1], args[2], args[3]); break;
-                case 5: result = ((Func<object, Proc, object, object, object, object, object, object>)_initializer)(instance, null, args[0], args[1], args[2], args[3], args[4]); break;
-                default: throw Assert.Unreachable;
+            if (_initializerCall != null) {
+                result = _initializerCall.Invoke(instance, block, args);
+            } else {
+                switch (args.Length) {
+                    case 0: result = ((Func<object, Proc, object>)_initializer)(instance, block); break;
+                    case 1: result = ((Func<object, Proc, object, object>)_initializer)(instance, block, args[0]); break;
+                    case 2: result = ((Func<object, Proc, object, object, object>)_initializer)(instance, block, args[0], args[1]); break;
+                    case 3: result = ((Func<object, Proc, object, object, object, object>)_initializer)(instance, block, args[0], args[1], args[2]); break;
+                    case 4: result = ((Func<object, Proc, object, object, object, object, object>)_initializer)(instance, block, args[0], args[1], args[2], args[3]); break;
+                    case 5: result = ((Func<object, Proc, object, object, object, object, object, object>)_initializer)(instance, block, args[0], args[1], args[2], args[3], args[4]); break;
+                    default: throw Assert.Unreachable;
+                }
             }
             return RubyOps.PropagateRetrySingleton(instance, result);
         }
