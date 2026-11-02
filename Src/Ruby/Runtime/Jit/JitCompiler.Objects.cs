@@ -321,13 +321,39 @@ namespace IronRuby.Runtime.Jit {
                         Ast.Equal(Ast.Unbox(v, typeof(int)), Ast.Constant(literal)),
                         Ast.Call(JitRuntime.M("CaseFixnum"), v, Ast.Constant(literal),
                             Ast.Constant(IsBuiltinMethod(KindClass(JitRuntime.KindFloat), "==")),
-                            Ast.Constant(PlainEquals()),
-                            // Integer#== asks the String, which may have a singleton == of its own
-                            Ast.Constant(IsPlainLibraryMethod(KindClass(JitRuntime.KindString), "==") && NoToStr(KindClass(JitRuntime.KindFixnum))))
+                            Ast.Constant(FixnumUnequalKinds()))
                     );
                 default:
                     throw Bail("when of an Integer on a " + subject.Type);
             }
+        }
+
+        /// <summary>
+        /// The kinds (JitRuntime.CaseKind) of value v that Integer#== answers false for without calling Ruby
+        /// code, as a mask: it asks `v == L', which nil, true, false and a Symbol answer by identity; a
+        /// String, an Array and a Hash compare only with an object that responds to to_str, to_ary or
+        /// to_hash, which an Integer does not; and a Range only with a Range. Each where v's class's ==
+        /// is the library one - for a String, an Array, a Hash or a Range also on every singleton class.
+        /// </summary>
+        private int FixnumUnequalKinds() {
+            int mask = 0;
+            if (PlainEquals()) {
+                mask |= (1 << JitRuntime.KindNil) | (1 << JitRuntime.KindTrue) | (1 << JitRuntime.KindFalse) | (1 << JitRuntime.KindSymbol);
+            }
+            var integer = KindClass(JitRuntime.KindFixnum);
+            if (IsPlainLibraryMethod(KindClass(JitRuntime.KindString), "==") && NoToStr(integer)) {
+                mask |= 1 << JitRuntime.KindString;
+            }
+            if (IsPlainLibraryMethod(KindClass(JitRuntime.KindArray), "==") && NoConversion(integer, "to_ary")) {
+                mask |= 1 << JitRuntime.KindArray;
+            }
+            if (IsPlainLibraryMethod(KindClass(JitRuntime.KindHash), "==") && NoConversion(integer, "to_hash")) {
+                mask |= 1 << JitRuntime.KindHash;
+            }
+            if (IsPlainLibraryMethod(KindClass(JitRuntime.KindRange), "==")) {
+                mask |= 1 << JitRuntime.KindRange;
+            }
+            return mask;
         }
 
         /// <summary>nil, true, false and a Symbol answer `==' by identity (theirs are the library methods).</summary>
@@ -398,8 +424,13 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>Instances of cls answer respond_to?(:to_str) false without calling Ruby code.</summary>
         private bool NoToStr(RubyClass/*!*/ cls) {
+            return NoConversion(cls, "to_str");
+        }
+
+        /// <summary>Instances of cls answer respond_to?(name) false without calling Ruby code.</summary>
+        private bool NoConversion(RubyClass/*!*/ cls, string/*!*/ name) {
             return IsBuiltinMethod(cls, "respond_to?") && IsBuiltinMethod(cls, "respond_to_missing?")
-                && !cls.ResolveMethod("to_str", VisibilityContext.AllVisible).Found;
+                && !cls.ResolveMethod(name, VisibilityContext.AllVisible).Found;
         }
 
         /// <summary>

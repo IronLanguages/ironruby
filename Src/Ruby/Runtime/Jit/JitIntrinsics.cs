@@ -225,18 +225,15 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>
         /// `L === v', L an Integer literal, v an object that is not an Int32 (the caller tested that):
         /// Integer#=== asks `v == L', which a Float answers numerically when Float#== is the library
-        /// one (<paramref name="floatEquals"/>), nil, true, false and a Symbol answer false when
-        /// theirs are (<paramref name="plainFalse"/>), and a String does when String#== is and an
-        /// Integer does not respond to to_str (<paramref name="stringFalse"/>). Anything else deopts.
+        /// one (<paramref name="floatEquals"/>), and a value of a kind in <paramref name="unequal"/>
+        /// answers false (checked when compiled: JitCompiler.FixnumUnequalKinds). Anything else deopts.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        public static bool CaseFixnum(object value, int literal, bool floatEquals, bool plainFalse, bool stringFalse) {
+        public static bool CaseFixnum(object value, int literal, bool floatEquals, int unequal) {
             if (value is long) { return (long)value == literal; }
             if (value is double) {
                 if (floatEquals) { return (double)value == literal; }
-            } else if (plainFalse && (value == null || value is bool || value is RubySymbol)) {
-                return false;
-            } else if (stringFalse && value != null && value.GetType() == typeof(MutableString)) {
+            } else if (((unequal >> CaseKind(value)) & 1) != 0) {
                 return false;
             }
             throw Deopt();

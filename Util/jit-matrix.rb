@@ -1266,6 +1266,21 @@ end
 JIT_RANGE_WARM = [3, 50, 200, "x", :s, nil, [1], { a: 1 }, true, false, 2.5, 7.5]
 $jit_coerced = 0
 
+# Integer whens reached by subjects of every kind: `L === v' is `v == L', which an Array, a Hash and
+# a Range answer false for an Integer (it has no to_ary or to_hash) - unless their == is someone else's
+def sp_case_lit(v)
+  case v
+  when 0 then :zero
+  when 1, 2 then :one_two
+  when Array then :array
+  when Hash then :hash
+  when Range then :range
+  else :other
+  end
+end
+JIT_LIT_WARM = [0, 1, 2, 3, [1], { 1 => 2 }, 1..2, nil, :s, "x", true, 2.0, 2**40, [], {}]
+$jit_eq = 0
+
 def sp_case_sym(s)
   case s
   when :add then 1
@@ -1403,6 +1418,9 @@ t('case of a Float, other types') { [sp_case_float(1), sp_case_float(2), sp_case
 warm { |i| sp_case_range(JIT_RANGE_WARM[i % JIT_RANGE_WARM.size]) }
 t('case of a range, each kind') { JIT_MIX.map { |v| sp_case_range(v) } }
 t('case of a range, Floats and edges') { [0, 1, 5, 6, 99, 100, -1, 0.5, 1.0, 5.0, 5.5, 99.5].map { |v| sp_case_range(v) } }
+warm { |i| sp_case_lit(JIT_LIT_WARM[i % JIT_LIT_WARM.size]) }
+t('case of Integer literals, each kind') { JIT_MIX.map { |v| sp_case_lit(v) } + JIT_LIT_WARM.map { |v| sp_case_lit(v) } }
+t('case of Integer literals, subclasses') { [JitArr.new, JitHash.new, JitStr.new("1"), 2**70, 1.0, 0.0, -0.0].map { |v| sp_case_lit(v) } }
 warm { |i| sp_case_sym([:add, :sub, :mul, :div, :mod][i % 5]) }
 t('case of a Symbol') { [:add, :sub, :mul, :div, :mod, "add", nil, 1].map { |s| sp_case_sym(s) } }
 warm { |i| sp_case_str(["foo", "bar", "baz", "qux"][i % 4]) }
@@ -1544,6 +1562,43 @@ class Hash
 end
 $jit_coerced = 0
 t('Hash#respond_to? removed') { [sp_case_range({ a: 1 }), $jit_coerced] }
+class Array
+  alias_method :__jit_matrix_aeq, :==
+  def ==(o)
+    $jit_eq += 1 if o.is_a?(Integer)
+    __jit_matrix_aeq(o)
+  end
+end
+t('Array#== redefined') { [[[1], [], { 1 => 2 }, 1..2].map { |v| sp_case_lit(v) }, $jit_eq] }
+warm { |i| sp_case_lit(JIT_LIT_WARM[i % JIT_LIT_WARM.size]) }
+$jit_eq = 0
+t('Array#== redefined, hot again') { [[[1], [], { 1 => 2 }, 1..2].map { |v| sp_case_lit(v) }, $jit_eq] }
+class Array
+  alias_method :==, :__jit_matrix_aeq
+end
+$jit_eq = 0
+t('Array#== restored') { [[[1], [], { 1 => 2 }].map { |v| sp_case_lit(v) }, $jit_eq] }
+jit_eq_hash = { 1 => 2 }
+def jit_eq_hash.==(o)
+  $jit_eq += 1
+  o == 2 || super
+end
+t('a Hash with a singleton ==') { [sp_case_lit(jit_eq_hash), sp_case_lit({ 1 => 2 }), $jit_eq] }
+warm { |i| sp_case_lit(JIT_LIT_WARM[i % JIT_LIT_WARM.size]) }
+$jit_eq = 0
+t('a Hash with a singleton ==, hot again') { [sp_case_lit(jit_eq_hash), sp_case_lit({ 1 => 2 }), $jit_eq] }
+class Range
+  def ==(o)
+    o == 0 || super
+  end
+end
+t('Range#== redefined') { [sp_case_lit(1..2), sp_case_lit(3..4), sp_case_lit([1])] }
+warm { |i| sp_case_lit(JIT_LIT_WARM[i % JIT_LIT_WARM.size]) }
+t('Range#== redefined, hot again') { [sp_case_lit(1..2), sp_case_lit(3..4), sp_case_lit([1])] }
+class Range
+  remove_method :==
+end
+t('Range#== removed') { [sp_case_lit(1..2), sp_case_lit([1])] }
 t('<=> of an Integer and objects without #coerce') { [1 <=> nil, 1 <=> "a", 1 <=> :a, 1.5 <=> [1], "a" <=> 1, (1 + nil rescue $!.class), (1 < "a" rescue $!.class)] }
 class String
   alias_method :__jit_matrix_streqq, :===
