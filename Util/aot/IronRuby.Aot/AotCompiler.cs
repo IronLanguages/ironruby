@@ -689,9 +689,41 @@ namespace IronRuby.Aot {
                 Expression.Constant(ps.Unsplat != null ? ((LocalVariable)ps.Unsplat).Name : null, typeof(string)),
                 Expression.Constant(ps.Block?.Name, typeof(string)),
                 SerializeSignature(ps.Signature));
-            return Expression.Call(typeof(PrecompiledCode).GetMethod("CreateMethodBody"),
+            return Expression.Call(typeof(PrecompiledCode).GetMethod("CreateMethodBody",
+                    new[] { typeof(MethodDefinition), typeof(string), typeof(RubyEncoding), typeof(Func<RubyScope, RubyModule, Delegate>), typeof(string) }),
                 header, StringExpression(body.Document?.FileName),
-                ConstantField(AotHost.GetEncoding(body), typeof(RubyEncoding)), factory);
+                ConstantField(AotHost.GetEncoding(body), typeof(RubyEncoding)), factory,
+                Expression.Constant(JitSource(body, ast), typeof(string)));
+        }
+
+        private string _sourcePath;
+        private byte[] _sourceBytes;
+
+        /// <summary>
+        /// The source of a `def' the method JIT may specialize (JitStub.IsCandidate), which the library keeps for it: the JIT
+        /// works from the method's AST, and the compiled method has none (PrecompiledCode.ParseJitSource parses this at the
+        /// method's first call). Kept only if it parses back, the way the runtime will parse it, to a method the JIT takes too.
+        /// </summary>
+        private string JitSource(RubyMethodBody body, MethodDefinition ast) {
+            string path = body.Document?.FileName;
+            if (path == null || AotHost.GetEncoding(body) != RubyEncoding.UTF8 || !IronRuby.Runtime.Jit.JitStub.IsCandidate(ast, _context)) {
+                return null;
+            }
+            if (_sourcePath != path) {
+                // what prism was given: the UTF-8 bytes of the file's code, whose offsets the AST's locations are
+                _sourceBytes = System.Text.Encoding.UTF8.GetBytes(_context.CreateFileUnit(path).GetCode());
+                _sourcePath = path;
+            }
+            int start = ast.Location.Start.Index, end = ast.Location.End.Index;
+            string text = start >= 0 && end > start && end <= _sourceBytes.Length ? System.Text.Encoding.UTF8.GetString(_sourceBytes, start, end - start) : null;
+            var parsed = text != null && text.StartsWith("def", StringComparison.Ordinal) ? PrecompiledCode.ParseJitSource(_context, text, ast, path) : null;
+            if (parsed == null || !IronRuby.Runtime.Jit.JitStub.IsCandidate(parsed, _context)) {
+                Count("JIT candidates whose source does not parse back (not kept)");
+                return null;
+            }
+            Count("method bodies whose source is kept for the JIT");
+            Count("source kept for the JIT (chars)", text.Length);
+            return text;
         }
 
         internal static string LocationKey(MethodDefinition def) => def.Location.Start.Index + ":" + def.Location.End.Index + ":" + def.Name;

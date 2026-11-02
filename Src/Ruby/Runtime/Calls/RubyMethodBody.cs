@@ -60,10 +60,14 @@ namespace IronRuby.Runtime.Calls {
         // method's header (name, parameters, location), not its body.
         private readonly Func<RubyScope, RubyModule, Delegate> _precompiled;
 
+        // A precompiled method the JIT may specialize: its def's source, which the JIT's AST is parsed from (see Compile).
+        private readonly string _jitSource;
+
         internal RubyMethodBody(MethodDeclaration/*!*/ header, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding,
-            Func<RubyScope, RubyModule, Delegate>/*!*/ precompiled)
+            Func<RubyScope, RubyModule, Delegate>/*!*/ precompiled, string jitSource)
             : this(header, document, encoding, (LineCoverage)null) {
             _precompiled = precompiled;
+            _jitSource = jitSource;
         }
 
         /// <summary>
@@ -287,7 +291,16 @@ namespace IronRuby.Runtime.Calls {
 
         private Delegate/*!*/ CompileNoTiming(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
             if (_precompiled != null) {
-                return _precompiled(declaringScope, declaringModule);
+                var compiled = _precompiled(declaringScope, declaringModule);
+                // -X:JIT, as below: from the def's AST, which the library keeps the source of for the methods it may specialize
+                var jitContext = declaringScope.RubyContext;
+                if (_jitSource != null && jitContext.RubyOptions.Jit && !IronRuby.Runtime.Jit.JitRuntime.Disabled) {
+                    var ast = Precompiled.PrecompiledCode.ParseJitSource(jitContext, _jitSource, _ast, _document != null ? _document.FileName : null);
+                    if (ast != null) {
+                        compiled = IronRuby.Runtime.Jit.JitStub.Wrap(compiled, ast, jitContext, declaringModule);
+                    }
+                }
+                return compiled;
             }
 
             // TODO: remove options

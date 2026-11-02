@@ -178,8 +178,41 @@ namespace IronRuby.Runtime.Precompiled {
 
         public static RubyMethodBody/*!*/ CreateMethodBody(MethodDefinition/*!*/ header, string documentPath, RubyEncoding/*!*/ encoding,
             Func<RubyScope, RubyModule, Delegate>/*!*/ factory) {
+            return CreateMethodBody(header, documentPath, encoding, factory, null);
+        }
+
+        /// <summary>
+        /// <paramref name="jitSource"/>: the def's source, kept for a method the JIT may specialize (JitStub.IsCandidate):
+        /// the JIT works from the method's AST, and the header has no body. Parsed when the method is first called.
+        /// </summary>
+        public static RubyMethodBody/*!*/ CreateMethodBody(MethodDefinition/*!*/ header, string documentPath, RubyEncoding/*!*/ encoding,
+            Func<RubyScope, RubyModule, Delegate>/*!*/ factory, string jitSource) {
             var document = documentPath != null ? MSA.Expression.SymbolDocument(documentPath) : null;
-            return new RubyMethodBody(header, document, encoding, factory);
+            return new RubyMethodBody(header, document, encoding, factory, jitSource);
+        }
+
+        /// <summary>
+        /// The `def' a precompiled method was compiled from, parsed from the source the library keeps for it
+        /// (CreateMethodBody), for the JIT: the same parser on the same text, starting at the def's line, gives the AST
+        /// the compiler screened. Null if it does not (the method then runs as compiled, unspecialized).
+        /// </summary>
+        internal static MethodDefinition ParseJitSource(RubyContext/*!*/ context, string/*!*/ source, MethodDefinition/*!*/ header, string path) {
+            try {
+                var unit = context.CreateSnippet(source, path, SourceCodeKind.File);
+                var options = new RubyCompilerOptions(context.RubyOptions) {
+                    FactoryKind = TopScopeFactoryKind.File,
+                    InitialLocation = new SourceLocation(0, header.Location.Start.Line, 1)
+                };
+                var tree = RubyContext.EffectiveParser(unit, options, ErrorSink.Null);
+                var def = tree != null ? tree.Statements.FirstOrDefault() as MethodDefinition : null;
+                if (def == null || def.Name != header.Name || def.Parameters.Mandatory.Length != header.Parameters.Mandatory.Length ||
+                    def.Parameters.Optional.Length != header.Parameters.Optional.Length) {
+                    return null;
+                }
+                return def;
+            } catch (Exception) {
+                return null;
+            }
         }
 
         #endregion
