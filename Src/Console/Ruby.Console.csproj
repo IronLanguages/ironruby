@@ -99,8 +99,10 @@
           Condition="'$(Configuration)' == 'Release' and '$(TargetFramework)' != '' and '$(RuntimeIdentifier)' == '' and '$(IronRubyNestedR2R)' != 'true' and '$(IronRubyR2R)' != 'false' and $([MSBuild]::IsOSPlatform('Linux'))">
     <!-- The host is published next to the old one and swapped in only once the publish succeeded: a publish that
          fails halfway (it has hit an IOException race in Src/Prism/bin/.../linux-x64) would otherwise leave a host
-         with some assemblies new and some old. One retry, since that race does not repeat. The startup library is
-         built against the new host before the swap, so the two always go in together. -->
+         with some assemblies new and some old. One retry, since that race does not repeat; the retry's exit status
+         decides (IgnoreStandardErrorWarningFormat), not the error lines the failed first attempt printed, which would
+         otherwise turn a good publish into ExitCode -1 and skip the swap. The startup library is built against the new
+         host before the swap, so the two always go in together. -->
     <PropertyGroup>
       <_IrR2RDir>$(MSBuildProjectDirectory)/bin/R2R/$(TargetFramework)</_IrR2RDir>
       <_IrR2RNew>$(_IrR2RDir).new</_IrR2RNew>
@@ -108,7 +110,8 @@
       <_IrR2RPublishExit>-1</_IrR2RPublishExit>
       <_IrStartupExit></_IrStartupExit>
     </PropertyGroup>
-    <Exec ContinueOnError="WarnAndContinue" Command="rm -rf &quot;$(_IrR2RNew)&quot; &amp;&amp; ( $(_IrR2RPublish) || $(_IrR2RPublish) )">
+    <Exec ContinueOnError="WarnAndContinue" IgnoreStandardErrorWarningFormat="true"
+          Command="rm -rf &quot;$(_IrR2RNew)&quot; &amp;&amp; ( $(_IrR2RPublish) || $(_IrR2RPublish) )">
       <Output TaskParameter="ExitCode" PropertyName="_IrR2RPublishExit" />
     </Exec>
     <Exec Condition="'$(_IrR2RPublishExit)' == '0' and '$(IronRubyStartupLibrary)' == 'true'" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true"
