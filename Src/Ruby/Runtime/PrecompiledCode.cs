@@ -187,8 +187,18 @@ namespace IronRuby.Runtime.Precompiled {
         /// </summary>
         public static RubyMethodBody/*!*/ CreateMethodBody(MethodDefinition/*!*/ header, string documentPath, RubyEncoding/*!*/ encoding,
             Func<RubyScope, RubyModule, Delegate>/*!*/ factory, string jitSource) {
+            return CreateMethodBody(header, documentPath, encoding, factory, jitSource, null);
+        }
+
+        /// <summary>
+        /// <paramref name="label"/>: the label the compiled body's frames carry, which the compiler worked out from the
+        /// lexical nesting. If the runtime gives the method another (RubyMethodBody.Compile), the def is compiled from its
+        /// source instead (<see cref="ParseDefinition"/>).
+        /// </summary>
+        public static RubyMethodBody/*!*/ CreateMethodBody(MethodDefinition/*!*/ header, string documentPath, RubyEncoding/*!*/ encoding,
+            Func<RubyScope, RubyModule, Delegate>/*!*/ factory, string jitSource, string label) {
             var document = documentPath != null ? MSA.Expression.SymbolDocument(documentPath) : null;
-            return new RubyMethodBody(header, document, encoding, factory, jitSource);
+            return new RubyMethodBody(header, document, encoding, factory, jitSource, label);
         }
 
         /// <summary>
@@ -200,11 +210,26 @@ namespace IronRuby.Runtime.Precompiled {
             if (Trace) {
                 Console.Error.WriteLine("IronRuby.Startup: the JIT parses `def " + header.Name + "' (" + path + ":" + header.Location.Start.Line + ")");
             }
+            return ParseMethod(context, null, source, header, path);
+        }
+
+        // magicComments: lines put before the def, which the def's first line is moved up by
+        private static MethodDefinition ParseMethod(RubyContext/*!*/ context, string magicComments, string/*!*/ source,
+            MethodDefinition/*!*/ header, string path) {
+            int line = header.Location.Start.Line;
+            if (magicComments != null) {
+                foreach (char c in magicComments) {
+                    if (c == '\n') {
+                        line--;
+                    }
+                }
+                source = magicComments + source;
+            }
             try {
                 var unit = context.CreateSnippet(source, path, SourceCodeKind.File);
                 var options = new RubyCompilerOptions(context.RubyOptions) {
                     FactoryKind = TopScopeFactoryKind.File,
-                    InitialLocation = new SourceLocation(0, header.Location.Start.Line, 1)
+                    InitialLocation = new SourceLocation(0, line, 1)
                 };
                 var tree = RubyContext.EffectiveParser(unit, options, ErrorSink.Null);
                 var def = tree != null ? tree.Statements.FirstOrDefault() as MethodDefinition : null;
@@ -216,6 +241,87 @@ namespace IronRuby.Runtime.Precompiled {
             } catch (Exception) {
                 return null;
             }
+        }
+
+        // the file whose source ParseDefinition read last, as prism was given it, and its magic comments
+        private static Tuple<string, byte[], string> _lastSource;
+
+        /// <summary>
+        /// The lines of the file's leading comments that set frozen_string_literal (or a lone def parsed from the file would
+        /// get mutable string literals where the file has frozen ones), each with its "\n"; null if there are none. The
+        /// encoding comment is left out: the def is UTF-8, as a file without one is.
+        /// </summary>
+        internal static string MagicComments(byte[]/*!*/ code) {
+            System.Text.StringBuilder result = null;
+            int pos = 0;
+            while (pos < code.Length) {
+                int end = Array.IndexOf(code, (byte)'\n', pos);
+                if (end < 0) {
+                    end = code.Length;
+                }
+                int first = pos;
+                while (first < end && (code[first] == ' ' || code[first] == '\t' || code[first] == '\r')) {
+                    first++;
+                }
+                if (first < end && code[first] != '#') {
+                    break;
+                }
+                if (first < end) {
+                    string text = System.Text.Encoding.UTF8.GetString(code, first, end - first).TrimEnd('\r');
+                    if (text.IndexOf("frozen", StringComparison.OrdinalIgnoreCase) >= 0) {
+                        (result ?? (result = new System.Text.StringBuilder())).Append(text).Append('\n');
+                    }
+                }
+                pos = end + 1;
+            }
+            return result != null ? result.ToString() : null;
+        }
+
+        /// <summary>
+        /// A precompiled `def' parsed from its file, for a method the library's compiled body does not fit (see
+        /// CreateMethodBody's label): only while the file is still the source the library was compiled from, and only for
+        /// UTF-8 source, whose bytes the def's location indexes. Null if not.
+        /// </summary>
+        internal static MethodDefinition ParseDefinition(RubyContext/*!*/ context, MethodDefinition/*!*/ header, RubyEncoding/*!*/ encoding,
+            string path) {
+            string hash;
+            if (path == null || encoding != RubyEncoding.UTF8 || _fileHashes == null || !_fileHashes.TryGetValue(path, out hash)) {
+                return null;
+            }
+            byte[] code;
+            string magicComments;
+            var last = _lastSource;
+            if (last != null && last.Item1 == path) {
+                code = last.Item2;
+                magicComments = last.Item3;
+            } else {
+                try {
+                    code = File.ReadAllBytes(path);
+                } catch (Exception) {
+                    return null;
+                }
+                if (HashBytes(code) != hash) {
+                    return null;
+                }
+                if (code.Length >= 3 && code[0] == 0xEF && code[1] == 0xBB && code[2] == 0xBF) {
+                    code = code.AsSpan(3).ToArray();
+                }
+                magicComments = MagicComments(code);
+                _lastSource = Tuple.Create(path, code, magicComments);
+            }
+            int start = header.Location.Start.Index, end = header.Location.End.Index;
+            if (start < 0 || end <= start || end > code.Length) {
+                return null;
+            }
+            string text = System.Text.Encoding.UTF8.GetString(code, start, end - start);
+            if (!text.StartsWith("def", StringComparison.Ordinal)) {
+                return null;
+            }
+            if (Trace) {
+                Console.Error.WriteLine("IronRuby.Startup: compiles `def " + header.Name + "' (" + path + ":" + header.Location.Start.Line +
+                    ") from source: it runs for another module than its compiled frame label says");
+            }
+            return ParseMethod(context, magicComments, text, header, path);
         }
 
         #endregion
@@ -249,7 +355,10 @@ namespace IronRuby.Runtime.Precompiled {
         /// a file edited since is parsed again rather than run from stale code.
         /// </summary>
         public static string/*!*/ HashFile(string/*!*/ path) {
-            byte[] bytes = File.ReadAllBytes(path);
+            return HashBytes(File.ReadAllBytes(path));
+        }
+
+        internal static string/*!*/ HashBytes(byte[]/*!*/ bytes) {
             // FNV-1a over 8-byte words, then the tail bytes: a change detector, not a cryptographic hash
             ulong h = 14695981039346656037UL;
             var words = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, ulong>(new ReadOnlySpan<byte>(bytes));
@@ -264,6 +373,9 @@ namespace IronRuby.Runtime.Precompiled {
         }
 
         private static int _startupClaimed;
+
+        // the library's files, as the run-time tree has them, and the hashes of the sources they were compiled from
+        private static System.Collections.Generic.Dictionary<string, string> _fileHashes;
 
         [ThreadStatic]
         private static int _runDepth;
@@ -397,9 +509,11 @@ namespace IronRuby.Runtime.Precompiled {
                 if (Trace) {
                     Console.Error.WriteLine("IronRuby.Startup: loaded " + path + " in " + watch.Elapsed.TotalMilliseconds.ToString("F1") + " ms");
                 }
+                var fileHashes = new System.Collections.Generic.Dictionary<string, string>();
                 for (int i = 0; i < info.Files.Length; i++) {
                     string file = Path.IsPathRooted(info.Files[i]) ? info.Files[i] : runtimeRoot + info.Files[i], hash = info.Hashes[i];
-                    // checked when the file is first loaded: most of a library's files may never be
+                    fileHashes[file] = hash;
+                    // checked when the file is loaded, not now: most of a library's files may never be
                     Func<bool> isCurrent = () => {
                         bool current;
                         try {
@@ -417,6 +531,7 @@ namespace IronRuby.Runtime.Precompiled {
                     Func<RubyScope, object, object> lazyTarget = (scope, self) => (target ?? (target = entry(fileIndex)))(scope, self);
                     context.Loader.RegisterPrecompiledFile(file, new RubyScriptCode(lazyTarget, context.CreateFileUnit(file), TopScopeFactoryKind.File), isCurrent);
                 }
+                _fileHashes = fileHashes;
             } catch (Exception e) {
                 // a broken or mismatched library only costs the speedup
                 if (Trace) {

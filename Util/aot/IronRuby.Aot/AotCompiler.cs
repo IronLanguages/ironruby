@@ -139,6 +139,19 @@ namespace IronRuby.Aot {
                     return MethodImplAttributes.AggressiveOptimization;
                 };
             }
+            // each file parsed first: the frame labels of one file's methods depend on what the others do with its modules
+            var asts = new SourceUnitTree[paths.Length];
+            var units = new SourceUnit[paths.Length];
+            var unitOptions = new RubyCompilerOptions[paths.Length];
+            var extended = new HashSet<string>();
+            for (int i = 0; i < paths.Length; i++) {
+                var unit = units[i] = _context.CreateFileUnit(paths[i]);
+                bool isMain = mainFile != null && paths[i] == Path.GetFullPath(mainFile);
+                var options = unitOptions[i] = new RubyCompilerOptions(_context.RubyOptions) { FactoryKind = isMain ? TopScopeFactoryKind.Main : TopScopeFactoryKind.File };
+                asts[i] = IronRuby.Prism.PrismAstBridge.Parse(unit, options, ErrorSink.Default);
+                if (asts[i] == null) throw new InvalidOperationException("syntax error in " + paths[i]);
+                new ExtendWalker(extended).Walk(asts[i]);
+            }
             for (int i = 0; i < paths.Length; i++) {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 if (Library && i > 0) {
@@ -148,12 +161,11 @@ namespace IronRuby.Aot {
                     _rootedStrings.Clear();
                     _boxedLiterals.Clear();
                 }
-                var unit = _context.CreateFileUnit(paths[i]);
-                bool isMain = mainFile != null && paths[i] == Path.GetFullPath(mainFile);
-                var options = new RubyCompilerOptions(_context.RubyOptions) { FactoryKind = isMain ? TopScopeFactoryKind.Main : TopScopeFactoryKind.File };
-                var ast = IronRuby.Prism.PrismAstBridge.Parse(unit, options, ErrorSink.Default);
-                if (ast == null) throw new InvalidOperationException("syntax error in " + paths[i]);
-                new FrameLabelWalker(_frameOwners).Walk(ast);
+                var unit = units[i];
+                var options = unitOptions[i];
+                var ast = asts[i];
+                asts[i] = null;
+                new FrameLabelWalker(_frameOwners, _context, extended).Walk(ast);
                 var lambda = _context.TransformTree<Func<RubyScope, object, object>>(ast, unit, options);
 
                 var rewritten = (LambdaExpression)Rewrite(lambda);
@@ -736,10 +748,10 @@ namespace IronRuby.Aot {
                 Expression.Constant(ps.Block?.Name, typeof(string)),
                 SerializeSignature(ps.Signature));
             return Expression.Call(typeof(PrecompiledCode).GetMethod("CreateMethodBody",
-                    new[] { typeof(MethodDefinition), typeof(string), typeof(RubyEncoding), typeof(Func<RubyScope, RubyModule, Delegate>), typeof(string) }),
+                    new[] { typeof(MethodDefinition), typeof(string), typeof(RubyEncoding), typeof(Func<RubyScope, RubyModule, Delegate>), typeof(string), typeof(string) }),
                 header, StringExpression(body.Document?.FileName),
                 ConstantField(AotHost.GetEncoding(body), typeof(RubyEncoding)), factory,
-                Expression.Constant(JitSource(body, ast), typeof(string)));
+                Expression.Constant(JitSource(body, ast), typeof(string)), Expression.Constant(label, typeof(string)));
         }
 
         private string _sourcePath;
@@ -776,23 +788,70 @@ namespace IronRuby.Aot {
 
         #endregion
 
+        // the modules `extend M' names, by their last segment
+        private sealed class ExtendWalker : Walker {
+            private readonly HashSet<string> _names;
+            public ExtendWalker(HashSet<string> names) { _names = names; }
+
+            public override bool Enter(MethodCall node) {
+                if (node.MethodName == "extend" && node.Arguments != null) {
+                    foreach (var arg in node.Arguments.Expressions) {
+                        if (arg is ConstantVariable c) _names.Add(c.Name);
+                    }
+                }
+                if (node.Block is BlockDefinition block) block.Walk(this);
+                return true;
+            }
+        }
+
         /// <summary>
         /// Frame labels ("Gem::Requirement#parse", "Gem::Requirement.create") that the runtime works out from
         /// the declaring module when the `def' runs; here they come from the lexical nesting. A qualified
         /// class name (class Gem::Requirement) is resolved the way the constant lookup most likely does it:
         /// its first segment against the enclosing modules, then against the modules compiled so far, and
         /// otherwise at the top level.
+        ///
+        /// A `def' run for another module than the one guessed here - the copy module_function makes of it, a def
+        /// in class_eval or in a block - is compiled from its source at its first call (RubyMethodBody), so a wrong
+        /// guess costs a parse, not a wrong label. So the guess is the copy most calls go to: for a module function
+        /// (module_function or FileUtils' private_module_function) the module's singleton copy ("FileUtils.mkdir_p"),
+        /// except in Kernel, whose functions are called without a receiver ("Kernel#sleep"), and in a module the files
+        /// extend, whose functions the extended classes call (Gem::Deprecate#rubygems_deprecate, at every start).
         /// </summary>
         private sealed class FrameLabelWalker : Walker {
             private readonly Dictionary<string, string> _owners;
-            // full module paths, innermost last; null for a module whose name is not a constant path
-            private readonly List<string> _modules = new();
-            // whether each entry of _modules is `class << self' (methods in it are singleton methods)
-            private readonly List<bool> _singleton = new();
+            private readonly RubyContext _context;
+            // the names (last segment) of the modules the compiled files extend
+            private readonly HashSet<string> _extended;
+            // the module bodies (and blocks) the walk is in, innermost last
+            private readonly List<Frame> _frames = new();
             private static readonly HashSet<string> _known = new();
-            public FrameLabelWalker(Dictionary<string, string> owners) { _owners = owners; }
+            // the block of `X = Class.new do ... end' (Module.new, Struct.new, Data.define) and the module it makes
+            private readonly Dictionary<MethodCall, string> _blockModules = new(ReferenceEqualityComparer.Instance);
 
-            private string Enclosing => _modules.Count == 0 ? null : _modules[_modules.Count - 1];
+            public FrameLabelWalker(Dictionary<string, string> owners, RubyContext context, HashSet<string> extended) {
+                _owners = owners;
+                _context = context;
+                _extended = extended;
+            }
+
+            private sealed class Frame {
+                // the full module path; null for a module whose name is not a constant path
+                public string Path;
+                // class << X: methods in it are singleton methods
+                public bool Singleton;
+                // module M (module_function applies to its methods)
+                public bool IsModule;
+                // after a bare `module_function' in the body: its methods are module functions
+                public bool ModuleFunctions;
+                // how deep in `def's the walk is in this body (a call there is not the body's)
+                public int DefDepth;
+                // the body's defs by name, the last one of each name
+                public readonly Dictionary<string, MethodDefinition> Defs = new();
+            }
+
+            private Frame Top => _frames.Count == 0 ? null : _frames[_frames.Count - 1];
+            private string Enclosing => Top?.Path;
 
             private static List<string> Segments(ConstantVariable c, out bool global) {
                 var result = new List<string>();
@@ -808,6 +867,7 @@ namespace IronRuby.Aot {
                 return result;
             }
 
+            // the module a `class'/`module' definition names
             private string Resolve(ConstantVariable name) {
                 var segments = Segments(name, out bool global);
                 if (segments == null) return null;
@@ -817,8 +877,8 @@ namespace IronRuby.Aot {
                     return Enclosing == null ? rest : Enclosing + "::" + rest;
                 }
                 string first = segments[0];
-                for (int i = _modules.Count - 1; i >= 0; i--) {
-                    string m = _modules[i];
+                for (int i = _frames.Count - 1; i >= 0; i--) {
+                    string m = _frames[i].Path;
                     if (m == null) continue;
                     if (m == first || m.EndsWith("::" + first, StringComparison.Ordinal)) {
                         return m + rest.Substring(first.Length);
@@ -830,41 +890,146 @@ namespace IronRuby.Aot {
                 return rest;
             }
 
-            private void Push(string path, bool singleton) {
-                _modules.Add(path);
-                _singleton.Add(singleton);
+            // the module a constant refers to (class << Time, def Time.now): a module the enclosing ones or the top level
+            // have under that name, if the files compiled so far define it or the runtime has it; null for anything else
+            // (ENV, a class made by Class.new), which the runtime labels by its own name or not at all
+            private string ResolveReference(ConstantVariable name) {
+                var segments = Segments(name, out bool global);
+                if (segments == null) return null;
+                string rest = string.Join("::", segments);
+                if (!global) {
+                    for (int i = _frames.Count - 1; i >= 0; i--) {
+                        string m = _frames[i].Path;
+                        if (m != null && _known.Contains(m + "::" + segments[0])) {
+                            rest = m + "::" + rest;
+                            break;
+                        }
+                    }
+                }
+                return _known.Contains(rest) || IsRuntimeModule(rest) ? rest : null;
+            }
+
+            private bool IsRuntimeModule(string path) {
+                object value = _context.ObjectClass;
+                foreach (string segment in path.Split("::")) {
+                    if (!(value is RubyModule module) || !module.TryGetConstant(null, segment, out value)) return false;
+                }
+                return value is RubyModule;
+            }
+
+            private void Push(string path, bool singleton, bool isModule) {
+                _frames.Add(new Frame { Path = path, Singleton = singleton, IsModule = isModule });
                 if (path != null) _known.Add(path);
             }
 
             private void Pop() {
-                _modules.RemoveAt(_modules.Count - 1);
-                _singleton.RemoveAt(_singleton.Count - 1);
+                _frames.RemoveAt(_frames.Count - 1);
             }
 
-            public override bool Enter(ClassDefinition node) { Push(Resolve(node.QualifiedName), false); return true; }
+            public override bool Enter(ClassDefinition node) { Push(Resolve(node.QualifiedName), false, false); return true; }
             public override void Exit(ClassDefinition node) { Pop(); }
-            public override bool Enter(ModuleDefinition node) { Push(Resolve(node.QualifiedName), false); return true; }
+            public override bool Enter(ModuleDefinition node) { Push(Resolve(node.QualifiedName), false, true); return true; }
             public override void Exit(ModuleDefinition node) { Pop(); }
             public override bool Enter(SingletonDefinition node) {
-                // class << self: the module itself, its methods singleton ones; class << obj: unknown
-                Push(node.Singleton is SelfReference ? Enclosing : null, node.Singleton is SelfReference);
+                // class << self: the module itself, its methods singleton ones; class << Time: Time's; class << obj: unknown
+                string path = node.Singleton is SelfReference ? Enclosing
+                    : node.Singleton is ConstantVariable c ? ResolveReference(c)
+                    : null;
+                Push(path, path != null, false);
                 return true;
             }
             public override void Exit(SingletonDefinition node) { Pop(); }
 
+            private static bool IsModuleFunctionCall(string name) => name == "module_function" || name == "private_module_function";
+
+            // a call in a module body (not in a def of it)
+            private Frame BodyOf(MethodCall node) {
+                var top = Top;
+                return node.Target == null && top != null && top.DefDepth == 0 ? top : null;
+            }
+
+            public override bool Enter(SimpleAssignmentExpression node) {
+                if (node.Left is ConstantVariable name && node.Right is MethodCall call && call.Block is BlockDefinition &&
+                    call.Target is ConstantVariable maker && maker.Qualifier == null && !maker.IsGlobal &&
+                    (call.MethodName == "new" && (maker.Name == "Class" || maker.Name == "Module" || maker.Name == "Struct") ||
+                     call.MethodName == "define" && maker.Name == "Data")) {
+                    // its methods are first called once the module has the constant's name, which is when the runtime labels them
+                    _blockModules[call] = Resolve(name);
+                }
+                return true;
+            }
+
+            public override bool Enter(MethodCall node) {
+                // the Walker leaves out a call's block: its defs are those of a module made there (X = Class.new do ... end),
+                // or of a module only the run knows (class_eval, refine), labelled by their bare name here
+                if (node.Block is BlockDefinition block) {
+                    _blockModules.TryGetValue(node, out string module);
+                    Push(module, false, module != null && ((ConstantVariable)node.Target).Name == "Module");
+                    block.Walk(this);
+                    Pop();
+                }
+                var body = BodyOf(node);
+                if (body != null && (node.Arguments == null || node.Arguments.IsEmpty)) {
+                    if (node.MethodName == "module_function") {
+                        body.ModuleFunctions = body.IsModule;
+                    } else if (node.MethodName == "public" || node.MethodName == "private" || node.MethodName == "protected") {
+                        body.ModuleFunctions = false;
+                    }
+                }
+                return true;
+            }
+
+            // module_function :a, :b, or module_function def a ... end: once the arguments are walked
+            public override void Exit(MethodCall node) {
+                var body = BodyOf(node);
+                if (body == null || !body.IsModule || !IsModuleFunctionCall(node.MethodName) || node.Arguments == null) {
+                    return;
+                }
+                foreach (var arg in node.Arguments.Expressions) {
+                    MethodDefinition def = arg as MethodDefinition;
+                    if (def == null && arg is StringLiteral literal && literal.Value is string name) {
+                        body.Defs.TryGetValue(name, out def);
+                    }
+                    if (def != null && def.Target == null) {
+                        _owners[LocationKey(def)] = ModuleFunctionLabel(body, def.Name);
+                    }
+                }
+            }
+
+            private string ModuleFunctionLabel(Frame body, string name) {
+                if (body.Path == null) return name;
+                int colons = body.Path.LastIndexOf("::", StringComparison.Ordinal);
+                string last = colons < 0 ? body.Path : body.Path.Substring(colons + 2);
+                return body.Path == "Kernel" || _extended.Contains(last) ? body.Path + "#" + name : body.Path + "." + name;
+            }
+
             public override bool Enter(MethodDefinition node) {
-                string owner = _modules.Count == 0 ? "Object" : Enclosing;
-                bool inSingletonClass = _singleton.Count > 0 && _singleton[_singleton.Count - 1];
+                var top = Top;
+                string owner = top == null ? "Object" : top.Path;
                 string label;
                 if (node.Target != null) {
-                    label = node.Target is SelfReference && owner != null && owner != "Object" ? owner + "." + node.Name : node.Name;
-                } else if (inSingletonClass) {
+                    string target = node.Target is SelfReference ? (owner != "Object" ? owner : null)
+                        : node.Target is ConstantVariable c ? ResolveReference(c)
+                        : null;
+                    label = target != null ? target + "." + node.Name : node.Name;
+                } else if (top != null && top.Singleton) {
                     label = owner != null ? owner + "." + node.Name : node.Name;
+                } else if (top != null && top.ModuleFunctions && top.DefDepth == 0) {
+                    label = ModuleFunctionLabel(top, node.Name);
                 } else {
                     label = owner != null ? owner + "#" + node.Name : node.Name;
                 }
                 _owners[LocationKey(node)] = label;
+                if (top != null) {
+                    if (top.DefDepth == 0 && node.Target == null) top.Defs[node.Name] = node;
+                    top.DefDepth++;
+                }
                 return true;
+            }
+
+            public override void Exit(MethodDefinition node) {
+                var top = Top;
+                if (top != null) top.DefDepth--;
             }
         }
     }
