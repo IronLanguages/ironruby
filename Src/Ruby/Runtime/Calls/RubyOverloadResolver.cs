@@ -61,6 +61,9 @@ namespace IronRuby.Runtime.Calls {
         // An optional list of assumptions upon arguments that were made during resolution.
         private List<Key<int, NarrowingLevel, Expression>> _argumentAssumptions;
 
+        // Arguments whose class the rule tests, because the protocol conversions their class implements decided the binding.
+        private List<DynamicMetaObject> _classTestedArguments;
+
         // Keywords of a call to a CLR method that bind by name: to its parameters, and for a constructor
         // also to the properties and fields of the new object. Null when the call passes no keywords or
         // they are passed on as a positional Hash. _keywordNames holds the CLR name each keyword binds to.
@@ -807,7 +810,294 @@ namespace IronRuby.Runtime.Calls {
                 return Candidate.One;
             }
 
+            // On the last narrowing level any object converts to a CLR method's String, numeric, Array or Hash parameter by
+            // Ruby's conversion protocols (to_str, to_int, ...), and only the call finds out whether it can. A conversion
+            // the object's class does not implement is the worst there is:
+            if (level >= NarrowingLevel.Three) {
+                bool oneLacks = LacksImplicitConversion(arg, candidateOne);
+                bool twoLacks = LacksImplicitConversion(arg, candidateTwo);
+                if (oneLacks != twoLacks) {
+                    return oneLacks ? Candidate.Two : Candidate.One;
+                }
+            }
+
             return base.SelectBestConversionFor(arg, candidateOne, candidateTwo, level);
+        }
+
+        /// <summary>
+        /// True if the argument converts to the parameter only by one of Ruby's conversion protocols and its class does not
+        /// implement that conversion the way MRI's implicit conversions go: it has no to_str, to_int, to_ary or to_hash for
+        /// it, or for a floating-point parameter it is not a Numeric. The call then raises the conversion's TypeError - or
+        /// parses a String, calls to_f of another object or passes an Int32? parameter null, more than MRI would do, which
+        /// should not make an overload a better choice than another.
+        /// </summary>
+        private bool LacksImplicitConversion(DynamicMetaObject/*!*/ arg, ParameterWrapper/*!*/ parameter) {
+            return NeedsProtocolConversion(arg, parameter) && !HasImplicitConversion(arg, parameter.Type);
+        }
+
+        /// <summary>
+        /// True if the argument converts to the parameter only by one of Ruby's conversion protocols, which a CLR
+        /// method's parameter of a String, numeric, IList or IDictionary type accepts any object for on the last
+        /// narrowing level (<see cref="Converter.CanConvertFrom"/>).
+        /// </summary>
+        private bool NeedsProtocolConversion(DynamicMetaObject/*!*/ arg, ParameterWrapper/*!*/ parameter) {
+            if (!_implicitProtocolConversions || !ProtocolConversionAction.HasDefaultConversion(parameter.Type)) {
+                return false;
+            }
+
+            Type argType = arg.GetLimitType();
+            bool explicitProtocol = HasExplicitProtocolConversion(parameter);
+            return !Converter.CanConvertFrom(arg, argType, parameter.Type, parameter.ProhibitNull, NarrowingLevel.Two, explicitProtocol, true).IsConvertible
+                && Converter.CanConvertFrom(arg, argType, parameter.Type, parameter.ProhibitNull, NarrowingLevel.Three, explicitProtocol, true).IsConvertible;
+        }
+
+        /// <summary>
+        /// False if the class of the argument does not implement the protocol conversion to <paramref name="type"/>: it has
+        /// no to_xxx method for it and does not answer through respond_to? or method_missing either
+        /// (<see cref="ProtocolConversionAction.CanConvert"/>), or the conversion is to_f and the class is not a Numeric -
+        /// MRI converts nothing else to a Float implicitly (rb_to_float: "can't convert String into Float"). That depends
+        /// on the class, so the rule tests it from here on.
+        /// </summary>
+        private bool HasImplicitConversion(DynamicMetaObject/*!*/ arg, Type/*!*/ type) {
+            string methodName;
+            if (!arg.HasValue || RubyMetaBinder.IsForeignMetaObject(arg) ||
+                (methodName = ProtocolConversionAction.GetDefaultConversionMethodName(Context, type)) == null) {
+                return true;
+            }
+
+            RubyClass cls = Context.GetImmediateClassOf(arg.Value);
+            using (Context.ClassHierarchyLocker()) {
+                AddArgumentClassTest(arg, cls);
+                if (methodName == Symbols.ToF && !IsNumeric(cls)) {
+                    return false;
+                }
+                return ProtocolConversionAction.CanConvert(cls, methodName);
+            }
+        }
+
+        private bool IsNumeric(RubyClass/*!*/ cls) {
+            // Integer < Numeric:
+            RubyClass integer = Context.IntegerClass;
+            return integer != null && integer.SuperClass != null && cls.IsSubclassOf(integer.SuperClass);
+        }
+
+        private void AddArgumentClassTest(DynamicMetaObject/*!*/ arg, RubyClass/*!*/ cls) {
+            if (_classTestedArguments == null) {
+                _classTestedArguments = new List<DynamicMetaObject>();
+            } else if (_classTestedArguments.Contains(arg)) {
+                return;
+            }
+            _classTestedArguments.Add(arg);
+
+            // A splatted argument is read from the list the splat test stores, so it can only be tested after that test,
+            // the way AddArgumentRestrictions does:
+            var args = GetActualArguments();
+            int index = args.Arguments.IndexOf(arg);
+            bool splatted = (index >= 0) ? (index >= args.FirstSplattedArg && index <= _lastSplattedArg) : _keywordsSplatted;
+
+            bool treatRestrictionsAsConditions = _metaBuilder.TreatRestrictionsAsConditions;
+            _metaBuilder.TreatRestrictionsAsConditions |= splatted;
+            try {
+                _metaBuilder.AddTargetTypeTest(arg.Value, cls, arg.Expression, _args.MetaContext, ProtocolConversionAction.DefaultConversionMethodNames);
+            } finally {
+                _metaBuilder.TreatRestrictionsAsConditions = treatRestrictionsAsConditions;
+            }
+        }
+
+        /// <summary>
+        /// C#'s tie-break between overloads that take the same parameter types once instantiated, where the DLR only prefers
+        /// a non-generic method to a generic one (C# spec, "better function member"). In C#'s order:
+        /// - one that takes the arguments in its normal form wins over one that expands its params array;
+        /// - of two that expand it, the one with more declared parameters wins;
+        /// - one that gets an argument for each of its parameters wins over one that needs a default value;
+        /// - the one whose declared parameter types are more specific wins, a type parameter being less specific than any
+        ///   other type. Of LINQ's Max&lt;TSource&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource, int&gt;) and
+        ///   Max&lt;TSource, TResult&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource, TResult&gt;), both Max(List&lt;int&gt;, Func&lt;int, int&gt;) for a
+        ///   Func&lt;int, int&gt; selector, that is the first.
+        /// </summary>
+        protected override Candidate CompareEquivalentCandidates(ApplicableCandidate/*!*/ one, ApplicableCandidate/*!*/ two) {
+            Candidate result = base.CompareEquivalentCandidates(one, two);
+            if (result != Candidate.Equivalent) {
+                return result;
+            }
+
+            MethodBase declarationOne = GetDeclaration(one.Method.Overload);
+            MethodBase declarationTwo = GetDeclaration(two.Method.Overload);
+            if (declarationOne == null || declarationTwo == null ||
+                declarationOne == one.Method.Overload.ReflectionInfo && declarationTwo == two.Method.Overload.ReflectionInfo) {
+                // nothing generic to compare
+                return result;
+            }
+
+            var args = GetActualArguments();
+            for (int i = 0; i < args.Count; i++) {
+                if (one.GetParameter(i).Type != two.GetParameter(i).Type) {
+                    return result;
+                }
+            }
+
+            bool expandedOne, expandedTwo, defaultsOne, defaultsTwo;
+            if (!TryGetArgumentForm(one.Method, declarationOne, out expandedOne, out defaultsOne) ||
+                !TryGetArgumentForm(two.Method, declarationTwo, out expandedTwo, out defaultsTwo)) {
+                return result;
+            }
+
+            if (expandedOne != expandedTwo) {
+                return expandedOne ? Candidate.Two : Candidate.One;
+            }
+
+            int countOne = declarationOne.GetParameters().Length, countTwo = declarationTwo.GetParameters().Length;
+            if (expandedOne && countOne != countTwo) {
+                return countOne > countTwo ? Candidate.One : Candidate.Two;
+            }
+
+            if (defaultsOne != defaultsTwo) {
+                return defaultsOne ? Candidate.Two : Candidate.One;
+            }
+
+            // Of two that need default values for different numbers of parameters C# prefers neither:
+            if (countOne != countTwo) {
+                return result;
+            }
+
+            int specificity = 0;
+            for (int i = 0; i < args.Count; i++) {
+                Type declaredOne, declaredTwo;
+                if (!TryGetDeclaredType(declarationOne, one.GetParameter(i), out declaredOne) ||
+                    !TryGetDeclaredType(declarationTwo, two.GetParameter(i), out declaredTwo)) {
+                    return result;
+                }
+
+                int c = CompareSpecificity(declaredOne, declaredTwo);
+                if (c != 0) {
+                    if (specificity == -c) {
+                        return result;
+                    }
+                    specificity = c;
+                }
+            }
+
+            return specificity > 0 ? Candidate.One : specificity < 0 ? Candidate.Two : result;
+        }
+
+        /// <summary>
+        /// The method with its declared parameter types - those of a generic method's definition, in a generic type's
+        /// definition - or null if it cannot be found.
+        /// </summary>
+        private static MethodBase GetDeclaration(OverloadInfo/*!*/ overload) {
+            MethodBase method = overload.ReflectionInfo;
+            if (method == null || method.ContainsGenericParameters) {
+                return null;
+            }
+
+            if (method.DeclaringType != null && method.DeclaringType.IsConstructedGenericType) {
+                try {
+                    return method.Module.ResolveMethod(method.MetadataToken);
+                } catch (ArgumentException) {
+                    return null;
+                } catch (InvalidOperationException) {
+                    return null;
+                } catch (NotSupportedException) {
+                    return null;
+                }
+            }
+
+            return method.IsGenericMethod ? ((MethodInfo)method).GetGenericMethodDefinition() : method;
+        }
+
+        /// <summary>
+        /// Whether the candidate expands the params array of the method, into any number of items including none, and
+        /// whether it substitutes the default value of a parameter no argument is passed for. False if it leaves out a
+        /// parameter for another reason, such as an out parameter it returns.
+        /// </summary>
+        private static bool TryGetArgumentForm(MethodCandidate/*!*/ candidate, MethodBase/*!*/ declaration, out bool expanded,
+            out bool usesDefaults) {
+
+            ParameterInfo[] declared = declaration.GetParameters();
+            var passed = new bool[declared.Length];
+            foreach (ParameterWrapper parameter in candidate.GetParameters()) {
+                ParameterInfo info = parameter.ParameterInfo;
+                if (info != null && info.Position >= 0 && info.Position < declared.Length) {
+                    passed[info.Position] = true;
+                }
+            }
+
+            expanded = usesDefaults = false;
+            for (int i = 0; i < declared.Length; i++) {
+                if (declared[i].IsDefined(typeof(ParamArrayAttribute), false)) {
+                    expanded = !candidate.HasParamsArray;
+                } else if (!passed[i]) {
+                    if (!declared[i].IsOptional) {
+                        return false;
+                    }
+                    usesDefaults = true;
+                }
+            }
+            return true;
+        }
+
+        private static bool TryGetDeclaredType(MethodBase/*!*/ declaration, ParameterWrapper/*!*/ parameter, out Type declaredType) {
+            ParameterInfo info = parameter.ParameterInfo;
+            if (info == null) {
+                // the instance, or a parameter the binder adds:
+                declaredType = parameter.Type;
+                return true;
+            }
+
+            if (info.Position < 0) {
+                declaredType = null;
+                return false;
+            }
+
+            declaredType = declaration.GetParameters()[info.Position].ParameterType;
+
+            // a by-ref parameter takes a StrongBox or the value itself, but C# compares ref T to ref int:
+            if (info.ParameterType == parameter.Type || info.ParameterType.IsByRef) {
+                return true;
+            }
+
+            // an item of an expanded params array, compared by the item type:
+            if (declaredType.IsArray && parameter.Type == info.ParameterType.GetElementType() &&
+                info.IsDefined(typeof(ParamArrayAttribute), false)) {
+                declaredType = declaredType.GetElementType();
+                return true;
+            }
+
+            declaredType = null;
+            return false;
+        }
+
+        /// <summary>
+        /// +1 if <paramref name="one"/> is more specific than <paramref name="two"/>, -1 if it is less, 0 otherwise: a type
+        /// parameter is less specific than any other type, and a constructed type or an array is more specific than another
+        /// of the same shape if one of its type arguments is and none is less (C# spec, "better function member").
+        /// </summary>
+        private static int CompareSpecificity(Type/*!*/ one, Type/*!*/ two) {
+            if (one.IsGenericParameter || two.IsGenericParameter) {
+                return (one.IsGenericParameter == two.IsGenericParameter) ? 0 : one.IsGenericParameter ? -1 : +1;
+            }
+
+            if (one.IsArray && two.IsArray && one.GetArrayRank() == two.GetArrayRank() ||
+                one.IsByRef && two.IsByRef || one.IsPointer && two.IsPointer) {
+                return CompareSpecificity(one.GetElementType(), two.GetElementType());
+            }
+
+            if (one.IsGenericType && two.IsGenericType && one.GetGenericTypeDefinition() == two.GetGenericTypeDefinition()) {
+                Type[] argsOne = one.GetGenericArguments(), argsTwo = two.GetGenericArguments();
+                int result = 0;
+                for (int i = 0; i < argsOne.Length; i++) {
+                    int c = CompareSpecificity(argsOne[i], argsTwo[i]);
+                    if (c != 0) {
+                        if (result == -c) {
+                            return 0;
+                        }
+                        result = c;
+                    }
+                }
+                return result;
+            }
+
+            return 0;
         }
 
         public override Expression/*!*/ Convert(DynamicMetaObject/*!*/ metaObject, Type restrictedType, ParameterInfo info, Type/*!*/ toType) {
@@ -1017,7 +1307,7 @@ namespace IronRuby.Runtime.Calls {
             Expression exceptionValue;
             switch (target.Result) {
                 case BindingResult.AmbiguousMatch:
-                    exceptionValue = MakeAmbiguousCallError(target);
+                    exceptionValue = MakeProtocolConversionError(target) ?? MakeAmbiguousCallError(target);
                     break;
 
                 case BindingResult.IncorrectArgumentCount:
@@ -1071,6 +1361,109 @@ namespace IronRuby.Runtime.Calls {
             }
 
             return Methods.MakeAmbiguousMatchError.OpCall(AstUtils.Constant(sb.ToString()));
+        }
+
+        /// <summary>
+        /// Overloads found equally good may all be ones that cannot take the arguments: each needs a protocol conversion
+        /// of an argument whose class does not implement it (<see cref="LacksImplicitConversion"/>), as Method(String, String)
+        /// and Method(String, Integer) do for a Time. Then the call fails with MRI's TypeError for such a conversion ("no
+        /// implicit conversion of Time into String or Integer"), not as an ambiguity. Null if some overload could take the
+        /// arguments.
+        /// </summary>
+        private Expression MakeProtocolConversionError(BindingTarget/*!*/ target) {
+            if (!_implicitProtocolConversions) {
+                return null;
+            }
+
+            var args = GetActualArguments();
+            var failures = new List<KeyValuePair<int, Type>>();
+            int firstFailure = Int32.MaxValue;
+            foreach (MethodCandidate candidate in target.AmbiguousMatches) {
+                var parameters = candidate.GetParameters();
+                int failed = -1;
+                for (int i = 0; i < args.Count && failed < 0; i++) {
+                    ParameterWrapper parameter = GetBoundParameter(parameters, args, i);
+                    if (parameter != null && LacksImplicitConversion(args[i], parameter)) {
+                        failures.Add(new KeyValuePair<int, Type>(i, parameter.Type));
+                        failed = i;
+                    }
+                }
+
+                if (failed < 0) {
+                    // this one could take the arguments
+                    return null;
+                }
+                firstFailure = Math.Min(firstFailure, failed);
+            }
+
+            // name what the first argument that fails would have to convert to:
+            var targetNames = new List<string>();
+            foreach (var failure in failures) {
+                string name = GetProtocolConversionTargetName(failure.Value);
+                if (failure.Key == firstFailure && !targetNames.Contains(name)) {
+                    targetNames.Add(name);
+                }
+            }
+
+            return Methods.CreateImplicitConversionError.OpCall(
+                AstUtils.Constant(GetConversionSourceName(args[firstFailure].Value)),
+                AstUtils.Constant(JoinAlternatives(targetNames))
+            );
+        }
+
+        // The parameter of a candidate the argument at the index binds to: a positional argument to the parameter at its
+        // index, a keyword to the parameter of its name (ActualArguments.TryBindNamedArguments).
+        private static ParameterWrapper GetBoundParameter(IList<ParameterWrapper>/*!*/ parameters, ActualArguments/*!*/ args, int index) {
+            if (index < args.Arguments.Count) {
+                return parameters[index];
+            }
+
+            string name = args.ArgNames[index - args.Arguments.Count];
+            foreach (var parameter in parameters) {
+                if (parameter.Name == name) {
+                    return parameter;
+                }
+            }
+            return null;
+        }
+
+        // How a conversion error names the object: true, false and nil as themselves, anything else by its class.
+        private string/*!*/ GetConversionSourceName(object value) {
+            if (value == null) {
+                return "nil";
+            }
+            if (value is bool) {
+                return (bool)value ? "true" : "false";
+            }
+            return Context.GetImmediateClassOf(value).GetNonSingletonClass().GetNonNullName(Context);
+        }
+
+        // The class MRI names for the implicit conversion the parameter needs, whatever CLR type it has: Integer for a Byte,
+        // an Int64 or an Int32? parameter alike (to_int), Float for a Single (to_f), String for a CLR String (to_str).
+        private string/*!*/ GetProtocolConversionTargetName(Type/*!*/ type) {
+            string methodName = ProtocolConversionAction.GetDefaultConversionMethodName(Context, type);
+            if (methodName == Symbols.ToInt) {
+                return "Integer";
+            }
+            if (methodName == Symbols.ToF) {
+                return "Float";
+            }
+            if (methodName == Symbols.ToStr) {
+                return "String";
+            }
+            return GetConversionTargetName(Nullable.GetUnderlyingType(type) ?? type);
+        }
+
+        // "A", "A or B", "A, B, or C" - the way DescribeExpectedArgumentCount lists arities.
+        private static string/*!*/ JoinAlternatives(IList<string>/*!*/ items) {
+            var sb = new StringBuilder();
+            for (int i = 0; i < items.Count; i++) {
+                if (i > 0) {
+                    sb.Append(i == items.Count - 1 ? (items.Count == 2 ? " or " : ", or ") : ", ");
+                }
+                sb.Append(items[i]);
+            }
+            return sb.ToString();
         }
 
         private Expression MakeIncorrectArgumentCountError(BindingTarget target) {

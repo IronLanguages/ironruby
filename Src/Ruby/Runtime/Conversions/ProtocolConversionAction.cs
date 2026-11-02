@@ -356,6 +356,55 @@ namespace IronRuby.Runtime.Conversions {
         }
 
         /// <summary>
+        /// The to_xxx method the default conversion to <paramref name="parameterType"/> calls (to_str for a String
+        /// parameter, to_int for an Int32 one, ...), or null if that conversion is not a single protocol method.
+        /// </summary>
+        internal static string GetDefaultConversionMethodName(RubyContext/*!*/ context, Type/*!*/ parameterType) {
+            var conversion = TryGetDefaultConversionAction(context, parameterType) as ProtocolConversionAction;
+            return (conversion != null) ? conversion.ToMethodName : null;
+        }
+
+        /// <summary>
+        /// Everything whose definition decides whether an object answers a default conversion (see <see cref="CanConvert"/>):
+        /// the to_xxx methods the conversions of TryGetDefaultConversionAction call, and the methods asked instead of them.
+        /// </summary>
+        internal static readonly string/*!*/[]/*!*/ DefaultConversionMethodNames = new[] {
+            Symbols.ToStr, Symbols.ToInt, Symbols.ToF, Symbols.ToAry, Symbols.ToHash,
+            Symbols.RespondTo, Symbols.MethodMissing, Symbols.RespondToMissing
+        };
+
+        /// <summary>
+        /// False if <see cref="BuildConversion"/> could only build the conversion error for an object of
+        /// <paramref name="targetClass"/>: the class has no <paramref name="methodName"/> and leaves respond_to? and
+        /// method_missing as Kernel and BasicObject define them, so nothing asks the object at run time.
+        /// The lookups are registered as BuildConversion's are: defining any of these methods later changes the
+        /// version of the class, which a rule that relies on the answer has to test.
+        /// </summary>
+        internal static bool CanConvert(RubyClass/*!*/ targetClass, string/*!*/ methodName) {
+            RubyContext context = targetClass.Context;
+            context.RequiresClassHierarchyLock();
+
+            var respondTo = targetClass.ResolveMethodForSiteNoLock(Symbols.RespondTo, VisibilityContext.AllVisible);
+            if (respondTo.Found && IsOverridden(respondTo.Info, context.KernelModule)) {
+                return true;
+            }
+
+            var methodMissing = targetClass.ResolveMethodForSiteNoLock(Symbols.MethodMissing, VisibilityContext.AllVisible);
+            if (!respondTo.Found) {
+                methodMissing.InvalidateSitesOnMissingMethodAddition(Symbols.RespondTo, context);
+            }
+
+            if (targetClass.ResolveMethodForSiteNoLock(methodName, VisibilityContext.AllVisible).Found) {
+                return true;
+            }
+            methodMissing.InvalidateSitesOnMissingMethodAddition(methodName, context);
+
+            // An object that has overridden method_missing is asked for the conversion anyway (MakeMethodMissingConversion).
+            // One that has overridden only respond_to_missing? is asked that, but nothing could answer the call then:
+            return IsOverridden(methodMissing.Info, context.BasicObjectClass) && !(methodMissing.Info is RubyScopeMethodMissingInfo);
+        }
+
+        /// <summary>
         /// The conversion for a receiver whose class does not define to_xxx. MRI's rb_check_funcall
         /// asks method_missing for it, unless a user-written respond_to_missing? says no first:
         ///   both overridden:            respond_to_missing?(:to_xxx, true) ? to_xxx : &lt;error&gt;
