@@ -939,6 +939,33 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class ConvertToFixnumAction : ConvertToIntegerAction<ConvertToFixnumAction> {
         protected override string/*!*/ TargetTypeName { get { return "Integer"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToFixnumValidator; } }
+
+        // A Fixnum converts to itself (TryImplicitConversion, on a test of its exact type), without a rule; a site whose result is
+        // an object gets it boxed, as the rule's result is:
+        internal override object BindPrecompiled(CallSite/*!*/ site, Type/*!*/ delegateType, object[]/*!*/ args) {
+            if (Context == null || args.Length != 1 || !(args[0] is int)) {
+                return null;
+            }
+            return (delegateType == typeof(Func<CallSite, object, int>)) ? _FixnumIdentity :
+                (delegateType == typeof(Func<CallSite, object, object>)) ? _BoxedFixnumIdentity : (object)null;
+        }
+
+        private static readonly Func<CallSite, object, int>/*!*/ _FixnumIdentity = ConvertFixnum;
+        private static readonly Func<CallSite, object, object>/*!*/ _BoxedFixnumIdentity = ConvertFixnumBoxed;
+
+        private static int ConvertFixnum(CallSite/*!*/ site, object target) {
+            if (target is int) {
+                return (int)target;
+            }
+            return ((CallSite<Func<CallSite, object, int>>)site).Update(site, target);
+        }
+
+        private static object ConvertFixnumBoxed(CallSite/*!*/ site, object target) {
+            if (target is int) {
+                return (object)(int)target;
+            }
+            return ((CallSite<Func<CallSite, object, object>>)site).Update(site, target);
+        }
     }
 
     public sealed class ConvertToByteAction : ConvertToIntegerAction<ConvertToByteAction> {

@@ -21,6 +21,7 @@ using Microsoft.Scripting.Ast;
 
 using System;
 using System.Collections;
+using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
@@ -126,6 +127,14 @@ namespace IronRuby.Runtime.Conversions {
 
         public override Expression/*!*/ CreateExpression() {
             return Methods.GetMethod(GetType(), "MakeShared").OpCall(Ast.Constant(_conversion));
+        }
+
+        // A path (to_path, then to_str) of a String - nearly every path a library method is given - or nil is converted by the
+        // first conversion implicitly, to itself, which goes without a rule (see ImplicitConversionDispatcher): the rule is one of
+        // the first of its delegate type, whose interpretation has code JIT-compiled the first time (10 ms at `ir -e 1').
+        internal override object BindPrecompiled(CallSite/*!*/ site, Type/*!*/ delegateType, object[]/*!*/ args) {
+            return (Context != null && _conversion == CompositeConversion.ToPathToStr) ?
+                ImplicitConversionDispatcher<MutableString>.TryCreate((ConvertToPathAction)_conversions[0], delegateType, args) : null;
         }
 
         protected override bool Build(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, bool defaultFallback) {
