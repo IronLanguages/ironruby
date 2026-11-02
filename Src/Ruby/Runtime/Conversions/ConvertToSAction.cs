@@ -24,6 +24,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
@@ -36,9 +37,20 @@ namespace IronRuby.Runtime.Conversions {
     // 1) implicit conversion to MutableString
     // 2) calls to_s
     // 3) default conversion if (2) returns a non-string
-    public sealed class ConvertToSAction : RubyConversionAction {
+    public sealed class ConvertToSAction : RubyConversionAction, IImplicitConversion<MutableString> {
         public override Type/*!*/ ReturnType {
             get { return typeof(MutableString); }
+        }
+
+        // A string converts to itself (TryImplicitConversion) - the only conversion that calls no method, and goes without a rule
+        // (see ImplicitConversionDispatcher, which tests the string's exact type as the rule does).
+        bool IImplicitConversion<MutableString>.TryConvertImplicitly(object target, out MutableString result) {
+            result = target as MutableString;
+            return result != null;
+        }
+
+        internal override object BindPrecompiled(CallSite/*!*/ site, Type/*!*/ delegateType, object[]/*!*/ args) {
+            return (Context != null) ? ImplicitConversionDispatcher<MutableString>.TryCreate(this, delegateType, args) : null;
         }
 
         public static ConvertToSAction/*!*/ Make(RubyContext/*!*/ context) {

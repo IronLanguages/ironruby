@@ -23,6 +23,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
+using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
@@ -143,15 +144,33 @@ namespace IronRuby.Runtime.Calls {
                 return true;
             }
 
-            // identity, a reference conversion or unboxing; anything else is a conversion the rule makes:
-            return p.Type.IsValueType ? value.GetType() == p.Type : p.Type.IsInstanceOfType(value);
+            // identity, a reference conversion, unboxing or a widening of a number; anything else is a conversion the rule makes:
+            return p.Type.IsValueType ? value.GetType() == p.Type || IsNumericWidening(value.GetType(), p.Type) : p.Type.IsInstanceOfType(value);
         }
 
         private static bool AcceptsItem(Parameter/*!*/ p, object value) {
             if (value == null) {
                 return !p.NotNull && (!p.Type.IsValueType || p.Type == typeof(bool) || p.Conversion != null);
             }
-            return p.Conversion != null || (p.Type.IsValueType ? value.GetType() == p.Type : p.Type.IsInstanceOfType(value));
+            return p.Conversion != null ||
+                (p.Type.IsValueType ? value.GetType() == p.Type || IsNumericWidening(value.GetType(), p.Type) : p.Type.IsInstanceOfType(value));
+        }
+
+        // The implicit conversions of Ruby's integers on narrowing level None (Converter.CanConvertFrom: an implicit numeric
+        // conversion, BigInteger's op_Implicit), which Converter.ImplicitConvert makes the same way: a Fixnum to an Int64, a Float
+        // or a Bignum parameter, an Int64 to a Float or a Bignum one.
+        private static bool IsNumericWidening(Type/*!*/ from, Type/*!*/ to) {
+            return from == typeof(int) && (to == typeof(long) || to == typeof(double) || to == typeof(BigInteger)) ||
+                from == typeof(long) && (to == typeof(double) || to == typeof(BigInteger));
+        }
+
+        private static object/*!*/ Widen(object/*!*/ value, Type/*!*/ to) {
+            if (value is int) {
+                int i = (int)value;
+                return (to == typeof(long)) ? (object)(long)i : (to == typeof(double)) ? (object)(double)i : (object)new BigInteger(i);
+            }
+            long l = (long)value;
+            return (to == typeof(double)) ? (object)(double)l : (object)new BigInteger(l);
         }
 
         // RubyOverloadResolver.Convert of an accepted value:
@@ -159,8 +178,11 @@ namespace IronRuby.Runtime.Calls {
             if (p.Conversion != null) {
                 return p.Conversion.Convert(value);
             }
-            if (value == null && p.Type == typeof(bool)) {
-                return ScriptingRuntimeHelpers.False;
+            if (value == null) {
+                return (p.Type == typeof(bool)) ? ScriptingRuntimeHelpers.False : null;
+            }
+            if (p.Type.IsValueType && value.GetType() != p.Type) {
+                return Widen(value, p.Type);
             }
             return value;
         }
@@ -190,7 +212,7 @@ namespace IronRuby.Runtime.Calls {
                         break;
 
                     case Kind.Self:
-                        clrArgs[i] = self;
+                        clrArgs[i] = ConvertValue(p, self);
                         break;
 
                     case Kind.Positional:
@@ -822,13 +844,14 @@ namespace IronRuby.Runtime.Calls {
         private bool[] _restricted;
         private bool _blockGiven;
 
-        // the receiver test: IRubyObject - its exact type and its immediate class's version; nil or a CLR object (plain type test,
-        // see RubyCallAction.HasPlainClrTypeTest) - its exact type (null for nil) and the version of its class; true or false - the
-        // value too:
+        // the receiver test: IRubyObject - its exact type and its immediate class's version; nil or a CLR object - its exact type
+        // (null for nil) and the version of its class (and the singleton test the rule makes, see RubyCallAction.ClrReceiverTest);
+        // true or false - the value too:
         private bool _isRubyObject;
         private Type _targetType;
         private bool _bool;
         private VersionHandle _classVersion;
+        private RubyCallAction.ClrReceiverTest _clrTest;
 
         private SiteBudget/*!*/ _budget;
 
@@ -837,8 +860,20 @@ namespace IronRuby.Runtime.Calls {
             if (_isRubyObject) {
                 return self != null && self.GetType() == _targetType && ((IRubyObject)self).ImmediateClass.Version.Method == Version;
             }
-            return (self == null ? _targetType == null : self.GetType() == _targetType && (_targetType != typeof(bool) || (bool)self == _bool)) &&
-                _classVersion.Method == Version;
+            if (self == null) {
+                return _targetType == null && _classVersion.Method == Version;
+            }
+            if (self.GetType() != _targetType) {
+                return false;
+            }
+            switch (_clrTest) {
+                case RubyCallAction.ClrReceiverTest.NonSingleton:
+                    return RubyOps.IsClrNonSingletonRuleValid(_context, self, _classVersion, Version);
+                case RubyCallAction.ClrReceiverTest.Singleton:
+                    return RubyOps.IsClrSingletonRuleValid(_context, self, Version);
+                default:
+                    return (_targetType != typeof(bool) || (bool)self == _bool) && _classVersion.Method == Version;
+            }
         }
 
         // Func<CallSite, (RubyScope)?, object, (Proc)?, object x N, object>, the shape the generated dispatchers take:
@@ -975,9 +1010,10 @@ namespace IronRuby.Runtime.Calls {
             return (RubyScope)scope ?? _context.EmptyScope;
         }
 
-        /// <param name="plainClrTypeTest">The receiver is a CLR object whose rule would test its type and class version only (see RubyCallAction.HasPlainClrTypeTest).</param>
+        /// <param name="clrTest">The test of a CLR object receiver (not nil, true or false) the rule would make.</param>
         internal static object TryCreate(CallSite/*!*/ site, RubyCallAction/*!*/ binder, Type/*!*/ delegateType, RubyCallSignature signature,
-            RubyLibraryMethodInfo/*!*/ method, RubyClass/*!*/ targetClass, object target, bool plainClrTypeTest, int version, object[]/*!*/ args) {
+            RubyLibraryMethodInfo/*!*/ method, RubyClass/*!*/ targetClass, object target, RubyCallAction.ClrReceiverTest clrTest, int version,
+            object[]/*!*/ args) {
 
             if (!MayDispatch(site, targetClass.Context)) {
                 return null;
@@ -986,7 +1022,7 @@ namespace IronRuby.Runtime.Calls {
             // The type test of the rule (see MetaObjectBuilder.AddTargetTypeTest) we can do without the rule: a Ruby object's,
             // nil's and the plain one of a CLR object, true's and false's (told apart by value):
             bool isRubyObject = target is IRubyObject;
-            if (!isRubyObject && target != null && !(target is bool) && !plainClrTypeTest) {
+            if (!isRubyObject && target != null && !(target is bool) && clrTest == RubyCallAction.ClrReceiverTest.None) {
                 return null;
             }
 
@@ -1070,6 +1106,7 @@ namespace IronRuby.Runtime.Calls {
             dispatcher._targetType = (target != null) ? target.GetType() : null;
             dispatcher._bool = (target is bool) ? (bool)target : false;
             dispatcher._classVersion = targetClass.Version;
+            dispatcher._clrTest = (isRubyObject || target == null || target is bool) ? RubyCallAction.ClrReceiverTest.Plain : clrTest;
             dispatcher.Version = version;
 
             object result = dispatcher.CreateDelegate(isUntyped);

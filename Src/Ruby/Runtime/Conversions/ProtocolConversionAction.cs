@@ -517,12 +517,8 @@ namespace IronRuby.Runtime.Conversions {
         // A conversion of a value that needs no conversion method - the commonest by far - goes without a rule: the dispatcher tests
         // what the rule would (the target's exact type, see BuildConversion) and converts the same way.
         internal override object BindPrecompiled(CallSite/*!*/ site, Type/*!*/ delegateType, object[]/*!*/ args) {
-            TTargetType result;
-            if (Context == null || args.Length != 1 || delegateType != typeof(Func<CallSite, object, TTargetType>) || ReturnType != typeof(TTargetType) ||
-                RubyCallAction.IsForeignObject(args[0]) || !TryConvertImplicitly(args[0], out result)) {
-                return null;
-            }
-            return new ImplicitConversionDispatcher<TTargetType>(this, args[0]).Delegate;
+            return (Context != null && (delegateType != typeof(Func<CallSite, object, TTargetType>) || ReturnType == typeof(TTargetType))) ?
+                ImplicitConversionDispatcher<TTargetType>.TryCreate(this, delegateType, args) : null;
         }
     }
 
@@ -532,13 +528,26 @@ namespace IronRuby.Runtime.Conversions {
         // the exact type of the values converted, null for nil:
         private readonly Type _type;
 
-        internal ImplicitConversionDispatcher(IImplicitConversion<TTargetType>/*!*/ conversion, object target) {
+        private ImplicitConversionDispatcher(IImplicitConversion<TTargetType>/*!*/ conversion, object target) {
             _conversion = conversion;
             _type = (target != null) ? target.GetType() : null;
         }
 
-        internal Func<CallSite, object, TTargetType>/*!*/ Delegate {
-            get { return Invoke; }
+        /// <summary>
+        /// The dispatcher of a site converting to TTargetType, or one whose result is an object (the rule's result, a reference
+        /// converted to object, is the same object) - if the conversion of the argument is implicit.
+        /// </summary>
+        internal static object TryCreate(IImplicitConversion<TTargetType>/*!*/ conversion, Type/*!*/ delegateType, object[]/*!*/ args) {
+            TTargetType result;
+            if (args.Length != 1 || delegateType != typeof(Func<CallSite, object, TTargetType>) && delegateType != typeof(Func<CallSite, object, object>) ||
+                RubyCallAction.IsForeignObject(args[0]) || !conversion.TryConvertImplicitly(args[0], out result)) {
+                return null;
+            }
+
+            var dispatcher = new ImplicitConversionDispatcher<TTargetType>(conversion, args[0]);
+            return (delegateType == typeof(Func<CallSite, object, object>)) ?
+                (object)new Func<CallSite, object, object>(dispatcher.InvokeUntyped) :
+                new Func<CallSite, object, TTargetType>(dispatcher.Invoke);
         }
 
         private TTargetType Invoke(CallSite/*!*/ site, object target) {
@@ -547,6 +556,14 @@ namespace IronRuby.Runtime.Conversions {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, TTargetType>>)site).Update(site, target);
+        }
+
+        private object InvokeUntyped(CallSite/*!*/ site, object target) {
+            TTargetType result;
+            if ((target == null ? _type == null : target.GetType() == _type) && _conversion.TryConvertImplicitly(target, out result)) {
+                return result;
+            }
+            return ((CallSite<Func<CallSite, object, object>>)site).Update(site, target);
         }
     }
 

@@ -148,14 +148,14 @@ namespace IronRuby.Runtime.Calls {
 
             int version;
             MethodResolutionResult method;
-            bool plainClrTypeTest;
+            ClrReceiverTest clrTest;
             RubyClass targetClass = Context.GetImmediateClassOf(target);
             using (targetClass.Context.ClassHierarchyLocker()) {
                 // initialization changes the version (see MetaObjectBuilder.AddTargetTypeTest):
                 targetClass.InitializeMethodsNoLock();
                 version = targetClass.Version.Method;
                 method = targetClass.ResolveMethodForSiteNoLock(_methodName, GetVisibilityContext(Signature, scope));
-                plainClrTypeTest = target != null && !(target is IRubyObject) && HasPlainClrTypeTest(targetClass, _methodName);
+                clrTest = (target != null && !(target is IRubyObject)) ? GetClrReceiverTest(targetClass, _methodName) : ClrReceiverTest.None;
             }
 
             if (!method.Found || method.Info.IsProtected && !Signature.HasImplicitSelf) {
@@ -181,7 +181,8 @@ namespace IronRuby.Runtime.Calls {
             var dispatcher = method.Info.GetDispatcher(delegateType, Signature, target, version);
 
             // a Ruby method of a builtin class (much of the core library is written in Ruby), called on nil, true, false or a CLR object:
-            if (dispatcher == null && rubyMethod != null && !(target is IRubyObject) && (target == null || target is bool || plainClrTypeTest) &&
+            if (dispatcher == null && rubyMethod != null && !(target is IRubyObject) &&
+                (target == null || target is bool || clrTest == ClrReceiverTest.Plain && !targetClass.IsSingletonClass) &&
                 !IsForeignObject(target)) {
                 dispatcher = rubyMethod.GetClrDispatcher(delegateType, Signature, target, targetClass, version);
             }
@@ -202,7 +203,7 @@ namespace IronRuby.Runtime.Calls {
 
             var libraryMethod = method.Info as RubyLibraryMethodInfo;
             if (libraryMethod != null && !TracePoint.CCallTracing && !DispatchIntrinsics.IsSend(libraryMethod)) {
-                return LibraryDispatcher.TryCreate(site, this, delegateType, Signature, libraryMethod, targetClass, target, plainClrTypeTest, version, args);
+                return LibraryDispatcher.TryCreate(site, this, delegateType, Signature, libraryMethod, targetClass, target, clrTest, version, args);
             }
 
             return null;
@@ -350,6 +351,38 @@ namespace IronRuby.Runtime.Calls {
         internal static bool IsForeignObject(object target) {
             return target is IDynamicMetaObjectProvider && !(target is IRubyDynamicMetaObjectProvider) ||
                 target != null && TypeUtils.IsComObjectType(target.GetType());
+        }
+
+        /// <summary>
+        /// The test of a CLR object receiver (not nil, true or false) that MetaObjectBuilder.AddTargetTypeTest makes in a rule calling
+        /// the method of that name.
+        /// </summary>
+        internal enum ClrReceiverTest {
+            // another test (an adopted object)
+            None,
+
+            // its exact type and the version of its class - its singleton class if it has one (and no other object of the type has a
+            // singleton method of that name or of method_missing): nothing else (HasPlainClrTypeTest, but for the singleton)
+            Plain,
+
+            // its exact type, and that it has no singleton class (nor a Ruby class) and its class's version (IsClrNonSingletonRuleValid):
+            // some object of its type has a singleton method of that name, or of method_missing, or a Ruby class
+            NonSingleton,
+
+            // its exact type, and that it has a singleton class of the version (IsClrSingletonRuleValid)
+            Singleton,
+        }
+
+        internal static ClrReceiverTest GetClrReceiverTest(RubyClass/*!*/ targetClass, string/*!*/ methodName) {
+            if (targetClass.GetNonSingletonClass().IsRubyClass) {
+                return ClrReceiverTest.None;
+            }
+            var nominalClass = targetClass.NominalClass;
+            var singletonMethods = nominalClass.ClrSingletonMethods;
+            bool singletonCheck = nominalClass.HasAdoptedInstances ||
+                singletonMethods != null && (singletonMethods.ContainsKey(methodName) || singletonMethods.ContainsKey(Symbols.MethodMissing));
+
+            return !singletonCheck ? ClrReceiverTest.Plain : targetClass.IsSingletonClass ? ClrReceiverTest.Singleton : ClrReceiverTest.NonSingleton;
         }
 
         // MetaObjectBuilder.AddTargetTypeTest tests a CLR object's type and its class version - and nothing else - in this case:
