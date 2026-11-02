@@ -79,8 +79,8 @@ namespace IronRuby.Runtime {
             // Compiled trace: contains frames above and including the first Ruby filter/catch site that the exception was caught by:
             if (catchSiteTrace != null) {
                 // Interpreted: skip one interpreter Run method frame - is was already matched with the last processed interpreted frame:
-                // Compiled: skip one frame - the catch-site frame is already included
-                AddBacktrace(catchSiteTrace.GetFrames(), isCatchSiteInterpreted ? 0 : 1, isCatchSiteInterpreted);
+                // Compiled: skip the catch-site frame - the throw-site trace ends with it
+                AddBacktrace(catchSiteTrace.GetFrames(), 0, isCatchSiteInterpreted, !isCatchSiteInterpreted);
             }
         }
 
@@ -314,6 +314,15 @@ namespace IronRuby.Runtime {
         internal const string InterpretedCallSiteName = "CallSite.Target";
 
         private void AddBacktrace(IEnumerable<StackFrame> stackTrace, int skipFrames, bool skipInterpreterRunMethod) {
+            AddBacktrace(stackTrace, skipFrames, skipInterpreterRunMethod, false);
+        }
+
+        // skipCompiledCatchSite: the first compiled Ruby frame is the catch site, which the throw-site trace has already gone
+        // through. It is skipped as a frame, whether or not it was reported: skipping the first frame reported instead lost
+        // the frame above a catch site that is not reported, such as a block of the Ruby half of the core library (the
+        // `require' of gem_compat.rb catching a LoadError dropped the frame of the code calling require, once that block was
+        // compiled - from the start with the precompiled startup library).
+        private void AddBacktrace(IEnumerable<StackFrame> stackTrace, int skipFrames, bool skipInterpreterRunMethod, bool skipCompiledCatchSite) {
             if (stackTrace != null) {
                 foreach (var frame in InterpretedFrame.GroupStackFrames(stackTrace)) {
                     string methodName, file;
@@ -345,6 +354,9 @@ namespace IronRuby.Runtime {
                             // ignore ruby interpreted call sites
                             continue;
                         }
+                    } else if (skipCompiledCatchSite && IsRubyMethodFrame(frame)) {
+                        skipCompiledCatchSite = false;
+                        continue;
                     } else if (TryGetStackFrameInfo(frame, out methodName, out file, out line)) {
                         // special case: the frame will be added with the next frame's source info:
                         if (line == NextFrameLine) {
@@ -386,6 +398,11 @@ namespace IronRuby.Runtime {
                     }
                 }
             }
+        }
+
+        private static bool IsRubyMethodFrame(StackFrame/*!*/ frame) {
+            MethodBase method = frame.GetMethod();
+            return method != null && method.Name.StartsWith(RubyMethodPrefix, StringComparison.Ordinal);
         }
 
         private static bool IsInternalMethodFrame(string methodName) {
