@@ -898,6 +898,33 @@ p(C.new.instance_exec {
 ");
         }
 
+        /// <summary>
+        /// A compiled protected call guards on the caller's self class, so once self gains a singleton class that
+        /// includes the method's module the same site binds again and the call is allowed.
+        /// </summary>
+        public void Visibility6() {
+            TestOutput(@"
+module M
+  protected
+  def foo; :m; end
+end
+class C; include M; end
+
+s = Object.new
+r = C.new
+p(s.instance_eval {
+  res = []
+  2.times do |i|
+    res << (r.foo rescue :denied)
+    extend(M) if i == 0
+  end
+  res
+})
+", @"
+[:denied, :m]
+");
+        }
+
         public void ModuleFunctionVisibility1() {
             TestOutput(@"
 module M
