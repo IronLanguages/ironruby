@@ -622,7 +622,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             protected override Expression ToExpression(OverloadResolver/*!*/ resolver, RestrictedArguments/*!*/ args, bool[]/*!*/ hasBeenUsed) {
-                return AstUtils.Constant(Activator.CreateInstance(ParameterInfo.ParameterType, ((RubyOverloadResolver)resolver).Context));
+                return AstUtils.Constant(RubyCallSiteStorage.Create(ParameterInfo.ParameterType, ((RubyOverloadResolver)resolver).Context));
             }
         }
 

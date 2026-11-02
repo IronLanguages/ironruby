@@ -293,7 +293,7 @@ namespace IronRuby.Runtime.Calls {
             while (i < infos.Count && infos[i].ParameterType.IsSubclassOf(typeof(RubyCallSiteStorage))) {
                 object storage;
                 try {
-                    storage = Activator.CreateInstance(infos[i].ParameterType, context);
+                    storage = RubyCallSiteStorage.Create(infos[i].ParameterType, context);
                 } catch (Exception) {
                     return null;
                 }
