@@ -1441,7 +1441,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("autoload", RubyMethodAttributes.PublicSingleton)]
         public static void SetAutoloadedConstant(ConversionStorage<MutableString>/*!*/ toPath, RubyScope/*!*/ scope, object self,
             [DefaultProtocol, NotNull]string/*!*/ constantName, object path) {
-            ModuleOps.SetAutoloadedConstant(toPath, GetAutoloadOwner(scope), constantName, path);
+            ModuleOps.SetAutoloadedConstant(toPath, scope, GetAutoloadOwner(scope), constantName, path);
         }
 
         [RubyMethod("autoload?", RubyMethodAttributes.PrivateInstance)]

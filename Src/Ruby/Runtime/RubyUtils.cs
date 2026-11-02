@@ -794,6 +794,17 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// Location of the Ruby code that called the currently executing builtin from <paramref name="scope"/>:
+        /// what precompiled code noted for the call (PrecompiledCode.NoteCallLocation), else as below.
+        /// </summary>
+        public static bool TryGetCallerSourceLocation(RubyScope/*!*/ scope, out string sourcePath, out int sourceLine) {
+            if (Precompiled.PrecompiledCode.TryTakeCallLocation(scope, out sourcePath, out sourceLine)) {
+                return true;
+            }
+            return TryGetCallerSourceLocation(scope.RubyContext, out sourcePath, out sourceLine);
+        }
+
+        /// <summary>
         /// Location of the Ruby frame that called the currently executing builtin, taken from the CLR stack.
         /// Only for cold paths (Module#const_set, Module#autoload): capturing a stack trace with file info
         /// costs on the order of a millisecond.

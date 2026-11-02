@@ -234,9 +234,9 @@ namespace IronRuby.Runtime.Precompiled {
 
         /// <summary>
         /// True while this thread runs the top level of a precompiled file. Its frames are compiled IL,
-        /// not interpreted frames, so a caller location (const_set, autoload) could only come from a
-        /// CLR stack walk - about 0.3 ms, for an answer without a line - and the prelude makes hundreds
-        /// of such calls. They get no location instead, as constants set from C do in MRI.
+        /// not interpreted frames, so a caller location (const_set, autoload) that precompiled code did not
+        /// note (NoteCallLocation) could only come from a CLR stack walk - about 0.2 ms - and is not looked
+        /// for: such a call gets no location, as constants set from C do in MRI.
         /// </summary>
         internal static bool IsRunningOnThread {
             get { return _runDepth > 0; }
@@ -249,6 +249,45 @@ namespace IronRuby.Runtime.Precompiled {
             } finally {
                 _runDepth--;
             }
+        }
+
+        // What precompiled code says right before it calls const_set or autoload (see NoteCallLocation).
+        [ThreadStatic]
+        private static object _callScope;
+        [ThreadStatic]
+        private static string _callPath;
+        [ThreadStatic]
+        private static int _callLine;
+
+        /// <summary>
+        /// Called by precompiled code right before a call of const_set or autoload, with the scope the call is made
+        /// from and where it is: Module#const_set and #autoload record their caller's location, which an interpreted
+        /// frame gives for free but compiled code only through a CLR stack walk (~0.2 ms, and rubygems alone makes
+        /// some 30 such calls at startup). The method asks with the scope it was called from, which only the noted
+        /// call can match (see TryTakeCallLocation). Not emitted in the Ruby half of the core library, whose frames
+        /// report their caller's location.
+        /// </summary>
+        public static void NoteCallLocation(object scope, string path, int line) {
+            _callScope = scope;
+            _callPath = path;
+            _callLine = line;
+        }
+
+        /// <summary>
+        /// The location precompiled code noted for a call it made from <paramref name="scope"/> (NoteCallLocation),
+        /// once: a later call from the same scope that noted nothing (a send) must not take it again.
+        /// </summary>
+        internal static bool TryTakeCallLocation(RubyScope scope, out string path, out int line) {
+            if (scope != null && ReferenceEquals(_callScope, scope)) {
+                path = _callPath;
+                line = _callLine;
+                _callScope = null;
+                _callPath = null;
+                return path != null;
+            }
+            path = null;
+            line = 0;
+            return false;
         }
 
         /// <summary>IR_STARTUP_DLL_TRACE=1: say what the startup library registered, and which files are compiled from source.</summary>

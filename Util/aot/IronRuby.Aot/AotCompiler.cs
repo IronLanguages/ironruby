@@ -290,10 +290,24 @@ namespace IronRuby.Aot {
             private readonly AotCompiler _c;
             public Rewriter(AotCompiler c) { _c = c; }
 
+            // the statement being rewritten: the last sequence point visited (see NoteCallLocation)
+            private string _file;
+            private int _line;
+
+            protected override Expression VisitDebugInfo(DebugInfoExpression node) {
+                if (!node.IsClear) {
+                    _file = node.Document.FileName;
+                    _line = node.StartLine;
+                }
+                return base.VisitDebugInfo(node);
+            }
+
             protected override Expression VisitExtension(Expression node) {
                 if (!node.CanReduce) {
                     throw new NotSupportedException("irreducible extension node " + node.GetType());
                 }
+                string file = _file;
+                int line = _line;
                 // A call site the interpreter would run gets the interpreter's site shape: every argument and the result
                 // an object (DynamicInstructionN.CreateUntypedInstruction). Reduced, it would be typed after its
                 // arguments ((CallSite, RubyScope, object, int) and so on): a delegate type, CallSite<T> and rule
@@ -302,7 +316,8 @@ namespace IronRuby.Aot {
                 // compiled code (see RuleVersionSet.MakeTest).
                 if (node is Microsoft.Scripting.Ast.LightDynamicExpression && node.Type == typeof(object) &&
                     node.Reduce() is DynamicExpression reduced && reduced.Type == typeof(object) && reduced.Arguments.Count <= MaxUntypedSiteArguments) {
-                    return _c.UntypedDynamic(reduced.Binder, Visit(reduced.Arguments));
+                    var args = Visit(reduced.Arguments);
+                    return _c.NoteCallLocation(reduced.Binder, args, file, line, _c.UntypedDynamic(reduced.Binder, args));
                 }
                 return Visit(node.Reduce());
             }
@@ -320,15 +335,45 @@ namespace IronRuby.Aot {
             }
 
             protected override Expression VisitDynamic(DynamicExpression node) {
+                string file = _file;
+                int line = _line;
                 var args = Visit(node.Arguments);
                 var siteExpr = _c.SiteField(node.DelegateType, node.Binder);
                 var site = Expression.Variable(siteExpr.Type, "#site");
                 var invokeArgs = new List<Expression> { site };
                 invokeArgs.AddRange(args);
-                return Expression.Block(node.Type, new[] { site },
+                return _c.NoteCallLocation(node.Binder, args, file, line, Expression.Block(node.Type, new[] { site },
                     Expression.Assign(site, siteExpr),
-                    Expression.Invoke(Expression.Field(site, "Target"), invokeArgs));
+                    Expression.Invoke(Expression.Field(site, "Target"), invokeArgs)));
             }
+        }
+
+        // the builtins that record where they were called from (RubyUtils.TryGetCallerSourceLocation)
+        private static readonly HashSet<string> _locationRecordingMethods = new() { "const_set", "autoload" };
+
+        /// <summary>
+        /// A call of Module#const_set or #autoload records its caller's location, which compiled code only has on the
+        /// CLR stack: the call says where it is first (PrecompiledCode.NoteCallLocation), with the scope the method is
+        /// then called from. Not in the Ruby half of the core library, whose frames report their caller's location.
+        /// </summary>
+        private Expression NoteCallLocation(CallSiteBinder binder, IList<Expression> args, string file, int line, Expression call) {
+            if (!(binder is RubyCallAction action) || !_locationRecordingMethods.Contains(action.MethodName) || !action.Signature.HasScope ||
+                args.Count == 0 || file == null || line <= 0 || RubyStackTraceBuilder.IsInternalFile(file)) {
+                return call;
+            }
+            var scope = args[0];
+            while (scope is UnaryExpression u && u.NodeType == ExpressionType.Convert) {
+                scope = u.Operand;
+            }
+            if (!(scope is ParameterExpression)) {
+                return call;
+            }
+            Count("const_set/autoload calls noting their location");
+            return Expression.Block(call.Type,
+                Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.NoteCallLocation)),
+                    Expression.Convert(scope, typeof(object)), IsRooted(file) ? RootedStringField(file) : Expression.Constant(file, typeof(string)),
+                    Expression.Constant(line)),
+                call);
         }
 
         // DynamicInstructionN.CreateUntypedInstruction's limit
