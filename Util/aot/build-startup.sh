@@ -37,7 +37,8 @@ fi
 [ -n "$DOTNET_ROOT" ] && export DOTNET_ROOT && PATH="$DOTNET_ROOT:$PATH"
 DOTNET="${DOTNET_HOST_PATH:-dotnet}"
 TFM=net8.0 HOST= RID= ROOT= R2R=--r2r BUILDREFS=false
-DLR="${DLR_SOURCE_DIR:-$(dirname "$IR_ROOT")/dlr/src/core}"
+# the DLR the tree builds with: --dlr, DLR_SOURCE_DIR, or else what the build itself takes (Directory.Build.props or .rsp)
+DLR="${DLR_SOURCE_DIR:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --host) HOST="$2"; shift ;;
@@ -74,7 +75,7 @@ AOT_DIR=Util/aot/IronRuby.Aot
 AOT="$AOT_DIR/bin/Release/net10.0/IronRuby.Aot"
 CACHE="$IR_ROOT/$AOT_DIR/obj/startup/$TFM-${RID:-host}$( [ -f "$HOST/System.Private.CoreLib.dll" ] && echo -sc )${R2R:+-r2r}"
 
-props="-p:DlrSourceDir=$DLR -p:IronRubyTargetFrameworks=$TFM -p:IronRubyAotHostTfm=$TFM -p:IronRubyR2R=false"
+props="${DLR:+-p:DlrSourceDir=$DLR} -p:IronRubyTargetFrameworks=$TFM -p:IronRubyAotHostTfm=$TFM -p:IronRubyR2R=false"
 if [ "$BUILDREFS" = true ]; then
   "$DOTNET" build "$AOT_DIR" -c Release -nologo -v:q -nodeReuse:false $props || exit 1
 else
