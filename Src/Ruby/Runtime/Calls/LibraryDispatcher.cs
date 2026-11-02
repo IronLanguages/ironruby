@@ -68,7 +68,9 @@ namespace IronRuby.Runtime.Calls {
             internal LibraryArgumentConversion Conversion;
         }
 
-        private readonly CallInstruction/*!*/ _call;
+        // the call of the overload's method: through its entry point, or a CallInstruction if its shape has no such call
+        private readonly LibraryFunctionCall _function;
+        private readonly CallInstruction _call;
         private readonly Parameter/*!*/[]/*!*/ _parameters;
         private readonly Type/*!*/ _returnType;
 
@@ -81,8 +83,10 @@ namespace IronRuby.Runtime.Calls {
         private readonly Parameter _block;
         private readonly int _blockIndex;
 
-        private LibraryCallPlan(CallInstruction/*!*/ call, Parameter/*!*/[]/*!*/ parameters, Type/*!*/ returnType,
+        private LibraryCallPlan(LibraryFunctionCall function, CallInstruction call, Parameter/*!*/[]/*!*/ parameters, Type/*!*/ returnType,
             int mandatoryCount, int positionalCount, Parameter paramsParameter, Parameter block) {
+            Debug.Assert((function != null) != (call != null));
+            _function = function;
             _call = call;
             _parameters = parameters;
             _returnType = returnType;
@@ -236,7 +240,7 @@ namespace IronRuby.Runtime.Calls {
                 bfc = RubyOps.CreateBfcForLibraryMethod(block);
                 clrArgs[_blockIndex] = bfc;
                 try {
-                    return Box(_call.Invoke(clrArgs));
+                    return Call(clrArgs);
                 } catch (MethodUnwinder unwinder) when (RubyOps.IsProcConverterTarget(bfc, unwinder)) {
                     return unwinder.ReturnValue;
                 } finally {
@@ -244,7 +248,11 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
-            return Box(_call.Invoke(clrArgs));
+            return Call(clrArgs);
+        }
+
+        private object Call(object[]/*!*/ clrArgs) {
+            return (_function != null) ? _function.Invoke(clrArgs) : Box(_call.Invoke(clrArgs));
         }
 
         // AstUtils.Convert to object, which the rule's result goes through, boxes these through the shared boxes:
@@ -403,14 +411,19 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            CallInstruction call;
-            try {
-                call = CallInstruction.Create(method, method.GetParameters());
-            } catch (Exception) {
-                return null;
+            // the method's parameters, which the overload's are (LibraryOverload.Parameters, but as an array):
+            var clrParameters = method.GetParameters();
+            var function = LibraryFunctionCall.TryCreate(method, clrParameters);
+            CallInstruction call = null;
+            if (function == null) {
+                try {
+                    call = CallInstruction.Create(method, clrParameters);
+                } catch (Exception) {
+                    return null;
+                }
             }
 
-            return new LibraryCallPlan(call, parameters, returnType, mandatoryCount, positionalCount, paramsParameter, block);
+            return new LibraryCallPlan(function, call, parameters, returnType, mandatoryCount, positionalCount, paramsParameter, block);
         }
 
         private static bool IsPlainParameterType(Type/*!*/ type) {

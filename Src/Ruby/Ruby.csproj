@@ -3,6 +3,8 @@
     <TargetFrameworks>$(IronRubyTargetFrameworks)</TargetFrameworks>
     <AssemblyName>IronRuby</AssemblyName>
     <RootNamespace>IronRuby</RootNamespace>
+    <!-- LibraryFunctionCall calls library methods through function pointers -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <!-- present in the tree but never compiled by the legacy csproj -->
