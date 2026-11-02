@@ -32,7 +32,7 @@ namespace IronRuby.Runtime.Jit {
     /// <summary>
     /// Runtime helpers called from JIT-compiled code, plus the global kill switch.
     /// </summary>
-    public static class JitRuntime {
+    public static partial class JitRuntime {
         /// <summary>
         /// Set when something the JIT cannot reason about shows up (refinements). Specialized
         /// code checks it on entry, so turning it on deoptimizes every specialization at once.
@@ -265,6 +265,25 @@ namespace IronRuby.Runtime.Jit {
             if (RubyUtils.IsSafePointRequested) {
                 throw SafePointDeopt();
             }
+        }
+
+        /// <summary>
+        /// A loop's safe point in a specialized method. What is waiting runs here, and the body goes on -
+        /// unless <paramref name="deopt"/> says the body writes Hash or Array elements: a trap handler
+        /// run in the middle of those could change an element a later deopt takes back to what it was
+        /// before the handler ran. Such a body deopts instead (it is one that may: JitCompiler takes no
+        /// impure body that can deopt), and the generic body runs what is waiting at its first safe point.
+        /// </summary>
+        public static void MethodSafePoint(StrongBox<bool>/*!*/ deopt) {
+            if (RubyUtils.IsSafePointRequested) {
+                MethodSafePointSlow(deopt);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void MethodSafePointSlow(StrongBox<bool>/*!*/ deopt) {
+            if (deopt.Value) { throw SafePointDeopt(); }
+            RubyUtils.SafePoint();
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]

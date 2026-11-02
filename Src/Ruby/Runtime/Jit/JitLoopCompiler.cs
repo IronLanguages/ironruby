@@ -74,13 +74,25 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static Func<object[], object> TryCompile(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex) {
+            return TryCompile(loop, context, scopeDepth, tupleArgIndex, args, selfArgIndex, -1);
+        }
+
+        /// <summary>
+        /// <paramref name="scopeArgIndex"/>: where in <paramref name="args"/> the loop's RubyScope is,
+        /// which its constants resolve in; negative if it was not passed.
+        /// </summary>
+        internal static Func<object[], object> TryCompile(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
+            int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex, int scopeArgIndex) {
 
             if (JitRuntime.Disabled || context.HasRefinements) { return null; }
 
             // What the prologue's version guard compares against: read before the compiler
             // resolves anything (see JitStub.TrySpecialize), so that a method table change racing
-            // with the compile leaves the copy stale rather than right for good.
+            // with the compile leaves the copy stale rather than right for good. The same for the
+            // constants the body folds.
             int version = RubyModule.GlobalMethodVersion;
+            int constantVersion = context.ConstantAccessVersion;
+            RubyScope scope = (scopeArgIndex >= 0 && scopeArgIndex < args.Length) ? args[scopeArgIndex] as RubyScope : null;
 
             var argsParameter = Ast.Parameter(typeof(object[]), "#args");
             var exit = Ast.Label(typeof(object), "#osr-jit-exit");
@@ -131,7 +143,11 @@ namespace IronRuby.Runtime.Jit {
 
                 JT type;
                 bool writeFirst = (hint == JT.Int || hint == JT.Lng || hint == JT.Dbl);
-                if (writeFirst) {
+                if (!writeFirst && hint == JT.Obj) {
+                    // Met first as the target of an object (an element read, a constant): an object
+                    // slot, which holds whatever the tuple holds - nil, if the loop has not written it.
+                    type = JT.Obj;
+                } else if (writeFirst) {
                     // The loop met this local as the target of an assignment, so the type it
                     // will hold is the one being stored into it, whatever it holds right now.
                     // What it holds at entry is then not something to insist on either - the
@@ -148,11 +164,12 @@ namespace IronRuby.Runtime.Jit {
                 } else if (current is double) {
                     type = JT.Dbl;
                 } else {
-                    if (OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   {0} holds {1}", local.Name, current == null ? "nil" : current.GetType().Name); }
-                    return null;
+                    // Anything else - an Array, a Hash, nil, true - is carried as an object, which the
+                    // emitter only moves around, tests for truth, or hands to a helper that checks it.
+                    type = JT.Obj;
                 }
 
-                Type clr = (type == JT.Int) ? typeof(int) : (type == JT.Lng) ? typeof(long) : typeof(double);
+                Type clr = (type == JT.Int) ? typeof(int) : (type == JT.Lng) ? typeof(long) : (type == JT.Dbl) ? typeof(double) : typeof(object);
                 return new JitLoopSlot {
                     Type = type,
                     Variable = Ast.Parameter(clr, local.Name),
@@ -184,7 +201,14 @@ namespace IronRuby.Runtime.Jit {
 
             List<JitLoopSlot> slots;
             bool canDeopt;
-            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, out slots, out canDeopt);
+            JitCompiler.JitLoopFacts facts;
+            // what self is, as a hint for the Array and Hash intrinsics (JitCompiler.ObservedType)
+            var hints = new JitCompiler.ReceiverHints();
+            if (selfArgIndex >= 0 && selfArgIndex < args.Length) {
+                hints.Self = (args[selfArgIndex] == null) ? typeof(void) : args[selfArgIndex].GetType();
+            }
+            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, scope, hints,
+                out slots, out canDeopt, out facts);
             if (body == null || slots.Count == 0) {
                 if (OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter gave up (body={0} slots={1})", body != null, slots == null ? -1 : slots.Count); }
                 return null;
@@ -202,6 +226,10 @@ namespace IronRuby.Runtime.Jit {
             locals.Add(probe);
             if (self != null) {
                 locals.Add(self);
+            }
+            if (facts.UndoLog != null) {
+                locals.Add(facts.UndoLog);
+                locals.Add(facts.UndoMark);
             }
 
             // The scope this loop belongs to always makes tuples of the same shape, but nothing
@@ -224,6 +252,18 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Not(Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version))),
                 Ast.Return(exit, Ast.Call(JitRuntime.M("OsrVersionStale")))
             ));
+            // and no constant may have changed since the ones the body folded were read
+            if (facts.UsesConstants) {
+                prologue.Add(Ast.IfThen(
+                    Ast.Not(Ast.Call(JitRuntime.M("ConstantsOk"), Ast.Constant(context), Ast.Constant(constantVersion))),
+                    Ast.Return(exit, Ast.Call(JitRuntime.M("OsrVersionStale")))
+                ));
+            }
+            if (facts.UndoLog != null) {
+                // the element writes the current iteration makes, for a deopt to take back
+                prologue.Add(Ast.Assign(facts.UndoLog, Ast.Property(null, typeof(JitUndoLog).GetProperty("Current"))));
+                prologue.Add(Ast.Assign(facts.UndoMark, Ast.Property(facts.UndoLog, typeof(JitUndoLog).GetProperty("Mark"))));
+            }
 
             var storeCurrent = new List<MSA.Expression>();
             var storeSnapshot = new List<MSA.Expression>();
@@ -237,12 +277,14 @@ namespace IronRuby.Runtime.Jit {
                 // or an Int64, since both are the same Ruby Integer and only the magnitude says
                 // which one a given value is.
                 bool isLong = (slot.Type == JT.Lng);
+                bool isObj = (slot.Type == JT.Obj);
+                // an object slot holds whatever the tuple holds
                 MSA.Expression holds = isLong
                     ? Ast.Call(JitRuntime.M("IsIntegral"), probe)
-                    : (MSA.Expression)Ast.TypeIs(probe, clr);
+                    : isObj ? Ast.Constant(true) : (MSA.Expression)Ast.TypeIs(probe, clr);
                 MSA.Expression read = isLong
                     ? Ast.Call(JitRuntime.M("ToLong"), probe)
-                    : (MSA.Expression)Ast.Unbox(probe, clr);
+                    : isObj ? probe : (MSA.Expression)Ast.Unbox(probe, clr);
 
                 MSA.Expression store = Ast.Assign(slot.Accessor, Box(slot.Variable, isLong));
                 MSA.Expression storeSnap = Ast.Assign(slot.Accessor, Box(slot.Snapshot, isLong));
@@ -261,10 +303,12 @@ namespace IronRuby.Runtime.Jit {
                     storeSnap = Ast.IfThen(slot.AssignedSnapshot, storeSnap);
                 } else {
                     prologue.Add(Ast.Assign(probe, slot.Accessor));
-                    prologue.Add(Ast.IfThen(
-                        Ast.Not(holds),
-                        Ast.Return(exit, Ast.Call(JitRuntime.M("OsrTypeGuardFailed"), Ast.Constant(slot.Variable.Name)))
-                    ));
+                    if (!isObj) {
+                        prologue.Add(Ast.IfThen(
+                            Ast.Not(holds),
+                            Ast.Return(exit, Ast.Call(JitRuntime.M("OsrTypeGuardFailed"), Ast.Constant(slot.Variable.Name)))
+                        ));
+                    }
                     prologue.Add(Ast.Assign(slot.Variable, read));
                     prologue.Add(Ast.Assign(slot.Snapshot, slot.Variable));
                 }
@@ -279,9 +323,17 @@ namespace IronRuby.Runtime.Jit {
             );
 
             if (canDeopt) {
+                if (facts.UndoLog != null) {
+                    // the generic loop re-runs the iteration: first take back what it wrote
+                    storeSnapshot.Insert(0, Ast.Call(facts.UndoLog, typeof(JitUndoLog).GetMethod("Rollback"), facts.UndoMark));
+                }
                 storeSnapshot.Add(Ast.Constant(OsrLoopSite.Retry, typeof(object)));
                 run = Ast.TryCatch(run,
                     Ast.Catch(typeof(JitDeoptException), Ast.Block(typeof(object), storeSnapshot.ToArray())));
+            }
+            if (facts.UndoLog != null) {
+                // the writes of a run that ended stand, however it ended
+                run = Ast.TryFinally(run, Ast.Call(facts.UndoLog, typeof(JitUndoLog).GetMethod("Release"), facts.UndoMark));
             }
 
             prologue.Add(run);

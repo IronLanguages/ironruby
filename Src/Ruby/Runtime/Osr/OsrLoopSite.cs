@@ -105,6 +105,8 @@ namespace IronRuby.Runtime.Osr {
         internal Dictionary<int, int> TupleArgIndex;
         // Where in the argument array the loop's self is; -1 if it is not passed.
         internal int SelfArgIndex = -1;
+        // Where in the argument array the loop's RubyScope is, which its constants resolve in; -1 if not passed.
+        internal int ScopeArgIndex = -1;
 
         private readonly object/*!*/ _lock = new object();
         private readonly string/*!*/ _name;
@@ -196,7 +198,7 @@ namespace IronRuby.Runtime.Osr {
 
                 long start = Stopwatch.GetTimestamp();
                 try {
-                    _typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex);
+                    _typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex);
                 } catch (Exception e) {
                     if (Verbose) {
                         Console.Error.WriteLine("[osr] {0}: specialization failed: {1}", _name, e.Message);

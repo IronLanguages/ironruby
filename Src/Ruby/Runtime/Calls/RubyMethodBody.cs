@@ -306,7 +306,7 @@ namespace IronRuby.Runtime.Calls {
             // the only place the rest of the runtime knows about it.
             var context = declaringScope.RubyContext;
             if (context.RubyOptions.Jit) {
-                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, _ast, context, declaringModule);
+                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, _ast, context, declaringModule, declaringScope);
             }
             return result;
         }
