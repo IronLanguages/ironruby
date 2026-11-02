@@ -129,12 +129,14 @@ namespace IronRuby.Runtime.Calls {
                 return false;
             }
 
-            var members = libraryMethod.GetMembers();
-            if (members.Length == 0 || members[0].Name != "SendMessage") {
+            // the first overload's method only (GetMembers would reflect upon every overload):
+            var overloads = libraryMethod.MethodBases;
+            var member = (overloads.Length > 0) ? overloads[0].ReflectionInfo : null;
+            if (member == null || member.Name != "SendMessage") {
                 return false;
             }
 
-            switch (members[0].DeclaringType.FullName) {
+            switch (member.DeclaringType.FullName) {
                 case "IronRuby.Builtins.KernelOps": _send = method; return true;
                 case "IronRuby.Builtins.BasicObjectOps": _basicSend = method; return true;
                 default: return false;

@@ -894,7 +894,7 @@ namespace IronRuby.Runtime.Calls {
             if (!delegateType.IsGenericType) {
                 return false;
             }
-            var args = delegateType.GetGenericArguments();
+            var args = GetDelegateTypeArguments(delegateType);
             int i = 1;
             if (signature.HasScope && args[i++] != typeof(RubyScope)) {
                 return false;
@@ -918,7 +918,7 @@ namespace IronRuby.Runtime.Calls {
             if (signature.HasScope || signature.HasBlock || count > 2 || !delegateType.IsGenericType) {
                 return null;
             }
-            var args = delegateType.GetGenericArguments();
+            var args = GetDelegateTypeArguments(delegateType);
             if (args.Length != count + 3 || args[0] != typeof(CallSite) || args[args.Length - 1] != typeof(object) ||
                 delegateType != (count == 0 ? typeof(Func<,,>) : count == 1 ? typeof(Func<,,,>) : typeof(Func<,,,,>)).MakeGenericType(args)) {
                 return null;
@@ -1142,7 +1142,7 @@ namespace IronRuby.Runtime.Calls {
                 }
                 if (plan != null) {
                     // the site's parameter types: Func<CallSite, (scope)?, self, (block)?, arguments..., result>
-                    var siteTypes = delegateType.IsGenericType ? delegateType.GetGenericArguments() : Type.EmptyTypes;
+                    var siteTypes = GetDelegateTypeArguments(delegateType);
                     if (siteTypes.Length != first + count + 2) {
                         return null;
                     }
