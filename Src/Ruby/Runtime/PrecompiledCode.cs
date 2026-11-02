@@ -197,6 +197,9 @@ namespace IronRuby.Runtime.Precompiled {
         /// the compiler screened. Null if it does not (the method then runs as compiled, unspecialized).
         /// </summary>
         internal static MethodDefinition ParseJitSource(RubyContext/*!*/ context, string/*!*/ source, MethodDefinition/*!*/ header, string path) {
+            if (Trace) {
+                Console.Error.WriteLine("IronRuby.Startup: the JIT parses `def " + header.Name + "' (" + path + ":" + header.Location.Start.Line + ")");
+            }
             try {
                 var unit = context.CreateSnippet(source, path, SourceCodeKind.File);
                 var options = new RubyCompilerOptions(context.RubyOptions) {
