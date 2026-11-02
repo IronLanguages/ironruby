@@ -867,6 +867,37 @@ mm
 ", OutputFlags.Match);
         }
 
+        /// <summary>
+        /// A singleton class made while a scope runs - lazily, by a def in an instance_eval block - is self's class
+        /// from then on, also for the visibility of a protected method called on an explicit receiver, even when an
+        /// earlier call in the same scope already asked for self's class.
+        /// </summary>
+        public void Visibility5() {
+            TestOutput(@"
+class C; end
+
+o = C.new
+p(o.instance_eval {
+  me = self
+  [1].to_s
+  def secret; :a; end
+  singleton_class.send(:protected, :secret)
+  me.secret
+})
+
+p(C.new.instance_exec {
+  me = self
+  me.to_s
+  define_singleton_method(:secret) { :b }
+  singleton_class.send(:protected, :secret)
+  me.secret
+})
+", @"
+:a
+:b
+");
+        }
+
         public void ModuleFunctionVisibility1() {
             TestOutput(@"
 module M
