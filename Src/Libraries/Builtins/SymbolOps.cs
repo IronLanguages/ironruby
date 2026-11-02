@@ -173,7 +173,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_proc")]
         public static Proc/*!*/ ToProc(RubyScope/*!*/ scope, RubySymbol/*!*/ self) {
-            return Proc.CreateMethodInvoker(scope, self.ToString());
+            return self.MethodInvoker ?? (self.MethodInvoker = Proc.CreateMethodInvoker(scope, self.ToString()));
         }
 
         #endregion

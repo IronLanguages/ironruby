@@ -73,9 +73,21 @@ namespace IronRuby.Builtins {
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static Range/*!*/ Reinitialize(BinaryOpStorage/*!*/ comparisonStorage, 
+        public static object Reinitialize(BinaryOpStorage/*!*/ comparisonStorage, 
             RubyContext/*!*/ context, Range/*!*/ self, object begin, object end, [Optional]bool excludeEnd) {
             self.Initialize(comparisonStorage, context, begin, end, excludeEnd);
+            return null;
+        }
+
+        // Range.allocate.send(:initialize_copy, other) fills in an uninitialized range; on any
+        // other it is the FrozenError every Range mutation is.
+        [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
+        public static Range/*!*/ InitializeCopy(RubyContext/*!*/ context, Range/*!*/ self, object other) {
+            var range = other as Range;
+            if (range == null) {
+                throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
+            }
+            self.InitializeCopy(context, range);
             return self;
         }
 

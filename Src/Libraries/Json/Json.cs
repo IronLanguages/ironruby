@@ -291,6 +291,7 @@ namespace IronRuby.StandardLibrary.Json {
 
             var parser = new JsonParser(source.ConvertToString(), context);
             parser.SymbolizeNames = TruthyOption(context, options, "symbolize_names");
+            parser.AllowControlCharacters = TruthyOption(context, options, "allow_control_characters");
             object result = parser.ParseValue(0);
             parser.SkipWhitespace();
             if (!parser.AtEnd) {
@@ -301,7 +302,7 @@ namespace IronRuby.StandardLibrary.Json {
 
         /// <summary>
         /// One keyword of the options Hash JSON.parse takes.  Only the options this parser
-        /// can honour are read: symbolize_names, and allow_comments, which needs no flag
+        /// can honour are read: symbolize_names, allow_control_characters, and allow_comments, which needs no flag
         /// because this parser has always skipped comments.  An option it does not know is
         /// ignored rather than rejected, the way the json gem ignores unknown keys.
         /// </summary>
@@ -351,6 +352,12 @@ namespace IronRuby.StandardLibrary.Json {
         /// JSON.parse(source, symbolize_names: true) answers Symbol keys.
         /// </summary>
         internal bool SymbolizeNames { get; set; }
+
+        /// <summary>
+        /// JSON.parse(source, allow_control_characters: true) takes a raw newline, tab, ... inside
+        /// a string as it is.
+        /// </summary>
+        internal bool AllowControlCharacters { get; set; }
 
         internal JsonParser(string/*!*/ source, RubyContext/*!*/ context) {
             _source = source;
@@ -494,6 +501,12 @@ namespace IronRuby.StandardLibrary.Json {
                     return builder.ToString();
                 }
                 if (c != '\\') {
+                    // RFC 8259: U+0000 through U+001F must be escaped inside a string. The json gem
+                    // rejects them unless asked not to (2.18.0's allow_control_characters).
+                    if (c < ' ' && !AllowControlCharacters) {
+                        _position--;
+                        throw new JsonParserError("invalid ASCII control character in string: '" + Rest + "'");
+                    }
                     builder.Append(c);
                     continue;
                 }

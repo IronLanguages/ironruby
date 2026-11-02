@@ -39,7 +39,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         // see Ruby Language.doc/Runtime/Control Flow Implementation/Yield
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             MSA.Expression bfcVariable = gen.CurrentScope.DefineHiddenVariable("#yielded-bfc", typeof(BlockParam));
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#result", typeof(object));
             

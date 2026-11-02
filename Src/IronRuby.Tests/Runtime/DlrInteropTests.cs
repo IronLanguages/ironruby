@@ -933,7 +933,7 @@ C.xxx rescue puts $!.to_s[0, 22]
 1
 2
 2
-undefined method `xxx'
+undefined method 'xxx'
 ");
         }
 

@@ -40,9 +40,21 @@ namespace IronRuby.Builtins {
         private CallSite<Func<CallSite, object, object, object>> _index;
         private CallSite<Func<CallSite, object, object, object>> _hasKey;
         private CallSite<Func<CallSite, object, object, object>> _new;
+        private CallSite<Func<CallSite, object, object>> _numerator;
+        private CallSite<Func<CallSite, object, object>> _denominator;
 
         [Emitted]
         public StringFormatterSiteStorage(RubyContext/*!*/ context) : base(context) {
+        }
+
+        public object Numerator(object value) {
+            var site = RubyUtils.GetCallSite(ref _numerator, Context, "numerator", 0);
+            return site.Target(site, value);
+        }
+
+        public object Denominator(object value) {
+            var site = RubyUtils.GetCallSite(ref _denominator, Context, "denominator", 0);
+            return site.Target(site, value);
         }
 
         public int CastToFixnum(object value) {
@@ -252,6 +264,13 @@ namespace IronRuby.Builtins {
                 char c = _format[_index];
 
                 if (c == '#' || c == '-' || c == '+' || c == ' ' || c == '0') {
+                    // MRI: flags belong before the width ("%5 d" is an error, "% 5d" is not)
+                    if (widthSeen) {
+                        throw RubyExceptions.CreateArgumentError("flag after width");
+                    }
+                    if (precisionSeen) {
+                        throw RubyExceptions.CreateArgumentError("flag after precision");
+                    }
                     _index++;
                     flagSeen = true;
                     switch (c) {
@@ -317,10 +336,19 @@ namespace IronRuby.Builtins {
                         end++;
                     }
                     if (end < _format.Length && _format[end] == '$') {
+                        string digits = _format.Substring(_index, end - _index);
                         if (_opts.ArgIndex.HasValue) {
-                            throw RubyExceptions.CreateArgumentError("value given twice");
+                            throw RubyExceptions.CreateArgumentError("value given twice - {0}$", digits);
                         }
-                        _opts.ArgIndex = int.Parse(_format.Substring(_index, end - _index), CultureInfo.InvariantCulture);
+                        if (_useNamed) {
+                            throw RubyExceptions.CreateArgumentError("numbered({0}) after named", digits);
+                        }
+                        if (_useAbsolute.HasValue && !_useAbsolute.Value) {
+                            throw RubyExceptions.CreateArgumentError("numbered({0}) after unnumbered({1})", digits, _relativeIndex.ToString());
+                        }
+                        // numbered from here on: a "*" width in this directive may not be unnumbered
+                        _useAbsolute = true;
+                        _opts.ArgIndex = int.Parse(digits, CultureInfo.InvariantCulture);
                         _index = end + 1;
                         argumentSeen = true;
                     } else {
@@ -345,14 +373,22 @@ namespace IronRuby.Builtins {
                     if (end < 0) {
                         throw RubyExceptions.CreateArgumentError("malformed name - unmatched parenthesis");
                     }
+                    string spelled = _format.Substring(_index, end - _index + 1); // with its brackets, as MRI quotes it
                     if (_opts.Name != null) {
-                        throw RubyExceptions.CreateArgumentError("name{0}{1}{2} after <{3}>",
-                            c.ToString(), _format.Substring(_index + 1, end - _index - 1), close.ToString(), _opts.Name);
+                        throw RubyExceptions.CreateArgumentError("named{0} after <{1}>", spelled, _opts.Name);
+                    }
+                    if (_opts.ArgIndex.HasValue || (_useAbsolute.HasValue && _useAbsolute.Value)) {
+                        throw RubyExceptions.CreateArgumentError("named{0} after numbered", spelled);
+                    }
+                    if (_useAbsolute.HasValue) {
+                        throw RubyExceptions.CreateArgumentError("named{0} after unnumbered({1})", spelled, _relativeIndex.ToString());
                     }
                     _opts.Name = _format.Substring(_index + 1, end - _index - 1);
                     _opts.NameStyle = c;
                     _index = end + 1;
                     argumentSeen = true;
+                    // a "*" width in this very directive is already "mixed with named"
+                    _useNamed = true;
                     if (c == '{') {
                         // %{name} is a complete directive; it formats the value with to_s
                         conversion = 's';
@@ -433,6 +469,9 @@ namespace IronRuby.Builtins {
             }
 
             if (_useNamed) {
+                if (absoluteIndex.HasValue) {
+                    throw RubyExceptions.CreateArgumentError("numbered({0}) after named", absoluteIndex.Value.ToString());
+                }
                 throw RubyExceptions.CreateArgumentError("unnumbered({0}) mixed with named", (_relativeIndex + 1).ToString());
             }
 
@@ -459,8 +498,9 @@ namespace IronRuby.Builtins {
 
         private object GetNamedData(string/*!*/ name) {
             if (_useAbsolute.HasValue) {
-                throw RubyExceptions.CreateArgumentError("named<{0}> after {1}({2})", name,
-                    _useAbsolute.Value ? "numbered" : "unnumbered", (_relativeIndex == 0 ? 1 : _relativeIndex).ToString());
+                throw _useAbsolute.Value
+                    ? RubyExceptions.CreateArgumentError("named<{0}> after numbered", name)
+                    : RubyExceptions.CreateArgumentError("named<{0}> after unnumbered({1})", name, (_relativeIndex == 0 ? 1 : _relativeIndex).ToString());
             }
             _useNamed = true;
 
@@ -580,6 +620,9 @@ namespace IronRuby.Builtins {
                 str = _siteStorage.TryConvertToStr(value);
             }
             if (str != null) {
+                if (!str.Encoding.IsAsciiIdentity) {
+                    throw RubyExceptions.CreateAsciiIncompatibleEncodingError(str.Encoding);
+                }
                 object parsed = KernelOps.ToInteger(null, str);
                 return (parsed is BigInteger) ? (BigInteger)parsed : (parsed is long ? (BigInteger)(long)parsed : (BigInteger)(int)parsed);
             }
@@ -722,10 +765,154 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // CRuby renders floats with its own copy of David Gay's dtoa (missing/dtoa.c), and that
+        // copy does one thing Gay's does not: in the fast path that generates the requested
+        // digits with double arithmetic ("Generate ilim digits, then fix them up"), a remainder
+        // it cannot tell apart from one half - within that path's error bound, eps - is taken
+        // to *be* a half, and is settled by the parity of the last digit generated, whatever
+        // the exact binary value was.  Gay falls back to exact bignum arithmetic there; CRuby
+        // sets a `half` flag that the exact pass then honours.  So "%.2f" % 2.675 is "2.68"
+        // in CRuby although the double 2.675 is a little below 2.675, and "%.1f" % 99.45 is
+        // "99.4" although that double is a little above 99.45 - the digit before the cut is
+        // what decides, 7 up and 4 down.  Only numbers that look like ties at the requested
+        // precision are affected; everything else rounds exactly, as here.
+        //
+        // This repeats the fast path's floating-point steps - the k estimate, the scaling by
+        // powers of ten, eps, the digit loop - and reports whether CRuby lands on that tie for
+        // |d| rendered to ndigits in mode 3 ("%f": ndigits fraction digits) or mode 2 ("%e",
+        // "%g": ndigits significant digits).  When it does, the caller rounds up exactly when
+        // the last kept digit is odd.  The path is only tried for up to Quick_max (14) digits,
+        // so longer renderings are exact in CRuby too.
+        private static readonly double[] _Tens = {
+            1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
+            1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19,
+            1e20, 1e21, 1e22
+        };
+        private static readonly double[] _BigTens = { 1e16, 1e32, 1e64, 1e128, 1e256 };
+
+        private static bool RubyDtoaApparentTie(double d, int mode, int ndigits) {
+            Debug.Assert(mode == 2 || mode == 3);
+            d = SM.Abs(d);
+            if (d == 0.0 || Double.IsNaN(d) || Double.IsInfinity(d)) {
+                return false;
+            }
+
+            // log10(d) estimate: (binary exponent) * log10(2) + log10(mantissa), the latter
+            // from a first-order series around 1.5, biased to err on the high side.
+            long bits = BitConverter.DoubleToInt64Bits(d);
+            int biasedExponent = (int)((bits >> 52) & 0x7FF);
+            long fraction = bits & 0xFFFFFFFFFFFFFL;
+            int i;
+            double d2;
+            if (biasedExponent != 0) {
+                d2 = BitConverter.Int64BitsToDouble(fraction | 0x3FF0000000000000L);
+                i = biasedExponent - 1023;
+            } else {
+                // Denormal: the mantissa's top 32 bits as an integer, scaled into [1, 2).
+                int bitLength = 64 - BitOperations.LeadingZeroCount((ulong)fraction);
+                uint x = bitLength > 32 ? (uint)((ulong)fraction >> (bitLength - 32)) : (uint)fraction << (32 - bitLength);
+                d2 = (double)x * (1.0 / 2147483648.0);
+                i = bitLength - 1075;
+            }
+            double ds = (d2 - 1.5) * 0.289529654602168 + 0.1760912590558 + i * 0.301029995663981;
+            int k = (int)ds;
+            if (ds < 0.0 && ds != k) {
+                k--;
+            }
+            bool kCheck = true;
+            if (k >= 0 && k <= 22) {
+                if (d < _Tens[k]) {
+                    k--;
+                }
+                kCheck = false;
+            }
+
+            int ilim, ilim1;
+            if (mode == 2) {
+                if (ndigits <= 0) {
+                    ndigits = 1;
+                }
+                ilim = ilim1 = ndigits;
+            } else {
+                ilim = ndigits + k + 1;
+                ilim1 = ilim - 1;
+            }
+            if (ilim < 0 || ilim > 14) {
+                return false;
+            }
+
+            // Scale d by 10^-k into [1, 10), counting the roundings taken in ieps.
+            int ieps = 2;
+            i = 0;
+            if (k > 0) {
+                ds = _Tens[k & 0xf];
+                int j = k >> 4;
+                if ((j & 0x10) != 0) {
+                    j &= 0x0f;
+                    d /= _BigTens[4];
+                    ieps++;
+                }
+                for (; j != 0; j >>= 1, i++) {
+                    if ((j & 1) != 0) {
+                        ieps++;
+                        ds *= _BigTens[i];
+                    }
+                }
+                d /= ds;
+            } else if (k < 0) {
+                int j1 = -k;
+                d *= _Tens[j1 & 0xf];
+                for (int j = j1 >> 4; j != 0; j >>= 1, i++) {
+                    if ((j & 1) != 0) {
+                        ieps++;
+                        d *= _BigTens[i];
+                    }
+                }
+            }
+            if (kCheck && d < 1.0 && ilim > 0) {
+                if (ilim1 <= 0) {
+                    return false;
+                }
+                ilim = ilim1;
+                d *= 10.0;
+                ieps++;
+            }
+            double eps = (ieps * d + 7.0) * 2.220446049250313e-16;  // word0(eps) -= (P-1)*Exp_msk1
+            if (ilim == 0) {
+                // Decided against one half exactly, which is what the exact pass does too.
+                return false;
+            }
+
+            eps *= _Tens[ilim - 1];
+            for (i = 1; ; i++, d *= 10.0) {
+                int digit = (int)d;
+                d -= digit;
+                if (d == 0.0) {
+                    ilim = i;
+                }
+                if (i == ilim) {
+                    // Clearly above or below one half: the exact rounding agrees. Anything in
+                    // between is CRuby's tie.
+                    return !(d > 0.5 + eps) && !(d < 0.5 - eps);
+                }
+            }
+        }
+
         /// <summary>
-        /// Exact round-half-to-even of |value| * 10^scale to an integer.
+        /// Exact round-half-to-even of |value| * 10^scale to an integer, except that
+        /// <paramref name="rubyTie"/> (see <see cref="RubyDtoaApparentTie"/>) rounds by the
+        /// parity of the last kept digit alone.
         /// </summary>
-        private static BigInteger ScaledRound(double value, int scale) {
+        private static BigInteger ScaledRound(double value, int scale, bool rubyTie) {
+            int ignoredCmp;
+            bool ignoredUp;
+            return ScaledRound(value, scale, rubyTie, out ignoredCmp, out ignoredUp);
+        }
+
+        /// <param name="exactCmp">How twice the discarded remainder compares with one unit: the
+        /// sign says whether the exact value lies above (+), on (0) or below (-) the half.</param>
+        /// <param name="roundedUp">Whether the kept digits were incremented.</param>
+        private static BigInteger ScaledRound(double value, int scale, bool rubyTie, out int exactCmp, out bool roundedUp) {
             BigInteger mantissa;
             int exponent;
             DecomposeDouble(value, out mantissa, out exponent);
@@ -749,15 +936,58 @@ namespace IronRuby.Builtins {
             BigInteger quotient = BigInteger.DivRem(numerator, denominator, out remainder);
 
             int cmp = (remainder * 2).CompareTo(denominator);
-            if (cmp > 0 || (cmp == 0 && !quotient.IsEven)) {
+            exactCmp = cmp;
+            roundedUp = rubyTie ? !quotient.IsEven : (cmp > 0 || (cmp == 0 && !quotient.IsEven));
+            if (roundedUp) {
                 quotient += BigInteger.One;
             }
             return quotient;
         }
 
+        /// <summary>
+        /// floor(log10(|value|)), exactly: the power of ten that |value| (not zero, finite) is at
+        /// least and less than ten times.  Math.Log10 rounds to a whole number for a double a
+        /// few ulps below a power of ten, and an exponent one too high there turns
+        /// 999.9999999999999 into 1.000000000000000e+03 instead of 9.999999999999999e+02.
+        /// </summary>
+        private static int ExactExponent(double value) {
+            int exponent = (int)SM.Floor(SM.Log10(value));
+            BigInteger mantissa;
+            int exponent2;
+            DecomposeDouble(value, out mantissa, out exponent2);
+            while (ComparePowerOfTen(mantissa, exponent2, exponent) < 0) {
+                exponent--;
+            }
+            while (ComparePowerOfTen(mantissa, exponent2, exponent + 1) >= 0) {
+                exponent++;
+            }
+            return exponent;
+        }
+
+        /// <summary>Compares mantissa * 2^exponent2 with 10^exponent10.</summary>
+        private static int ComparePowerOfTen(BigInteger mantissa, int exponent2, int exponent10) {
+            BigInteger left = mantissa;
+            BigInteger right = BigInteger.One;
+            if (exponent2 >= 0) {
+                left <<= exponent2;
+            } else {
+                right <<= -exponent2;
+            }
+            if (exponent10 >= 0) {
+                right *= BigInteger.Pow(10, exponent10);
+            } else {
+                left *= BigInteger.Pow(10, -exponent10);
+            }
+            return left.CompareTo(right);
+        }
+
         /// <summary>|value| rendered as ddd.ddd with exactly <paramref name="precision"/> fraction digits.</summary>
         private static string/*!*/ FormatFixed(double value, int precision) {
-            string digits = ScaledRound(value, precision).ToString(CultureInfo.InvariantCulture);
+            return FormatFixed(value, precision, RubyDtoaApparentTie(value, 3, precision));
+        }
+
+        private static string/*!*/ FormatFixed(double value, int precision, bool rubyTie) {
+            string digits = ScaledRound(value, precision, rubyTie).ToString(CultureInfo.InvariantCulture);
             if (precision <= 0) {
                 return digits;
             }
@@ -768,35 +998,46 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>Decimal exponent that %e would produce for |value| at the given precision.</summary>
-        private static int ExponentFor(double value, int precision, out BigInteger digits) {
+        private static int ExponentFor(double value, int precision, bool rubyTie, out BigInteger digits) {
+            int ignoredCmp;
+            bool ignoredUp;
+            return ExponentFor(value, precision, rubyTie, out digits, out ignoredCmp, out ignoredUp);
+        }
+
+        /// <summary>
+        /// Decimal exponent that %e would produce for |value| at the given precision, with the
+        /// precision + 1 significant digits in <paramref name="digits"/> and how they were
+        /// rounded (see <see cref="ScaledRound"/>).
+        /// </summary>
+        private static int ExponentFor(double value, int precision, bool rubyTie, out BigInteger digits, out int exactCmp, out bool roundedUp) {
             if (value == 0.0) {
                 digits = BigInteger.Zero;
-                for (int i = 0; i < precision; i++) {
-                    digits = digits * 10;
-                }
+                exactCmp = 0;
+                roundedUp = false;
                 return 0;
             }
 
-            int exponent = (int)SM.Floor(SM.Log10(value));
+            int exponent = ExactExponent(value);
             BigInteger low = BigInteger.Pow(10, precision);
             BigInteger high = low * 10;
 
-            digits = ScaledRound(value, precision - exponent);
-            int guard = 0;
-            while (digits >= high && guard++ < 8) {
+            digits = ScaledRound(value, precision - exponent, rubyTie, out exactCmp, out roundedUp);
+            if (digits >= high) {
+                // Rounding carried into one more digit: 9.95 at one fraction digit is 10.0,
+                // which is 1.0 one power of ten up.
+                digits = low;
                 exponent++;
-                digits = ScaledRound(value, precision - exponent);
-            }
-            while (digits < low && guard++ < 16) {
-                exponent--;
-                digits = ScaledRound(value, precision - exponent);
             }
             return exponent;
         }
 
         private static string/*!*/ FormatExponential(double value, int precision, bool upperCase, bool forceDot) {
+            return FormatExponential(value, precision, upperCase, forceDot, RubyDtoaApparentTie(value, 2, precision + 1));
+        }
+
+        private static string/*!*/ FormatExponential(double value, int precision, bool upperCase, bool forceDot, bool rubyTie) {
             BigInteger scaled;
-            int exponent = ExponentFor(value, precision, out scaled);
+            int exponent = ExponentFor(value, precision, rubyTie, out scaled);
 
             string digits = scaled.ToString(CultureInfo.InvariantCulture);
             if (digits.Length < precision + 1) {
@@ -810,30 +1051,19 @@ namespace IronRuby.Builtins {
             } else if (forceDot) {
                 result.Append('.');
             }
+            AppendExponent(result, exponent, upperCase);
+            return result.ToString();
+        }
+
+        /// <summary>e+XX, with at least two exponent digits, as C prints it.</summary>
+        private static void AppendExponent(StringBuilder/*!*/ result, int exponent, bool upperCase) {
             result.Append(upperCase ? 'E' : 'e');
             result.Append(exponent < 0 ? '-' : '+');
-            int absExponent = SM.Abs(exponent);
-            string exponentDigits = absExponent.ToString(CultureInfo.InvariantCulture);
+            string exponentDigits = SM.Abs(exponent).ToString(CultureInfo.InvariantCulture);
             if (exponentDigits.Length < 2) {
                 exponentDigits = exponentDigits.PadLeft(2, '0');
             }
             result.Append(exponentDigits);
-            return result.ToString();
-        }
-
-        private static string/*!*/ StripTrailingZeros(string/*!*/ significand, bool keepDot) {
-            int dot = significand.IndexOf('.');
-            if (dot < 0) {
-                return significand;
-            }
-            int end = significand.Length;
-            while (end > dot + 1 && significand[end - 1] == '0') {
-                end--;
-            }
-            if (end == dot + 1 && !keepDot) {
-                end = dot;
-            }
-            return significand.Substring(0, end);
         }
 
         private static string/*!*/ FormatGeneral(double value, int precision, bool upperCase, bool altForm) {
@@ -841,23 +1071,58 @@ namespace IronRuby.Builtins {
                 precision = 1;
             }
 
-            BigInteger ignored;
-            int exponent = ExponentFor(value, precision - 1, out ignored);
+            // "%g" asks dtoa for precision significant digits (mode 2) and then picks the
+            // notation, so the tie is the one for those digits, and the digits are rendered
+            // once: rounding them again at the notation's scale would apply the tie to the
+            // wrong digit after a carry ("%.1g" % 0.095 is 0.1, by way of 9.5 -> 10).
+            bool rubyTie = RubyDtoaApparentTie(value, 2, precision);
+            BigInteger digits;
+            int exactCmp;
+            bool roundedUp;
+            int exponent = ExponentFor(value, precision - 1, rubyTie, out digits, out exactCmp, out roundedUp);
+            string digitString = digits.ToString(CultureInfo.InvariantCulture).PadLeft(precision, '0');
 
-            if (exponent < -4 || exponent >= precision) {
-                string s = FormatExponential(value, precision - 1, upperCase, altForm);
-                if (altForm) {
-                    return s;
-                }
-                int e = s.IndexOf(upperCase ? 'E' : 'e');
-                return StripTrailingZeros(s.Substring(0, e), false) + s.Substring(e);
-            } else {
-                string s = FormatFixed(value, precision - 1 - exponent);
-                if (altForm) {
-                    return (s.IndexOf('.') < 0) ? s + "." : s;
-                }
-                return StripTrailingZeros(s, false);
+            // "%g" prints the digits dtoa hands back and pads nothing, so its trailing zeros are
+            // whatever dtoa left in place.  dtoa trims them, except on CRuby's tie when the last
+            // digit is even and stays: the exact pass then returns without trimming when the
+            // value is above the half ("%.5g" % 0.0676905 is "0.067690"), and its separate
+            // path for whole numbers below 1e15, which never trims, keeps them on an exact half
+            // as well ("%.2g" % 205.0 is "2.0e+02").
+            bool keepZeros = altForm;
+            if (!keepZeros && rubyTie && !roundedUp) {
+                bool wholeNumberPath = value == SM.Floor(value) && exponent <= 14;
+                keepZeros = exactCmp > 0 || (exactCmp == 0 && wholeNumberPath);
             }
+            if (!keepZeros) {
+                digitString = digitString.TrimEnd('0');
+                if (digitString.Length == 0) {
+                    digitString = "0";
+                }
+            }
+
+            StringBuilder result = new StringBuilder();
+            if (exponent < -4 || exponent >= precision) {
+                result.Append(digitString[0]);
+                if (digitString.Length > 1) {
+                    result.Append('.').Append(digitString, 1, digitString.Length - 1);
+                } else if (altForm) {
+                    result.Append('.');
+                }
+                AppendExponent(result, exponent, upperCase);
+            } else if (exponent >= 0) {
+                int integerDigits = exponent + 1;
+                if (digitString.Length <= integerDigits) {
+                    result.Append(digitString).Append('0', integerDigits - digitString.Length);
+                    if (altForm) {
+                        result.Append('.');
+                    }
+                } else {
+                    result.Append(digitString, 0, integerDigits).Append('.').Append(digitString, integerDigits, digitString.Length - integerDigits);
+                }
+            } else {
+                result.Append("0.").Append('0', -exponent - 1).Append(digitString);
+            }
+            return result.ToString();
         }
 
         private static string/*!*/ FormatHexFloat(double value, int precision, bool upperCase, bool altForm) {
@@ -957,6 +1222,10 @@ namespace IronRuby.Builtins {
                 AppendExactInteger();
                 return;
             }
+            if (type == 'f' && _siteStorage != null && IsRational(_opts.Value)) {
+                AppendExactRational();
+                return;
+            }
 
             double value;
             if (_siteStorage != null) {
@@ -1029,6 +1298,66 @@ namespace IronRuby.Builtins {
 
         /// <summary>Characters whose presence already marks a rendered number as a float.</summary>
         private static readonly char[] _FloatMarkers = new char[] { '.', 'e', 'E', 'n', 'N' };
+
+        private bool IsRational(object value) {
+            return value != null && !(value is int) && !(value is long) && !(value is BigInteger) && !(value is double) &&
+                _context.GetClassOf(value).Name == "Rational";
+        }
+
+        private static BigInteger ToBigInteger(object value) {
+            if (value is int) {
+                return (int)value;
+            }
+            if (value is long) {
+                return (long)value;
+            }
+            return (BigInteger)value;
+        }
+
+        /// <summary>
+        /// "%f" of a Rational is exact in CRuby, like that of an Integer: the digits come from
+        /// numerator * 10^precision / denominator in integer arithmetic, rounded half up
+        /// (sprintf.c adds half the denominator before dividing), so "%.0f" % (1/2r) is 1 and
+        /// "%.1f" % (10**30 + 1/2r) keeps all thirty digits.
+        /// </summary>
+        private void AppendExactRational() {
+            BigInteger numerator = ToBigInteger(_siteStorage.Numerator(_opts.Value));
+            BigInteger denominator = ToBigInteger(_siteStorage.Denominator(_opts.Value));
+
+            int precision = _opts.Precision;
+            if (precision == UnspecifiedPrecision) {
+                precision = 6;
+            }
+            if (precision > 1000) {
+                precision = 1000;
+            }
+
+            bool negative = numerator.Sign < 0;
+            numerator = BigInteger.Abs(numerator);
+
+            string body;
+            if (denominator.IsOne) {
+                body = numerator.ToString(CultureInfo.InvariantCulture);
+                if (precision > 0) {
+                    body += "." + new string('0', precision);
+                } else if (_opts.AltForm) {
+                    body += ".";
+                }
+            } else {
+                BigInteger scaled = (numerator * BigInteger.Pow(10, precision) + denominator / 2) / denominator;
+                string digits = scaled.ToString(CultureInfo.InvariantCulture);
+                if (precision <= 0) {
+                    body = digits + (_opts.AltForm ? "." : "");
+                } else {
+                    if (digits.Length <= precision) {
+                        digits = digits.PadLeft(precision + 1, '0');
+                    }
+                    body = digits.Substring(0, digits.Length - precision) + "." + digits.Substring(digits.Length - precision);
+                }
+            }
+
+            AppendPadded(SignFor(negative), "", body, true);
+        }
 
         /// <summary>"%f" of an Integer: all of its digits followed by a zero fraction.</summary>
         private void AppendExactInteger() {
@@ -1154,13 +1483,19 @@ namespace IronRuby.Builtins {
                 return character.ToString();
             }
 
-            if (codepoint < 0 || codepoint > 0x10FFFF) {
+            // a binary format has single-byte characters only (MRI: rb_enc_uint_chr)
+            if (encoding == RubyEncoding.Binary && codepoint > 0xFF) {
                 throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+            }
+
+            // MRI: rb_enc_codelen fails for a code point the encoding has no character for
+            if (codepoint < 0 || codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+                throw RubyExceptions.CreateArgumentError("invalid character");
             }
             string text = Char.ConvertFromUtf32(codepoint);
 
             if (codepoint > 0x7F && !IsRepresentable(text)) {
-                throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+                throw RubyExceptions.CreateArgumentError("invalid character");
             }
             return text;
         }
@@ -1212,13 +1547,25 @@ namespace IronRuby.Builtins {
                 return;
             }
 
-            if (encoding == null || encoding == _resultEncoding) {
+            if (encoding == null) {
                 return;
             }
 
-            if (_formatIsAscii && encoding.IsAsciiIdentity && (_argEncoding == null || _argEncoding == encoding)) {
-                _argEncoding = encoding;
-                _resultEncoding = encoding;
+            // The first non-ASCII argument fixes the encoding of the result, whether it agrees
+            // with the format's or (an all-ASCII format) replaces it; every later one has to be
+            // in the same encoding. Forgetting to record the first one when it merely agreed let
+            // "%s %s" % ["\u3042", "\xFF".b] come out as a binary string holding U+3042.
+            if (_argEncoding == null) {
+                if (encoding == _resultEncoding) {
+                    _argEncoding = encoding;
+                    return;
+                }
+                if (_formatIsAscii && encoding.IsAsciiIdentity) {
+                    _argEncoding = encoding;
+                    _resultEncoding = encoding;
+                    return;
+                }
+            } else if (encoding == _argEncoding) {
                 return;
             }
 

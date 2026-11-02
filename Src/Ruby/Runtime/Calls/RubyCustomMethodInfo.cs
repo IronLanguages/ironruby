@@ -23,12 +23,22 @@ using IronRuby.Builtins;
 namespace IronRuby.Runtime.Calls {
     internal sealed class RubyCustomMethodInfo : RubyMemberInfo {
         private readonly RuleGenerator/*!*/ _ruleGenerator;
+        private readonly int? _arity;
 
         public RubyCustomMethodInfo(RuleGenerator/*!*/ ruleGenerator, RubyMemberFlags flags, RubyModule/*!*/ declaringModule)
+            : this(ruleGenerator, flags, declaringModule, null) {
+        }
+
+        /// <summary>
+        /// A rule generator with a fixed number of arguments - a Struct member's reader (0) or
+        /// writer (1) - reports it as its arity.
+        /// </summary>
+        public RubyCustomMethodInfo(RuleGenerator/*!*/ ruleGenerator, RubyMemberFlags flags, RubyModule/*!*/ declaringModule, int? arity)
             : base(flags, declaringModule) {
 
             Assert.NotNull(ruleGenerator, declaringModule);
             _ruleGenerator = ruleGenerator;
+            _arity = arity;
         }
 
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
@@ -53,11 +63,22 @@ namespace IronRuby.Runtime.Calls {
         }
 
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
-            return new RubyCustomMethodInfo(_ruleGenerator, flags, module);
+            return new RubyCustomMethodInfo(_ruleGenerator, flags, module, _arity);
         }
 
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
             return new MemberInfo[] { _ruleGenerator.GetMethodInfo() };
+        }
+
+        /// <summary>
+        /// A rule generator binds whatever arguments arrive - Class#new, Kernel#send, IO.open -
+        /// so its arity is -1, as MRI's is for those; Class#allocate alone takes nothing.
+        /// </summary>
+        public override int GetArity() {
+            if (_arity.HasValue) {
+                return _arity.Value;
+            }
+            return _ruleGenerator.GetMethodInfo().Name == "InstanceAllocator" ? 0 : -1;
         }
 
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {

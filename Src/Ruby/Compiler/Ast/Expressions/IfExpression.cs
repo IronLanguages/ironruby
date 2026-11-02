@@ -62,7 +62,7 @@ namespace IronRuby.Compiler.Ast {
             _elseIfClauses = elseIfClauses;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
 
             MSA.Expression result;
 

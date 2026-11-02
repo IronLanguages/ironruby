@@ -27,9 +27,9 @@
  * and so goes direct only to a method that is public where the lookup finds it: `private :m'
  * in a subclass, a singleton class or an including class leaves a forwarder there that hides
  * the inherited public m, as it does from the ordinary call. A private or protected method
- * makes the ordinary call, which raises or checks the caller as it always did. Calls
- * where refinements could be in play are never sent this way (JitRuntime.Disabled,
- * RubyContext.HasRefinements), and neither is anything once tracing is on.
+ * makes the ordinary call, which raises or checks the caller as it always did. A call
+ * a refinement could reach (RubyContext.IsRefinementSensitive) is never sent this way - only
+ * its call site knows where it is made - and neither is anything once tracing is on.
  *
  * ***************************************************************************/
 
@@ -134,7 +134,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private object Call(object self, object p0, object p1, object k0, object k1, object k2) {
-            if (Off || JitRuntime.Disabled || _context.HasRefinements) { return NoDirect; }
+            if (Off) { return NoDirect; }
 
             // (QuietAt is the compiled call's to test: it does not call this while it is current.)
             int version = RubyModule.GlobalMethodVersion;
@@ -195,6 +195,13 @@ namespace IronRuby.Runtime.Jit {
         private State/*!*/ Resolve(RubyClass/*!*/ cls, int version) {
             var state = new State { Class = cls, Version = version };
             try {
+                // Refining the name re-versions the class, so the state is resolved again when it is.
+                if (_context.HasRefinements) {
+                    using (_context.ClassHierarchyLocker()) {
+                        if (_context.IsRefinementSensitive(cls, _name)) { return state; }
+                    }
+                }
+
                 // A forwarder that `private :m' or `protected :m' left in a subclass resolves to the
                 // inherited m, still public itself: the forwarder's own visibility is what hides it,
                 // and only a lookup that sees nothing but public methods asks about it.
@@ -239,7 +246,7 @@ namespace IronRuby.Runtime.Jit {
             Arguments arguments, bool implicitSelf) {
 
             var options = gen.Context.RubyOptions;
-            if (!options.Jit || options.EnableTracing || options.Profile || JitRuntime.Disabled) { return null; }
+            if (!options.Jit || options.EnableTracing || options.Profile) { return null; }
             if (arguments == null) { return null; }
 
             var exprs = arguments.Expressions;

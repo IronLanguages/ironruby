@@ -1426,8 +1426,19 @@ class Socket
 
     alias_method :__ir_raw_new, :new
 
-    def new(domain, socktype, protocol = nil)
-      __ir_raw_new(__ir_family_arg(domain), __ir_socktype_arg(socktype), __ir_protocol_arg(protocol))
+    def new(*args, &block)
+      # A subclass with an #initialize of its own takes whatever arguments that wants -
+      # cool.io's TCPConnectSocket.new(family, addr, port) calls super(family, type, 0) -
+      # and is allocated and initialized like any Ruby class.
+      if !equal?(::Socket) && instance_method(:initialize).owner != ::Socket
+        return __ir_raw_new(*args, &block)
+      end
+      unless (2..3).cover?(args.size)
+        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 2..3)"
+      end
+      domain, socktype, protocol = args
+      __ir_raw_new(::Socket.__ir_family_arg(domain), ::Socket.__ir_socktype_arg(socktype),
+                   ::Socket.__ir_protocol_arg(protocol))
     end
 
     def open(*args, &block)
@@ -1440,6 +1451,16 @@ class Socket
       end
     end
   end
+
+  # What a subclass's super(domain, type, protocol) reaches, with Socket.new's conversions.
+  alias_method :__ir_raw_initialize, :initialize
+  private :__ir_raw_initialize
+
+  def initialize(domain, socktype, protocol = nil)
+    __ir_raw_initialize(Socket.__ir_family_arg(domain), Socket.__ir_socktype_arg(socktype),
+                        Socket.__ir_protocol_arg(protocol))
+  end
+  private :initialize
 end
 
 class BasicSocket
@@ -1579,6 +1600,13 @@ class BasicSocket
   # winsock values on IronRuby).  An unbound socket has no local endpoint at
   # all, and .NET reports that as a NullReferenceException.
   def __ir_afamily # :nodoc:
+    # .NET's own record of the family first: asking getsockname would complete a pending
+    # non-blocking connect inside .NET and consume its SO_ERROR (see __ir_raw_address_family).
+    case (__ir_raw_address_family rescue nil)
+    when 1 then return Socket::AF_UNIX
+    when 2 then return Socket::AF_INET
+    when 23 then return Socket::AF_INET6
+    end
     name = __ir_raw_getsockname_bytes
     return Socket::AF_INET if name.nil? || name.bytesize < 2
     case name.unpack("S")[0]
@@ -1693,7 +1721,7 @@ class TCPSocket
         else
           __ir_raw_new(remote_host, remote_port, local_host, local_port || 0)
         end
-      rescue Errno::ETIMEDOUT => e
+      rescue Errno::ETIMEDOUT
         raise IO::TimeoutError, "Connection timed out" if timeout
         raise
       end

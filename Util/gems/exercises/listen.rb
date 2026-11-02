@@ -16,14 +16,24 @@ puts listener.class
 listener.start
 puts listener.processing?
 
-File.write(File.join(dir, 'a.txt'), 'one')
+# Listen builds its first snapshot of the directory on a thread of its own after #start, so a
+# file written at once may already be in it, and then no "added" event comes - on any Ruby,
+# just more often on a slower or busier one. Writing it again with other content makes a
+# "modified" event in that case, so the answer does not depend on who won the race.
+file = File.join(dir, 'a.txt')
+File.write(file, 'one')
 deadline = Time.now + 10
 events = []
+rewritten_at = Time.now
 while Time.now < deadline
   begin
     events << seen.pop(true)
   rescue ThreadError
     sleep 0.1
+    if Time.now - rewritten_at > 0.5
+      File.write(file, "one #{Time.now.to_f}")
+      rewritten_at = Time.now
+    end
   end
   break if events.flatten.include?('a.txt')
 end

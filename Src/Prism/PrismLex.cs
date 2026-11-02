@@ -33,6 +33,10 @@ namespace IronRuby.Prism {
         }
 
         private static byte[]/*!*/ Serialize(byte[]/*!*/ source, byte[]/*!*/ optionsData) {
+            return PrismNative.WithParserStack(source.Length, () => SerializeHere(source, optionsData));
+        }
+
+        private static byte[]/*!*/ SerializeHere(byte[]/*!*/ source, byte[]/*!*/ optionsData) {
             IntPtr buffer = IntPtr.Zero;
             GCHandle pinned = GCHandle.Alloc(source, GCHandleType.Pinned);
             GCHandle options = GCHandle.Alloc(optionsData, GCHandleType.Pinned);

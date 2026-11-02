@@ -65,10 +65,13 @@ namespace IronRuby.Builtins {
 
         private static void CheckOptions(RubyContext/*!*/ context, Hash/*!*/ options) {
             var unknown = new List<string>();
-            foreach (var key in options.Keys) {
-                var symbol = key as RubySymbol;
+            foreach (var entry in options) {
+                var symbol = entry.Key as RubySymbol;
                 if (symbol == null || symbol.ToString() != "capacity") {
-                    unknown.Add(context.Inspect(key).ToString());
+                    unknown.Add(context.Inspect(entry.Key).ToString());
+                } else if (!(entry.Value is int || entry.Value is System.Numerics.BigInteger || entry.Value is double)) {
+                    // MRI converts the hint with to_int; the hint itself is not used here.
+                    throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(entry.Value), "Integer");
                 }
             }
             if (unknown.Count > 0) {
@@ -78,9 +81,23 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// A lambda default proc has to be callable with (hash, key): MRI accepts arity 2 and any
+        /// negative arity down to -3, and refuses the rest up front.
+        /// </summary>
+        private static Proc CheckDefaultProc(Proc proc) {
+            if (proc != null && proc.Kind == ProcKind.Lambda) {
+                int arity = proc.Dispatcher.Arity;
+                if (arity != 2 && (arity >= 0 || arity < -3)) {
+                    throw RubyExceptions.CreateTypeError("default_proc takes two arguments (2 for {0})", arity);
+                }
+            }
+            return proc;
+        }
+
         [RubyConstructor]
         public static Hash/*!*/ CreateHash([NotNull]BlockParam/*!*/ defaultProc, RubyClass/*!*/ self) {
-            return new Hash(self.Context.EqualityComparer, defaultProc.Proc, null);
+            return new Hash(self.Context.EqualityComparer, CheckDefaultProc(defaultProc.Proc), null);
         }
 
         [RubyMethod("[]", RubyMethodAttributes.PublicSingleton)]
@@ -159,7 +176,7 @@ namespace IronRuby.Builtins {
             Assert.NotNull(self);
             if (IsOptions(defaultValue)) {
                 CheckOptions(context, (Hash)defaultValue);
-                self.DefaultProc = (block != null) ? block.Proc : null;
+                self.DefaultProc = (block != null) ? CheckDefaultProc(block.Proc) : null;
                 self.DefaultValue = null;
                 return self;
             }
@@ -186,7 +203,7 @@ namespace IronRuby.Builtins {
         public static Hash/*!*/ Initialize([NotNull]BlockParam/*!*/ defaultProc, Hash/*!*/ self) {
             Assert.NotNull(self, defaultProc);
 
-            self.DefaultProc = defaultProc.Proc;
+            self.DefaultProc = CheckDefaultProc(defaultProc.Proc);
             self.DefaultValue = null;
             return self;
         }
@@ -283,6 +300,10 @@ namespace IronRuby.Builtins {
             if (Object.ReferenceEquals(self, other)) {
                 self.RequireNotFrozen();
                 return self;
+            }
+            self.RequireNotFrozen();
+            if (self.IsIterating) {
+                throw RubyExceptions.CreateRuntimeError("can't replace hash during iteration");
             }
 
             Hash otherHash = other as Hash;

@@ -3,2585 +3,2761 @@ using IronRuby.Prism.Ast;
 
 namespace IronRuby.Prism {
     public sealed partial class PrismLoader {
-        public const int SerializationMajor = 1;
-        public const int SerializationMinor = 9;
+        public const int SerializationMajor = 2;
+        public const int SerializationMinor = 0;
         public const int SerializationPatch = 0;
 
-        private PmNode LoadNode() {
-            byte type = LoadByte();
-            uint nodeId = LoadVarUInt();
-            PmLocation location = LoadLocation();
-            switch (type) {
-                case 1: {
-                    return new AliasGlobalVariableNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        NewName = LoadNode(),
-                        OldName = LoadNode(),
-                        KeywordLoc = LoadLocation(),
-                    };
+        /// <summary>The byte that precedes the child subtrees of a DefNode, never a node type.</summary>
+        private const byte LazyMarker = 255;
+
+        // Builds the nodes serialized from the current position up to end, which has to be where
+        // the subtree of one node ends, and returns that node (null for an absent one).
+        private PmNode LoadNodes(int end) {
+            int stackBase = _stackSize;
+            int lazyBase = _lazyCount;
+            while (_pos < end) {
+                if (_lazyCount > lazyBase && _pos == _lazyStarts[_lazyCount - 1]) {
+                    // A DefNode body, left in the buffer: skim it, and stand in for it on the stack.
+                    int start = _pos;
+                    int length = _lazyLengths[--_lazyCount];
+                    uint contents = SkimNodes(start + length);
+                    Push(new DeferredBody { Offset = start, BodyLength = length, Contents = contents });
+                    continue;
                 }
-                case 2: {
-                    return new AliasMethodNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        NewName = LoadNode(),
-                        OldName = LoadNode(),
-                        KeywordLoc = LoadLocation(),
-                    };
+                byte type = _buffer[_pos++];
+                if (type == 0) {
+                    Push(null);
+                    continue;
                 }
-                case 3: {
-                    return new AlternationPatternNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Left = LoadNode(),
-                        Right = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
+                if (type == LazyMarker) {
+                    int skip = (int)LoadRawUInt32();
+                    int bodyLength = (int)LoadRawUInt32();
+                    if (_lazyDefBodies) PushLazy(_pos + skip, bodyLength);
+                    continue;
                 }
-                case 4: {
-                    return new AndNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Left = LoadNode(),
-                        Right = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 5: {
-                    return new ArgumentsNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Arguments = LoadNodeList(),
-                    };
-                }
-                case 6: {
-                    return new ArrayNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Elements = LoadNodeList(),
-                        OpeningLoc = LoadOptionalLocation(),
-                        ClosingLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 7: {
-                    return new ArrayPatternNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Constant = LoadOptionalNode(),
-                        Requireds = LoadNodeList(),
-                        Rest = LoadOptionalNode(),
-                        Posts = LoadNodeList(),
-                        OpeningLoc = LoadOptionalLocation(),
-                        ClosingLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 8: {
-                    return new AssocNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Key = LoadNode(),
-                        Value = LoadNode(),
-                        OperatorLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 9: {
-                    return new AssocSplatNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Value = LoadOptionalNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 10: {
-                    return new BackReferenceReadNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 11: {
-                    return new BeginNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        BeginKeywordLoc = LoadOptionalLocation(),
-                        Statements = LoadOptionalNode(),
-                        RescueClause = LoadOptionalNode(),
-                        ElseClause = LoadOptionalNode(),
-                        EnsureClause = LoadOptionalNode(),
-                        EndKeywordLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 12: {
-                    return new BlockArgumentNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Expression = LoadOptionalNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 13: {
-                    return new BlockLocalVariableNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 14: {
-                    return new BlockNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Locals = LoadConstantList(),
-                        Parameters = LoadOptionalNode(),
-                        Body = LoadOptionalNode(),
-                        OpeningLoc = LoadLocation(),
-                        ClosingLoc = LoadLocation(),
-                    };
-                }
-                case 15: {
-                    return new BlockParameterNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadOptionalConstant(),
-                        NameLoc = LoadOptionalLocation(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 16: {
-                    return new BlockParametersNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Parameters = LoadOptionalNode(),
-                        Locals = LoadNodeList(),
-                        OpeningLoc = LoadOptionalLocation(),
-                        ClosingLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 17: {
-                    return new BreakNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Arguments = LoadOptionalNode(),
-                        KeywordLoc = LoadLocation(),
-                    };
-                }
-                case 18: {
-                    return new CallAndWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Receiver = LoadOptionalNode(),
-                        CallOperatorLoc = LoadOptionalLocation(),
-                        MessageLoc = LoadOptionalLocation(),
-                        ReadName = LoadConstant(),
-                        WriteName = LoadConstant(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 19: {
-                    return new CallNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Receiver = LoadOptionalNode(),
-                        CallOperatorLoc = LoadOptionalLocation(),
-                        Name = LoadConstant(),
-                        MessageLoc = LoadOptionalLocation(),
-                        OpeningLoc = LoadOptionalLocation(),
-                        Arguments = LoadOptionalNode(),
-                        ClosingLoc = LoadOptionalLocation(),
-                        EqualLoc = LoadOptionalLocation(),
-                        Block = LoadOptionalNode(),
-                    };
-                }
-                case 20: {
-                    return new CallOperatorWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Receiver = LoadOptionalNode(),
-                        CallOperatorLoc = LoadOptionalLocation(),
-                        MessageLoc = LoadOptionalLocation(),
-                        ReadName = LoadConstant(),
-                        WriteName = LoadConstant(),
-                        BinaryOperator = LoadConstant(),
-                        BinaryOperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 21: {
-                    return new CallOrWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Receiver = LoadOptionalNode(),
-                        CallOperatorLoc = LoadOptionalLocation(),
-                        MessageLoc = LoadOptionalLocation(),
-                        ReadName = LoadConstant(),
-                        WriteName = LoadConstant(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 22: {
-                    return new CallTargetNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Receiver = LoadNode(),
-                        CallOperatorLoc = LoadLocation(),
-                        Name = LoadConstant(),
-                        MessageLoc = LoadLocation(),
-                    };
-                }
-                case 23: {
-                    return new CapturePatternNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Value = LoadNode(),
-                        Target = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 24: {
-                    return new CaseMatchNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Predicate = LoadOptionalNode(),
-                        Conditions = LoadNodeList(),
-                        ElseClause = LoadOptionalNode(),
-                        CaseKeywordLoc = LoadLocation(),
-                        EndKeywordLoc = LoadLocation(),
-                    };
-                }
-                case 25: {
-                    return new CaseNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Predicate = LoadOptionalNode(),
-                        Conditions = LoadNodeList(),
-                        ElseClause = LoadOptionalNode(),
-                        CaseKeywordLoc = LoadLocation(),
-                        EndKeywordLoc = LoadLocation(),
-                    };
-                }
-                case 26: {
-                    return new ClassNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Locals = LoadConstantList(),
-                        ClassKeywordLoc = LoadLocation(),
-                        ConstantPath = LoadNode(),
-                        InheritanceOperatorLoc = LoadOptionalLocation(),
-                        Superclass = LoadOptionalNode(),
-                        Body = LoadOptionalNode(),
-                        EndKeywordLoc = LoadLocation(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 27: {
-                    return new ClassVariableAndWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 28: {
-                    return new ClassVariableOperatorWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        BinaryOperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        BinaryOperator = LoadConstant(),
-                    };
-                }
-                case 29: {
-                    return new ClassVariableOrWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 30: {
-                    return new ClassVariableReadNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 31: {
-                    return new ClassVariableTargetNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 32: {
-                    return new ClassVariableWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 33: {
-                    return new ConstantAndWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 34: {
-                    return new ConstantOperatorWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        BinaryOperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        BinaryOperator = LoadConstant(),
-                    };
-                }
-                case 35: {
-                    return new ConstantOrWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 36: {
-                    return new ConstantPathAndWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Target = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 37: {
-                    return new ConstantPathNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Parent = LoadOptionalNode(),
-                        Name = LoadOptionalConstant(),
-                        DelimiterLoc = LoadLocation(),
-                        NameLoc = LoadLocation(),
-                    };
-                }
-                case 38: {
-                    return new ConstantPathOperatorWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Target = LoadNode(),
-                        BinaryOperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        BinaryOperator = LoadConstant(),
-                    };
-                }
-                case 39: {
-                    return new ConstantPathOrWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Target = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 40: {
-                    return new ConstantPathTargetNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Parent = LoadOptionalNode(),
-                        Name = LoadOptionalConstant(),
-                        DelimiterLoc = LoadLocation(),
-                        NameLoc = LoadLocation(),
-                    };
-                }
-                case 41: {
-                    return new ConstantPathWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Target = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 42: {
-                    return new ConstantReadNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 43: {
-                    return new ConstantTargetNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 44: {
-                    return new ConstantWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 45: {
-                    LoadRawUInt32();
-                    var def = new DefNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        Receiver = LoadOptionalNode(),
-                        Parameters = LoadOptionalNode(),
-                    };
-                    if (_lazyDefBodies) {
-                        def.DeferredBodyLoader = this;
-                        def.DeferredBodyOffset = _pos;
-                        _contents = 0;
-                        SkimOptionalNode();
-                        def.BodyContents = _contents;
-                    } else {
-                        def.Body = LoadOptionalNode();
+                uint nodeId = LoadVarUInt();
+                PmLocation location = LoadLocation();
+                switch (type) {
+                    case 1: {
+                        var node = new AliasGlobalVariableNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.OldName = Pop();
+                        node.NewName = Pop();
+                        Push(node);
+                        continue;
                     }
-                    def.Locals = LoadConstantList();
-                    def.DefKeywordLoc = LoadLocation();
-                    def.OperatorLoc = LoadOptionalLocation();
-                    def.LparenLoc = LoadOptionalLocation();
-                    def.RparenLoc = LoadOptionalLocation();
-                    def.EqualLoc = LoadOptionalLocation();
-                    def.EndKeywordLoc = LoadOptionalLocation();
-                    return def;
-                }
-                case 46: {
-                    return new DefinedNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        LparenLoc = LoadOptionalLocation(),
-                        Value = LoadNode(),
-                        RparenLoc = LoadOptionalLocation(),
-                        KeywordLoc = LoadLocation(),
-                    };
-                }
-                case 47: {
-                    return new ElseNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        ElseKeywordLoc = LoadLocation(),
-                        Statements = LoadOptionalNode(),
-                        EndKeywordLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 48: {
-                    return new EmbeddedStatementsNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadLocation(),
-                        Statements = LoadOptionalNode(),
-                        ClosingLoc = LoadLocation(),
-                    };
-                }
-                case 49: {
-                    return new EmbeddedVariableNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OperatorLoc = LoadLocation(),
-                        Variable = LoadNode(),
-                    };
-                }
-                case 50: {
-                    return new EnsureNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        EnsureKeywordLoc = LoadLocation(),
-                        Statements = LoadOptionalNode(),
-                        EndKeywordLoc = LoadLocation(),
-                    };
-                }
-                case 51: {
-                    return new ErrorRecoveryNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Unexpected = LoadOptionalNode(),
-                    };
-                }
-                case 52: {
-                    return new FalseNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 53: {
-                    return new FindPatternNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Constant = LoadOptionalNode(),
-                        Left = LoadNode(),
-                        Requireds = LoadNodeList(),
-                        Right = LoadNode(),
-                        OpeningLoc = LoadOptionalLocation(),
-                        ClosingLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 54: {
-                    return new FlipFlopNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Left = LoadOptionalNode(),
-                        Right = LoadOptionalNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 55: {
-                    return new FloatNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Value = LoadDouble(),
-                    };
-                }
-                case 56: {
-                    return new ForNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Index = LoadNode(),
-                        Collection = LoadNode(),
-                        Statements = LoadOptionalNode(),
-                        ForKeywordLoc = LoadLocation(),
-                        InKeywordLoc = LoadLocation(),
-                        DoKeywordLoc = LoadOptionalLocation(),
-                        EndKeywordLoc = LoadLocation(),
-                    };
-                }
-                case 57: {
-                    return new ForwardingArgumentsNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 58: {
-                    return new ForwardingParameterNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 59: {
-                    return new ForwardingSuperNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        KeywordLoc = LoadLocation(),
-                        Block = LoadOptionalNode(),
-                    };
-                }
-                case 60: {
-                    return new GlobalVariableAndWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 61: {
-                    return new GlobalVariableOperatorWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        BinaryOperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        BinaryOperator = LoadConstant(),
-                    };
-                }
-                case 62: {
-                    return new GlobalVariableOrWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 63: {
-                    return new GlobalVariableReadNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 64: {
-                    return new GlobalVariableTargetNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 65: {
-                    return new GlobalVariableWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 66: {
-                    return new HashNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadLocation(),
-                        Elements = LoadNodeList(),
-                        ClosingLoc = LoadLocation(),
-                    };
-                }
-                case 67: {
-                    return new HashPatternNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Constant = LoadOptionalNode(),
-                        Elements = LoadNodeList(),
-                        Rest = LoadOptionalNode(),
-                        OpeningLoc = LoadOptionalLocation(),
-                        ClosingLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 68: {
-                    return new IfNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        IfKeywordLoc = LoadOptionalLocation(),
-                        Predicate = LoadNode(),
-                        ThenKeywordLoc = LoadOptionalLocation(),
-                        Statements = LoadOptionalNode(),
-                        Subsequent = LoadOptionalNode(),
-                        EndKeywordLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 69: {
-                    return new ImaginaryNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Numeric = LoadNode(),
-                    };
-                }
-                case 70: {
-                    return new ImplicitNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 71: {
-                    return new ImplicitRestNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 72: {
-                    return new InNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Pattern = LoadNode(),
-                        Statements = LoadOptionalNode(),
-                        InKeywordLoc = LoadLocation(),
-                        ThenKeywordLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 73: {
-                    return new IndexAndWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Receiver = LoadOptionalNode(),
-                        CallOperatorLoc = LoadOptionalLocation(),
-                        OpeningLoc = LoadLocation(),
-                        Arguments = LoadOptionalNode(),
-                        ClosingLoc = LoadLocation(),
-                        Block = LoadOptionalNode(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 74: {
-                    return new IndexOperatorWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Receiver = LoadOptionalNode(),
-                        CallOperatorLoc = LoadOptionalLocation(),
-                        OpeningLoc = LoadLocation(),
-                        Arguments = LoadOptionalNode(),
-                        ClosingLoc = LoadLocation(),
-                        Block = LoadOptionalNode(),
-                        BinaryOperator = LoadConstant(),
-                        BinaryOperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 75: {
-                    return new IndexOrWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Receiver = LoadOptionalNode(),
-                        CallOperatorLoc = LoadOptionalLocation(),
-                        OpeningLoc = LoadLocation(),
-                        Arguments = LoadOptionalNode(),
-                        ClosingLoc = LoadLocation(),
-                        Block = LoadOptionalNode(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 76: {
-                    return new IndexTargetNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Receiver = LoadNode(),
-                        OpeningLoc = LoadLocation(),
-                        Arguments = LoadOptionalNode(),
-                        ClosingLoc = LoadLocation(),
-                        Block = LoadOptionalNode(),
-                    };
-                }
-                case 77: {
-                    return new InstanceVariableAndWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 78: {
-                    return new InstanceVariableOperatorWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        BinaryOperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        BinaryOperator = LoadConstant(),
-                    };
-                }
-                case 79: {
-                    return new InstanceVariableOrWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 80: {
-                    return new InstanceVariableReadNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 81: {
-                    return new InstanceVariableTargetNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 82: {
-                    return new InstanceVariableWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 83: {
-                    return new IntegerNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Value = LoadInteger(),
-                    };
-                }
-                case 84: {
-                    return new InterpolatedMatchLastLineNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadLocation(),
-                        Parts = LoadNodeList(),
-                        ClosingLoc = LoadLocation(),
-                    };
-                }
-                case 85: {
-                    return new InterpolatedRegularExpressionNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadLocation(),
-                        Parts = LoadNodeList(),
-                        ClosingLoc = LoadLocation(),
-                    };
-                }
-                case 86: {
-                    return new InterpolatedStringNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadOptionalLocation(),
-                        Parts = LoadNodeList(),
-                        ClosingLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 87: {
-                    return new InterpolatedSymbolNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadOptionalLocation(),
-                        Parts = LoadNodeList(),
-                        ClosingLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 88: {
-                    return new InterpolatedXStringNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadLocation(),
-                        Parts = LoadNodeList(),
-                        ClosingLoc = LoadLocation(),
-                    };
-                }
-                case 89: {
-                    return new ItLocalVariableReadNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 90: {
-                    return new ItParametersNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 91: {
-                    return new KeywordHashNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Elements = LoadNodeList(),
-                    };
-                }
-                case 92: {
-                    return new KeywordRestParameterNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadOptionalConstant(),
-                        NameLoc = LoadOptionalLocation(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 93: {
-                    return new LambdaNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Locals = LoadConstantList(),
-                        OperatorLoc = LoadLocation(),
-                        OpeningLoc = LoadLocation(),
-                        ClosingLoc = LoadLocation(),
-                        Parameters = LoadOptionalNode(),
-                        Body = LoadOptionalNode(),
-                    };
-                }
-                case 94: {
-                    return new LocalVariableAndWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        NameLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        Name = LoadConstant(),
-                        Depth = LoadVarUInt(),
-                    };
-                }
-                case 95: {
-                    return new LocalVariableOperatorWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        NameLoc = LoadLocation(),
-                        BinaryOperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        Name = LoadConstant(),
-                        BinaryOperator = LoadConstant(),
-                        Depth = LoadVarUInt(),
-                    };
-                }
-                case 96: {
-                    return new LocalVariableOrWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        NameLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        Name = LoadConstant(),
-                        Depth = LoadVarUInt(),
-                    };
-                }
-                case 97: {
-                    return new LocalVariableReadNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        Depth = LoadVarUInt(),
-                    };
-                }
-                case 98: {
-                    return new LocalVariableTargetNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        Depth = LoadVarUInt(),
-                    };
-                }
-                case 99: {
-                    return new LocalVariableWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        Depth = LoadVarUInt(),
-                        NameLoc = LoadLocation(),
-                        Value = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 100: {
-                    return new MatchLastLineNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadLocation(),
-                        ContentLoc = LoadLocation(),
-                        ClosingLoc = LoadLocation(),
-                        Unescaped = LoadStringBytes(),
-                    };
-                }
-                case 101: {
-                    return new MatchPredicateNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Value = LoadNode(),
-                        Pattern = LoadNode(),
-                        KeywordLoc = LoadLocation(),
-                    };
-                }
-                case 102: {
-                    return new MatchRequiredNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Value = LoadNode(),
-                        Pattern = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 103: {
-                    return new MatchWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Call = LoadNode(),
-                        Targets = LoadNodeList(),
-                    };
-                }
-                case 104: {
-                    return new ModuleNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Locals = LoadConstantList(),
-                        ModuleKeywordLoc = LoadLocation(),
-                        ConstantPath = LoadNode(),
-                        Body = LoadOptionalNode(),
-                        EndKeywordLoc = LoadLocation(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 105: {
-                    return new MultiTargetNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Lefts = LoadNodeList(),
-                        Rest = LoadOptionalNode(),
-                        Rights = LoadNodeList(),
-                        LparenLoc = LoadOptionalLocation(),
-                        RparenLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 106: {
-                    return new MultiWriteNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Lefts = LoadNodeList(),
-                        Rest = LoadOptionalNode(),
-                        Rights = LoadNodeList(),
-                        LparenLoc = LoadOptionalLocation(),
-                        RparenLoc = LoadOptionalLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 107: {
-                    return new NextNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Arguments = LoadOptionalNode(),
-                        KeywordLoc = LoadLocation(),
-                    };
-                }
-                case 108: {
-                    return new NilNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 109: {
-                    return new NoBlockParameterNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OperatorLoc = LoadLocation(),
-                        KeywordLoc = LoadLocation(),
-                    };
-                }
-                case 110: {
-                    return new NoKeywordsParameterNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OperatorLoc = LoadLocation(),
-                        KeywordLoc = LoadLocation(),
-                    };
-                }
-                case 111: {
-                    return new NumberedParametersNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Maximum = LoadByte(),
-                    };
-                }
-                case 112: {
-                    return new NumberedReferenceReadNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Number = LoadVarUInt(),
-                    };
-                }
-                case 113: {
-                    return new OptionalKeywordParameterNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 114: {
-                    return new OptionalParameterNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Value = LoadNode(),
-                    };
-                }
-                case 115: {
-                    return new OrNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Left = LoadNode(),
-                        Right = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 116: {
-                    return new ParametersNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Requireds = LoadNodeList(),
-                        Optionals = LoadNodeList(),
-                        Rest = LoadOptionalNode(),
-                        Posts = LoadNodeList(),
-                        Keywords = LoadNodeList(),
-                        KeywordRest = LoadOptionalNode(),
-                        Block = LoadOptionalNode(),
-                    };
-                }
-                case 117: {
-                    return new ParenthesesNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Body = LoadOptionalNode(),
-                        OpeningLoc = LoadLocation(),
-                        ClosingLoc = LoadLocation(),
-                    };
-                }
-                case 118: {
-                    return new PinnedExpressionNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Expression = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                        LparenLoc = LoadLocation(),
-                        RparenLoc = LoadLocation(),
-                    };
-                }
-                case 119: {
-                    return new PinnedVariableNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Variable = LoadNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 120: {
-                    return new PostExecutionNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Statements = LoadOptionalNode(),
-                        KeywordLoc = LoadLocation(),
-                        OpeningLoc = LoadLocation(),
-                        ClosingLoc = LoadLocation(),
-                    };
-                }
-                case 121: {
-                    return new PreExecutionNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Statements = LoadOptionalNode(),
-                        KeywordLoc = LoadLocation(),
-                        OpeningLoc = LoadLocation(),
-                        ClosingLoc = LoadLocation(),
-                    };
-                }
-                case 122: {
-                    return new ProgramNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Locals = LoadConstantList(),
-                        Statements = LoadNode(),
-                    };
-                }
-                case 123: {
-                    return new RangeNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Left = LoadOptionalNode(),
-                        Right = LoadOptionalNode(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 124: {
-                    return new RationalNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Numerator = LoadInteger(),
-                        Denominator = LoadInteger(),
-                    };
-                }
-                case 125: {
-                    return new RedoNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 126: {
-                    return new RegularExpressionNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadLocation(),
-                        ContentLoc = LoadLocation(),
-                        ClosingLoc = LoadLocation(),
-                        Unescaped = LoadStringBytes(),
-                    };
-                }
-                case 127: {
-                    return new RequiredKeywordParameterNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                        NameLoc = LoadLocation(),
-                    };
-                }
-                case 128: {
-                    return new RequiredParameterNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadConstant(),
-                    };
-                }
-                case 129: {
-                    return new RescueModifierNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Expression = LoadNode(),
-                        KeywordLoc = LoadLocation(),
-                        RescueExpression = LoadNode(),
-                    };
-                }
-                case 130: {
-                    return new RescueNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        KeywordLoc = LoadLocation(),
-                        Exceptions = LoadNodeList(),
-                        OperatorLoc = LoadOptionalLocation(),
-                        Reference = LoadOptionalNode(),
-                        ThenKeywordLoc = LoadOptionalLocation(),
-                        Statements = LoadOptionalNode(),
-                        Subsequent = LoadOptionalNode(),
-                    };
-                }
-                case 131: {
-                    return new RestParameterNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Name = LoadOptionalConstant(),
-                        NameLoc = LoadOptionalLocation(),
-                        OperatorLoc = LoadLocation(),
-                    };
-                }
-                case 132: {
-                    return new RetryNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 133: {
-                    return new ReturnNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        KeywordLoc = LoadLocation(),
-                        Arguments = LoadOptionalNode(),
-                    };
-                }
-                case 134: {
-                    return new SelfNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 135: {
-                    return new ShareableConstantNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Write = LoadNode(),
-                    };
-                }
-                case 136: {
-                    return new SingletonClassNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Locals = LoadConstantList(),
-                        ClassKeywordLoc = LoadLocation(),
-                        OperatorLoc = LoadLocation(),
-                        Expression = LoadNode(),
-                        Body = LoadOptionalNode(),
-                        EndKeywordLoc = LoadLocation(),
-                    };
-                }
-                case 137: {
-                    return new SourceEncodingNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 138: {
-                    return new SourceFileNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Filepath = LoadStringBytes(),
-                    };
-                }
-                case 139: {
-                    return new SourceLineNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 140: {
-                    return new SplatNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OperatorLoc = LoadLocation(),
-                        Expression = LoadOptionalNode(),
-                    };
-                }
-                case 141: {
-                    return new StatementsNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Body = LoadNodeList(),
-                    };
-                }
-                case 142: {
-                    return new StringNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadOptionalLocation(),
-                        ContentLoc = LoadLocation(),
-                        ClosingLoc = LoadOptionalLocation(),
-                        Unescaped = LoadStringBytes(),
-                    };
-                }
-                case 143: {
-                    return new SuperNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        KeywordLoc = LoadLocation(),
-                        LparenLoc = LoadOptionalLocation(),
-                        Arguments = LoadOptionalNode(),
-                        RparenLoc = LoadOptionalLocation(),
-                        Block = LoadOptionalNode(),
-                    };
-                }
-                case 144: {
-                    return new SymbolNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadOptionalLocation(),
-                        ContentLoc = LoadLocation(),
-                        ClosingLoc = LoadOptionalLocation(),
-                        Unescaped = LoadStringBytes(),
-                    };
-                }
-                case 145: {
-                    return new TrueNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                    };
-                }
-                case 146: {
-                    return new UndefNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        Names = LoadNodeList(),
-                        KeywordLoc = LoadLocation(),
-                    };
-                }
-                case 147: {
-                    return new UnlessNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        UnlessKeywordLoc = LoadLocation(),
-                        Predicate = LoadNode(),
-                        ThenKeywordLoc = LoadOptionalLocation(),
-                        Statements = LoadOptionalNode(),
-                        ElseClause = LoadOptionalNode(),
-                        EndKeywordLoc = LoadOptionalLocation(),
-                    };
-                }
-                case 148: {
-                    return new UntilNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        UntilKeywordLoc = LoadLocation(),
-                        DoKeywordLoc = LoadOptionalLocation(),
-                        EndKeywordLoc = LoadOptionalLocation(),
-                        Predicate = LoadNode(),
-                        Statements = LoadOptionalNode(),
-                    };
-                }
-                case 149: {
-                    return new WhenNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        WhenKeywordLoc = LoadLocation(),
-                        Conditions = LoadNodeList(),
-                        ThenKeywordLoc = LoadOptionalLocation(),
-                        Statements = LoadOptionalNode(),
-                    };
-                }
-                case 150: {
-                    return new WhileNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        WhileKeywordLoc = LoadLocation(),
-                        DoKeywordLoc = LoadOptionalLocation(),
-                        EndKeywordLoc = LoadOptionalLocation(),
-                        Predicate = LoadNode(),
-                        Statements = LoadOptionalNode(),
-                    };
-                }
-                case 151: {
-                    return new XStringNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        OpeningLoc = LoadLocation(),
-                        ContentLoc = LoadLocation(),
-                        ClosingLoc = LoadLocation(),
-                        Unescaped = LoadStringBytes(),
-                    };
-                }
-                case 152: {
-                    return new YieldNode {
-                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
-                        Flags = LoadVarUInt(),
-                        KeywordLoc = LoadLocation(),
-                        LparenLoc = LoadOptionalLocation(),
-                        Arguments = LoadOptionalNode(),
-                        RparenLoc = LoadOptionalLocation(),
-                    };
-                }
-        default:
-            throw new System.InvalidOperationException("Unknown prism node type: " + type);
+                    case 2: {
+                        var node = new AliasMethodNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.OldName = Pop();
+                        node.NewName = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 3: {
+                        var node = new AlternationPatternNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Right = Pop();
+                        node.Left = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 4: {
+                        var node = new AndNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Right = Pop();
+                        node.Left = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 5: {
+                        var node = new ArgumentsNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int argumentsCount = (int)LoadVarUInt();
+                        node.Arguments = PopList(argumentsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 6: {
+                        var node = new ArrayNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int elementsCount = (int)LoadVarUInt();
+                        node.OpeningLoc = LoadOptionalLocation();
+                        node.ClosingLoc = LoadOptionalLocation();
+                        node.Elements = PopList(elementsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 7: {
+                        var node = new ArrayPatternNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int requiredsCount = (int)LoadVarUInt();
+                        int postsCount = (int)LoadVarUInt();
+                        node.OpeningLoc = LoadOptionalLocation();
+                        node.ClosingLoc = LoadOptionalLocation();
+                        node.Posts = PopList(postsCount);
+                        node.Rest = Pop();
+                        node.Requireds = PopList(requiredsCount);
+                        node.Constant = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 8: {
+                        var node = new AssocNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadOptionalLocation();
+                        node.Value = Pop();
+                        node.Key = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 9: {
+                        var node = new AssocSplatNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 10: {
+                        var node = new BackReferenceReadNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        Push(node);
+                        continue;
+                    }
+                    case 11: {
+                        var node = new BeginNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.BeginKeywordLoc = LoadOptionalLocation();
+                        node.EndKeywordLoc = LoadOptionalLocation();
+                        node.EnsureClause = Pop();
+                        node.ElseClause = Pop();
+                        node.RescueClause = Pop();
+                        node.Statements = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 12: {
+                        var node = new BlockArgumentNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Expression = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 13: {
+                        var node = new BlockLocalVariableNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        Push(node);
+                        continue;
+                    }
+                    case 14: {
+                        var node = new BlockNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Locals = LoadConstantList();
+                        node.OpeningLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.Body = Pop();
+                        node.Parameters = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 15: {
+                        var node = new BlockParameterNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadOptionalConstant();
+                        node.NameLoc = LoadOptionalLocation();
+                        node.OperatorLoc = LoadLocation();
+                        Push(node);
+                        continue;
+                    }
+                    case 16: {
+                        var node = new BlockParametersNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int localsCount = (int)LoadVarUInt();
+                        node.OpeningLoc = LoadOptionalLocation();
+                        node.ClosingLoc = LoadOptionalLocation();
+                        node.Locals = PopList(localsCount);
+                        node.Parameters = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 17: {
+                        var node = new BreakNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.Arguments = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 18: {
+                        var node = new CallAndWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.CallOperatorLoc = LoadOptionalLocation();
+                        node.MessageLoc = LoadOptionalLocation();
+                        node.ReadName = LoadConstant();
+                        node.WriteName = LoadConstant();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        node.Receiver = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 19: {
+                        var node = new CallNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.CallOperatorLoc = LoadOptionalLocation();
+                        node.Name = LoadConstant();
+                        node.MessageLoc = LoadOptionalLocation();
+                        node.OpeningLoc = LoadOptionalLocation();
+                        node.ClosingLoc = LoadOptionalLocation();
+                        node.EqualLoc = LoadOptionalLocation();
+                        node.Block = Pop();
+                        node.Arguments = Pop();
+                        node.Receiver = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 20: {
+                        var node = new CallOperatorWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.CallOperatorLoc = LoadOptionalLocation();
+                        node.MessageLoc = LoadOptionalLocation();
+                        node.ReadName = LoadConstant();
+                        node.WriteName = LoadConstant();
+                        node.BinaryOperator = LoadConstant();
+                        node.BinaryOperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        node.Receiver = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 21: {
+                        var node = new CallOrWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.CallOperatorLoc = LoadOptionalLocation();
+                        node.MessageLoc = LoadOptionalLocation();
+                        node.ReadName = LoadConstant();
+                        node.WriteName = LoadConstant();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        node.Receiver = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 22: {
+                        var node = new CallTargetNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.CallOperatorLoc = LoadLocation();
+                        node.Name = LoadConstant();
+                        node.MessageLoc = LoadLocation();
+                        node.Receiver = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 23: {
+                        var node = new CapturePatternNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Target = Pop();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 24: {
+                        var node = new CaseMatchNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int conditionsCount = (int)LoadVarUInt();
+                        node.CaseKeywordLoc = LoadLocation();
+                        node.EndKeywordLoc = LoadLocation();
+                        node.ElseClause = Pop();
+                        node.Conditions = PopList(conditionsCount);
+                        node.Predicate = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 25: {
+                        var node = new CaseNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int conditionsCount = (int)LoadVarUInt();
+                        node.CaseKeywordLoc = LoadLocation();
+                        node.EndKeywordLoc = LoadLocation();
+                        node.ElseClause = Pop();
+                        node.Conditions = PopList(conditionsCount);
+                        node.Predicate = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 26: {
+                        var node = new ClassNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Locals = LoadConstantList();
+                        node.ClassKeywordLoc = LoadLocation();
+                        node.InheritanceOperatorLoc = LoadOptionalLocation();
+                        node.EndKeywordLoc = LoadLocation();
+                        node.Name = LoadConstant();
+                        node.Body = Pop();
+                        node.Superclass = Pop();
+                        node.ConstantPath = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 27: {
+                        var node = new ClassVariableAndWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 28: {
+                        var node = new ClassVariableOperatorWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.BinaryOperatorLoc = LoadLocation();
+                        node.BinaryOperator = LoadConstant();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 29: {
+                        var node = new ClassVariableOrWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 30: {
+                        var node = new ClassVariableReadNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        Push(node);
+                        continue;
+                    }
+                    case 31: {
+                        var node = new ClassVariableTargetNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        Push(node);
+                        continue;
+                    }
+                    case 32: {
+                        var node = new ClassVariableWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 33: {
+                        var node = new ConstantAndWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 34: {
+                        var node = new ConstantOperatorWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.BinaryOperatorLoc = LoadLocation();
+                        node.BinaryOperator = LoadConstant();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 35: {
+                        var node = new ConstantOrWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 36: {
+                        var node = new ConstantPathAndWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        node.Target = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 37: {
+                        var node = new ConstantPathNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadOptionalConstant();
+                        node.DelimiterLoc = LoadLocation();
+                        node.NameLoc = LoadLocation();
+                        node.Parent = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 38: {
+                        var node = new ConstantPathOperatorWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.BinaryOperatorLoc = LoadLocation();
+                        node.BinaryOperator = LoadConstant();
+                        node.Value = Pop();
+                        node.Target = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 39: {
+                        var node = new ConstantPathOrWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        node.Target = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 40: {
+                        var node = new ConstantPathTargetNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadOptionalConstant();
+                        node.DelimiterLoc = LoadLocation();
+                        node.NameLoc = LoadLocation();
+                        node.Parent = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 41: {
+                        var node = new ConstantPathWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        node.Target = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 42: {
+                        var node = new ConstantReadNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        Push(node);
+                        continue;
+                    }
+                    case 43: {
+                        var node = new ConstantTargetNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        Push(node);
+                        continue;
+                    }
+                    case 44: {
+                        var node = new ConstantWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 45: {
+                        var node = new DefNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.Locals = LoadConstantList();
+                        node.DefKeywordLoc = LoadLocation();
+                        node.OperatorLoc = LoadOptionalLocation();
+                        node.LparenLoc = LoadOptionalLocation();
+                        node.RparenLoc = LoadOptionalLocation();
+                        node.EqualLoc = LoadOptionalLocation();
+                        node.EndKeywordLoc = LoadOptionalLocation();
+                        PmNode body = Pop();
+                        if (body is DeferredBody deferred) {
+                            node.DeferredBodyLoader = this;
+                            node.DeferredBodyOffset = deferred.Offset;
+                            node.DeferredBodyLength = deferred.BodyLength;
+                            node.BodyContents = deferred.Contents;
+                        } else {
+                            node.Body = body;
+                        }
+                        node.Parameters = Pop();
+                        node.Receiver = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 46: {
+                        var node = new DefinedNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.LparenLoc = LoadOptionalLocation();
+                        node.RparenLoc = LoadOptionalLocation();
+                        node.KeywordLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 47: {
+                        var node = new ElseNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.ElseKeywordLoc = LoadLocation();
+                        node.EndKeywordLoc = LoadOptionalLocation();
+                        node.Statements = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 48: {
+                        var node = new EmbeddedStatementsNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.Statements = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 49: {
+                        var node = new EmbeddedVariableNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Variable = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 50: {
+                        var node = new EnsureNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.EnsureKeywordLoc = LoadLocation();
+                        node.EndKeywordLoc = LoadLocation();
+                        node.Statements = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 51: {
+                        var node = new ErrorRecoveryNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Unexpected = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 52: {
+                        var node = new FalseNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 53: {
+                        var node = new FindPatternNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int requiredsCount = (int)LoadVarUInt();
+                        node.OpeningLoc = LoadOptionalLocation();
+                        node.ClosingLoc = LoadOptionalLocation();
+                        node.Right = Pop();
+                        node.Requireds = PopList(requiredsCount);
+                        node.Left = Pop();
+                        node.Constant = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 54: {
+                        var node = new FlipFlopNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Right = Pop();
+                        node.Left = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 55: {
+                        var node = new FloatNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Value = LoadDouble();
+                        Push(node);
+                        continue;
+                    }
+                    case 56: {
+                        var node = new ForNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.ForKeywordLoc = LoadLocation();
+                        node.InKeywordLoc = LoadLocation();
+                        node.DoKeywordLoc = LoadOptionalLocation();
+                        node.EndKeywordLoc = LoadLocation();
+                        node.Statements = Pop();
+                        node.Collection = Pop();
+                        node.Index = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 57: {
+                        var node = new ForwardingArgumentsNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 58: {
+                        var node = new ForwardingParameterNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 59: {
+                        var node = new ForwardingSuperNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.Block = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 60: {
+                        var node = new GlobalVariableAndWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 61: {
+                        var node = new GlobalVariableOperatorWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.BinaryOperatorLoc = LoadLocation();
+                        node.BinaryOperator = LoadConstant();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 62: {
+                        var node = new GlobalVariableOrWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 63: {
+                        var node = new GlobalVariableReadNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        Push(node);
+                        continue;
+                    }
+                    case 64: {
+                        var node = new GlobalVariableTargetNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        Push(node);
+                        continue;
+                    }
+                    case 65: {
+                        var node = new GlobalVariableWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 66: {
+                        var node = new HashNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadLocation();
+                        int elementsCount = (int)LoadVarUInt();
+                        node.ClosingLoc = LoadLocation();
+                        node.Elements = PopList(elementsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 67: {
+                        var node = new HashPatternNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int elementsCount = (int)LoadVarUInt();
+                        node.OpeningLoc = LoadOptionalLocation();
+                        node.ClosingLoc = LoadOptionalLocation();
+                        node.Rest = Pop();
+                        node.Elements = PopList(elementsCount);
+                        node.Constant = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 68: {
+                        var node = new IfNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.IfKeywordLoc = LoadOptionalLocation();
+                        node.ThenKeywordLoc = LoadOptionalLocation();
+                        node.EndKeywordLoc = LoadOptionalLocation();
+                        node.Subsequent = Pop();
+                        node.Statements = Pop();
+                        node.Predicate = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 69: {
+                        var node = new ImaginaryNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Numeric = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 70: {
+                        var node = new ImplicitNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 71: {
+                        var node = new ImplicitRestNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 72: {
+                        var node = new InNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.InKeywordLoc = LoadLocation();
+                        node.ThenKeywordLoc = LoadOptionalLocation();
+                        node.Statements = Pop();
+                        node.Pattern = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 73: {
+                        var node = new IndexAndWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.CallOperatorLoc = LoadOptionalLocation();
+                        node.OpeningLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        node.Block = Pop();
+                        node.Arguments = Pop();
+                        node.Receiver = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 74: {
+                        var node = new IndexOperatorWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.CallOperatorLoc = LoadOptionalLocation();
+                        node.OpeningLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.BinaryOperator = LoadConstant();
+                        node.BinaryOperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        node.Block = Pop();
+                        node.Arguments = Pop();
+                        node.Receiver = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 75: {
+                        var node = new IndexOrWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.CallOperatorLoc = LoadOptionalLocation();
+                        node.OpeningLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        node.Block = Pop();
+                        node.Arguments = Pop();
+                        node.Receiver = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 76: {
+                        var node = new IndexTargetNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.Block = Pop();
+                        node.Arguments = Pop();
+                        node.Receiver = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 77: {
+                        var node = new InstanceVariableAndWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 78: {
+                        var node = new InstanceVariableOperatorWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.BinaryOperatorLoc = LoadLocation();
+                        node.BinaryOperator = LoadConstant();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 79: {
+                        var node = new InstanceVariableOrWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 80: {
+                        var node = new InstanceVariableReadNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        Push(node);
+                        continue;
+                    }
+                    case 81: {
+                        var node = new InstanceVariableTargetNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        Push(node);
+                        continue;
+                    }
+                    case 82: {
+                        var node = new InstanceVariableWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 83: {
+                        var node = new IntegerNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Value = LoadInteger();
+                        Push(node);
+                        continue;
+                    }
+                    case 84: {
+                        var node = new InterpolatedMatchLastLineNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadLocation();
+                        int partsCount = (int)LoadVarUInt();
+                        node.ClosingLoc = LoadLocation();
+                        node.Parts = PopList(partsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 85: {
+                        var node = new InterpolatedRegularExpressionNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadLocation();
+                        int partsCount = (int)LoadVarUInt();
+                        node.ClosingLoc = LoadLocation();
+                        node.Parts = PopList(partsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 86: {
+                        var node = new InterpolatedStringNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadOptionalLocation();
+                        int partsCount = (int)LoadVarUInt();
+                        node.ClosingLoc = LoadOptionalLocation();
+                        node.Parts = PopList(partsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 87: {
+                        var node = new InterpolatedSymbolNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadOptionalLocation();
+                        int partsCount = (int)LoadVarUInt();
+                        node.ClosingLoc = LoadOptionalLocation();
+                        node.Parts = PopList(partsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 88: {
+                        var node = new InterpolatedXStringNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadLocation();
+                        int partsCount = (int)LoadVarUInt();
+                        node.ClosingLoc = LoadLocation();
+                        node.Parts = PopList(partsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 89: {
+                        var node = new ItLocalVariableReadNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 90: {
+                        var node = new ItParametersNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 91: {
+                        var node = new KeywordHashNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int elementsCount = (int)LoadVarUInt();
+                        node.Elements = PopList(elementsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 92: {
+                        var node = new KeywordRestParameterNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadOptionalConstant();
+                        node.NameLoc = LoadOptionalLocation();
+                        node.OperatorLoc = LoadLocation();
+                        Push(node);
+                        continue;
+                    }
+                    case 93: {
+                        var node = new LambdaNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Locals = LoadConstantList();
+                        node.OperatorLoc = LoadLocation();
+                        node.OpeningLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.Body = Pop();
+                        node.Parameters = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 94: {
+                        var node = new LocalVariableAndWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Name = LoadConstant();
+                        node.Depth = LoadVarUInt();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 95: {
+                        var node = new LocalVariableOperatorWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.NameLoc = LoadLocation();
+                        node.BinaryOperatorLoc = LoadLocation();
+                        node.Name = LoadConstant();
+                        node.BinaryOperator = LoadConstant();
+                        node.Depth = LoadVarUInt();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 96: {
+                        var node = new LocalVariableOrWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Name = LoadConstant();
+                        node.Depth = LoadVarUInt();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 97: {
+                        var node = new LocalVariableReadNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.Depth = LoadVarUInt();
+                        Push(node);
+                        continue;
+                    }
+                    case 98: {
+                        var node = new LocalVariableTargetNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.Depth = LoadVarUInt();
+                        Push(node);
+                        continue;
+                    }
+                    case 99: {
+                        var node = new LocalVariableWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.Depth = LoadVarUInt();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 100: {
+                        var node = new MatchLastLineNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadLocation();
+                        node.ContentLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.Unescaped = LoadStringBytes();
+                        Push(node);
+                        continue;
+                    }
+                    case 101: {
+                        var node = new MatchPredicateNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.Pattern = Pop();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 102: {
+                        var node = new MatchRequiredNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Pattern = Pop();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 103: {
+                        var node = new MatchWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int targetsCount = (int)LoadVarUInt();
+                        node.Targets = PopList(targetsCount);
+                        node.Call = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 104: {
+                        var node = new ModuleNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Locals = LoadConstantList();
+                        node.ModuleKeywordLoc = LoadLocation();
+                        node.EndKeywordLoc = LoadLocation();
+                        node.Name = LoadConstant();
+                        node.Body = Pop();
+                        node.ConstantPath = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 105: {
+                        var node = new MultiTargetNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int leftsCount = (int)LoadVarUInt();
+                        int rightsCount = (int)LoadVarUInt();
+                        node.LparenLoc = LoadOptionalLocation();
+                        node.RparenLoc = LoadOptionalLocation();
+                        node.Rights = PopList(rightsCount);
+                        node.Rest = Pop();
+                        node.Lefts = PopList(leftsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 106: {
+                        var node = new MultiWriteNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int leftsCount = (int)LoadVarUInt();
+                        int rightsCount = (int)LoadVarUInt();
+                        node.LparenLoc = LoadOptionalLocation();
+                        node.RparenLoc = LoadOptionalLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        node.Rights = PopList(rightsCount);
+                        node.Rest = Pop();
+                        node.Lefts = PopList(leftsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 107: {
+                        var node = new NextNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.Arguments = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 108: {
+                        var node = new NilNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 109: {
+                        var node = new NoBlockParameterNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.KeywordLoc = LoadLocation();
+                        Push(node);
+                        continue;
+                    }
+                    case 110: {
+                        var node = new NoKeywordsParameterNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.KeywordLoc = LoadLocation();
+                        Push(node);
+                        continue;
+                    }
+                    case 111: {
+                        var node = new NumberedParametersNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Maximum = LoadByte();
+                        Push(node);
+                        continue;
+                    }
+                    case 112: {
+                        var node = new NumberedReferenceReadNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Number = LoadVarUInt();
+                        Push(node);
+                        continue;
+                    }
+                    case 113: {
+                        var node = new OptionalKeywordParameterNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 114: {
+                        var node = new OptionalParameterNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.Value = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 115: {
+                        var node = new OrNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Right = Pop();
+                        node.Left = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 116: {
+                        var node = new ParametersNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int requiredsCount = (int)LoadVarUInt();
+                        int optionalsCount = (int)LoadVarUInt();
+                        int postsCount = (int)LoadVarUInt();
+                        int keywordsCount = (int)LoadVarUInt();
+                        node.Block = Pop();
+                        node.KeywordRest = Pop();
+                        node.Keywords = PopList(keywordsCount);
+                        node.Posts = PopList(postsCount);
+                        node.Rest = Pop();
+                        node.Optionals = PopList(optionalsCount);
+                        node.Requireds = PopList(requiredsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 117: {
+                        var node = new ParenthesesNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.Body = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 118: {
+                        var node = new PinnedExpressionNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.LparenLoc = LoadLocation();
+                        node.RparenLoc = LoadLocation();
+                        node.Expression = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 119: {
+                        var node = new PinnedVariableNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Variable = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 120: {
+                        var node = new PostExecutionNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.OpeningLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.Statements = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 121: {
+                        var node = new PreExecutionNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.OpeningLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.Statements = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 122: {
+                        var node = new ProgramNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Locals = LoadConstantList();
+                        node.Statements = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 123: {
+                        var node = new RangeNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Right = Pop();
+                        node.Left = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 124: {
+                        var node = new RationalNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Numerator = LoadInteger();
+                        node.Denominator = LoadInteger();
+                        Push(node);
+                        continue;
+                    }
+                    case 125: {
+                        var node = new RedoNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 126: {
+                        var node = new RegularExpressionNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadLocation();
+                        node.ContentLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.Unescaped = LoadStringBytes();
+                        Push(node);
+                        continue;
+                    }
+                    case 127: {
+                        var node = new RequiredKeywordParameterNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        node.NameLoc = LoadLocation();
+                        Push(node);
+                        continue;
+                    }
+                    case 128: {
+                        var node = new RequiredParameterNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadConstant();
+                        Push(node);
+                        continue;
+                    }
+                    case 129: {
+                        var node = new RescueModifierNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.RescueExpression = Pop();
+                        node.Expression = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 130: {
+                        var node = new RescueNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        int exceptionsCount = (int)LoadVarUInt();
+                        node.OperatorLoc = LoadOptionalLocation();
+                        node.ThenKeywordLoc = LoadOptionalLocation();
+                        node.Subsequent = Pop();
+                        node.Statements = Pop();
+                        node.Reference = Pop();
+                        node.Exceptions = PopList(exceptionsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 131: {
+                        var node = new RestParameterNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Name = LoadOptionalConstant();
+                        node.NameLoc = LoadOptionalLocation();
+                        node.OperatorLoc = LoadLocation();
+                        Push(node);
+                        continue;
+                    }
+                    case 132: {
+                        var node = new RetryNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 133: {
+                        var node = new ReturnNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.Arguments = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 134: {
+                        var node = new SelfNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 135: {
+                        var node = new ShareableConstantNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Write = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 136: {
+                        var node = new SingletonClassNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Locals = LoadConstantList();
+                        node.ClassKeywordLoc = LoadLocation();
+                        node.OperatorLoc = LoadLocation();
+                        node.EndKeywordLoc = LoadLocation();
+                        node.Body = Pop();
+                        node.Expression = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 137: {
+                        var node = new SourceEncodingNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 138: {
+                        var node = new SourceFileNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.Filepath = LoadStringBytes();
+                        Push(node);
+                        continue;
+                    }
+                    case 139: {
+                        var node = new SourceLineNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 140: {
+                        var node = new SplatNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OperatorLoc = LoadLocation();
+                        node.Expression = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 141: {
+                        var node = new StatementsNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int bodyCount = (int)LoadVarUInt();
+                        node.Body = PopList(bodyCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 142: {
+                        var node = new StringNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadOptionalLocation();
+                        node.ContentLoc = LoadLocation();
+                        node.ClosingLoc = LoadOptionalLocation();
+                        node.Unescaped = LoadStringBytes();
+                        Push(node);
+                        continue;
+                    }
+                    case 143: {
+                        var node = new SuperNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.LparenLoc = LoadOptionalLocation();
+                        node.RparenLoc = LoadOptionalLocation();
+                        node.Block = Pop();
+                        node.Arguments = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 144: {
+                        var node = new SymbolNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadOptionalLocation();
+                        node.ContentLoc = LoadLocation();
+                        node.ClosingLoc = LoadOptionalLocation();
+                        node.Unescaped = LoadStringBytes();
+                        Push(node);
+                        continue;
+                    }
+                    case 145: {
+                        var node = new TrueNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        Push(node);
+                        continue;
+                    }
+                    case 146: {
+                        var node = new UndefNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        int namesCount = (int)LoadVarUInt();
+                        node.KeywordLoc = LoadLocation();
+                        node.Names = PopList(namesCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 147: {
+                        var node = new UnlessNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.UnlessKeywordLoc = LoadLocation();
+                        node.ThenKeywordLoc = LoadOptionalLocation();
+                        node.EndKeywordLoc = LoadOptionalLocation();
+                        node.ElseClause = Pop();
+                        node.Statements = Pop();
+                        node.Predicate = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 148: {
+                        var node = new UntilNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.UntilKeywordLoc = LoadLocation();
+                        node.DoKeywordLoc = LoadOptionalLocation();
+                        node.EndKeywordLoc = LoadOptionalLocation();
+                        node.Statements = Pop();
+                        node.Predicate = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 149: {
+                        var node = new WhenNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.WhenKeywordLoc = LoadLocation();
+                        int conditionsCount = (int)LoadVarUInt();
+                        node.ThenKeywordLoc = LoadOptionalLocation();
+                        node.Statements = Pop();
+                        node.Conditions = PopList(conditionsCount);
+                        Push(node);
+                        continue;
+                    }
+                    case 150: {
+                        var node = new WhileNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.WhileKeywordLoc = LoadLocation();
+                        node.DoKeywordLoc = LoadOptionalLocation();
+                        node.EndKeywordLoc = LoadOptionalLocation();
+                        node.Statements = Pop();
+                        node.Predicate = Pop();
+                        Push(node);
+                        continue;
+                    }
+                    case 151: {
+                        var node = new XStringNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.OpeningLoc = LoadLocation();
+                        node.ContentLoc = LoadLocation();
+                        node.ClosingLoc = LoadLocation();
+                        node.Unescaped = LoadStringBytes();
+                        Push(node);
+                        continue;
+                    }
+                    case 152: {
+                        var node = new YieldNode {
+                            NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
+                            Flags = LoadVarUInt(),
+                        };
+                        node.KeywordLoc = LoadLocation();
+                        node.LparenLoc = LoadOptionalLocation();
+                        node.RparenLoc = LoadOptionalLocation();
+                        node.Arguments = Pop();
+                        Push(node);
+                        continue;
+                    }
+            default:
+                throw new System.InvalidOperationException("Unknown prism node type: " + type);
+        }
     }
+    if (_pos != end || _stackSize != stackBase + 1 || _lazyCount != lazyBase) {
+        throw new System.InvalidOperationException("Invalid prism serialization (unbalanced subtree)");
+    }
+    return Pop();
 }
 
-// Reads past a node without building it, noting in _contents what the bridge has to see
-// at parse time (see PrismLoader.Contents*). Mirrors LoadNode field for field.
-private void SkimNode() {
-    byte type = LoadByte();
-    LoadVarUInt(); // node id
-    LoadLocation();
-    switch (type) {
-                case 1: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 2: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 3: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 4: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 5: {
-                    LoadVarUInt(); // flags
-                    SkimNodeList();
-                    return;
-                }
-                case 6: {
-                    LoadVarUInt(); // flags
-                    SkimNodeList();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 7: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    SkimNodeList();
-                    SkimOptionalNode();
-                    SkimNodeList();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 8: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimNode();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 9: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadLocation();
-                    return;
-                }
-                case 10: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 11: {
-                    LoadVarUInt(); // flags
-                    LoadOptionalLocation();
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 12: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadLocation();
-                    return;
-                }
-                case 13: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 14: {
-                    LoadVarUInt(); // flags
-                    SkipVarUIntList();
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 15: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadOptionalLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 16: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    SkimNodeList();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 17: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadLocation();
-                    return;
-                }
-                case 18: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    LoadVarUInt();
-                    LoadVarUInt();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 19: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    LoadVarUInt();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    SkimOptionalNode();
-                    return;
-                }
-                case 20: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    LoadVarUInt();
-                    LoadVarUInt();
-                    LoadVarUInt();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 21: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    LoadVarUInt();
-                    LoadVarUInt();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 22: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    LoadLocation();
-                    LoadVarUInt();
-                    LoadLocation();
-                    return;
-                }
-                case 23: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 24: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    SkimNodeList();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 25: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    SkimNodeList();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 26: {
-                    LoadVarUInt(); // flags
-                    _contents |= ContentsEager;
-                    SkipVarUIntList();
-                    LoadLocation();
-                    SkimNode();
-                    LoadOptionalLocation();
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    LoadVarUInt();
-                    return;
-                }
-                case 27: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 28: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    LoadVarUInt();
-                    return;
-                }
-                case 29: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 30: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 31: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 32: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 33: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 34: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    LoadVarUInt();
-                    return;
-                }
-                case 35: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 36: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 37: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 38: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    LoadLocation();
-                    SkimNode();
-                    LoadVarUInt();
-                    return;
-                }
-                case 39: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 40: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 41: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 42: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 43: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 44: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 45: {
-                    _pos += 4;
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    SkimOptionalNode();
-                    uint outer = _contents;
-                    _contents = 0;
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    _contents = outer | (_contents & ContentsEager);
-                    SkipVarUIntList();
-                    LoadLocation();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 46: {
-                    LoadVarUInt(); // flags
-                    _contents |= ContentsEager;
-                    LoadOptionalLocation();
-                    SkimNode();
-                    LoadOptionalLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 47: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 48: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    return;
-                }
-                case 49: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 50: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    return;
-                }
-                case 51: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    return;
-                }
-                case 52: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 53: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    SkimNode();
-                    SkimNodeList();
-                    SkimNode();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 54: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    return;
-                }
-                case 55: {
-                    LoadVarUInt(); // flags
-                    _pos += 8;
-                    return;
-                }
-                case 56: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimNode();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    LoadLocation();
-                    LoadOptionalLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 57: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 58: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 59: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    if (_buffer[_pos] == 0) _contents |= ContentsUsesBlock;
-                    SkimOptionalNode();
-                    return;
-                }
-                case 60: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 61: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    LoadVarUInt();
-                    return;
-                }
-                case 62: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 63: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 64: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 65: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 66: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimNodeList();
-                    LoadLocation();
-                    return;
-                }
-                case 67: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    SkimNodeList();
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 68: {
-                    LoadVarUInt(); // flags
-                    LoadOptionalLocation();
-                    SkimNode();
-                    LoadOptionalLocation();
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 69: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    return;
-                }
-                case 70: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    return;
-                }
-                case 71: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 72: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 73: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    LoadLocation();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 74: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    LoadLocation();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    SkimOptionalNode();
-                    LoadVarUInt();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 75: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    LoadLocation();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 76: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    LoadLocation();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    SkimOptionalNode();
-                    return;
-                }
-                case 77: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 78: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    LoadVarUInt();
-                    return;
-                }
-                case 79: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 80: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 81: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 82: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 83: {
-                    LoadVarUInt(); // flags
-                    LoadInteger();
-                    return;
-                }
-                case 84: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimNodeList();
-                    LoadLocation();
-                    return;
-                }
-                case 85: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimNodeList();
-                    LoadLocation();
-                    return;
-                }
-                case 86: {
-                    LoadVarUInt(); // flags
-                    LoadOptionalLocation();
-                    SkimNodeList();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 87: {
-                    LoadVarUInt(); // flags
-                    LoadOptionalLocation();
-                    SkimNodeList();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 88: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimNodeList();
-                    LoadLocation();
-                    return;
-                }
-                case 89: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 90: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 91: {
-                    LoadVarUInt(); // flags
-                    SkimNodeList();
-                    return;
-                }
-                case 92: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadOptionalLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 93: {
-                    LoadVarUInt(); // flags
-                    SkipVarUIntList();
-                    LoadLocation();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    return;
-                }
-                case 94: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    LoadVarUInt();
-                    LoadVarUInt();
-                    return;
-                }
-                case 95: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    LoadVarUInt();
-                    LoadVarUInt();
-                    LoadVarUInt();
-                    return;
-                }
-                case 96: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    LoadVarUInt();
-                    LoadVarUInt();
-                    return;
-                }
-                case 97: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadVarUInt();
-                    return;
-                }
-                case 98: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadVarUInt();
-                    return;
-                }
-                case 99: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadVarUInt();
-                    LoadLocation();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 100: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    LoadLocation();
-                    LoadLocation();
-                    SkipRegexpSource();
-                    return;
-                }
-                case 101: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 102: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 103: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimNodeList();
-                    return;
-                }
-                case 104: {
-                    LoadVarUInt(); // flags
-                    _contents |= ContentsEager;
-                    SkipVarUIntList();
-                    LoadLocation();
-                    SkimNode();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    LoadVarUInt();
-                    return;
-                }
-                case 105: {
-                    LoadVarUInt(); // flags
-                    SkimNodeList();
-                    SkimOptionalNode();
-                    SkimNodeList();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 106: {
-                    LoadVarUInt(); // flags
-                    SkimNodeList();
-                    SkimOptionalNode();
-                    SkimNodeList();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 107: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadLocation();
-                    return;
-                }
-                case 108: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 109: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 110: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 111: {
-                    LoadVarUInt(); // flags
-                    _pos++;
-                    return;
-                }
-                case 112: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 113: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 114: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 115: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 116: {
-                    LoadVarUInt(); // flags
-                    SkimNodeList();
-                    SkimNodeList();
-                    SkimOptionalNode();
-                    SkimNodeList();
-                    SkimNodeList();
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    return;
-                }
-                case 117: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 118: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    LoadLocation();
-                    LoadLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 119: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    LoadLocation();
-                    return;
-                }
-                case 120: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadLocation();
-                    LoadLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 121: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    LoadLocation();
-                    LoadLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 122: {
-                    LoadVarUInt(); // flags
-                    SkipVarUIntList();
-                    SkimNode();
-                    return;
-                }
-                case 123: {
-                    LoadVarUInt(); // flags
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    return;
-                }
-                case 124: {
-                    LoadVarUInt(); // flags
-                    LoadInteger();
-                    LoadInteger();
-                    return;
-                }
-                case 125: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 126: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    LoadLocation();
-                    LoadLocation();
-                    SkipRegexpSource();
-                    return;
-                }
-                case 127: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadLocation();
-                    return;
-                }
-                case 128: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    return;
-                }
-                case 129: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    LoadLocation();
-                    SkimNode();
-                    return;
-                }
-                case 130: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimNodeList();
-                    LoadOptionalLocation();
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    return;
-                }
-                case 131: {
-                    LoadVarUInt(); // flags
-                    LoadVarUInt();
-                    LoadOptionalLocation();
-                    LoadLocation();
-                    return;
-                }
-                case 132: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 133: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimOptionalNode();
-                    return;
-                }
-                case 134: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 135: {
-                    LoadVarUInt(); // flags
-                    SkimNode();
-                    return;
-                }
-                case 136: {
-                    LoadVarUInt(); // flags
-                    _contents |= ContentsEager;
-                    SkipVarUIntList();
-                    LoadLocation();
-                    LoadLocation();
-                    SkimNode();
-                    SkimOptionalNode();
-                    LoadLocation();
-                    return;
-                }
-                case 137: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 138: {
-                    LoadVarUInt(); // flags
-                    SkipString();
-                    return;
-                }
-                case 139: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 140: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimOptionalNode();
-                    return;
-                }
-                case 141: {
-                    LoadVarUInt(); // flags
-                    SkimNodeList();
-                    return;
-                }
-                case 142: {
-                    LoadVarUInt(); // flags
-                    LoadOptionalLocation();
-                    LoadLocation();
-                    LoadOptionalLocation();
-                    SkipString();
-                    return;
-                }
-                case 143: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    LoadOptionalLocation();
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    if (_buffer[_pos] == 0) _contents |= ContentsUsesBlock;
-                    SkimOptionalNode();
-                    return;
-                }
-                case 144: {
-                    LoadVarUInt(); // flags
-                    LoadOptionalLocation();
-                    LoadLocation();
-                    LoadOptionalLocation();
-                    SkipString();
-                    return;
-                }
-                case 145: {
-                    LoadVarUInt(); // flags
-                    return;
-                }
-                case 146: {
-                    LoadVarUInt(); // flags
-                    SkimNodeList();
-                    LoadLocation();
-                    return;
-                }
-                case 147: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimNode();
-                    LoadOptionalLocation();
-                    SkimOptionalNode();
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    return;
-                }
-                case 148: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    SkimNode();
-                    SkimOptionalNode();
-                    return;
-                }
-                case 149: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    SkimNodeList();
-                    LoadOptionalLocation();
-                    SkimOptionalNode();
-                    return;
-                }
-                case 150: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    LoadOptionalLocation();
-                    LoadOptionalLocation();
-                    SkimNode();
-                    SkimOptionalNode();
-                    return;
-                }
-                case 151: {
-                    LoadVarUInt(); // flags
-                    LoadLocation();
-                    LoadLocation();
-                    LoadLocation();
-                    SkipString();
-                    return;
-                }
-                case 152: {
-                    LoadVarUInt(); // flags
-                    _contents |= ContentsUsesBlock;
-                    LoadLocation();
-                    LoadOptionalLocation();
-                    SkimOptionalNode();
-                    LoadOptionalLocation();
-                    return;
-                }
-              default:
-                  throw new System.InvalidOperationException("Unknown prism node type: " + type);
-          }
-      }
-  }
+// Reads past the nodes serialized from the current position up to end - the subtree of one
+// node, like LoadNodes - without building them, and answers what the bridge has to see of
+// them at parse time (PrismLoader.Contents* bits). Each node's bits go on a stack of their
+// own; a record ORs its children's into its own, and an absent child is SkimAbsent.
+private uint SkimNodes(int end) {
+    int stackBase = _skimSize;
+    while (_pos < end) {
+        byte type = _buffer[_pos++];
+        if (type == 0) {
+            PushSkim(SkimAbsent);
+            continue;
+        }
+        if (type == LazyMarker) {
+            // a nested DefNode: its record below sorts out what of its body is the outer one's
+            _pos += 8;
+            continue;
+        }
+        LoadVarUInt(); // node id
+        LoadLocation();
+        LoadVarUInt(); // flags
+        _contents = 0;
+        switch (type) {
+                    case 1: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 2: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 3: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 4: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 5: {
+                        int argumentsCount = (int)LoadVarUInt();
+                        _contents |= PopSkim(argumentsCount);
+                        break;
+                    }
+                    case 6: {
+                        int elementsCount = (int)LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(elementsCount);
+                        break;
+                    }
+                    case 7: {
+                        int requiredsCount = (int)LoadVarUInt();
+                        int postsCount = (int)LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(postsCount + requiredsCount + 2);
+                        break;
+                    }
+                    case 8: {
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 9: {
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 10: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 11: {
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(4);
+                        break;
+                    }
+                    case 12: {
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 13: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 14: {
+                        SkipVarUIntList();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 15: {
+                        LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        break;
+                    }
+                    case 16: {
+                        int localsCount = (int)LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(localsCount + 1);
+                        break;
+                    }
+                    case 17: {
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 18: {
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        LoadVarUInt();
+                        LoadVarUInt();
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 19: {
+                        LoadOptionalLocation();
+                        LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(3);
+                        break;
+                    }
+                    case 20: {
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        LoadVarUInt();
+                        LoadVarUInt();
+                        LoadVarUInt();
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 21: {
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        LoadVarUInt();
+                        LoadVarUInt();
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 22: {
+                        LoadLocation();
+                        LoadVarUInt();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 23: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 24: {
+                        int conditionsCount = (int)LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim(conditionsCount + 2);
+                        break;
+                    }
+                    case 25: {
+                        int conditionsCount = (int)LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim(conditionsCount + 2);
+                        break;
+                    }
+                    case 26: {
+                        _contents |= ContentsEager;
+                        SkipVarUIntList();
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        LoadVarUInt();
+                        _contents |= PopSkim(3);
+                        break;
+                    }
+                    case 27: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 28: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        LoadVarUInt();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 29: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 30: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 31: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 32: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 33: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 34: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        LoadVarUInt();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 35: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 36: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 37: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 38: {
+                        LoadLocation();
+                        LoadVarUInt();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 39: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 40: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 41: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 42: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 43: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 44: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 45: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        SkipVarUIntList();
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        uint inner = PopSkim() | PopSkim(); // body, parameters
+                        _contents |= (inner & ContentsEager) | PopSkim(); // receiver
+                        break;
+                    }
+                    case 46: {
+                        _contents |= ContentsEager;
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 47: {
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 48: {
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 49: {
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 50: {
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 51: {
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 52: {
+                        break;
+                    }
+                    case 53: {
+                        int requiredsCount = (int)LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(requiredsCount + 3);
+                        break;
+                    }
+                    case 54: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 55: {
+                        _pos += 8;
+                        break;
+                    }
+                    case 56: {
+                        LoadLocation();
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        _contents |= PopSkim(3);
+                        break;
+                    }
+                    case 57: {
+                        break;
+                    }
+                    case 58: {
+                        break;
+                    }
+                    case 59: {
+                        LoadLocation();
+                        if (PeekSkim() == SkimAbsent) _contents |= ContentsUsesBlock;
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 60: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 61: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        LoadVarUInt();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 62: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 63: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 64: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 65: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 66: {
+                        LoadLocation();
+                        int elementsCount = (int)LoadVarUInt();
+                        LoadLocation();
+                        _contents |= PopSkim(elementsCount);
+                        break;
+                    }
+                    case 67: {
+                        int elementsCount = (int)LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(elementsCount + 2);
+                        break;
+                    }
+                    case 68: {
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(3);
+                        break;
+                    }
+                    case 69: {
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 70: {
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 71: {
+                        break;
+                    }
+                    case 72: {
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 73: {
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim(4);
+                        break;
+                    }
+                    case 74: {
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        LoadVarUInt();
+                        LoadLocation();
+                        _contents |= PopSkim(4);
+                        break;
+                    }
+                    case 75: {
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim(4);
+                        break;
+                    }
+                    case 76: {
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim(3);
+                        break;
+                    }
+                    case 77: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 78: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        LoadVarUInt();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 79: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 80: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 81: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 82: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 83: {
+                        LoadInteger();
+                        break;
+                    }
+                    case 84: {
+                        LoadLocation();
+                        int partsCount = (int)LoadVarUInt();
+                        LoadLocation();
+                        _contents |= PopSkim(partsCount);
+                        break;
+                    }
+                    case 85: {
+                        LoadLocation();
+                        int partsCount = (int)LoadVarUInt();
+                        LoadLocation();
+                        _contents |= PopSkim(partsCount);
+                        break;
+                    }
+                    case 86: {
+                        LoadOptionalLocation();
+                        int partsCount = (int)LoadVarUInt();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(partsCount);
+                        break;
+                    }
+                    case 87: {
+                        LoadOptionalLocation();
+                        int partsCount = (int)LoadVarUInt();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(partsCount);
+                        break;
+                    }
+                    case 88: {
+                        LoadLocation();
+                        int partsCount = (int)LoadVarUInt();
+                        LoadLocation();
+                        _contents |= PopSkim(partsCount);
+                        break;
+                    }
+                    case 89: {
+                        break;
+                    }
+                    case 90: {
+                        break;
+                    }
+                    case 91: {
+                        int elementsCount = (int)LoadVarUInt();
+                        _contents |= PopSkim(elementsCount);
+                        break;
+                    }
+                    case 92: {
+                        LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        break;
+                    }
+                    case 93: {
+                        SkipVarUIntList();
+                        LoadLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 94: {
+                        LoadLocation();
+                        LoadLocation();
+                        LoadVarUInt();
+                        LoadVarUInt();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 95: {
+                        LoadLocation();
+                        LoadLocation();
+                        LoadVarUInt();
+                        LoadVarUInt();
+                        LoadVarUInt();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 96: {
+                        LoadLocation();
+                        LoadLocation();
+                        LoadVarUInt();
+                        LoadVarUInt();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 97: {
+                        LoadVarUInt();
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 98: {
+                        LoadVarUInt();
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 99: {
+                        LoadVarUInt();
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 100: {
+                        LoadLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        SkipRegexpSource();
+                        break;
+                    }
+                    case 101: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 102: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 103: {
+                        int targetsCount = (int)LoadVarUInt();
+                        _contents |= PopSkim(targetsCount + 1);
+                        break;
+                    }
+                    case 104: {
+                        _contents |= ContentsEager;
+                        SkipVarUIntList();
+                        LoadLocation();
+                        LoadLocation();
+                        LoadVarUInt();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 105: {
+                        int leftsCount = (int)LoadVarUInt();
+                        int rightsCount = (int)LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(rightsCount + leftsCount + 1);
+                        break;
+                    }
+                    case 106: {
+                        int leftsCount = (int)LoadVarUInt();
+                        int rightsCount = (int)LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        _contents |= PopSkim(rightsCount + leftsCount + 2);
+                        break;
+                    }
+                    case 107: {
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 108: {
+                        break;
+                    }
+                    case 109: {
+                        LoadLocation();
+                        LoadLocation();
+                        break;
+                    }
+                    case 110: {
+                        LoadLocation();
+                        LoadLocation();
+                        break;
+                    }
+                    case 111: {
+                        _pos++;
+                        break;
+                    }
+                    case 112: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 113: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 114: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 115: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 116: {
+                        int requiredsCount = (int)LoadVarUInt();
+                        int optionalsCount = (int)LoadVarUInt();
+                        int postsCount = (int)LoadVarUInt();
+                        int keywordsCount = (int)LoadVarUInt();
+                        _contents |= PopSkim(keywordsCount + postsCount + optionalsCount + requiredsCount + 3);
+                        break;
+                    }
+                    case 117: {
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 118: {
+                        LoadLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 119: {
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 120: {
+                        LoadLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 121: {
+                        LoadLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 122: {
+                        SkipVarUIntList();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 123: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 124: {
+                        LoadInteger();
+                        LoadInteger();
+                        break;
+                    }
+                    case 125: {
+                        break;
+                    }
+                    case 126: {
+                        LoadLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        SkipRegexpSource();
+                        break;
+                    }
+                    case 127: {
+                        LoadVarUInt();
+                        LoadLocation();
+                        break;
+                    }
+                    case 128: {
+                        LoadVarUInt();
+                        break;
+                    }
+                    case 129: {
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 130: {
+                        LoadLocation();
+                        int exceptionsCount = (int)LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(exceptionsCount + 3);
+                        break;
+                    }
+                    case 131: {
+                        LoadVarUInt();
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        break;
+                    }
+                    case 132: {
+                        break;
+                    }
+                    case 133: {
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 134: {
+                        break;
+                    }
+                    case 135: {
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 136: {
+                        _contents |= ContentsEager;
+                        SkipVarUIntList();
+                        LoadLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 137: {
+                        break;
+                    }
+                    case 138: {
+                        SkipString();
+                        break;
+                    }
+                    case 139: {
+                        break;
+                    }
+                    case 140: {
+                        LoadLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 141: {
+                        int bodyCount = (int)LoadVarUInt();
+                        _contents |= PopSkim(bodyCount);
+                        break;
+                    }
+                    case 142: {
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        SkipString();
+                        break;
+                    }
+                    case 143: {
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        if (PeekSkim() == SkimAbsent) _contents |= ContentsUsesBlock;
+                        _contents |= PopSkim();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    case 144: {
+                        LoadOptionalLocation();
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        SkipString();
+                        break;
+                    }
+                    case 145: {
+                        break;
+                    }
+                    case 146: {
+                        int namesCount = (int)LoadVarUInt();
+                        LoadLocation();
+                        _contents |= PopSkim(namesCount);
+                        break;
+                    }
+                    case 147: {
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(3);
+                        break;
+                    }
+                    case 148: {
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 149: {
+                        LoadLocation();
+                        int conditionsCount = (int)LoadVarUInt();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(conditionsCount + 1);
+                        break;
+                    }
+                    case 150: {
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim(2);
+                        break;
+                    }
+                    case 151: {
+                        LoadLocation();
+                        LoadLocation();
+                        LoadLocation();
+                        SkipString();
+                        break;
+                    }
+                    case 152: {
+                        _contents |= ContentsUsesBlock;
+                        LoadLocation();
+                        LoadOptionalLocation();
+                        LoadOptionalLocation();
+                        _contents |= PopSkim();
+                        break;
+                    }
+                    default:
+                        throw new System.InvalidOperationException("Unknown prism node type: " + type);
+                }
+                PushSkim(_contents);
+            }
+            if (_pos != end || _skimSize != stackBase + 1) {
+                throw new System.InvalidOperationException("Invalid prism serialization (unbalanced subtree)");
+            }
+            return PopSkim();
+        }
+    }
 }

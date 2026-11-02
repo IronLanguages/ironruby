@@ -390,7 +390,8 @@ namespace IronRuby.StandardLibrary.StringIO {
                 throw RubyExceptions.CreateEINVAL("negative length");
             }
             self.GetWritableContent().SetByteCount(length);
-            return lengthObj;
+            // MRI answers 0, whatever the length
+            return 0;
         }
 
         // MRI's strio_rewind does not check that the stream is open: a StringIO that a
@@ -583,7 +584,18 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyMethod("write")]
         [RubyMethod("syswrite")]
+        public static int Write(StringIO/*!*/ self, DynamicNull value) {
+            // nil.to_s is "": nothing to write, as for IO#write(nil), but the stream must be writable
+            self.GetWritableContent();
+            return 0;
+        }
+
+        [RubyMethod("write")]
+        [RubyMethod("syswrite")]
         public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, StringIO/*!*/ self, object obj) {
+            if (obj == null) {
+                return Write(self, (DynamicNull)null);
+            }
             return Write(self, Protocols.ConvertToString(tosConversion, obj));
         }
 
@@ -593,8 +605,10 @@ namespace IronRuby.StandardLibrary.StringIO {
         /// </summary>
         [RubyMethod("write")]
         public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, StringIO/*!*/ self,
-            object first, [NotNull]params object[]/*!*/ rest) {
+            object first, params object[]/*!*/ rest) {
 
+            // A lone nil after the first argument binds as the params array itself.
+            rest = rest ?? new object[] { null };
             int written = Write(tosConversion, self, first);
             foreach (object value in rest) {
                 written += Write(tosConversion, self, value);
@@ -647,6 +661,8 @@ namespace IronRuby.StandardLibrary.StringIO {
                 throw new EOFError("end of file reached");
             }
 
+            // Only a read of so many bytes answers bytes; the rest of the string keeps its encoding.
+            buffer.ForceEncoding(content.Encoding);
             return buffer;
         }
 
@@ -1048,6 +1064,13 @@ namespace IronRuby.StandardLibrary.StringIO {
             // of the two: gets(">", 2) answers "th", not "this>".
             if (limit > 0 && position - oldPosition > limit) {
                 position = oldPosition + limit;
+                // MRI relaxes the limit while it would split a character, by 16 bytes at most:
+                // gets(1) on "é" answers "é". A UTF-8 continuation byte at the cut marks the split.
+                if (content.Encoding.StrictEncoding.CodePage == 65001) {
+                    for (int extra = 16; extra > 0 && position < length && (content.GetByte(position) & 0xC0) == 0x80; extra--) {
+                        position++;
+                    }
+                }
             }
 
             return content.GetSlice(oldPosition, position - oldPosition);

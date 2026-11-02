@@ -213,7 +213,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region abs, zero?, to_f, quo
+        #region abs, zero?, to_f
 
         [RubyMethod("abs")]
         [RubyMethod("magnitude")]
@@ -229,11 +229,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_f")]
         public static double ToFloat(long self) {
             return (double)self;
-        }
-
-        [RubyMethod("quo")]
-        public static double Quotient(long self, long other) {
-            return (double)self / (double)other;
         }
 
         #endregion

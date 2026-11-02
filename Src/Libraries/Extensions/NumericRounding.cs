@@ -15,6 +15,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Numerics;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
@@ -102,7 +103,12 @@ namespace IronRuby.Builtins {
 
             IntegerValue value = Protocols.CastToInteger(integerCast, ndigits);
             if (!value.IsFixnum) {
-                throw RubyExceptions.CreateRangeError("integer {0} too big to convert to `int'", value.Bignum);
+                // MRI's NUM2INT narrows to a C long first, and a value too large for one fails there.
+                BigInteger big = value.Bignum;
+                if (big > Int64.MaxValue || big < Int64.MinValue) {
+                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+                }
+                throw RubyExceptions.CreateRangeError("integer {0} too {1} to convert to 'int'", big, big.Sign < 0 ? "small" : "big");
             }
             return value.Fixnum;
         }
@@ -221,8 +227,54 @@ namespace IronRuby.Builtins {
             return ndigits >= FloatDig - (binexp > 0 ? binexp / 4 : binexp / 3 - 1);
         }
 
+        // MRI: the result is 0 when ndigits + ceil(log10 |number|) < 0, estimated from the
+        // binary exponent. The earlier test here (exponent below the mantissa width) turned
+        // 1e-20.round(25) into 0.0.
         internal static bool RoundUnderflows(double number, int ndigits) {
-            return BinaryExponent(number) < -DblMantDig;
+            int binexp = BinaryExponent(number);
+            return ndigits < -(binexp > 0 ? binexp / 3 + 1 : binexp / 4);
+        }
+
+        /// <summary>
+        /// MRI's rb_flo_round_by_rational, used for more than 14 digits, where pow(10, ndigits)
+        /// is no longer exact: the double is taken apart into an exact mantissa * 2**exp, rounded
+        /// as a rational and read back through the (correctly rounding) parser.
+        /// </summary>
+        internal static double RoundByRational(double number, int ndigits, Half mode) {
+            long bits = BitConverter.DoubleToInt64Bits(number);
+            bool negative = bits < 0;
+            int exponent = (int)((bits >> 52) & 0x7FF);
+            long mantissa = bits & 0xFFFFFFFFFFFFFL;
+            if (exponent == 0) {
+                exponent = 1;
+            } else {
+                mantissa |= 1L << 52;
+            }
+            exponent -= 1075;
+
+            BigInteger numerator = mantissa * Pow10(ndigits);
+            BigInteger denominator = BigInteger.One;
+            if (exponent >= 0) {
+                numerator <<= exponent;
+            } else {
+                denominator <<= -exponent;
+            }
+
+            BigInteger remainder;
+            BigInteger q = BigInteger.DivRem(numerator, denominator, out remainder);
+            int cmp = (remainder * 2).CompareTo(denominator);
+            bool up;
+            switch (mode) {
+                case Half.Down: up = cmp > 0; break;
+                case Half.Even: up = cmp > 0 || (cmp == 0 && !q.IsEven); break;
+                default: up = cmp >= 0; break;
+            }
+            if (up) {
+                q += 1;
+            }
+
+            string text = (negative ? "-" : "") + q.ToString(CultureInfo.InvariantCulture) + "E-" + ndigits.ToString(CultureInfo.InvariantCulture);
+            return Double.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture);
         }
 
         #endregion

@@ -16,9 +16,7 @@ Gem::Specification.new do |s|
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
   s.files = [
     "lib/yaml.rb".freeze,
-    "lib/yaml/types.rb".freeze,
     "lib/yaml/dbm.rb".freeze,
     "lib/yaml/store.rb".freeze,
-    "lib/yaml/syck.rb".freeze,
   ]
 end

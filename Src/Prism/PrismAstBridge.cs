@@ -46,6 +46,10 @@ namespace IronRuby.Prism {
         // In a `case/in` or `=>`: the key a hash pattern last found missing, or nil. Decides
         // whether a failed match raises NoMatchingPatternKeyError rather than NoMatchingPatternError.
         private LocalVariable _patternMissingKey;
+        // Where a failed match raises, the reason the last test failed - "String === 1 does not
+        // return true", "[1, 2, 3] length mismatch (given 3, expected 2)" - so that the
+        // NoMatchingPatternError says what MRI's says. Null where a failed match is just false.
+        private LocalVariable _patternFailure;
         private bool _isEval;
         // case/in subject temp -> { value, "already computed" flag } holding its #deconstruct result
         private readonly Dictionary<LocalVariable, LocalVariable[]>/*!*/ _deconstructCache =
@@ -75,7 +79,13 @@ namespace IronRuby.Prism {
                 commandLine = CommandLineFlags(context.RubyOptions, sourceUnit.Path);
                 mainScript = sourceUnit.Path != "-e";
             }
-            return ParseText(sourceUnit.GetCode(), sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
+            string code = sourceUnit.GetCode();
+            // Prism, told this is the main script, would skip a #! line without "ruby" in it to
+            // look for one that has; a binstub that names IronRuby's launcher is already Ruby.
+            if (mainScript && (commandLine & 0x20) == 0 && RubyUtils.ShebangNamesIronRuby(code)) {
+                mainScript = false;
+            }
+            return ParseText(code, sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
                 options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval,
                 options.EvalSourceEncoding, commandLine, mainScript);
         }
@@ -380,7 +390,11 @@ namespace IronRuby.Prism {
                 var hoisted = new List<Pm.PmNode>();
                 var rest = new List<Pm.PmNode>();
                 foreach (var n in loopBody.Body) {
-                    (n is Pm.PreExecutionNode ? hoisted : rest).Add(n);
+                    if (n is Pm.PreExecutionNode preExec) {
+                        CollectPreExecution(preExec, hoisted);
+                    } else {
+                        rest.Add(n);
+                    }
                 }
                 loop.Statements = new Pm.StatementsNode {
                     Body = rest.ToArray(), StartOffset = loopBody.StartOffset, Length = loopBody.Length, Flags = loopBody.Flags
@@ -396,7 +410,7 @@ namespace IronRuby.Prism {
             }
             var reordered = new List<Pm.PmNode>();
             foreach (var n in statements.Body) {
-                if (n is Pm.PreExecutionNode) reordered.Add(n);
+                if (n is Pm.PreExecutionNode preExec) CollectPreExecution(preExec, reordered);
             }
             foreach (var n in statements.Body) {
                 if (!(n is Pm.PreExecutionNode)) reordered.Add(n);
@@ -404,6 +418,33 @@ namespace IronRuby.Prism {
             return new Pm.StatementsNode {
                 Body = reordered.ToArray(), StartOffset = statements.StartOffset, Length = statements.Length, Flags = statements.Flags
             };
+        }
+
+        /// <summary>
+        /// Adds a BEGIN block to <paramref name="into"/>, after the BEGIN blocks written inside it:
+        /// MRI's parser registers a BEGIN when it is closed, so `BEGIN { a; BEGIN { b } }` runs b
+        /// first, and then a without the inner block.
+        /// </summary>
+        private static void CollectPreExecution(Pm.PreExecutionNode/*!*/ node, List<Pm.PmNode>/*!*/ into) {
+            // Nested BEGINs recurse through here rather than through Expr (see StackGuard).
+            if (!StackGuard.IsSufficient) {
+                StackGuard.RunOnFreshStack(() => CollectPreExecution(node, into));
+                return;
+            }
+            if (node.Statements is Pm.StatementsNode body && Array.Exists(body.Body, n => n is Pm.PreExecutionNode)) {
+                var rest = new List<Pm.PmNode>();
+                foreach (var n in body.Body) {
+                    if (n is Pm.PreExecutionNode inner) {
+                        CollectPreExecution(inner, into);
+                    } else {
+                        rest.Add(n);
+                    }
+                }
+                node.Statements = new Pm.StatementsNode {
+                    Body = rest.ToArray(), StartOffset = body.StartOffset, Length = body.Length, Flags = body.Flags
+                };
+            }
+            into.Add(node);
         }
 
         private Statements/*!*/ BuildStatements(Pm.PmNode statementsNode) {
@@ -467,6 +508,10 @@ namespace IronRuby.Prism {
         // ---- expression dispatch ----
 
         private Expression/*!*/ Expr(Pm.PmNode/*!*/ node) {
+            // Nesting recurses through here; prism accepts it deeper than a thread's stack goes.
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => Expr(node));
+            }
             var span = Span(node);
             switch (node) {
                 case Pm.IntegerNode integer:
@@ -707,7 +752,9 @@ namespace IronRuby.Prism {
                     Expression assign;
                     var temp = NewTemp(Expr(matchPredicate.Value), span, out assign);
                     var enclosingMissingKey = _patternMissingKey;
+                    var enclosingFailure = _patternFailure;
                     _patternMissingKey = null;
+                    _patternFailure = null;
                     try {
                         return new BlockExpression(MakeStatements(new Expression[] {
                             assign,
@@ -716,6 +763,7 @@ namespace IronRuby.Prism {
                         }), span);
                     } finally {
                         _patternMissingKey = enclosingMissingKey;
+                        _patternFailure = enclosingFailure;
                     }
                 }
                 case Pm.MatchRequiredNode matchRequired: {
@@ -723,7 +771,9 @@ namespace IronRuby.Prism {
                     Expression assign;
                     var temp = NewTemp(Expr(matchRequired.Value), span, out assign);
                     var enclosingMissingKey = _patternMissingKey;
+                    var enclosingFailure = _patternFailure;
                     _patternMissingKey = CurrentScope.ResolveOrAddVariable("?pmk" + _tempCounter++ + "?", span);
+                    _patternFailure = CurrentScope.ResolveOrAddVariable("?pmf" + _tempCounter++ + "?", span);
                     try {
                         return new BlockExpression(MakeStatements(new Expression[] {
                             assign,
@@ -732,6 +782,7 @@ namespace IronRuby.Prism {
                         }), span);
                     } finally {
                         _patternMissingKey = enclosingMissingKey;
+                        _patternFailure = enclosingFailure;
                     }
                 }
 
@@ -1459,6 +1510,15 @@ namespace IronRuby.Prism {
         }
 
         private Expression/*!*/ SafeNavigation(Pm.CallNode/*!*/ node, SourceSpan span) {
+            // self&.m: self is never nil, and the call keeps the right of `self.m` to reach a
+            // private method - a temporary standing in for self would lose it
+            if (node.Receiver is Pm.SelfNode) {
+                return HasFlag(node, Pm.CallNodeFlags.AttributeWrite)
+                    ? AttributeWrite(node, new SelfReference(span), node.Name, span)
+                    : new MethodCall(new SelfReference(span), node.Name,
+                        node.Arguments != null ? BuildArguments(node.Arguments) : null, OptionalBlock(node.Block), span);
+            }
+
             // recv&.m(args)  =>  (?safeN? = recv).nil? ? nil : ?safeN?.m(args)
             return SafeGuard(node.Receiver, temp =>
                 HasFlag(node, Pm.CallNodeFlags.AttributeWrite)
@@ -1588,6 +1648,10 @@ namespace IronRuby.Prism {
         /// against the right hand side.
         /// </summary>
         private LeftValue/*!*/ Target(Pm.PmNode/*!*/ node, Statements hoist) {
+            // Nested targets ((a, b), c) recurse through here rather than through Expr (see StackGuard).
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => Target(node, hoist));
+            }
             var span = Span(node);
             switch (node) {
                 case Pm.LocalVariableTargetNode local:
@@ -2742,8 +2806,9 @@ namespace IronRuby.Prism {
         /// (including Arrays with a singleton #deconstruct) are allowed to override.
         /// </summary>
         private LocalVariable/*!*/ DeconstructToArray(Expression/*!*/ subject, List<Expression>/*!*/ tests, SourceSpan span) {
-            tests.Add(new MethodCall(subject, "respond_to?",
-                new Arguments(new SymbolLiteral("deconstruct", _encoding, span)), span));
+            tests.Add(Explained(new MethodCall(subject, "respond_to?",
+                new Arguments(new SymbolLiteral("deconstruct", _encoding, span)), span),
+                "deconstruct", new Expression[] { subject }, span));
 
             Expression arrAssign;
             var arr = NewTemp(DeconstructCall(subject, span), span, out arrAssign);
@@ -2755,9 +2820,13 @@ namespace IronRuby.Prism {
         }
 
         private Expression/*!*/ RaiseNoMatchingPattern(Expression/*!*/ subject, SourceSpan span) {
+            Expression message = _patternFailure == null
+                ? new MethodCall(subject, "inspect", null, span)
+                : new MethodCall(new ConstantVariable("NoMatchingPatternError", span), "__message__",
+                    new Arguments(new Expression[] { subject, _patternFailure }), span);
             Expression result = new MethodCall(null, "raise", new Arguments(new Expression[] {
                 new ConstantVariable("NoMatchingPatternError", span),
-                new MethodCall(subject, "inspect", null, span)
+                message
             }), span);
 
             if (_patternMissingKey != null) {
@@ -2778,12 +2847,49 @@ namespace IronRuby.Prism {
         /// so that only the failure that ends the match decides the exception.
         /// </summary>
         private Expression/*!*/ ResetMissingKey(Expression/*!*/ test, SourceSpan span) {
-            if (_patternMissingKey == null) {
+            if (_patternMissingKey == null && _patternFailure == null) {
                 return test;
             }
+            var statements = new List<Expression>();
+            if (_patternMissingKey != null) {
+                statements.Add(new SimpleAssignmentExpression(_patternMissingKey, Literal.Nil(span), null, span));
+            }
+            if (_patternFailure != null) {
+                statements.Add(new SimpleAssignmentExpression(_patternFailure, Literal.Nil(span), null, span));
+            }
+            statements.Add(test);
+            return new BlockExpression(MakeStatements(statements.ToArray()), span);
+        }
+
+        /// <summary>
+        /// <paramref name="test"/>, which on failing records why in <see cref="_patternFailure"/>
+        /// (when there is one): kind names the reason and args are what the message quotes, as
+        /// NoMatchingPatternError.__reason__ in the prelude formats them.
+        /// </summary>
+        private Expression/*!*/ Explained(Expression/*!*/ test, string/*!*/ kind, Expression[]/*!*/ args, SourceSpan span) {
+            if (_patternFailure == null) {
+                return test;
+            }
+            var reasonArgs = new List<Expression> { new SymbolLiteral(kind, _encoding, span) };
+            reasonArgs.AddRange(args);
+            return new OrExpression(test, new BlockExpression(MakeStatements(new Expression[] {
+                new SimpleAssignmentExpression(_patternFailure,
+                    new MethodCall(new ConstantVariable("NoMatchingPatternError", span), "__reason__",
+                        new Arguments(reasonArgs.ToArray()), span), null, span),
+                Literal.False(span)
+            }), span), span);
+        }
+
+        /// <summary>pattern === subject, evaluating the pattern once so the reason can quote it.</summary>
+        private Expression/*!*/ ValuePattern(Expression/*!*/ pattern, Expression/*!*/ subject, SourceSpan span) {
+            if (_patternFailure == null) {
+                return CaseEqual(pattern, subject, span);
+            }
+            Expression assign;
+            var temp = NewTemp(pattern, span, out assign);
             return new BlockExpression(MakeStatements(new Expression[] {
-                new SimpleAssignmentExpression(_patternMissingKey, Literal.Nil(span), null, span),
-                test
+                assign,
+                Explained(CaseEqual(temp, subject, span), "eqq", new Expression[] { temp, subject }, span)
             }), span);
         }
 
@@ -2802,7 +2908,10 @@ namespace IronRuby.Prism {
             Expression firstTest = null;
             Statements firstBody = null;
             var enclosingMissingKey = _patternMissingKey;
-            _patternMissingKey = node.ElseClause is Pm.ElseNode ? null : CurrentScope.ResolveOrAddVariable("?pmk" + _tempCounter++ + "?", span);
+            var enclosingFailure = _patternFailure;
+            bool raises = !(node.ElseClause is Pm.ElseNode);
+            _patternMissingKey = raises ? CurrentScope.ResolveOrAddVariable("?pmk" + _tempCounter++ + "?", span) : null;
+            _patternFailure = raises ? CurrentScope.ResolveOrAddVariable("?pmf" + _tempCounter++ + "?", span) : null;
             foreach (var condition in node.Conditions) {
                 var inNode = (Pm.InNode)condition;
                 var test = ResetMissingKey(PatternTest(inNode.Pattern, temp, Span(inNode)), Span(inNode));
@@ -2820,6 +2929,7 @@ namespace IronRuby.Prism {
                 clauses.Add(new ElseIfClause(null, new Statements(RaiseNoMatchingPattern(temp, span)), span));
             }
             _patternMissingKey = enclosingMissingKey;
+            _patternFailure = enclosingFailure;
 
             _deconstructCache.Remove(temp);
             var ifExpr = new IfExpression(firstTest, firstBody, clauses, span);
@@ -2833,6 +2943,10 @@ namespace IronRuby.Prism {
         /// deconstruct/deconstruct_keys for array/hash patterns.
         /// </summary>
         private Expression/*!*/ PatternTest(Pm.PmNode/*!*/ pattern, Expression/*!*/ subject, SourceSpan span) {
+            // Nested patterns recurse through here rather than through Expr (see StackGuard).
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => PatternTest(pattern, subject, span));
+            }
             switch (pattern) {
                 case Pm.LocalVariableTargetNode target: {
                     var local = CurrentScope.ResolveOrAddVariable(target.Name, Span(target));
@@ -2848,18 +2962,19 @@ namespace IronRuby.Prism {
                     return new OrExpression(ResetMissingKey(PatternTest(alternation.Left, subject, span), span),
                         ResetMissingKey(PatternTest(alternation.Right, subject, span), span), span);
                 case Pm.PinnedVariableNode pinned:
-                    return CaseEqual(Expr(pinned.Variable), subject, Span(pinned));
+                    return ValuePattern(Expr(pinned.Variable), subject, Span(pinned));
                 case Pm.PinnedExpressionNode pinnedExpr:
-                    return CaseEqual(Expr(pinnedExpr.Expression), subject, Span(pinnedExpr));
+                    return ValuePattern(Expr(pinnedExpr.Expression), subject, Span(pinnedExpr));
                 case Pm.IfNode guard: {
                     // `in pat if cond`: prism nests the pattern in the guard's statements
                     var inner = ((Pm.StatementsNode)guard.Statements).Body[0];
-                    return new AndExpression(PatternTest(inner, subject, span), Condition(guard.Predicate), Span(guard));
+                    return new AndExpression(PatternTest(inner, subject, span),
+                        Explained(Condition(guard.Predicate), "guard", new Expression[0], span), Span(guard));
                 }
                 case Pm.UnlessNode guard: {
                     var inner = ((Pm.StatementsNode)guard.Statements).Body[0];
                     return new AndExpression(PatternTest(inner, subject, span),
-                        new NotExpression(Expr(guard.Predicate), Span(guard)), Span(guard));
+                        Explained(new NotExpression(Expr(guard.Predicate), Span(guard)), "guard", new Expression[0], span), Span(guard));
                 }
                 case Pm.ArrayPatternNode arrayPattern:
                     return ArrayPattern(arrayPattern, subject, span);
@@ -2868,7 +2983,7 @@ namespace IronRuby.Prism {
                 case Pm.FindPatternNode findPattern:
                     return FindPattern(findPattern, subject, span);
                 default:
-                    return CaseEqual(Expr(pattern), subject, span); // value pattern
+                    return ValuePattern(Expr(pattern), subject, span); // value pattern
             }
         }
 
@@ -2894,7 +3009,7 @@ namespace IronRuby.Prism {
         private Expression/*!*/ ArrayPattern(Pm.ArrayPatternNode/*!*/ node, Expression/*!*/ subject, SourceSpan span) {
             var tests = new List<Expression>();
             if (node.Constant != null) {
-                tests.Add(CaseEqual(Expr(node.Constant), subject, span));
+                tests.Add(ValuePattern(Expr(node.Constant), subject, span));
             }
 
             var arr = DeconstructToArray(subject, tests, span);
@@ -2903,8 +3018,9 @@ namespace IronRuby.Prism {
             Expression lenAssign;
             var len = NewTemp(new MethodCall(arr, "length", null, span), span, out lenAssign);
             tests.Add(new BlockExpression(MakeStatements(new Expression[] { lenAssign, Literal.True(span) }), span));
-            tests.Add(new MethodCall(len, node.Rest != null ? ">=" : "==",
-                new Arguments(Literal.Integer(required, span)), span));
+            tests.Add(Explained(new MethodCall(len, node.Rest != null ? ">=" : "==",
+                new Arguments(Literal.Integer(required, span)), span),
+                "length", new Expression[] { arr, len, Literal.Integer(required, span), node.Rest != null ? Literal.True(span) : Literal.False(span) }, span));
 
             for (int i = 0; i < node.Requireds.Length; i++) {
                 tests.Add(ElementPattern(node.Requireds[i], arr, Literal.Integer(i, span), span));
@@ -2941,7 +3057,7 @@ namespace IronRuby.Prism {
         private Expression/*!*/ HashPattern(Pm.HashPatternNode/*!*/ node, Expression/*!*/ subject, SourceSpan span) {
             var tests = new List<Expression>();
             if (node.Constant != null) {
-                tests.Add(CaseEqual(Expr(node.Constant), subject, span));
+                tests.Add(ValuePattern(Expr(node.Constant), subject, span));
             }
 
             var knownKeys = new List<string>();
@@ -2949,10 +3065,13 @@ namespace IronRuby.Prism {
                 knownKeys.Add(LiteralText(((Pm.SymbolNode)((Pm.AssocNode)element).Key).Unescaped));
             }
 
-            // MRI hands #deconstruct_keys the keys the pattern is interested in, or nil when a
-            // named **rest means the pattern needs every key.
+            // MRI hands #deconstruct_keys the keys the pattern is interested in, or nil when the
+            // pattern needs every key: a **rest or **nil looks at the keys it does not name, and
+            // `in {}` demands that there be none. A bare ** needs nothing beyond the named keys.
+            bool hasRest = node.Rest != null && !(node.Rest is Pm.AssocSplatNode anonymous && anonymous.Value == null);
+            bool hasKeys = node.Elements.Length > 0 || node.Rest != null;
             Expression keyList;
-            if (node.Rest is Pm.AssocSplatNode named && named.Value != null) {
+            if (!hasKeys || hasRest) {
                 keyList = Literal.Nil(span);
             } else {
                 var symbols = new List<Expression>();
@@ -2960,8 +3079,9 @@ namespace IronRuby.Prism {
                 keyList = new ArrayConstructor(new Arguments(symbols.ToArray()), span);
             }
 
-            tests.Add(new MethodCall(subject, "respond_to?",
-                new Arguments(new SymbolLiteral("deconstruct_keys", _encoding, span)), span));
+            tests.Add(Explained(new MethodCall(subject, "respond_to?",
+                new Arguments(new SymbolLiteral("deconstruct_keys", _encoding, span)), span),
+                "deconstruct_keys", new Expression[] { subject }, span));
 
             Expression hashAssign;
             var hash = NewTemp(new MethodCall(subject, "deconstruct_keys", new Arguments(keyList), span),
@@ -2973,7 +3093,7 @@ namespace IronRuby.Prism {
 
             // `in {}` is the one hash pattern that demands an empty hash
             if (node.Elements.Length == 0 && node.Rest == null) {
-                tests.Add(new MethodCall(hash, "empty?", null, span));
+                tests.Add(Explained(new MethodCall(hash, "empty?", null, span), "empty", new Expression[] { hash }, span));
             }
 
             foreach (var element in node.Elements) {
@@ -3015,10 +3135,13 @@ namespace IronRuby.Prism {
                 // {**nil}: no keys beyond the listed ones — (h.keys - [...]).empty?
                 var listed = new List<Expression>();
                 foreach (var key in knownKeys) listed.Add(new SymbolLiteral(key, _encoding, span));
-                tests.Add(new MethodCall(
+                var listedAgain = new List<Expression>();
+                foreach (var key in knownKeys) listedAgain.Add(new SymbolLiteral(key, _encoding, span));
+                tests.Add(Explained(new MethodCall(
                     new MethodCall(new MethodCall(hash, "keys", null, span), "-",
                         new Arguments(new ArrayConstructor(new Arguments(listed.ToArray()), span)), span),
-                    "empty?", null, span));
+                    "empty?", null, span),
+                    "rest", new Expression[] { hash, new ArrayConstructor(new Arguments(listedAgain.ToArray()), span) }, span));
             }
 
             return AndAll(tests, span);
@@ -3031,7 +3154,7 @@ namespace IronRuby.Prism {
         private Expression/*!*/ FindPattern(Pm.FindPatternNode/*!*/ node, Expression/*!*/ subject, SourceSpan span) {
             var tests = new List<Expression>();
             if (node.Constant != null) {
-                tests.Add(CaseEqual(Expr(node.Constant), subject, span));
+                tests.Add(ValuePattern(Expr(node.Constant), subject, span));
             }
 
             var arr = DeconstructToArray(subject, tests, span);
@@ -3065,7 +3188,7 @@ namespace IronRuby.Prism {
             Expression idxAssign;
             var idx = NewTemp(new MethodCall(null, "__pm_find_index__",
                 new Arguments(new Expression[] { arr, Literal.Integer(count, span) }), probe, span), span, out idxAssign);
-            tests.Add(new BlockExpression(MakeStatements(idxAssign, idx), span));
+            tests.Add(Explained(new BlockExpression(MakeStatements(idxAssign, idx), span), "find", new Expression[] { arr }, span));
 
             if (node.Left is Pm.SplatNode leftSplat && leftSplat.Expression != null) {
                 var pre = (LocalVariable)Target(leftSplat.Expression);

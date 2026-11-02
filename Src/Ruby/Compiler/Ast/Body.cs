@@ -73,7 +73,7 @@ namespace IronRuby.Compiler.Ast {
             return TransformRead(gen);
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             Assert.NotNull(gen);
 
             if (HasExceptionHandling) {
@@ -234,7 +234,15 @@ namespace IronRuby.Compiler.Ast {
                     Ast.Assign(exceptionRethrowVariable, AstUtils.Constant(true)),
                     AstUtils.Empty()
                 ).FinallyWithJumps(
-                    AstUtils.Unless(retryingVariable, transformedEnsure)
+                    AstUtils.Unless(retryingVariable,
+#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
+                        // Reclaiming a discarded fiber drops Ruby ensure bodies, just as freeing
+                        // a native fiber stack does. CLR cleanup finally blocks still execute.
+                        AstUtils.Unless(Ast.Property(null, typeof(RubyUtils), "IsReclaimingFiber"), transformedEnsure)
+#else
+                        transformedEnsure
+#endif
+                    )
                 )
             );
 

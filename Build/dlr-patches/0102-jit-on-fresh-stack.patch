@@ -1,0 +1,102 @@
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+@@ -163,6 +163,10 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+         private readonly LightCompiler _parent;
+ 
++        // How deep Compile/CompileAsVoid have nested so far, and the deepest they went: what the
++        // delegate creator needs to know to compile the lambda where the CLR's JIT has stack enough.
++        private int _depth, _maxDepth;
++
+         private static readonly LocalDefinition[] EmptyLocals = Array.Empty<LocalDefinition>();
+ 
+         internal LightCompiler(int compilationThreshold) {
+@@ -198,7 +202,7 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+             Debug.Assert(Instructions.CurrentStackDepth == (node.ReturnType != typeof(void) ? 1 : 0));
+ 
+-            return new LightDelegateCreator(MakeInterpreter(node.Name), node);
++            return new LightDelegateCreator(MakeInterpreter(node.Name), node) { TreeDepth = _maxDepth };
+         }
+ 
+         internal LightDelegateCreator CompileTop(LightLambdaExpression node) {
+@@ -216,7 +220,7 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+             Debug.Assert(Instructions.CurrentStackDepth == (node.ReturnType != typeof(void) ? 1 : 0));
+ 
+-            return new LightDelegateCreator(MakeInterpreter(node.Name), node);
++            return new LightDelegateCreator(MakeInterpreter(node.Name), node) { TreeDepth = _maxDepth };
+         }
+ 
+         private Interpreter MakeInterpreter(string lambdaName) {
+@@ -1547,6 +1551,9 @@ namespace Microsoft.Scripting.Interpreter {
+                 StackGuard.RunOnFreshStack(() => CompileAsVoid(expr));
+                 return;
+             }
++            if (++_depth > _maxDepth) {
++                _maxDepth = _depth;
++            }
+             bool pushLabelBlock = TryPushLabelBlock(expr);
+             int startingStackDepth = Instructions.CurrentStackDepth;
+             switch (expr.NodeType) {
+@@ -1579,6 +1586,7 @@ namespace Microsoft.Scripting.Interpreter {
+             if (pushLabelBlock) {
+                 PopLabelBlock(_labelBlock.Kind);
+             }
++            _depth--;
+         }
+ 
+         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Maintainability", "CA1502:AvoidExcessiveComplexity")]
+@@ -1683,11 +1691,15 @@ namespace Microsoft.Scripting.Interpreter {
+                 StackGuard.RunOnFreshStack(() => Compile(expr));
+                 return;
+             }
++            if (++_depth > _maxDepth) {
++                _maxDepth = _depth;
++            }
+             bool pushLabelBlock = TryPushLabelBlock(expr);
+             CompileNoLabelPush(expr);
+             if (pushLabelBlock) {
+                 PopLabelBlock(_labelBlock.Kind);
+             }
++            _depth--;
+         }
+     }
+ }
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs b/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
+@@ -40,6 +40,16 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+         internal Interpreter Interpreter { get; }
+ 
++        /// <summary>
++        /// How deeply the lambda's expression tree nests, as the light compiler found it.
++        /// </summary>
++        internal int TreeDepth { get; set; }
++
++        // The CLR's JIT recurses over the trees of the IL it compiles, and an optimizing compile of a
++        // tree some thousands of levels deep runs a 1 MB stack (a Windows main thread's) out long before
++        // the light compiler would. A lambda nested deeper than this is compiled on a fresh stack.
++        private const int FreshStackTreeDepth = 400;
++
+         private bool HasClosure => Interpreter is not null && Interpreter.ClosureSize > 0;
+ 
+         internal bool HasCompiled => _compiled is not null;
+@@ -115,6 +125,15 @@ namespace Microsoft.Scripting.Interpreter {
+                 return;
+             }
+ 
++            // See FreshStackTreeDepth (and StackGuard).
++            if (TreeDepth > FreshStackTreeDepth) {
++                StackGuard.RunOnFreshStack(CompileOnThisStack);
++                return;
++            }
++            CompileOnThisStack();
++        }
++
++        private void CompileOnThisStack() {
+             // Compilation is expensive, we only want to do it once.
+             lock (_compileLock) {
+                 if (_compiled is not null) {

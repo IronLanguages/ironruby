@@ -59,7 +59,9 @@ namespace IronRuby.Builtins {
 
             // Conversion to a delegate.
             // Explicit: convertible to any delegate type.
-            // Implicit: convertible to a delegate type of the same arity as the block.
+            // Implicit: a lambda converts to a delegate type of the same arity. A block or proc converts to any
+            // delegate type - it ignores arguments it has no parameters for and gets nil for those it is not
+            // passed (list.ForEach { puts "x" }) - but overload resolution prefers delegates of its arity.
             public Convertibility IsConvertibleTo(Type/*!*/ type, bool @explicit) {
                 if (!typeof(Delegate).IsAssignableFrom(type)) {
                     return Convertibility.NotConvertible;
@@ -78,11 +80,15 @@ namespace IronRuby.Builtins {
                     return Convertibility.NotConvertible;
                 }
 
-                int delegateArity = invoke.GetParameters().Length;
                 return new Convertibility(
-                    delegateArity == Value.Dispatcher.ParameterCount || delegateArity > Value.Dispatcher.ParameterCount && Value.Dispatcher.HasUnsplatParameter,
+                    Value.Kind != ProcKind.Lambda || AcceptsArity(Value, invoke.GetParameters().Length),
                     Ast.Equal(Methods.GetProcArity.OpCall(AstUtils.Convert(Expression, typeof(Proc))), Ast.Constant(Value.Dispatcher.Arity))
                 );
+            }
+
+            internal static bool AcceptsArity(Proc/*!*/ proc, int delegateArity) {
+                return delegateArity == proc.Dispatcher.ParameterCount
+                    || delegateArity > proc.Dispatcher.ParameterCount && proc.Dispatcher.HasUnsplatParameter;
             }
 
             public override DynamicMetaObject/*!*/ BindConvert(ConvertBinder/*!*/ binder) {

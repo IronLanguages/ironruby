@@ -590,10 +590,10 @@ module IronRuby
     # "Lib" next to the executable makes the bundle look like an installed IronRuby.
     #
     # Some of the library is not optional: the runtime loads ironruby/ruby4.rb as its
-    # prelude and pulls ruby/1.9.1 files (rational18.rb and friends) in while booting.
-    # --no-stdlib therefore drops the vendored Ruby 4.0 tree and the installed gems --
-    # the 12 MB of it -- and keeps what IronRuby itself needs to start.
-    ALWAYS_COPIED = ["ironruby", File.join("ruby", "1.9.1")].freeze
+    # prelude, and that pulls in the rest of ironruby/ (Rational, Complex, Set, Pathname)
+    # while booting. --no-stdlib therefore drops the vendored Ruby 4.0 tree and the
+    # installed gems -- the 12 MB of it -- and keeps what IronRuby itself needs to start.
+    ALWAYS_COPIED = ["ironruby"].freeze
     STDLIB_COPIED = [File.join("ruby", "4.0"), File.join("ruby", "gems"),
                      File.join("ruby", "site_ruby")].freeze
 

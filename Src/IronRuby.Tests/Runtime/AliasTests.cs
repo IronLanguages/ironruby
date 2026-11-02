@@ -154,7 +154,7 @@ end
 d = D.new
 d.bar
 ", @"
-#<NameError: undefined method `f' for class `E'>
+#<NameError: undefined method 'f' for class 'E'>
 ");
         }
 
@@ -262,7 +262,7 @@ false
                 CompilerTest(@"
 def b; end
 p ((alias a b))
-", 1, 0);
+", 0, 0);
             }, "nil");
         }
 

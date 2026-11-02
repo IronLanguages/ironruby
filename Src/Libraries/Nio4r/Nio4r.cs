@@ -345,6 +345,11 @@ namespace IronRuby.StandardLibrary.Nio4r {
                 public RubyPipe Pipe;
                 public int Descriptor;      // Unix: what poll(2) is handed, or -1
                 public int Ready;
+                // A TLS socket's transport (IoReadiness.IReadinessHook): the interests it answers
+                // for itself, whatever the kernel says about the socket, and its answer.
+                public IReadinessHook Hook;
+                public int HookOwned;
+                public int HookReady;
             }
 
             private object SelectLocked(BlockParam block, int milliseconds) {
@@ -353,6 +358,8 @@ namespace IronRuby.StandardLibrary.Nio4r {
                 var info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
                 bool wasBlocked = info.Blocked;
                 List<RubyPipe> pipes = null;
+                List<IReadinessHook> hooks = null;
+                bool hooked = false;
                 Probe[] probes;
                 try {
                     info.Blocked = true;
@@ -375,6 +382,14 @@ namespace IronRuby.StandardLibrary.Nio4r {
                             if (probe.Pipe != null && _waiter != null) {
                                 probe.Pipe.AddWaiter(_waiter);
                                 (pipes ?? (pipes = new List<RubyPipe>())).Add(probe.Pipe);
+                            }
+                            probe.Hook = IoReadiness.GetHook(probe.IO);
+                            if (probe.Hook != null) {
+                                hooked = true;
+                                if (_waiter != null) {
+                                    probe.Hook.AddWaiter(_waiter);
+                                    (hooks ?? (hooks = new List<IReadinessHook>())).Add(probe.Hook);
+                                }
                             }
                         }
                         monitor._probeIndex = count;
@@ -399,9 +414,23 @@ namespace IronRuby.StandardLibrary.Nio4r {
 
                         long remaining = deadline - Environment.TickCount64;
                         int wait = (readyCount > 0 || woken || remaining <= 0) ? 0
-                            : (int)Math.Min(remaining, (pipes != null && _waiter == null) ? 1 : IoReadiness.SliceMilliseconds);
+                            : (int)Math.Min(remaining, ((pipes != null || hooked) && _waiter == null) ? 1 : IoReadiness.SliceMilliseconds);
 
                         readyCount += AskKernel(probes, count, wait);
+
+                        // What a hook answers for, it answers alone: the kernel may call its socket
+                        // readable while the bytes are still on their way through the hook's read.
+                        if (hooked) {
+                            readyCount = 0;
+                            for (int i = 0; i < count; i++) {
+                                if (probes[i].Hook != null) {
+                                    probes[i].Ready = (probes[i].Ready & ~probes[i].HookOwned) | probes[i].HookReady;
+                                }
+                                if (probes[i].Ready != 0) {
+                                    readyCount++;
+                                }
+                            }
+                        }
 
                         if (readyCount > 0 || woken || Volatile.Read(ref _wakeupRequested) != 0) {
                             Interlocked.Exchange(ref _wakeupRequested, 0);
@@ -439,6 +468,11 @@ namespace IronRuby.StandardLibrary.Nio4r {
                             pipe.RemoveWaiter(_waiter);
                         }
                     }
+                    if (hooks != null) {
+                        foreach (var hook in hooks) {
+                            hook.RemoveWaiter(_waiter);
+                        }
+                    }
                     info.Blocked = wasBlocked;
                 }
             }
@@ -459,6 +493,23 @@ namespace IronRuby.StandardLibrary.Nio4r {
                 var stream = io.GetStream();
                 if ((probe.Interests & InterestRead) != 0 && stream.DataBuffered) {
                     ready |= InterestRead;
+                }
+
+                if (probe.Hook != null) {
+                    probe.HookOwned = probe.HookReady = 0;
+                    foreach (int interest in new[] { InterestRead, InterestWrite }) {
+                        if ((probe.Interests & interest) == 0) {
+                            continue;
+                        }
+                        bool? answer = probe.Hook.IsReady(interest == InterestRead ? IoReadiness.Read : IoReadiness.Write);
+                        if (answer.HasValue) {
+                            probe.HookOwned |= interest;
+                            if (answer.Value) {
+                                probe.HookReady |= interest;
+                            }
+                        }
+                    }
+                    ready |= probe.HookReady;
                 }
 
                 if (probe.Pipe != null) {

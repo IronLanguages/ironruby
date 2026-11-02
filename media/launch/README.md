@@ -47,7 +47,8 @@ npm run render     # renders/ironruby-4-launch.mp4, 60 fps
 npm run preview    # the HyperFrames studio, to scrub and edit
 ```
 
-`.github/workflows/release.yml` does the same on Ubuntu for every `v*` tag (and for pull
-requests that touch this folder) and attaches the MP4 to the release. Run by hand with
-`video_for: v4.0.0`, it renders only the film and replaces it on that release, along with
-its line in `SHA256SUMS`.
+`.github/workflows/release.yml` does the same on Ubuntu, but only when it is run by hand -
+neither a `v*` tag nor a pull request renders the film. With `render_video` ticked it keeps
+the MP4 as a workflow artifact; with `video_for: v4.0.0` it renders only the film and puts
+it on that release, along with its line in `SHA256SUMS` (replacing the one there, or adding
+both to a release published without it).

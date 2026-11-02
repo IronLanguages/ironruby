@@ -69,9 +69,9 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
-        /// `obj.respond_to?(:name)' answered by method lookups alone - no refinements anywhere, the name's
-        /// method or Kernel#respond_to_missing? found - is a constant for as long as the receiver class's
-        /// method version stays the same, which the rule's receiver test already checks: the lookups are
+        /// `obj.respond_to?(:name)' answered by method lookups alone - no refinement of the receiver's class
+        /// with the name, the name's method or Kernel#respond_to_missing? found - is a constant for as long as
+        /// the receiver class's method version stays the same, which the rule's receiver test already checks: the lookups are
         /// registered for invalidation the way a call site's own resolution is (RubyModule.GetMethodLookup).
         /// The symbol is part of the rule's test, so each literal site gets a rule of its own.
         /// </summary>
@@ -85,11 +85,22 @@ namespace IronRuby.Runtime.Calls {
             // Only a Ruby object's rule tests its exact class; a CLR object's may cover an instance with singleton methods.
             var symbol = args.GetSimpleArgument(0) as RubySymbol;
             var targetClass = args.TargetClass;
-            if (symbol == null || !(args.Target is IRubyObject) || targetClass.Context.HasRefinements) {
+            if (symbol == null || !(args.Target is IRubyObject)) {
                 return false;
             }
 
+            // Kernel#respond_to? sees the refinements active where it is called: where one could supply
+            // either method it would look up, the answer is not the class's alone. Refining either name
+            // re-versions the class, which the rule's receiver test checks.
             string name = symbol.ToString();
+            var context = targetClass.Context;
+            if (context.HasRefinements) {
+                using (context.ClassHierarchyLocker()) {
+                    if (context.IsRefinementSensitive(targetClass, name) || context.IsRefinementSensitive(targetClass, Symbols.RespondToMissing)) {
+                        return false;
+                    }
+                }
+            }
             int version;
             var lookup = targetClass.GetMethodLookup(name, out version);
             if (version < 0) {

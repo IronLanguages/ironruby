@@ -497,7 +497,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static int Shutdown(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self, [DefaultProtocol, DefaultParameterValue(2)]int how) {
             CheckSecurity(context, self, "can't shutdown socket");
             if (how < 0 || 2 < how) {
-                throw RubyExceptions.CreateArgumentError("`how' should be either 0, 1, 2");
+                throw RubyExceptions.CreateArgumentError("`how' should be either :SHUT_RD, :SHUT_WR, :SHUT_RDWR");
             }
             // This used to close() instead, to work around webrick trouble in 2009. Closing is
             // observably wrong -- the socket stays open after shutdown in every other Ruby, and
@@ -697,6 +697,18 @@ namespace IronRuby.StandardLibrary.Sockets {
         ///      p s.recv_nonblock(10) #=> "aaa"
         /// </example>
         #region libc getsockopt, setsockopt
+
+        /// <summary>
+        /// The socket's address family as .NET numbers it (InterNetwork 2, InterNetworkV6 23,
+        /// Unix 1), without a syscall. getsockopt needs the family and used to read it from
+        /// getsockname - but .NET's LocalEndPoint first finishes a pending non-blocking connect,
+        /// reading SO_ERROR to do it, which clears the very error a caller asking for SO_ERROR
+        /// after connect_nonblock wanted to see (cool.io's Connector, EventMachine-style code).
+        /// </summary>
+        [RubyMethod("__ir_raw_address_family", RubyMethodAttributes.PrivateInstance)]
+        public static int GetAddressFamily(RubyBasicSocket/*!*/ self) {
+            return (int)self.Socket.AddressFamily;
+        }
 
         /// <summary>
         /// getsockopt(2) with the *platform's* level and option numbers (the Ruby layer translates
@@ -1152,7 +1164,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                     return new IPAddress(bytes).ToString();
                 }
             } else {
-                throw RubyExceptions.CreateRangeError("bignum too big to convert into `quad long'");
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'unsigned long'");
             }
         }
 
@@ -1197,7 +1209,7 @@ namespace IronRuby.StandardLibrary.Sockets {
 
             if (value is BigInteger bignum) {
                 if (!bignum.AsInt32(out result)) {
-                    throw RubyExceptions.CreateRangeError("bignum too big to convert into `long'");
+                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
                 }
                 return true;
             }
@@ -1228,7 +1240,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 return i;
             }
 
-            throw SocketErrorOps.Create(MutableString.FormatMessage("Invalid port number or service name: `{0}'.", serviceName));
+            throw SocketErrorOps.Create(MutableString.FormatMessage("Invalid port number or service name: '{0}'.", serviceName));
         }
 
         internal static ServiceName SearchForService(int port) {

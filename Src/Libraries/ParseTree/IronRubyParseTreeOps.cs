@@ -71,7 +71,7 @@ namespace IronRuby.StandardLibrary.ParseTree {
 
                 var options = RubyUtils.CreateCompilerOptionsForEval(scope, line);
 
-                SourceUnitTree ast = new Parser().Parse(source, options, scope.RubyContext.RuntimeErrorSink);
+                SourceUnitTree ast = RubyContext.EffectiveParser(source, options, scope.RubyContext.RuntimeErrorSink);
                 // TODO:
                 // bool includeNewLines = IncludeNewLines(scope.RubyContext, self);
                 var visitor = new AstVisitor(scope.RubyContext, GetNodeNames(scope.RubyContext, self), false);

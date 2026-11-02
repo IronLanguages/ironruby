@@ -83,7 +83,7 @@ namespace IronRuby.Compiler.Ast {
             return new KeywordArgumentSplat(hash, converted, keywords);
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             if (_converted != null) {
                 return MSA.Expression.Coalesce(
                     Methods.SplatKeywordHashIfHash.OpCall(gen.CurrentScopeVariable, AstUtils.Box(Argument.TransformRead(gen))),

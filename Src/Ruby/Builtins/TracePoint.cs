@@ -208,6 +208,11 @@ namespace IronRuby.Builtins {
         #region Delivery
 
         public static void Deliver(TraceEventInfo/*!*/ info) {
+#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
+            if (RubyUtils.IsReclaimingFiber) {
+                return;
+            }
+#endif
             if (_currentEvent != null) {
                 return;
             }

@@ -986,7 +986,6 @@ namespace IronRuby.Hosting {
                 var request = new WarmStart.Request {
                     Cwd = Environment.CurrentDirectory,
                     Argv = new[] { Environment.ProcessPath }
-                        .Concat(RubyContext.AlternativeParser != null ? new[] { "-X:UsePrism" } : new string[0])
                         .Concat(Environment.GetCommandLineArgs().Skip(1))
                         .Concat(new[] { "-e", "nil" }).ToArray(),
                 };
@@ -1034,12 +1033,9 @@ namespace IronRuby.Hosting {
                 return reason;
             }
 
+            // -X:UsePrism is accepted and ignored, as by Main: prism is the only parser.
             var args = new List<string>(request.Argv.Skip(1));
-            bool usePrism = args.Remove("-X:UsePrism");
             while (args.Remove("-X:UsePrism")) { }
-            if (usePrism != (RubyContext.AlternativeParser != null)) {
-                return "-X:UsePrism differs";
-            }
 
             var savedEnvironment = WarmStart.CaptureEnvironment();
             string savedDirectory = Environment.CurrentDirectory;

@@ -88,7 +88,7 @@ objects.each do |x|
   raise unless ((y.foo;false) rescue true)            # methods NOT copied
   raise unless y.instance_variable_get(:@iv_x) == 4   # instance variables copied
 end
-");
+", 1, 0);
             }, @"
 Hash
 Array

@@ -3,6 +3,8 @@
     <TargetFrameworks>$(IronRubyTargetFrameworks)</TargetFrameworks>
     <AssemblyName>IronRuby.Libraries</AssemblyName>
     <RootNamespace>IronRuby</RootNamespace>
+    <!-- Src/Libraries/Zstd calls ZstdSharp's ZSTD_* functions, which take pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <!-- present in the tree but never compiled by the legacy csproj -->
@@ -17,15 +19,56 @@
     <!-- SQLite3 library (Src/Libraries/Sqlite3): Microsoft.Data.Sqlite brings
          SQLitePCLRaw, whose bundle_e_sqlite3 carries a native SQLite for
          linux-x64/win-x64 under runtimes/<rid>/native. -->
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
-    <!-- ... but the SQLite in the SQLitePCLRaw 2.1.6 it brings is older than 3.50.2
-         (CVE-2025-6965, NU1903); SQLitePCLRaw 2.1.12 and later carry a fixed one. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.33" />
+    <!-- SQLitePCLRaw before 2.1.12 carries a SQLite older than 3.50.2 (CVE-2025-6965,
+         NU1903). Microsoft.Data.Sqlite 8.0.33 already depends on 2.1.13; the explicit
+         reference keeps the floor if Microsoft.Data.Sqlite is ever moved back. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
     <!-- The HTML5 parser behind Nokogiri::HTML5 / Nokogiri::HTML4 (Src/Libraries/Nokogiri).
          AngleSharp implements the WHATWG tokenizer and tree-construction algorithm, which is
          what nokogiri's gumbo does; nothing in the .NET base class library parses tag soup. -->
     <PackageReference Include="AngleSharp" Version="1.5.0" />
     <PackageReference Include="AngleSharp.Xml" Version="1.2.0" />
+    <!-- The codec behind the zstd-ruby gem's extension (Src/Libraries/Zstd): ZstdSharp is a
+         C# port of libzstd 1.5.7 - the version zstd-ruby 1.5.7.0 bundles - and is MIT-licensed.
+         Managed, so it needs no libzstd on the machine. -->
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- cmark-gfm for markly (Src/Libraries/Markly), built from the markly gem's own C
+         sources by Util/build-markly.sh into Markly/native/build.  Ship whichever
+         platforms' builds are there, as Src/Prism/IronRuby.Prism.csproj does libprism;
+         without one, `require "markly"` raises a LoadError naming the script. -->
+    <Content Include="Markly\native\build\libmarkly_cmark.so" Condition="Exists('$(MSBuildThisFileDirectory)Markly\native\build\libmarkly_cmark.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libmarkly_cmark.so</Link>
+    </Content>
+    <Content Include="Markly\native\build\markly_cmark.dll" Condition="Exists('$(MSBuildThisFileDirectory)Markly\native\build\markly_cmark.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>markly_cmark.dll</Link>
+    </Content>
+    <Content Include="Markly\native\build\libmarkly_cmark.dylib" Condition="Exists('$(MSBuildThisFileDirectory)Markly\native\build\libmarkly_cmark.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libmarkly_cmark.dylib</Link>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- librbs, the rbs gem's parser behind `rbs_extension` (Src/Libraries/Rbs), built by
+         Util/build-librbs.sh into Rbs/native/build: librbs.so, librbs.dylib, or librbs.dll
+         under MinGW gcc on Windows.  Ship whichever ones are there, as libprism is shipped
+         from Src/Prism; RbsNative picks by RuntimeInformation. -->
+    <Content Include="Rbs\native\build\librbs.so" Condition="Exists('Rbs\native\build\librbs.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>librbs.so</Link>
+    </Content>
+    <Content Include="Rbs\native\build\librbs.dll" Condition="Exists('Rbs\native\build\librbs.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>librbs.dll</Link>
+    </Content>
+    <Content Include="Rbs\native\build\librbs.dylib" Condition="Exists('Rbs\native\build\librbs.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>librbs.dylib</Link>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />

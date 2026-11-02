@@ -15,18 +15,24 @@
 # 101 LINQ Samples in Ruby (see http://msdn.microsoft.com/en-us/vcsharp/aa336746.aspx)
 
 load_assembly 'System.Core'
-using_clr_extensions System::Linq
 
 # Linq Helpers
 
-class Object
-  def to_seq(type = Object)
-    System::Linq::Enumerable.method(:of_type).of(type).call(self.to_a)
+# LINQ extends IEnumerable<T>, and a Ruby Array isn't one, so the samples turn their arrays into
+# sequences with to_seq. A refinement keeps it to this file.
+module LinqSampleHelpers
+  refine Object do
+    def to_seq(type = Object)
+      System::Linq::Enumerable.method(:of_type).of(type).call(self.to_a)
+    end
   end
 end
 
-make_pair = lambda { |a,b| [a,b] }
-identity = lambda { |a| a }
+using System::Linq
+using LinqSampleHelpers
+
+make_pair = ->(a,b) { [a,b] }
+identity = ->(a) { a }
 
 ############
 ### Data ###
@@ -71,19 +77,19 @@ digits = digits_array.to_seq
 ###################
 
 puts '-- Where: Simple 1'
-numbers.where(lambda { |n| n < 5 }).each { |x| puts x }
+numbers.where { |n| n < 5 }.each { |x| puts x }
 
 
 puts '-- Where: Simple 2'
-products.where(lambda { |p| p.units_in_stock == 0 }).each { |x| puts x.product_name }
+products.where { |p| p.units_in_stock == 0 }.each { |x| puts x.product_name }
 
 
 puts '-- Where: Simple 3'
-products.where(lambda { |p| p.units_in_stock > 0 and p.unit_price > 3.00 }).each { |x| puts x.product_name }
+products.where { |p| p.units_in_stock > 0 and p.unit_price > 3.00 }.each { |x| puts x.product_name }
 
 
 puts '-- Where: Drilldown'
-wa_customers = customers.where(lambda {|c| c.region == "WA"})
+wa_customers = customers.where {|c| c.region == "WA"}
 wa_customers.each do |customer| 
   puts "Customer #{customer.id}: #{customer.company_name}"
   customer.orders.each do |order|
@@ -93,52 +99,56 @@ end
 
 
 puts '-- Where: Indexed'
-digits.where(lambda { |digit, index| digit.size < index }).each { |x| puts x }
+# A lambda, not a block: on .NET 9 and later the sequence has a Where(Func<T, bool>) of its own, which a block
+# with two parameters also fits, and index would be nil.
+digits.where(->(digit, index) { digit.size < index }).each { |x| puts x }
 
 ##################
 ### Projection ###
 ##################
 
 puts '-- Select: Simple 1'
-p numbers.select(lambda { |n| n + 1 }).to_a
+p numbers.select { |n| n + 1 }.to_a
 
 
 puts '-- Select: Simple 2'
-p products.select(lambda { |p| p.product_name }).to_a
+p products.select { |p| p.product_name }.to_a
 
 
 puts '-- Select: Transformation'
-p numbers.select(lambda { |n| digits_array[n] }).to_a
+p numbers.select { |n| digits_array[n] }.to_a
 
 
 puts '-- Select: Anonymous Types 1'
 words = [ "aPPLE", "BlUeBeRrY", "cHeRry" ].to_seq
 s = Struct.new(:upper, :lower)
 words.
-  select(lambda { |w| s[w.upcase, w.downcase] }).
+  select { |w| s[w.upcase, w.downcase] }.
   each { |ul| puts "Uppercase: #{ul.upper} Lowercase: #{ul.lower}" }
 
 
 puts '-- Select: Anonymous Types 2'
 s = Struct.new(:digit, :even)
 numbers.
-  select(lambda {|n| s[digits_array[n], n % 2 == 0] }).
+  select {|n| s[digits_array[n], n % 2 == 0] }.
   each { |entry| p entry }
 
 
 puts '-- Select: Anonymous Types 3'
 s = Struct.new(:product_name, :category, :price)
 products.
-  select(lambda {|p| s[p.product_name, p.category, p.unit_price] }).
+  select {|p| s[p.product_name, p.category, p.unit_price] }.
   each { |product_info| puts "#{product_info.product_name} is in the category #{product_info.category} and costs #{product_info.price} per unit" }
 
 
 puts '-- Select: Indexed'
-numbers.select(lambda { |num, index| [num, num == index] }).each { |num, in_place| puts "#{num}: #{in_place}" }
+# A lambda, not a block: on .NET 9 and later the sequence has a Select(Func<T, R>) of its own, which a block
+# with two parameters also fits, and the call would be ambiguous.
+numbers.select(->(num, index) { [num, num == index] }).each { |num, in_place| puts "#{num}: #{in_place}" }
 
 
 puts '-- Select: Filtered'
-p numbers.where(lambda { |n| n < 5 }).select(lambda { |n| digits_array[n] }).to_a
+p numbers.where { |n| n < 5 }.select { |n| digits_array[n] }.to_a
 
 
 puts '-- SelectMany: Compound from 1'
@@ -146,17 +156,17 @@ numbersA = [ 0, 2, 4, 5, 6, 8, 9 ].to_seq
 numbersB = [ 1, 3, 5, 7, 8 ].to_seq
 
 numbersA.
-  select_many(lambda { |_| numbersB }, make_pair).
-  where(lambda { |(a,b)| a < b }).
+  select_many(->(_) { numbersB }, make_pair).
+  where { |(a,b)| a < b }.
   each { |a,b| puts "#{a} is less than #{b}" }
 
 
 puts '-- SelectMany: Compound from 2'
 s = Struct.new(:customer_id, :order_id, :total)
 customers.
-  select_many(lambda { |c| c.orders }, make_pair).
-  where(lambda { |(c,o)| o.total < 500 }).
-  select(lambda { |(c,o)| s[c.id, o.id, o.total] }).
+  select_many(->(c) { c.orders }, make_pair).
+  where { |(c,o)| o.total < 500 }.
+  select { |(c,o)| s[c.id, o.id, o.total] }.
   each { |entry| p entry }
 
 
@@ -170,16 +180,16 @@ puts '-- SelectMany: Multiple from'
 cutoff_date = 1997
 s = Struct.new(:customer_id, :order_id)
 customers.
-  where(lambda { |c| c.region == "WA" }).
-  select_many(lambda { |c| c.orders }, make_pair).
-  where(lambda { |(c, o)| o.order_date >= cutoff_date }).
-  select(lambda { |(c, o)| s[c.id, o.id] }).
+  where { |c| c.region == "WA" }.
+  select_many(->(c) { c.orders }, make_pair).
+  where { |(c, o)| o.order_date >= cutoff_date }.
+  select { |(c, o)| s[c.id, o.id] }.
   each { |entry| p entry }
 
 
 puts '-- SelectMany: Indexed'
 customers.
-  select_many(lambda { |cust, cust_index| cust.orders.to_seq.select(lambda {|o| "Customer #{cust_index + 1} has an order with id #{o.id}" }) }).
+  select_many { |cust, cust_index| cust.orders.to_seq.select {|o| "Customer #{cust_index + 1} has an order with id #{o.id}" } }.
   each { |s| puts s }
 
 #####################
@@ -200,27 +210,27 @@ p numbers.skip(3).to_a
 puts '-- Skip: Nested'
 s = Struct.new(:customer_id, :order_id, :order_date)
 customers.
-  select_many(lambda { |c| c.orders }, make_pair).
-  where(lambda {|(c,o)| c.region == "WA" }).
-  select(lambda {|(c,o)| s[c.id, o.id, o.order_date]}).
+  select_many(->(c) { c.orders }, make_pair).
+  where {|(c,o)| c.region == "WA" }.
+  select {|(c,o)| s[c.id, o.id, o.order_date]}.
   skip(2).
   each { |entry| p entry }
 
 
 puts '-- TakeWhile: Simple'
-p numbers.take_while(lambda {|n| n < 6 }).to_a
+p numbers.take_while {|n| n < 6 }.to_a
 
 
 puts '-- TakeWhile: Indexed'
-p numbers.take_while(lambda {|n, index| n >= index }).to_a
+p numbers.take_while {|n, index| n >= index }.to_a
 
 
 puts '-- SkipWhile: Simple'
-p numbers.skip_while(lambda {|n| n % 3 != 0 }).to_a
+p numbers.skip_while {|n| n % 3 != 0 }.to_a
 
 
 puts '-- SkipWhile: Indexed'
-p numbers.skip_while(lambda {|n, index| n >= index }).to_a
+p numbers.skip_while {|n, index| n >= index }.to_a
 
 ################
 ### Ordering ###
@@ -249,16 +259,16 @@ end
 # puts '-- ThenBy - Comparer'
 
 puts '-- ThenByDescending: Simple'
-products.order_by(lambda { |p| p.category }).then_by_descending(lambda { |p| p.unit_price }).each { |product| p product }
+products.order_by { |p| p.category }.then_by_descending { |p| p.unit_price }.each { |product| p product }
 
 
 puts '-- ThenByDescending: Comparer'
 words = [ "aPPLE", "AbAcUs", "bRaNcH", "BlUeBeRrY", "ClOvEr", "cHeRry"  ].to_seq
-p words.order_by(lambda { |a| a.size }).then_by_descending(identity, Comparer.new { |x, y| x.casecmp y }).to_a
+p words.order_by { |a| a.size }.then_by_descending(identity, Comparer.new { |x, y| x.casecmp y }).to_a
 
 
 puts '-- Reverse'
-digits.where(lambda { |d| d[1] == ?i }).reverse.each { |d| puts d }
+digits.where { |d| d[1] == ?i }.reverse.each { |d| puts d }
 
 
 ################
@@ -267,14 +277,14 @@ digits.where(lambda { |d| d[1] == ?i }).reverse.each { |d| puts d }
 
 puts '-- Grouping: Simple 1'
 numbers.
-  group_by(lambda { |n| n % 5 }).
+  group_by { |n| n % 5 }.
   each { |g| puts "Numbers with a remainder of #{g.key} when divided by 5: #{g.to_a.inspect}" }
   
 
 puts '-- Grouping: Simple 2'
 words = [ "blueberry", "chimpanzee", "abacus", "banana", "apple", "cheese" ].to_seq
 words.
-  group_by(lambda { |w| w[0] }).
+  group_by { |w| w[0] }.
   each { |g| puts "Words that start with the letter '#{g.key.chr}': #{g.to_a.join(', ')}" }
 
 
@@ -306,15 +316,15 @@ end
 anagrams = ["from   ", " salt", " earn ", "  last   ", " near ", " form  "].to_seq
 
 anagrams.
-  group_by(lambda { |w| w.strip }, AnagramEqualityComparer.new).
-  each { |g| puts "#{g.key}: #{g.select(lambda { |w| "'#{w}'" }).to_a.join(', ')}" }
+  group_by(->(w) { w.strip }, AnagramEqualityComparer.new).
+  each { |g| puts "#{g.key}: #{g.select { |w| "'#{w}'" }.to_a.join(', ')}" }
   
   
 puts '-- GroupBy: Comparer, Mapped'
 
 anagrams.
-  group_by(lambda { |w| w.strip }, lambda { |a| a.upcase }, AnagramEqualityComparer.new).
-  each { |g| puts "#{g.key}: #{g.select(lambda { |w| "'#{w}'" }).to_a.join(', ')}" }
+  group_by(->(w) { w.strip }, ->(a) { a.upcase }, AnagramEqualityComparer.new).
+  each { |g| puts "#{g.key}: #{g.select { |w| "'#{w}'" }.to_a.join(', ')}" }
   
 #####################
 ### Set Operators ###
@@ -357,35 +367,34 @@ p words.order_by(identity).to_list
 puts '-- ToDictionary'
 s = Struct.new(:name, :score)
 score_records = [s["Alice", 50], s["Bob", 40], s["Cathy", 45]].to_seq
-dict = score_records.to_dictionary(lambda {|sr| sr.name })
+dict = score_records.to_dictionary {|sr| sr.name }
 dict.each {|k,v| puts "#{k} => #{v}" }
 
-# TODO: IronRuby bug
-#puts '-- OfType'
-#p [ nil, 1.0, "two", 3, "four", 5, "six", 7.0 ].to_seq.method(:of_type).of(Float).call.to_a
+puts '-- OfType'
+p [ nil, 1.0, "two", 3, "four", 5, "six", 7.0 ].to_seq.method(:of_type).of(Float).call.to_a
 
 #########################
 ### Element Operators ###
 #########################
 
 puts '-- First: Simple'
-p products.where(lambda {|p| p.category == "foo" }).first
+p products.where {|p| p.category == "foo" }.first
 
 
 puts '-- First: Condition'
-p digits.first(lambda {|s| s[0] == ?o})
+p digits.first {|s| s[0] == ?o}
 
 
 puts '-- FirstOrDefault: Simple'
-p [].to_seq(Fixnum).first_or_default
+p [].to_seq(Integer).first_or_default
 
 
 puts '-- FirstOrDefault: Condition'
-p digits.first_or_default(lambda {|s| s[0] == ?x}).nil?
+p digits.first_or_default {|s| s[0] == ?x}.nil?
 
 
 puts '-- ElementAt'
-p numbers.where(lambda {|n| n > 5}).element_at(1)
+p numbers.where {|n| n > 5}.element_at(1)
 
 ############################
 ### Generation Operators ###
@@ -397,6 +406,7 @@ System::Linq::Enumerable.range(10, 5).each { |n| puts "#{n} is #{n % 2 == 1 ? 'o
 
 puts '-- Repeat'
 System::Linq::Enumerable.repeat(7, 10).each { |n| print n }
+puts
 
 ###################
 ### Quantifiers ###
@@ -404,24 +414,24 @@ System::Linq::Enumerable.repeat(7, 10).each { |n| print n }
 
 puts '-- Any: Simple'
 words = ["believe", "relief", "receipt", "field"].to_seq
-p words.any(lambda { |w| w.include? "ei" })
+p words.any { |w| w.include? "ei" }
 
 puts '-- Any: Grouped'
 products.
-  group_by(lambda { |p| p.category }).
-  where(lambda { |g| g.any(lambda { |p| p.units_in_stock == 0 }) }).
-  each { |g| puts "#{g.key}: #{g.select(lambda {|p| p.product_name }).to_a.join(', ')}" }
+  group_by { |p| p.category }.
+  where { |g| g.any { |p| p.units_in_stock == 0 } }.
+  each { |g| puts "#{g.key}: #{g.select {|p| p.product_name }.to_a.join(', ')}" }
 
   
 puts '-- All: Simple'
-p numbers.all(lambda { |n| n % 2 == 1 })
+p numbers.all { |n| n % 2 == 1 }
 
 
 puts '-- All: Grouped'
 products.
-  group_by(lambda { |p| p.category }).
-  where(lambda { |g| g.all(lambda { |p| p.units_in_stock > 0 }) }).
-  each { |g| puts "#{g.key}: #{g.select(lambda {|p| p.product_name }).to_a.join(', ')}" }
+  group_by { |p| p.category }.
+  where { |g| g.all { |p| p.units_in_stock > 0 } }.
+  each { |g| puts "#{g.key}: #{g.select {|p| p.product_name }.to_a.join(', ')}" }
 
 
 ###########################
@@ -434,67 +444,67 @@ p factorsOf300.distinct.count
 
 
 puts '-- Count: Conditional'
-p numbers.count(lambda { |n| n % 2 == 1 })
+p numbers.count { |n| n % 2 == 1 }
 
 
 puts '-- Count: Nested'
-p customers.select(lambda {|c| [c.id, c.orders.to_seq.count]}).to_a
+p customers.select {|c| [c.id, c.orders.to_seq.count]}.to_a
 
 
 puts '-- Count: Grouped'
 s = Struct.new(:category, :product_count)
 products.
-  group_by(lambda { |p| p.category }, lambda { |c, g| s[c, g.count ] }).
+  group_by(->(p) { p.category }) { |c, g| s[c, g.count ] }.
   each { |entry| p entry }
 
 
 puts '-- Sum: Simple'
 # sum is only defined on IEnumerable<numeric type>, but numbers are of type IEnumerable<object>:
-p numbers.to_seq(Fixnum).sum
+p numbers.to_seq(Integer).sum
 
 
 puts '-- Sum: Projection'
 # sum is overloaded on the Func's return type, which we don't currently infer, so we need it to be specified explicitly:
-p words.sum(System::Func[Object, Fixnum].new { |w| w.length })
+p words.sum(System::Func[Object, Integer].new { |w| w.length })
 
 
 puts '-- Sum: Grouped'
 s = Struct.new(:category, :total_units_in_stock)
 products.
-  group_by(lambda { |p| p.category }, lambda { |c, g| s[c, g.sum(System::Func[Object, Fixnum].new { |p| p.units_in_stock })] }).
+  group_by(->(p) { p.category }) { |c, g| s[c, g.sum(System::Func[Object, Integer].new { |p| p.units_in_stock })] }.
   each { |entry| p entry }
 
 
 puts '-- Min: Simple'
 # min is only defined on IEnumerable<numeric type>, but numbers are of type IEnumerable<object>:
-p numbers.to_seq(Fixnum).min
+p numbers.to_seq(Integer).min
 
 
 puts '-- Min: Projection'
 # min is overloaded on the Func's return type, which we don't currently infer, so we need it to be specified explicitly:
-p words.sum(System::Func[Object, Fixnum].new { |w| w.length })
+p words.method(:min).of(Object, Integer).call { |w| w.length }
 
 
 puts '-- Min: Grouped'
 s = Struct.new(:category, :cheapest_price)
 products.
-  group_by(lambda { |p| p.category }, lambda do |c, g| 
+  group_by(->(p) { p.category }) do |c, g| 
     # min has overloads that we are currently not able to disambiguate via type inference, so we need some help:
-    s[c, g.method(:min).of(Object, Float).call(lambda { |p| p.unit_price })] 
-  end).
+    s[c, g.method(:min).of(Object, Float).call { |p| p.unit_price }] 
+  end.
   each { |entry| p entry }
   
   
 puts '-- Min: Elements'
 s = Struct.new(:category, :cheapest_products)
 products.
-  group_by(lambda { |p| p.category }, lambda do |c, g| 
+  group_by(->(p) { p.category }) do |c, g| 
     # min has overloads that we are currently not able to disambiguate via type inference, so we need some help:
-    min_price = g.method(:min).of(Object, Float).call(lambda { |p| p.unit_price })
+    min_price = g.method(:min).of(Object, Float).call { |p| p.unit_price }
     
-    s[c, g.where(lambda {|p| p.unit_price == min_price })] 
-  end).
-  each { |entry| puts "Cheapest products in category #{entry.category}: #{entry.cheapest_products.select(lambda {|p| p.product_name }).to_a}" }
+    s[c, g.where {|p| p.unit_price == min_price }] 
+  end.
+  each { |entry| puts "Cheapest products in category #{entry.category}: #{entry.cheapest_products.select {|p| p.product_name }.to_a}" }
 
 
 # Max samples are similar to Min 
@@ -505,14 +515,14 @@ products.
 
 puts '-- Aggregate: Simple'
 doubles = [ 1.7, 2.3, 1.9, 4.1, 2.9 ].to_seq
-p doubles.aggregate(lambda { |running_product, next_factor| running_product * next_factor })
+p doubles.aggregate { |running_product, next_factor| running_product * next_factor }
 
 
 puts '-- Aggregate: Seed'
 start_balance = 100.0
 attempted_withdrawals = [ 20, 10, 40, 50, 10, 70, 30 ].to_seq
 
-end_balance = attempted_withdrawals.aggregate start_balance, lambda { |balance, next_withdrawal| 
+end_balance = attempted_withdrawals.aggregate(start_balance) { |balance, next_withdrawal| 
   next_withdrawal <= balance ? balance - next_withdrawal : balance 
 }
 
@@ -526,8 +536,8 @@ p numbersA.concat(numbersB).to_a
 
 
 puts '-- Concat: 2'
-customer_names = customers.select(lambda {|c| c.company_name })
-product_names = products.select(lambda {|p| p.product_name })
+customer_names = customers.select {|c| c.company_name }
+product_names = products.select {|p| p.product_name }
 p customer_names.concat(product_names).to_a
 
 
@@ -561,27 +571,27 @@ p wordsA.sequence_equal(wordsB)
 puts '-- Cross Join'
 categories = ["bar", "foo"].to_seq
 categories.
-  join(products, identity, lambda { |p| p.category }, make_pair).
+  join(products, identity, ->(p) { p.category }, make_pair).
   each { |(c, p)| puts "#{p.product_name}: #{c}" }
 
 
 puts '-- Group Join'
 categories.
-  group_join(products, identity, lambda { |p| p.category }, make_pair).
-  each { |(c, ps)| puts "#{c}: #{ps.select(lambda {|p| p.product_name}).to_a.join(', ')}" }
+  group_join(products, identity, ->(p) { p.category }, make_pair).
+  each { |(c, ps)| puts "#{c}: #{ps.select {|p| p.product_name}.to_a.join(', ')}" }
   
 
 puts '-- Cross Join with Group Join'
 s = Struct.new(:category, :product_name)
 categories.
-  group_join(products, identity, lambda { |p| p.category }, make_pair).
-  select_many(lambda { |(c, ps)| ps }, lambda { |(c,), p| s[c, p.product_name] }).
+  group_join(products, identity, ->(p) { p.category }, make_pair).
+  select_many(->((c, ps)) { ps }) { |(c, _), p| s[c, p.product_name] }.
   each { |entry| p entry}
 
 
 puts '-- Left Outer Join'
 categories = ["foo", "no such category"].to_seq
 categories.
-  group_join(products, identity, lambda { |p| p.category }, make_pair).
-  select_many(lambda { |(c, ps)| ps.default_if_empty }, lambda { |(c,), p| s[c, if p.nil? then "(No Products)" else p.product_name end] }).
+  group_join(products, identity, ->(p) { p.category }, make_pair).
+  select_many(->((c, ps)) { ps.default_if_empty }) { |(c, _), p| s[c, if p.nil? then "(No Products)" else p.product_name end] }.
   each { |entry| p entry}

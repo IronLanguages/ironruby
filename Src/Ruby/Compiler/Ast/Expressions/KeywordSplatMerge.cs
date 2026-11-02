@@ -78,7 +78,7 @@ namespace IronRuby.Compiler.Ast {
             return new KeywordSplatMerge(hash, splatted, location);
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             if (_converted == null) {
                 return Methods.MergeKeywordHash.OpCall(gen.CurrentScopeVariable,
                     AstUtils.Box(_hash.TransformRead(gen)), AstUtils.Box(_splatted.TransformRead(gen)));

@@ -14,6 +14,8 @@ bin/
 !/Src/StdLib/ruby/gems/*/gems/*/bin/
 /Stage
 /Package
+# librbs, built by Util/build-librbs.sh
+/Src/Libraries/Rbs/native/build/
 
 # Temporary VS files
 *.suo
@@ -77,3 +79,6 @@ Util/References
 /.claude/
 # scratch copies of ir.sh pointing at an out-of-tree build
 /ir[0-9].sh
+
+# Util/build-markly.sh output: cmark-gfm built from the markly gem, per platform
+/Src/Libraries/Markly/native/build/

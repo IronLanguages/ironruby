@@ -65,7 +65,7 @@ namespace IronRuby.Compiler.Ast {
             _target = target;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             var literal = _target as StringLiteral;
             if (literal != null && _methodName == "freeze" && (Arguments == null || Arguments.IsEmpty) && Block == null) {
                 return literal.TransformReadFrozen(gen);

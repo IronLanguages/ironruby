@@ -183,7 +183,8 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         [RubyMethod("limit", RubyMethodAttributes.PublicSingleton)]
         public static int Limit(RubyContext/*!*/ context, RubyClass/*!*/ self, [Optional]object n) {
-            if (!(n is Missing)) {
+            // BigDecimal.limit(nil) answers the limit without changing it (BigDecimal_limit).
+            if (!(n is Missing) && n != null) {
                 throw RubyExceptions.CreateUnexpectedTypeError(context, n, "Integer");
             }
             return GetConfig(context).Limit;
@@ -570,6 +571,22 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public static BigDecimal/*!*/ Divide(RubyContext/*!*/ context, BigDecimal/*!*/ self, BigDecimal/*!*/ other) {
             BigDecimal remainder;
             return BigDecimal.Divide(GetConfig(context), self, other, 0, out remainder);
+        }
+
+        // An Integer divisor is turned into a BigDecimal, as for #+ and #*. Without these it went
+        // through Integer#coerce, which answers a pair of Floats, so BigDecimal("3.14") / 2 was 1.57.
+        [RubyMethod("/")]
+        [RubyMethod("quo")]
+        public static BigDecimal/*!*/ Divide(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
+            BigDecimal.Config config = GetConfig(context);
+            return Divide(context, self, BigDecimal.Create(config, other));
+        }
+
+        [RubyMethod("/")]
+        [RubyMethod("quo")]
+        public static BigDecimal/*!*/ Divide(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
+            BigDecimal.Config config = GetConfig(context);
+            return Divide(context, self, BigDecimal.Create(config, other));
         }
 
         [RubyMethod("/")]
@@ -1228,4 +1245,4 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #endregion
     }
-}
+}

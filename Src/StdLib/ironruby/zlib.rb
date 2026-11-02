@@ -13,18 +13,10 @@
 #
 # ****************************************************************************
 
-# There is no libz to bind to on Windows, and the z_stream this binds to is laid out for
-# an LP64 C compiler - `unsigned long` is 8 bytes there and 4 under MSVC - so even a
-# zlib1.dll that happens to be on PATH would be read through the wrong struct. Refusing
-# here is a LoadError the caller can rescue; letting it through was a
-# TypeInitializationException from the first constant the class defines.
-if ::File::ALT_SEPARATOR == "\\"
-  raise LoadError, "cannot load such file -- zlib (no libz on this platform)"
-end
-
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Zlib'
 
 # Zlib::ZStream, Inflate and Deflate are the libz binding in Src/Libraries/Zlib/zlib.cs.
+# Windows has no libz; there they run on the zlib .NET itself ships (Src/Libraries/Zlib/ClrZlib.cs).
 # The gzip family below is written on top of them: a gzip member is a 10-byte header, a
 # raw deflate stream and an 8-byte footer, none of which needs libz directly.
 

@@ -48,7 +48,7 @@ namespace IronRuby.Compiler.Ast {
             _argument = argument;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return AstUtils.LightDynamic(ExplicitSplatAction.Make(gen.Context), typeof(IList), _argument.TransformRead(gen));
         }
     }

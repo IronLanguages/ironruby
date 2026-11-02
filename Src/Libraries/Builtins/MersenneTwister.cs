@@ -16,6 +16,12 @@ namespace IronRuby.Builtins {
     /// MRI's Random generator: MT19937 as random.c/mt19937.c have it, seeded the same way, so that
     /// Random.new(seed) produces the same numbers, bytes and marshal data as MRI does.
     /// Random itself is written in Ruby (ruby4.rb); this is the part that has to be fast.
+    ///
+    /// Every public operation holds a private lock.  MRI's generator is shared by every thread
+    /// that calls Kernel#rand or Array#shuffle, and the GVL makes each draw atomic there; without
+    /// the lock two threads drawing at once advanced _next past the end of the state vector, and
+    /// Kernel#rand died with System::IndexOutOfRangeException.  A draw is a few nanoseconds of
+    /// arithmetic, so an uncontended lock is the cheap way to keep the MRI sequence intact.
     /// </summary>
     public sealed class MersenneTwister {
         private const int N = 624;
@@ -25,6 +31,7 @@ namespace IronRuby.Builtins {
         private const uint LowerMask = 0x7fffffffU;
 
         private readonly uint[] _state = new uint[N];
+        private readonly object _lock = new object();
         private int _next;
         private int _left;
 
@@ -63,7 +70,9 @@ namespace IronRuby.Builtins {
         }
 
         public MersenneTwister/*!*/ Copy() {
-            return new MersenneTwister(this);
+            lock (_lock) {
+                return new MersenneTwister(this);
+            }
         }
 
         private void InitGenrand(uint s) {
@@ -110,6 +119,13 @@ namespace IronRuby.Builtins {
         }
 
         public uint NextUInt32() {
+            lock (_lock) {
+                return Draw();
+            }
+        }
+
+        /// <summary>genrand_int32 itself; the caller holds _lock.</summary>
+        private uint Draw() {
             if (--_left <= 0) {
                 NextState();
             }
@@ -130,7 +146,11 @@ namespace IronRuby.Builtins {
         /// random_real: genrand_res53 for [0, 1), int_pair_to_real_inclusive for [0, 1].
         /// </summary>
         public double GenrandReal(bool excludeEnd) {
-            uint a = NextUInt32(), b = NextUInt32();
+            uint a, b;
+            lock (_lock) {
+                a = Draw();
+                b = Draw();
+            }
             if (excludeEnd) {
                 return ((a >> 5) * 67108864.0 + (b >> 6)) * (1.0 / 9007199254740992.0);
             }
@@ -145,11 +165,13 @@ namespace IronRuby.Builtins {
         public byte[]/*!*/ GenrandBytes(int count) {
             byte[] result = new byte[count];
             int i = 0;
-            while (i < count) {
-                uint x = NextUInt32();
-                for (int k = 0; k < 4 && i < count; k++) {
-                    result[i++] = (byte)x;
-                    x >>= 8;
+            lock (_lock) {
+                while (i < count) {
+                    uint x = Draw();
+                    for (int k = 0; k < 4 && i < count; k++) {
+                        result[i++] = (byte)x;
+                        x >>= 8;
+                    }
                 }
             }
             return result;
@@ -179,7 +201,19 @@ namespace IronRuby.Builtins {
                 lim[i / 4] |= (uint)bytes[i] << (8 * (i % 4));
             }
             uint[] rnd = new uint[len];
+            lock (_lock) {
+                FillLimited(lim, rnd, len);
+            }
 
+            BigInteger result = BigInteger.Zero;
+            for (int i = len - 1; i >= 0; i--) {
+                result = (result << 32) | rnd[i];
+            }
+            return Protocols.Normalize(result);
+        }
+
+        /// <summary>limited_rand's drawing loop; the caller holds _lock.</summary>
+        private void FillLimited(uint[]/*!*/ lim, uint[]/*!*/ rnd, int len) {
         retry:
             uint mask = 0;
             bool boundary = true;
@@ -187,7 +221,7 @@ namespace IronRuby.Builtins {
                 uint r = 0;
                 mask = mask != 0 ? 0xffffffffU : MakeMask(lim[i]);
                 if (mask != 0) {
-                    r = NextUInt32() & mask;
+                    r = Draw() & mask;
                     if (boundary) {
                         if (lim[i] < r) {
                             goto retry;
@@ -199,25 +233,21 @@ namespace IronRuby.Builtins {
                 }
                 rnd[i] = r;
             }
-
-            BigInteger result = BigInteger.Zero;
-            for (int i = len - 1; i >= 0; i--) {
-                result = (result << 32) | rnd[i];
-            }
-            return Protocols.Normalize(result);
         }
 
         /// <summary>The state vector as one Integer, least significant word first (rand_mt_dump).</summary>
         public BigInteger GetState() {
-            BigInteger result = BigInteger.Zero;
-            for (int i = N - 1; i >= 0; i--) {
-                result = (result << 32) | _state[i];
+            lock (_lock) {
+                BigInteger result = BigInteger.Zero;
+                for (int i = N - 1; i >= 0; i--) {
+                    result = (result << 32) | _state[i];
+                }
+                return result;
             }
-            return result;
         }
 
         public int Left {
-            get { return _left; }
+            get { lock (_lock) { return _left; } }
         }
 
         /// <summary>rand_mt_load.</summary>
@@ -226,15 +256,26 @@ namespace IronRuby.Builtins {
                 throw new ArgumentOutOfRangeException("left", "wrong value");
             }
             BigInteger mask = uint.MaxValue;
-            for (int i = 0; i < N; i++) {
-                _state[i] = (uint)(state & mask);
-                state >>= 32;
+            lock (_lock) {
+                for (int i = 0; i < N; i++) {
+                    _state[i] = (uint)(state & mask);
+                    state >>= 32;
+                }
+                _left = left;
+                _next = N - left + 1;
             }
-            _left = left;
-            _next = N - left + 1;
         }
 
         public bool StateEquals(MersenneTwister/*!*/ other) {
+            // Compare against a snapshot of +other+ taken under its own lock, so that two threads
+            // comparing a == b and b == a never hold both locks at once.
+            other = other.Copy();
+            lock (_lock) {
+                return StateEqualsLocked(other);
+            }
+        }
+
+        private bool StateEqualsLocked(MersenneTwister/*!*/ other) {
             if (_left != other._left || _next != other._next) {
                 return false;
             }

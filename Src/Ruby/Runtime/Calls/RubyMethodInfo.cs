@@ -210,6 +210,22 @@ namespace IronRuby.Runtime.Calls {
         #region Dynamic Sites
 
         internal override MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version) {
+            return GetDispatcher(delegateType, signature, target, version, null, false);
+        }
+
+        /// <summary>
+        /// The dispatcher of a call a refinement could change, which also tests that the method's refinement record holds
+        /// <paramref name="refinements"/> (see MethodDispatcher.CreateRefinedRubyObjectDispatcher).
+        /// </summary>
+        internal MemberDispatcher GetRefinedDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version,
+            RefinementActivation/*!*/ refinements, bool inBlock) {
+            Assert.NotNull(refinements);
+            return GetDispatcher(delegateType, signature, target, version, refinements, inBlock);
+        }
+
+        private MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version,
+            RefinementActivation refinements, bool inBlock) {
+
             if (Parameters.Unsplat != null) {
                 return null;
             }
@@ -233,9 +249,9 @@ namespace IronRuby.Runtime.Calls {
             }
 
             var method = GetDelegate();
-            var dispatcher = MethodDispatcher.CreateRubyObjectDispatcher(
-                delegateType, method, parameterCount, signature.HasScope, signature.HasBlock, version
-            );
+            var dispatcher = (refinements != null) ?
+                MethodDispatcher.CreateRefinedRubyObjectDispatcher(delegateType, method, parameterCount, signature.HasBlock, version, refinements, inBlock) :
+                MethodDispatcher.CreateRubyObjectDispatcher(delegateType, method, parameterCount, signature.HasScope, signature.HasBlock, version);
             if (dispatcher != null && !_isModuleFunctionCopy) {
                 _body.RegisterDispatcher(dispatcher, method);
             }

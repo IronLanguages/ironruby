@@ -8,7 +8,6 @@ namespace IronRuby.Tests {
         /// with the method for every receiver of the class, for a receiver whose === is user-defined, and after Module#===
         /// is wrapped. The answers are CRuby's.
         /// </summary>
-        [Options(Prism = true)]
         public void CaseEquals1() {
             TestOutput(@"
 module M; end
@@ -65,7 +64,6 @@ int
         /// Rules bound before c_call tracing is switched on are rebound, so the library method's own rule reports
         /// each === while a TracePoint wants it.
         /// </summary>
-        [Options(Prism = true)]
         public void CaseEquals2() {
             TestOutput(@"
 3.times { Integer === 1 }

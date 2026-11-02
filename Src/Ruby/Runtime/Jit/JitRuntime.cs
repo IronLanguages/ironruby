@@ -30,15 +30,9 @@ namespace IronRuby.Runtime.Jit {
     }
 
     /// <summary>
-    /// Runtime helpers called from JIT-compiled code, plus the global kill switch.
+    /// Runtime helpers called from JIT-compiled code.
     /// </summary>
     public static class JitRuntime {
-        /// <summary>
-        /// Set when something the JIT cannot reason about shows up (refinements). Specialized
-        /// code checks it on entry, so turning it on deoptimizes every specialization at once.
-        /// </summary>
-        internal static bool Disabled;
-
         /// <summary>IR_JIT_VERBOSE=1 traces what gets specialized and what is rejected.</summary>
         internal static readonly bool Verbose = Environment.GetEnvironmentVariable("IR_JIT_VERBOSE") == "1";
 
@@ -65,10 +59,6 @@ namespace IronRuby.Runtime.Jit {
                 _screenReasons.TryGetValue(nodeKind ?? "?", out n);
                 _screenReasons[nodeKind ?? "?"] = n + 1;
             }
-        }
-
-        internal static void Disable() {
-            Disabled = true;
         }
 
         private static int _statsHooked;
@@ -275,13 +265,14 @@ namespace IronRuby.Runtime.Jit {
         // ---- guards ----------------------------------------------------------------------
 
         /// <summary>
-        /// The entry guard: the global method version has not moved since specialization and
-        /// nothing has globally disabled the JIT. Any def/undef/alias/include/singleton-method
-        /// anywhere bumps RubyModule's global method version, so this one check covers method
-        /// redefinition, overriding in a subclass, and singleton methods.
+        /// The entry guard: the global method version has not moved since specialization. Any
+        /// def/undef/alias/include/singleton-method anywhere bumps RubyModule's global method
+        /// version, and so does a method coming or going in a refinement (it re-versions the
+        /// classes below the refined module), so this one check covers method redefinition,
+        /// overriding in a subclass, singleton methods and refinements.
         /// </summary>
         public static bool VersionOk(int snapshot) {
-            return !Disabled && RubyModule.GlobalMethodVersion == snapshot;
+            return RubyModule.GlobalMethodVersion == snapshot;
         }
 
         /// <summary>A method entry's VersionOk failed: it is stale for good (see JitStub.VersionChanged).</summary>

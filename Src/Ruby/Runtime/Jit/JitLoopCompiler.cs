@@ -70,12 +70,17 @@ namespace IronRuby.Runtime.Jit {
         /// this can specialize. <paramref name="args"/> are the locals tuples the site passes,
         /// one per lexical depth; they carry the live values the types are read from, which is
         /// a type profile a loop that is already running gets for free. The loop's self is
-        /// args[<paramref name="selfArgIndex"/>], or there is none if that is negative.
+        /// args[<paramref name="selfArgIndex"/>], or there is none if that is negative; its scope
+        /// is args[<paramref name="scopeArgIndex"/>].
         /// </summary>
         internal static Func<object[], object> TryCompile(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
-            int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex) {
+            int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex, int scopeArgIndex) {
 
-            if (JitRuntime.Disabled || context.HasRefinements) { return null; }
+            // The refinements active where the loop is written: the operators it inlines are resolved
+            // under them, as its call sites would resolve them.
+            var scope = (scopeArgIndex >= 0 && scopeArgIndex < args.Length) ? args[scopeArgIndex] as RubyScope : null;
+            if (scope == null) { return null; }
+            RefinementActivation refinements = scope.GetActiveRefinements();
 
             // What the prologue's version guard compares against: read before the compiler
             // resolves anything (see JitStub.TrySpecialize), so that a method table change racing
@@ -184,7 +189,8 @@ namespace IronRuby.Runtime.Jit {
 
             List<JitLoopSlot> slots;
             bool canDeopt;
-            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, out slots, out canDeopt);
+            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, refinements,
+                out slots, out canDeopt);
             if (body == null || slots.Count == 0) {
                 if (OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter gave up (body={0} slots={1})", body != null, slots == null ? -1 : slots.Count); }
                 return null;
@@ -212,6 +218,19 @@ namespace IronRuby.Runtime.Jit {
                 prologue.Add(Ast.IfThen(guard, Ast.Return(exit, Ast.Constant(OsrLoopSite.Retry, typeof(object)))));
             }
             prologue.AddRange(tupleInit);
+
+            // The same loop can be entered under other refinements than the ones the copy was built
+            // under - an eval string's, say: build one for those. Not a Retype: the locals' types are
+            // as the copy expects, and those rebuilds are kept for the day one of them widens.
+            prologue.Add(Ast.IfThen(
+                Ast.NotEqual(
+                    Ast.Call(IronRuby.Compiler.Methods.GetActiveRefinements,
+                        Ast.Convert(Ast.ArrayIndex(argsParameter, Ast.Constant(scopeArgIndex)), typeof(RubyScope))),
+                    Ast.Constant(refinements, typeof(RefinementActivation))
+                ),
+                Ast.Return(exit, Ast.Constant(OsrLoopSite.RefinementsChanged, typeof(object)))
+            ));
+
             if (self != null) {
                 prologue.Add(Ast.Assign(self, Ast.ArrayIndex(argsParameter, Ast.Constant(selfArgIndex))));
             }

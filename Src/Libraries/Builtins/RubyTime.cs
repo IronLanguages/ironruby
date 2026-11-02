@@ -248,12 +248,12 @@ namespace IronRuby.Builtins {
             return new RubyTime(ClampSeconds(whole), sub, kind, fixedOffset);
         }
 
+        // Seconds since the epoch are kept in a long; half its range leaves room for
+        // the arithmetic on them.  MRI keeps a bignum and has no such limit.
         private static long ClampSeconds(BigInteger value) {
-            if (value > new BigInteger(Int64.MaxValue / 2)) {
-                throw new OverflowException();
-            }
-            if (value < new BigInteger(Int64.MinValue / 2)) {
-                throw new OverflowException();
+            if (value > new BigInteger(Int64.MaxValue / 2) || value < new BigInteger(Int64.MinValue / 2)) {
+                throw RubyExceptions.CreateRangeError(String.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "time {0} out of Time range", value));
             }
             return (long)value;
         }

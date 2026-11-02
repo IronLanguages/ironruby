@@ -53,7 +53,7 @@ namespace IronRuby.Compiler.Ast {
             _falseExpression = falseExpression;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return AstFactory.Condition(
                 _condition.TransformReadBoolean(gen, true),
                 _trueExpression.TransformRead(gen),

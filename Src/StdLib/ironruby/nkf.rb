@@ -25,20 +25,23 @@
 # accepted and ignored, which is what nkf itself does with a flag it does not know.
 
 module NKF
-  AUTO = 0
-  JIS = 1
-  EUC = 2
-  SJIS = 3
-  NOCONV = 4
-  ASCII = 5
-  BINARY = 4
-  NKF_RELEASE_DATE = "2007-01-28"
-  NKF_VERSION = "2.0.8"
-  UNKNOWN = 0
-  UTF16 = 8
-  UTF32 = 12
-  UTF8 = 6
-  VERSION = "2.0.8 (2007-01-28)"
+  # nkf 0.2.0, the gem Ruby 4.0 bundles: the codes are Encodings, nil for the three that
+  # name no encoding. (They were Integers in nkf 1.x, which kconv.rb can no longer use.)
+  AUTO = nil
+  NOCONV = nil
+  UNKNOWN = nil
+  BINARY = Encoding::BINARY
+  ASCII = Encoding::US_ASCII
+  JIS = Encoding::ISO_2022_JP
+  EUC = Encoding::EUC_JP
+  SJIS = Encoding::Shift_JIS
+  UTF8 = Encoding::UTF_8
+  UTF16 = Encoding::UTF_16BE
+  UTF32 = Encoding::UTF_32BE
+  NKF_VERSION = "2.1.5"
+  NKF_RELEASE_DATE = "2018-12-15"
+  VERSION = "2.1.5 (2018-12-15)"
+  GEM_VERSION = "0.2.0"
 
   # The single-letter flags, upper case for input and lower case for output.
   # "8", "16" and "32" may follow W/w, and "B"/"L" a UTF-16 or UTF-32 to ask for
@@ -73,8 +76,7 @@ module NKF
       out
     end
 
-    # The Encoding the bytes look like. nkf returns an Encoding object here (not one
-    # of the integer constants, which are only the historical NKF::* names).
+    # The Encoding the bytes look like.
     def guess(str)
       str = str.to_str
       b = str.b

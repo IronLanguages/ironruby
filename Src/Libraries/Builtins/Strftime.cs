@@ -41,6 +41,7 @@ namespace IronRuby.Builtins {
             public bool Swapcase;
             public int Colons;
             public int Width;
+            public char Alt;        // 'E' or 'O': the locale modifiers, accepted on the conversions MRI accepts them on
 
             // '-' is sticky for text and numbers: once seen, no padding at all.
             public bool NoPadding {
@@ -72,8 +73,8 @@ namespace IronRuby.Builtins {
                 int start = i;
                 i++;
                 if (i >= format.Length) {
-                    result.Append('%');
-                    break;
+                    // MRI: a lone % at the end, or one followed only by flags or a width, is an error
+                    throw RubyExceptions.CreateArgumentError("invalid format: " + format.Substring(start));
                 }
 
                 Modifiers modifiers = new Modifiers();
@@ -103,6 +104,15 @@ namespace IronRuby.Builtins {
                     }
                 }
 
+                if (i >= format.Length) {
+                    throw RubyExceptions.CreateArgumentError("invalid format: " + format.Substring(start));
+                }
+
+                if (format[i] == 'E' || format[i] == 'O') {
+                    modifiers.Alt = format[i];
+                    i++;
+                }
+
                 while (i < format.Length && format[i] == ':' && modifiers.Colons < 3) {
                     modifiers.Colons++;
                     i++;
@@ -128,6 +138,11 @@ namespace IronRuby.Builtins {
 
         private static string FormatDirective(RubyContext/*!*/ context, RubyTime/*!*/ time, char directive, Modifiers modifiers, int width, int depth) {
             if (modifiers.Colons > 0 && directive != 'z') {
+                return null;
+            }
+            // %E goes with the alternative-representation conversions and %O with the numeric
+            // ones, as in MRI; on anything else the whole directive is copied through.
+            if (modifiers.Alt == 'E' && "cCxXyY".IndexOf(directive) < 0 || modifiers.Alt == 'O' && "deHImMSuUVwWy".IndexOf(directive) < 0) {
                 return null;
             }
 
@@ -224,9 +239,22 @@ namespace IronRuby.Builtins {
             long sec = abs % 60;
 
             string separator = (modifiers.Colons > 0) ? ":" : "";
-            string tail = separator + m.ToString("D2", CultureInfo.InvariantCulture);
-            if (modifiers.Colons >= 2 || (modifiers.Colons == 0 && sec != 0)) {
-                tail += separator + sec.ToString("D2", CultureInfo.InvariantCulture);
+            string tail;
+            if (modifiers.Colons == 3) {
+                // %:::z: hours, with the minutes and seconds only when they are not zero
+                tail = "";
+                if (m != 0 || sec != 0) {
+                    tail += ":" + m.ToString("D2", CultureInfo.InvariantCulture);
+                }
+                if (sec != 0) {
+                    tail += ":" + sec.ToString("D2", CultureInfo.InvariantCulture);
+                }
+            } else {
+                // %z is +hhmm and %:z +hh:mm whatever the seconds; only %::z shows them
+                tail = separator + m.ToString("D2", CultureInfo.InvariantCulture);
+                if (modifiers.Colons >= 2) {
+                    tail += separator + sec.ToString("D2", CultureInfo.InvariantCulture);
+                }
             }
 
             char pad = modifiers.PadChar('0');

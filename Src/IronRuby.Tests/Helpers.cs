@@ -108,9 +108,19 @@ namespace IronRuby.Tests {
         public void CompilerTest(string/*!*/ code, int expectedCompilerWarningCount, int expectedRuntimeWarningCount) {
             LoggingErrorSink log = new LoggingErrorSink(true);
             CompilerTest(code, log);
-            Assert(log.ErrorCount == 0 && log.FatalErrorCount == 0, "Compile time error");
-            Assert(log.WarningCount == expectedCompilerWarningCount, "Wrong number of compile time errors/warnings");
+            Assert(log.ErrorCount == 0 && log.FatalErrorCount == 0, "Compile time error: " + DescribeLog(log));
+            Assert(log.WarningCount == expectedCompilerWarningCount, String.Format(
+                "Wrong number of compile time errors/warnings: expected {0}, got {1}: {2}",
+                expectedCompilerWarningCount, log.WarningCount, DescribeLog(log)));
             Assert(Context.RuntimeErrorSink.WarningCount == expectedRuntimeWarningCount, "Wrong number of runtime warnings");
+        }
+
+        private static string/*!*/ DescribeLog(LoggingErrorSink/*!*/ log) {
+            var parts = new List<string>();
+            foreach (var e in log.Errors) {
+                parts.Add(String.Format("{0} at {1}: {2}", e.Severity, e.Span.Start.Line, e.Message));
+            }
+            return String.Join("; ", parts);
         }
 
         public void CompilerTest(string/*!*/ code, ErrorSink/*!*/ sink) {
@@ -133,43 +143,6 @@ namespace IronRuby.Tests {
                 compiledCode.Run(new Scope());
             }
         }
-
-        public List<Tokens> GetRubyTokens(ErrorSink log, string source) {
-            return GetRubyTokens(log, source, false);
-        }
-
-        public List<Tokens> GetRubyTokens(ErrorSink log, string source, bool dumpTokens) {
-            return GetRubyTokens(Context, log, source, dumpTokens, false);
-        }
-
-        public static List<Tokens> GetRubyTokens(RubyContext context, ErrorSink log, string source, bool dumpTokens, bool dumpReductions) {
-            Parser parser = new Parser();
-            List<Tokens> tokens = new List<Tokens>();
-
-            if (dumpTokens) {
-                parser.Tokenizer.EnableLogging(1, Console.Out);
-            }
-
-            parser.TokenSink = delegate(Tokens token, SourceSpan span) {
-                tokens.Add(token);
-            };
-
-#if DEBUG
-            if (dumpReductions) {
-                DefaultParserLogger.Attach(parser, Console.Out);
-            }
-#endif
-            parser.Parse(context.CreateSnippet(source, SourceCodeKind.File), new RubyCompilerOptions(), log);
-
-            //tokenizer.Initialize(SourceUnit.CreateSnippet(RB, source));
-            //List<Tokens> tokens = new List<Tokens>();
-            //Tokens token;
-            //while ((token = tokenizer.GetNextToken()) != Tokens.EOF) {
-            //    tokens.Add(token);
-            //}
-
-            return tokens;
-        }        
 
         [Flags]
         enum OutputFlags {
@@ -202,6 +175,29 @@ namespace IronRuby.Tests {
             AssertOutput(() => CompilerTest(code), expectedOutput);
         }
 
+        /// <summary>
+        /// The tests run with warnings on (Verbosity 2, ruby -w), so the parse warnings are the ones
+        /// `ruby -wc` reports for the same code.
+        /// </summary>
+        [DebuggerHiddenAttribute]
+        private void TestOutput(string code, string expectedOutput, int expectedCompilerWarningCount) {
+            AssertOutput(() => CompilerTest(code, expectedCompilerWarningCount, 0), expectedOutput);
+        }
+
+        [DebuggerHiddenAttribute]
+        private void TestOutput(string code, string expectedOutput, int expectedCompilerWarningCount, int expectedRuntimeWarningCount) {
+            AssertOutput(() => CompilerTest(code, expectedCompilerWarningCount, expectedRuntimeWarningCount), expectedOutput);
+        }
+
+        /// <summary>
+        /// TestOutput for code that calls using_clr_extensions, which reports once per runtime that it is deprecated:
+        /// once in this test, which runs in a runtime of its own.
+        /// </summary>
+        [DebuggerHiddenAttribute]
+        private void LegacyExtensionsTestOutput(string code, string expectedOutput) {
+            TestOutput(code, expectedOutput, 0, 1);
+        }
+
         [DebuggerHiddenAttribute]
         private void XTestOutput(string code, string expectedOutput) {
             XAssertOutput(() => CompilerTest(code), expectedOutput);
@@ -210,6 +206,11 @@ namespace IronRuby.Tests {
         [DebuggerHiddenAttribute]
         private void TestOutputWithEval(string code, string expectedOutput) {
             UsingEval((eval) => AssertOutput(() => CompilerTest(Eval(eval, code)), expectedOutput));
+        }
+
+        [DebuggerHiddenAttribute]
+        private void TestOutputWithEval(string code, string expectedOutput, int expectedCompilerWarningCount) {
+            UsingEval((eval) => AssertOutput(() => CompilerTest(Eval(eval, code), expectedCompilerWarningCount, 0), expectedOutput));
         }
 
         [DebuggerHiddenAttribute]
@@ -388,37 +389,6 @@ namespace IronRuby.Tests {
                 Debugger.Break();
             }
         }
-
-        #region Parser, Tokenizer
-
-        public object TestCategorizer(ScriptEngine engine, object state, string/*!*/ src, params TokenInfo[]/*!*/ expected) {
-            return TestCategorizer(engine, state, src, SourceLocation.MinValue, expected);
-        }
-
-        public object TestCategorizer(ScriptEngine engine, object state, string/*!*/ src, SourceLocation initial, params TokenInfo[]/*!*/ expected) {
-            TokenCategorizer categorizer = engine.GetService<TokenCategorizer>();
-
-            categorizer.Initialize(state, engine.CreateScriptSourceFromString(src), initial);
-            IEnumerable<TokenInfo> actual = categorizer.ReadTokens(Int32.MaxValue);
-
-            int i = 0;
-            foreach (TokenInfo info in actual) {
-                Assert(i < expected.Length);
-                if (!info.Equals(expected[i])) {
-                    Assert(false);
-                }
-                i++;
-            }
-            Assert(i == expected.Length);
-
-            TokenInfo t = categorizer.ReadToken();
-            SourceLocation end = expected[expected.Length - 1].SourceSpan.End;
-            Assert(t.Equals(new TokenInfo(new SourceSpan(end, end), TokenCategory.EndOfStream, TokenTriggers.None)));
-
-            return categorizer.CurrentState;
-        }
-
-        #endregion
 
         #region Bugs
 

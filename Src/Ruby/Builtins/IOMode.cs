@@ -221,6 +221,21 @@ namespace IronRuby.Builtins {
 
             result = result.AddTextOrBinaryMode(context, options);
 
+            // The conversion options are checked when the stream opens, as MRI does, not when
+            // the first transcoding happens to need them.
+            CheckConversionOption(context, options, "invalid", "unknown value for invalid character option");
+            CheckConversionOption(context, options, "undef", "unknown value for undefined character option");
+            if (options.TryGetValue(context.CreateAsciiSymbol("newline"), out optionValue) && optionValue != null) {
+                var newline = optionValue as RubySymbol;
+                string newlineName = newline != null ? newline.ToString() : null;
+                if (newlineName != "universal" && newlineName != "crlf" && newlineName != "cr" && newlineName != "lf") {
+                    // only a Symbol gets named in the message
+                    throw newlineName != null
+                        ? RubyExceptions.CreateArgumentError("unexpected value for newline option: {0}", newlineName)
+                        : RubyExceptions.CreateArgumentError("unexpected value for newline option");
+                }
+            }
+
             // :newline is a text-mode decorator, so it contradicts "b".
             if (options.TryGetValue(context.CreateAsciiSymbol("newline"), out optionValue)
                 && (result.Mode & IOMode.PreserveEndOfLines) != 0) {
@@ -234,6 +249,15 @@ namespace IronRuby.Builtins {
             }
 
             return result;
+        }
+
+        // :invalid and :undef take :replace or nil and nothing else.
+        private static void CheckConversionOption(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ options, string/*!*/ name, string/*!*/ message) {
+            object value;
+            if (options.TryGetValue(context.CreateAsciiSymbol(name), out value) && value != null
+                && !ReferenceEquals(value, context.CreateAsciiSymbol("replace"))) {
+                throw RubyExceptions.CreateArgumentError(message);
+            }
         }
 
         private IOInfo AddMode(RubyContext/*!*/ context, IOMode mode) {
@@ -255,12 +279,17 @@ namespace IronRuby.Builtins {
                 return this;
             }
 
+            bool binmode = hasBin && Protocols.IsTrue(binValue);
+            bool textmode = hasText && Protocols.IsTrue(textValue);
             if (_textOrBinarySpecified) {
+                // the mode string already said: repeating it is "twice", contradicting it is "both"
+                bool modeIsBinary = (Mode & IOMode.PreserveEndOfLines) != 0;
+                if ((hasBin && hasText) || hasBin != modeIsBinary) {
+                    throw RubyExceptions.CreateArgumentError("both textmode and binmode specified");
+                }
                 throw RubyExceptions.CreateArgumentError("{0} specified twice", hasBin ? "binmode" : "textmode");
             }
 
-            bool binmode = hasBin && Protocols.IsTrue(binValue);
-            bool textmode = hasText && Protocols.IsTrue(textValue);
             if (binmode && textmode) {
                 throw RubyExceptions.CreateArgumentError("both textmode and binmode specified");
             }

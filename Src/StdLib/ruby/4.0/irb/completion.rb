@@ -8,6 +8,29 @@
 require_relative 'ruby-lex'
 
 module IRB
+  class DocumentTarget # :nodoc:
+    attr_reader :name
+
+    def initialize(name)
+      @name = name
+    end
+  end
+
+  class CommandDocument < DocumentTarget # :nodoc:
+  end
+
+  # Represents a method/class documentation target. May hold multiple names
+  # when the receiver is ambiguous (e.g. `{}.any?` could be Hash#any? or Proc#any?).
+  # The dialog popup uses only the first name; the full-screen display renders all.
+  class MethodDocument < DocumentTarget # :nodoc:
+    attr_reader :names
+
+    def initialize(*names)
+      super(names.first)
+      @names = names
+    end
+  end
+
   class BaseCompletor # :nodoc:
 
     # Set of reserved words used by Ruby, you should not use these for
@@ -76,6 +99,12 @@ module IRB
       end
     end
 
+    def command_document_target(preposing, matched)
+      if preposing.empty? && IRB::Command.command_names.include?(matched)
+        CommandDocument.new(matched)
+      end
+    end
+
     def retrieve_files_to_require_relative_from_current_dir
       @files_from_current_dir ||= Dir.glob("**/*.{rb,#{RbConfig::CONFIG['DLEXT']}}", base: '.').map { |path|
         path.sub(/\.(rb|#{RbConfig::CONFIG['DLEXT']})\z/, '')
@@ -118,8 +147,10 @@ module IRB
     end
 
     def doc_namespace(preposing, matched, _postposing, bind:)
-      result = ReplTypeCompletor.analyze(preposing + matched, binding: bind, filename: @context.irb_path)
-      result&.doc_namespace('')
+      command_document_target(preposing, matched) || begin
+        result = ReplTypeCompletor.analyze(preposing + matched, binding: bind, filename: @context.irb_path)
+        result&.doc_namespace('')
+      end
     end
   end
 
@@ -166,22 +197,13 @@ module IRB
       else
         return nil # It's not String literal
       end
-      tokens = RubyLex.ripper_lex_without_warning(preposing.rstrip)
-      tok = nil
-      tokens.reverse_each do |t|
-        unless [:on_lparen, :on_sp, :on_ignored_sp, :on_nl, :on_ignored_nl, :on_comment].include?(t.event)
-          tok = t
-          break
-        end
-      end
-      return unless tok&.event == :on_ident && tok.state == Ripper::EXPR_CMDARG
 
-      case tok.tok
-      when 'require'
+      case preposing
+      when /(^|[^\w])require\(? *\z/
         retrieve_files_to_require_from_load_path.filter_map { |path|
           quote + path if path.start_with?(actual_target)
         }
-      when 'require_relative'
+      when /(^|[^\w])require_relative\(? *\z/
         retrieve_files_to_require_relative_from_current_dir.filter_map { |path|
           quote + path if path.start_with?(actual_target)
         }
@@ -210,8 +232,8 @@ module IRB
       commands | completion_data
     end
 
-    def doc_namespace(_preposing, matched, _postposing, bind:)
-      retrieve_completion_data(matched, bind: bind, doc_namespace: true)
+    def doc_namespace(preposing, matched, _postposing, bind:)
+      command_document_target(preposing, matched) || retrieve_completion_data(matched, bind: bind, doc_namespace: true)
     end
 
     def retrieve_completion_data(input, bind:, doc_namespace:)

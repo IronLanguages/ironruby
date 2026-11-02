@@ -59,7 +59,7 @@ foobarbaz
 puts ""foo#{1;2;3}baz""
 ", @"
 foo3baz
-");
+", 2);
         }
 
         public void Strings3() {
@@ -89,7 +89,7 @@ N+N
 -N+N
 -N+N-
 -bob-
-");
+", 1);
         }
 
         public void Strings4() {
@@ -128,7 +128,7 @@ puts :""-#{1}+#{1}""
 puts :""-#{1}+#{1}-""
 
 puts ""-#{x = 'bob'}-""
-");
+", 1, 0);
             }, @"
 N
 N-

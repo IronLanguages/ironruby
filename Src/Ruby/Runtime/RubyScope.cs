@@ -138,9 +138,6 @@ namespace IronRuby.Runtime {
             // stamped with RubyContext.RefinementVersion so that a `using' anywhere forces a recompute.
             public RefinementActivation Refinements;
             public int RefinementsVersion;
-
-            // see RubyMethodScope.DefinitionRefinements
-            public StrongBox<RefinementActivation> MethodDefinitionRefinements;
         }
 
         private RareState _rare;
@@ -622,12 +619,64 @@ namespace IronRuby.Runtime {
         /// cheap) call-site guard.
         /// </summary>
         public RefinementActivation/*!*/ GetActiveRefinements() {
-            var context = RubyContext;
-            if (!context.HasRefinements) {
+            if (!RubyContext.HasRefinements) {
                 return RefinementActivation.Empty;
             }
+            return GetLexicalRefinements();
+        }
 
-            int version = context.RefinementVersion;
+        /// <summary>
+        /// <see cref="GetActiveRefinements"/> for a caller that knows something has been refined in this
+        /// runtime, which stays true: the guard of a refined call's rule (RubyOps.GetLexicalRefinements),
+        /// which runs on every call.
+        /// </summary>
+        internal RefinementActivation/*!*/ GetLexicalRefinements() {
+            // A scope without rare state has no `using' of its own and no memo, so it answers what the
+            // scope below the block, method or other body it is part of answers: the walk is a loop
+            // that reads a field or two per scope.  The first scope that has rare state - the top level
+            // or class body a `using' ran in, mostly - answers from its memo, or takes the general step,
+            // which recurses from there.  A block's Proc has an override only while a refine block runs
+            // it, and RubyUtils.EvaluateRefinementBlock counts those, so while none runs a block scope is
+            // one more step down.
+            bool refineBlockRunning = RubyOps.RefineBlocksRunning != 0;
+            RubyScope scope = this;
+            do {
+                var rare = scope._rare;
+                if (rare != null) {
+                    var memo = rare.Refinements;
+                    if (memo != null && rare.RefinementsVersion == scope._top.RubyContext.RefinementVersion) {
+                        return memo;
+                    }
+                    return scope.ComputeActiveRefinements();
+                }
+
+                var methodScope = scope as RubyMethodScope;
+                if (methodScope != null) {
+                    var recorded = methodScope.DefinitionRefinements;
+                    if (recorded == null) {
+                        return RefinementActivation.Empty;
+                    }
+                    var definition = recorded.Value;
+                    if (definition != null) {
+                        return definition;
+                    }
+                } else if (refineBlockRunning) {
+                    var blockScope = scope as RubyBlockScope;
+                    if (blockScope != null) {
+                        var blockOverride = blockScope.BlockFlowControl.Proc.RefinementOverride;
+                        if (blockOverride != null) {
+                            return blockOverride;
+                        }
+                    }
+                }
+                scope = scope._parent;
+            } while (scope != null);
+
+            return RefinementActivation.Empty;
+        }
+
+        private RefinementActivation/*!*/ ComputeActiveRefinements() {
+            int version = RubyContext.RefinementVersion;
             var cached = _rare;
             if (cached != null && cached.Refinements != null && cached.RefinementsVersion == version) {
                 return cached.Refinements;
@@ -645,21 +694,24 @@ namespace IronRuby.Runtime {
                 // into it.  The declaring scope is shared by every method defined in it, so the
                 // definition-time state comes from the compiled body instead - see
                 // RubyMethodBody.SetDefinitionRefinements.  A body compiled with no record was
-                // defined before anything was refined at all.
+                // defined where nothing was `using'd (or before anything was refined at all).
                 var recorded = methodScope.DefinitionRefinements;
                 if (recorded == null) {
-                    outer = RefinementActivation.Empty;
-                } else {
-                    outer = recorded.Value ?? ((_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty);
+                    return RefinementActivation.Empty;
                 }
+                outer = recorded.Value ?? ((_parent != null) ? _parent.GetLexicalRefinements() : RefinementActivation.Empty);
             } else {
-                outer = (_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty;
+                outer = (_parent != null) ? _parent.GetLexicalRefinements() : RefinementActivation.Empty;
             }
             RefinementActivation result = (UsedModules != null) ? RefinementActivation.Create(outer, UsedModules, UsedModuleSnapshots) : outer;
 
-            var rare = Rare;
-            rare.Refinements = result;
-            rare.RefinementsVersion = version;
+            // Only a scope that has its rare state anyway keeps the answer.  The others - the scope of
+            // nearly every method and block call - get it from their parent chain each time, which is
+            // what memoizing would cost them to begin with, without allocating per call.
+            if (cached != null) {
+                cached.Refinements = result;
+                cached.RefinementsVersion = version;
+            }
             return result;
         }
 
@@ -1082,8 +1134,8 @@ namespace IronRuby.Runtime {
         internal MutableString GetCurrentMatchLastGroup() {
             var match = _currentMatch;
             if (match != null) {
-                // TODO: cache the last successful group index?
-                for (int i = match.GroupCount - 1; i >= 0; i--) {
+                // the last capture group that matched; a pattern without groups has none ($+ is nil)
+                for (int i = match.GroupCount - 1; i >= 1; i--) {
                     MutableString result = match.GetGroupValue(i);
                     if (result != null) {
                         return result;
@@ -1176,14 +1228,28 @@ var closureScope = scope as RubyClosureScope;
             get { return _blockParameter; }
         }
 
+        // see DefinitionRefinements
+        private StrongBox<RefinementActivation> _definitionRefinements;
+
         /// <summary>
         /// The refinements active where the method was defined, stored by the compiled body right after
-        /// it creates this scope; null for a body compiled before anything was refined.  Public because
-        /// the method body assigns it directly.
+        /// it creates this scope; null for a body compiled with nothing `using'd where it was defined.
+        /// Public because the method body assigns it directly - on every call, so it is a field of its own.
         /// </summary>
         public StrongBox<RefinementActivation> DefinitionRefinements {
-            get { var r = RareOrNull; return (r != null) ? r.MethodDefinitionRefinements : null; }
-            set { Rare.MethodDefinitionRefinements = value; }
+            get { return _definitionRefinements; }
+            set { _definitionRefinements = value; }
+        }
+
+        /// <summary>
+        /// What the record holds, null if there is no record or it holds nothing (an imported refinement method's,
+        /// which follows its declaring scope). Read by the rule of a refined call made here (RubyCallAction.Resolve).
+        /// </summary>
+        public RefinementActivation DefinitionRefinementsValue {
+            get {
+                var record = _definitionRefinements;
+                return (record != null) ? record.Value : null;
+            }
         }
 
         internal RubyMethodScope(MutableTuple locals, string/*!*/[]/*!*/ variableNames, int visibleParameterCountAndSignatureFlags,
@@ -1558,7 +1624,7 @@ var closureScope = scope as RubyClosureScope;
                         if (first && (path == "gem_prelude.rb" || path == "ruby4.rb")) {
                             context.Loader.LoadCorePrelude(globalScope, rubyGlobalScope.MainObject, path);
                         } else {
-                            context.Loader.LoadFile(globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
+                            RequireLibrary(context, globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8));
                         }
                         first = false;
                     }
@@ -1568,6 +1634,22 @@ var closureScope = scope as RubyClosureScope;
             }
 
             return scope;
+        }
+
+        /// <summary>
+        /// -r library: MRI calls #require on main, so once the prelude has loaded RubyGems its #require
+        /// activates gems - ruby -r csv finds the bundled csv gem. Without RubyGems it is the builtin.
+        /// </summary>
+        private static void RequireLibrary(RubyContext/*!*/ context, Scope/*!*/ globalScope, object main, MutableString/*!*/ path) {
+            var method = context.ResolveMethod(main, "require", VisibilityContext.AllVisible).Info;
+            if (method == null || method is RubyLibraryMethodInfo) {
+                context.Loader.LoadFile(globalScope, main, path, LoadFlags.Require);
+            } else {
+                var site = CallSite<Func<CallSite, object, object, object>>.Create(
+                    RubyCallAction.Make(context, "require", RubyCallSignature.WithImplicitSelf(1))
+                );
+                site.Target(site, main, path);
+            }
         }
 
         internal static RubyTopLevelScope/*!*/ CreateHostedTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context, bool bindGlobals) {

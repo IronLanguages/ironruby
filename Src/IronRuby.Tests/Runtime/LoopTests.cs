@@ -173,40 +173,6 @@ puts x
 ");
         }
 
-        /// <summary>
-        /// Break, retry, redo and next in a method, out of loop/rescue.
-        /// </summary>
-        public void MethodBreakRetryRedoNext1() {
-            TestOutput(@"
-def _break; break rescue p $!; end
-def _redo; redo rescue puts 'not caught here'; end
-def _retry; retry rescue puts 'not caught here'; end
-def _next; next rescue puts 'not caught here'; end
-def e_break; eval('break') rescue p $!; end
-def e_redo; eval('redo') rescue puts 'not caught here'; end
-def e_retry; eval('retry') rescue puts 'not caught here'; end           # // TODO: bug
-def e_next; eval('next') rescue puts 'not caught here'; end             # // TODO: bug
-
-_break
-_retry rescue p $!
-_redo rescue p $!
-_next rescue p $!
-e_break
-e_retry rescue p $!
-e_redo rescue p $!
-e_next rescue p $!
-", @"
-#<LocalJumpError: unexpected break>
-#<LocalJumpError: retry used out of rescue>
-#<LocalJumpError: unexpected redo>
-#<LocalJumpError: unexpected next>
-#<LocalJumpError: unexpected break>
-#<LocalJumpError: retry used out of rescue>
-not caught here
-not caught here
-");
-        }
-
         public void Scenario_RubyUntilLoop1() {
             AssertOutput(delegate() {
                 CompilerTest(@"

@@ -53,6 +53,14 @@ namespace IronRuby.Runtime.Osr {
         public static readonly object/*!*/ Retype = new object();
 
         /// <summary>
+        /// What a compiled copy answers when the loop is entered under other refinements than the
+        /// ones it was built under (an eval string's, a `def' run again after a `using'). The types
+        /// under it have not moved, so this does not count against MaxRetypes: the site builds a
+        /// copy for the refinements in force now, up to MaxRefinementRebuilds times.
+        /// </summary>
+        public static readonly object/*!*/ RefinementsChanged = new object();
+
+        /// <summary>
         /// Back edges the generic loop runs before it asks again, after a copy handed it back.
         /// Long enough that a loop deopting every iteration costs its eight rounds and no more,
         /// short enough that the tail of a loop whose accumulator just widened is not lost.
@@ -61,6 +69,12 @@ namespace IronRuby.Runtime.Osr {
 
         /// <summary>Copies one loop may be rebuilt for, after the types under it moved.</summary>
         private const int MaxRetypes = 3;
+
+        /// <summary>
+        /// Copies one loop may be rebuilt for, after the refinements it runs under changed. Each is a
+        /// compilation, so a loop entered under alternating refinements stops paying for them in the end.
+        /// </summary>
+        private const int MaxRefinementRebuilds = 8;
 
         /// <summary>IR_OSR_VERBOSE=1 traces which loops get specialized and what that cost.</summary>
         public static readonly bool Verbose = Environment.GetEnvironmentVariable("IR_OSR_VERBOSE") == "1";
@@ -105,6 +119,8 @@ namespace IronRuby.Runtime.Osr {
         internal Dictionary<int, int> TupleArgIndex;
         // Where in the argument array the loop's self is; -1 if it is not passed.
         internal int SelfArgIndex = -1;
+        // Where in the argument array the loop's scope is (its refinements); -1 if it is not passed.
+        internal int ScopeArgIndex = -1;
 
         private readonly object/*!*/ _lock = new object();
         private readonly string/*!*/ _name;
@@ -112,6 +128,7 @@ namespace IronRuby.Runtime.Osr {
         private bool _tried;
         private int _deopts;
         private int _retypes;
+        private int _refinementRebuilds;
 
         public OsrLoopSite(string/*!*/ name) {
             _name = name;
@@ -139,6 +156,12 @@ namespace IronRuby.Runtime.Osr {
                     // wider representation instead of falling back to the generic body for good.
                     Deopts++;
                     if (++_retypes > MaxRetypes) { Retire(); } else { Rebuild(); }
+                    return Retry;
+                }
+                if (ReferenceEquals(result, RefinementsChanged)) {
+                    // Entered under other refinements than the copy's: build one for these, without
+                    // spending the rebuilds a widening local may still need.
+                    if (++_refinementRebuilds > MaxRefinementRebuilds) { Retire(); } else { Rebuild(); }
                     return Retry;
                 }
                 if (!ReferenceEquals(result, Retry)) { return result; }
@@ -196,7 +219,7 @@ namespace IronRuby.Runtime.Osr {
 
                 long start = Stopwatch.GetTimestamp();
                 try {
-                    _typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex);
+                    _typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex);
                 } catch (Exception e) {
                     if (Verbose) {
                         Console.Error.WriteLine("[osr] {0}: specialization failed: {1}", _name, e.Message);

@@ -131,3 +131,84 @@ namespace IronRubyTests.ExtensionMethods2 {
         }
     }
 }
+
+// Extension methods whose Ruby name (describe) is not their CLR name (Describe).
+namespace IronRubyTests.ExtensionMethods3 {
+    public class Widget {
+        public string Describe() { return "Describe()"; }
+        public string Describe(int a) { return "Describe(int)"; }
+    }
+
+    public class SubWidget : Widget {
+    }
+
+    public interface IShape {
+    }
+
+    public class Square : IShape {
+        public string Area() { return "Area()"; }
+    }
+
+    public class Box<T> {
+        public string Open() { return "Open()"; }
+    }
+
+    public static class EMs {
+        // same signature as Widget.Describe() => the instance method is preferred
+        public static string Describe(this Widget self) { return "e:Describe()"; }
+        public static string Describe(this Widget self, string a) { return "e:Describe(string)"; }
+
+        public static string Area(this IShape self, int scale) { return "e:Area(int)"; }
+
+        public static string Open<T>(this Box<T> self, T item) { return "e:Open(T)"; }
+    }
+
+    // `using IronRubyTests::ExtensionMethods3::MoreEMs' (C#'s `using static') brings in these and not EMs'.
+    public static class MoreEMs {
+        public static string Label(this Widget self) { return "e:Label()"; }
+    }
+}
+
+// Extension methods named like property accessors (get_Weight, set_Item). They aren't accessors: C# makes no property
+// or indexer of them, and doesn't let them change the extended type's own.
+namespace IronRubyTests.ExtensionMethods4 {
+    // no property or indexer of its own
+    public class Crate {
+    }
+
+    // a Weight property and an indexer, whose accessors' names the extension methods below take
+    public class Scale {
+        public int Weight { get { return 1; } set { Last = "Weight=" + value; } }
+        public int this[int i] { get { return 10 + i; } set { Last = "[" + i + "]=" + value; } }
+        public string Last;
+    }
+
+    public interface IWeighed {
+    }
+
+    public class Parcel : IWeighed {
+    }
+
+    // an instance method named like an accessor that isn't one
+    public class Plain {
+        public string get_Weight() { return "get_Weight()"; }
+    }
+
+    public static class EMs {
+        public static string get_Weight(this Crate self) { return "e:get_Weight()"; }
+        public static string set_Weight(this Crate self, int value) { return "e:set_Weight(int)"; }
+        public static string get_Item(this Crate self, int i) { return "e:get_Item(int)"; }
+        public static string set_Item(this Crate self, int i, int value) { return "e:set_Item(int, int)"; }
+
+        // same signatures as Scale's accessors => the accessors are preferred
+        public static string get_Weight(this Scale self) { return "e:get_Weight()"; }
+        public static string set_Weight(this Scale self, int value) { return "e:set_Weight(int)"; }
+        public static string get_Item(this Scale self, int i) { return "e:get_Item(int)"; }
+        public static string set_Item(this Scale self, int i, int value) { return "e:set_Item(int, int)"; }
+        public static string get_Weight(this Scale self, int scale) { return "e:get_Weight(int)"; }
+
+        public static string get_Weight(this IWeighed self) { return "e:IWeighed.get_Weight()"; }
+
+        public static string get_Heft(this object self) { return "e:get_Heft()"; }
+    }
+}

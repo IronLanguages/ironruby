@@ -22,6 +22,5 @@ namespace IronRuby.Tests {
         };
 
         public static bool ParseOnly = false;
-        public static bool DumpReductions = false;
     }
 }

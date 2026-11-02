@@ -64,6 +64,10 @@ namespace IronRuby.Runtime.Jit {
         private readonly RubyContext/*!*/ _context;
         private readonly int _scopeDepth;
 
+        // The refinements active where the code being compiled was written: the calls it binds itself
+        // (operators, the self-call) are resolved as its call sites would resolve them.
+        private RefinementActivation/*!*/ _refinements = RefinementActivation.Empty;
+
         // Locals, in nested scopes. Ruby has no block scoping, but a local first assigned
         // inside a conditionally executed region is nil on the path that skipped it, which a
         // typed int/double slot cannot represent. Declaring such a local in the region's own
@@ -230,17 +234,19 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, out List<JitLoopSlot> slots, out bool canDeopt) {
-            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, null, null, out slots, out canDeopt);
+            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, null, null, RefinementActivation.Empty, out slots, out canDeopt);
         }
 
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self,
             Func<string, JT> ivarProfile, Func<string, string> attrProfile,
-            Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal, out List<JitLoopSlot> slots, out bool canDeopt) {
+            Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal, RefinementActivation/*!*/ refinements,
+            out List<JitLoopSlot> slots, out bool canDeopt) {
 
             slots = null;
             canDeopt = false;
             var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal);
+            c._refinements = refinements;
             MSA.Expression body;
             try {
                 JT type;
@@ -385,18 +391,20 @@ namespace IronRuby.Runtime.Jit {
         /// cannot be specialized.
         /// </summary>
         internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes) {
-            return TryCompile(ast, context, paramTypes, null);
+            return TryCompile(ast, context, paramTypes, null, RefinementActivation.Empty);
         }
 
-        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords) {
-            return TryCompile(ast, context, paramTypes, keywords, -1);
+        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords,
+            RefinementActivation/*!*/ refinements) {
+            return TryCompile(ast, context, paramTypes, keywords, refinements, -1);
         }
 
         /// <summary>
         /// <paramref name="supplied"/>: compile the body for calls that pass this many of the optional
         /// parameters, evaluating the other defaults itself; -1 for the body that takes them all.
         /// </summary>
-        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords, int supplied) {
+        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords,
+            RefinementActivation/*!*/ refinements, int supplied) {
             // The self-recursive call needs the method's return type before the body has been
             // typed. Guess, compile, and re-run once if the guess was wrong.
             // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
@@ -404,6 +412,7 @@ namespace IronRuby.Runtime.Jit {
             JT guess = JT.None;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied);
+                c._refinements = refinements;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
@@ -722,6 +731,8 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private MSA.Expression/*!*/ Emit(RExpr/*!*/ node, out JT type) {
             if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
+            // Deep enough to run this thread out of stack: the method stays interpreted (see StackGuard).
+            if (!StackGuard.IsSufficient) { throw Bail("nested too deeply for the stack"); }
 
             var literal = node as Literal;
             if (literal != null) { return EmitLiteral(literal, out type); }
@@ -1220,8 +1231,10 @@ namespace IronRuby.Runtime.Jit {
             // `x' or `self.x' in an outlined loop, where x is an attr_reader on the loop's self: the
             // instance variable read the reader does, and no call. JitRuntime.ReadSelfAttr checks
             // self's class and the global method version on each read and deopts when either has
-            // moved; a read is not observable, so the iteration stays restartable.
-            if (argc == 0 && _attrProfile != null && (node.Target == null || node.Target is SelfReference)) {
+            // moved; a read is not observable, so the iteration stays restartable. It finds the
+            // reader as a call with no refinements active does, so only a loop written where none
+            // are (the copy's prologue checks the loop is still entered so) reads this way.
+            if (argc == 0 && _attrProfile != null && _refinements.IsEmpty && (node.Target == null || node.Target is SelfReference)) {
                 string variableName = _attrProfile(node.MethodName);
                 if (variableName != null) {
                     _canDeopt = true;
@@ -1237,7 +1250,7 @@ namespace IronRuby.Runtime.Jit {
             // same read, of o as it is in its tuple slot (the loop may not write o), typed by what
             // the variable holds in o right now - a guarded unboxing for an Integer or a Float.
             var receiverLocal = node.Target as LocalVariable;
-            if (argc == 0 && receiverLocal != null && _peekLocal != null) {
+            if (argc == 0 && receiverLocal != null && _peekLocal != null && _refinements.IsEmpty) {
                 MSA.ParameterExpression bound;
                 JT boundType;
                 if (!TryLookup(Key(receiverLocal), out bound, out boundType)) {
@@ -1372,8 +1385,10 @@ namespace IronRuby.Runtime.Jit {
             return JitRuntime.ClassOf(_context, sample);
         }
 
-        private static bool IsBuiltinMethod(RubyClass/*!*/ cls, string/*!*/ name) {
-            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible);
+        private bool IsBuiltinMethod(RubyClass/*!*/ cls, string/*!*/ name) {
+            // A refinement of the operator active where the code was written is what its call site would
+            // call: that is not the built-in one either.
+            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible, _refinements);
             var info = resolved.Found ? resolved.Info as RubyLibraryMethodInfo : null;
             if (info == null) { return false; }
             foreach (var member in info.GetMembers()) {
@@ -1654,6 +1669,8 @@ namespace IronRuby.Runtime.Jit {
             // Emit gives up past MaxNodes. The screen's count is not exactly Emit's, so it only
             // rules out a body that is too big by any counting - the walk stays bounded either way.
             if (++_nodes > 2 * JitCompiler.MaxNodes) { return No(node); }
+            // Nor one nested deeper than this thread's stack goes: interpreting it is fine (see StackGuard).
+            if (!StackGuard.IsSufficient) { return No(node); }
 
             var literal = node as Literal;
             if (literal != null) {

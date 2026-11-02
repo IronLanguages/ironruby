@@ -62,7 +62,7 @@ namespace IronRuby.Builtins {
         }
 
         // Copies key,value pairs into an array. Needed for iteration over the hash while mutating it.
-        private static IEnumerable<KeyValuePair<object, object>> CopyKeyValuePairs(IDictionary<object, object>/*!*/ dict) {
+        private static KeyValuePair<object, object>[]/*!*/ CopyKeyValuePairs(IDictionary<object, object>/*!*/ dict) {
             KeyValuePair<object, object>[] pairs = new KeyValuePair<object, object>[dict.Count];
             dict.CopyTo(pairs, 0);
             return pairs;
@@ -218,15 +218,26 @@ namespace IronRuby.Builtins {
             // while iterating over it
             RubyArray keysToDelete = new RubyArray();
 
-            foreach (var pair in self) {
-                object result;
-                if (block.Yield(CustomStringDictionary.ObjToNull(pair.Key), pair.Value, out result)) {
-                    return result;
-                }
+            Hash hash = self as Hash;
+            if (hash != null) {
+                hash.BeginIteration();
+            }
+            try {
+                // over a snapshot: the block may delete from the hash (it may not add to it)
+                foreach (var pair in CopyKeyValuePairs(self)) {
+                    object result;
+                    if (block.Yield(CustomStringDictionary.ObjToNull(pair.Key), pair.Value, out result)) {
+                        return result;
+                    }
 
-                // Delete the key, unless 'false' or 'nil' is returned
-                if (RubyOps.IsTrue(result)) {
-                    keysToDelete.Add(pair.Key);
+                    // Delete the key, unless 'false' or 'nil' is returned
+                    if (RubyOps.IsTrue(result)) {
+                        keysToDelete.Add(pair.Key);
+                    }
+                }
+            } finally {
+                if (hash != null) {
+                    hash.EndIteration();
                 }
             }
 
@@ -240,6 +251,24 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region each, each_pair, each_key, each_value
+
+        /// <summary>
+        /// The value an entry of the snapshot has now. A key that is not found was deleted by the
+        /// block - or it is a key whose hash has drifted since it was stored, a Hash that is its
+        /// own key being the usual case; MRI still visits such an entry, since it walks the table.
+        /// The block may not add entries, so the count can only have dropped if something was
+        /// deleted: while it has not, the entry is still there and its snapshot value stands.
+        /// </summary>
+        private static bool TryGetCurrentValue(IDictionary<object, object>/*!*/ self, KeyValuePair<object, object>[]/*!*/ snapshot, int index, out object value) {
+            if (self.TryGetValue(snapshot[index].Key, out value)) {
+                return true;
+            }
+            if (self.Count < snapshot.Length) {
+                return false;
+            }
+            value = snapshot[index].Value;
+            return true;
+        }
 
         [RubyMethod("each")]
         [RubyMethod("each_pair")]
@@ -257,6 +286,8 @@ namespace IronRuby.Builtins {
                 // is used as is while the block leaves the hash alone; once it mutates it, the rest is
                 // looked up as below. That is the same answer without hashing every key a second
                 // time - which, for a key of a Ruby class, was a #hash and an #eql? call per entry.
+                // Adding a key is what MRI forbids while a hash is being iterated, and the Hash
+                // itself raises for that between BeginIteration and EndIteration.
                 var hash = self as Hash;
                 if (hash != null) {
                     int count = hash.Count;
@@ -264,36 +295,49 @@ namespace IronRuby.Builtins {
                     object[] hashValues = new object[count];
                     hash.CopyKeysAndValues(hashKeys, hashValues);
                     int stamp = hash.MutationStamp;
-                    for (int i = 0; i < count; i++) {
-                        object key = hashKeys[i];
-                        object value;
-                        if (hash.MutationStamp == stamp) {
-                            value = hashValues[i];
-                        } else if (!hash.TryGetValue(key, out value)) {
-                            // deleted by the block before its turn came: MRI skips it
-                            continue;
+                    hash.BeginIteration();
+                    try {
+                        for (int i = 0; i < count; i++) {
+                            object key = hashKeys[i];
+                            object value;
+                            if (hash.MutationStamp == stamp) {
+                                value = hashValues[i];
+                            } else if (!hash.TryGetValue(key, out value)) {
+                                if (hash.Count < count) {
+                                    // deleted by the block before its turn came: MRI skips it
+                                    continue;
+                                }
+                                // a key whose hash has drifted since it was stored, a Hash that is
+                                // its own key being the usual case: MRI walks the table and still
+                                // visits it
+                                value = hashValues[i];
+                            }
+                            object result;
+                            if (yieldPair
+                                ? block.Yield(CustomStringDictionary.ObjToNull(key), value, out result)
+                                : block.Yield(MakeArray(key, value), out result)) {
+                                return result;
+                            }
                         }
-                        object result;
-                        if (yieldPair
-                            ? block.Yield(CustomStringDictionary.ObjToNull(key), value, out result)
-                            : block.Yield(MakeArray(key, value), out result)) {
-                            return result;
-                        }
+                    } finally {
+                        hash.EndIteration();
                     }
                     return self;
                 }
 
-                // Must make a copy of the Keys array so that we can iterate over a static set of keys. Remember
-                // that the block can modify the hash, hence the need for a copy of the keys
-                object[] keys = new object[self.Count];
-                self.Keys.CopyTo(keys, 0);
-
-                // TODO: what are all the scenarios where the block can mutate the hash? can it remove keys? if so, what happens?
-                for (int i = 0; i < keys.Length; i++) {
+                // Any other IDictionary: the block may change it, so iterate over a copy of the
+                // entries and look each value up when it is its turn: a value the block replaced is
+                // seen replaced, and a key the block deleted is skipped, as in MRI.
+                var pairs = CopyKeyValuePairs(self);
+                for (int i = 0; i < pairs.Length; i++) {
+                    object value;
+                    if (!TryGetCurrentValue(self, pairs, i, out value)) {
+                        continue;
+                    }
                     object result;
                     if (yieldPair
-                        ? block.Yield(CustomStringDictionary.ObjToNull(keys[i]), self[keys[i]], out result)
-                        : block.Yield(MakeArray(keys[i], self[keys[i]]), out result)) {
+                        ? block.Yield(CustomStringDictionary.ObjToNull(pairs[i].Key), value, out result)
+                        : block.Yield(MakeArray(pairs[i].Key, value), out result)) {
                         return result;
                     }
                 }
@@ -325,16 +369,27 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_key")]
         public static object EachKey(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
-                // Must make a copy of the Keys array so that we can iterate over a static set of keys. Remember
-                // that the block can modify the hash, hence the need for a copy of the keys
-                object[] keys = new object[self.Count];
-                self.Keys.CopyTo(keys, 0);
+                // See Each: a copy of the entries, deleted ones skipped, no new ones allowed.
+                var pairs = CopyKeyValuePairs(self);
 
-                // TODO: what are all the scenarios where the block can mutate the hash? can it remove keys? if so, what happens?
-                for (int i = 0; i < keys.Length; i++) {
-                    object result;
-                    if (block.Yield(CustomStringDictionary.ObjToNull(keys[i]), out result)) {
-                        return result;
+                Hash hash = self as Hash;
+                if (hash != null) {
+                    hash.BeginIteration();
+                }
+                try {
+                    for (int i = 0; i < pairs.Length; i++) {
+                        object value;
+                        if (!TryGetCurrentValue(self, pairs, i, out value)) {
+                            continue;
+                        }
+                        object result;
+                        if (block.Yield(CustomStringDictionary.ObjToNull(pairs[i].Key), out result)) {
+                            return result;
+                        }
+                    }
+                } finally {
+                    if (hash != null) {
+                        hash.EndIteration();
                     }
                 }
             }
@@ -350,14 +405,27 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_value")]
         public static object EachValue(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
-                // Ruby allows modifications while iterating thru the dictionary:
-                object[] values = new object[self.Count];
-                self.Values.CopyTo(values, 0);
+                // See Each: a copy of the entries, deleted ones skipped, no new ones allowed.
+                var pairs = CopyKeyValuePairs(self);
 
-                for (int i = 0; i < values.Length; i++) {
-                    object result;
-                    if (block.Yield(values[i], out result)) {
-                        return result;
+                Hash hash = self as Hash;
+                if (hash != null) {
+                    hash.BeginIteration();
+                }
+                try {
+                    for (int i = 0; i < pairs.Length; i++) {
+                        object value;
+                        if (!TryGetCurrentValue(self, pairs, i, out value)) {
+                            continue;
+                        }
+                        object result;
+                        if (block.Yield(value, out result)) {
+                            return result;
+                        }
+                    }
+                } finally {
+                    if (hash != null) {
+                        hash.EndIteration();
                     }
                 }
             }
@@ -413,16 +481,6 @@ namespace IronRuby.Builtins {
                 }
             }
             return false;
-        }
-
-        [RubyMethod("index")]
-        public static object Index(BinaryOpStorage/*!*/ equals, IDictionary<object, object>/*!*/ self, object value) {
-            foreach (KeyValuePair<object, object> pair in self) {
-                if (Protocols.IsEqual(equals, pair.Value, value)) {
-                    return CustomStringDictionary.ObjToNull(pair.Key);
-                }
-            }
-            return null;
         }
 
         [RubyMethod("invert")]
@@ -491,6 +549,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("rehash")]
         public static IDictionary<object, object> Rehash(Hash/*!*/ self) {
             self.RequireNotFrozen();
+            if (self.IsIterating) {
+                throw RubyExceptions.CreateRuntimeError("rehash during iteration");
+            }
             return Rehash((IDictionary<object, object>)self);
         }
 
@@ -524,15 +585,25 @@ namespace IronRuby.Builtins {
             // while iterating over it
             RubyArray keysToDelete = new RubyArray();
 
-            foreach (KeyValuePair<object,object> pair in self) {
-                object result;
-                if (block.Yield(CustomStringDictionary.ObjToNull(pair.Key), pair.Value, out result)) {
-                    return result;
-                }
+            Hash hash = self as Hash;
+            if (hash != null) {
+                hash.BeginIteration();
+            }
+            try {
+                foreach (KeyValuePair<object,object> pair in CopyKeyValuePairs(self)) {
+                    object result;
+                    if (block.Yield(CustomStringDictionary.ObjToNull(pair.Key), pair.Value, out result)) {
+                        return result;
+                    }
 
-                // Delete the key, unless 'false' or 'nil' is returned
-                if (RubyOps.IsTrue(result)) {
-                    keysToDelete.Add(pair.Key);
+                    // Delete the key, unless 'false' or 'nil' is returned
+                    if (RubyOps.IsTrue(result)) {
+                        keysToDelete.Add(pair.Key);
+                    }
+                }
+            } finally {
+                if (hash != null) {
+                    hash.EndIteration();
                 }
             }
 
@@ -546,6 +617,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("replace")]
         public static Hash/*!*/ Replace(RubyContext/*!*/ context, Hash/*!*/ self, [DefaultProtocol, NotNull]IDictionary<object, object>/*!*/ other) {
             self.RequireNotFrozen();
+            if (self.IsIterating) {
+                throw RubyExceptions.CreateRuntimeError("can't replace hash during iteration");
+            }
             return IDictionaryOps.ReplaceData(self, other);
         }
 
@@ -678,10 +752,11 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("values_at")]
-        public static RubyArray/*!*/ ValuesAt(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ self, params object[]/*!*/ keys) {
+        public static RubyArray/*!*/ ValuesAt(BinaryOpStorage/*!*/ storage, IDictionary<object, object>/*!*/ self, params object[]/*!*/ keys) {
             RubyArray values = new RubyArray();
             foreach (object key in keys) {
-                values.Add(GetElement(context, self, key));
+                // A missing key answers the default, as #[] does: Hash.new(5).values_at(:x) is [5].
+                values.Add(HashOps.GetElement(storage, self, key));
             }
             return values;
         }

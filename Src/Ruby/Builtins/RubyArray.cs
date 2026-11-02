@@ -281,6 +281,10 @@ namespace IronRuby.Builtins {
         /// <returns>The index of the first slot that will contain the new elements.</returns>
         private int ResizeForAppend(int additionalCount, bool clear) {
             int oldCount = _count;
+            if (additionalCount < 0 || additionalCount > Int32.MaxValue - oldCount) {
+                // the count would overflow: no such array can be allocated (Ruby: NoMemoryError)
+                throw new OutOfMemoryException();
+            }
             _count += additionalCount;
 
             if (_start + oldCount > _content.Length - additionalCount) {

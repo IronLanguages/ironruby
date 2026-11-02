@@ -23,9 +23,14 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
+using System.Collections;
+using System.Runtime.CompilerServices;
+using IronRuby.Builtins;
+using Range = IronRuby.Builtins.Range;
 using System.Reflection;
 using IronRuby.Compiler;
 using IronRuby.Runtime.Calls;
+using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Generation;
 using System.Numerics;
@@ -153,6 +158,18 @@ namespace IronRuby.Runtime.Conversions {
                 return Convertibility.AlwaysConvertible;
             }
 
+            if (implicitProtocolConversions && IsCollectionConversion(fromType, toType)) {
+                return Convertibility.AlwaysConvertible;
+            }
+
+            if (IsTypeGroupConversion(fromType, toType)) {
+                return Convertibility.AlwaysConvertible;
+            }
+
+            if (fromType == typeof(Range) && toType == typeof(System.Range)) {
+                return Convertibility.AlwaysConvertible;
+            }
+
             if (toType == typeof(bool)) {
                 return Convertibility.AlwaysConvertible;
             }
@@ -183,6 +200,128 @@ namespace IronRuby.Runtime.Conversions {
             return Convertibility.NotConvertible;
         }
 
+        #region Ruby Array and Hash to typed CLR collections
+
+        // A CLR method that takes an int[], an IEnumerable<string> or a Dictionary<string, object> gets a
+        // copy of a Ruby Array or Hash, its items converted the way each would be converted as an argument.
+        // A Ruby Array already is an IList<object> and a Hash an IDictionary<object, object>; those pass as they are.
+
+        /// <summary>
+        /// The item type of a CLR collection a Ruby Array converts to: T[], IEnumerable&lt;T&gt;, ICollection&lt;T&gt;,
+        /// IList&lt;T&gt;, IReadOnlyCollection&lt;T&gt;, IReadOnlyList&lt;T&gt; or List&lt;T&gt;. Null for any other type.
+        /// </summary>
+        internal static Type GetListItemType(Type/*!*/ toType) {
+            Type itemType = null;
+            if (toType.IsSZArray) {
+                itemType = toType.GetElementType();
+            } else if (toType.IsGenericType) {
+                Type definition = toType.GetGenericTypeDefinition();
+                if (definition == typeof(IEnumerable<>) || definition == typeof(ICollection<>) || definition == typeof(IList<>) ||
+                    definition == typeof(IReadOnlyCollection<>) || definition == typeof(IReadOnlyList<>) || definition == typeof(List<>)) {
+                    itemType = toType.GetGenericArguments()[0];
+                }
+            }
+            return itemType != null && IsConvertibleItemType(itemType) ? itemType : null;
+        }
+
+        /// <summary>
+        /// The key and value types of a CLR dictionary a Ruby Hash converts to: IDictionary&lt;K, V&gt;,
+        /// IReadOnlyDictionary&lt;K, V&gt; or Dictionary&lt;K, V&gt;. Null for any other type.
+        /// </summary>
+        internal static Type[] GetDictionaryItemTypes(Type/*!*/ toType) {
+            if (toType.IsGenericType) {
+                Type definition = toType.GetGenericTypeDefinition();
+                if (definition == typeof(IDictionary<,>) || definition == typeof(IReadOnlyDictionary<,>) || definition == typeof(Dictionary<,>)) {
+                    Type[] types = toType.GetGenericArguments();
+                    if (IsConvertibleItemType(types[0]) && IsConvertibleItemType(types[1])) {
+                        return types;
+                    }
+                }
+            }
+            return null;
+        }
+
+        private static bool IsConvertibleItemType(Type/*!*/ type) {
+            return !type.ContainsGenericParameters && !type.IsByRef && !type.IsPointer && !type.IsByRefLike;
+        }
+
+        private static bool IsCollectionConversion(Type/*!*/ fromType, Type/*!*/ toType) {
+            return typeof(RubyArray).IsAssignableFrom(fromType) && GetListItemType(toType) != null
+                || typeof(Hash).IsAssignableFrom(fromType) && GetDictionaryItemTypes(toType) != null;
+        }
+
+        /// <summary>
+        /// Converts <paramref name="expr"/> holding a Ruby Array or Hash to a typed CLR collection, or returns null if
+        /// that is not a conversion the two types have (see <see cref="IsCollectionConversion"/>).
+        /// </summary>
+        internal static Expression TryConvertToCollection(Expression/*!*/ expr, Type/*!*/ fromType, Type/*!*/ toType, RubyContext/*!*/ context,
+            bool implicitProtocolConversions) {
+
+            if (!implicitProtocolConversions || !IsCollectionConversion(fromType, toType)) {
+                return null;
+            }
+
+            MethodInfo converter;
+            Expression[] args;
+            if (typeof(RubyArray).IsAssignableFrom(fromType)) {
+                Type itemType = GetListItemType(toType);
+                converter = (toType.IsArray ? RubyOps.ConvertToVectorMethod : RubyOps.ConvertToListMethod).MakeGenericMethod(itemType);
+                args = new[] {
+                    AstUtils.Convert(expr, typeof(IList)),
+                    MakeItemConversionSite(context, itemType, implicitProtocolConversions)
+                };
+            } else {
+                Type[] itemTypes = GetDictionaryItemTypes(toType);
+                converter = RubyOps.ConvertToDictionaryMethod.MakeGenericMethod(itemTypes);
+                args = new[] {
+                    AstUtils.Convert(expr, typeof(IDictionary<object, object>)),
+                    MakeItemConversionSite(context, itemTypes[0], implicitProtocolConversions),
+                    MakeItemConversionSite(context, itemTypes[1], implicitProtocolConversions)
+                };
+            }
+            return AstUtils.Convert(Ast.Call(converter, args), toType);
+        }
+
+        private static Expression/*!*/ MakeItemConversionSite(RubyContext/*!*/ context, Type/*!*/ itemType, bool implicitProtocolConversions) {
+            var siteType = typeof(CallSite<>).MakeGenericType(typeof(Func<,,>).MakeGenericType(typeof(CallSite), typeof(object), itemType));
+            var binder = ProtocolConversionAction.GetConversionAction(context, itemType, implicitProtocolConversions);
+            return AstUtils.Constant(siteType.GetMethod("Create", new[] { typeof(CallSiteBinder) }).Invoke(null, new object[] { binder }), siteType);
+        }
+
+        #endregion
+
+        #region Type group to module
+
+        // A constant naming both a generic and a non-generic CLR type (System::IComparable is IComparable and
+        // IComparable<T>) is a type group. Where a module or class is expected - include System::IComparable,
+        // x.is_a?(System::IComparable) - it stands for its non-generic member.
+
+        private static bool IsTypeGroupConversion(Type/*!*/ fromType, Type/*!*/ toType) {
+            return typeof(TypeGroup).IsAssignableFrom(fromType) && (toType == typeof(RubyModule) || toType == typeof(RubyClass));
+        }
+
+        internal static Expression TryConvertTypeGroup(Expression/*!*/ expr, Type/*!*/ fromType, Type/*!*/ toType, Expression/*!*/ contextExpression) {
+            if (!IsTypeGroupConversion(fromType, toType)) {
+                return null;
+            }
+            return AstUtils.Convert(
+                Ast.Call(RubyOps.ConvertTypeGroupToModuleMethod, AstUtils.Convert(contextExpression, typeof(RubyContext)), AstUtils.Convert(expr, typeof(TypeGroup))),
+                toType
+            );
+        }
+
+        #endregion
+
+        /// <summary>
+        /// A Ruby Range of Integers passed for a System.Range: 1..3 is 1..4, -3..-1 is ^3..^0, 2.. is 2..^0.
+        /// </summary>
+        internal static Expression TryConvertRange(Expression/*!*/ expr, Type/*!*/ fromType, Type/*!*/ toType) {
+            if (fromType != typeof(Range) || toType != typeof(System.Range)) {
+                return null;
+            }
+            return Ast.Call(RubyOps.ConvertToRangeMethod, AstUtils.Convert(expr, typeof(Range)));
+        }
+
         internal static Expression/*!*/ ConvertExpression(Expression/*!*/ expr, Type/*!*/ toType, RubyContext/*!*/ context, Expression/*!*/ contextExpression,
             bool implicitProtocolConversions) {
 
@@ -194,6 +333,11 @@ namespace IronRuby.Runtime.Conversions {
 
         internal static Expression ImplicitConvert(Expression/*!*/ expr, Type/*!*/ fromType, Type/*!*/ toType) {
             expr = AstUtils.Convert(expr, fromType);
+
+            // Index's own implicit conversion rejects a negative int; a Ruby index counts from the end (-1 is ^1):
+            if (fromType == typeof(int) && toType == typeof(System.Index)) {
+                return Ast.Call(RubyOps.ConvertToIndexMethod, expr);
+            }
 
             if (toType.IsAssignableFrom(fromType)) {
                 return AstUtils.Convert(expr, toType);

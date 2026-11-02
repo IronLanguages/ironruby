@@ -25,6 +25,7 @@ using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
+using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Runtime;
 
@@ -351,6 +352,19 @@ namespace IronRuby.Builtins {
         // A list of extension methods included into this type or null if none were included.
         // { method-name -> methods }
         internal Dictionary<string, List<ExtensionMethodInfo>> _extensionMethods;
+
+        // The extension methods of this type that `using' a namespace (or a static class) can bring in,
+        // or null: those of every namespace some `using' has named. Unlike _extensionMethods they are
+        // not part of any method group; a call sees the ones active where it is made (see
+        // ResolveMethodNoLock).  { CLR or Ruby method name (Where, where) -> methods }
+        private Dictionary<string, List<ExtensionMethodInfo>> _scopedExtensionMethods;
+
+        // { (name, activation, the group lookup found or NoBaseGroup) -> the method group a call of name sees
+        // there }: the CLR method group extended by the active extension methods, or a group of those
+        // alone (null if none applies).  For the class version in _scopedExtensionGroupsVersion; classes only.
+        private Dictionary<Key<string, RefinementActivation, object>, RubyMemberInfo> _scopedExtensionGroups;
+        private int _scopedExtensionGroupsVersion;
+        private static readonly object NoBaseGroup = new object();
 
         //
         // Refinements (Module#refine).  Two independent roles:
@@ -1617,7 +1631,8 @@ namespace IronRuby.Builtins {
         /// The table is allocated lazily so modules whose constants all come from C#/library code pay nothing.
         /// </summary>
         public void SetConstantLocation(string/*!*/ name, string sourcePath, int sourceLine) {
-            if (sourcePath == null) {
+            // Nor do the constants the core prelude defines: they are MRI's C-defined core.
+            if (sourcePath == null || Context.Loader.IsLoadingCorePrelude) {
                 return;
             }
             using (Context.ClassHierarchyLocker()) {
@@ -2000,14 +2015,46 @@ namespace IronRuby.Builtins {
 
             if (_namespaceTracker != null) {
                 object value;
-                if (_namespaceTracker.TryGetValue(name, out value)) {
+                // the member can live in a platform assembly nothing has loaded yet:
+                if (_namespaceTracker.TryGetValue(name, out value) ||
+                    _context.TryLoadNamespaceMemberAssembly(_namespaceTracker, name) && _namespaceTracker.TryGetValue(name, out value)) {
                     storage = new ConstantStorage( _context.TrackerToModule(value));
                     return true;
                 }
             }
 
+            object fieldValue;
+            if (_typeTracker != null && TryGetClrConstantField(name, out fieldValue)) {
+                storage = new ConstantStorage(fieldValue);
+                return true;
+            }
+
             storage = default(ConstantStorage);
             return false;
+        }
+
+        /// <summary>
+        /// A CLR class's const and static readonly fields are its constants - System::Math::PI, Int32::MaxValue,
+        /// String::Empty, an enum's values - as a Java class's static final fields are in JRuby. Other static members,
+        /// mutable fields and properties included, are methods: Math.Max, Task.Factory, DateTime.Now.
+        /// </summary>
+        private bool TryGetClrConstantField(string/*!*/ name, out object value) {
+            value = null;
+            Type type = _typeTracker.Type;
+            if ((Restrictions & ModuleRestrictions.NoNameMapping) != 0 || type.ContainsGenericParameters || !Tokenizer.IsConstantName(name)) {
+                return false;
+            }
+
+            var flags = BindingFlags.Static | BindingFlags.DeclaredOnly | BindingFlags.Public |
+                (_context.DomainManager.Configuration.PrivateBinding ? BindingFlags.NonPublic : 0);
+
+            FieldInfo field = type.GetField(name, flags);
+            if (field == null || !(field.IsLiteral || field.IsInitOnly)) {
+                return false;
+            }
+
+            value = field.GetValue(null);
+            return true;
         }
 
         // Direct lookup into the constant table (if it exists).
@@ -2108,10 +2155,8 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
 
             ForEachAncestor(inherited, delegate(RubyModule/*!*/ module) {
-
-                // Skip CLR modules (methods declared on CLR modules have already been looked for in the class).
-                // If 'this' is a CLR module, we want to visit all mixed-in methods.
-                if (module.IsClrModule && !this.IsClrModule) return false;
+                // CLR modules are visited like any other: method lookup finds the methods libraries define on an
+                // interface module, and the default interface methods, so listing them has to as well.
 
                 // notification that we entered the module (it could have no method):
                 if (action(module, null, null)) return true;
@@ -2239,18 +2284,24 @@ namespace IronRuby.Builtins {
             Assert.NotNull(name, method);
 
             if (callerContext != _context) {
-                throw RubyExceptions.CreateTypeError(String.Format("Cannot define a method on a {0} `{1}' defined in a foreign runtime #{2}",
+                throw RubyExceptions.CreateTypeError(String.Format("Cannot define a method on a {0} '{1}' defined in a foreign runtime #{2}",
                     IsClass ? "class" : "module", _name, _context.RuntimeId));
             }
 
             if (method.IsUndefined && name == Symbols.Initialize) {
-                throw RubyExceptions.CreateTypeError("Cannot undefine `initialize' method");
+                throw RubyExceptions.CreateTypeError("Cannot undefine 'initialize' method");
             }
 
             PrepareMethodUpdate(name, method);
 
             InitializeMethodsNoLock();
             _methods[name] = method;
+
+            // A refinement is in no one's ancestors, so PrepareMethodUpdate reaches no class: the calls it
+            // changes are those of the module it refines.
+            if (_refinedModule != null) {
+                _context.RefinedMethodChanged(_refinedModule, name);
+            }
         }
 
         internal void AddExtensionMethodsNoLock(List<ExtensionMethodInfo>/*!*/ extensions) {
@@ -2408,8 +2459,12 @@ namespace IronRuby.Builtins {
                         if (method.InvalidateGroupsOnRemoval) {
                             InvalidateGroupsInDependentClasses(name, Int32.MaxValue);
                         }
-                        
+
                         _methods.Remove(name);
+
+                        if (_refinedModule != null) {
+                            _context.RefinedMethodChanged(_refinedModule, name);
+                        }
                     } else {
                         SetMethodNoEventNoLock(Context, name, RubyMemberInfo.HiddenMethod);
                     }
@@ -2457,6 +2512,20 @@ namespace IronRuby.Builtins {
 
             using (Context.ClassHierarchyLocker()) {
                 return ResolveMethodNoLock(name, visibility);
+            }
+        }
+
+        /// <summary>
+        /// What a call of <paramref name="name"/> written where <paramref name="refinements"/> are active resolves
+        /// to, for code that binds such a call itself (the method JIT).  Not registered for invalidation the way a
+        /// call site's resolution is: the caller guards on RubyModule.GlobalMethodVersion.
+        /// </summary>
+        internal MethodResolutionResult ResolveMethod(string/*!*/ name, VisibilityContext visibility, RefinementActivation refinements) {
+            if (refinements == null || refinements.IsEmpty) {
+                return ResolveMethod(name, visibility);
+            }
+            using (Context.ClassHierarchyLocker()) {
+                return ResolveMethodNoLock(name, visibility, MethodLookup.Default, refinements);
             }
         }
 
@@ -2530,11 +2599,19 @@ namespace IronRuby.Builtins {
             bool foundCallerSelf = false;
             MethodResolutionResult result;
 
+            // The CLR extension methods `using'd where the call is made, and whether the search passed a module they
+            // extend before it found the method:
+            var scopedExtensions = (refinements != null && IsClass && (options & MethodLookup.Virtual) == 0) ?
+                refinements.Extensions : null;
+            bool passedScopedExtensions = false;
+
             // Without refinements, the walk without a closure: this is the lookup every call site's binding does,
             // and the closure's captured locals were allocated on every call (which is also why the walk with
-            // refinements is a method of its own).
+            // refinements is a method of its own). Scoped CLR extensions come only with a `using', so only with
+            // refinements active.
             bool found = (refinements != null && !refinements.IsEmpty) ?
-                FindMethodWithRefinementsNoLock(name, options, visibility, refinements, ref skipHidden, ref foundCallerSelf, out info, out owner) :
+                FindMethodWithRefinementsNoLock(name, options, visibility, refinements, scopedExtensions, ref passedScopedExtensions,
+                    ref skipHidden, ref foundCallerSelf, out info, out owner) :
                 FindMethodInAncestorsNoLock(name, (options & MethodLookup.Virtual) != 0, visibility.Class, ref skipHidden, ref foundCallerSelf, out info, out owner);
 
             if (found) {
@@ -2562,16 +2639,37 @@ namespace IronRuby.Builtins {
                 return _context.ObjectClass.ResolveMethodNoLock(name, visibility, options & ~MethodLookup.FallbackToObject, refinements);
             }
 
+            // The CLR extension methods `using'd where the call is made are where using_clr_extensions puts them for
+            // everyone, which is where a refinement of the type they extend would be: a CLR method group anywhere gets
+            // them as more overloads (List#count; an exact tie goes to the instance member), and they shadow a Ruby method
+            // the type picks up after it (IEnumerable[T]'s select ahead of Enumerable#select) - but not one ahead of it
+            // (Array#select: an Array's ancestors don't include IEnumerable[T]).
+            if (scopedExtensions != null) {
+                if (result.Found && result.Info is RubyMethodGroupInfo) {
+                    return AddScopedExtensionsNoLock(name, result, refinements, scopedExtensions);
+                }
+                if (passedScopedExtensions) {
+                    var extended = AddScopedExtensionsNoLock(name, MethodResolutionResult.NotFound, refinements, scopedExtensions);
+                    if (extended.Found) {
+                        // a site bound to them must re-bind if what they shadow changes, as a definition ahead of them would
+                        result.InvalidateSitesOnOverride();
+                    }
+                    return extended;
+                }
+            }
+
             return result;
         }
 
         private bool FindMethodWithRefinementsNoLock(string/*!*/ name, MethodLookup options, VisibilityContext visibility,
-            RefinementActivation/*!*/ refinements, ref bool skipHiddenRef, ref bool foundCallerSelfRef, out RubyMemberInfo infoOut, out RubyModule ownerOut) {
+            RefinementActivation/*!*/ refinements, RefinementActivation.ClrExtensionScope scopedExtensions, ref bool passedScopedExtensionsRef,
+            ref bool skipHiddenRef, ref bool foundCallerSelfRef, out RubyMemberInfo infoOut, out RubyModule ownerOut) {
 
             RubyMemberInfo info = null;
             RubyModule owner = null;
             bool skipHidden = skipHiddenRef;
             bool foundCallerSelf = foundCallerSelfRef;
+            bool passedScopedExtensions = passedScopedExtensionsRef;
             var refinementBuffer = new List<RubyModule>();
 
             bool found = ForEachAncestor((module) => {
@@ -2587,11 +2685,16 @@ namespace IronRuby.Builtins {
                 }
                 owner = module;
                 foundCallerSelf |= module == visibility.Class;
-                return module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info);
+                if (module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
+                    return true;
+                }
+                passedScopedExtensions |= scopedExtensions != null && module.HasScopedExtensionMethodsNoLock(name, scopedExtensions);
+                return false;
             });
 
             skipHiddenRef = skipHidden;
             foundCallerSelfRef = foundCallerSelf;
+            passedScopedExtensionsRef = passedScopedExtensions;
             infoOut = info;
             ownerOut = owner;
             return found;
@@ -2637,6 +2740,165 @@ namespace IronRuby.Builtins {
                 if (m.TryGetMethod(name, ref skipHidden, virtualLookup, out info)) return true;
             }
             return false;
+        }
+
+        // Extension methods have the places using_clr_extensions gives them, the CLR method groups of classes backed by a CLR
+        // type: a class's place has its own and those of the interfaces it implements (a Dictionary's select is LINQ's,
+        // not the Ruby one its IDictionary picks up ahead of IEnumerable[T]). An interface module, a Ruby class (one that
+        // includes IEnumerable[Object] too) and a singleton class have none of their own.
+        private bool IsScopedExtensionPlace {
+            get { return IsClass && !IsSingletonClass && _typeTracker != null; }
+        }
+
+        private bool HasScopedExtensionMethodsNoLock(string/*!*/ name, RefinementActivation.ClrExtensionScope/*!*/ extensions) {
+            if (!IsScopedExtensionPlace) {
+                return false;
+            }
+            if (HasOwnScopedExtensionMethodsNoLock(name, extensions)) {
+                return true;
+            }
+            foreach (var mixin in Mixins) {
+                if (mixin.HasOwnScopedExtensionMethodsNoLock(name, extensions)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private bool HasOwnScopedExtensionMethodsNoLock(string/*!*/ name, RefinementActivation.ClrExtensionScope/*!*/ extensions) {
+            List<ExtensionMethodInfo> candidates;
+            if (_scopedExtensionMethods != null && _scopedExtensionMethods.TryGetValue(name, out candidates)) {
+                foreach (var extension in candidates) {
+                    if (extensions.Contains(extension.Method)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private MethodResolutionResult AddScopedExtensionsNoLock(string/*!*/ name, MethodResolutionResult result,
+            RefinementActivation/*!*/ refinements, RefinementActivation.ClrExtensionScope/*!*/ extensions) {
+
+            int version = Version.Method;
+            if (_scopedExtensionGroups == null || _scopedExtensionGroupsVersion != version) {
+                _scopedExtensionGroups = new Dictionary<Key<string, RefinementActivation, object>, RubyMemberInfo>();
+                _scopedExtensionGroupsVersion = version;
+            }
+
+            var baseGroup = result.Found ? (RubyMethodGroupInfo)result.Info : null;
+            var key = Key.Create(name, refinements, (object)baseGroup ?? NoBaseGroup);
+            RubyMemberInfo group;
+            if (!_scopedExtensionGroups.TryGetValue(key, out group)) {
+                var present = new HashSet<MethodBase>();
+                var overloads = new List<OverloadInfo>();
+                if (baseGroup != null) {
+                    foreach (var overload in baseGroup.MethodBases) {
+                        overloads.Add(overload);
+                        if (overload.ReflectionInfo != null) {
+                            present.Add(overload.ReflectionInfo);
+                        }
+                    }
+                }
+
+                int baseCount = overloads.Count;
+                Action<RubyModule> addExtensions = (module) => {
+                    List<ExtensionMethodInfo> candidates;
+                    if (module._scopedExtensionMethods != null && module._scopedExtensionMethods.TryGetValue(name, out candidates)) {
+                        foreach (var extension in candidates) {
+                            // (an extension activated by using_clr_extensions as well is in the group already)
+                            if (extensions.Contains(extension.Method) && present.Add(extension.Method)) {
+                                overloads.Add(new ReflectionOverloadInfo(extension.Method));
+                            }
+                        }
+                    }
+                };
+                ForEachAncestor((module) => {
+                    if (module.IsScopedExtensionPlace) {
+                        addExtensions(module);
+                        foreach (var mixin in module.Mixins) {
+                            addExtensions(mixin);
+                        }
+                    }
+                    return false;
+                });
+
+                group = (overloads.Count > baseCount) ? new RubyMethodGroupInfo(overloads.ToArray(), this, false) : null;
+                _scopedExtensionGroups.Add(key, group);
+            }
+
+            if (group == null) {
+                return result;
+            }
+
+            // A site bound to the extended group must re-bind when what it extends (or, for a name that found
+            // no group, a method of the name defined anywhere) would change the call - as for the group itself.
+            if (result.Found) {
+                result.InvalidateSitesOnOverride();
+            } else {
+                result.InvalidateSitesOnMissingMethodAddition(name, Context);
+            }
+            return new MethodResolutionResult(group, this, true);
+        }
+
+        /// <summary>
+        /// True if `using <paramref name="module"/>' brings in CLR extension methods: <paramref name="module"/> is a
+        /// CLR namespace (C#'s `using System.Linq;'), whose name is returned in <paramref name="ns"/>, or a CLR
+        /// static class (C#'s `using static'), returned in <paramref name="staticClass"/>.
+        /// </summary>
+        public static bool IsClrExtensionSource(RubyModule/*!*/ module, out string ns, out Type staticClass) {
+            if (module.NamespaceTracker != null) {
+                ns = module.NamespaceTracker.Name;
+                staticClass = null;
+                return true;
+            }
+
+            ns = null;
+            staticClass = null;
+            Type type;
+            if (module.IsClass && module.TypeTracker != null && (type = module.TypeTracker.Type).IsAbstract && type.IsSealed &&
+                !type.IsGenericTypeDefinition) {
+                staticClass = type;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Adds extension methods of this type from a namespace some `using' has named: the calls made where the
+        /// namespace (or the methods' static class) is used can see them from now on.
+        /// </summary>
+        internal void AddScopedExtensionMethodsNoLock(List<ExtensionMethodInfo>/*!*/ extensions) {
+            Context.RequiresClassHierarchyLock();
+
+            if (_scopedExtensionMethods == null) {
+                _scopedExtensionMethods = new Dictionary<string, List<ExtensionMethodInfo>>();
+            }
+
+            // Filed under the CLR name and the Ruby one (Where: where; ToJSON: to_json), the names a call can use.
+            var names = new HashSet<string>();
+            foreach (var extension in extensions) {
+                string clrName = extension.Method.Name;
+                AddScopedExtensionMethod(clrName, extension, names);
+
+                string mangled = RubyUtils.TryMangleName(clrName);
+                if (mangled != null && mangled != clrName) {
+                    AddScopedExtensionMethod(mangled, extension, names);
+                }
+            }
+
+            Context.LexicalMethodsAdded(this, names, "ScopedExtensions");
+        }
+
+        private void AddScopedExtensionMethod(string/*!*/ name, ExtensionMethodInfo extension, HashSet<string>/*!*/ names) {
+            List<ExtensionMethodInfo> overloads;
+            if (!_scopedExtensionMethods.TryGetValue(name, out overloads)) {
+                _scopedExtensionMethods.Add(name, overloads = new List<ExtensionMethodInfo>());
+            }
+            if (!overloads.Contains(extension)) {
+                overloads.Add(extension);
+                names.Add(name);
+            }
         }
 
         private bool IsMethodVisible(RubyMemberInfo/*!*/ method, RubyModule/*!*/ owner, VisibilityContext visibility, bool foundCallerSelf) {
@@ -2763,14 +3025,16 @@ namespace IronRuby.Builtins {
 
         private bool TryGetClrMember(string/*!*/ name, bool virtualLookup, out RubyMemberInfo method) {
             // Skip hidden CLR overloads.
-            // Skip lookup on types that are not visible, that are interfaces or generic type definitions.
-            if (_typeTracker != null && !IsModuleType(_typeTracker.Type)) {
+            // An interface exposes only its default methods, a generic type definition nothing (see GetDefaultInterfaceMethods).
+            if (_typeTracker != null) {
                 // Note: Do not allow mangling for CLR virtual lookups - we want to match the overridden name exactly as is, 
                 // so that it corresponds to the base method call the override stub performs.
                 bool mapNames = (Restrictions & ModuleRestrictions.NoNameMapping) == 0;
                 bool unmangleNames = !virtualLookup && mapNames;
 
-                if (TryGetClrMember(_typeTracker.Type, name, mapNames, unmangleNames, out method)) {
+                if (IsModuleType(_typeTracker.Type) ?
+                    TryGetDefaultInterfaceMember(name, unmangleNames, out method) :
+                    TryGetClrMember(_typeTracker.Type, name, mapNames, unmangleNames, out method)) {
                     _methods.Add(name, method);
                     return true;
                 }
@@ -2778,6 +3042,106 @@ namespace IronRuby.Builtins {
 
             method = null;
             return false;
+        }
+
+        // The public instance members of an interface and its base interfaces that have a default implementation (C# 8),
+        // or an empty array.
+        private MethodInfo[] _defaultInterfaceMethods;
+
+        private MethodInfo/*!*/[]/*!*/ GetDefaultInterfaceMethods() {
+            if (_defaultInterfaceMethods == null) {
+                Type type = _typeTracker.Type;
+                var result = new List<MethodInfo>();
+                // A generic definition's methods cannot be called, only those of its instantiations. The base interfaces
+                // are searched too: an interface module does not include the modules of the interfaces it extends.
+                if (type.IsInterface && !type.ContainsGenericParameters) {
+                    AddDefaultInterfaceMethods(result, type);
+                    foreach (Type baseInterface in type.GetInterfaces()) {
+                        AddDefaultInterfaceMethods(result, baseInterface);
+                    }
+                }
+                _defaultInterfaceMethods = result.ToArray();
+            }
+            return _defaultInterfaceMethods;
+        }
+
+        private static void AddDefaultInterfaceMethods(List<MethodInfo>/*!*/ result, Type/*!*/ interfaceType) {
+            foreach (MethodInfo method in interfaceType.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)) {
+                if (method.IsAbstract || method.ContainsGenericParameters) {
+                    continue;
+                }
+
+                // a member that hides one of the same signature in a base interface wins over it:
+                int hidden = result.FindIndex((existing) => existing.Name == method.Name && 
+                    ReflectionUtils.GetParameterTypes(existing.GetParameters()).ValueEquals(ReflectionUtils.GetParameterTypes(method.GetParameters())));
+
+                if (hidden < 0) {
+                    result.Add(method);
+                } else if (result[hidden].DeclaringType.IsAssignableFrom(method.DeclaringType)) {
+                    result[hidden] = method;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Abstract interface members are metadata: an object exposes its implementation of them through its class.
+        /// A default interface method has a body of its own, which is all a class implementing the interface without
+        /// overriding the member has (and all a Ruby class including it has), so it is callable from the interface module.
+        /// The call dispatches through the interface: an implementation, if there is one, still wins.
+        /// </summary>
+        private bool TryGetDefaultInterfaceMember(string/*!*/ name, bool unmangleNames, out RubyMemberInfo method) {
+            method = null;
+            var defaults = GetDefaultInterfaceMethods();
+            if (defaults.Length == 0 || name.Length == 0) {
+                return false;
+            }
+
+            // a method, a property getter or a property setter:
+            bool isSetter = name.Length > 1 && name.LastCharacter() == '=';
+            string clrName = isSetter ? name.Substring(0, name.Length - 1) : name;
+            string altName = unmangleNames ? RubyUtils.TryUnmangleMethodName(clrName) : null;
+
+            List<OverloadInfo> overloads = null;
+            foreach (var dim in defaults) {
+                string dimName = dim.Name;
+                if (dim.IsSpecialName) {
+                    if (!dimName.StartsWith(isSetter ? "set_" : "get_", StringComparison.Ordinal)) {
+                        continue;
+                    }
+                    dimName = dimName.Substring(4);
+                } else if (isSetter) {
+                    continue;
+                }
+
+                // the name the member is listed under (see RubyClass.GetIrregularlyMangledName):
+                if (dimName == clrName || dimName == altName ||
+                    unmangleNames && RubyUtils.HasMangledName(dimName) && RubyUtils.TryMangleName(dimName) == clrName) {
+                    if (overloads == null) {
+                        overloads = new List<OverloadInfo>();
+                    }
+                    overloads.Add(new ReflectionOverloadInfo(dim));
+                }
+            }
+
+            if (overloads == null) {
+                return false;
+            }
+
+            // an attached CLR member: virtual sites forward to the default body rather than call it through the interface
+            method = new RubyOverloadGroupInfo(overloads.ToArray(), this, null, false);
+            return true;
+        }
+
+        internal IEnumerable<string/*!*/>/*!*/ EnumerateDefaultInterfaceMembers() {
+            foreach (var dim in GetDefaultInterfaceMethods()) {
+                if (!dim.IsSpecialName) {
+                    yield return dim.Name;
+                } else if (dim.Name.StartsWith("get_", StringComparison.Ordinal)) {
+                    yield return dim.Name.Substring(4);
+                } else if (dim.Name.StartsWith("set_", StringComparison.Ordinal)) {
+                    yield return dim.Name.Substring(4) + "=";
+                }
+            }
         }
 
         protected virtual bool TryGetClrMember(Type/*!*/ type, string/*!*/ name, bool mapNames, bool unmangleNames, out RubyMemberInfo method) {
@@ -2800,9 +3164,9 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            // CLR members (do not include interface members - they are not callable methods, just metadata):
-            if (_typeTracker != null && !IsModuleType(_typeTracker.Type)) {
-                foreach (string name in EnumerateClrMembers(_typeTracker.Type)) {
+            // CLR members (do not include abstract interface members - they are not callable methods, just metadata):
+            if (_typeTracker != null) {
+                foreach (string name in IsModuleType(_typeTracker.Type) ? EnumerateDefaultInterfaceMembers() : EnumerateClrMembers(_typeTracker.Type)) {
                     if (action(this, name, RubyMemberInfo.InteropMember)) {
                         return true;
                     }
@@ -2837,6 +3201,17 @@ namespace IronRuby.Builtins {
         /// </remarks>
         public void ForEachMember(bool inherited, RubyMethodAttributes attributes, IEnumerable<string> foreignMembers, 
             Action<string/*!*/, RubyModule/*!*/, RubyMemberInfo/*!*/>/*!*/ action) {
+            ForEachMember(inherited, attributes, foreignMembers, false, action);
+        }
+
+        /// <param name="objectMethods">
+        /// Kernel#public_methods(false) and its private and protected siblings, as against
+        /// Module#instance_methods(false): MRI lists the object's singleton class, whatever is
+        /// mixed into it, and the object's class itself - but not modules prepended to that
+        /// class, nor anything above it.
+        /// </param>
+        public void ForEachMember(bool inherited, RubyMethodAttributes attributes, IEnumerable<string> foreignMembers, bool objectMethods,
+            Action<string/*!*/, RubyModule/*!*/, RubyMemberInfo/*!*/>/*!*/ action) {
 
             Context.RequiresClassHierarchyLock();
 
@@ -2870,7 +3245,24 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // The modules prepended to the object's class, which Kernel#public_methods(false) does
+            // not list although they precede the class in the walk: everything the first class
+            // that is not a singleton declares as an ancestor (its included modules come after it,
+            // where the walk has stopped).
+            HashSet<RubyModule> firstClassOwned = null;
+            if (instanceMethods && !inherited && objectMethods) {
+                for (RubyClass c = this as RubyClass; c != null; c = c.SuperClass) {
+                    if (!c.IsSingletonClass) {
+                        firstClassOwned = new HashSet<RubyModule>();
+                        RubyClass owner = c;
+                        c.ForEachDeclaredAncestor((m) => { if (!ReferenceEquals(m, owner)) firstClassOwned.Add(m); return false; });
+                        break;
+                    }
+                }
+            }
+
             bool stop = false;
+            bool seenSelf = false;
             ForEachInstanceMethod(true, delegate(RubyModule/*!*/ module, string name, RubyMemberInfo member) {
 
                 if (member == null) {
@@ -2881,7 +3273,20 @@ namespace IronRuby.Builtins {
                     }
 
                     if (instanceMethods) {
-                        stop = !inherited && (!IsClass || module.IsClass && !module.IsSingletonClass);
+                        // instance_methods(false) lists what the module itself defines: not what
+                        // a module prepended to it defines (those come first in the walk), and
+                        // for a singleton class not the class behind it.
+                        if (!inherited) {
+                            if (objectMethods) {
+                                // through the singleton classes, up to and including the object's class
+                                stop = module.IsClass && !module.IsSingletonClass;
+                            } else {
+                                if (seenSelf) {
+                                    return true;
+                                }
+                                seenSelf = ReferenceEquals(module, this);
+                            }
+                        }
                     } else if (singletonMethods) {
                         if (!inherited && module != this || classOwned.Contains(module)) {
                             return true;
@@ -2891,6 +3296,12 @@ namespace IronRuby.Builtins {
                     }
 
                 } else if (!visited.ContainsKey(name)) {
+                    if (instanceMethods && !inherited && (objectMethods ? firstClassOwned != null && firstClassOwned.Contains(module) : !ReferenceEquals(module, this))) {
+                        // a prepended module's member: not this module's, and it must not hide
+                        // the one this module defines under the same name
+                        return false;
+                    }
+
                     // yield the member only if it has the right visibility:
                     if (!member.IsUndefined && !member.IsHidden && (((RubyMethodAttributes)member.Visibility & attributes) != 0)) {
                         action(name, module, member);
@@ -3105,7 +3516,7 @@ namespace IronRuby.Builtins {
                 if (module.IsInterface && !CanIncludeClrInterface) {
                     if (Array.IndexOf(_prepends, module) == -1) {
                         throw new InvalidOperationException(String.Format(
-                            "Interface `{0}' cannot be prepended to class `{1}' because its underlying type has already been created",
+                            "Interface '{0}' cannot be prepended to class '{1}' because its underlying type has already been created",
                             module.Name, Name
                         ));
                     }
@@ -3258,7 +3669,7 @@ namespace IronRuby.Builtins {
                 if (module.IsInterface && !CanIncludeClrInterface) {
                     if (Array.IndexOf(_mixins, module) == -1) {
                         throw new InvalidOperationException(String.Format(
-                            "Interface `{0}' cannot be included in class `{1}' because its underlying type has already been created",
+                            "Interface '{0}' cannot be included in class '{1}' because its underlying type has already been created",
                             module.Name, Name
                         ));
                     }

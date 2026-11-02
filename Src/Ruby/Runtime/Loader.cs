@@ -83,6 +83,14 @@ namespace IronRuby.Runtime {
         // lazy init
         private ConcurrentDictionary<string, Scope> _loadedScripts;
 
+        // The assemblies this runtime loaded from files, each mapped to its file: a reference of one's that nothing else
+        // resolves is looked for next to it (LoadAssemblyNextTo).
+        private readonly ConcurrentDictionary<Assembly, string>/*!*/ _assemblyFiles = new ConcurrentDictionary<Assembly, string>();
+
+        // Those of every runtime in the process: a reference made by another runtime's is left to that runtime
+        // (ResolveAssembly).
+        private static readonly ConditionalWeakTable<Assembly, string>/*!*/ _AssemblyFilesOfAllRuntimes = new ConditionalWeakTable<Assembly, string>();
+
 #if FEATURE_FILESYSTEM
         // TODO: static
         // maps full normalized path to compiled code:
@@ -165,6 +173,11 @@ namespace IronRuby.Runtime {
             if (options.HasSearchPaths) {
                 foreach (string path in options.SearchPaths) {
                     loadPaths.Add(_context.EncodePath(path));
+                    // -X:StdLib, which every launcher passes, names the library directories here.
+                    if (_ironRubyLibraryPath == null &&
+                        String.Equals(Path.GetFileName(path.TrimEnd('/', '\\')), "ironruby", StringComparison.OrdinalIgnoreCase)) {
+                        _ironRubyLibraryPath = CanonicalDirectory(path);
+                    }
                 }
             }
 
@@ -172,6 +185,25 @@ namespace IronRuby.Runtime {
             // TODO: remove?
             loadPaths.Add(MutableString.CreateAscii("."));
             return loadPaths;
+        }
+
+        /// <summary>
+        /// IronRuby's own library directory, Src/StdLib/ironruby: where its implementations of
+        /// CRuby's C extensions are, as .rb files (etc.rb loads the C# half). From -X:StdLib when
+        /// it names one, else the default standard library's; spelled as FindFile spells a
+        /// $LOAD_PATH directory, so the two compare.
+        /// </summary>
+        private string _ironRubyLibraryPath;
+
+        private string/*!*/ CanonicalDirectory(string/*!*/ dir) {
+            try {
+                if (dir.Length > 0 && !Platform.IsAbsolutePath(dir)) {
+                    dir = Platform.GetFullPath(dir);
+                }
+            } catch (Exception) {
+                // as FindFile: the path as given
+            }
+            return RubyUtils.CanonicalizePath(ResolveDirectoryLinks(dir)).TrimEnd('/');
         }
 
         private void AddStandardLibraryPath(RubyArray/*!*/ loadPaths, string path, string applicationBaseDir) {
@@ -222,12 +254,15 @@ namespace IronRuby.Runtime {
             // -I ones before them.
             int firstDefault = loadPaths.Count;
             loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ruby/site_ruby/" + _context.StandardLibraryVersion)));
-            loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ironruby")));
+            string ironRubyLibrary = RubyUtils.CombinePaths(path, "ironruby");
+            if (_ironRubyLibraryPath == null) {
+                _ironRubyLibraryPath = CanonicalDirectory(ironRubyLibrary);
+            }
+            loadPaths.Add(_context.EncodePath(ironRubyLibrary));
             string rubyLib4 = RubyUtils.CombinePaths(path, "ruby/4.0");
             if (Directory.Exists(rubyLib4)) {
                 loadPaths.Add(_context.EncodePath(rubyLib4));
             }
-            loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ruby/" + _context.StandardLibraryVersion)));
 
             for (int i = firstDefault; i < loadPaths.Count; i++) {
                 var entry = (MutableString)loadPaths[i];
@@ -484,7 +519,11 @@ namespace IronRuby.Runtime {
         );
 
         internal static bool TryParseAssemblyName(string/*!*/ path, out string typeName, out string assemblyName) {
-            Match match = (path.IndexOf('=') >= 0) ? AssemblyNameRegex.Match(path) : null;
+            // The regex needs a property - a "," and a later "=" - to match. Every require asks,
+            // and an ordinary path has neither, so a quick look first: the unanchored regex
+            // otherwise tries each position of the path, which made it a tenth of irb's startup.
+            int comma = path.IndexOf(',');
+            Match match = (comma >= 0 && path.IndexOf('=', comma) >= 0) ? AssemblyNameRegex.Match(path) : null;
             if (match != null && match.Success) {
                 Group typeGroup = match.Groups["type"];
                 Group assemblyGroup = match.Groups["assembly"];
@@ -544,11 +583,11 @@ namespace IronRuby.Runtime {
 
                     _assembliesBeingResolved.Add(assemblyName);
                     try {
-                        return loader.ResolveAssembly(assemblyName);
+                        return loader.ResolveAssembly(assemblyName, args.RequestingAssembly);
                     } catch (Exception e) {
                         // the exception might not be reported by the type loader, so at least report a warning:
                         loader._context.ReportWarning(
-                            String.Format("An exception was risen while resolving an assembly `{0}': {1}", assemblyName, e.Message)
+                            String.Format("An exception was risen while resolving an assembly '{0}': {1}", assemblyName, e.Message)
                         );
                         throw;
                     } finally {
@@ -561,10 +600,46 @@ namespace IronRuby.Runtime {
             }
         }
 
-        internal Assembly ResolveAssembly(string/*!*/ fullName) {
+        /// <summary>
+        /// The assembly for a reference by name that .NET's own probing did not find: one this runtime has loaded already,
+        /// else one on $LOAD_PATH, else one next to the assembly that asked, if that was loaded from a file.
+        /// </summary>
+        internal Assembly ResolveAssembly(string/*!*/ fullName, Assembly requestingAssembly) {
             Utils.Log(String.Format("Resolving assembly: '{0}'", fullName), "RESOLVE_ASSEMBLY");
-            
+
+            // The event is the process's, and every runtime in it is asked, in the order they hooked it. A reference
+            // made by a DLL that another runtime loaded from a file is left to that one: this runtime would answer it
+            // with its own copy of what the DLL references, loaded already or found on its $LOAD_PATH.
+            if (requestingAssembly != null && !_assemblyFiles.ContainsKey(requestingAssembly) &&
+                _AssemblyFilesOfAllRuntimes.TryGetValue(requestingAssembly, out _)) {
+                return null;
+            }
+
             AssemblyName assemblyName = new AssemblyName(fullName);
+            return FindLoadedAssembly(assemblyName)
+                ?? LoadAssemblyFromLoadPath(assemblyName, fullName)
+                ?? LoadAssemblyNextTo(requestingAssembly, assemblyName);
+        }
+
+        /// <summary>
+        /// One of the assemblies this runtime has loaded, if one will do. Most references that get here are made by
+        /// a DLL required by its path: Assembly.LoadFile gives each file a load context of its own, where a reference
+        /// by name finds the application's assemblies and no other. If the DLL referenced is loaded too, the reference
+        /// is to that one. Loading it again, from $LOAD_PATH or the directory, would make a second copy with types
+        /// of its own, and the DLL making the reference would take the copy's types, not those of the objects Ruby
+        /// has made.
+        /// </summary>
+        private Assembly FindLoadedAssembly(AssemblyName/*!*/ reference) {
+            foreach (Assembly assembly in DomainManager.GetLoadedAssemblyList()) {
+                if (!assembly.IsDynamic && Satisfies(assembly.GetName(), reference)) {
+                    Utils.Log(String.Format("Assembly '{0}' already loaded for '{1}'", assembly.FullName, reference.FullName), "RESOLVE_ASSEMBLY");
+                    return assembly;
+                }
+            }
+            return null;
+        }
+
+        private Assembly LoadAssemblyFromLoadPath(AssemblyName/*!*/ assemblyName, string/*!*/ fullName) {
             ResolvedFile file = FindFile(assemblyName.Name, true, ArrayUtils.EmptyStrings, false).FirstOrDefault();
             if (file == null || file.SourceUnit != null) {
                 return null;
@@ -572,23 +647,90 @@ namespace IronRuby.Runtime {
 
             Utils.Log(String.Format("Assembly '{0}' resolved: found in '{1}'", fullName, file.Path), "RESOLVE_ASSEMBLY");
             try {
-                Assembly assembly = Platform.LoadAssemblyFromPath(file.Path);
-
-                // TODO: this API is broken
-                if (AssemblyName.ReferenceMatchesDefinition(assemblyName, assembly.GetName())) 
-                {
-                    Utils.Log(String.Format("Assembly '{0}' loaded for '{1}'", assembly.FullName, fullName), "RESOLVE_ASSEMBLY");
-                    DomainManager.LoadAssembly(assembly);
-                    return assembly;
+                // Checked before loading, as next to the requesting assembly (LoadAssemblyNextTo): an older copy here
+                // must not answer a reference to a newer one, and a file that won't do isn't loaded at all.
+                if (!Satisfies(AssemblyName.GetAssemblyName(file.Path), assemblyName)) {
+                    return null;
                 }
+
+                Assembly assembly = LoadAssemblyFromFile(file.Path);
+                Utils.Log(String.Format("Assembly '{0}' loaded for '{1}'", assembly.FullName, fullName), "RESOLVE_ASSEMBLY");
+                DomainManager.LoadAssembly(assembly);
+                return assembly;
             } catch (Exception e) {
                 throw RubyExceptions.CreateLoadError(e);
             }
+        }
 
-            return null;
+        /// <summary>
+        /// .NET Framework's LoadFrom context looked for an assembly's references next to it. Assembly.LoadFile,
+        /// which require uses, does not, so a DLL required by its path found what it references only on
+        /// $LOAD_PATH. This looks next to the assemblies loaded from files, after $LOAD_PATH, and loads what it
+        /// finds there as what is found on $LOAD_PATH is loaded: its namespaces become Ruby's.
+        /// </summary>
+        private Assembly LoadAssemblyNextTo(Assembly requestingAssembly, AssemblyName/*!*/ reference) {
+            string requestingFile;
+            if (requestingAssembly == null || !_assemblyFiles.TryGetValue(requestingAssembly, out requestingFile)) {
+                return null;
+            }
+
+            string path = Path.Combine(Path.GetDirectoryName(requestingFile), reference.Name + ".dll");
+
+            // A file that won't do isn't loaded at all: nothing would use it, and it would stay loaded. One that isn't
+            // an assembly (a native DLL of the same name) or can't be read isn't an answer either: the reference is
+            // left unresolved, as if nothing were there.
+            try {
+                if (!Platform.FileExists(path) || !Satisfies(AssemblyName.GetAssemblyName(path), reference)) {
+                    return null;
+                }
+            } catch (Exception e) when (e is IOException || e is BadImageFormatException) {
+                return null;
+            }
+
+            Assembly assembly;
+            try {
+                assembly = LoadAssemblyFromFile(path);
+            } catch (Exception e) {
+                throw RubyExceptions.CreateLoadError(e);
+            }
+            Utils.Log(String.Format("Assembly '{0}' loaded for '{1}' from '{2}'", assembly.FullName, reference.FullName, path), "RESOLVE_ASSEMBLY");
+
+            // The assembly is what the reference asks for even if its extension methods can't be read (they name a type
+            // of an assembly that isn't there, say): that is reported, and the reference still gets it.
+            try {
+                DomainManager.LoadAssembly(assembly);
+            } catch (Exception e) when (e is IOException || e is BadImageFormatException || e is TypeLoadException) {
+                _context.ReportWarning(String.Format("extension methods of {0} not read: {1}", assembly.GetName().Name, e.Message.TrimEnd()));
+            }
+            return assembly;
+        }
+
+        /// <summary>
+        /// Whether an assembly named <paramref name="definition"/> will do for a reference to <paramref name="reference"/>:
+        /// the same simple name and culture and at least the version asked for, as .NET's binder requires of an
+        /// application's assemblies, and the same public key token if the reference names one.
+        /// AssemblyName.ReferenceMatchesDefinition compares the simple names only.
+        /// </summary>
+        private static bool Satisfies(AssemblyName/*!*/ definition, AssemblyName/*!*/ reference) {
+            byte[] token = reference.GetPublicKeyToken();
+            return String.Equals(definition.Name, reference.Name, StringComparison.OrdinalIgnoreCase)
+                && String.Equals(definition.CultureName ?? "", reference.CultureName ?? "", StringComparison.OrdinalIgnoreCase)
+                && (reference.Version == null || (definition.Version != null && definition.Version >= reference.Version))
+                && (token == null || token.Length == 0 || token.AsSpan().SequenceEqual(definition.GetPublicKeyToken()));
         }
 
 #endif
+        /// <summary>
+        /// Loads the assembly in the file at <paramref name="path"/>, remembering the file and that this runtime
+        /// loaded it (ResolveAssembly).
+        /// </summary>
+        private Assembly/*!*/ LoadAssemblyFromFile(string/*!*/ path) {
+            Assembly assembly = Platform.LoadAssemblyFromPath(path);
+            _assemblyFiles.TryAdd(assembly, path);
+            _AssemblyFilesOfAllRuntimes.AddOrUpdate(assembly, path);
+            return assembly;
+        }
+
         #endregion
 
         private class ResolvedFile {
@@ -687,9 +829,8 @@ namespace IronRuby.Runtime {
                         _unfinishedFiles.Add(file.Path, Thread.CurrentThread);
                     }
 
-                    // MRI warns under -w. Only for a require the program made: Kernel#Complex and
-                    // #Rational are autoloaded constants pointing at complex18.rb and rational18.rb,
-                    // and those files reopen the very class whose autoload is running - a circularity
+                    // MRI warns under -w. Only for a require the program made: an autoloaded
+                    // constant whose file reopens the very class being autoloaded is a circularity
                     // the user did not write.
                     if (circular && (flags & LoadFlags.WarnCircular) != 0) {
                         _context.ReportWarning("loading in progress, circular require considered harmful - " + file.Path, true);
@@ -720,18 +861,49 @@ namespace IronRuby.Runtime {
                 if (file.SourceUnit != null) {
                     AddScriptLines(file.SourceUnit);
 
-                    ScriptCode compiledCode;
-                    if (file.SourceUnit.LanguageContext == _context) {
-                        compiledCode = CompileRubySource(file.SourceUnit, flags);
-                    } else {
-                        compiledCode = file.SourceUnit.Compile();
+                    long traceStart = StartupTrace.Now();
+                    StartupTrace.BeginFile();
+                    try {
+                        ScriptCode compiledCode;
+                        if (file.SourceUnit.LanguageContext == _context) {
+                            compiledCode = CompileRubySource(file.SourceUnit, flags);
+                        } else {
+                            compiledCode = file.SourceUnit.Compile();
+                        }
+                        // A file the prelude requires from outside its own directory - an argf.rb
+                        // earlier on the load path, say - is a program's, and its constants keep
+                        // their locations: it runs with the marker lifted.
+                        Thread thread = Thread.CurrentThread;
+                        bool corePrelude = _corePreludeLoaderThread == thread && _corePreludeDirectory == null
+                            && Path.GetFileName(file.Path) == "ruby4.rb";
+                        bool foreign = !corePrelude && _corePreludeThread == thread && !IsInCorePreludeDirectory(file.Path);
+                        if (corePrelude) {
+                            _corePreludeDirectory = Path.GetDirectoryName(Path.GetFullPath(file.Path)) + Path.DirectorySeparatorChar;
+                            _corePreludeThread = thread;
+                        } else if (foreign) {
+                            _corePreludeThread = null;
+                        }
+                        try {
+                            loaded = Execute(globalScope, compiledCode);
+                        } finally {
+                            if (corePrelude) {
+                                _corePreludeThread = null;
+                            } else if (foreign) {
+                                _corePreludeThread = thread;
+                            }
+                        }
+                    } finally {
+                        StartupTrace.EndFile(file.Path, traceStart);
                     }
-                    loaded = Execute(globalScope, compiledCode);
                 } else {
                     Debug.Assert(file.Path != null);
                     try {
-                        Assembly assembly = Platform.LoadAssemblyFromPath(file.Path);
-                        DomainManager.LoadAssembly(assembly);
+                        Assembly assembly = LoadAssemblyFromFile(file.Path);
+                        if (!DomainManager.LoadAssembly(assembly)) {
+                            // The runtime has seen the assembly, which it reports once: maybe in a require that failed
+                            // reading its extension methods. This reads them if they haven't been read.
+                            _context.AddExtensionAssembly(assembly);
+                        }
                         loaded = assembly;
                     } catch (BadImageFormatException) when (IsNativeExtensionPath(file.Path)) {
                         // A gem's compiled CRuby extension. It is not a CLR assembly and never will
@@ -882,6 +1054,16 @@ namespace IronRuby.Runtime {
                 // - use forward slashes everywhere.
                 dir = RubyUtils.CanonicalizePath(dir);
                 ResolvedFile file = ResolveFile(RubyUtils.CombinePaths(dir, path), extension, appendExtensions, sourceFileExtensions);
+                // A C extension by its library name ("etc.so", as tmpdir.rb requires it) is IronRuby's
+                // implementation of that extension, as JRuby loads its own for one: the .rb of the
+                // same name in IronRuby's library directory. Not finding it cost a LoadError and
+                // RubyGems' search of every installed gem - a quarter of a second, the first time.
+                if (file == null && _ironRubyLibraryPath != null &&
+                    extension.Equals(".so", StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(dir.TrimEnd('/'), _ironRubyLibraryPath, StringComparison.OrdinalIgnoreCase)) {
+                    string source = path.Substring(0, path.Length - extension.Length) + ".rb";
+                    file = ResolveFile(RubyUtils.CombinePaths(dir, source), ".rb", false, sourceFileExtensions);
+                }
                 if (file != null) {
                     result.Add(file);
                 }
@@ -893,7 +1075,12 @@ namespace IronRuby.Runtime {
 
             // MRI tries each extension over the whole $LOAD_PATH before the next one, so for a
             // bare name a .rb file anywhere wins over a library found in an earlier directory.
-            if (appendExtensions && extension.Length == 0 && result.Count > 1 && result[0].SourceUnit == null) {
+            // A name whose last dot starts no extension Ruby knows - "cool.io_ext" - is a bare
+            // name too: MRI appends .rb and .so to it just the same.
+            bool bareName = extension.Length == 0 ||
+                (!IsKnownExtension(extension, sourceFileExtensions ?? ArrayUtils.EmptyStrings) &&
+                 _LibraryExtensions.IndexOf(extension, DlrConfiguration.FileExtensionComparer) == -1);
+            if (appendExtensions && bareName && result.Count > 1 && result[0].SourceUnit == null) {
                 result = result.Where((f) => f.SourceUnit != null).Concat(result.Where((f) => f.SourceUnit == null)).ToList();
             }
 
@@ -1224,9 +1411,21 @@ namespace IronRuby.Runtime {
 
         #endregion
 
-        // The thread running ruby4.rb as the host's core prelude (--disable-gems), while it does. The
-        // only Ruby code on its stack then is the prelude's own, which backtraces leave out.
+        // The thread running ruby4.rb as the host's core prelude, while it does - directly under
+        // --disable-gems, else from gem_prelude.rb's first line. The only Ruby code on its stack then
+        // is the prelude's own, which backtraces leave out.
         private Thread _corePreludeThread;
+
+        // The thread in LoadCorePrelude, while it is: the ruby4.rb it loads is the core prelude, a
+        // later `load "ruby4.rb"` by a program is not.
+        private Thread _corePreludeLoaderThread;
+
+        // The directory of the core prelude's ruby4.rb, with a trailing separator, once it has started.
+        private string _corePreludeDirectory;
+
+        private bool IsInCorePreludeDirectory(string/*!*/ path) {
+            return Path.GetFullPath(path).StartsWith(_corePreludeDirectory, StringComparison.OrdinalIgnoreCase);
+        }
 
         /// <summary>
         /// True while this thread runs ruby4.rb as the core prelude, loaded by the host itself: a
@@ -1250,10 +1449,7 @@ namespace IronRuby.Runtime {
         /// lists the features MRI has in $" from the start.
         /// </summary>
         internal void LoadCorePrelude(Scope/*!*/ globalScope, object self, string/*!*/ path) {
-            bool direct = path == "ruby4.rb";
-            if (direct) {
-                _corePreludeThread = Thread.CurrentThread;
-            }
+            _corePreludeLoaderThread = Thread.CurrentThread;
             _loadingCorePrelude = true;
             // The prelude's hot code is mostly not the program's: compiling it on another thread while the prelude
             // loads only competes with the loading (the compilations of `ir -e 1' took ~180 ms of CPU). What is
@@ -1263,9 +1459,7 @@ namespace IronRuby.Runtime {
                 LoadFile(globalScope, self, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
             } finally {
                 _loadingCorePrelude = false;
-                if (direct) {
-                    _corePreludeThread = null;
-                }
+                _corePreludeLoaderThread = null;
                 holdCompilation.Dispose();
             }
             ProvideCoreFeatures();
@@ -1276,7 +1470,7 @@ namespace IronRuby.Runtime {
         private readonly HashSet<string>/*!*/ _hiddenLoadedFiles = new HashSet<string>(StringComparer.Ordinal);
 
         private static readonly string[]/*!*/ _CorePreludeFiles = {
-            "gem_prelude.rb", "ruby4.rb", "argf.rb", "thread.rb", "complex18.rb", "rational18.rb",
+            "gem_prelude.rb", "ruby4.rb", "argf.rb", "thread.rb", "rational.rb", "complex.rb",
             "gem_compat.rb"
         };
 
@@ -1399,12 +1593,19 @@ namespace IronRuby.Runtime {
             // An extensionless entry in $" says nothing about a file that was found: MRI only
             // counts "foo" as loaded when no foo.rb (or library) could be found at all.
             // A feature listed by name ("set.rb", "complex.so" - what MRI provides) is loaded for
-            // a require of that name, with or without the extension.
+            // a require of that name, with or without the extension. Except that a library
+            // ("foo.so") does not stand in for a Ruby file found on the path: MRI's
+            // search_required goes on to look for foo.rb when only foo.so is in $", which is how
+            // `require "pathname"` loads lib/pathname.rb over the core's "pathname.so".
             IEnumerable<MutableString> requested;
             if (RubyUtils.GetExtension(path).Length != 0) {
                 requested = new[] { _context.EncodePath(path) };
             } else if (!Platform.IsAbsolutePath(path) && !path.StartsWith(".", StringComparison.Ordinal)) {
-                requested = new[] { _context.EncodePath(path + ".rb"), _context.EncodePath(path + ".so") };
+                var found = files.FirstOrDefault();
+                bool foundSource = found != null && found.SourceUnit != null;
+                requested = foundSource
+                    ? new[] { _context.EncodePath(path + ".rb") }
+                    : new[] { _context.EncodePath(path + ".rb"), _context.EncodePath(path + ".so") };
             } else {
                 requested = Enumerable.Empty<MutableString>();
             }

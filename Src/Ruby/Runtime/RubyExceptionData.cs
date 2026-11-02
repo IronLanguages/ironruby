@@ -60,6 +60,7 @@ namespace IronRuby.Runtime {
 
         // if this is set to null we need to initialize it
         private object _message; 
+        private static readonly string _DefaultDivideByZeroMessage = new DivideByZeroException().Message;
         
         // can be set explicitly by the user (even to nil):
         private RubyArray _backtrace;
@@ -280,7 +281,13 @@ namespace IronRuby.Runtime {
                             return _message = GetDefaultMessage(immediateClass.NominalClass);
                         }
                     }
-                    _message = MutableString.Create(_visibleException.Message, RubyEncoding.UTF8);
+                    string clrMessage = _visibleException.Message;
+                    if (_visibleException is DivideByZeroException && clrMessage == _DefaultDivideByZeroMessage) {
+                        // Integer division by zero raises the CLR's own exception, whose message is
+                        // "Attempted to divide by zero."; MRI says "divided by 0".
+                        clrMessage = "divided by 0";
+                    }
+                    _message = MutableString.Create(clrMessage, RubyEncoding.UTF8);
                 }
                 return _message;
             }
@@ -382,6 +389,15 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// NoMethodError#args. MRI records the arguments of the failed call on the error.
         /// </summary>
+        // NoMethodError#private_call?: the call that went missing had an implicit receiver
+        // (or `self.`), so a private method would have been reachable.
+        private bool _privateCall;
+
+        public bool PrivateCall {
+            get { return _privateCall; }
+            set { _privateCall = value; }
+        }
+
         public object Arguments {
             get { return _arguments; }
             set { _arguments = value; }
@@ -446,9 +462,11 @@ namespace IronRuby.Runtime {
 
             RubyClass exceptionClass = context.GetClass(exception.GetType());
 
-            // new resolves to Class#new built-in method:
+            // new resolves to Class#new built-in method, or to a library constructor (a C#-thrown
+            // exception of such a class already carries whatever that constructor would set):
             var newMethod = exceptionClass.ImmediateClass.ResolveMethod("new", VisibilityContext.AllVisible);
-            if (newMethod.Found && newMethod.Info.DeclaringModule == context.ClassClass && newMethod.Info is RubyCustomMethodInfo) {
+            if (newMethod.Found && ((newMethod.Info.DeclaringModule == context.ClassClass && newMethod.Info is RubyCustomMethodInfo)
+                || newMethod.Info is RubyLibraryMethodInfo)) {
                 // initialize resolves to a built-in method:
                 var initializeMethod = exceptionClass.ResolveMethod("initialize", VisibilityContext.AllVisible);
                 if (initializeMethod.Found && initializeMethod.Info is RubyLibraryMethodInfo) {
@@ -457,10 +475,17 @@ namespace IronRuby.Runtime {
                 }
             }
 
+            object message = instanceData.Message;
+            // Errno classes extend CLR exceptions of several roots (ExternalException,
+            // IOException, ...), so SystemCallError membership is decided on the Ruby side.
+            if (exceptionClass.IsSubclassOf(context.GetClass(typeof(System.Runtime.InteropServices.ExternalException)))) {
+                message = StripSystemCallErrorPrefix(exceptionClass, message);
+            }
+
             var site = exceptionClass.NewSite;
             Exception newException;
             try {
-                newException = site.Target(site, exceptionClass, instanceData.Message) as Exception;
+                newException = site.Target(site, exceptionClass, message) as Exception;
             } catch (Exception e) {
                 // MRI: this can lead to stack overflow:
                 return HandleException(context, e);
@@ -479,6 +504,39 @@ namespace IronRuby.Runtime {
             newInstanceData._capturedTrace = instanceData._capturedTrace;
 #endif
             return newException;
+        }
+
+        /// <summary>
+        /// A SystemCallError thrown from C# already says "&lt;strerror&gt; - &lt;detail&gt;"
+        /// (RubyExceptions.MakeMessage). The Ruby-level initialize it is about to be handed to -
+        /// the prelude's SystemCallError#initialize - builds that same form from the detail, so it
+        /// gets the detail alone, or the error would name itself twice: "No such file or directory
+        /// - No such file or directory - path". The class's strerror text is its Message constant.
+        /// </summary>
+        private static object StripSystemCallErrorPrefix(RubyClass/*!*/ exceptionClass, object message) {
+            var text = message as MutableString;
+            if (text == null) {
+                return message;
+            }
+            for (RubyClass c = exceptionClass; c != null; c = c.SuperClass) {
+                object constant;
+                if (c.TryGetConstant(null, "Message", out constant)) {
+                    var prefix = constant as MutableString;
+                    if (prefix == null) {
+                        return message;
+                    }
+                    string s = text.ConvertToString();
+                    string p = prefix.ConvertToString();
+                    if (s == p) {
+                        return null;
+                    }
+                    if (s.StartsWith(p + " - ", StringComparison.Ordinal)) {
+                        return MutableString.Create(s.Substring(p.Length + 3), text.Encoding);
+                    }
+                    return message;
+                }
+            }
+            return message;
         }
 
         // A handled exception used to leave a pending Thread.Abort behind when Thread#raise had delivered it

@@ -58,6 +58,9 @@ namespace IronRuby.Builtins {
         private const int ERROR_FILE_NOT_FOUND = 2;
         private const int ERROR_PATH_NOT_FOUND = 3;
         private const int ERROR_ACCESS_DENIED = 5;
+        private const int ERROR_SHARING_VIOLATION = 32;
+        private const int ERROR_LOCK_VIOLATION = 33;
+        private const int ERROR_INVALID_NAME = 123;
         private const int ERROR_BAD_EXE_FORMAT = 193;
         private const int ERROR_BROKEN_PIPE = 109;
 
@@ -142,6 +145,15 @@ namespace IronRuby.Builtins {
         [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security,
             uint creation, uint flags, IntPtr template);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool TerminateProcess(IntPtr handle, uint exitCode);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool GenerateConsoleCtrlEvent(uint ctrlEvent, int processGroupId);
 
         #endregion
 
@@ -438,10 +450,12 @@ namespace IronRuby.Builtins {
                         break;
 
                     default: {
-                        IntPtr opened = OpenFile(ToStr(action[2]), ToInt(action[3]));
+                        string path = ToStr(action[2]);
+                        IntPtr opened = OpenFile(path, ToInt(action[3]));
                         if (opened == new IntPtr(-1)) {
-                            plan.Error = -Errno(Marshal.GetLastWin32Error());
-                            return plan;
+                            int error = Marshal.GetLastWin32Error();
+                            plan.Dispose();
+                            throw RedirectionError(error, path);
                         }
                         plan.Opened.Add(opened);
                         Assign(plan, target, opened);
@@ -504,11 +518,28 @@ namespace IronRuby.Builtins {
                 FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
         }
 
+        /// <summary>
+        /// MRI opens a redirection's file in the parent before it starts the child, so a file that
+        /// cannot be opened is what the error names. Handing back only -errno made the prelude name
+        /// the program instead: `out: "C:/no/dir/x"` read as "No such file or directory - ruby.exe".
+        /// </summary>
+        private static Exception/*!*/ RedirectionError(int win32Error, string/*!*/ path) {
+            switch (Errno(win32Error)) {
+                case ENOENT: return new FileNotFoundException(path);
+                case EACCES: return Directory.Exists(path) ? RubyExceptions.CreateEISDIR(path) : new UnauthorizedAccessException(path);
+                default: return new InvalidError(path);
+            }
+        }
+
+        // the nearest errno, as MRI's map_errno gives it
         private static int Errno(int win32Error) {
             switch (win32Error) {
                 case ERROR_FILE_NOT_FOUND:
-                case ERROR_PATH_NOT_FOUND: return ENOENT;
-                case ERROR_ACCESS_DENIED: return EACCES;
+                case ERROR_PATH_NOT_FOUND:
+                case ERROR_INVALID_NAME: return ENOENT;
+                case ERROR_ACCESS_DENIED:
+                case ERROR_SHARING_VIOLATION:
+                case ERROR_LOCK_VIOLATION: return EACCES;
                 case ERROR_BAD_EXE_FORMAT: return ENOEXEC;
                 default: return EINVAL;
             }
@@ -594,6 +625,86 @@ namespace IronRuby.Builtins {
             CloseHandle(handle);
             Environment.Exit(unchecked((int)code));
             return 0;   // not reached
+        }
+
+        #endregion
+
+        #region kill
+
+        private const int SIGINT = 2;
+        private const int SIGKILL = 9;
+        private const int EPERM = 1;
+        private const int ESRCH = 3;
+        private const uint STILL_ACTIVE = 259;
+        private const uint PROCESS_TERMINATE = 0x0001;
+        private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+        private const int ERROR_INVALID_PARAMETER = 87;
+        private const uint CTRL_C_EVENT = 0;
+        private const uint CTRL_BREAK_EVENT = 1;
+
+        /// <summary>
+        /// kill(2) as MRI's win32 kill() does it, since there is no kill(2) to call - the libc one
+        /// Process.kill used to P/Invoke is not there (DllNotFoundException). Returns 0, or -errno.
+        /// KILL is TerminateProcess (with exit code 0, as in MRI), 0 asks whether the process still
+        /// runs, INT is a console Ctrl+C - Ctrl+Break for a pid, which has to be a process group
+        /// (spawn's pgroup: true). Windows has no other signals to send: EINVAL, as in MRI.
+        /// </summary>
+        internal static int Kill(int pid, int signal) {
+            if (pid < 0 || (pid == 0 && signal != SIGINT)) {
+                return -EINVAL;
+            }
+
+            switch (signal) {
+                case SIGINT:
+                    // a console's Ctrl+C cannot be aimed at one process group, so a pid gets Ctrl+Break
+                    if (!GenerateConsoleCtrlEvent(pid != 0 ? CTRL_BREAK_EVENT : CTRL_C_EVENT, pid)) {
+                        int error = Marshal.GetLastWin32Error();
+                        return -(error == 0 ? EPERM : Errno(error));
+                    }
+                    return 0;
+
+                case 0:
+                case SIGKILL:
+                    // A child's handle is the one __waitpid__ reaps and closes, so it is used with the
+                    // table locked: otherwise another thread could close it between the lookup and the
+                    // call, and a child started meanwhile could be handed the same handle value.
+                    lock (_children) {
+                        IntPtr child;
+                        if (_children.TryGetValue(pid, out child)) {
+                            return Signal(child, signal);
+                        }
+                    }
+
+                    // signal 0 only asks, so it needs no right to end the process
+                    uint access = PROCESS_QUERY_LIMITED_INFORMATION | (signal == SIGKILL ? PROCESS_TERMINATE : 0);
+                    IntPtr handle = OpenProcess(access, false, pid);
+                    if (handle == IntPtr.Zero) {
+                        return (Marshal.GetLastWin32Error() == ERROR_INVALID_PARAMETER) ? -ESRCH : -EPERM;
+                    }
+                    try {
+                        return Signal(handle, signal);
+                    } finally {
+                        CloseHandle(handle);
+                    }
+
+                default:
+                    return -EINVAL;
+            }
+        }
+
+        /// <summary>KILL or 0 to an open process handle: 0, or -errno.</summary>
+        private static int Signal(IntPtr handle, int signal) {
+            uint status;
+            if (!GetExitCodeProcess(handle, out status)) {
+                return -Errno(Marshal.GetLastWin32Error());
+            }
+            if (status != STILL_ACTIVE) {
+                return -ESRCH;
+            }
+            if (signal == SIGKILL && !TerminateProcess(handle, 0)) {
+                return -EPERM;
+            }
+            return 0;
         }
 
         #endregion

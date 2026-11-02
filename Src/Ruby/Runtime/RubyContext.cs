@@ -73,13 +73,14 @@ namespace IronRuby.Runtime {
         private static int _RuntimeIdGenerator = 0;
 
         // MRI compliance: language level targeted by the prism front end.
-        // The bundled standard library is still the 1.9 snapshot.
         public string/*!*/ MriVersion {
             get { return MriVersionString; }
         }
 
         private const string MriVersionString = "4.0.0";
 
+        // Names the site directory (ruby/site_ruby/1.9.1, where rb-readline lives), as
+        // RbConfig's ruby_version does. The standard library itself is ruby/4.0.
         public string/*!*/ StandardLibraryVersion {
             get { return "1.9.1"; }
         }
@@ -321,18 +322,39 @@ namespace IronRuby.Runtime {
         #region Refinements
 
         // Bumped by every successful `using'.  RubyScope memoizes its effective RefinementActivation and
-        // recomputes it when this changes, so a `using' anywhere invalidates every memoized table - and
-        // with it every call-site rule guarded on a table instance.  `using' is rare; correctness first.
+        // recomputes it when this changes.  The recomputed table is the same instance whenever its contents
+        // are (RefinementActivation interns them), so a `using' only fails the call-site rules guarded on
+        // a table it actually changed.
         internal int RefinementVersion = 1;
 
-        // Every module that Module#refine has ever been called on, plus - transitively at query time -
-        // the classes that inherit from them.  Empty in a program that never calls refine, which is what
-        // keeps the whole feature off the fast path: RubyCallAction only looks at scopes when this is
-        // non-empty.
+        // Every module that Module#refine has ever been called on.  Empty in a program that never calls
+        // refine, which is what keeps the whole feature off the fast path.
         private readonly Dictionary<RubyModule, bool> _refinedModules = new Dictionary<RubyModule, bool>();
 
+        // Set by the first `using' of a CLR namespace or static class (see ActivateScopedExtensions): from
+        // then on lexical activations matter even if nothing is refined.
+        private bool _hasScopedExtensions;
+
+        // { module -> the names a refinement of it, or an extension method of it some `using' of a CLR
+        // namespace has brought in, has (or had) }.  This is what decides whether a call can depend on
+        // where it is made at all - CRuby's REFINED method entry: a refinement of String that defines
+        // #shout makes `x.shout' a refined call where x is a String, and leaves `x.upcase' and every call
+        // on an Integer alone.  Only ever grows.
+        private readonly Dictionary<RubyModule, HashSet<string>> _refinedMethodNames = new Dictionary<RubyModule, HashSet<string>>();
+
+        // Every name in _refinedMethodNames, read without the class-hierarchy lock; copy-on-write.
+        private volatile HashSet<string> _allRefinedMethodNames = new HashSet<string>();
+
+        // RefinementActivation's intern table (see RefinementActivation.Intern).
+        internal readonly Dictionary<RefinementActivation, RefinementActivation> RefinementActivations =
+            new Dictionary<RefinementActivation, RefinementActivation>(RefinementActivation.ContentComparer);
+
+        /// <summary>
+        /// True once anything has been refined or a CLR namespace `using'd: from then on what a `using'
+        /// activates is recorded where methods are defined and asked by the calls that can depend on it.
+        /// </summary>
         internal bool HasRefinements {
-            get { return _refinedModules.Count > 0; }
+            get { return _refinedModules.Count > 0 || _hasScopedExtensions; }
         }
 
         private RubyClass _refinementClass;
@@ -355,29 +377,77 @@ namespace IronRuby.Runtime {
             if (_refinedModules.ContainsKey(refinedModule)) {
                 return;
             }
+            // A refinement that defines nothing changes no call: the call sites it can affect are
+            // invalidated name by name, as methods arrive in it (RefinedMethodChanged).
             _refinedModules.Add(refinedModule, true);
-
-            // The method JIT resolves calls statically and has no notion of an activated
-            // refinement, so the first `refine' switches every specialization off for good.
-            IronRuby.Runtime.Jit.JitRuntime.Disable();
-
-            // Every call site that targets this module or a descendant of it must re-bind, because from
-            // now on its rule needs the refinement guard.  This mirrors what RubyClass.PrependsUpdated
-            // does for a prepend: the MRO the site cached is no longer the whole story.
-            refinedModule.MethodsUpdated("Refine");
         }
 
         /// <summary>
-        /// True if a call whose target is <paramref name="cls"/> could be affected by a refinement, i.e.
-        /// the class or one of its ancestors has been refined.  Call sites for classes that answer false
-        /// are built exactly as they were before refinements existed and pay nothing.
+        /// A refinement of <paramref name="refinedModule"/> defined, redefined, undefined or removed its
+        /// method <paramref name="name"/>.  The call sites that resolved the name on the module or below it
+        /// were bound without the refinement guard (the name was not refined yet) or against the method it
+        /// had before, so they re-bind - CRuby clears the method cache of the refined class for the name.
         /// </summary>
-        internal bool IsRefinementSensitive(RubyModule/*!*/ cls) {
+        internal void RefinedMethodChanged(RubyModule/*!*/ refinedModule, string/*!*/ name) {
             RequiresClassHierarchyLock();
-            if (_refinedModules.Count == 0) {
+            AddLexicalMethodName(refinedModule, name);
+            refinedModule.AllDependentMethodsUpdated("RefinedMethod: " + name);
+        }
+
+        /// <summary>
+        /// Extension methods of <paramref name="module"/> named <paramref name="names"/> can now be reached by a
+        /// call made where their namespace is `using'd: the calls of those names on the module and below it
+        /// re-bind, now with the lexical guard.
+        /// </summary>
+        internal void LexicalMethodsAdded(RubyModule/*!*/ module, ICollection<string>/*!*/ names, string/*!*/ reason) {
+            RequiresClassHierarchyLock();
+            if (names.Count == 0) {
+                return;
+            }
+            foreach (string name in names) {
+                AddLexicalMethodName(module, name);
+            }
+            module.AllDependentMethodsUpdated(reason);
+        }
+
+        private void AddLexicalMethodName(RubyModule/*!*/ module, string/*!*/ name) {
+            HashSet<string> names;
+            if (!_refinedMethodNames.TryGetValue(module, out names)) {
+                _refinedMethodNames.Add(module, names = new HashSet<string>());
+            }
+            if (names.Add(name) && !_allRefinedMethodNames.Contains(name)) {
+                var all = new HashSet<string>(_allRefinedMethodNames);
+                all.Add(name);
+                _allRefinedMethodNames = all;
+            }
+        }
+
+        /// <summary>
+        /// True if a call of <paramref name="name"/> on an instance of <paramref name="cls"/> could be
+        /// affected by a refinement: some refinement of the class or of one of its ancestors has a method
+        /// of that name (or a `using'd CLR namespace has an extension method of that name for one of them).  Whether one is active where the call is made is the call site's question, which
+        /// only call sites that answer true here ask; all the others are built - and dispatched, and
+        /// JIT-compiled - exactly as if nothing were refined.
+        /// </summary>
+        internal bool IsRefinementSensitive(RubyModule/*!*/ cls, string/*!*/ name) {
+            RequiresClassHierarchyLock();
+            if (!IsRefinedMethodName(name)) {
                 return false;
             }
-            return cls.ForEachAncestor(true, (m) => _refinedModules.ContainsKey(m));
+            return cls.ForEachAncestor(true, (m) => {
+                HashSet<string> names;
+                return _refinedMethodNames.TryGetValue(m, out names) && names.Contains(name);
+            });
+        }
+
+        /// <summary>
+        /// False if no refinement anywhere has a method <paramref name="name"/>: no call of the name can be a
+        /// refined call.  Lock-free, for the checks made on every execution of an operation rather than once
+        /// per call-site rule.
+        /// </summary>
+        public bool IsRefinedMethodName(string/*!*/ name) {
+            var names = _allRefinedMethodNames;
+            return names.Count != 0 && names.Contains(name);
         }
 
         #endregion
@@ -625,8 +695,12 @@ namespace IronRuby.Runtime {
             _namespaceCache = new Dictionary<NamespaceTracker, RubyModule>();
             _referenceTypeInstanceData = new System.Runtime.CompilerServices.ConditionalWeakTable<object, RubyInstanceData>();
             _valueTypeInstanceData = new Dictionary<object, RubyInstanceData>();
-            _inputProvider = new RubyInputProvider(this, _options.Arguments, _options.LocaleEncoding);
-            _defaultExternalEncoding = _options.DefaultEncoding ?? _options.LocaleEncoding;
+            // MRI 3.0+ on Windows: the default external encoding is UTF-8 whatever the console's
+            // code page, which stays the locale encoding - and ARGV is in it too; a .NET argument
+            // is Unicode, so nothing is lost.
+            bool windows = Path.DirectorySeparatorChar == '\\';
+            _inputProvider = new RubyInputProvider(this, _options.Arguments, windows ? RubyEncoding.UTF8 : _options.LocaleEncoding);
+            _defaultExternalEncoding = _options.DefaultEncoding ?? (windows ? RubyEncoding.UTF8 : _options.LocaleEncoding);
             // -E / --encoding, resolved here rather than in the options parser because looking an
             // encoding up by its Ruby name needs a context. It overrides both -K and the locale:
             // that is the whole point of the option.
@@ -716,6 +790,7 @@ namespace IronRuby.Runtime {
             // Refinement inherits Module's ancestor-splicing hooks and must not keep them; they have to go
             // before any user code can ask Refinement.private_instance_methods.
             InitializeRefinementClass();
+            StartupTrace.Mark("RubyContext created (core classes set up)");
         }
 
         private void InitializeRefinementClass() {
@@ -780,6 +855,7 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("VERBOSE", Runtime.GlobalVariables.Verbose);
             DefineGlobalVariableNoLock("-v", Runtime.GlobalVariables.Verbose);
             DefineGlobalVariableNoLock("-w", Runtime.GlobalVariables.Verbose);
+            DefineGlobalVariableNoLock("-W", Runtime.GlobalVariables.WarningLevel);
             DefineGlobalVariableNoLock("DEBUG", debug);
             DefineGlobalVariableNoLock("-d", debug);
 
@@ -1063,7 +1139,101 @@ namespace IronRuby.Runtime {
 
         private void AssemblyLoaded(Assembly/*!*/ assembly) {
             _namespaces.LoadAssembly(assembly);
-            AddExtensionAssembly(assembly);
+            try {
+                AddExtensionAssembly(assembly);
+            } finally {
+                // The assembly can add types to namespaces whose misses are already cached (defined?
+                // and constant sites keep their answer per constant version) - its namespaces are
+                // loaded even if its extension methods can't be read.
+                using (ClassHierarchyLocker()) {
+                    ConstantAccessVersion++;
+                }
+            }
+        }
+
+        // Simple names of the assemblies the host was started with that the on-demand loading below
+        // has not tried yet; built on the first miss.
+        private HashSet<string> _untriedPlatformAssemblies;
+
+        // Namespace members the on-demand loading below has already looked for.
+        private HashSet<string> _platformAssemblyProbes;
+
+        /// <summary>
+        /// On .NET Core the class library is split into many assemblies that are loaded only when
+        /// referenced, so `System::Console` misses until System.Console.dll has been loaded. When a
+        /// constant lookup in a CLR namespace misses, this loads the platform assemblies that could
+        /// define <paramref name="name"/> in that namespace: A.B.Name, A.B, A (for a miss in A.B),
+        /// then the netstandard facade, which forwards the whole .NET Standard surface. Only
+        /// assemblies on the runtime's trusted platform assembly list are considered and each name is
+        /// tried once, so a repeated miss costs a set lookup. Returns true if the namespace may now
+        /// contain <paramref name="name"/>.
+        /// </summary>
+        internal bool TryLoadNamespaceMemberAssembly(NamespaceTracker/*!*/ ns, string/*!*/ name) {
+            RequiresClassHierarchyLock();
+
+            string nsName = ns.Name;
+            if (nsName == null || name.IndexOf('.') >= 0) {
+                return false;
+            }
+
+            if (_platformAssemblyProbes == null) {
+                _untriedPlatformAssemblies = GetPlatformAssemblyNames();
+                _platformAssemblyProbes = new HashSet<string>();
+            }
+
+            if (_untriedPlatformAssemblies.Count == 0 || !_platformAssemblyProbes.Add(nsName + "." + name)) {
+                return false;
+            }
+
+            string candidate = nsName + "." + name;
+            while (true) {
+                if (TryLoadPlatformAssembly(candidate) && ns.ContainsKey(name)) {
+                    return true;
+                }
+                int dot = candidate.LastIndexOf('.');
+                if (dot < 0) {
+                    break;
+                }
+                candidate = candidate.Substring(0, dot);
+            }
+
+            // The netstandard facade forwards the whole .NET Standard surface. Only for the BCL's own
+            // namespaces, though: a namespace included into Object (include Modern) has every top-level
+            // constant looked up in it, and a miss there is no reason to load a hundred assemblies.
+            return (nsName == "System" || nsName.StartsWith("System.", StringComparison.Ordinal) ||
+                    nsName == "Microsoft" || nsName.StartsWith("Microsoft.", StringComparison.Ordinal))
+                && TryLoadPlatformAssembly("netstandard") && ns.ContainsKey(name);
+        }
+
+        // Loads a platform assembly that has not been tried yet. Returns true if it is now loaded.
+        private bool TryLoadPlatformAssembly(string/*!*/ simpleName) {
+            if (!_untriedPlatformAssemblies.Remove(simpleName)) {
+                return false;
+            }
+
+            Assembly assembly;
+            try {
+                assembly = DomainManager.Platform.LoadAssembly(simpleName);
+            } catch (Exception e) {
+                Utils.Log(String.Format("Loading platform assembly '{0}' failed: {1}", simpleName, e.Message), "LOADER");
+                return false;
+            }
+
+            DomainManager.LoadAssembly(assembly);
+            return true;
+        }
+
+        private static HashSet<string>/*!*/ GetPlatformAssemblyNames() {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var paths = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
+            if (paths != null) {
+                foreach (var path in paths.Split(new[] { Path.PathSeparator }, StringSplitOptions.RemoveEmptyEntries)) {
+                    if (path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) {
+                        result.Add(Path.GetFileNameWithoutExtension(path));
+                    }
+                }
+            }
+            return result;
         }
 
         internal void AddModuleToCacheNoLock(Type/*!*/ type, RubyModule/*!*/ module) {
@@ -1263,6 +1433,15 @@ namespace IronRuby.Runtime {
                 modules.Add(GetOrCreateModuleNoLock(iface));
             }
 
+            // Hash patterns match a CLR object's public members. Last, so that an interface or a generic type
+            // definition can define its own #deconstruct_keys; a subclass finds the module on its base class.
+            // An abstract class has no instances of its own, and leaving it out keeps the library classes that
+            // derive from one (System::Char from ValueType, ...) as they are.
+            RubyModule patternMatching;
+            if (!type.IsAbstract && TryGetModuleNoLock(typeof(ClrPatternMatching), out patternMatching)) {
+                modules.Add(patternMatching);
+            }
+
             return modules.Count > 0 ? modules.ToArray() : null;
         }
 
@@ -1272,15 +1451,38 @@ namespace IronRuby.Runtime {
 
         private readonly object ExtensionsLock = new object();
         
-        // List of assemblies that might include extension methods but whose processing was delayed until the first call of use_clr_extensions.
-        // Null once use_clr_extensions has been called.
+        // List of assemblies that might include extension methods but whose processing was delayed until the first call of
+        // use_clr_extensions or `using' of a CLR namespace. Null once either has run.
         private List<Assembly> _potentialExtensionAssemblies = new List<Assembly>();
 
         // A list of extension methods that are available for activation. Grouped by a declaring namespace.
         // Value is null if the namepsace has been activated.
         private Dictionary<string, List<IEnumerable<ExtensionMethodInfo>>> _availableExtensions;
 
-        private void AddExtensionAssembly(Assembly/*!*/ assembly) {
+        // Every extension method loaded so far, by declaring namespace: what a `using' of the namespace brings in,
+        // whether or not using_clr_extensions has activated it everywhere as well.
+        private readonly Dictionary<string, List<ExtensionMethodInfo>>/*!*/ _loadedExtensions = new Dictionary<string, List<ExtensionMethodInfo>>();
+
+        // The namespaces some `using' has named. Their extension methods - those of assemblies loaded later too - are
+        // filed with the types they extend (RubyModule.AddScopedExtensionMethodsNoLock), for the calls made where the
+        // namespace (or the method's static class) is `using'd to see.
+        private readonly HashSet<string>/*!*/ _scopedExtensionNamespaces = new HashSet<string>();
+
+        // Assemblies whose extension methods have been registered (or are queued to be, in _potentialExtensionAssemblies).
+        private readonly HashSet<Assembly>/*!*/ _extensionAssemblies = new HashSet<Assembly>();
+
+        /// <summary>
+        /// Registers the extension methods of <paramref name="assembly"/>, or queues them until extension methods are first asked
+        /// for. Does nothing for an assembly seen already, unless reading its extension methods failed: the exception is thrown
+        /// and the next call tries again (a require of the DLL once what it references can be found, say).
+        /// </summary>
+        internal void AddExtensionAssembly(Assembly/*!*/ assembly) {
+            lock (ExtensionsLock) {
+                if (!_extensionAssemblies.Add(assembly)) {
+                    return;
+                }
+            }
+
             if (_potentialExtensionAssemblies != null) {
                 lock (ExtensionsLock) {
                     if (_potentialExtensionAssemblies != null) {
@@ -1290,11 +1492,33 @@ namespace IronRuby.Runtime {
                 }
             }
 
-            LoadExtensions(ReflectionUtils.GetVisibleExtensionMethodGroups(assembly, true));
+            LoadExtensions(ReadExtensionMethods(assembly));
+        }
+
+        // Reading an assembly's extension methods loads the types in their signatures, and fails if one lives in an assembly
+        // that can't be found. The assembly is then forgotten, so that it's read again next time.
+        private IEnumerable<KeyValuePair<string, IEnumerable<ExtensionMethodInfo>>>/*!*/ ReadExtensionMethods(Assembly/*!*/ assembly) {
+            try {
+                return ReflectionUtils.GetVisibleExtensionMethodGroups(assembly, true);
+            } catch {
+                lock (ExtensionsLock) {
+                    _extensionAssemblies.Remove(assembly);
+                }
+                throw;
+            }
+        }
+
+        private static bool IsUnreadableExtensionAssembly(Exception/*!*/ e) {
+            return e is IOException || e is BadImageFormatException || e is TypeLoadException || e is LoadError;
+        }
+
+        private void ReportUnreadableExtensionAssembly(Assembly/*!*/ assembly, Exception/*!*/ e) {
+            ReportWarning(String.Format("extension methods of {0} not read: {1}", assembly.GetName().Name, e.Message.TrimEnd()));
         }
 
         private void LoadExtensions(IEnumerable<KeyValuePair<string, IEnumerable<ExtensionMethodInfo>>>/*!*/ extensionMethodGroups) {
             List<IEnumerable<ExtensionMethodInfo>> immediatelyActivated = null;
+            List<ExtensionMethodInfo> scoped = null;
 
             lock (ExtensionsLock) {
                 foreach (var extensionMethodGroup in extensionMethodGroups) {
@@ -1303,6 +1527,22 @@ namespace IronRuby.Runtime {
                     }
 
                     string ns = extensionMethodGroup.Key;
+                    var methods = new List<ExtensionMethodInfo>(extensionMethodGroup.Value);
+
+                    List<ExtensionMethodInfo> loaded;
+                    if (!_loadedExtensions.TryGetValue(ns, out loaded)) {
+                        _loadedExtensions.Add(ns, loaded = new List<ExtensionMethodInfo>());
+                    }
+                    loaded.AddRange(methods);
+
+                    // an assembly loaded after its namespace was `using'd:
+                    if (_scopedExtensionNamespaces.Contains(ns)) {
+                        if (scoped == null) {
+                            scoped = new List<ExtensionMethodInfo>();
+                        }
+                        scoped.AddRange(methods);
+                    }
+
                     List<IEnumerable<ExtensionMethodInfo>> extensions;
                     if (_availableExtensions.TryGetValue(ns, out extensions)) {
                         if (extensions == null) {
@@ -1314,17 +1554,110 @@ namespace IronRuby.Runtime {
                     } else {
                         _availableExtensions.Add(ns, extensions = new List<IEnumerable<ExtensionMethodInfo>>());
                     }
-                    extensions.Add(extensionMethodGroup.Value);
+                    extensions.Add(methods);
                 }
             }
 
             if (immediatelyActivated != null) {
                 ActivateExtensions(immediatelyActivated);
             }
+            if (scoped != null) {
+                AddScopedExtensions(scoped);
+            }
         }
 
+        /// <summary>
+        /// using_clr_extensions: the extension methods of <paramref name="namespace"/> become methods of the types they
+        /// extend, for every call in the runtime.
+        /// </summary>
         public void ActivateExtensions(string/*!*/ @namespace) {
             ContractUtils.RequiresNotNull(@namespace, "namespace");
+            LoadExtensions(@namespace);
+
+            List<IEnumerable<ExtensionMethodInfo>> extensions = null;
+            lock (ExtensionsLock) {
+                if (_availableExtensions == null) {
+                    _availableExtensions = new Dictionary<string, List<IEnumerable<ExtensionMethodInfo>>>();
+                }
+                _availableExtensions.TryGetValue(@namespace, out extensions);
+                
+                // activate namespace:
+                _availableExtensions[@namespace] = null;
+            }
+
+            if (extensions != null) {
+                ActivateExtensions(extensions);
+            }
+        }
+
+        // using_clr_extensions is deprecated in favour of `using'; each runtime says so once.
+        private int _usingClrExtensionsDeprecationReported;
+
+        /// <summary>
+        /// Warns that using_clr_extensions is deprecated, the first time anything in the runtime calls it where the
+        /// warning shows: a call made while $VERBOSE is nil, which prints no warning, leaves it to the next one.
+        /// <paramref name="namespaceName"/> is the namespace it was called with, or null for the global one.
+        /// </summary>
+        public void ReportUsingClrExtensionsDeprecation(string namespaceName) {
+            if (Verbose != null && Interlocked.Exchange(ref _usingClrExtensionsDeprecationReported, 1) == 0) {
+                ReportWarning(String.Format(
+                    "using_clr_extensions is deprecated; use '{0}' instead, which brings the extension methods into the rest of " +
+                    "the file, class body or eval string only, as C#'s using directive does",
+                    namespaceName != null ? "using " + namespaceName : "using <namespace>"
+                ));
+            }
+        }
+
+        /// <summary>
+        /// `using' of a CLR namespace, or of a static class declared in <paramref name="namespace"/>: the namespace's
+        /// extension methods become available to the calls made where it (or the class) is `using'd, and to no other
+        /// (see RubyModule.ResolveMethodNoLock).
+        /// </summary>
+        public void ActivateScopedExtensions(string/*!*/ @namespace) {
+            ContractUtils.RequiresNotNull(@namespace, "namespace");
+            LoadExtensions(@namespace);
+
+            List<ExtensionMethodInfo> extensions = null;
+            lock (ExtensionsLock) {
+                _hasScopedExtensions = true;
+                if (_scopedExtensionNamespaces.Add(@namespace)) {
+                    _loadedExtensions.TryGetValue(@namespace, out extensions);
+                }
+            }
+
+            if (extensions != null) {
+                AddScopedExtensions(extensions);
+            }
+        }
+
+        /// <summary>
+        /// Makes sure the extension methods of <paramref name="namespace"/> have been loaded, along with those of
+        /// every assembly whose processing was put off until extension methods were first asked for.
+        /// </summary>
+        private void LoadExtensions(string/*!*/ @namespace) {
+            // The types of a namespace can be known through a facade's type forwarders (netstandard, System.Xml),
+            // which loads the assemblies that define them without them ever being reported loaded: their extension
+            // methods (System.Linq.Enumerable's) would never be seen. Look at where the namespace's types really live.
+            NamespaceTracker tracker = _namespaces;
+            foreach (string part in @namespace.Length > 0 ? @namespace.Split('.') : ArrayUtils.EmptyStrings) {
+                MemberTracker member;
+                tracker = (tracker != null && tracker.TryGetValue(part, out member)) ? member as NamespaceTracker : null;
+            }
+            // An assembly whose extension methods can't be read is reported, and read again by the next `using' of its
+            // namespace or require of it; the rest are read.
+            if (tracker != null) {
+                foreach (var member in tracker) {
+                    var typeTracker = member.Value as TypeTracker;
+                    if (typeTracker != null && !(typeTracker is TypeGroup)) {
+                        Assembly assembly = typeTracker.Type.Assembly;
+                        try {
+                            AddExtensionAssembly(assembly);
+                        } catch (Exception e) when (IsUnreadableExtensionAssembly(e)) {
+                            ReportUnreadableExtensionAssembly(assembly, e);
+                        }
+                    }
+                }
+            }
 
             Assembly[] assemblies = null;
             if (_potentialExtensionAssemblies != null) {
@@ -1339,25 +1672,40 @@ namespace IronRuby.Runtime {
             if (assemblies != null) {
                 var extensionGroups = new List<KeyValuePair<string, IEnumerable<ExtensionMethodInfo>>>(); 
                 foreach (var assembly in assemblies) {
-                    extensionGroups.AddRange(ReflectionUtils.GetVisibleExtensionMethodGroups(assembly, true));
+                    try {
+                        extensionGroups.AddRange(ReadExtensionMethods(assembly));
+                    } catch (Exception e) when (IsUnreadableExtensionAssembly(e)) {
+                        ReportUnreadableExtensionAssembly(assembly, e);
+                    }
                 }
                 LoadExtensions(extensionGroups);
-            }
-
-            List<IEnumerable<ExtensionMethodInfo>> extensions;
-            lock (ExtensionsLock) {
-                _availableExtensions.TryGetValue(@namespace, out extensions);
-                
-                // activate namespace:
-                _availableExtensions[@namespace] = null;
-            }
-
-            if (extensions != null) {
-                ActivateExtensions(extensions);
             }
         }
 
         private void ActivateExtensions(List<IEnumerable<ExtensionMethodInfo>>/*!*/ extensionLists) {
+            var groupedByType = GroupByExtendedModule(extensionLists);
+            using (ClassHierarchyLocker()) {
+                lock (ModuleCacheLock) {
+                    foreach (var entry in groupedByType) {
+                        GetExtendedModuleNoLock(entry.Key).AddExtensionMethodsNoLock(entry.Value);
+                    }
+                }
+            }
+        }
+
+        private void AddScopedExtensions(List<ExtensionMethodInfo>/*!*/ extensions) {
+            var groupedByType = GroupByExtendedModule(new[] { extensions });
+            using (ClassHierarchyLocker()) {
+                lock (ModuleCacheLock) {
+                    foreach (var entry in groupedByType) {
+                        GetExtendedModuleNoLock(entry.Key).AddScopedExtensionMethodsNoLock(entry.Value);
+                    }
+                }
+            }
+        }
+
+        // { the type whose Ruby module the extension methods are filed with -> extension methods }
+        private static Dictionary<Type, List<ExtensionMethodInfo>>/*!*/ GroupByExtendedModule(IEnumerable<IEnumerable<ExtensionMethodInfo>>/*!*/ extensionLists) {
             var groupedByType = new Dictionary<Type, List<ExtensionMethodInfo>>();
             foreach (var extensionList in extensionLists) {
                 foreach (var extension in extensionList) {
@@ -1383,18 +1731,11 @@ namespace IronRuby.Runtime {
                     list.Add(extension);
                 }
             }
+            return groupedByType;
+        }
 
-            using (ClassHierarchyLocker()) {
-                lock (ModuleCacheLock) {
-                    foreach (var entry in groupedByType) {
-                        Type target = entry.Key;
-                        var methods = entry.Value;
-
-                        RubyModule targetModule = (target.IsGenericTypeDefinition || target.IsInterface) ? GetOrCreateModuleNoLock(target) : GetOrCreateClassNoLock(target);
-                        targetModule.AddExtensionMethodsNoLock(methods);
-                    }
-                }
-            }
+        private RubyModule/*!*/ GetExtendedModuleNoLock(Type/*!*/ target) {
+            return (target.IsGenericTypeDefinition || target.IsInterface) ? GetOrCreateModuleNoLock(target) : GetOrCreateClassNoLock(target);
         }
 
         #endregion
@@ -1583,10 +1924,12 @@ namespace IronRuby.Runtime {
                         var result = c.Value as T;
                         bool isClass = typeof(T) == typeof(RubyClass);
                         if (result == null || result.IsClass != isClass) {
-                            throw RubyExceptions.CreateTypeError("`{0}' is not a {1}", name, isClass ? "class" : "module");
+                            // MRI's rb_define_class/rb_define_module: "Zlib is not a module (Class)"
+                            throw RubyExceptions.CreateTypeError("{0} is not a {1} ({2})", name, isClass ? "class" : "module",
+                                GetClassName(c.Value));
                         }
                         if (isClass && (restrictions & ModuleRestrictions.AllowReopening) == 0) {
-                            throw RubyExceptions.CreateTypeError("cannot redefine {1} `{0}'", name, isClass ? "class" : "module");
+                            throw RubyExceptions.CreateTypeError("cannot redefine {1} '{0}'", name, isClass ? "class" : "module");
                         }
                         return result;
                     }
@@ -2034,7 +2377,33 @@ namespace IronRuby.Runtime {
             _privateConstantReference = owner;
         }
 
+        /// <summary>
+        /// For a lookup that reports a constant missing without calling #const_missing, which
+        /// would otherwise consume the reference: defined? does that.
+        /// </summary>
+        internal static void ClearPrivateConstantReference() {
+            _privateConstantReference = null;
+        }
+
         // thread-safe:
+        // Task::Factory is a static property, not a constant: say how to get it (Task.Factory). Only CLR const and
+        // static readonly fields are constants (RubyModule.TryGetClrConstantField) - a constant is cached where it is
+        // used, which a property like DateTime.Now must not be.
+        private static string/*!*/ GetClrStaticMemberHint(RubyModule/*!*/ owner, string/*!*/ name) {
+            Type type = (owner.TypeTracker != null) ? owner.TypeTracker.Type : null;
+            if (type == null || type.ContainsGenericParameters || (owner.Restrictions & ModuleRestrictions.NoNameMapping) != 0) {
+                return String.Empty;
+            }
+
+            foreach (var member in type.GetMember(name, BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)) {
+                if (member is PropertyInfo || member is FieldInfo || member is MethodInfo) {
+                    return String.Format(" ({1} is a static {2} of the CLR type, called as a method: {0}.{1})",
+                        owner.Name, name, member is MethodInfo ? "method" : member is PropertyInfo ? "property" : "field");
+                }
+            }
+            return String.Empty;
+        }
+
         public object ResolveMissingConstant(RubyModule/*!*/ owner, string/*!*/ name) {
             var privateReference = _privateConstantReference;
             _privateConstantReference = null;
@@ -2056,11 +2425,16 @@ namespace IronRuby.Runtime {
             }
 
             // MRI omits the owner for Object: "uninitialized constant Foo", but keeps it otherwise:
-            // "uninitialized constant Math::Nope".
+            // "uninitialized constant Math::Nope".  The test is on rb_class_real(owner), so the
+            // singleton class of a plain Object counts as Object.
+            RubyModule realOwner = owner;
+            while (realOwner is RubyClass && ((RubyClass)realOwner).IsSingletonClass && ((RubyClass)realOwner).SuperClass != null) {
+                realOwner = ((RubyClass)realOwner).SuperClass;
+            }
             throw RubyExceptions.WithNameAndReceiver(this, RubyExceptions.CreateNameError(
-                owner == ObjectClass
+                realOwner == ObjectClass
                     ? String.Format("uninitialized constant {0}", name)
-                    : String.Format("uninitialized constant {0}::{1}", GetModuleDisplayName(owner), name)
+                    : String.Format("uninitialized constant {0}::{1}", GetModuleDisplayName(owner), name) + GetClrStaticMemberHint(owner, name)
             ), name, owner);
         }
 
@@ -2075,7 +2449,10 @@ namespace IronRuby.Runtime {
         /// calling #new on it. Null when there is no such constant, or when what is there is not
         /// an exception class.
         /// </summary>
-        public Exception CreateLibraryException(RubyModule/*!*/ owner, string/*!*/ className, string/*!*/ message) {
+        /// <summary>
+        /// A null message leaves the exception with its class's default one (an Errno's strerror text).
+        /// </summary>
+        public Exception CreateLibraryException(RubyModule/*!*/ owner, string/*!*/ className, string message) {
             object exceptionClass;
             if (!owner.TryGetConstant(null, className, out exceptionClass)) {
                 return null;
@@ -2088,7 +2465,7 @@ namespace IronRuby.Runtime {
                     null
                 );
             }
-            return _exceptionFactory.Target(_exceptionFactory, exceptionClass, MutableString.Create(message, RubyEncoding.UTF8)) as Exception;
+            return _exceptionFactory.Target(_exceptionFactory, exceptionClass, message != null ? MutableString.Create(message, RubyEncoding.UTF8) : null) as Exception;
         }
 
         /// <summary>
@@ -3412,18 +3789,24 @@ namespace IronRuby.Runtime {
                 // "file:line:in `method'", read from the right: a file name can hold colons of
                 // its own - an eval inside an eval is called "(eval at file:line)" - so the line
                 // number is the last thing before ":in", not the first thing after the path.
-                string first = backtrace[0].ToString();
-                int inIndex = first.LastIndexOf(":in ", StringComparison.Ordinal);
-                string head = (inIndex >= 0) ? first.Substring(0, inIndex) : first;
+                // A frame without a file (":0:in ..." - a library method, or a CLR frame when
+                // backtraces show them) is not where the code was written: the first one that
+                // names a file is.
+                foreach (var entry in backtrace) {
+                    string frame = entry.ToString();
+                    int inIndex = frame.LastIndexOf(":in ", StringComparison.Ordinal);
+                    string head = (inIndex >= 0) ? frame.Substring(0, inIndex) : frame;
 
-                int colon = head.LastIndexOf(':');
-                if (colon < 0 || !Int32.TryParse(head.Substring(colon + 1), out line)) {
-                    line = 0;
-                    return false;
+                    int colon = head.LastIndexOf(':');
+                    if (colon <= 0 || !Int32.TryParse(head.Substring(colon + 1), out line)) {
+                        continue;
+                    }
+
+                    path = head.Substring(0, colon);
+                    return true;
                 }
-
-                path = head.Substring(0, colon);
-                return true;
+                line = 0;
+                return false;
             } catch (Exception) {
                 path = null;
                 line = 0;
@@ -3443,6 +3826,13 @@ namespace IronRuby.Runtime {
             // Encoding::UTF_16BE is that every path operation raises
             // Encoding::CompatibilityError, which this layer has no way to report), and neither
             // can ASCII-8BIT, which rejects every character above U+00FF.
+            //
+            // On Windows file names are Unicode and MRI's filesystem encoding is UTF-8 whatever
+            // the console's code page: under code page 850 a path holding a character CP850 has
+            // no byte for was an Errno::EINVAL here.
+            if (Path.DirectorySeparatorChar == '\\') {
+                return RubyEncoding.UTF8;
+            }
             var external = _defaultExternalEncoding;
             if (external == null || !external.IsAsciiIdentity || external == RubyEncoding.Binary) {
                 return RubyEncoding.UTF8;
@@ -3494,7 +3884,7 @@ namespace IronRuby.Runtime {
                     return path.ConvertToString();
                 }
             } catch (DecoderFallbackException) {
-                throw RubyExceptions.CreateEINVAL("Invalid multi-byte sequence in path `{0}'", path.ToAsciiString());
+                throw RubyExceptions.CreateEINVAL("Invalid multi-byte sequence in path '{0}'", path.ToAsciiString());
             }
         }
 
@@ -3587,54 +3977,44 @@ namespace IronRuby.Runtime {
 #endif
 
         /// <summary>
-        /// The front end a host chose, or null for the default. The default is the prism bridge
-        /// whenever IronRuby.Prism can be loaded - it is what ir, irubyc's hosts and the test suite's
-        /// prism mode use, and the only front end that parses Ruby 3 and 4 (ruby4.rb included) - and the
-        /// legacy 1.9-era parser only when it cannot. Before, null meant the legacy parser, so a host
-        /// that embedded IronRuby with Ruby.CreateEngine() and set nothing got a 1.9 parser without
-        /// any sign of it. Set this to <see cref="LegacyParser"/> to ask for the old parser explicitly.
+        /// The front end a host chose, or null for prism (IronRuby.Prism's bridge), which is the
+        /// only parser IronRuby has: the 1.9-era LALR parser that used to be the fallback is gone.
         /// </summary>
         public static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> AlternativeParser;
 
-        /// <summary>The built-in 1.9-era parser, for hosts (and the legacy test mode) that want it.</summary>
-        public static readonly Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> LegacyParser =
-            (sourceUnit, options, errorSink) => new Parser().Parse(sourceUnit, options, errorSink);
-
         private static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> _defaultParser;
 
-        /// <summary>The front end in effect: the one a host set, or else the default.</summary>
+        /// <summary>The front end in effect: the one a host set, or else prism.</summary>
         public static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> EffectiveParser {
             get { return AlternativeParser ?? (_defaultParser ?? (_defaultParser = ResolveDefaultParser())); }
         }
 
-        /// <summary>True when source is parsed by the legacy parser (which cannot wrap -n/-p itself).</summary>
-        public static bool UsesLegacyParser {
-            get { return EffectiveParser == LegacyParser; }
-        }
-
         // IronRuby.Prism references IronRuby, so IronRuby cannot reference it back: find it by name.
-        // A missing IronRuby.Prism means the legacy parser; a present one whose native libprism is
-        // missing fails at the first parse with DllNotFoundException - a deployment error that is
-        // better reported than papered over with a parser that cannot read the prelude.
+        // Without it there is nothing to parse with, which is a deployment error and is reported as
+        // one; a present IronRuby.Prism whose native libprism is missing fails at the first parse
+        // with DllNotFoundException.
         private static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> ResolveDefaultParser() {
-            try {
-                Type bridge = Type.GetType("IronRuby.Prism.PrismAstBridge, IronRuby.Prism", false);
-                MethodInfo parse = (bridge != null) ? bridge.GetMethod("Parse", BindingFlags.Public | BindingFlags.Static, null,
-                    new[] { typeof(SourceUnit), typeof(RubyCompilerOptions), typeof(ErrorSink) }, null) : null;
-                if (parse != null) {
-                    return (Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree>)parse.CreateDelegate(typeof(Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree>));
-                }
-            } catch (Exception) {
-                // not deployed, or not loadable here: fall back below
+            Type bridge = Type.GetType("IronRuby.Prism.PrismAstBridge, IronRuby.Prism", false);
+            MethodInfo parse = (bridge != null) ? bridge.GetMethod("Parse", BindingFlags.Public | BindingFlags.Static, null,
+                new[] { typeof(SourceUnit), typeof(RubyCompilerOptions), typeof(ErrorSink) }, null) : null;
+            if (parse == null) {
+                throw new InvalidOperationException(
+                    "IronRuby.Prism.dll could not be loaded: it is IronRuby's parser and has to be deployed next to IronRuby.dll.");
             }
-            return LegacyParser;
+            return (Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree>)parse.CreateDelegate(typeof(Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree>));
         }
 
 
         internal MSA.Expression<T> ParseSourceCode<T>(SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options, ErrorSink/*!*/ errorSink) {
             Debug.Assert(sourceUnit.LanguageContext == this);
 
-            SourceUnitTree ast = EffectiveParser(sourceUnit, options, errorSink);
+            long traceStart = StartupTrace.Now();
+            SourceUnitTree ast;
+            try {
+                ast = EffectiveParser(sourceUnit, options, errorSink);
+            } finally {
+                StartupTrace.Parsed(traceStart);
+            }
 
             if (ast == null) {
                 return null;
@@ -3647,7 +4027,12 @@ namespace IronRuby.Runtime {
                 System.Linq.Expressions.Expression.Histogram = _TransformationHistogram;
                 try {
 #endif
-            lambda = TransformTree<T>(ast, sourceUnit, options);
+            traceStart = StartupTrace.Now();
+            try {
+                lambda = TransformTree<T>(ast, sourceUnit, options);
+            } finally {
+                StartupTrace.Transformed(traceStart);
+            }
 #if MEASURE_AST
                 } finally {
                     System.Linq.Expressions.Expression.Histogram = oldHistogram;
@@ -4411,12 +4796,10 @@ namespace IronRuby.Runtime {
         public override TService GetService<TService>(params object[] args) {
             if (typeof(TService) == typeof(RubyService)) {
                 return (TService)(object)(_rubyService ?? (_rubyService = new RubyService(this, (Microsoft.Scripting.Hosting.ScriptEngine)args[0])));
-            } 
-            
-            if (typeof(TService) == typeof(TokenizerService)) {
-                return (TService)(object)new Tokenizer();
             }
 
+            // There is no TokenizerService (the DLR's colouring tokenizer) any more: it was the
+            // 1.9-era lexer of the legacy parser.
             return base.GetService<TService>(args);
         }
 
@@ -4877,6 +5260,11 @@ namespace IronRuby.Runtime {
         }
 
         internal void ReportTraceEvent(string/*!*/ operation, RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/ name, string fileName, int lineNumber) {
+#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
+            if (RubyUtils.IsReclaimingFiber) {
+                return;
+            }
+#endif
             if (_traceListener != null && !_traceListenerSuspended) {
                 try {
                     _traceListenerSuspended = true;

@@ -133,7 +133,7 @@ namespace IronRuby.Compiler.Ast {
             return result;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             MSA.Expression result;
             if (_elseStatements != null) {
                 // ... else body end

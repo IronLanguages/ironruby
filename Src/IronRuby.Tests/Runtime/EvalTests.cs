@@ -25,7 +25,7 @@ def foo()
 end
 
 foo
-");
+", 1, 0);
             }, "1");
         }
 
@@ -79,23 +79,25 @@ eval <<-END
 END
 ";
             // Locals an eval defines are its own: neither the frame nor the next eval sees them (MRI 1.9+).
-            // MRI raises NameError for a bare name; only the prism front end tells a bare name apart,
-            // so under this parser it is still NoMethodError, its subclass.
+            // A bare name that is neither is a NameError under ir, as in MRI; this test runs hosted, in a
+            // ScriptScope whose variables a bare name may also mean, and there it is NoMethodError, its
+            // subclass. `a`, assigned in the block and read only inside eval strings, is the one parse
+            // warning `ruby -wc` gives for each wrapping.
             string output = @"
-#<N*Error: * `b' *>
+#<N*Error: * 'b' *>
 N*Error
 N*Error
-#<N*Error: * `a' *>
-#<N*Error: * `b' *>
-#<N*Error: * `a' *>
-#<N*Error: * `b' *>
+#<N*Error: * 'a' *>
+#<N*Error: * 'b' *>
+#<N*Error: * 'a' *>
+#<N*Error: * 'b' *>
 ";
 
-            AssertOutput(() => CompilerTest(String.Format(@"def foo; {0}; end; foo", body)), output, OutputFlags.Match);
-            AssertOutput(() => CompilerTest(String.Format(@"module M; {0}; end", body)), output, OutputFlags.Match);
-            AssertOutput(() => CompilerTest(String.Format(@"class C; {0}; end", body)), output, OutputFlags.Match);
-            AssertOutput(() => CompilerTest(String.Format(@"class << Object.new; {0}; end", body)), output, OutputFlags.Match);
-            AssertOutput(() => CompilerTest(body), output, OutputFlags.Match);
+            AssertOutput(() => CompilerTest(String.Format(@"def foo; {0}; end; foo", body), 1, 0), output, OutputFlags.Match);
+            AssertOutput(() => CompilerTest(String.Format(@"module M; {0}; end", body), 1, 0), output, OutputFlags.Match);
+            AssertOutput(() => CompilerTest(String.Format(@"class C; {0}; end", body), 1, 0), output, OutputFlags.Match);
+            AssertOutput(() => CompilerTest(String.Format(@"class << Object.new; {0}; end", body), 1, 0), output, OutputFlags.Match);
+            AssertOutput(() => CompilerTest(body, 1, 0), output, OutputFlags.Match);
         }
 
         /// <summary>
@@ -173,7 +175,7 @@ end", @"
 [1, 2, 3, nil, nil]
 [1, 2, 3, 4, nil]
 [1, 2, 3, 4, 5]
-");
+", 2);
         }
 
         public void LocalNames1() {
@@ -186,7 +188,7 @@ def f
 end
 
 f
-");
+", 2, 0);
             }, @"
 a
 b");
@@ -207,7 +209,7 @@ end
 bar
 
 eval('puts local_variables.sort', $b)
-");
+", 1, 0);
             }, @"
 x
 y
@@ -231,7 +233,7 @@ end
     
 eval('puts x', $p[0])
 eval('puts x', $p[1])
-");
+", 1, 0);
             }, @"
 0
 1
@@ -258,7 +260,7 @@ end
 bar
 
 eval('puts local_variables.sort', $b)
-");
+", 0, 1);
             }, @"
 y
 z
@@ -291,7 +293,7 @@ end
 foo
 
 p eval('x+y', $b)
-");
+", 2, 0);
             }, "3");
         }
 
@@ -336,7 +338,7 @@ def z
 end
 
 p eval('x+y+z', goo) rescue p $!
-");
+", 3, 0);
             }, @"#<TypeError: wrong argument type proc (expected binding)>");
         }
 
@@ -599,7 +601,7 @@ def foo
 end
 
 foo
-");
+", 1, 0);
             }, @"
 1
 1");

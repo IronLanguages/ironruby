@@ -264,6 +264,12 @@ namespace IronRuby.Builtins {
             Debug.Assert(type != null);
             RubyModule result;
             if (!_context.TryGetModule(type, out result)) {
+                // a CLR interface is a module of its own, which a library class extending a CLR type includes by hand
+                // (the runtime mixes the interfaces only into the classes it creates itself)
+                if (type.IsInterface) {
+                    return _context.GetModule(type);
+                }
+
                 // TODO: we should load the library that contains this type if it is not a CLR type
                 throw new NotSupportedException(String.Format("Ruby library that contains type {0} hasn't been loaded yet.", type));
             }

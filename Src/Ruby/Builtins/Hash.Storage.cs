@@ -18,6 +18,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
 
@@ -469,6 +470,10 @@ namespace IronRuby.Builtins {
                 if (++collisions > entries.Length) {
                     break;
                 }
+            }
+
+            if (_iterationLevel > 0) {
+                throw RubyExceptions.CreateRuntimeError("can't add a new key into hash during iteration");
             }
 
             if (_count == _entries.Length) {

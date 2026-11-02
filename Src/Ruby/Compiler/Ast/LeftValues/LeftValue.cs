@@ -39,7 +39,7 @@ namespace IronRuby.Compiler.Ast {
         // Returns null if the left value doesn't have target expression.
         internal abstract MSA.Expression TransformTargetRead(AstGenerator/*!*/ gen);
         
-        internal sealed override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal sealed override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return TransformRead(gen, TransformTargetRead(gen), false);
         }
         

@@ -11,6 +11,15 @@ module JSON
   VERSION_MINOR = VERSION_ARRAY[1] # :nodoc:
   VERSION_BUILD = VERSION_ARRAY[2] # :nodoc:
 
+  # json/common.rb's create identifier, which the json/add/* files name their class under.
+  def self.create_id=(new_value)
+    Thread.current[:"JSON.create_id"] = new_value.dup.freeze
+  end
+
+  def self.create_id
+    Thread.current[:"JSON.create_id"] || 'json_class'
+  end
+
   # Convenience wrappers the C# module does not need to provide itself.
   def self.pretty_unparse(obj, opts = nil); pretty_generate(obj, opts); end
   def self.unparse(obj, opts = nil); generate(obj, opts); end

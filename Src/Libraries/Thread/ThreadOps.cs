@@ -25,20 +25,7 @@ namespace IronRuby.StandardLibrary.Threading {
     /// </summary>
     [RubyClass(Extends = typeof(Thread), Inherits = typeof(object), BuildConfig = "FEATURE_THREAD")]
     public static class ThreadOps {
-        [RubyMethod("exclusive", RubyMethodAttributes.PublicSingleton)]
-        public static object Exclusive(RubyContext/*!*/ context, [NotNull]BlockParam /*!*/block, object self) {
-            IronRuby.Builtins.ThreadOps.Critical(context, self, true);
-            try {
-                object result;
-                block.Yield(out result);
-                return result;
-            } finally {
-                // Note that we assume that Thread.critical was false when this method was called.
-                // IronRuby does not support mismatched calls to Thread.critical= since it uses
-                // native threads, not green threads
-                IronRuby.Builtins.ThreadOps.Critical(context, self, false);
-            }
-        }
+        // Thread.exclusive, the last method here, went with Ruby 3.0; Thread.critical= with 1.9.
     }
 }
 #endif

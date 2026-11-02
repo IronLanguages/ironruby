@@ -27,7 +27,7 @@ Gem::Specification.new do |s|
 
   s.specification_version = 4
 
-  s.add_runtime_dependency(%q<prism>.freeze, ["~> 1.5".freeze])
+  s.add_runtime_dependency(%q<prism>.freeze, [">= 1.5".freeze])
   s.add_development_dependency(%q<rdoc>.freeze, [">= 4.0".freeze, "< 7".freeze])
   s.add_development_dependency(%q<simplecov>.freeze, ["~> 0.21".freeze])
   s.add_development_dependency(%q<hoe>.freeze, ["~> 4.3".freeze])

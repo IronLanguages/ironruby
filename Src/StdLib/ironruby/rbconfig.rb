@@ -39,9 +39,13 @@ module RbConfig
   CONFIG["RUBY_PROGRAM_VERSION"] = RUBY_VERSION.dup
   CONFIG["RUBY_API_VERSION"] = "#{CONFIG["MAJOR"]}.#{CONFIG["MINOR"]}"
   CONFIG["EXEEXT"] = windows ? ".exe" : ""
-  # This value is used by libraries to spawn new processes to run Ruby scripts. Hence it needs to match the ir.exe name
-  CONFIG["ruby_install_name"] = "ir"
-  CONFIG["RUBY_INSTALL_NAME"] = "ir"
+  # Libraries spawn RbConfig.ruby to run Ruby scripts, so this has to be a file in bindir:
+  # the build puts an ironruby apphost beside ir (Ruby.Console.csproj). And Bundler and
+  # Rails write it into binstubs as `#!/usr/bin/env ironruby`, which the ironruby launcher
+  # answers - a #! line with "ruby" in it, as JRuby's "jruby" is. (RubyGems' own binstubs
+  # name the launcher by its path: rubygems/defaults/ironruby.rb.)
+  CONFIG["ruby_install_name"] = "ironruby"
+  CONFIG["RUBY_INSTALL_NAME"] = "ironruby"
   CONFIG["RUBY_SO_NAME"] = "IronRuby"
   CONFIG["PATH_SEPARATOR"] = File::PATH_SEPARATOR.dup
 
@@ -73,14 +77,14 @@ module RbConfig
   CONFIG["sitearch"] = arch.dup
 
   # std lib
-  CONFIG["ruby_version"] = stdlib_version = "1.9.1"               # std library version
+  # Still 1.9.1: the version names the site directory, and site_ruby/1.9.1 is where
+  # IronRuby's readline (rb-readline) lives. The standard library itself is ruby/4.0
+  # (rubylibdir below) and gems go under gems/4.0.0 (rubygems/defaults/ironruby.rb).
+  CONFIG["ruby_version"] = stdlib_version = "1.9.1"
   CONFIG["RUBY_BASE_NAME"] = ruby_base_name = "ruby"              # directory name
   CONFIG["datadir"] = datadir = "#{prefix}/share"
   CONFIG["rubylibprefix"] = rubylibprefix = "#{libdir}/#{ruby_base_name}"
-  # The 4.0 library comes first on the load path; the 1.9 tree only backs it up.
-  rubylibdir = "#{rubylibprefix}/4.0"
-  rubylibdir = "#{rubylibprefix}/#{stdlib_version}" unless File.directory?(rubylibdir)
-  CONFIG["rubylibdir"] = rubylibdir
+  CONFIG["rubylibdir"] = "#{rubylibprefix}/4.0"
   # What MRI keeps in its arch dir as C extensions IronRuby implements in ironruby/.
   CONFIG["rubyarchdir"] = CONFIG["archdir"] = "#{libdir}/ironruby"
 

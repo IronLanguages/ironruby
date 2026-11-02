@@ -151,12 +151,15 @@ namespace IronRuby.Builtins {
         /// .NET opened (an embedder that redirected SharedIO keeps its own stream) and is redirected.
         /// </summary>
         private static Stream GetUnbufferedStream(Stream/*!*/ stream, bool output) {
-            if (Environment.OSVersion.Platform != PlatformID.Unix && Environment.OSVersion.Platform != PlatformID.MacOSX) {
+            var name = stream.GetType().FullName;
+            if (name == null || !name.EndsWith("ConsoleStream", StringComparison.Ordinal)) {
                 return null;
             }
 
-            var name = stream.GetType().FullName;
-            if (name == null || !name.EndsWith("ConsoleStream", StringComparison.Ordinal)) {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return GetWindowsConsole(output);
+            }
+            if (Environment.OSVersion.Platform != PlatformID.Unix && Environment.OSVersion.Platform != PlatformID.MacOSX) {
                 return null;
             }
 
@@ -176,6 +179,94 @@ namespace IronRuby.Builtins {
                 }
             }
             return cache;
+        }
+
+        private static Stream _consoleOutput, _consoleError;
+        private static bool _consoleOutputChecked, _consoleErrorChecked;
+
+        /// <summary>
+        /// On Windows .NET's standard-output stream hands the bytes to WriteFile, and a console
+        /// reads them in its output code page - 850 or 437 on most machines, not UTF-8 - so
+        /// everything outside ASCII came out as mojibake ("ä" as "Ã¤", irb's banner logo as
+        /// "ÔóÇÔí"). MRI writes to a console with WriteConsoleW instead, as UTF-16, which shows
+        /// the text whatever the code page; this does the same, decoding the bytes as UTF-8,
+        /// Ruby's default external encoding on Windows. A stream that is redirected to a file
+        /// or a pipe is not a console and keeps getting the bytes unchanged.
+        /// </summary>
+        private static Stream GetWindowsConsole(bool output) {
+            ref bool isChecked = ref (output ? ref _consoleOutputChecked : ref _consoleErrorChecked);
+            ref Stream cache = ref (output ? ref _consoleOutput : ref _consoleError);
+            if (!isChecked) {
+                isChecked = true;
+                try {
+                    IntPtr handle = Win32Console.GetStdHandle(output ? Win32Console.STD_OUTPUT_HANDLE : Win32Console.STD_ERROR_HANDLE);
+                    if (Win32Console.GetConsoleMode(handle, out _)) {
+                        cache = new Win32ConsoleWriter(handle);
+                    }
+                } catch (Exception) {
+                    cache = null;
+                }
+            }
+            return cache;
+        }
+
+        private static class Win32Console {
+            internal const int STD_OUTPUT_HANDLE = -11;
+            internal const int STD_ERROR_HANDLE = -12;
+
+            [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true)]
+            internal static extern IntPtr GetStdHandle(int nStdHandle);
+
+            [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true)]
+            internal static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint mode);
+
+            [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+            internal static extern bool WriteConsoleW(IntPtr hConsoleOutput, char[] buffer, int charsToWrite, out int charsWritten, IntPtr reserved);
+        }
+
+        /// <summary>
+        /// Writes UTF-8 bytes to a console as UTF-16. A character whose bytes arrive in two
+        /// writes is held back until the rest of it comes, as the decoder keeps them.
+        /// </summary>
+        private sealed class Win32ConsoleWriter : Stream {
+            private readonly IntPtr _handle;
+            private readonly Decoder _decoder = new UTF8Encoding(false).GetDecoder();
+            private char[] _chars = new char[1024];
+
+            public Win32ConsoleWriter(IntPtr handle) {
+                _handle = handle;
+            }
+
+            public override void Write(byte[]/*!*/ buffer, int offset, int count) {
+                lock (_decoder) {
+                    int needed = _decoder.GetCharCount(buffer, offset, count, false);
+                    if (needed > _chars.Length) {
+                        _chars = new char[Math.Max(needed, _chars.Length * 2)];
+                    }
+                    int length = _decoder.GetChars(buffer, offset, count, _chars, 0, false);
+                    while (length > 0) {
+                        if (!Win32Console.WriteConsoleW(_handle, _chars, length, out int written, IntPtr.Zero) || written <= 0) {
+                            throw new IOException("WriteConsoleW failed", System.Runtime.InteropServices.Marshal.GetHRForLastWin32Error());
+                        }
+                        // The console took only part of it: what is left goes again from the start.
+                        length -= written;
+                        Array.Copy(_chars, written, _chars, 0, length);
+                    }
+                }
+            }
+
+            public override bool CanRead => false;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override void Flush() { }
+            public override long Length => throw new NotSupportedException();
+            public override long Position {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
         }
     }
 }

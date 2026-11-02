@@ -5,7 +5,7 @@
 #       by Keiju ISHITSUKA(keiju@ruby-lang.org)
 #
 
-require "ripper"
+require "prism"
 require "reline"
 
 require_relative "irb/init"
@@ -21,6 +21,7 @@ require_relative "irb/color"
 
 require_relative "irb/version"
 require_relative "irb/easter-egg"
+require_relative "irb/startup_message"
 require_relative "irb/debug"
 require_relative "irb/pager"
 
@@ -50,7 +51,13 @@ module IRB
         irb = Irb.new(nil, @CONF[:SCRIPT])
       else
         irb = Irb.new
+
+        # Only display the banner in the irb executable
+        if @CONF[:SHOW_BANNER] && ap_path&.end_with?("exe/irb")
+          StartupMessage.display
+        end
       end
+
       irb.run(@CONF)
     end
 
@@ -76,6 +83,15 @@ module IRB
     PROMPT_MAIN_TRUNCATE_LENGTH = 32
     PROMPT_MAIN_TRUNCATE_OMISSION = '...'
     CONTROL_CHARACTERS_PATTERN = "\x00-\x1F"
+
+    # Track the nesting depth of run loops. This is used for history management
+    # only the outermost run loop should load/save history.
+    @run_nesting_depth = 0
+
+    class << self
+      # TODO: When refactoring to v2.0, find a better way to manage and track nesting sessions.
+      attr_accessor :run_nesting_depth
+    end
 
     # Returns the current context of this irb session
     attr_reader :context
@@ -148,7 +164,10 @@ module IRB
     end
 
     def run(conf = IRB.conf)
-      in_nested_session = !!conf[:MAIN_CONTEXT]
+      # Use run_nesting_depth to determine if we're in a nested session.
+      in_nested_session = Irb.run_nesting_depth > 0
+      Irb.run_nesting_depth += 1
+
       conf[:IRB_RC].call(context) if conf[:IRB_RC]
       prev_context = conf[:MAIN_CONTEXT]
       conf[:MAIN_CONTEXT] = context
@@ -174,6 +193,8 @@ module IRB
           eval_input
         end
       ensure
+        Irb.run_nesting_depth -= 1
+
         # Do not restore to nil. It will cause IRB crash when used with threads.
         IRB.conf[:MAIN_CONTEXT] = prev_context if prev_context
 
@@ -251,11 +272,10 @@ module IRB
         code << line
         return code if command?(code)
 
-        tokens, opens, terminated = @scanner.check_code_state(code, local_variables: @context.local_variables)
+        continue, opens, terminated = @scanner.check_code_state(code, local_variables: @context.local_variables)
         return code if terminated
 
         line_offset += 1
-        continue = @scanner.should_continue?(tokens)
         prompt = generate_prompt(opens, continue, line_offset)
       end
     end
@@ -316,23 +336,25 @@ module IRB
           else
             next true if command?(code)
 
-            _tokens, _opens, terminated = @scanner.check_code_state(code, local_variables: @context.local_variables)
+            _continue, _opens, terminated = @scanner.check_code_state(code, local_variables: @context.local_variables)
             terminated
           end
         end
       end
       if @context.io.respond_to?(:dynamic_prompt)
         @context.io.dynamic_prompt do |lines|
-          tokens = RubyLex.ripper_lex_without_warning(lines.map{ |l| l + "\n" }.join, local_variables: @context.local_variables)
-          line_results = IRB::NestingParser.parse_by_line(tokens)
+          code = lines.map{ |l| l + "\n" }.join
+          parse_lex_result = Prism.parse_lex(code, scopes: [@context.local_variables])
+          line_results = IRB::NestingParser.parse_by_line(parse_lex_result)
+
+          tokens = parse_lex_result.value[1].map(&:first)
+          tokens_by_line = tokens.group_by {|t| t.location.start_line - 1 }
+
           tokens_until_line = []
-          line_results.map.with_index do |(line_tokens, _prev_opens, next_opens, _min_depth), line_num_offset|
-            line_tokens.each do |token, _s|
-              # Avoid appending duplicated token. Tokens that include "n" like multiline
-              # tstring_content can exist in multiple lines.
-              tokens_until_line << token if token != tokens_until_line.last
-            end
-            continue = @scanner.should_continue?(tokens_until_line)
+          line_results.map.with_index do |(_prev_opens, next_opens, _min_depth), line_num_offset|
+            line = lines[line_num_offset]
+            tokens_until_line.concat(tokens_by_line[line_num_offset] || [])
+            continue = @scanner.should_continue?(tokens_until_line, line, line_num_offset + 1)
             generate_prompt(next_opens, continue, line_num_offset)
           end
         end
@@ -344,8 +366,8 @@ module IRB
           next nil if !is_newline && lines[line_index]&.byteslice(0, byte_pointer)&.match?(/\A\s*\z/)
 
           code = lines[0..line_index].map { |l| "#{l}\n" }.join
-          tokens = RubyLex.ripper_lex_without_warning(code, local_variables: @context.local_variables)
-          @scanner.process_indent_level(tokens, lines, line_index, is_newline)
+          parse_lex_result = Prism.parse_lex(code, scopes: [@context.local_variables])
+          @scanner.process_indent_level(parse_lex_result, lines, line_index, is_newline)
         end
       end
     end
@@ -584,7 +606,7 @@ module IRB
     end
 
     def generate_prompt(opens, continue, line_offset)
-      ltype = @scanner.ltype_from_open_tokens(opens)
+      ltype = @scanner.ltype_from_open_nestings(opens)
       indent = @scanner.calc_indent_level(opens)
       continue = opens.any? || continue
       line_no = @line_no + line_offset

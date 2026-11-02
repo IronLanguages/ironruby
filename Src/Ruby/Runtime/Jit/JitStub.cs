@@ -16,7 +16,10 @@
  *   - RubyModule.GlobalMethodVersion is bumped by every method table change anywhere
  *     (def, undef, alias, include/extend, singleton method, attr_*), so one snapshot
  *     comparison covers method redefinition and overriding in a subclass.
- *   - JitRuntime.Disabled is set when refinements appear.
+ *   - The calls the typed body binds itself - operators, the self-call - are resolved under the
+ *     refinements active where the method was defined (RubyMethodScope.DefinitionRefinements),
+ *     which is what its call sites would see; none, for a method defined where nothing was
+ *     `using'd. A method added to an active refinement bumps the global method version too.
  *   - The receiver's immediate class is pinned whenever the specialized body contains a
  *     direct self-call, so that call cannot be a call to an override.
  *   - Argument types are re-checked on entry; a miss falls through to the generic body.
@@ -89,6 +92,10 @@ namespace IronRuby.Runtime.Jit {
         // Parameters the body only ever stores into an instance variable: kept as the boxed
         // objects they arrived as, whatever their type (JitScreen's otherUses).
         private bool[] _storedOnly;
+
+        // The record of the refinements active where the method was defined, as the generic body has it
+        // (RubyMethodBody.Compile); null for a body compiled with none active.
+        private StrongBox<RefinementActivation> _definitionRefinements;
 
         // profiling feedback
         private int _calls;
@@ -509,8 +516,14 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private bool TrySpecialize() {
-            if (JitRuntime.Disabled || _context.HasRefinements) { return false; }
-            if (_perCountMandatory >= 0) { return TrySpecializePerCount(); }
+            // The refinements the body's calls see. A record that follows the declaring scope rather than
+            // naming the refinements (an imported refinement method's) is not something to compile against.
+            RefinementActivation refinements = RefinementActivation.Empty;
+            if (_definitionRefinements != null) {
+                refinements = _definitionRefinements.Value;
+                if (refinements == null) { return false; }
+            }
+            if (_perCountMandatory >= 0) { return TrySpecializePerCount(refinements); }
 
             var types = ProfiledTypes(_typedCount);
 
@@ -522,13 +535,13 @@ namespace IronRuby.Runtime.Jit {
             int version = RubyModule.GlobalMethodVersion;
 
             long start = Stopwatch.GetTimestamp();
-            var code = JitCompiler.TryCompile(_ast, _context, types, _keywords);
+            var code = JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements);
             if (code == null) { return false; }
 
             bool needsClassGuard = code.EmittedSelfCall;
             if (needsClassGuard) {
                 if (_receiverClass == null || _polymorphicReceiver) { return false; }
-                if (!SelfCallResolvesHere(_receiverClass)) { return false; }
+                if (!SelfCallResolvesHere(_receiverClass, refinements)) { return false; }
             }
 
             // The typed body only has to exist as a delegate of its own when it calls itself: the
@@ -604,7 +617,7 @@ namespace IronRuby.Runtime.Jit {
         /// One typed body for each number of optional arguments the calls so far have passed; a call
         /// passing a number no body was compiled for runs the generic body.
         /// </summary>
-        private bool TrySpecializePerCount() {
+        private bool TrySpecializePerCount(RefinementActivation/*!*/ refinements) {
             // read before compiling, as in TrySpecialize
             int version = RubyModule.GlobalMethodVersion;
 
@@ -615,10 +628,10 @@ namespace IronRuby.Runtime.Jit {
             bool any = false, pinned = false;
             for (int k = 0; k <= optionalCount; k++) {
                 if ((_countsSeen & (1 << k)) == 0) { continue; }
-                var code = JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, k);
+                var code = JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, refinements, k);
                 if (code == null) { continue; }
                 if (code.EmittedSelfCall) {
-                    if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass)) { continue; }
+                    if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass, refinements)) { continue; }
                     pinned = true;
                 }
                 codes[k] = code;
@@ -665,10 +678,10 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>
         /// The direct self-call is only correct if the name still resolves, from the profiled
-        /// receiver class, to this very body.
+        /// receiver class and under the body's refinements, to this very body.
         /// </summary>
-        private bool SelfCallResolvesHere(RubyClass/*!*/ cls) {
-            var resolved = cls.ResolveMethod(_ast.Name, VisibilityContext.AllVisible);
+        private bool SelfCallResolvesHere(RubyClass/*!*/ cls, RefinementActivation/*!*/ refinements) {
+            var resolved = cls.ResolveMethod(_ast.Name, VisibilityContext.AllVisible, refinements);
             if (!resolved.Found) { return false; }
             var info = resolved.Info as RubyMethodInfo;
             return info != null && ReferenceEquals(info.GetSyntaxTree(), _ast);
@@ -1014,8 +1027,8 @@ namespace IronRuby.Runtime.Jit {
         /// returns the trampoline that replaces the generic delegate. Returns the generic
         /// delegate unchanged when it is not.
         /// </summary>
-        internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule) {
-            if (JitRuntime.Disabled) { return generic; }
+        internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule,
+            StrongBox<RefinementActivation> definitionRefinements) {
             JitRuntime.HookStats();
 
             var ps = ast.Parameters;
@@ -1105,6 +1118,7 @@ namespace IronRuby.Runtime.Jit {
             } else {
                 stub._genericCompiled = true;
             }
+            stub._definitionRefinements = definitionRefinements;
             return stub.Trampoline;
         }
 

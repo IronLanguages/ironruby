@@ -121,6 +121,21 @@ namespace IronRuby.Builtins {
             return Reinitialize(new Enumerator(), targetObject, targetName, targetArguments);
         }
 
+        /// <summary>
+        /// #dup and #clone: the copy iterates the same target with the same arguments (the
+        /// instance variables a prelude-built enumerator keeps its generator in are copied by
+        /// the runtime). Without this a copy had no target and failed with "undefined method
+        /// `each' for nil".
+        /// </summary>
+        [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
+        public static Enumerator/*!*/ InitializeCopy(Enumerator/*!*/ self, [NotNull]Enumerator/*!*/ other) {
+            self._impl = other._impl;
+            self.SizeSource = other.SizeSource;
+            self.SizeOp = other.SizeOp;
+            self.SizeArg = other.SizeArg;
+            return self;
+        }
+
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static Enumerator/*!*/ Reinitialize(Enumerator/*!*/ self, object targetObject, [DefaultProtocol, Optional]string targetName,
             params object[] targetArguments) {
@@ -248,6 +263,23 @@ namespace IronRuby.Builtins {
             }
 
             return new ArrayCursor(array, RubyUtils.CurrentRubyThread);
+        }
+
+        // External iteration needs the target/generator, not the public Enumerator that owns
+        // the fiber handle. Preserve custom #each receivers, where detaching could change Ruby
+        // behavior; those can still retain themselves through their suspended user frames.
+        [RubyMethod("__enum_iteration_source__", RubyMethodAttributes.PrivateInstance)]
+        public static Enumerator GetIterationSource(RubyContext context, Enumerator self) {
+            if (context.GetImmediateClassOf(self) != context.GetClass(typeof(Enumerator)) ||
+                !IsBuiltinMethod(context, self, "each", typeof(Enumerator), "EachFromCaller")) {
+                return self;
+            }
+            var source = new Enumerator(self._impl);
+            object generator;
+            if (context.TryGetInstanceVariable(self, "@generator", out generator)) {
+                context.SetInstanceVariable(source, "@generator", generator);
+            }
+            return source;
         }
 
         private static bool IsBuiltinMethod(RubyContext/*!*/ context, object target, string/*!*/ name, Type/*!*/ declaringType, string/*!*/ clrName) {

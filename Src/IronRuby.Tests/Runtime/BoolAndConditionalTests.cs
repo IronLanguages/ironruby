@@ -286,7 +286,7 @@ puts(if nil then 1 elsif nil then 2 end)
 puts(if nil then 1 elsif 1 then 2 end)
 puts(if nil then 1 elsif nil then 2 else 3 end)
 puts(if nil then 1 elsif 1 then 2 else 3 end)
-");
+", 4, 0);
             }, @"
 
 1
@@ -309,7 +309,7 @@ puts(if nil then end)
 puts(if 1 then end)
 puts(if 1 then 1;11;111 end)
 puts(if nil then 1 else 2;22 end)
-");
+", 5, 0);
             }, @"
 
 
@@ -323,7 +323,7 @@ puts(if nil then 1 else 2;22 end)
                 CompilerTest(@"
 puts(unless nil then 1 end)
 puts(unless 1 then 1 end)
-");
+", 1, 0);
             }, @"
 1
 

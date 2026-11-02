@@ -139,7 +139,7 @@ namespace IronRuby.Builtins {
         internal static RubyMemberInfo/*!*/ BindGenericParameters(RubyContext/*!*/ context, RubyMemberInfo/*!*/ info, string/*!*/ name, object[]/*!*/ typeArgs) {
             RubyMemberInfo result = info.TryBindGenericParameters(Protocols.ToTypes(context, typeArgs));
             if (result == null) {
-                throw RubyExceptions.CreateArgumentError("wrong number of generic arguments for `{0}'", name);
+                throw RubyExceptions.CreateArgumentError("wrong number of generic arguments for '{0}'", name);
             }
             return result;
         }
@@ -147,7 +147,7 @@ namespace IronRuby.Builtins {
         internal static RubyMemberInfo/*!*/ SelectOverload(RubyContext/*!*/ context, RubyMemberInfo/*!*/ info, string/*!*/ name, object[]/*!*/ typeArgs) {
             RubyMemberInfo result = info.TrySelectOverload(Protocols.ToTypes(context, typeArgs));
             if (result == null) {
-                throw RubyExceptions.CreateArgumentError("no overload of `{0}' matches given parameter types", name);
+                throw RubyExceptions.CreateArgumentError("no overload of '{0}' matches given parameter types", name);
             }
             return result;
         }

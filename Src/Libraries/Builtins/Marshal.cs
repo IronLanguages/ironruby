@@ -53,6 +53,12 @@ namespace IronRuby.Builtins {
             public CallSite<Func<CallSite, object, object>>/*!*/ Binmode {
                 get { return RubyUtils.GetCallSite(ref _binmode, Context, "binmode", 0); }
             }
+
+            private RespondToStorage _respondTo;
+
+            public RespondToStorage/*!*/ RespondTo {
+                get { return _respondTo ?? (_respondTo = new RespondToStorage(Context)); }
+            }
         }
 
         public sealed class ReaderSites : RubyCallSiteStorage {
@@ -60,10 +66,16 @@ namespace IronRuby.Builtins {
 
             private CallSite<Func<CallSite, object, object, object>> _marshalLoad;
             private CallSite<Func<CallSite, object, MutableString, object>> _load;
-            public CallSite<Func<CallSite, Proc, object, object>> _procCall;
+            public CallSite<Func<CallSite, object, object, object>> _procCall;
 
             public CallSite<Func<CallSite, object, object, object>>/*!*/ MarshalLoad {
                 get { return RubyUtils.GetCallSite(ref _marshalLoad, Context, "marshal_load", 1); }
+            }
+
+            private CallSite<Func<CallSite, object, object, object>> _compare;
+
+            public CallSite<Func<CallSite, object, object, object>>/*!*/ Compare {
+                get { return RubyUtils.GetCallSite(ref _compare, Context, "<=>", 1); }
             }
 
             public CallSite<Func<CallSite, object, MutableString, object>>/*!*/ Load {
@@ -77,7 +89,7 @@ namespace IronRuby.Builtins {
                 get { return RubyUtils.GetCallSite(ref _loadData, Context, "_load_data", RubyCallSignature.WithImplicitSelf(1)); }
             }
 
-            public CallSite<Func<CallSite, Proc, object, object>>/*!*/ ProcCall {
+            public CallSite<Func<CallSite, object, object, object>>/*!*/ ProcCall {
                 get { return RubyUtils.GetCallSite(ref _procCall, Context, "call", 1); }
             }
 
@@ -100,6 +112,8 @@ namespace IronRuby.Builtins {
         // (true => UTF-8, false => US-ASCII); everything else is spelled out by name under
         // ":encoding". ASCII-8BIT is represented by the absence of both.
         internal const string EncodingShortIVarName = "E";
+        // MRI's ARG_ENCODING_NONE option bit in a regexp record (/n)
+        internal const int NoEncodingFlag = 0x20;
         internal const string EncodingIVarName = "encoding";
 
         #endregion
@@ -291,6 +305,7 @@ namespace IronRuby.Builtins {
             }
 
             private void WriteModuleName(RubyModule/*!*/ module) {
+                TestForAnonymous(module);
                 WriteSymbol(module.Name, module.Context.GetIdentifierEncoding());
             }
 
@@ -316,6 +331,10 @@ namespace IronRuby.Builtins {
                 int flags = (int)(value.Options & (RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline));
                 if (value.IsFixedEncoding) {
                     flags |= (int)RubyRegexOptions.FIXED;
+                }
+                if ((value.Options & RubyRegexOptions.FIXED) != 0) {
+                    // /n: MRI's ARG_ENCODING_NONE bit
+                    flags |= NoEncodingFlag;
                 }
                 _writer.Write((byte)flags);
             }
@@ -516,10 +535,21 @@ namespace IronRuby.Builtins {
                 RubyClass theClass = _context.GetClassOf(obj);
                 TestForAnonymous(theClass);
                 WriteModuleName(theClass);
-                WriteAnObject(_sites.MarshalDump.Target(_sites.MarshalDump, obj));
+                object data = _sites.MarshalDump.Target(_sites.MarshalDump, obj);
+                // The dumped form has to be something else, or loading it would never end. MRI
+                // compares the immediate classes, so an object with a singleton class may answer
+                // another instance of its own class as long as that one has no singleton of its own.
+                if (data != null && ReferenceEquals(_context.GetImmediateClassOf(data), _context.GetImmediateClassOf(obj))) {
+                    throw RubyExceptions.CreateRuntimeError("{0}#marshal_dump returned same class instance",
+                        _context.GetImmediateClassOf(obj).GetDisplayName(_context, false));
+                }
+                WriteAnObject(data);
             }
 
             private void WriteClass(RubyClass/*!*/ obj) {
+                if (obj.IsSingletonClass) {
+                    throw RubyExceptions.CreateTypeError("singleton class can't be dumped");
+                }
                 WriteModuleDefinition((byte)'c', obj);
             }
 
@@ -722,8 +752,10 @@ namespace IronRuby.Builtins {
                         CheckDumpable(obj);
 
                         // TODO: visibility?
-                        bool implementsDump = _context.ResolveMethod(obj, "_dump", VisibilityContext.AllVisible).Found;
-                        bool implementsMarshalDump = _context.ResolveMethod(obj, "marshal_dump", VisibilityContext.AllVisible).Found;
+                        bool implementsDump = _context.ResolveMethod(obj, "_dump", VisibilityContext.AllVisible).Found
+                            || Protocols.RespondTo(_sites.RespondTo, obj, "_dump");
+                        bool implementsMarshalDump = _context.ResolveMethod(obj, "marshal_dump", VisibilityContext.AllVisible).Found
+                            || Protocols.RespondTo(_sites.RespondTo, obj, "marshal_dump");
 
                         if (implementsMarshalDump) {
                             _objects[obj] = _objects.Count;
@@ -758,7 +790,7 @@ namespace IronRuby.Builtins {
                                   obj is RubyArray || obj is Hash || obj is RubyRegex || obj is RubyModule ||
                                   obj is RubyStruct || isData);
 
-                            bool writeInstanceData = !isObjectRecord &&
+                            bool writeInstanceData = !isObjectRecord && !(obj is RubyModule) &&
                                 (instanceNames.Length > 0 || NeedsEncodingIVar(encoding));
 
                             if (writeInstanceData) {
@@ -935,7 +967,7 @@ namespace IronRuby.Builtins {
             private readonly BinaryReader/*!*/ _reader;
             private readonly ReaderSites/*!*/ _sites;
             private readonly RubyGlobalScope/*!*/ _globalScope;
-            private readonly Proc _proc;
+            private readonly object _proc;
             private readonly bool _freeze;
             private readonly Dictionary<int, Symbol>/*!*/ _symbols;
             private readonly Dictionary<int, object>/*!*/ _objects;
@@ -951,12 +983,12 @@ namespace IronRuby.Builtins {
             }
 
             internal MarshalReader(ReaderSites/*!*/ sites, BinaryReader/*!*/ reader,
-                RubyGlobalScope/*!*/ globalScope, Proc proc)
+                RubyGlobalScope/*!*/ globalScope, object proc)
                 : this(sites, reader, globalScope, proc, false) {
             }
 
             internal MarshalReader(ReaderSites/*!*/ sites, BinaryReader/*!*/ reader,
-                RubyGlobalScope/*!*/ globalScope, Proc proc, bool freeze) {
+                RubyGlobalScope/*!*/ globalScope, object proc, bool freeze) {
                 _sites = sites;
                 _reader = reader;
                 _globalScope = globalScope;
@@ -1068,7 +1100,14 @@ namespace IronRuby.Builtins {
                 if (pos >= 0) {
                     value.Remove(pos, value.Length - pos);
                 }
-                return Protocols.ConvertStringToFloat(Context, value);
+                // strtod: the longest numeric prefix counts, and no number at all is 0.0
+                var match = System.Text.RegularExpressions.Regex.Match(value.ToString(),
+                    @"\A[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?");
+                double result;
+                if (match.Success && Double.TryParse(match.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
+                    return result;
+                }
+                return 0.0;
             }
 
             private MutableString/*!*/ ReadString() {
@@ -1079,12 +1118,17 @@ namespace IronRuby.Builtins {
 
             private RubyRegex/*!*/ ReadRegex() {
                 MutableString pattern = ReadString();
-                var flags = (RubyRegexOptions)_reader.ReadByte();
+                int raw = _reader.ReadByte();
+                var flags = (RubyRegexOptions)(raw & (int)(RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline | RubyRegexOptions.FIXED));
 
                 // The bit MRI writes at 0x10 means "this regexp's encoding is fixed", which is
-                // Regexp::FIXEDENCODING here; 0x10 on its own is /n, which says the opposite.
+                // Regexp::FIXEDENCODING here; 0x10 on its own is /n, which says the opposite,
+                // and is what MRI's 0x20 (ARG_ENCODING_NONE) asks for.
                 if ((flags & RubyRegexOptions.FIXED) != 0) {
                     flags = (flags & ~RubyRegexOptions.FIXED) | RubyRegexOptions.FixedEncoding;
+                }
+                if ((raw & NoEncodingFlag) != 0) {
+                    flags |= RubyRegexOptions.FIXED;
                 }
 
                 return new RubyRegex(pattern, flags);
@@ -1092,6 +1136,9 @@ namespace IronRuby.Builtins {
 
             private RubyArray/*!*/ ReadArray(RubyArray/*!*/ result) {
                 int count = ReadInt32();
+                if (count < 0) {
+                    throw RubyExceptions.CreateArgumentError("negative array size (or size too big)");
+                }
                 for (int i = 0; i < count; i++) {
                     result.Add(ReadAnObject(false));
                 }
@@ -1196,7 +1243,7 @@ namespace IronRuby.Builtins {
                 return RubyUtils.CreateObject(ReadType());
             }
 
-            private object/*!*/ ReadObject() {
+            private object/*!*/ ReadObject(int objectRef) {
                 RubyClass theClass = ReadType();
 
                 // The writing side refuses to put a class backed by a CLR object into an 'o'
@@ -1207,17 +1254,41 @@ namespace IronRuby.Builtins {
                 }
 
                 int count = ReadInt32();
-                var attributes = new Dictionary<string, object>();
+                Type type = theClass.GetUnderlyingSystemType();
+                if (typeof(Exception).IsAssignableFrom(type) || typeof(Range).IsAssignableFrom(type)) {
+                    // built from its attributes, which are not instance variables of the result
+                    var attributes = new Dictionary<string, object>();
+                    for (int i = 0; i < count; i++) {
+                        string name = ReadIdentifier();
+                        attributes[name] = ReadAnObject(false);
+                    }
+                    if (typeof(Exception).IsAssignableFrom(type)) {
+                        return CreateException(theClass, attributes);
+                    }
+                    // MRI's range_loader: the two ends have to compare (begin <=> end not nil)
+                    object rangeBegin, rangeEnd;
+                    attributes.TryGetValue("begin", out rangeBegin);
+                    attributes.TryGetValue("end", out rangeEnd);
+                    if (rangeBegin != null && rangeEnd != null) {
+                        var compare = _sites.Compare;
+                        if (compare.Target(compare, rangeBegin, rangeEnd) == null) {
+                            throw RubyExceptions.CreateArgumentError("bad value for range");
+                        }
+                    }
+                    return RubyUtils.CreateObject(theClass, attributes);
+                }
+
+                // The object is in the link table before its instance variables are read, so one
+                // that refers to itself (@a = self) links back to the object being built.
+                object obj = RubyUtils.CreateObject(theClass);
+                if (objectRef >= 0) {
+                    _objects[objectRef] = obj;
+                }
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
-                    attributes[name] = ReadAnObject(false);
+                    Context.SetInstanceVariable(obj, name, ReadAnObject(false));
                 }
-
-                if (typeof(Exception).IsAssignableFrom(theClass.GetUnderlyingSystemType())) {
-                    return CreateException(theClass, attributes);
-                }
-
-                return RubyUtils.CreateObject(theClass, attributes);
+                return obj;
             }
 
             private object/*!*/ CreateException(RubyClass/*!*/ theClass, Dictionary<string, object>/*!*/ attributes) {
@@ -1252,6 +1323,10 @@ namespace IronRuby.Builtins {
 
             private object/*!*/ ReadUsingLoad() {
                 RubyClass theClass = ReadType();
+                if (!Context.ResolveMethod(theClass, "_load", VisibilityContext.AllVisible).Found) {
+                    throw RubyExceptions.CreateTypeError("class {0} needs to have method '_load'",
+                        theClass.GetDisplayName(Context, false).ToString());
+                }
                 return _sites.Load.Target(_sites.Load, theClass, ReadString());
             }
 
@@ -1288,6 +1363,10 @@ namespace IronRuby.Builtins {
                 if (extension != null) {
                     ModuleOps.ExtendObject(extension, obj);
                 }
+                if (!Context.ResolveMethod(obj, "marshal_load", VisibilityContext.AllVisible).Found) {
+                    throw RubyExceptions.CreateTypeError("instance of {0} needs to have method 'marshal_load'",
+                        Context.GetClassOf(obj).GetDisplayName(Context, false).ToString());
+                }
                 _sites.MarshalLoad.Target(_sites.MarshalLoad, obj, ReadAnObject(false));
                 return obj;
             }
@@ -1309,10 +1388,10 @@ namespace IronRuby.Builtins {
 
                 bool isClass = result is RubyClass;
                 if (isClass && typeFlag == 'm') {
-                    throw RubyExceptions.CreateArgumentError("{0} does not refer module", name);
+                    throw RubyExceptions.CreateArgumentError("{0} does not refer to module", name);
                 }
                 if (!isClass && typeFlag == 'c') {
-                    throw RubyExceptions.CreateArgumentError("{0} does not refer class", name);
+                    throw RubyExceptions.CreateArgumentError("{0} does not refer to class", name);
                 }
                 return result;
             }
@@ -1334,14 +1413,14 @@ namespace IronRuby.Builtins {
                 var names = obj.GetNames();
                 int count = ReadInt32();
                 if (count != names.Count) {
-                    throw RubyExceptions.CreateArgumentError("struct size differs");
+                    throw RubyExceptions.CreateTypeError("struct {0} not compatible (struct size differs)", Context.GetClassOf(obj).Name);
                 }
 
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
                     if (name != names[i]) {
                         RubyClass theClass = Context.GetClassOf(obj);
-                        throw RubyExceptions.CreateTypeError("struct {0} not compatible ({1} for {2})", theClass.Name, name, names[i]);
+                        throw RubyExceptions.CreateTypeError("struct {0} not compatible (:{1} for :{2})", theClass.Name, name, names[i]);
                     }
                     obj[i] = ReadAnObject(false);
                 }
@@ -1354,13 +1433,34 @@ namespace IronRuby.Builtins {
             /// variables named after them, and the result is frozen - every Data is.
             /// </summary>
             private object/*!*/ ReadData(object/*!*/ instance) {
+                RubyClass dataClass = Context.GetClassOf(instance);
+                RubyArray members = GetDataMembers(dataClass);
                 int count = ReadInt32();
+                if (members != null && count != members.Count) {
+                    throw RubyExceptions.CreateTypeError("struct {0} not compatible (struct size differs)", dataClass.Name);
+                }
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
+                    if (members != null && name != members[i].ToString()) {
+                        throw RubyExceptions.CreateTypeError("struct {0} not compatible (:{1} for :{2})", dataClass.Name, name, members[i]);
+                    }
                     Context.SetInstanceVariable(instance, RubyUtils.GetHiddenInstanceVariableName(name), ReadAnObject(false));
                 }
                 Context.FreezeObject(instance);
                 return instance;
+            }
+
+            // The member list Data.define recorded on the class (or on the Data class a plain
+            // subclass derives from), in a hidden instance variable; null when there is none.
+            private RubyArray GetDataMembers(RubyClass/*!*/ dataClass) {
+                string ivar = RubyUtils.GetHiddenInstanceVariableName("data_members");
+                for (RubyClass cls = dataClass; cls != null; cls = cls.SuperClass) {
+                    object names;
+                    if (Context.TryGetInstanceVariable(cls, ivar, out names) && names is RubyArray) {
+                        return (RubyArray)names;
+                    }
+                }
+                return null;
             }
 
             private object/*!*/ ReadInstanced(int objectRef) {
@@ -1611,7 +1711,7 @@ namespace IronRuby.Builtins {
                                 break;
                             }
                             case 'o':
-                                obj = ReadObject();
+                                obj = ReadObject(objectRef);
                                 break;
                             case 'u':
                                 obj = ReadUsingLoad();
@@ -1696,7 +1796,8 @@ namespace IronRuby.Builtins {
             /// variables or a singleton class is its own object.
             /// </summary>
             private MutableString/*!*/ Deduplicate(MutableString/*!*/ str) {
-                if (Context.HasInstanceVariables(str)) {
+                // only a plain String joins the table; an instance of a subclass keeps its class
+                if (Context.HasInstanceVariables(str) || str.GetType() != typeof(MutableString)) {
                     return str;
                 }
 
@@ -1794,7 +1895,7 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Splits the optional trailing arguments of Marshal.load into the proc and the "freeze:" option.
         /// </summary>
-        private static bool ParseLoadOptions(RubyContext/*!*/ context, object arg1, object arg2, out Proc proc) {
+        private static bool ParseLoadOptions(RubyContext/*!*/ context, object arg1, object arg2, out object proc) {
             proc = null;
             bool freeze = false;
 
@@ -1810,17 +1911,15 @@ namespace IronRuby.Builtins {
                         var key = pair.Key as RubySymbol;
                         if (key != null && key.ToString() == "freeze") {
                             freeze = RubyOps.IsTrue(pair.Value);
+                        } else {
+                            throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(pair.Key));
                         }
                     }
                     continue;
                 }
 
-                var p = arg as Proc;
-                if (p == null) {
-                    throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Proc)",
-                        context.GetClassDisplayName(arg));
-                }
-                proc = p;
+                // anything that answers #call will do; one that does not fails when it is called
+                proc = arg;
             }
 
             return freeze;
@@ -1831,7 +1930,7 @@ namespace IronRuby.Builtins {
         public static object Load(ReaderSites/*!*/ sites, RubyScope/*!*/ scope, RubyModule/*!*/ self, [NotNull]MutableString/*!*/ source,
             [Optional]object proc, [Optional]object options) {
 
-            Proc block;
+            object block;
             bool freeze = ParseLoadOptions(self.Context, proc, options, out block);
             BinaryReader reader = new BinaryReader(new MemoryStream(source.ConvertToBytes()));
             MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze);
@@ -1843,7 +1942,7 @@ namespace IronRuby.Builtins {
         public static object Load(ReaderSites/*!*/ sites, RubyScope/*!*/ scope, RubyModule/*!*/ self, [NotNull]RubyIO/*!*/ source,
             [Optional]object proc, [Optional]object options) {
 
-            Proc block;
+            object block;
             bool freeze = ParseLoadOptions(self.Context, proc, options, out block);
             BinaryReader reader = source.GetBinaryReader();
             MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze) { FromStream = true };
@@ -1852,14 +1951,21 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("restore", RubyMethodAttributes.PublicSingleton)]
-        public static object Load(ReaderSites/*!*/ sites, RespondToStorage/*!*/ respondToStorage,
+        public static object Load(ReaderSites/*!*/ sites, RespondToStorage/*!*/ respondToStorage, ConversionStorage<MutableString>/*!*/ toStr,
             RubyScope/*!*/ scope, RubyModule/*!*/ self, object source, [Optional]object proc, [Optional]object options) {
 
-            Proc block;
+            // MRI: anything with #to_str is the dump itself; otherwise the source has to answer
+            // both #getbyte and #read to count as an IO.
+            MutableString dump = source != null ? Protocols.TryCastToString(toStr, source) : null;
+            if (dump != null) {
+                return Load(sites, scope, self, dump, proc, options);
+            }
+
+            object block;
             bool freeze = ParseLoadOptions(self.Context, proc, options, out block);
 
             Stream stream = null;
-            if (source != null) {
+            if (source != null && Protocols.RespondTo(respondToStorage, source, "getbyte")) {
                 stream = RubyIOOps.CreateIOWrapper(respondToStorage, source, FileAccess.Read);
             }
             if (stream == null || !stream.CanRead) {

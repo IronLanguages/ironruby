@@ -198,6 +198,45 @@ module Psych
     end
   end
 
+  module Visitors
+    class Visitor
+      # Visitor#visit maps a node's class to its visit_ method through one Hash shared by every
+      # visitor in the process, filled in by a default block on first sight of each class.  On
+      # CRuby the GVL makes that insert atomic.  IronRuby's Hash is not synchronized, so two
+      # threads loading YAML at once - Bundler's parallel installer reads every downloaded .gem's
+      # checksums.yaml.gz this way - could insert together, corrupt the table, and surface as a
+      # System::IndexOutOfRangeException out of Hash#[]=.
+      #
+      # This cache is copy-on-write instead: lookups read a Hash that is never mutated once
+      # published, and a miss builds the next one under a lock and swaps it in.  A visitor sees
+      # a handful of node classes, so misses stop after the first document.
+      class DispatchCache
+        def initialize
+          @map = {}.compare_by_identity.freeze
+          @lock = ::Thread::Mutex.new
+        end
+
+        def [](klass)
+          @map[klass] || @lock.synchronize do
+            @map[klass] || begin
+              map = @map.dup
+              map[klass] = :"visit_#{klass.name.gsub('::', '_')}"
+              @map = map.freeze
+              map[klass]
+            end
+          end
+        end
+      end
+
+      remove_const(:DISPATCH) if const_defined?(:DISPATCH, false)
+      DISPATCH = DispatchCache.new
+
+      def self.dispatch_cache
+        DispatchCache.new
+      end
+    end
+  end
+
   class ClassLoader
     private
 

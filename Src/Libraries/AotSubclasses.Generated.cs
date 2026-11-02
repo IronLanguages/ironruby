@@ -40,7 +40,6 @@ namespace IronRuby.Builtins {
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.Errno.WouldBlockError), typeof(IronRuby_Builtins_Errno_WouldBlockError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.FloatDomainError), typeof(IronRuby_Builtins_FloatDomainError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.Interrupt), typeof(IronRuby_Builtins_Interrupt_Subclass));
-            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.NoMemoryError), typeof(IronRuby_Builtins_NoMemoryError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.RubyTime), typeof(IronRuby_Builtins_RubyTime_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.SignalException), typeof(IronRuby_Builtins_SignalException_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.StopIteration), typeof(IronRuby_Builtins_StopIteration_Subclass));
@@ -67,6 +66,7 @@ namespace IronRuby.Builtins {
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Json.JsonError), typeof(IronRuby_StandardLibrary_Json_JsonError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Json.JsonGeneratorError), typeof(IronRuby_StandardLibrary_Json_JsonGeneratorError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Json.JsonParserError), typeof(IronRuby_StandardLibrary_Json_JsonParserError_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Markly.MarklyOps.MarklyError), typeof(IronRuby_StandardLibrary_Markly_MarklyOps_MarklyError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.MessagePack.MessagePackOps.MalformedFormatError), typeof(IronRuby_StandardLibrary_MessagePack_MessagePackOps_MalformedFormatError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.MessagePack.MessagePackOps.StackError), typeof(IronRuby_StandardLibrary_MessagePack_MessagePackOps_StackError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnexpectedTypeError), typeof(IronRuby_StandardLibrary_MessagePack_MessagePackOps_UnexpectedTypeError_Subclass));
@@ -85,6 +85,7 @@ namespace IronRuby.Builtins {
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport), typeof(IronRuby_StandardLibrary_OpenSsl_OpenSsl_SSL_Transport_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Name), typeof(IronRuby_StandardLibrary_OpenSsl_OpenSsl_X509_Name_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Puma.PumaModule.HttpParserError), typeof(IronRuby_StandardLibrary_Puma_PumaModule_HttpParserError_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.SSLError), typeof(IronRuby_StandardLibrary_Puma_PumaModule_MiniSsl_SSLError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Sockets.RubySocket), typeof(IronRuby_StandardLibrary_Sockets_RubySocket_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Sockets.TCPServer), typeof(IronRuby_StandardLibrary_Sockets_TCPServer_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Sockets.TCPSocket), typeof(IronRuby_StandardLibrary_Sockets_TCPSocket_Subclass));
@@ -124,6 +125,8 @@ namespace IronRuby.Builtins {
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Threading.RubyMutex), typeof(IronRuby_StandardLibrary_Threading_RubyMutex_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Threading.RubyQueue), typeof(IronRuby_StandardLibrary_Threading_RubyQueue_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Threading.SizedQueue), typeof(IronRuby_StandardLibrary_Threading_SizedQueue_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Yajl.YajlOps.EncodeError), typeof(IronRuby_StandardLibrary_Yajl_YajlOps_EncodeError_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Yajl.YajlOps.ParseError), typeof(IronRuby_StandardLibrary_Yajl_YajlOps_ParseError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Zlib.Zlib.BufError), typeof(IronRuby_StandardLibrary_Zlib_Zlib_BufError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Zlib.Zlib.DataError), typeof(IronRuby_StandardLibrary_Zlib_Zlib_DataError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Zlib.Zlib.Error), typeof(IronRuby_StandardLibrary_Zlib_Zlib_Error_Subclass));
@@ -957,38 +960,6 @@ namespace IronRuby.Builtins {
         DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
     }
 
-    public sealed class IronRuby_Builtins_NoMemoryError_Subclass : global::IronRuby.Builtins.NoMemoryError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
-        private RubyInstanceData _instanceData;
-        private RubyClass/*!*/ _immediateClass;
-
-        public IronRuby_Builtins_NoMemoryError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
-            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
-            _immediateClass = rubyClass;
-        }
-
-        public IronRuby_Builtins_NoMemoryError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
-            : base(p0) {
-            _immediateClass = rubyClass;
-        }
-
-        public IronRuby_Builtins_NoMemoryError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
-            : base(p0, p1) {
-            _immediateClass = rubyClass;
-        }
-
-        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
-        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
-        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
-        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
-        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
-        public int BaseGetHashCode() { return base.GetHashCode(); }
-        public bool BaseEquals(object other) { return base.Equals(other); }
-        public string/*!*/ BaseToString() { return base.ToString(); }
-        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
-    }
-
     public sealed class IronRuby_Builtins_RubyTime_Subclass : global::IronRuby.Builtins.RubyTime, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
         private RubyInstanceData _instanceData;
         private RubyClass/*!*/ _immediateClass;
@@ -1701,6 +1672,38 @@ namespace IronRuby.Builtins {
         DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
     }
 
+    public sealed class IronRuby_StandardLibrary_Markly_MarklyOps_MarklyError_Subclass : global::IronRuby.StandardLibrary.Markly.MarklyOps.MarklyError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_StandardLibrary_Markly_MarklyOps_MarklyError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_StandardLibrary_Markly_MarklyOps_MarklyError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_StandardLibrary_Markly_MarklyOps_MarklyError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
+        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
     public sealed class IronRuby_StandardLibrary_MessagePack_MessagePackOps_MalformedFormatError_Subclass : global::IronRuby.StandardLibrary.MessagePack.MessagePackOps.MalformedFormatError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
         private RubyInstanceData _instanceData;
         private RubyClass/*!*/ _immediateClass;
@@ -2247,12 +2250,49 @@ namespace IronRuby.Builtins {
         DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
     }
 
+    public sealed class IronRuby_StandardLibrary_Puma_PumaModule_MiniSsl_SSLError_Subclass : global::IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.SSLError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_StandardLibrary_Puma_PumaModule_MiniSsl_SSLError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_StandardLibrary_Puma_PumaModule_MiniSsl_SSLError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_StandardLibrary_Puma_PumaModule_MiniSsl_SSLError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
+        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
     public sealed class IronRuby_StandardLibrary_Sockets_RubySocket_Subclass : global::IronRuby.StandardLibrary.Sockets.RubySocket, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
         private RubyInstanceData _instanceData;
         private RubyClass/*!*/ _immediateClass;
 
         public IronRuby_StandardLibrary_Sockets_RubySocket_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.Net.Sockets.Socket p1)
             : base(global::IronRuby.Runtime.RubyOps.GetContextFromModule(rubyClass), p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_StandardLibrary_Sockets_RubySocket_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetContextFromModule(rubyClass)) {
             _immediateClass = rubyClass;
         }
 
@@ -3417,6 +3457,70 @@ namespace IronRuby.Builtins {
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_StandardLibrary_Yajl_YajlOps_EncodeError_Subclass : global::IronRuby.StandardLibrary.Yajl.YajlOps.EncodeError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_StandardLibrary_Yajl_YajlOps_EncodeError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_StandardLibrary_Yajl_YajlOps_EncodeError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_StandardLibrary_Yajl_YajlOps_EncodeError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
+        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_StandardLibrary_Yajl_YajlOps_ParseError_Subclass : global::IronRuby.StandardLibrary.Yajl.YajlOps.ParseError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_StandardLibrary_Yajl_YajlOps_ParseError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_StandardLibrary_Yajl_YajlOps_ParseError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_StandardLibrary_Yajl_YajlOps_ParseError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
+        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
         DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
     }
 

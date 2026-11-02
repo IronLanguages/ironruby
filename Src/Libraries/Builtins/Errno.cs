@@ -147,6 +147,16 @@ namespace IronRuby.Builtins {
             }
         }
 
+        [RubyClass("EIO", Extends = typeof(InputOutputError), Inherits = typeof(ExternalException))]
+        public class InputOutputErrorOps {
+            [RubyConstructor]
+            public static InputOutputError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
+                var result = new InputOutputError(RubyExceptions.MakeMessage(ref message, "Input/output error"));
+                RubyExceptionData.InitializeException(result, message);
+                return result;
+            }
+        }
+
         [RubyClass("EBADF", Extends = typeof(BadFileDescriptorError), Inherits = typeof(ExternalException))]
         public class BadFileDescriptorErrorOps {
             [RubyConstructor]

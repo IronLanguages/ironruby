@@ -133,6 +133,77 @@ class BigDecimal
   alias_method :modulo, :%
 end
 
+# The pieces of bigdecimal 4.0.1 that bigdecimal/math, bigdecimal/jacobian and the rest of
+# its Ruby half build on. BigDecimal::Internal is the gem's own lib/bigdecimal.rb verbatim;
+# #n_significant_digits and #_decimal_shift are methods of its C extension, written here on
+# top of #split.
+class BigDecimal
+  module Internal # :nodoc:
+
+    # Coerce x to BigDecimal with the specified precision.
+    # TODO: some methods (example: BigMath.exp) require more precision than specified to coerce.
+    def self.coerce_to_bigdecimal(x, prec, method_name) # :nodoc:
+      case x
+      when BigDecimal
+        return x
+      when Integer, Float
+        return BigDecimal(x, 0)
+      when Rational
+        return BigDecimal(x, [prec, 2 * BigDecimal.double_fig].max)
+      end
+      raise ArgumentError, "#{x.inspect} can't be coerced into BigDecimal"
+    end
+
+    def self.coerce_validate_prec(prec, method_name, accept_zero: false) # :nodoc:
+      unless Integer === prec
+        original = prec
+        # Emulate Integer.try_convert for ruby < 3.1
+        if prec.respond_to?(:to_int)
+          prec = prec.to_int
+        else
+          raise TypeError, "no implicit conversion of #{original.class} into Integer"
+        end
+        raise TypeError, "can't convert #{original.class} to Integer" unless Integer === prec
+      end
+
+      if accept_zero
+        raise ArgumentError, "Negative precision for #{method_name}" if prec < 0
+      else
+        raise ArgumentError, "Zero or negative precision for #{method_name}" if prec <= 0
+      end
+      prec
+    end
+
+    def self.infinity_computation_result # :nodoc:
+      if BigDecimal.mode(BigDecimal::EXCEPTION_ALL).anybits?(BigDecimal::EXCEPTION_INFINITY)
+        raise FloatDomainError, "Computation results in 'Infinity'"
+      end
+      BigDecimal::INFINITY
+    end
+
+    def self.nan_computation_result # :nodoc:
+      if BigDecimal.mode(BigDecimal::EXCEPTION_ALL).anybits?(BigDecimal::EXCEPTION_NaN)
+        raise FloatDomainError, "Computation results to 'NaN'"
+      end
+      BigDecimal::NAN
+    end
+  end
+
+  # BigDecimal_n_significant_digits: the digits between the first and the last nonzero one.
+  def n_significant_digits
+    return 0 if zero? || !finite?
+    split[1].sub(/0+\z/, "").length
+  end unless method_defined?(:n_significant_digits)
+
+  # BigDecimal_decimal_shift: self * 10**n, exactly, at whatever precision that takes.
+  def _decimal_shift(n)
+    n = n.to_int unless Integer === n
+    return self if zero? || nan? || infinite? || n == 0
+    sign, digits, _base, exponent = split
+    BigDecimal("#{sign < 0 ? '-' : ''}0.#{digits}e#{exponent + n}")
+  end unless method_defined?(:_decimal_shift)
+end
+
 # BigMath.exp and BigMath.log live in the bigdecimal extension itself, not in
 # bigdecimal/math (which adds PI, E, sqrt and the trigonometric functions), so plain
 # `require "bigdecimal"` has to provide them - and they take any Numeric, not only a

@@ -395,6 +395,17 @@ namespace IronRuby.Builtins {
             return encoding;
         }
 
+        [RubyMethod("find", RubyMethodAttributes.PublicSingleton)]
+        public static RubyEncoding GetEncoding(RubyClass/*!*/ self, DynamicNull name) {
+            throw RubyExceptions.CreateImplicitConversionError("nil", "String");
+        }
+
+        // An Encoding is a constant of the runtime: there is nothing in it to change.
+        [RubyMethod("frozen?")]
+        public static bool IsFrozen(RubyEncoding/*!*/ self) {
+            return true;
+        }
+
         // A Symbol is not a name here: MRI takes only a String or something with #to_str.
         [RubyMethod("find", RubyMethodAttributes.PublicSingleton)]
         public static RubyEncoding/*!*/ GetEncoding(RubyClass/*!*/ self, [NotNull]RubySymbol/*!*/ name) {

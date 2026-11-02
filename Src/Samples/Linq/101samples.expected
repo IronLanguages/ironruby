@@ -1,0 +1,237 @@
+-- Where: Simple 1
+4
+1
+3
+2
+0
+-- Where: Simple 2
+product 3
+-- Where: Simple 3
+product 2
+-- Where: Drilldown
+Customer 0: company 1
+  Order 0: 1995
+  Order 1: 2001
+  Order 5: 1996
+Customer 3: company 4
+-- Where: Indexed
+five
+six
+seven
+eight
+nine
+-- Select: Simple 1
+[6, 5, 2, 4, 10, 9, 7, 8, 3, 1]
+-- Select: Simple 2
+["product 1", "product 2", "product 3", "product 4"]
+-- Select: Transformation
+["five", "four", "one", "three", "nine", "eight", "six", "seven", "two", "zero"]
+-- Select: Anonymous Types 1
+Uppercase: APPLE Lowercase: apple
+Uppercase: BLUEBERRY Lowercase: blueberry
+Uppercase: CHERRY Lowercase: cherry
+-- Select: Anonymous Types 2
+#<struct digit="five", even=false>
+#<struct digit="four", even=true>
+#<struct digit="one", even=false>
+#<struct digit="three", even=false>
+#<struct digit="nine", even=false>
+#<struct digit="eight", even=true>
+#<struct digit="six", even=true>
+#<struct digit="seven", even=false>
+#<struct digit="two", even=true>
+#<struct digit="zero", even=true>
+-- Select: Anonymous Types 3
+product 1 is in the category foo and costs 1.3 per unit
+product 2 is in the category bar and costs 10.0 per unit
+product 3 is in the category baz and costs 4.0 per unit
+product 4 is in the category foo and costs 2.5 per unit
+-- Select: Indexed
+5: false
+4: false
+1: false
+3: true
+9: false
+8: false
+6: true
+7: true
+2: false
+0: false
+-- Select: Filtered
+["four", "one", "three", "two", "zero"]
+-- SelectMany: Compound from 1
+0 is less than 1
+0 is less than 3
+0 is less than 5
+0 is less than 7
+0 is less than 8
+2 is less than 3
+2 is less than 5
+2 is less than 7
+2 is less than 8
+4 is less than 5
+4 is less than 7
+4 is less than 8
+5 is less than 7
+5 is less than 8
+6 is less than 7
+6 is less than 8
+-- SelectMany: Compound from 2
+#<struct customer_id=0, order_id=0, total=56.4>
+#<struct customer_id=0, order_id=1, total=100.3>
+#<struct customer_id=2, order_id=4, total=150.3>
+-- SelectMany: Multiple from
+#<struct customer_id=0, order_id=1>
+-- SelectMany: Indexed
+Customer 1 has an order with id 0
+Customer 1 has an order with id 1
+Customer 1 has an order with id 5
+Customer 2 has an order with id 2
+Customer 2 has an order with id 3
+Customer 3 has an order with id 4
+-- Take: Simple
+[5, 4, 1]
+-- Skip: Simple
+[3, 9, 8, 6, 7, 2, 0]
+-- Skip: Nested
+#<struct customer_id=0, order_id=5, order_date=1996>
+-- TakeWhile: Simple
+[5, 4, 1, 3]
+-- TakeWhile: Indexed
+[5, 4]
+-- SkipWhile: Simple
+[3, 9, 8, 6, 7, 2, 0]
+-- SkipWhile: Indexed
+[1, 3, 9, 8, 6, 7, 2, 0]
+-- ThenByDescending: Simple
+#<struct Product product_name="product 2", category="bar", units_in_stock=3, unit_price=10.0>
+#<struct Product product_name="product 3", category="baz", units_in_stock=0, unit_price=4.0>
+#<struct Product product_name="product 4", category="foo", units_in_stock=1, unit_price=2.5>
+#<struct Product product_name="product 1", category="foo", units_in_stock=4, unit_price=1.3>
+-- ThenByDescending: Comparer
+["aPPLE", "ClOvEr", "cHeRry", "bRaNcH", "AbAcUs", "BlUeBeRrY"]
+-- Reverse
+nine
+eight
+six
+five
+-- Grouping: Simple 1
+Numbers with a remainder of 0 when divided by 5: [5, 0]
+Numbers with a remainder of 4 when divided by 5: [4, 9]
+Numbers with a remainder of 1 when divided by 5: [1, 6]
+Numbers with a remainder of 3 when divided by 5: [3, 8]
+Numbers with a remainder of 2 when divided by 5: [7, 2]
+-- Grouping: Simple 2
+Words that start with the letter 'b': blueberry, banana
+Words that start with the letter 'c': chimpanzee, cheese
+Words that start with the letter 'a': abacus, apple
+-- GroupBy: Comparer
+from: 'from   ', ' form  '
+salt: ' salt', '  last   '
+earn: ' earn ', ' near '
+-- GroupBy: Comparer, Mapped
+from: 'FROM   ', ' FORM  '
+salt: ' SALT', '  LAST   '
+earn: ' EARN ', ' NEAR '
+-- Distinct 1
+[2, 3, 5]
+-- Union 1
+[0, 2, 4, 5, 6, 8, 9, 1, 3, 7]
+-- Intersect 1
+[5, 8]
+-- Except 1
+[0, 2, 4, 6, 9]
+-- ToArray
+[1.7, 1.9, 2.3, 2.9, 4.1]
+-- ToList
+["apple", "blueberry", "cherry"]
+-- ToDictionary
+Alice => #<struct name="Alice", score=50>
+Bob => #<struct name="Bob", score=40>
+Cathy => #<struct name="Cathy", score=45>
+-- OfType
+[1.0, 7.0]
+-- First: Simple
+#<struct Product product_name="product 1", category="foo", units_in_stock=4, unit_price=1.3>
+-- First: Condition
+"one"
+-- FirstOrDefault: Simple
+0
+-- FirstOrDefault: Condition
+true
+-- ElementAt
+8
+-- Range
+10 is even
+11 is odd
+12 is even
+13 is odd
+14 is even
+-- Repeat
+7777777777
+-- Any: Simple
+true
+-- Any: Grouped
+baz: product 3
+-- All: Simple
+false
+-- All: Grouped
+foo: product 1, product 4
+bar: product 2
+-- Count: Simple
+3
+-- Count: Conditional
+5
+-- Count: Nested
+[[0, 3], [1, 2], [2, 1], [3, 0]]
+-- Count: Grouped
+#<struct category="foo", product_count=2>
+#<struct category="bar", product_count=1>
+#<struct category="baz", product_count=1>
+-- Sum: Simple
+45
+-- Sum: Projection
+25
+-- Sum: Grouped
+#<struct category="foo", total_units_in_stock=5>
+#<struct category="bar", total_units_in_stock=3>
+#<struct category="baz", total_units_in_stock=0>
+-- Min: Simple
+0
+-- Min: Projection
+5
+-- Min: Grouped
+#<struct category="foo", cheapest_price=1.3>
+#<struct category="bar", cheapest_price=10.0>
+#<struct category="baz", cheapest_price=4.0>
+-- Min: Elements
+Cheapest products in category foo: ["product 1"]
+Cheapest products in category bar: ["product 2"]
+Cheapest products in category baz: ["product 3"]
+-- Aggregate: Simple
+88.33080999999999
+-- Aggregate: Seed
+20.0
+-- Concat: 1
+[0, 2, 4, 5, 6, 8, 9, 1, 3, 5, 7, 8]
+-- Concat: 2
+["company 1", "company 2", "company 3", "company 4", "product 1", "product 2", "product 3", "product 4"]
+-- EqualAll: 1
+true
+-- EqualAll: 2
+false
+-- Cross Join
+product 2: bar
+product 1: foo
+product 4: foo
+-- Group Join
+bar: product 2
+foo: product 1, product 4
+-- Cross Join with Group Join
+#<struct category="bar", product_name="product 2">
+#<struct category="foo", product_name="product 1">
+#<struct category="foo", product_name="product 4">
+-- Left Outer Join
+#<struct category="foo", product_name="product 1">
+#<struct category="foo", product_name="product 4">
+#<struct category="no such category", product_name="(No Products)">

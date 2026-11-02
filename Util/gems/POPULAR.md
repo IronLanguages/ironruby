@@ -146,7 +146,7 @@ Named in the brief, further down the list:
 | chunky_png | 1.4.0 | **WORKS** | draws into an image, encodes it, decodes it again and compares the pixels |
 | standard | 1.56.0 | **WORKS** | `Standard::Cli` over a file with a real offence; it is RuboCop underneath |
 | yard | 0.9.45 | **BROKEN** | `require "yard"` succeeds; parsing Ruby does not. `YARD::Parser::Ruby::RipperParser` builds its handlers from `Ripper::PARSER_EVENT_TABLE` at load, and IronRuby's Ripper is a prism tree translator with `Ripper.sexp` and the scanner events, not an event parser |
-| prawn | 2.5.0 | **BROKEN** | pins `bigdecimal ~> 3.1`; IronRuby's built-in bigdecimal presents as 4.0.1, so RubyGems tries to build the C one and fails. CRuby installs the C gem instead |
+| prawn | 2.5.0 | **WORKS** | two A4 pages with text, shapes, a text box and page numbers, rendered to the same bytes. ttfunk pins `bigdecimal ~> 3.1`; IronRuby's built-in bigdecimal is 4.0.1, and RubyGems now reads a 2.x or 3.x requirement on it as `>=` (`rubygems/defaults/ironruby.rb`) |
 | rb-inotify | 0.11.1 | **WORKS** | on IronRuby's ffi; create/modify/delete events match CRuby |
 | bcrypt | 3.1.22 | **IMPOSSIBLE as a gem** | C extension: the Blowfish KDF. A port, not a shim - `BCrypt.Net` already exists on NuGet |
 | oj | 3.17.6 | **IMPOSSIBLE as a gem** | C extension. Use `json`, which IronRuby implements |

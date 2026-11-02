@@ -874,6 +874,12 @@ namespace IronRuby.Compiler.Ast {
 
             Assert.NotNull(statements);
 
+            // Every body nested in another - a block's, a loop's, a branch's - comes through here, and the
+            // nesting can be deeper than a thread's stack goes (see StackGuard).
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => TransformStatements(prologue, statements, epilogue, resultOperation));
+            }
+
             int count = statements.Count + (prologue != null ? 1 : 0) + (epilogue != null ? 1 : 0);
 
             if (count == 0) {
@@ -944,6 +950,10 @@ namespace IronRuby.Compiler.Ast {
         }
 
         private MSA.Expression/*!*/ TransformStatementsToExpression(Statements statements, bool toBoolean, bool positive) {
+            // (see TransformStatements)
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => TransformStatementsToExpression(statements, toBoolean, positive));
+            }
 
             if (statements == null || statements.Count == 0) {
                 return toBoolean ? AstUtils.Constant(!positive) : AstUtils.Constant(null);

@@ -195,6 +195,7 @@ namespace IronRuby.Builtins {
             /// </summary>
             internal volatile string BlockedLabel;
             internal volatile Thread ActiveFiberThread;
+            internal FiberCore FiberExecution;
 
             /// <summary>
             /// A fiber thread parked in the pool between two fibers (ThreadOps.Fiber.cs). It is no
@@ -347,6 +348,14 @@ namespace IronRuby.Builtins {
             /// </summary>
             internal void Wake() {
                 _runSignal.Set();
+            }
+
+            /// <summary>
+            /// Drops a Wake() the thread's sleep did not consume - one that came after a timeout ran
+            /// out or an exception ended the wait - so that it does not cut the next sleep short.
+            /// </summary>
+            internal void ClearWake() {
+                _runSignal.Reset();
             }
         }
 
@@ -572,8 +581,9 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("join")]
-        public static Thread/*!*/ Join(Thread/*!*/ self) {
+        public static Thread/*!*/ Join(RubyContext/*!*/ context, Thread/*!*/ self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
+            RequireOtherThread(context, self);
 
             JoinWithSafePoints(self, Timeout.Infinite);
 
@@ -592,7 +602,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("join")]
         public static Thread Join(RubyContext/*!*/ context, Thread/*!*/ self, object timeout) {
             if (timeout == null) {
-                return Join(self);
+                return Join(context, self);
             }
             // MRI's time-interval conversion, not Float(): a String is a TypeError here rather
             // than the ArgumentError that Float("bar") would raise.
@@ -606,11 +616,23 @@ namespace IronRuby.Builtins {
             } else {
                 throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(timeout), "Float");
             }
-            return Join(self, seconds);
+            return Join(context, self, seconds);
         }
 
-        public static Thread/*!*/ Join(Thread/*!*/ self, double seconds) {
+        // A thread cannot wait for itself, it would never wake up; and nothing waits for the main
+        // thread, whose end is the end of the program.
+        private static void RequireOtherThread(RubyContext/*!*/ context, Thread/*!*/ self) {
+            if (ReferenceEquals(self, Thread.CurrentThread)) {
+                throw new ThreadError("Target thread must not be current thread");
+            }
+            if (ReferenceEquals(self, context.MainThread)) {
+                throw new ThreadError("Target thread must not be main thread");
+            }
+        }
+
+        public static Thread/*!*/ Join(RubyContext/*!*/ context, Thread/*!*/ self, double seconds) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
+            RequireOtherThread(context, self);
 
             if (!(self.ThreadState == ThreadState.AbortRequested || self.ThreadState == ThreadState.Aborted)) {
                 double ms = seconds * 1000;
@@ -876,8 +898,8 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("value")]
-        public static object Value(Thread/*!*/ self) {
-            Join(self);
+        public static object Value(RubyContext/*!*/ context, Thread/*!*/ self) {
+            Join(context, self);
             return RubyThreadInfo.FromThread(self).Result;
         }
 
@@ -914,13 +936,11 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("critical", RubyMethodAttributes.PublicSingleton)] // Compatibility <= RubyCompatibility.Ruby18
         public static bool Critical(RubyContext/*!*/ context, object self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
             return context.CriticalThread != null;
         }
 
-        [RubyMethod("critical=", RubyMethodAttributes.PublicSingleton)]
         public static void Critical(RubyContext/*!*/ context, object self, bool value) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
             SetCritical(context, value);
@@ -1024,6 +1044,11 @@ namespace IronRuby.Builtins {
             thread.Start();
         }
 
+        // Keep ThreadStarter out of the context's lifetime-long termination callback closure.
+        private static Action CreateThreadTerminator(RubyContext context) {
+            return () => TerminateAllThreads(context);
+        }
+
         /// <summary>
         /// Creates the CLR thread for a Ruby thread, ready to start once <paramref name="starter"/> has
         /// been given its block. System.Threading.Thread is sealed, so a thread of a Ruby subclass of
@@ -1034,7 +1059,7 @@ namespace IronRuby.Builtins {
             ThreadGroup group = creator.Group;
             ThreadStarter s = starter = new ThreadStarter();
             if (context.ThreadTerminator == null) {
-                context.ThreadTerminator = () => TerminateAllThreads(context);
+                context.ThreadTerminator = CreateThreadTerminator(context);
             }
             s.Creator = Thread.CurrentThread;
             Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, group, s.Creator)));
@@ -1052,10 +1077,12 @@ namespace IronRuby.Builtins {
 
             // MRI: a new thread's root fiber inherits the storage of the fiber that created it.
             // Fiber is implemented in Ruby, so all that is needed here is to carry the creating
-            // fiber over; Fiber.__root__ reads it (Src/StdLib/ironruby/ruby4.rb).
+            // fiber's State over; Fiber.__root__ reads it (Src/StdLib/ironruby/ruby4.rb). Not the
+            // public Fiber: a long-lived thread would keep an abandoned creator from being reclaimed.
             object creatorFiber = RubyThreadInfo.FromThread(Thread.CurrentThread)[context.CreateAsciiSymbol("__ir_fiber_current__")];
-            if (creatorFiber != null) {
-                info[context.CreateAsciiSymbol("__ir_fiber_parent__")] = creatorFiber;
+            object creatorState = GetCurrentFiberState(context, null);
+            if (creatorFiber != null && creatorState != null) {
+                info[context.CreateAsciiSymbol("__ir_fiber_parent__")] = creatorState;
             }
 
             // Ruby exits when the main thread exits. So all other threads need to be marked as background threads
@@ -1567,8 +1594,6 @@ namespace IronRuby.Builtins {
         private static void TerminateAllThreads(RubyContext/*!*/ context) {
             _terminating = true;
 
-            RubySymbol currentFiberKey = context.CreateAsciiSymbol("__ir_fiber_current__");
-            RubySymbol resumed = context.CreateAsciiSymbol("resumed");
             List<Thread> killed = new List<Thread>();
             List<Thread> busy = new List<Thread>();
 
@@ -1578,9 +1603,7 @@ namespace IronRuby.Builtins {
                     continue;
                 }
 
-                object fiber = info[currentFiberKey];
-                object status;
-                if (fiber != null && context.TryGetInstanceVariable(fiber, "@status", out status) && !ReferenceEquals(status, resumed)) {
+                if (info.IsIdleFiberWorker || (info.FiberExecution != null && info.FiberExecution.Status == "suspended")) {
                     // a suspended fiber (or a thread whose root fiber is suspended)
                     continue;
                 }

@@ -78,81 +78,126 @@ lands, the runs simply stop raising.
 
 ## Status
 
-All 41 microbenchmarks run and every one of them that has a value to compare
-produces CRuby's answer (`--verify`). One is N/A.
-
-Measured with `IR_CONFIG=Release`, `RB_WARMUP=3 RB_ITRS=4`, against CRuby 4.0.6
-on a shared box, so the absolute numbers move by tens of percent between runs
-and only the shape of the table is worth reading. Times are milliseconds for
-the fastest timed iteration; `RATIO` is IronRuby / CRuby.
+Rerun 2026-10-29, `IR_CONFIG=Release`, the runner's defaults (5 warmup, 5 timed
+iterations), CRuby 4.0.6, load average about 3. All 41 microbenchmarks run and
+every one with a value to compare produces CRuby's answer (`--verify`); one is
+N/A (`--verify`, rerun the same day: 37 SAME, 4 SKIP, 0 DIFFER). Geomean IronRuby/CRuby 2.13, median 2.40, five faster than CRuby. Times
+are milliseconds for the fastest timed iteration.
 
 ```
-BENCHMARK                GROUP     IR(ms) NOJIT(ms) CRUBY(ms)   RATIO STATUS   NOTE
-30k_ifelse               micro       6285      6687      1703    3.69 OK
-30k_methods              micro       5984      5462      1927    3.11 OK       NoJIT is faster
-30k_variables            micro       9165      9823      1449    6.33 OK
-attr_accessor            micro       1016      1086       262    3.88 OK
-block_methods            micro      25140     26822      6993    3.60 OK
-cfunc_itself             micro        249       728       160    1.56 OK
-fib                      micro       1909      1529       373    5.12 OK       NoJIT is faster
-gcbench                  micro      19939     16722      3431    5.81 OK       NoJIT is faster
-getivar                  micro        559       536        86    6.50 OK
-getivar-module           micro       1082      1131       229    4.72 OK
-keyword_args             micro       2766      2297       225   12.29 OK       NoJIT is faster
-loops-times              micro       1776      1822      1065    1.67 OK
-matmul                   micro        719       718       435    1.65 OK
-nqueens                  micro        364       273       183    1.99 OK       NoJIT is faster
-object-new               micro         46        51        73    0.63 OK
-object-new-initialize    micro        658       713       138    4.77 OK
-object-new-no-escape     micro        913      1071       263    3.47 OK
-respond_to               micro       2641      2529       237   11.14 OK
-ruby-xor                 micro        115       134       114    1.01 OK
-send_bmethod             micro        745       712       243    3.07 OK
-send_cfunc_block         micro        962       985       295    3.26 OK
-send_rubyfunc_block      micro        557       568       172    3.24 OK
-send_rubyfunc_inline     micro       1962      1995       653    3.00 OK
-setivar                  micro        568       552        90    6.31 OK
-setivar_object           micro        534       558        92    5.80 OK
-setivar_young            micro        553       567        92    6.01 OK
-splay                    micro        772       764       154    5.01 OK
-str_concat               micro        132       299        63    2.10 OK
-string_malloc_pressure   micro         54        71       495    0.11 OK
-structaref               micro        255       251       125    2.04 OK
-structaset               micro        165       206       113    1.46 OK
-struct-new-no-escape     micro       1276      1256       165    7.73 OK
-sudoku                   micro        664       625       404    1.64 OK       NoJIT is faster
-throw                    micro         48        47        23    2.09 OK
-binarytrees              micro       1281      1149       399    3.21 OK       NoJIT is faster
-fannkuchredux            micro        668       670       356    1.88 OK
-nbody                    micro        476       462       108    4.41 OK
-gvl_release_acquire      micro        196       217       133    1.47 OK
-ruby-json                micro       1349      1348       336    4.01 OK
-blurhash                 micro        966       928       314    3.08 OK
-lee                      micro       4726      4391      1197    3.95 OK       needs the victor gem
-knucleotide              micro          -         -         -       - N/A      uses Process.fork
+BENCHMARK                GROUP     IR(ms) CRUBY(ms)   RATIO STATUS   NOTE
+30k_ifelse               micro       5205      1284    4.05 OK
+30k_methods              micro       4011       844    4.75 OK
+30k_variables            micro       5777       910    6.35 OK
+attr_accessor            micro        339       171    1.98 OK
+block_methods            micro      13436      3255    4.13 OK
+cfunc_itself             micro         74        83    0.89 OK
+fib                      micro         35       216    0.16 OK
+gcbench                  micro       7646      2642    2.89 OK
+getivar                  micro        257        94    2.73 OK
+getivar-module           micro        594       239    2.49 OK
+keyword_args             micro       2454       235   10.44 OK
+loops-times              micro       2169      1113    1.95 OK
+matmul                   micro        753       471    1.60 OK
+nqueens                  micro        315       200    1.57 OK
+object-new               micro         47        77    0.61 OK
+object-new-initialize    micro        388       151    2.57 OK
+object-new-no-escape     micro        579       283    2.05 OK
+respond_to               micro        316       251    1.26 OK
+ruby-xor                 micro        111       116    0.96 OK
+send_bmethod             micro        924       237    3.90 OK
+send_cfunc_block         micro       1150       330    3.48 OK
+send_rubyfunc_block      micro        731       156    4.69 OK
+send_rubyfunc_inline     micro       2147       630    3.41 OK
+setivar                  micro        128        72    1.78 OK
+setivar_object           micro        122        98    1.24 OK
+setivar_young            micro        113        99    1.14 OK
+splay                    micro        693       108    6.42 OK
+str_concat               micro        142        66    2.15 OK
+string_malloc_pressure   micro         60       493    0.12 OK
+structaref               micro        284       134    2.12 OK
+structaset               micro        177       122    1.45 OK
+struct-new-no-escape     micro        989       178    5.56 OK
+sudoku                   micro        680       434    1.57 OK
+throw                    micro         65        24    2.71 OK
+binarytrees              micro       1202       441    2.73 OK
+fannkuchredux            micro        704       375    1.88 OK
+nbody                    micro        286       119    2.40 OK
+gvl_release_acquire      micro        190       140    1.36 OK
+ruby-json                micro       1265       306    4.13 OK
+blurhash                 micro       1073       329    3.26 OK
+lee                      micro       4529      1264    3.58 OK       needs the victor gem; first run installs it
+knucleotide              micro          -         -       - N/A      uses Process.fork for parallelism; .NET cannot fork
 ```
 
-The middle of the table is where IronRuby lives: most of these land between two
-and four times CRuby. Two benchmarks are faster than CRuby -
-`string_malloc_pressure`, because `String.new(capacity:)` is a hint IronRuby
-does not have to honour with a real allocation, and `object-new`, which is a
-plain allocation loop.
+Faster than CRuby: `fib` (0.16) and `cfunc_itself` (0.89), which the method JIT
+compiles into plain .NET calls; `string_malloc_pressure` (0.12), because
+`String.new(capacity:)` is a hint IronRuby need not honour with a real
+allocation; `object-new` (0.61), a plain allocation loop; and `ruby-xor`
+(0.96), at parity.
 
 What the outliers say:
 
-* `respond_to` (11x) and `keyword_args` (12x) are the two call-shape
-  benchmarks still well out of line. `keyword_args` was 23x before the
-  keyword-check change; what is left is the per-call binding itself.
-* `getivar`, `setivar*` (6x) and `struct-new-no-escape` (8x) say instance
-  variable and Struct access are not as direct as CRuby's slot access.
-* `30k_variables` (6x) is dominated by compiling 300 methods of 100 locals,
-  not by running them.
-* `ruby-json` was **103x** before the StringScanner work in this round.
+* `keyword_args` (10x) is the one call-shape benchmark still well out of line;
+  what is left is the per-call binding of the keyword hash. `respond_to` is at
+  parity since the resolution cache (it was 11x).
+* `struct-new-no-escape` (5.6x) and `30k_variables` (6.4x, dominated by
+  compiling 300 methods of 100 locals) are the next ones.
+* Instance-variable access is 1.1x-2.7x now (`getivar`, `setivar*`; 6x before).
+
+The macro benchmarks are in [pure-gems.md](pure-gems.md) (34 of 36 run;
+geomean 6.2x, median 4.8x, counting the web ones) and [web-gems.md](web-gems.md).
+The two that do not run, psych-load and sequel, are not missing code: their
+Gemfiles demand psych 4 and sqlite3 1.x, older majors than the ones IronRuby
+provides, and Bundler.setup says so.
 
 `--nojit` is worth running when a change touches the compiler: a benchmark
-where `-X:NoJIT` wins is a benchmark the method JIT is costing. Eight do here,
-mostly by a few percent, and the JIT clearly pays for itself on `cfunc_itself`
-(249ms against 728ms without it) and `str_concat`.
+where `-X:NoJIT` wins is a benchmark the method JIT is costing.
+
+## C extensions: what IronRuby, TruffleRuby and JRuby do
+
+Most of the macro benchmarks that used to be N/A here were N/A for one C
+extension somewhere in their bundle. The other two alternative Rubies solve that
+in opposite ways:
+
+* **TruffleRuby** compiles a gem's C extension as it is, against its own
+  implementation of CRuby's C API, so markly, rbs, strptime, yajl-ruby and
+  cool.io simply build there. It patches very little: `lib/truffle/truffle/patches`
+  holds build fixes for json, oci8, pg and tk only, and `lib/patches` adjusts a
+  few gems' Ruby (thread_safe among them). stackprof ships its own TruffleRuby
+  backend inside the gem.
+* **JRuby** cannot load C at all. It relies on gems publishing a `-java`
+  platform build with a Java extension, or on a pure-Ruby fallback in the gem.
+  Of the gems below, rubygems.org has `-java` builds of bcrypt, msgpack, puma,
+  nio4r, nokogiri, websocket-driver, http_parser.rb, jaro_winkler and (since
+  4.2.1.pre) rbs, whose Java build runs rbs's C parser compiled to WebAssembly.
+  markly, strptime, yajl-ruby, cool.io, io-event, zstd-ruby, sqlite3,
+  liquid-c and graphql-c_parser have none; JRuby apps use the JDBC adapter
+  instead of sqlite3.
+
+IronRuby cannot load C either, so it takes JRuby's route, with IronRuby
+providing what the `-java` build would: the gem's own Ruby is used as
+installed, and only the file its `lib/` requires for the extension
+(`markly/markly`, `rbs_extension`, `cool.io_ext`, ...) is IronRuby's. A `.rb` on
+the load path wins over a `.so`, so a CRuby-built copy of the gem next to it
+does not get in the way. Where the C is a self-contained library of its own, it
+is built from the gem's pinned sources and called through P/Invoke, as libprism
+already was, so the output is the same bytes by construction.
+
+| Gem | Needed by | TruffleRuby | JRuby | IronRuby |
+|-----|-----------|-------------|-------|----------|
+| bcrypt | lobsters | builds the C | `-java` (jBCrypt) | C# port (`Src/Libraries/BCrypt`) |
+| markly 0.15 | lobsters | builds the C | none | the gem's cmark-gfm as `libmarkly_cmark` (`Util/build-markly.sh`) + markly.c in C# |
+| jaro_winkler | lobsters (rubocop 0.81) | builds the C | `-java`, and the gem's pure-Ruby fallback | the gem's pure-Ruby fallback |
+| rbs 4.0.0.dev.5 | ruby-lsp | builds the C | `-java` from 4.2.1.pre (C parser as WASM) | the gem's parser as `librbs` (`Util/build-librbs.sh`) + the glue in C# |
+| strptime | fluentd | builds the C | none | C# port |
+| yajl-ruby | fluentd | builds the C | none | C# port of yajl and yajl_ext |
+| zstd-ruby | fluentd | builds the C | none | C# port over ZstdSharp (managed libzstd 1.5.7) |
+| cool.io | fluentd | builds the C | none | C# event loop over poll(2) / inotify |
+| io-event | fluentd (async) | builds the C | none | the gem's pure-Ruby selector |
+| msgpack, puma, nio4r, sqlite3, nokogiri | shipit, lobsters | build the C | `-java` / JDBC | C# (earlier work) |
+| pty (stdlib) | shipit | built in | built in | C#, posix_spawn with a new session |
+| liquid-c, graphql-c_parser | liquid-c, graphql-native | build the C | none | not done: these benchmarks measure the C extension itself |
 
 ## Environment
 

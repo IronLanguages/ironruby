@@ -60,7 +60,7 @@ using MSA = Microsoft.Scripting.Ast;
             return ToBody(gen).TransformResult(gen, ResultOperation.Ignore);
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator gen) {
             return ToBody(gen).TransformRead(gen);
         }
     }

@@ -202,7 +202,7 @@ ensure
 end
 puts x
 puts 'End'
-");
+", 2, 0);
             }, @"
 Begin
 Raise
@@ -577,7 +577,7 @@ end
 bar
 baz
 bazz
-", @"");
+", @"", 1);
         }
 
         public void ExceptionArg1() {

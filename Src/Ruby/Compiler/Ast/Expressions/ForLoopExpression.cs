@@ -56,7 +56,7 @@ namespace IronRuby.Compiler.Ast {
             _list = list;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             Assert.NotNull(gen);
 
             MSA.Expression transformedBlock = _block.Transform(gen);

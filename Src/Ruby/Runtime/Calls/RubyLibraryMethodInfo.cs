@@ -102,7 +102,8 @@ namespace IronRuby.Runtime.Calls {
                 if (_notImplemented == 0) {
                     bool result = true;
                     foreach (var member in GetMembers()) {
-                        if (!member.IsDefined(typeof(RubyNotImplementedAttribute), false)) {
+                        var notImplemented = (RubyNotImplementedAttribute)Attribute.GetCustomAttribute(member, typeof(RubyNotImplementedAttribute), false);
+                        if (notImplemented == null || !notImplemented.AppliesHere) {
                             result = false;
                             break;
                         }

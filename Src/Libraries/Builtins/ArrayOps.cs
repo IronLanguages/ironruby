@@ -154,6 +154,17 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        // Array.new(nil) is a size that is not an Integer, not a missing array.
+        [RubyConstructor]
+        public static RubyArray/*!*/ CreateArray(RubyClass/*!*/ self, DynamicNull size) {
+            throw RubyExceptions.CreateImplicitConversionError("nil", "Integer");
+        }
+
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ Reinitialize(RubyArray/*!*/ self, DynamicNull size) {
+            throw RubyExceptions.CreateImplicitConversionError("nil", "Integer");
+        }
+
         [RubyConstructor]
         public static RubyArray/*!*/ CreateArray(RubyClass/*!*/ self, [DefaultProtocol]int size, object value) {
             CheckArraySize(size); 
@@ -259,14 +270,26 @@ namespace IronRuby.Builtins {
             RubyArray/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format,
             [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
+            RubyContext context = integerConversion.Context;
+            if (!format.Encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", format.Encoding.Name);
+            }
+
             MutableString buffer = null;
             if (options != null) {
-                object value;
-                if (options.TryGetValue(integerConversion.Context.CreateAsciiSymbol("buffer"), out value)) {
-                    buffer = value as MutableString;
+                foreach (var option in options) {
+                    var key = option.Key as RubySymbol;
+                    if (key == null || key.ToString() != "buffer") {
+                        throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(option.Key));
+                    }
+                    // buffer: nil is no buffer
+                    if (option.Value == null) {
+                        continue;
+                    }
+                    buffer = option.Value as MutableString;
                     if (buffer == null) {
                         throw RubyExceptions.CreateTypeError("buffer must be String, not {0}",
-                            integerConversion.Context.GetClassDisplayName(value));
+                            context.GetClassDisplayName(option.Value));
                     }
                     buffer.RequireNotFrozen();
                 }
@@ -521,9 +544,10 @@ namespace IronRuby.Builtins {
             int left = start, right = start + half, target = start;
             int leftEnd = start + half, rightEnd = start + length;
             while (left < leftEnd && right < rightEnd) {
-                // Take from the right only when it is strictly smaller, which keeps equal
-                // elements in their original order.
-                buffer[target++] = comparison(items[right], items[left]) < 0 ? items[right++] : items[left++];
+                // Take from the left unless the right is strictly smaller, which keeps equal
+                // elements in their original order. The earlier element is the receiver of
+                // the comparison, as in MRI: [1, "a"].sort asks 1 <=> "a", not "a" <=> 1.
+                buffer[target++] = comparison(items[left], items[right]) <= 0 ? items[left++] : items[right++];
             }
             while (left < leftEnd) {
                 buffer[target++] = items[left++];

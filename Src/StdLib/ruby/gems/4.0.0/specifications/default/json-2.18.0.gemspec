@@ -17,11 +17,24 @@ Gem::Specification.new do |s|
   s.metadata = { "ironruby_pinned".freeze => "true".freeze }
   s.files = [
     "lib/json.rb".freeze,
+    "lib/json/add/bigdecimal.rb".freeze,
+    "lib/json/add/complex.rb".freeze,
     "lib/json/add/core.rb".freeze,
-    "lib/json/add/rails.rb".freeze,
+    "lib/json/add/date.rb".freeze,
+    "lib/json/add/date_time.rb".freeze,
+    "lib/json/add/exception.rb".freeze,
+    "lib/json/add/ostruct.rb".freeze,
+    "lib/json/add/range.rb".freeze,
+    "lib/json/add/rational.rb".freeze,
+    "lib/json/add/regexp.rb".freeze,
+    "lib/json/add/set.rb".freeze,
+    "lib/json/add/string.rb".freeze,
+    "lib/json/add/struct.rb".freeze,
+    "lib/json/add/symbol.rb".freeze,
+    "lib/json/add/time.rb".freeze,
     "lib/json/common.rb".freeze,
-    "lib/json/editor.rb".freeze,
     "lib/json/ext.rb".freeze,
+    "lib/json/generic_object.rb".freeze,
     "lib/json/version.rb".freeze,
   ]
 end

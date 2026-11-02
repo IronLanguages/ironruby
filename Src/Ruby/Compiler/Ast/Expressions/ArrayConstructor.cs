@@ -39,7 +39,7 @@ namespace IronRuby.Compiler.Ast {
             _arguments = arguments ?? Arguments.Empty;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return _arguments.TransformToArray(gen);
         }
     }

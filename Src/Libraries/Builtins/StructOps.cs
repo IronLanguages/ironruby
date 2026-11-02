@@ -97,11 +97,20 @@ namespace IronRuby.Builtins {
         // Struct#initialize. The overwhelmingly common call - one positional value per member, the
         // last of them not a Hash that could be keywords, on a class not built with keyword_init:
         // true - stores the values right here, which is what keeps Point.new(1, 2) cheap. Every
-        // other call goes to Struct#__struct_initialize_slow__ in ruby4.rb with the arguments as
-        // one array, as a `def initialize(*args)' would have received them.
+        // other call goes to Struct#__struct_initialize_slow__ in ruby4.rb with the positional
+        // arguments as one array and the keywords, if any, as a Hash - as a
+        // `def initialize(*args, **kwargs)' would have received them. The keywords arrive here as
+        // a flagged Hash after the positional values; a Hash passed as a value is not flagged, and
+        // stays a positional argument (MRI's rb_struct_initialize_m tells them apart the same way).
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static object Initialize(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowPath,
+        public static object Initialize(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slowPath,
             RubyStruct/*!*/ self, params object[]/*!*/ items) {
+
+            // MRI's rb_struct_modify comes first: re-initializing a frozen struct is a FrozenError
+            // before any of the arguments is looked at. A struct being constructed is never frozen.
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenErrorFor(self, "Struct");
+            }
 
             int count = self.ItemCount;
             if (items.Length == count && (count == 0 || !(items[count - 1] is IronRuby.Builtins.Hash)) && !self.IsKeywordInit) {
@@ -109,25 +118,54 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
-            var site = slowPath.GetCallSite("__struct_initialize_slow__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
-            return site.Target(site, self, RubyOps.NormalizeRestArgument(new RubyArray(items), false));
+            int positional = items.Length;
+            Hash keywords = null;
+            if (positional > 0) {
+                var hash = items[positional - 1] as Hash;
+                if (hash != null && hash.IsKeywordArguments) {
+                    // a plain copy: the flag would make it the slow path's keywords again
+                    keywords = new Hash(hash);
+                    positional--;
+                }
+            }
+
+            // Without the prelude (the test harness runs the libraries alone) there is no slow path:
+            // store what was given, as the C# `def initialize(*args)' did.
+            if (!self.ImmediateClass.ResolveMethod("__struct_initialize_slow__", VisibilityContext.AllVisible).Found) {
+                self.SetValues(items);
+                return null;
+            }
+
+            var site = slowPath.GetCallSite("__struct_initialize_slow__", new RubyCallSignature(2, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, new RubyArray(items, 0, positional), keywords);
         }
 
         // The plain store, for __struct_initialize_slow__.
         [RubyMethod("__struct_initialize__", RubyMethodAttributes.PrivateInstance)]
         public static void Reinitialize(RubyStruct/*!*/ self, params object[]/*!*/ items) {
+            // re-initializing a frozen struct is a FrozenError, as in MRI
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenErrorFor(self, "Struct");
+            }
             self.SetValues(items);
         }
 
         // Copies data from one Struct instance into another:
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
-        public static RubyStruct/*!*/ InitializeCopy(RubyStruct/*!*/ self, [NotNull]RubyStruct/*!*/ source) {
-            // TODO: compare non-singleton classes?
-            if (self.ImmediateClass.GetNonSingletonClass() != source.ImmediateClass.GetNonSingletonClass()) {
-                throw RubyExceptions.CreateTypeError("wrong argument class");
+        public static RubyStruct/*!*/ InitializeCopy(RubyStruct/*!*/ self, object source) {
+            if (ReferenceEquals(self, source)) {
+                return self;
+            }
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenErrorFor(self, "Struct");
+            }
+            // MRI: anything but an instance of this very struct class is rejected with this message
+            var other = source as RubyStruct;
+            if (other == null || self.ImmediateClass.GetNonSingletonClass() != other.ImmediateClass.GetNonSingletonClass()) {
+                throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
             }
 
-            self.SetValues(source.Values);
+            self.SetValues(other.Values);
             return self;
         }
 
@@ -261,6 +299,10 @@ namespace IronRuby.Builtins {
                 }
 
                 if (handle == null) {
+                    // the recursion marker always names the class, an anonymous one as #<Class:0x...>
+                    if (anonymous) {
+                        result.Append(context.Inspect(context.GetClassOf(self)));
+                    }
                     return result.Append(":...>");
                 }
                 if (!anonymous) {
@@ -333,8 +375,9 @@ namespace IronRuby.Builtins {
             if (normalized >= 0 && normalized < itemCount) {
                 return normalized;
             }
-            // MRI reports the normalized index, but we'll report the original one
-            throw RubyExceptions.CreateIndexError("offset {0} too small for struct (size:{1})", index, itemCount);
+            // MRI reports the index as given, and says which way it is out.
+            throw RubyExceptions.CreateIndexError(
+                index < 0 ? "offset {0} too small for struct(size:{1})" : "offset {0} too large for struct(size:{1})", index, itemCount);
         }
     }
 }

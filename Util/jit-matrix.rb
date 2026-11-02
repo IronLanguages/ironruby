@@ -1301,14 +1301,14 @@ class Float
   alias_method :*, :__jit_matrix_fmul
 end
 
-# ---------------------------------------------------------------- 9. refinements (must come last)
+# ---------------------------------------------------------------- 9. refinements
 
 def sp_before_refine(n)
   return n + 1
 end
 
 puts
-puts '--- 9. a refinement appears (must come last: once any refinement exists the JIT stands down) ---'
+puts '--- 9. refinements: a body binds its operators and self-calls under the ones active where it was defined ---'
 warm { |i| sp_before_refine(i) }
 t('specialized before any refinement') { sp_before_refine(41) }
 module JitRefine
@@ -1319,17 +1319,74 @@ module JitRefine
   end
 end
 
+# defined after a refinement exists, but where none is active: specialized, and unrefined
+def sp_after_refine(n)
+  return n + 1
+end
+warm { |i| sp_after_refine(i) }
+t('defined after the refinement, where it is not used') { sp_after_refine(41) }
+
 # Module#using in a class body is active to the end of that body, and nowhere else.
 class JitRefinedUser
   using JitRefine
-  def sp_in_refined_scope(n)
+  def no_refined_plus(n)
     return n + 1
+  end
+
+  # the refinement has no #*: the operator is still the built-in one here
+  def sp_unrefined_op_in_refined_scope(n)
+    return n * 2
   end
 end
 jr = JitRefinedUser.new
-warm { |i| jr.sp_in_refined_scope(i) }
-t('a method defined where + is refined') { jr.sp_in_refined_scope(41) }
+warm { |i| jr.no_refined_plus(i) }
+t('a method defined where + is refined') { jr.no_refined_plus(41) }
+warm { |i| jr.sp_unrefined_op_in_refined_scope(i) }
+t('an operator the refinement does not have') { jr.sp_unrefined_op_in_refined_scope(21) }
 t('the one defined before still unrefined') { sp_before_refine(41) }
 warm { |i| sp_before_refine(i) }
 t('and stays unrefined when hot again') { sp_before_refine(41) }
+t('nor is the one defined after') { sp_after_refine(41) }
 
+# A method arriving in an active refinement after a body using its name was specialized.
+# (Integer#- stays replaced from section 8, so this one is about #*.)
+module JitRefineLater
+  LATER = refine(Integer) { def jit_later_unused; end }
+end
+class JitRefineLaterUser
+  using JitRefineLater
+  def sp_times_until_refined(n)
+    return n * 3
+  end
+end
+jl = JitRefineLaterUser.new
+warm { |i| jl.sp_times_until_refined(i) }
+t('times before the refinement has it') { jl.sp_times_until_refined(14) }
+JitRefineLater::LATER.send(:define_method, :*) { |o| "later(#{self}, #{o})" }
+t('times once the refinement has it') { jl.sp_times_until_refined(14) }
+warm { |i| jl.sp_times_until_refined(i) }
+t('and when hot again') { jl.sp_times_until_refined(14) }
+t('times elsewhere unrefined') { 14 * 3 }
+
+# A self-call whose name the active refinement supplies is the refinement's method.
+class JitSelfRefined
+  def sp_count(n)
+    return n if n <= 0
+    return sp_count(n + -1)
+  end
+end
+module JitSelfRefine
+  refine(JitSelfRefined) { def sp_count(n) = :refined_count }
+end
+class JitSelfRefined
+  using JitSelfRefine
+  def no_count_refined(n)
+    return n if n <= 0
+    return sp_count(n + -1)
+  end
+end
+js = JitSelfRefined.new
+warm { |i| js.sp_count(i % 5) }
+t('self-call defined before the refinement') { js.sp_count(3) }
+warm { |i| js.no_count_refined(i % 5) }
+t('a call of the refined name where it is used') { js.no_count_refined(2) }

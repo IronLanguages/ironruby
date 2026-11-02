@@ -112,7 +112,7 @@ namespace IronRuby.Runtime {
         public static double ConvertToDouble(RubyContext/*!*/ context, BigInteger/*!*/ bignum) {
             double result = ToDouble(bignum);
             if (Double.IsInfinity(result)) {
-                context.ReportWarning("Integer out of Float range");
+                context.ReportWarning("Integer out of Float range", true);
             }
             return result;
         }

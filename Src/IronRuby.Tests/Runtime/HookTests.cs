@@ -10,7 +10,6 @@ namespace IronRuby.Tests {
         /// made by define_method or alias, or reached through method_missing once the hook is undefined. A removed hook
         /// goes back to the default. The expected output is CRuby 4.0's.
         /// </summary>
-        [Options(Prism = true)]
         public void Hooks1() {
             TestOutput(@"
 $log = []
@@ -177,7 +176,6 @@ p $log; $log.clear
         /// So must IronRuby, after the same hooks were left out while nothing was tracing, and it goes back to leaving
         /// them out once the TracePoint is disabled.
         /// </summary>
-        [Options(Prism = true)]
         public void Hooks2() {
             TestOutput(@"
 # warm-up: the default hooks run untraced first
@@ -232,7 +230,6 @@ p events
         /// singleton_method_added, a superclass's singleton hook. A class whose method lookup cache is full keeps its
         /// answers too. The expected output is CRuby 4.0's.
         /// </summary>
-        [Options(Prism = true)]
         public void Hooks3() {
             TestOutput(@"
 $log = []
@@ -304,7 +301,6 @@ p $log; $log.clear
         /// folds the answer into a rule, and a hook's answer is kept (<see cref="Hooks3"/>). Both go stale with the
         /// method version. The expected output is CRuby 4.0's.
         /// </summary>
-        [Options(Prism = true)]
         public void MethodLookupCacheFull1() {
             TestOutput(@"
 H = Class.new
@@ -351,7 +347,6 @@ p s
         /// from eval'd code, const_set with a String and Struct.new reach no other place that would intern them. The
         /// expected output is CRuby 4.0's.
         /// </summary>
-        [Options(Prism = true)]
         public void Hooks4() {
             TestOutput(@"
 interned = -> s { Symbol.all_symbols.any? { |y| y.to_s == s } }

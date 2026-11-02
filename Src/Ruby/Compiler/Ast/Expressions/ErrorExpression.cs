@@ -30,7 +30,7 @@ namespace IronRuby.Compiler.Ast {
 
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             throw Assert.Unreachable;
         }
     }

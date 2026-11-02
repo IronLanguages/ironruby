@@ -93,6 +93,19 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
+        /// <summary>The declared names of the required keyword parameters, in order.</summary>
+        public string[]/*!*/ RequiredKeywordNames {
+            get {
+                var names = new System.Collections.Generic.List<string>();
+                foreach (var parameter in _parameters) {
+                    if (parameter.Kind == "keyreq") {
+                        names.Add(parameter.Name);
+                    }
+                }
+                return names.ToArray();
+            }
+        }
+
         /// <summary>The bounds on the positional arguments alone; -1 as the maximum means unbounded.</summary>
         public int MinPositionalCount {
             get { return _leadingCount + _postCount; }

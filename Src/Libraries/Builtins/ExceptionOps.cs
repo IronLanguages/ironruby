@@ -150,6 +150,12 @@ namespace IronRuby.Builtins {
             return RubyExceptionData.GetInstance(self).Backtrace = backtrace;
         }
 
+        [RubyMethod("set_backtrace", RubyMethodAttributes.PublicInstance)]
+        public static RubyArray SetBacktrace(Exception/*!*/ self, object backtrace) {
+            // anything but nil, a String or an Array of Strings
+            throw RubyExceptions.CreateTypeError("backtrace must be Array of String");
+        }
+
         /// <summary>
         /// MRI's Exception#exception: self when called with no argument or with self, otherwise a
         /// *clone* of self carrying the new message. Cloning rather than allocating a fresh
@@ -184,11 +190,15 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("to_s")]
-        public static object StringRepresentation(ConversionStorage<MutableString>/*!*/ tosConversion, Exception/*!*/ self) {
+        public static object StringRepresentation(ConversionStorage<MutableString>/*!*/ strTryCast, ConversionStorage<MutableString>/*!*/ tosConversion, Exception/*!*/ self) {
             object message = RubyExceptionData.GetInstance(self).Message;
-            // MRI applies String() to whatever was passed as the message, so
-            // `raise MyError, some_object` reports some_object.to_s.
-            return message is MutableString ? message : Protocols.ConvertToString(tosConversion, message);
+            if (message is MutableString) {
+                return message;
+            }
+            // MRI applies String() to whatever was passed as the message: #to_str when the
+            // object offers one, #to_s otherwise.
+            MutableString str = Protocols.TryCastToString(strTryCast, message);
+            return str ?? (object)Protocols.ConvertToString(tosConversion, message);
         }
 
         /// <summary>

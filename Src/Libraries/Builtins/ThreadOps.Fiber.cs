@@ -17,6 +17,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
+using System.Runtime.CompilerServices;
+using IronRuby.Runtime.Calls;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 
@@ -202,11 +204,188 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // The worker retains execution state, never its public Ruby Fiber handle. A registration
+        // attached to that handle signals abandonment when the handle becomes unreachable.
+        public sealed class FiberCore {
+            private readonly FiberMailbox _mailbox;
+            private readonly Thread _owner;
+            private readonly RubyContext _context;
+            private readonly WeakReference<object> _handle;
+            private readonly bool _root;
+            private readonly RubySymbol _currentKey;
+            private readonly RubySymbol _parentKey;
+            private RubyThreadInfo _threadInfo;
+            private volatile bool _completed;
+            // A resumer is part of an active call chain until its child hands control back.
+            private object _pinnedHandle;
+            private const int ReclaimKind = 7;
+            private static readonly FiberMessage _reclaimMessage = new FiberMessage(ReclaimKind, null);
+            public object State { get; set; }
+            public string Status { get; private set; }
+            public object Handle {
+                get {
+                    object handle;
+                    return _handle.TryGetTarget(out handle) ? handle : null;
+                }
+            }
+
+            internal FiberCore(RubyContext context, object handle, Thread owner, bool root) {
+                _mailbox = new FiberMailbox();
+                _owner = owner;
+                _context = context;
+                _handle = new WeakReference<object>(handle);
+                _root = root;
+                _currentKey = context.CreateAsciiSymbol("__ir_fiber_current__");
+                _parentKey = context.CreateAsciiSymbol("__ir_fiber_parent__");
+                Status = root ? "resumed" : "created";
+            }
+
+            public void Terminate() {
+                _completed = true;
+                Status = "terminated";
+            }
+
+            internal void RequestReclaim() {
+                if (!_root && !_completed) {
+                    _mailbox.Post(_reclaimMessage);
+                }
+            }
+
+            // Keep the temporary strong reference out of Run/Await's suspended CLR frames.
+            [MethodImpl(MethodImplOptions.NoInlining)]
+            private void Activate() {
+                object handle = Handle;
+                if (handle == null) {
+                    RubyUtils.BeginFiberReclamation();
+                }
+                _currentFiber = handle;
+                _currentFiberContext = _context;
+                _currentFiberState = State;
+                var info = _threadInfo ?? (_threadInfo = RubyThreadInfo.FromThread(Thread.CurrentThread));
+                info[_currentKey] = handle;
+                info.FiberExecution = this;
+                RubyUtils.SetFiberOwnerThread(_owner);
+                _mailbox.GetOwnerInfo(_owner).ActiveFiberThread = Thread.CurrentThread;
+            }
+
+            private void Deactivate() {
+                _currentFiber = null;
+                var info = _threadInfo ?? (_threadInfo = RubyThreadInfo.FromThread(Thread.CurrentThread));
+                info[_currentKey] = null;
+            }
+
+            // Catch only at the execution boundary, after all user frames have unwound.
+            // In particular, Ruby rescue Exception cannot intercept the reclaim signal.
+            public void Run(object state) {
+                try {
+                    RubyThreadInfo.FromThread(Thread.CurrentThread)[_parentKey] = null;
+                    Activate();
+                    var site = _context.GetOrCreateSendSite<Func<CallSite, object, object>>("__run__", RubyCallSignature.Simple(0));
+                    site.Target(site, state);
+                } catch (Exception) when (RubyUtils.IsReclaimingFiber) {
+                    // CLR cleanup may replace the signal with another exception. The entire
+                    // discarded stack is still being reclaimed; do not report that as Ruby code.
+                    Terminate();
+                    IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(Thread.CurrentThread);
+                } finally {
+                    RubyUtils.EndFiberReclamation();
+                }
+            }
+
+            public void Post(int kind, object payload) {
+                _mailbox.Post(new FiberMessage(kind, payload));
+            }
+
+            public FiberMessage Await() {
+                Deactivate();
+                return Take();
+            }
+
+            private FiberMessage Take() {
+                var message = (FiberMessage)_mailbox.Take();
+                if (message.Kind == ReclaimKind) {
+                    RubyUtils.BeginFiberReclamation();
+                }
+                Activate();
+                Status = "resumed";
+                return message;
+            }
+
+            // A transfer from a fiber that is itself resumed also gets control back: the target's
+            // end returns to the deepest fiber of the root's resume chain, which is this one.
+            public FiberMessage Switch(FiberCore target, int kind, object payload, bool resumed) {
+                if (kind == FiberMessage.ResumeKind || kind == FiberMessage.RaiseKind || kind == FiberMessage.KillKind ||
+                    (kind == FiberMessage.TransferKind && resumed)) {
+                    _pinnedHandle = Handle;
+                }
+                try {
+                    Status = "suspended";
+                    Deactivate();
+                    target.Post(kind, payload);
+                    return Take();
+                } finally {
+                    // Take restores the running handle before releasing this pin. Also drop it
+                    // when an interrupt unwinds the wait instead of delivering a message.
+                    _pinnedHandle = null;
+                }
+            }
+
+            public FiberMessage Yield(FiberCore target, RubyArray args) {
+                return Switch(target, FiberMessage.YieldKind, PackArguments(args), false);
+            }
+
+            private static object PackArguments(RubyArray args) {
+                return args.Count == 0 ? null : args.Count == 1 ? args[0] : args;
+            }
+
+            public sealed class FiberMessage {
+                // Shared with the private Fiber protocol in ruby4.rb.
+                public const int ResumeKind = 0, TransferKind = 1, YieldKind = 2,
+                    ReturnKind = 3, RaiseKind = 4, ErrorKind = 5, KillKind = 6;
+                public int Kind { get; }
+                public object Payload { get; }
+                public object Value {
+                    get {
+                        return Kind == ResumeKind || Kind == TransferKind
+                            ? PackArguments((RubyArray)Payload) : Payload;
+                    }
+                }
+
+                internal FiberMessage(int kind, object payload) {
+                    Kind = kind;
+                    Payload = payload;
+                }
+            }
+        }
+
+        private sealed class FiberRegistration {
+            internal readonly FiberCore Core;
+            internal FiberRegistration(FiberCore core) { Core = core; }
+            ~FiberRegistration() { Core.RequestReclaim(); }
+        }
+
+        private static readonly ConditionalWeakTable<object, FiberRegistration> _fiberHandles =
+            new ConditionalWeakTable<object, FiberRegistration>();
+
+        [RubyMethod("__fiber_core__", RubyMethodAttributes.PublicSingleton)]
+        public static FiberCore CreateFiberCore(RubyContext context, object self, object handle, Thread owner, bool root) {
+            var core = new FiberCore(context, handle, owner, root);
+            _fiberHandles.Add(handle, new FiberRegistration(core));
+            return core;
+        }
+
+        [RubyMethod("__fiber_state__", RubyMethodAttributes.PublicSingleton)]
+        public static object GetCurrentFiberState(RubyContext context, object self) {
+            return ReferenceEquals(_currentFiberContext, context) ? _currentFiberState : null;
+        }
+
         // Fiber.current of this CLR thread (a fiber never leaves the thread it runs on), for the
         // context it belongs to. The same thing is kept in the thread's locals as :__ir_fiber_current__
         // for the C# code that looks there; this copy is what makes Fiber.current cheap.
         [ThreadStatic]
         private static object _currentFiber;
+        [ThreadStatic]
+        private static object _currentFiberState;
         [ThreadStatic]
         private static RubyContext _currentFiberContext;
 
@@ -276,7 +455,9 @@ namespace IronRuby.Builtins {
             RubyThreadInfo info = RubyThreadInfo.FromThread(current);
             info.ClearLocals();
             _currentFiber = null;
+            _currentFiberState = null;
             _currentFiberContext = null;
+            info.FiberExecution = null;
 
             FiberWorker worker = _fiberWorker ?? (_fiberWorker = new FiberWorker(current));
             lock (_idleFiberWorkers) {
@@ -342,6 +523,14 @@ namespace IronRuby.Builtins {
             RubyThreadInfo.FromThread(Thread.CurrentThread)[context.CreateAsciiSymbol("__ir_fiber_current__")] = fiber;
             _currentFiber = fiber;
             _currentFiberContext = context;
+            FiberRegistration registration;
+            if (fiber != null && _fiberHandles.TryGetValue(fiber, out registration)) {
+                _currentFiberState = registration.Core.State;
+                RubyThreadInfo.FromThread(Thread.CurrentThread).FiberExecution = registration.Core;
+            } else {
+                _currentFiberState = null;
+                RubyThreadInfo.FromThread(Thread.CurrentThread).FiberExecution = null;
+            }
             return fiber;
         }
 

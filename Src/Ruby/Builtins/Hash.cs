@@ -54,6 +54,11 @@ namespace IronRuby.Builtins {
 
         private bool _comparesByIdentity;
 
+        // MRI's RHASH_ITER_LEV: how many Hash#each-style iterations are running over this hash.
+        // Entries may be deleted and values replaced from inside an iteration, but adding a key
+        // is a RuntimeError, because the table could be rebuilt under the iterator.
+        private int _iterationLevel;
+
         /// <summary>
         /// True if Hash#compare_by_identity has been called on this hash.
         /// </summary>
@@ -77,6 +82,9 @@ namespace IronRuby.Builtins {
             if (_comparesByIdentity == value) {
                 return this;
             }
+            if (IsIterating) {
+                throw RubyExceptions.CreateRuntimeError("compare_by_identity during iteration");
+            }
             IEqualityComparer<object> comparer = value ? IdentityComparer.Instance : defaultComparer;
             if (comparer == null) {
                 throw new NotSupportedException("Hash#compare_by_identity is not available: no comparer to switch back to");
@@ -97,7 +105,10 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// #equal? semantics without ever dispatching to Ruby. Immediate values still compare by
-        /// value, matching CRuby, where they have no separate identity.
+        /// value, matching CRuby, where they have no separate identity: every Integer that is a
+        /// Fixnum there (62 bits) and every Float that is a flonum there, however IronRuby boxes
+        /// them. An Integer or Float outside those ranges is a heap object in CRuby and so has an
+        /// identity of its own; here too it compares by reference.
         /// </summary>
         internal sealed class IdentityComparer : IEqualityComparer<object> {
             internal static readonly IdentityComparer/*!*/ Instance = new IdentityComparer();
@@ -105,25 +116,67 @@ namespace IronRuby.Builtins {
             private IdentityComparer() {
             }
 
+            private static readonly System.Numerics.BigInteger FixnumMax = System.Numerics.BigInteger.Pow(2, 62) - 1;
+            private static readonly System.Numerics.BigInteger FixnumMin = -System.Numerics.BigInteger.Pow(2, 62);
+
+            private static bool TryGetImmediateInteger(object obj, out System.Numerics.BigInteger value) {
+                if (obj is int) {
+                    value = (int)obj;
+                    return true;
+                }
+                if (obj is long) {
+                    value = (long)obj;
+                } else if (obj is System.Numerics.BigInteger) {
+                    value = (System.Numerics.BigInteger)obj;
+                } else {
+                    value = default(System.Numerics.BigInteger);
+                    return false;
+                }
+                return value >= FixnumMin && value <= FixnumMax;
+            }
+
+            // CRuby's flonum: a double whose exponent lies in a middle range (and +0.0); NaN,
+            // the infinities, -0.0 and very large or small magnitudes live on the heap.
+            internal static bool IsFlonum(double d) {
+                long bits = BitConverter.DoubleToInt64Bits(d);
+                if (bits == 0) {
+                    return true;
+                }
+                if (bits == 0x3000000000000000L) {
+                    return false;
+                }
+                int top = (int)((bits >> 60) & 0x7);
+                return top == 3 || top == 4;
+            }
+
             bool IEqualityComparer<object>.Equals(object x, object y) {
                 if (ReferenceEquals(x, y)) {
                     return true;
                 }
-                if (x is int) {
-                    return y is int && (int)x == (int)y;
+                System.Numerics.BigInteger a, b;
+                if (TryGetImmediateInteger(x, out a)) {
+                    return TryGetImmediateInteger(y, out b) && a == b;
                 }
                 if (x is bool) {
                     return y is bool && (bool)x == (bool)y;
+                }
+                if (x is double) {
+                    double dx = (double)x;
+                    return y is double && IsFlonum(dx) && BitConverter.DoubleToInt64Bits(dx) == BitConverter.DoubleToInt64Bits((double)y);
                 }
                 return false;
             }
 
             int IEqualityComparer<object>.GetHashCode(object obj) {
-                if (obj is int) {
-                    return (int)obj;
+                System.Numerics.BigInteger value;
+                if (TryGetImmediateInteger(obj, out value)) {
+                    return value.GetHashCode();
                 }
                 if (obj is bool) {
                     return (bool)obj ? 1 : 0;
+                }
+                if (obj is double && IsFlonum((double)obj)) {
+                    return ((double)obj).GetHashCode();
                 }
                 return RuntimeHelpers.GetHashCode(obj);
             }
@@ -235,6 +288,19 @@ namespace IronRuby.Builtins {
 
         private void Mutate() {
             RequireNotFrozen();
+        }
+
+        public bool IsIterating {
+            get { return _iterationLevel > 0; }
+        }
+
+        /// <summary>Marks the start of an iteration; pair with <see cref="EndIteration"/> in a finally.</summary>
+        public void BeginIteration() {
+            _iterationLevel++;
+        }
+
+        public void EndIteration() {
+            _iterationLevel--;
         }
 
         public bool IsTainted {

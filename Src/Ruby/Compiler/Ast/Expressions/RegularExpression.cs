@@ -56,7 +56,7 @@ namespace IronRuby.Compiler.Ast {
             _options = options;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return StringConstructor.TransformConcatentation(gen, _pattern, this);
         }
 
@@ -109,7 +109,7 @@ namespace IronRuby.Compiler.Ast {
             _regex = regex;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return Methods.MatchLastInputLine.OpCall(_regex.TransformRead(gen), gen.CurrentScopeVariable);
         }
     }

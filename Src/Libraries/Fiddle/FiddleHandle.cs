@@ -226,6 +226,13 @@ namespace IronRuby.StandardLibrary.Fiddle {
 
             #region Symbols
 
+            /// <summary>
+            /// The address of an export, or zero.  On Windows a name is tried as CRuby's fiddle
+            /// tries it (fiddle_handle_find_func): as given, then with the ANSI "A" suffix - the
+            /// Win32 API exports FillConsoleOutputCharacterA and ...W but no
+            /// FillConsoleOutputCharacter, which reline asks for - then with the stdcall
+            /// decorations "@0" to "@252", plain and after the "A".
+            /// </summary>
             private IntPtr Lookup(string/*!*/ name) {
                 if (!_open) {
                     throw new DLError("closed handle");
@@ -233,15 +240,30 @@ namespace IronRuby.StandardLibrary.Fiddle {
                 if (_next) {
                     throw new DLError("RTLD_NEXT is not supported on this platform");
                 }
-                IntPtr address;
-                try {
-                    if (!NativeLibrary.TryGetExport(_address, name, out address)) {
-                        return IntPtr.Zero;
+                IntPtr address = Export(name);
+                if (address != IntPtr.Zero || !OperatingSystem.IsWindows()) {
+                    return address;
+                }
+                if ((address = Export(name + "A")) != IntPtr.Zero) {
+                    return address;
+                }
+                foreach (string stem in new[] { name, name + "A" }) {
+                    for (int i = 0; i < 256; i += 4) {
+                        if ((address = Export(stem + "@" + i.ToString(System.Globalization.CultureInfo.InvariantCulture))) != IntPtr.Zero) {
+                            return address;
+                        }
                     }
+                }
+                return IntPtr.Zero;
+            }
+
+            private IntPtr Export(string/*!*/ name) {
+                try {
+                    IntPtr address;
+                    return NativeLibrary.TryGetExport(_address, name, out address) ? address : IntPtr.Zero;
                 } catch (Exception) {
                     return IntPtr.Zero;
                 }
-                return address;
             }
 
             [RubyMethod("sym")]

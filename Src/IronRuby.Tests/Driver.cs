@@ -49,14 +49,6 @@ namespace IronRuby.Tests {
         public bool PrivateBinding { get; set; }
         public bool NoRuntime { get; set; }
         public Type Pal { get; set; }
-
-        /// <summary>
-        /// Parse with the prism front end, which ir and irubyc always use, instead of the legacy
-        /// parser the rest of the suite runs on. The legacy grammar stops at Ruby 1.9: it cannot
-        /// parse keyword parameters, so a test that loads today's standard library (psych 5.3.1,
-        /// ruby4.rb) needs this. IR_USE_PRISM=1 runs every test this way.
-        /// </summary>
-        public bool Prism { get; set; }
     }
 
     public class TestRuntime {
@@ -75,11 +67,8 @@ namespace IronRuby.Tests {
             _driver = driver;
             _testName = testCase.Name;
 
-            // The front end is a process-wide static, so every test sets it, back to the legacy
-            // parser as well, rather than inherit whatever the previous test chose.
-            RubyContext.AlternativeParser = (Driver.UsePrism || testCase.Options != null && testCase.Options.Prism)
-                ? IronRuby.Prism.PrismAstBridge.Parse
-                : RubyContext.LegacyParser;
+            // The front end is a process-wide static; every test parses with prism, as ir does.
+            RubyContext.AlternativeParser = IronRuby.Prism.PrismAstBridge.Parse;
 
             if (testCase.Options.NoRuntime) {
                 return;
@@ -152,14 +141,12 @@ namespace IronRuby.Tests {
         private static bool _verbose;
         private static bool _isDebug;
         private static bool _saveToAssemblies;
-        private static bool _runTokenizerDriver;
         private static bool _displayList;
         private static bool _partialTrust;
         private static bool _noAdaptiveCompilation;
         private static int _compilationThreshold;
         private static bool _runPython = true;
         private static bool? _isPythonConfigured;
-        private static bool _usePrism;
         private readonly string/*!*/ _baseDirectory;
 
         public Driver(string/*!*/ baseDirectory) {
@@ -230,14 +217,6 @@ namespace IronRuby.Tests {
             }
         }
 
-        /// <summary>
-        /// IR_USE_PRISM=1: every test parses with the prism front end, not only those marked
-        /// [Options(Prism = true)].
-        /// </summary>
-        public static bool UsePrism {
-            get { return _usePrism; }
-        }
-
         public string BaseDirectory {
             get { return _baseDirectory; }
         }
@@ -255,9 +234,6 @@ namespace IronRuby.Tests {
                 Console.WriteLine("Disable Python interop tests : /py-");
                 Console.WriteLine("Run Specific Tests           : [/exclude] [test_to_run ...]");
                 Console.WriteLine("List Tests                   : /list");
-                Console.WriteLine("Tokenizer baseline           : /tokenizer <target-dir> <sources-file>");
-                Console.WriteLine("Productions dump             : /tokenizer /prod <target-dir> <sources-file>");
-                Console.WriteLine("Benchmark                    : /tokenizer /bm <target-dir> <sources-file>");
             }
 
             if (args.Contains("/list")) {
@@ -330,22 +306,12 @@ namespace IronRuby.Tests {
                 args.Remove("/exclude");
             }
 
-            if (args.Contains("/tokenizer")) {
-                args.Remove("/tokenizer");
-                _runTokenizerDriver = true;
-            }
-
             return true;
         }
 
         public static void Main(string[]/*!*/ arguments) {
             List<string> args = new List<string>(arguments);
             string culture = Environment.GetEnvironmentVariable("IR_CULTURE");
-
-            if (Environment.GetEnvironmentVariable("IR_USE_PRISM") == "1") {
-                Console.WriteLine("Using prism front end");
-                _usePrism = true;
-            }
 
             if (args.Contains("/partial")) {
                 // partial trust requires CAS + secondary AppDomains, neither exists on .NET Core
@@ -385,25 +351,16 @@ namespace IronRuby.Tests {
 
             int status = 0;
 
-            if (_runTokenizerDriver) {
-                TokenizerTestDriver driver = new TokenizerTestDriver((RubyContext)HostingHelpers.GetLanguageContext(Ruby.CreateEngine()));
-                if (!driver.ParseArgs(args)) {
-                    return -3;
-                }
+            InitializeDomain();
+            Driver driver = new Driver(baseDirectory);
 
-                status = driver.RunTests();
+            if (Manual.TestCode.Trim().Length == 0) {
+                status = driver.RunUnitTests(args);
             } else {
-                InitializeDomain();
-                Driver driver = new Driver(baseDirectory);
-                
-                if (Manual.TestCode.Trim().Length == 0) {
-                    status = driver.RunUnitTests(args);
-                } else {
-                    driver.RunManualTest();
+                driver.RunManualTest();
 
-                    // for case the test is forgotten, this would fail the test suite:
-                    status = -2;
-                }
+                // for case the test is forgotten, this would fail the test suite:
+                status = -2;
             }
 
             // return failure on bad filter (any real failures throw)
@@ -433,7 +390,9 @@ namespace IronRuby.Tests {
             
             if (Manual.ParseOnly) {
                 _testRuntime = new TestRuntime(this, new TestCase { Name = "<manual>" });
-                Tests.GetRubyTokens(_testRuntime.Context, new LoggingErrorSink(false), Manual.TestCode, !Manual.DumpReductions, Manual.DumpReductions);                
+                var log = new LoggingErrorSink(false);
+                RubyContext.EffectiveParser(_testRuntime.Context.CreateSnippet(Manual.TestCode, SourceCodeKind.File), new IronRuby.Compiler.RubyCompilerOptions(), log);
+                Console.WriteLine("{0} error(s), {1} warning(s)", log.ErrorCount, log.WarningCount);
             } else {
                 try {
 

@@ -21,6 +21,23 @@ using System.Text;
 
 namespace IronRuby.Tests {
     public partial class Tests {
+        /// <summary>
+        /// A binstub that Rails or RubyGems writes on IronRuby starts "#!/usr/bin/env ir.exe"
+        /// (from ruby_install_name), which has no "ruby" in it and would otherwise make the
+        /// command line and prism look for the program further down.
+        /// </summary>
+        public void ShebangNamesIronRuby1() {
+            Assert(RubyUtils.ShebangNamesIronRuby("#!/usr/bin/env ir.exe\"\nAPP_PATH = 1\n"));
+            Assert(RubyUtils.ShebangNamesIronRuby("#!/usr/bin/env ir\r\nputs 1"));
+            Assert(RubyUtils.ShebangNamesIronRuby("#!C:\\IronRuby\\ir.cmd"));
+            Assert(RubyUtils.ShebangNamesIronRuby("#!\"C:/Program Files/IronRuby/IR.EXE\" -w"));
+            Assert(!RubyUtils.ShebangNamesIronRuby("#!/bin/sh\nexec ruby -x \"$0\""));
+            Assert(!RubyUtils.ShebangNamesIronRuby("#!/usr/bin/env irb"));
+            Assert(!RubyUtils.ShebangNamesIronRuby("#!/opt/dir/python"));
+            Assert(!RubyUtils.ShebangNamesIronRuby("puts 1 #!ir"));
+            Assert(!RubyUtils.ShebangNamesIronRuby("# !ir"));
+        }
+
         public void NameMangling1() {
             Assert(RubyUtils.TryUnmangleName("stack") == "Stack");
             Assert(RubyUtils.TryUnmangleName("this_is_my_long_name") == "ThisIsMyLongName");

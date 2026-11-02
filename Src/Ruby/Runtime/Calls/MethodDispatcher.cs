@@ -124,7 +124,31 @@ namespace IronRuby.Runtime.Calls {
             return dispatcher;
         }
 
+        /// <summary>
+        /// A dispatcher for a call a refinement could change, made from the scope of a method or of a block written
+        /// directly in one (<paramref name="inBlock"/>): it also tests that the method's refinement record holds
+        /// <paramref name="refinements"/>, as the rule would (see RubyCallAction.BindPrecompiled).
+        /// </summary>
+        internal static MethodDispatcher CreateRefinedRubyObjectDispatcher(Type/*!*/ func, Delegate/*!*/ method, int mandatoryParamCount,
+            bool hasBlock, int version, RefinementActivation/*!*/ refinements, bool inBlock) {
+
+            var dispatcher = (MethodDispatcher)CreateDispatcher(func, mandatoryParamCount, true, hasBlock, version,
+                () => hasBlock ? (MethodDispatcher)new RefinedRubyObjectMethodDispatcherWithScopeAndBlock() : new RefinedRubyObjectMethodDispatcherWithScope(),
+                hasBlock ? RefinedRubyObjectMethodDispatchersWithScopeAndBlock : RefinedRubyObjectMethodDispatchersWithScope
+            );
+
+            if (dispatcher != null) {
+                dispatcher.Initialize(method, version);
+                dispatcher.InitializeRefinements(refinements, inBlock);
+            }
+            return dispatcher;
+        }
+
         internal abstract void Initialize(Delegate/*!*/ method, int version);
+
+        internal virtual void InitializeRefinements(RefinementActivation/*!*/ refinements, bool inBlock) {
+            throw Assert.Unreachable;
+        }
 
         /// <summary>
         /// Points the dispatcher at the compiled form of the body it was made for (see
@@ -147,6 +171,41 @@ namespace IronRuby.Runtime.Calls {
             if (method is TRubyFunc typed) {
                 Method = typed;
             }
+        }
+    }
+
+    /// <summary>
+    /// The base of the dispatchers of a call a refinement could change (see CreateRefinedRubyObjectDispatcher). The scope of a
+    /// method has the refinements its `def' recorded, and so does that of a block written directly in one while no refine
+    /// block is running (RubyCallAction.MakeRefinementGuard tests the same in a rule).
+    /// </summary>
+    public abstract class RefinedMethodDispatcher<TRubyFunc> : MethodDispatcher<TRubyFunc> {
+        private RefinementActivation _refinements;
+        private bool _inBlock;
+
+        internal override void InitializeRefinements(RefinementActivation/*!*/ refinements, bool inBlock) {
+            Assert.NotNull(refinements);
+            _refinements = refinements;
+            _inBlock = inBlock;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool IsCurrentFor(object self, object scope) {
+            return IsCurrentFor(self) && HasRefinements(scope);
+        }
+
+        private bool HasRefinements(object scope) {
+            RubyMethodScope methodScope;
+            if (_inBlock) {
+                var blockScope = scope as RubyBlockScope;
+                if (blockScope == null || RubyOps.RefineBlocksRunning != 0) {
+                    return false;
+                }
+                methodScope = blockScope.Parent as RubyMethodScope;
+            } else {
+                methodScope = scope as RubyMethodScope;
+            }
+            return methodScope != null && ReferenceEquals(methodScope.DefinitionRefinementsValue, _refinements);
         }
     }
 

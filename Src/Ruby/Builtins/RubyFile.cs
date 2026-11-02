@@ -44,6 +44,7 @@ namespace IronRuby.Builtins {
         }
 
         private const int ENXIO = 6;
+        private const int HResultInvalidName = unchecked((int)0x8007007B);   // HRESULT of ERROR_INVALID_NAME
 
         public static Stream/*!*/ OpenFileStream(RubyContext/*!*/ context, string/*!*/ path, IOMode mode) {
             ContractUtils.RequiresNotNull(path, "path");
@@ -86,7 +87,19 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateENOENT(String.Format("No such file or directory - {0}", path));
 #if FEATURE_FILESYSTEM
                 } catch (DirectoryNotFoundException e) {
-                    throw RubyExceptions.CreateENOENT(e.Message, e);
+                    // The CLR says this for a missing directory on the way to the file and for a
+                    // file standing where a directory should be alike; MRI names the path, and
+                    // tells the two apart: ENOENT, and ENOTDIR (which is what a CLR
+                    // DirectoryNotFoundException surfaces as in Ruby, so it is rethrown as one).
+                    for (string parent = System.IO.Path.GetDirectoryName(path); !String.IsNullOrEmpty(parent); parent = System.IO.Path.GetDirectoryName(parent)) {
+                        if (File.Exists(parent)) {
+                            throw new DirectoryNotFoundException(String.Format("Not a directory - {0}", path), e);
+                        }
+                        if (Directory.Exists(parent)) {
+                            break;
+                        }
+                    }
+                    throw RubyExceptions.CreateENOENT(e, "No such file or directory - {0}", path);
                 } catch (PathTooLongException e) {
                     throw RubyExceptions.CreateENOENT(e.Message, e);
 #endif
@@ -100,6 +113,12 @@ namespace IronRuby.Builtins {
                     // a bare IOException would have surfaced as IOError.
                     if (e.HResult == ENXIO && System.IO.Path.DirectorySeparatorChar == '/') {
                         throw RubyExceptions.CreateENXIO(path);
+                    }
+                    // Windows: a name with a character no file name may hold (<, |, ? ...) is
+                    // ERROR_INVALID_NAME, which MRI raises as Errno::EINVAL. method_source opens the
+                    // path of a method defined in "<internal:kernel>" and expects a SystemCallError.
+                    if (e.HResult == HResultInvalidName) {
+                        throw RubyExceptions.CreateEINVAL(e, "{0}", path);
                     }
                     throw;
                 } catch (UnauthorizedAccessException) {
