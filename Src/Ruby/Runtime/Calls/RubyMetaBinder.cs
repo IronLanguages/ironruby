@@ -71,8 +71,7 @@ namespace IronRuby.Runtime.Calls {
             if (argArray != null) {
                 firstArg = argArray.GetArgument(0);
             } else {
-                // A site whose library-call dispatcher has run out (see LibraryDispatcher) is hot: it gets a rule.
-                object precompiled = BindPrecompiled(delegateType, args, !LibraryDispatcher.IsExhaustedDispatcher(site.Target));
+                object precompiled = BindPrecompiled(site, delegateType, args);
                 if (precompiled != null) {
                     result = (T)precompiled;
                     CacheTarget(result);
@@ -107,7 +106,7 @@ namespace IronRuby.Runtime.Calls {
                 return result;
             }
 
-            result = this.LightBind<T>(args, context.CompilationThreshold);
+            result = this.LightBind<T>(args, LibraryDispatcher.GetRuleCompilationThreshold(site, context));
             CacheTarget(result);
             return result;
         }
@@ -115,8 +114,8 @@ namespace IronRuby.Runtime.Calls {
         /// <summary>
         /// Returns a precompiled rule delegate or null, if not available for the given delegate type and arguments.
         /// </summary>
-        /// <param name="allowLibraryDispatch">Whether the first calls of a library method may go through a <see cref="LibraryDispatcher"/>.</param>
-        internal virtual object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args, bool allowLibraryDispatch) {
+        /// <param name="site">The site bound; the first calls a site makes of a library method may go through a <see cref="LibraryDispatcher"/>.</param>
+        internal virtual object BindPrecompiled(CallSite/*!*/ site, Type/*!*/ delegateType, object[]/*!*/ args) {
             return null;
         } 
 

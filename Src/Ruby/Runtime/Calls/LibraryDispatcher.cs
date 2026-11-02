@@ -697,16 +697,106 @@ namespace IronRuby.Runtime.Calls {
     /// A precompiled dispatcher for the first calls of a library method from a call site - a site that may well never be called again,
     /// as most of the prelude's are not. It calls the method through a <see cref="LibraryCallPlan"/>, on the receiver test of a rule (the
     /// class version, see <see cref="MetaObjectBuilder.AddTargetTypeTest"/>) and the overload resolver's choice made again for each call.
-    /// After <see cref="Budget"/> calls it hands the site back to the binder, which then builds the rule a site that is hot should have.
+    /// Once the site has made as many calls through dispatchers as the interpreter runs a rule for before it compiles it (see
+    /// <see cref="SiteBudget"/>), it is handed back to the binder for good, which then builds the rules a site that is hot should have.
+    /// The dispatcher stands in for the interpreted rule, and does what that rule does beyond the call: it saves the interpreted frames to
+    /// an exception that passes it (see <see cref="SaveInterpretedFrames"/>).
     /// </summary>
     public abstract partial class LibraryDispatcher : MemberDispatcher {
         /// <summary>
-        /// The calls a site makes through the dispatcher before it gets a rule: as many as the interpreter runs a rule for before
-        /// compiling it, so that a site that is called this often pays for the rule only where it also pays for its compilation.
+        /// The calls a site makes through dispatchers before it gets rules, if not -1: for tests.
         /// </summary>
-        internal const int DefaultBudget = 200;
+        internal static int BudgetOverride = -1;
 
-        internal static int Budget = DefaultBudget;
+        // Microsoft.Scripting.Interpreter.LightCompiler.DefaultCompilationThreshold, which a negative threshold stands for:
+        private const int DefaultCompilationThreshold = 32;
+
+        /// <summary>
+        /// The calls a site can still make through dispatchers. The budget is the site's rather than a dispatcher's: a site that sees
+        /// receivers of several classes gets a dispatcher for each, and would otherwise get fresh ones for as long as it runs - a
+        /// dispatcher drops out of the site's cache once it is spent, and the next call of its class finds none to tell it the site
+        /// is hot. A dispatcher another site finds in the binder's cache counts that site's calls here too, which only makes the
+        /// site that made it hot sooner.
+        /// </summary>
+        /// <remarks>
+        /// A site gets as many calls as the interpreter runs the site's rule for before it compiles it (RubyContext.CompilationThreshold
+        /// when the site is first bound: 200 while the core prelude loads, 32 after it): the calls a rule would have made interpreted,
+        /// which is all a dispatcher stands in for. So a site called this often pays for a rule only where it also pays for compiling
+        /// it, and none where the rule would have been compiled right away (-X:NoAdaptiveCompilation, a threshold of 0 or 1).
+        /// </remarks>
+        internal sealed class SiteBudget {
+            internal int Remaining;
+
+            internal SiteBudget(int remaining) {
+                Remaining = remaining;
+            }
+        }
+
+        private static readonly ConditionalWeakTable<CallSite, SiteBudget>/*!*/ _siteBudgets = new ConditionalWeakTable<CallSite, SiteBudget>();
+
+        /// <summary>
+        /// Whether the site may still make calls through dispatchers.
+        /// </summary>
+        internal static bool MayDispatch(CallSite/*!*/ site, RubyContext/*!*/ context) {
+            SiteBudget budget;
+            return _siteBudgets.TryGetValue(site, out budget) ? budget.Remaining > 0 : GetInitialBudget(context) > 0;
+        }
+
+        /// <summary>
+        /// The budget of a site that may still make calls through dispatchers (see <see cref="MayDispatch"/>), for a dispatcher made for it.
+        /// </summary>
+        private static SiteBudget/*!*/ GetSiteBudget(CallSite/*!*/ site, RubyContext/*!*/ context) {
+            SiteBudget budget;
+            if (!_siteBudgets.TryGetValue(site, out budget)) {
+                int calls = GetInitialBudget(context);
+                budget = _siteBudgets.GetValue(site, _ => new SiteBudget(calls));
+            }
+            return budget;
+        }
+
+        private static int GetInitialBudget(RubyContext/*!*/ context) {
+            return (BudgetOverride >= 0) ? BudgetOverride : GetInterpretedRuleCalls(context);
+        }
+
+        /// <summary>
+        /// The compilation threshold of a rule bound for the site: once a site has spent its budget on dispatchers, it has made the
+        /// calls the rule would have run interpreted, and the rule is compiled after the fewest the interpreter allows (in the
+        /// background, as any rule) - as it would have been by now. The rule's frames then are what they would have been too: an
+        /// interpreted rule has an interpreter frame of its own, which shows in the CLR stack a backtrace is made of.
+        /// </summary>
+        internal static int GetRuleCompilationThreshold(CallSite/*!*/ site, RubyContext/*!*/ context) {
+            SiteBudget budget;
+            return (_siteBudgets.TryGetValue(site, out budget) && budget.Remaining <= 0) ? MinAsyncCompilationThreshold : context.CompilationThreshold;
+        }
+
+        // the lowest threshold the interpreter compiles a lambda with in the background rather than before it runs it the first time:
+        private const int MinAsyncCompilationThreshold = 2;
+
+        private static int GetInterpretedRuleCalls(RubyContext/*!*/ context) {
+            if (context.Options.NoAdaptiveCompilation) {
+                return 0;
+            }
+            int threshold = context.CompilationThreshold;
+            if (threshold < 0) {
+                return DefaultCompilationThreshold;
+            }
+            // the interpreter compiles a lambda of threshold 0 or 1 before it runs it (Interpreter.CompileSynchronously):
+            return (threshold <= 1) ? 0 : threshold;
+        }
+
+        /// <summary>
+        /// What the interpreter does for an exception that leaves an interpreted rule (Interpreter.HandleException): it saves the
+        /// interpreted frames - the rule's and its callers' - to the exception, unless it has some already. A backtrace is made of
+        /// them (RubyStackTraceBuilder) along with the CLR frames the exception passes, which are not the interpreter's when the
+        /// methods in between are compiled; without them, the frames of the interpreted callers above would go missing. The rule's
+        /// own frame is no Ruby frame, and this dispatcher has no Interpreter.Run frame to stand for it.
+        /// </summary>
+        private static void SaveInterpretedFrames(Exception/*!*/ exception) {
+            var frame = InterpretedFrame.CurrentFrame.Value;
+            if (frame != null && InterpretedFrame.GetExceptionStackTrace(exception) == null) {
+                exception.SetData(typeof(InterpretedFrameInfo), new List<InterpretedFrameInfo>(frame.GetStackTraceDebugInfo()).ToArray());
+            }
+        }
 
         private RubyContext/*!*/ _context;
         private LibraryCallPlan/*!*/ _plan;
@@ -726,17 +816,7 @@ namespace IronRuby.Runtime.Calls {
         private bool _bool;
         private VersionHandle _classVersion;
 
-        private int _calls;
-
-        internal bool IsExhausted {
-            get { return _calls >= Budget; }
-        }
-
-        internal static bool IsExhaustedDispatcher(object rule) {
-            var d = rule as Delegate;
-            var dispatcher = (d != null) ? d.Target as LibraryDispatcher : null;
-            return dispatcher != null && dispatcher.IsExhausted;
-        }
+        private SiteBudget/*!*/ _budget;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool IsCurrent(object self) {
@@ -794,23 +874,33 @@ namespace IronRuby.Runtime.Calls {
 
         internal bool TryInvoke(RubyScope/*!*/ scope, object self, object blockArg, object[]/*!*/ args, out object result) {
             if (_construction != null) {
-                if (_calls >= Budget || !_construction.IsCurrent(args.Length)) {
+                if (_budget.Remaining <= 0 || !_construction.IsCurrent(args.Length)) {
                     result = null;
                     return false;
                 }
-                _calls++;
-                result = _construction.Invoke(args);
+                _budget.Remaining--;
+                try {
+                    result = _construction.Invoke(args);
+                } catch (Exception e) {
+                    SaveInterpretedFrames(e);
+                    throw;
+                }
                 return true;
             }
 
             Proc block = blockArg as Proc;
-            if (_calls >= Budget || blockArg != null && block == null || !Matches(block, args) || !_plan.Accepts(self, _hasBlock, block, args)) {
+            if (_budget.Remaining <= 0 || blockArg != null && block == null || !Matches(block, args) || !_plan.Accepts(self, _hasBlock, block, args)) {
                 result = null;
                 return false;
             }
 
-            _calls++;
-            result = _plan.Invoke(_context, scope, self, _hasBlock ? block : null, args);
+            _budget.Remaining--;
+            try {
+                result = _plan.Invoke(_context, scope, self, _hasBlock ? block : null, args);
+            } catch (Exception e) {
+                SaveInterpretedFrames(e);
+                throw;
+            }
             return true;
         }
 
@@ -820,13 +910,17 @@ namespace IronRuby.Runtime.Calls {
         /// <summary>
         /// Class#new of a Ruby class whose instances are plain Ruby objects, made without a rule (see RubyClass.TryGetObjectConstruction).
         /// </summary>
-        internal static object TryCreateConstruction(Type/*!*/ delegateType, RubyCallSignature signature, RubyClass/*!*/ cls,
+        internal static object TryCreateConstruction(CallSite/*!*/ site, Type/*!*/ delegateType, RubyCallSignature signature, RubyClass/*!*/ cls,
             RubyClass/*!*/ targetClass, int version, object[]/*!*/ args) {
 
             int first = signature.HasScope ? 2 : 1;
             int count = args.Length - first;
-            if (Budget <= 0 || signature.HasBlock || count < 0 || count > MaxLibraryArity || !MethodDispatcher.UntypedFuncs.Contains(delegateType) &&
+            if (signature.HasBlock || count < 0 || count > MaxLibraryArity || !MethodDispatcher.UntypedFuncs.Contains(delegateType) &&
                 !IsSiteDelegate(delegateType, signature)) {
+                return null;
+            }
+
+            if (!MayDispatch(site, cls.Context)) {
                 return null;
             }
 
@@ -836,6 +930,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             var dispatcher = CreateDispatcher(count, signature.HasScope, false);
+            dispatcher._budget = GetSiteBudget(site, cls.Context);
             dispatcher._context = cls.Context;
             dispatcher._construction = construction;
             dispatcher._isRubyObject = true;
@@ -870,15 +965,15 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <param name="plainClrTypeTest">The receiver is a CLR object whose rule would test its type and class version only (see RubyCallAction.HasPlainClrTypeTest).</param>
-        internal static object TryCreate(RubyCallAction/*!*/ binder, Type/*!*/ delegateType, RubyCallSignature signature, RubyLibraryMethodInfo/*!*/ method,
-            RubyClass/*!*/ targetClass, object target, bool plainClrTypeTest, int version, object[]/*!*/ args) {
+        internal static object TryCreate(CallSite/*!*/ site, RubyCallAction/*!*/ binder, Type/*!*/ delegateType, RubyCallSignature signature,
+            RubyLibraryMethodInfo/*!*/ method, RubyClass/*!*/ targetClass, object target, bool plainClrTypeTest, int version, object[]/*!*/ args) {
 
-            // The type test of the rule (see MetaObjectBuilder.AddTargetTypeTest) we can do without the rule: a Ruby object's,
-            // nil's and the plain one of a CLR object (not true/false, which are told apart by value):
-            if (Budget <= 0) {
+            if (!MayDispatch(site, targetClass.Context)) {
                 return null;
             }
 
+            // The type test of the rule (see MetaObjectBuilder.AddTargetTypeTest) we can do without the rule: a Ruby object's,
+            // nil's and the plain one of a CLR object, true's and false's (told apart by value):
             bool isRubyObject = target is IRubyObject;
             if (!isRubyObject && target != null && !(target is bool) && !plainClrTypeTest) {
                 return null;
@@ -941,6 +1036,7 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
+            dispatcher._budget = GetSiteBudget(site, targetClass.Context);
             dispatcher._context = targetClass.Context;
             dispatcher._plan = plan;
             dispatcher._hasBlock = signature.HasBlock;

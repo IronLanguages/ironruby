@@ -516,7 +516,7 @@ namespace IronRuby.Runtime.Conversions {
 
         // A conversion of a value that needs no conversion method - the commonest by far - goes without a rule: the dispatcher tests
         // what the rule would (the target's exact type, see BuildConversion) and converts the same way.
-        internal override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args, bool allowLibraryDispatch) {
+        internal override object BindPrecompiled(CallSite/*!*/ site, Type/*!*/ delegateType, object[]/*!*/ args) {
             TTargetType result;
             if (Context == null || args.Length != 1 || delegateType != typeof(Func<CallSite, object, TTargetType>) || ReturnType != typeof(TTargetType) ||
                 RubyCallAction.IsForeignObject(args[0]) || !TryConvertImplicitly(args[0], out result)) {

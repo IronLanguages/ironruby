@@ -107,7 +107,7 @@ namespace IronRuby.Runtime.Calls {
 
         #region Precompiled Rules
 
-        internal override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args, bool allowLibraryDispatch) {
+        internal override object BindPrecompiled(CallSite/*!*/ site, Type/*!*/ delegateType, object[]/*!*/ args) {
             // IsVariableCall only decides which error a call that finds no method raises; a dispatcher
             // is only made for a method that was found, and hands every other case back to the
             // binder. Leaving it out of the mask sent every bare `foo` to a rule of its own.
@@ -196,13 +196,13 @@ namespace IronRuby.Runtime.Calls {
             // Kernel#send is bound as the call it makes (DispatchIntrinsics.TryBuildSend), and so are calls while c_call
             // is traced (the rule reports the call). The same goes for Class#new of a plain Ruby class.
             var custom = method.Info as RubyCustomMethodInfo;
-            if (allowLibraryDispatch && custom != null && custom.IsInstanceConstructor && target is RubyClass && !passesKeywords) {
-                return LibraryDispatcher.TryCreateConstruction(delegateType, Signature, (RubyClass)target, targetClass, version, args);
+            if (custom != null && custom.IsInstanceConstructor && target is RubyClass && !passesKeywords) {
+                return LibraryDispatcher.TryCreateConstruction(site, delegateType, Signature, (RubyClass)target, targetClass, version, args);
             }
 
             var libraryMethod = method.Info as RubyLibraryMethodInfo;
-            if (allowLibraryDispatch && libraryMethod != null && !TracePoint.CCallTracing && !DispatchIntrinsics.IsSend(libraryMethod)) {
-                return LibraryDispatcher.TryCreate(this, delegateType, Signature, libraryMethod, targetClass, target, plainClrTypeTest, version, args);
+            if (libraryMethod != null && !TracePoint.CCallTracing && !DispatchIntrinsics.IsSend(libraryMethod)) {
+                return LibraryDispatcher.TryCreate(site, this, delegateType, Signature, libraryMethod, targetClass, target, plainClrTypeTest, version, args);
             }
 
             return null;
