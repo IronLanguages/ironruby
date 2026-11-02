@@ -922,6 +922,23 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal bool TryInvoke(RubyScope/*!*/ scope, object self, object blockArg, object[]/*!*/ args, out object result) {
+            if (_rubyCall != null) {
+                // the rule passes the block and the arguments as they are (RubyMethodInfo.BuildCallNoFlow):
+                Proc rubyBlock = blockArg as Proc;
+                if (_budget.Remaining <= 0 || blockArg != null && rubyBlock == null) {
+                    result = null;
+                    return false;
+                }
+                _budget.Remaining--;
+                try {
+                    result = _rubyCall.Invoke(self, rubyBlock, args);
+                } catch (Exception e) {
+                    SaveInterpretedFrames(e);
+                    throw;
+                }
+                return true;
+            }
+
             if (_construction != null) {
                 if (_budget.Remaining <= 0 || !_construction.IsCurrent(args.Length)) {
                     result = null;
@@ -955,6 +972,59 @@ namespace IronRuby.Runtime.Calls {
 
         // Class#new of the class that is the receiver, instead of a library method call:
         private ObjectConstruction _construction;
+
+        // a call of a Ruby method, instead of a library method call:
+        private RubyMethodCallPlan _rubyCall;
+
+        /// <summary>
+        /// A call of a Ruby method that the precompiled dispatchers of Ruby methods do not make (see <see cref="RubyMethodCallPlan"/>).
+        /// </summary>
+        /// <param name="clrTest">The test of a CLR object receiver (not nil, true or false) the rule would make.</param>
+        internal static object TryCreateRubyCall(CallSite/*!*/ site, Type/*!*/ delegateType, RubyCallSignature signature, RubyMethodInfo/*!*/ method,
+            RubyClass/*!*/ targetClass, object target, RubyCallAction.ClrReceiverTest clrTest, int version, object[]/*!*/ args) {
+
+            bool isRubyObject = target is IRubyObject;
+            if (!isRubyObject && target != null && !(target is bool) && clrTest == RubyCallAction.ClrReceiverTest.None ||
+                RubyCallAction.IsForeignObject(target)) {
+                return null;
+            }
+
+            int first = (signature.HasScope ? 2 : 1) + (signature.HasBlock ? 1 : 0);
+            int count = args.Length - first;
+            if (count < 0 || count > MaxLibraryArity || signature.HasBlock && args[first - 1] != null && !(args[first - 1] is Proc)) {
+                return null;
+            }
+
+            if (!MayDispatch(site, targetClass.Context)) {
+                return null;
+            }
+
+            var plan = RubyMethodCallPlan.TryCreate(method, count);
+            if (plan == null) {
+                return null;
+            }
+
+            bool isUntyped = MethodDispatcher.UntypedFuncs.Contains(delegateType);
+            LibraryDispatcher dispatcher;
+            if (isUntyped || IsSiteDelegate(delegateType, signature)) {
+                dispatcher = CreateDispatcher(count, signature.HasScope, signature.HasBlock);
+            } else if ((dispatcher = TryCreateTypedDispatcher(delegateType, count, signature)) == null) {
+                return null;
+            }
+
+            dispatcher._budget = GetSiteBudget(site, targetClass.Context);
+            dispatcher._context = targetClass.Context;
+            dispatcher._rubyCall = plan;
+            dispatcher._isRubyObject = isRubyObject;
+            dispatcher._targetType = (target != null) ? target.GetType() : null;
+            dispatcher._bool = (target is bool) ? (bool)target : false;
+            dispatcher._classVersion = targetClass.Version;
+            dispatcher._clrTest = (isRubyObject || target == null || target is bool) ? RubyCallAction.ClrReceiverTest.Plain : clrTest;
+            dispatcher.Version = version;
+
+            object result = dispatcher.CreateDelegate(isUntyped);
+            return (result.GetType() == delegateType) ? result : null;
+        }
 
         /// <summary>
         /// Class#new of a Ruby class whose instances are plain Ruby objects, made without a rule (see RubyClass.TryGetObjectConstruction).

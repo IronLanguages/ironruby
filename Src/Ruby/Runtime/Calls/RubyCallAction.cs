@@ -192,6 +192,12 @@ namespace IronRuby.Runtime.Calls {
                 return result;
             }
 
+            // The first calls of a Ruby method that those dispatchers do not call (one with optional parameters or a rest parameter,
+            // say) go without a rule too, as library methods' do (below).
+            if (rubyMethod != null) {
+                return LibraryDispatcher.TryCreateRubyCall(site, delegateType, Signature, rubyMethod, targetClass, target, clrTest, version, args);
+            }
+
             // The first calls of a library method from a site go without a rule. A rule built for a call is used for one
             // call more often than not - most of the prelude runs once - and building it costs more than many such calls.
             // Kernel#send is bound as the call it makes (DispatchIntrinsics.TryBuildSend), and so are calls while c_call
