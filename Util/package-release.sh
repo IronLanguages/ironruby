@@ -51,6 +51,8 @@ fi
 # take as compiled and ship without the composite image: so start and end with it empty.
 r2r_obj="$IR_ROOT/Src/Console/obj/Release/$IR_TFM/$RID/R2R"
 rm -rf "$r2r_obj"
+# also when the publish fails part way (set -e): stale composite stubs would disable R2R in the next publish
+trap 'rm -rf "$r2r_obj"' EXIT
 dotnet publish "$IR_ROOT/Src/Console/Ruby.Console.csproj" \
   -c Release -r "$RID" --self-contained true -f "$IR_TFM" \
   -p:IronRubyTargetFrameworks="$IR_TFM" -p:PublishReadyToRun=true \
