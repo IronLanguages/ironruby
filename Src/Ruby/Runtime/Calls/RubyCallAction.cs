@@ -107,7 +107,7 @@ namespace IronRuby.Runtime.Calls {
 
         #region Precompiled Rules
 
-        protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
+        internal override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args, bool allowLibraryDispatch) {
             // IsVariableCall only decides which error a call that finds no method raises; a dispatcher
             // is only made for a method that was found, and hands every other case back to the
             // binder. Leaving it out of the mask sent every bare `foo` to a rule of its own.
@@ -148,10 +148,14 @@ namespace IronRuby.Runtime.Calls {
 
             int version;
             MethodResolutionResult method;
+            bool plainClrTypeTest;
             RubyClass targetClass = Context.GetImmediateClassOf(target);
             using (targetClass.Context.ClassHierarchyLocker()) {
+                // initialization changes the version (see MetaObjectBuilder.AddTargetTypeTest):
+                targetClass.InitializeMethodsNoLock();
                 version = targetClass.Version.Method;
                 method = targetClass.ResolveMethodForSiteNoLock(_methodName, GetVisibilityContext(Signature, scope));
+                plainClrTypeTest = target != null && !(target is IRubyObject) && HasPlainClrTypeTest(targetClass, _methodName);
             }
 
             if (!method.Found || method.Info.IsProtected && !Signature.HasImplicitSelf) {
@@ -179,6 +183,15 @@ namespace IronRuby.Runtime.Calls {
                 object result = dispatcher.CreateDelegate(MethodDispatcher.UntypedFuncs.Contains(delegateType));
                 RubyBinder.DumpPrecompiledRule(this, dispatcher);
                 return result;
+            }
+
+            // The first calls of a library method from a site go without a rule. A rule built for a call is used for one
+            // call more often than not - most of the prelude runs once - and building it costs more than many such calls.
+            // Kernel#send is bound as the call it makes (DispatchIntrinsics.TryBuildSend), and so are calls while c_call
+            // is traced (the rule reports the call).
+            var libraryMethod = method.Info as RubyLibraryMethodInfo;
+            if (allowLibraryDispatch && libraryMethod != null && !TracePoint.CCallTracing && !DispatchIntrinsics.IsSend(libraryMethod)) {
+                return LibraryDispatcher.TryCreate(this, delegateType, Signature, libraryMethod, targetClass, target, plainClrTypeTest, version, args);
             }
 
             return null;
@@ -323,7 +336,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         // MetaObjectBuilder.AddTargetTypeTest tests a CLR object's type and its class version - and nothing else - in this case:
-        private static bool HasPlainClrTypeTest(RubyClass/*!*/ targetClass, string/*!*/ methodName) {
+        internal static bool HasPlainClrTypeTest(RubyClass/*!*/ targetClass, string/*!*/ methodName) {
             if (targetClass.IsSingletonClass || targetClass.GetNonSingletonClass().IsRubyClass) {
                 return false;
             }

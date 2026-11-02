@@ -177,5 +177,12 @@ namespace IronRuby.Runtime.Calls {
         internal static bool MaySpecialize(RubyMemberInfo/*!*/ method) {
             return IsKernelMethod(method, ref _respondTo, "RespondTo") || IsSendMethod(method);
         }
+
+        /// <summary>
+        /// Kernel#send and BasicObject#__send__: the call they make is bound in their place (TryBuildSend), and has no frame of its own.
+        /// </summary>
+        internal static bool IsSend(RubyMemberInfo/*!*/ method) {
+            return IsSendMethod(method);
+        }
     }
 }

@@ -65,6 +65,13 @@ namespace IronRuby.Runtime.Calls {
             get { return _args.RubyContext; }
         }
 
+        /// <summary>
+        /// Whether resolution made assumptions upon argument values - beyond their types - that the rule tests (see CanConvertFrom).
+        /// </summary>
+        internal bool HasArgumentAssumptions {
+            get { return _argumentAssumptions != null && _argumentAssumptions.Count > 0; }
+        }
+
         internal Expression/*!*/ ScopeExpression {
             get { return _args.MetaScope.Expression; }
         }
