@@ -435,16 +435,30 @@ namespace IronRuby.Runtime.Precompiled {
         /// once: a later call from the same scope that noted nothing (a send) must not take it again.
         /// </summary>
         internal static bool TryTakeCallLocation(RubyScope scope, out string path, out int line) {
-            if (scope != null && ReferenceEquals(_callScope, scope)) {
+            object noted = _callScope;
+            if (noted != null) {
+                // taken, or left by a noted call that went elsewhere (a receiver's own const_set) and raised before
+                // ClearCallLocation: either way no later call may take it
+                _callScope = null;
                 path = _callPath;
                 line = _callLine;
-                _callScope = null;
                 _callPath = null;
-                return path != null;
+                if (scope != null && ReferenceEquals(noted, scope)) {
+                    return path != null;
+                }
             }
             path = null;
             line = 0;
             return false;
+        }
+
+        /// <summary>
+        /// Called by precompiled code right after the call it noted the location of (NoteCallLocation) returns: a call that
+        /// did not reach Module#const_set or #autoload leaves nothing behind for a later one, nor keeps the scope alive.
+        /// </summary>
+        public static void ClearCallLocation() {
+            _callScope = null;
+            _callPath = null;
         }
 
         /// <summary>IR_STARTUP_DLL_TRACE=1: say what the startup library registered, and which files are compiled from source.</summary>

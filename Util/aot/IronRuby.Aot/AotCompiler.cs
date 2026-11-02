@@ -427,11 +427,16 @@ namespace IronRuby.Aot {
                 return call;
             }
             Count("const_set/autoload calls noting their location");
-            return Expression.Block(call.Type,
-                Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.NoteCallLocation)),
-                    Expression.Convert(scope, typeof(object)), IsRooted(file) ? RootedStringField(file) : Expression.Constant(file, typeof(string)),
-                    Expression.Constant(line)),
-                call);
+            var note = Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.NoteCallLocation)),
+                Expression.Convert(scope, typeof(object)), IsRooted(file) ? RootedStringField(file) : Expression.Constant(file, typeof(string)),
+                Expression.Constant(line));
+            // a call that went elsewhere (a receiver's own const_set) leaves no note for a later one
+            var clear = Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.ClearCallLocation)));
+            if (call.Type == typeof(void)) {
+                return Expression.Block(note, call, clear);
+            }
+            var result = Expression.Variable(call.Type, "#noted");
+            return Expression.Block(call.Type, new[] { result }, note, Expression.Assign(result, call), clear, result);
         }
 
         // DynamicInstructionN.CreateUntypedInstruction's limit
