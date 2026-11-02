@@ -1201,6 +1201,639 @@ def sp_opt_plus(a, b = 1 + a)
 end
 warm { |i| sp_opt_plus(i) }
 
+# ---------------------------------------------------------------- 7b. case/when, Array/Hash elements, constants
+
+class JitStr < String; end
+class JitArr < Array; end
+class JitHash < Hash
+  def [](k)
+    :subclass_element
+  end
+end
+module JitCaseMod; end
+class JitPlain; end
+JIT_LIMIT = 10
+JIT_CASE_CLS = String
+JIT_MIX = [1, "x", 2.0, :s, nil, [1], { a: 1 }, 1..2, 2**70, 2**40, true, false, JitPlain.new, JitStr.new("y")]
+
+def sp_case_class(v)
+  case v
+  when Integer then 1
+  when String then 2
+  when Float then 3
+  when Symbol then 4
+  when nil then 5
+  when Array, Hash then 6
+  when Comparable then 7
+  when JitCaseMod then 8
+  else 9
+  end
+end
+
+def sp_case_int(n)
+  case n
+  when 0 then :zero
+  when 1..5 then :small
+  when 6, 7 then :six_seven
+  when 8...JIT_LIMIT then :below_limit
+  when JIT_LIMIT then :limit
+  when Integer then :int
+  else :other
+  end
+end
+
+def sp_case_float(x)
+  case x
+  when 1 then :one
+  when 0..2 then :zero_two
+  when Float then :float
+  else :other
+  end
+end
+
+def sp_case_sym(s)
+  case s
+  when :add then 1
+  when :sub then 2
+  when :mul, :div then 3
+  else 0
+  end
+end
+
+def sp_case_str(s)
+  case s
+  when "foo" then 1
+  when "bar", "baz" then 2
+  when "é" then 3
+  else 0
+  end
+end
+
+def sp_case_cond(n)
+  case
+  when n < 0 then -1
+  when n == 0 then 0
+  else 1
+  end
+end
+
+def sp_case_const(v)
+  case v
+  when JIT_CASE_CLS then :the_class
+  else :other
+  end
+end
+
+def sp_case_value(n)
+  r = case n
+      when 1 then 10
+      when 2 then 2.5
+      else n * 2
+      end
+  r
+end
+
+module JitOuter
+  K = :outer
+  LIMIT = 3
+  class JitInner
+    def sp_lexical(n)
+      case n
+      when 0...LIMIT then K
+      else :no
+      end
+    end
+  end
+end
+
+def sp_qualified(v)
+  case v
+  when JitOuter::JitInner then 1
+  when ::String then 2
+  else JitOuter::LIMIT + 10
+  end
+end
+
+def sp_hget(h, k)
+  h[k]
+end
+
+def sp_hkey(h, k)
+  h.key?(k)
+end
+
+def sp_hfetch(h, k)
+  h.fetch(k, :none)
+end
+
+def sp_hfetch1(h, k)
+  h.fetch(k)
+end
+
+def sp_hincr(h, k, n)
+  h[k] += 1
+  n * n
+end
+
+def sp_hset(h, k, v)
+  h[k] = v
+end
+
+def sp_aget(a, i)
+  a[i]
+end
+
+def sp_aset(a, i, v)
+  a[i] = v
+end
+
+def sp_asum(a, n)
+  i = 0
+  s = 0
+  while i < n
+    s += a[i]
+    i += 1
+  end
+  s
+end
+
+def sp_scaled(a, i)
+  a[i] * 2.5 + (a[i] < 3 ? 1 : 0)
+end
+
+def sp_hsum(h, a)
+  i = 0
+  s = 0
+  while i < 4
+    s += h[i] + a[i]
+    i += 1
+  end
+  s
+end
+
+puts
+puts '--- 7b. case/when, Array/Hash elements, constants ---'
+warm { |i| sp_case_class(JIT_MIX[i % JIT_MIX.size]) }
+t('case of each kind') { JIT_MIX.map { |v| sp_case_class(v) } }
+t('case of subclass, Object, Module, singleton') { [JitStr.new("a"), Object.new, Kernel, Comparable].map { |v| sp_case_class(v) } }
+ext = "e".dup; ext.extend(JitCaseMod)
+eobj = Object.new; eobj.extend(JitCaseMod)
+t('case of objects extended with a module') { [sp_case_class(ext), sp_case_class(eobj)] }
+warm { |i| sp_case_int(i % 12) }
+t('case of an Integer') { (-1..12).map { |n| sp_case_int(n) } }
+t('case of an Integer, other types') { [sp_case_int(2**40), sp_case_int(2**70), sp_case_int(3.0), sp_case_int("3"), sp_case_int(nil)] }
+warm { |i| sp_case_float(i * 0.5) }
+t('case of a Float') { [0.0, 1.0, 1.5, 2.0, 2.5, -0.5, 0.0 / 0.0].map { |x| sp_case_float(x) } }
+t('case of a Float, other types') { [sp_case_float(1), sp_case_float(2), sp_case_float(:x)] }
+warm { |i| sp_case_sym([:add, :sub, :mul, :div, :mod][i % 5]) }
+t('case of a Symbol') { [:add, :sub, :mul, :div, :mod, "add", nil, 1].map { |s| sp_case_sym(s) } }
+warm { |i| sp_case_str(["foo", "bar", "baz", "qux"][i % 4]) }
+t('case of a String') { ["foo", "bar", "baz", "qux", "é", "é".b, "foo".b, JitStr.new("foo"), :foo, nil, 1, 2.0, true].map { |s| sp_case_str(s) } }
+warm { |i| sp_case_cond(i - 60) }
+t('case without a subject') { [sp_case_cond(-5), sp_case_cond(0), sp_case_cond(5)] }
+warm { |i| sp_case_const(["a", 1][i % 2]) }
+t('case of a constant') { [sp_case_const("a"), sp_case_const(1)] }
+warm { |i| sp_case_value(i % 4) }
+t('case value of mixed types') { (0..4).map { |n| sp_case_value(n) } }
+lex = JitOuter::JitInner.new
+warm { |i| lex.sp_lexical(i % 5) }
+t('a lexical constant') { (0..4).map { |n| lex.sp_lexical(n) } }
+JitOuter::JitInner::K = :inner
+t('a lexical constant shadowed') { (0..4).map { |n| lex.sp_lexical(n) } }
+warm { |i| lex.sp_lexical(i % 5) }
+t('a lexical constant shadowed, hot again') { (0..4).map { |n| lex.sp_lexical(n) } }
+warm { |i| sp_qualified([lex, "s", 1][i % 3]) }
+t('qualified and global constants') { [sp_qualified(lex), sp_qualified("s"), sp_qualified(1)] }
+
+# the methods === stands for, redefined mid-run
+class << Integer
+  def ===(o)
+    o == :magic_integer || super
+  end
+end
+t('Integer.=== redefined') { [sp_case_class(:magic_integer), sp_case_class(5), sp_case_int(:magic_integer)] }
+warm { |i| sp_case_class(JIT_MIX[i % JIT_MIX.size]) }
+t('Integer.=== redefined, hot again') { [sp_case_class(:magic_integer), sp_case_class(5)] }
+class << Integer
+  remove_method :===
+end
+t('Integer.=== restored') { [sp_case_class(:magic_integer), sp_case_class(5)] }
+class Module
+  alias_method :__jit_matrix_eqq, :===
+  def ===(o)
+    o == :magic_module ? true : __jit_matrix_eqq(o)
+  end
+end
+t('Module#=== redefined') { [sp_case_class(:magic_module), sp_case_class("s"), sp_case_const(:magic_module)] }
+class Module
+  alias_method :===, :__jit_matrix_eqq
+end
+t('Module#=== restored') { [sp_case_class(:magic_module), sp_case_class("s")] }
+class Integer
+  alias_method :__jit_matrix_ieqq, :===
+  def ===(o)
+    o == :magic_int ? true : __jit_matrix_ieqq(o)
+  end
+end
+t('Integer#=== redefined') { [sp_case_int(:magic_int), sp_case_int(0), sp_case_float(:magic_int)] }
+class Integer
+  alias_method :===, :__jit_matrix_ieqq
+end
+t('Integer#=== restored') { [sp_case_int(:magic_int), sp_case_int(0)] }
+class Symbol
+  alias_method :__jit_matrix_seqq, :===
+  def ===(o)
+    o == "add" ? true : __jit_matrix_seqq(o)
+  end
+end
+t('Symbol#=== redefined') { [sp_case_sym("add"), sp_case_sym(:sub)] }
+class Symbol
+  alias_method :===, :__jit_matrix_seqq
+end
+t('Symbol#=== restored') { [sp_case_sym("add"), sp_case_sym(:sub)] }
+class Range
+  alias_method :__jit_matrix_reqq, :===
+  def ===(o)
+    o == 100 ? true : __jit_matrix_reqq(o)
+  end
+end
+t('Range#=== redefined') { [sp_case_int(100), sp_case_int(3)] }
+class Range
+  alias_method :===, :__jit_matrix_reqq
+end
+t('Range#=== restored') { [sp_case_int(100), sp_case_int(3)] }
+class String
+  alias_method :__jit_matrix_streqq, :===
+  def ===(o)
+    o == :foo ? true : __jit_matrix_streqq(o)
+  end
+end
+t('String#=== redefined') { [sp_case_str(:foo), sp_case_str("bar")] }
+class String
+  alias_method :===, :__jit_matrix_streqq
+end
+t('String#=== restored') { [sp_case_str(:foo), sp_case_str("bar")] }
+class Float
+  include JitCaseMod
+end
+t('a module included into Float') { [sp_case_class(2.0), sp_case_float(2.5)] }
+Object.send(:remove_const, :JIT_CASE_CLS)
+JIT_CASE_CLS = Integer
+t('a when constant reassigned') { [sp_case_const("a"), sp_case_const(1)] }
+warm { |i| sp_case_const(["a", 1][i % 2]) }
+t('a when constant reassigned, hot again') { [sp_case_const("a"), sp_case_const(1)] }
+
+# the methods the literal whens' === call in turn, redefined
+def sp_case_mixed(v)
+  case v
+  when String then 1
+  when :x then 2
+  when 1 then 3
+  when 1..3 then 4
+  when "s" then 5
+  when nil then 6
+  else 7
+  end
+end
+class JitEqAll
+  def ==(o) = true
+end
+class JitEqRaise
+  def ==(o) = raise("boom")
+end
+class JitToStr
+  def to_str = "s"
+  def ==(o) = (o == "s" || o == 1)
+end
+warm { |i| sp_case_mixed([1, "s", :x, nil, 2.5][i % 5]) }
+t('objects with their own ==') { [sp_case_mixed(JitEqAll.new), (sp_case_mixed(JitEqRaise.new) rescue $!.message)] }
+t('an object with to_str') { sp_case_mixed(JitToStr.new) }
+t('Floats, Bignums and Int64s against literal whens') { [sp_case_mixed(1.0), sp_case_mixed(1.5), sp_case_mixed(3.0), sp_case_mixed(3.5), sp_case_mixed(2**70), sp_case_mixed(2**40)] }
+t('Rational and Complex against literal whens') { [sp_case_mixed(1r), sp_case_mixed(1i), sp_case_mixed(Rational(3, 2))] }
+class Integer
+  alias_method :__jit_matrix_ieq, :==
+  def ==(o) = (o == :int_eq_magic) ? true : __jit_matrix_ieq(o)
+end
+t('Integer#== redefined') { [sp_case_mixed(:int_eq_magic), sp_case_mixed(1)] }
+class Integer
+  alias_method :==, :__jit_matrix_ieq
+end
+t('Integer#== restored') { [sp_case_mixed(:int_eq_magic), sp_case_mixed(1)] }
+warm { |i| sp_case_mixed([1, "s", :x, nil, 2.5][i % 5]) }
+class Float
+  alias_method :__jit_matrix_feq, :==
+  def ==(o) = (o == 1) ? :never : __jit_matrix_feq(o)
+end
+t('Float#== redefined') { [sp_case_mixed(1.0), sp_case_mixed(1)] }
+class Float
+  alias_method :==, :__jit_matrix_feq
+end
+class Integer
+  alias_method :__jit_matrix_icmp, :<=>
+  def <=>(o) = (o == 77) ? 0 : __jit_matrix_icmp(o)
+end
+t('Integer#<=> redefined') { [sp_case_mixed(77), sp_case_mixed(2)] }
+class Integer
+  alias_method :<=>, :__jit_matrix_icmp
+end
+t('Integer#<=> restored') { [sp_case_mixed(77), sp_case_mixed(2)] }
+class NilClass
+  def ===(o) = (o == :nil_magic) || super
+end
+t('NilClass#=== defined') { [sp_case_mixed(:nil_magic), sp_case_mixed(nil)] }
+class NilClass
+  remove_method :===
+end
+class Symbol
+  def to_str = "s"
+end
+t('Symbol#to_str defined') { [sp_case_mixed(:y), sp_case_mixed(:x)] }
+class Symbol
+  remove_method :to_str
+end
+t('Symbol#to_str removed') { [sp_case_mixed(:y), sp_case_mixed(:x)] }
+
+# a when after the one that matches is not evaluated
+def sp_case_once(v)
+  case v
+  when Integer then :int
+  when JitMatrixUndefinedConstant then :never
+  else :other
+  end
+end
+warm { |i| sp_case_once(i) }
+t('a when constant that is never reached') { [sp_case_once(1), (sp_case_once("x") rescue $!.class)] }
+
+h = { 1 => :one, 2 => :two, :s => :sym, "str" => :string, nil => :nil_key, 2.5 => :float }
+warm { |i| sp_hget(h, i % 4) }
+t('Hash#[]') { [1, 2, 3, :s, "str", nil, 2.5, 2**40].map { |k| sp_hget(h, k) } }
+t('Hash#[] defaults') { [sp_hget(Hash.new(0), 1), sp_hget(Hash.new { |hh, k| k * 2 }, 21), sp_hget(Hash.new(:d).compare_by_identity, 1)] }
+ih = {}.compare_by_identity
+ks = "k"
+ih[ks] = :same; ih[1] = :one
+t('Hash#[] compare_by_identity') { [sp_hget(ih, ks), sp_hget(ih, "k"), sp_hget(ih, 1)] }
+t('Hash#[] frozen, subclass, Array, other') { [sp_hget(h.dup.freeze, 1), sp_hget(JitHash[1, 2], 1), sp_hget([5, 6, 7], -1), sp_hget("abc", 1)] }
+warm { |i| sp_hkey(h, i % 4) }
+t('Hash#key?') { [1, 3, :s, "str", nil, 2.5].map { |k| sp_hkey(h, k) } }
+warm { |i| sp_hfetch(h, i % 4) }
+t('Hash#fetch with a default') { [1, 3, "str", nil].map { |k| sp_hfetch(h, k) } }
+warm { |i| sp_hfetch1(h, 1 + i % 2) }
+t('Hash#fetch') { [sp_hfetch1(h, 1), sp_hfetch1(h, :s)] }
+t('Hash#fetch of a missing key') { sp_hfetch1(h, 99) }
+counts = Hash.new(0)
+warm { |i| sp_hincr(counts, i % 3, 3) }
+t('Hash#[] += 1') { counts }
+t('Hash#[] += 1, then the body deopts') { [sp_hincr(counts, 0, 2**40), sp_hincr(counts, 7, 2**40), counts] }
+t('Hash#[] += 1 on a frozen hash') { sp_hincr(counts.dup.freeze, 0, 1) }
+t('Hash#[] += 1 on a Float element') { c = { 0 => 1.5 }; sp_hincr(c, 0, 2); c }
+hs = {}
+warm { |i| sp_hset(hs, i % 5, i) }
+t('Hash#[]=') { hs }
+key = "fresh"
+t('Hash#[]= of a String key') { sp_hset(hs, key, 1); [hs.keys.last.frozen?, hs.keys.last.equal?(key), key.frozen?] }
+t('Hash#[]= frozen, identity, subclass') { ihs = {}.compare_by_identity; sp_hset(ihs, key, 2); [(sp_hset({}.freeze, 1, 1) rescue $!.class), ihs.keys[0].equal?(key), sp_hset(JitHash.new, 1, 2)] }
+a = [10, 20, 30]
+warm { |i| sp_aget(a, i % 5 - 2) }
+t('Array#[]') { (-4..4).map { |i| sp_aget(a, i) } }
+t('Array#[] of a subclass, a long index') { [sp_aget(JitArr[1, 2], 0), sp_aget(a, 2**40)] }
+warm { |i| sp_aset(a, i % 3, i) }
+t('Array#[]=') { [sp_aset(a, 1, :x), sp_aset(a, -1, :y), sp_aset(a, 5, :z), a] }
+t('Array#[]= frozen') { sp_aset([1].freeze, 0, 2) }
+warm { |i| sp_hsum({ 0 => 1, 1 => 2, 2 => 3, 3 => 4 }, [1, 1, 1, 1]) }
+t('Hash and Array reads in a loop') { sp_hsum({ 0 => 1, 1 => 2, 2 => 3, 3 => 4 }, [1, 1, 1, 1]) }
+t('... of a Float element') { sp_hsum({ 0 => 1, 1 => 2.5, 2 => 3, 3 => 4 }, [1, 1, 1, 1]) }
+warm { |i| sp_asum([1, 2, 3, i], 4) }
+t('Array sum') { [sp_asum([1, 2, 3, 4], 4), sp_asum([1, 2.5, 3], 3), sp_asum([2**62, 2**62], 2), sp_asum([1, nil], 2)] }
+warm { |i| sp_scaled([1, 2, 3, i], i % 4) }
+t('Array elements times a Float') { [sp_scaled([1, 2.5, 4], 0), sp_scaled([1, 2.5, 4], 1), sp_scaled([1, 2.5, 4], 2), sp_scaled([2**62], 0), sp_scaled(["x"], 0)] }
+class Hash
+  alias_method :__jit_matrix_aref, :[]
+  def [](k)
+    k == :magic_key ? :redefined : __jit_matrix_aref(k)
+  end
+end
+t('Hash#[] redefined') { [sp_hget(h, :magic_key), sp_hget(h, 1)] }
+warm { |i| sp_hget(h, i % 4) }
+t('Hash#[] redefined, hot again') { [sp_hget(h, :magic_key), sp_hget(h, 1)] }
+class Hash
+  alias_method :[], :__jit_matrix_aref
+end
+t('Hash#[] restored') { [sp_hget(h, :magic_key), sp_hget(h, 1)] }
+class Hash
+  alias_method :__jit_matrix_default, :default
+  def default(*k)
+    k == [:nope] ? :redefined_default : __jit_matrix_default(*k)
+  end
+end
+t('Hash#default redefined') { [sp_hget(h, :nope), sp_hget(Hash.new(0), 1), sp_hget(Hash.new(0), :nope)] }
+class Hash
+  alias_method :default, :__jit_matrix_default
+end
+t('Hash#default restored') { [sp_hget(h, :nope), sp_hget(Hash.new(0), 1)] }
+class Hash
+  alias_method :__jit_matrix_aset, :[]=
+  def []=(k, v)
+    __jit_matrix_aset(k, [:wrapped, v])
+  end
+end
+t('Hash#[]= redefined') { x = {}; sp_hset(x, 1, 2); x }
+class Hash
+  alias_method :[]=, :__jit_matrix_aset
+end
+t('Hash#[]= restored') { x = {}; sp_hset(x, 1, 2); x }
+class Hash
+  alias_method :__jit_matrix_key, :key?
+  def key?(k)
+    k == :magic_key ? :redefined_key : __jit_matrix_key(k)
+  end
+end
+t('Hash#key? redefined') { [sp_hkey(h, :magic_key), sp_hkey(h, 1)] }
+warm { |i| sp_hkey(h, i % 4) }
+t('Hash#key? redefined, hot again') { [sp_hkey(h, :magic_key), sp_hkey(h, 1)] }
+class Hash
+  alias_method :key?, :__jit_matrix_key
+end
+t('Hash#key? restored') { [sp_hkey(h, :magic_key), sp_hkey(h, 1)] }
+class Hash
+  alias_method :__jit_matrix_fetch, :fetch
+  def fetch(k, *d)
+    k == :magic_key ? :redefined_fetch : __jit_matrix_fetch(k, *d)
+  end
+end
+t('Hash#fetch redefined') { [sp_hfetch(h, :magic_key), sp_hfetch(h, 1), sp_hfetch1(h, :magic_key)] }
+warm { |i| sp_hfetch(h, i % 4) }
+t('Hash#fetch redefined, hot again') { [sp_hfetch(h, :magic_key), sp_hfetch(h, 3)] }
+class Hash
+  alias_method :fetch, :__jit_matrix_fetch
+end
+t('Hash#fetch restored') { [sp_hfetch(h, :magic_key), sp_hfetch(h, 3)] }
+class Integer
+  alias_method :__jit_matrix_ieql, :eql?
+  def eql?(o)
+    o == :magic_eql || __jit_matrix_ieql(o)
+  end
+end
+t('Integer#eql? redefined') { [sp_hget(h, 1), sp_hkey(h, 2), sp_hget({ 1 => :one }, 1)] }
+class Integer
+  alias_method :eql?, :__jit_matrix_ieql
+end
+# the methods above have been redefined under them and given up on: fresh ones
+def sp_hget2(h, k)
+  h[k]
+end
+
+def sp_hkey2(h, k)
+  h.key?(k)
+end
+
+def sp_hfetch2(h, k)
+  h.fetch(k, :none)
+end
+
+def sp_hset2(h, k, v)
+  h[k] = v
+end
+
+def sp_hincr2(h, k, n)
+  h[k] += 1
+  n * n
+end
+warm { |i| sp_hget2(h, i % 4); sp_hkey2(h, i % 4); sp_hfetch2(h, i % 4); sp_hset2(hs, i % 5, i); sp_hincr2(counts, i % 3, 3) }
+class JitDefaultHash < Hash; end
+dsub = JitDefaultHash.new { |hh, k| "made #{k}" }
+dsub[1] = :one
+t('a Hash subclass with a default proc') { [sp_hget2(dsub, 1), sp_hget2(dsub, 2), sp_hkey2(dsub, 2), sp_hfetch2(dsub, 2), sp_hset2(dsub, 3, 4), dsub] }
+dlate = { 1 => :one }
+t('default= and default_proc= on a hash the code has seen') { a = [sp_hget2(dlate, 2)]; dlate.default = :late; a << sp_hget2(dlate, 2); dlate.default_proc = proc { |hh, k| k * 10 }; a << sp_hget2(dlate, 2) << sp_hfetch2(dlate, 2); a }
+t('a default proc that writes the hash') { dw = Hash.new { |hh, k| hh[k] = k * 3 }; [sp_hget2(dw, 2), sp_hincr2(dw, 5, 2), dw] }
+t('a mutable default value') { dv = Hash.new([]); x = sp_hget2(dv, 1); x << 1; [dv, dv.default, sp_hget2(dv, 2)] }
+t('keys: nil, Float, Bignum, Array, Int64') { x = {}; [nil, 2.5, 2**70, [1], 2**40, -0.0].each_with_index { |k, j| sp_hset2(x, k, j) }; [nil, 2.5, 2**70, [1], 2**40, 0.0, 1.0].map { |k| [sp_hget2(x, k), sp_hkey2(x, k)] } }
+t('keys: 1 and 1.0') { x = { 1 => :i, 1.0 => :f }; [sp_hget2(x, 1), sp_hget2(x, 1.0), sp_hkey2(x, 1.0), sp_hfetch2(x, 2.0)] }
+t('keys: String encodings') { x = { "é" => 1, "a" => 2 }; [sp_hget2(x, "é"), sp_hget2(x, "é".b), sp_hget2(x, "a".b), sp_hkey2(x, "é".b), sp_hget2(x, "a".encode("UTF-16LE"))] }
+t('keys: String subclass') { x = { "a" => 1 }; k = JitStr.new("a"); sp_hset2(x, JitStr.new("b"), 2); [sp_hget2(x, k), sp_hkey2(x, k), x.keys.map(&:class), x.keys[0].frozen?] }
+t('keys: Symbol and String of one name') { x = { a: 1, "a" => 2 }; [sp_hget2(x, :a), sp_hget2(x, "a"), sp_hkey2(x, :b)] }
+t('existing String key kept') { k1 = "q".dup; x = { k1 => 1 }; sp_hset2(x, "q".dup, 2); [x, x.keys[0].equal?(k1)] }
+t('an update keeps the order') { x = { a: 1, b: 2 }; sp_hset2(x, :a, 3); sp_hset2(x, :c, 4); x.to_a }
+
+# outlined loops (OSR): a while loop that runs long enough to be replaced
+def osr_case_mix(vals, n)
+  counts = [0, 0, 0, 0, 0, 0]
+  i = 0
+  while i < n
+    case vals[i % vals.size]
+    when Integer then counts[0] += 1
+    when String then counts[1] += 1
+    when Float, Comparable then counts[2] += 1
+    when :s then counts[3] += 1
+    when nil, false then counts[4] += 1
+    else counts[5] += 1
+    end
+    i += 1
+  end
+  counts
+end
+
+def osr_hash_count(keys, n, big, huge)
+  h = Hash.new(0)
+  acc = 0
+  i = 0
+  while i < n
+    h[keys[i % keys.size]] += 1
+    x = (i == big) ? huge : 1
+    acc += x * 4
+    i += 1
+  end
+  [h, acc]
+end
+
+def osr_hash_read(h, n)
+  s = 0
+  miss = 0
+  i = 0
+  while i < n
+    v = h[i % 7]
+    if v
+      s += v
+    else
+      miss += 1
+    end
+    i += 1
+  end
+  [s, miss]
+end
+
+def osr_fetch_key(h, n)
+  s = 0
+  i = 0
+  while i < n
+    s += h.fetch(i % 5, 100) if h.key?(i % 3)
+    i += 1
+  end
+  s
+end
+
+puts
+puts '--- 7c. the same in outlined loops ---'
+t('OSR case of each kind') { osr_case_mix(JIT_MIX, 20000) }
+t('OSR case of extended strings and objects') { osr_case_mix([ext, eobj, 1, "a"], 20000) }
+t('OSR Hash#[] += 1') { osr_hash_count([1, 2, 3, :a, "b"], 20000, -1, 2**62) }
+t('OSR Hash#[] += 1, deopt mid-loop') { osr_hash_count([1, 2, 3, :a, "b"], 20000, 7001, 2**62) }
+t('OSR Hash#[] += 1, odd keys') { osr_hash_count([1, JitPlain, 2.5, nil, [1]], 20000, -1, 2**62) }
+t('OSR Hash#[] reads') { osr_hash_read({ 0 => 1, 1 => 2, 3 => 4, 5 => 6 }, 20000) }
+t('OSR Hash#[] reads, default') { osr_hash_read(Hash.new(3), 20000) }
+t('OSR Hash#[] reads, default proc') { osr_hash_read(Hash.new { |hh, k| k }, 20000) }
+t('OSR Hash#key? and #fetch') { osr_fetch_key({ 0 => 1, 1 => 2, 4 => 7 }, 20000) }
+class Symbol
+  alias_method :__jit_matrix_seqq2, :===
+  def ===(o)
+    o == :t ? true : __jit_matrix_seqq2(o)
+  end
+end
+t('OSR case after Symbol#=== redefined') { osr_case_mix([:t, :s, 1], 20000) }
+class Symbol
+  alias_method :===, :__jit_matrix_seqq2
+end
+t('OSR case after Symbol#=== restored') { osr_case_mix([:t, :s, 1], 20000) }
+
+# a module that one Hash is extended with: its key? and fetch stop those intrinsics for good (Hash#[] stays)
+def sp_hget3(h, k)
+  h[k]
+end
+
+def sp_hkey3(h, k)
+  h.key?(k)
+end
+
+def sp_hfetch3(h, k)
+  h.fetch(k, :none)
+end
+warm { |i| sp_hget3(h, i % 4); sp_hkey3(h, i % 4); sp_hfetch3(h, i % 4) }
+he = { 1 => :a, 2 => :b }
+he.extend(Module.new {
+  def key?(k) = :module_key
+  def fetch(k, *d) = :module_fetch
+})
+t('Hash#key? and #fetch from an extending module') { [sp_hget3(he, 1), sp_hkey3(he, 1), sp_hfetch3(he, 1), sp_hget3(h, 1), sp_hkey3(h, 1), sp_hfetch3(h, 1)] }
+warm { |i| sp_hget3(h, i % 4); sp_hkey3(h, i % 4); sp_hfetch3(h, i % 4) }
+t('... hot again') { [sp_hget3(he, 1), sp_hkey3(he, 1), sp_hfetch3(he, 1), sp_hget3(h, 1), sp_hkey3(h, 1), osr_fetch_key(he, 20000)] }
+# a String key with a singleton eql?, which the lookup asks
+seql = "str".dup
+def seql.eql?(o) = false
+warm { |i| sp_hget3(h, "str") }
+t('a String key with a singleton eql?') { [sp_hget3(h, seql), sp_hget3(h, "str"), sp_hget3(h, "str".dup)] }
+
+# last: a singleton [] on one Hash stops the Hash intrinsics for good (Array's stay)
+warm { |i| sp_hget(h, i % 4) }
+sh = { 1 => :a }
+def sh.[](k)
+  :singleton_element
+end
+t('Hash#[] with a singleton []') { [sp_hget(sh, 1), sp_hget(h, 1)] }
+warm { |i| sp_hget(h, i % 4) }
+warm { |i| sp_aget(a, i % 3) }
+t('Hash#[] with a singleton [], hot again') { [sp_hget(sh, 1), sp_hget(h, 1), sp_aget([4, 5], 1)] }
+t('OSR Hash#[] reads after a singleton []') { [osr_hash_read({ 0 => 1, 1 => 2 }, 20000), osr_hash_read(sh, 20000)] }
+
 # ---------------------------------------------------------------- 8. Integer#+ redefined
 
 def sp_plus(a, b)
@@ -1307,10 +1940,27 @@ def sp_before_refine(n)
   return n + 1
 end
 
+def sp_case_before_refine(v)
+  case v
+  when Integer then :int
+  when 1..5 then :range
+  when :s then :sym
+  when String then :str
+  else :other
+  end
+end
+
+def sp_hash_before_refine(h, k)
+  h[k]
+end
+
 puts
 puts '--- 9. a refinement appears (must come last: once any refinement exists the JIT stands down) ---'
 warm { |i| sp_before_refine(i) }
+warm { |i| sp_case_before_refine([1, "s", :s, 2.0][i % 4]) }
+warm { |i| sp_hash_before_refine({ 1 => 2 }, i % 2) }
 t('specialized before any refinement') { sp_before_refine(41) }
+t('case and Hash#[] specialized before any refinement') { [1, "s", :s, 2.0].map { |v| sp_case_before_refine(v) } + [sp_hash_before_refine({ 1 => 2 }, 1)] }
 module JitRefine
   refine Integer do
     def +(o)
@@ -1332,4 +1982,57 @@ t('a method defined where + is refined') { jr.sp_in_refined_scope(41) }
 t('the one defined before still unrefined') { sp_before_refine(41) }
 warm { |i| sp_before_refine(i) }
 t('and stays unrefined when hot again') { sp_before_refine(41) }
+
+# refinements of the methods case/when and the Hash intrinsics stand for
+module JitRefineCase
+  refine Integer.singleton_class do
+    def ===(o)
+      o == :refined_int || super
+    end
+  end
+  refine Hash do
+    def [](k)
+      k == :refined_key ? :refined_element : super
+    end
+  end
+  refine Symbol do
+    def ===(o)
+      o == "s" || super
+    end
+  end
+end
+
+class JitRefinedCaseUser
+  using JitRefineCase
+  def sp_case_refined(v)
+    case v
+    when Integer then :int
+    when :s then :sym
+    else :other
+    end
+  end
+
+  def sp_hash_refined(h, k)
+    h[k]
+  end
+
+  def osr_refined(h, n)
+    i = 0
+    s = 0
+    while i < n
+      s += 1 if h[:refined_key] == :refined_element
+      s += 2 if (case :refined_int when Integer then true else false end)
+      i += 1
+    end
+    s
+  end
+end
+jrc = JitRefinedCaseUser.new
+warm { |i| jrc.sp_case_refined([1, :s, "s", :refined_int][i % 4]); jrc.sp_hash_refined({ 1 => 2 }, i % 2) }
+t('case/when where === is refined') { [1, :s, "s", :refined_int, 2.0].map { |v| jrc.sp_case_refined(v) } }
+t('Hash#[] where it is refined') { [jrc.sp_hash_refined({ 1 => 2 }, 1), jrc.sp_hash_refined({ 1 => 2 }, :refined_key)] }
+t('an outlined loop where both are refined') { jrc.osr_refined({}, 20000) }
+t('outside the refined scope') { [:refined_int, "s", 1].map { |v| sp_case_before_refine(v) } + [sp_hash_before_refine({}, :refined_key)] }
+warm { |i| sp_case_before_refine([1, "s", :s, 2.0][i % 4]); sp_hash_before_refine({ 1 => 2 }, i % 2) }
+t('outside the refined scope, hot again') { [:refined_int, "s", 1].map { |v| sp_case_before_refine(v) } + [sp_hash_before_refine({}, :refined_key)] }
 
