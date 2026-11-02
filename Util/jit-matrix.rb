@@ -1875,6 +1875,81 @@ sx = "ext".dup.extend(Comparable)
 ox = Object.new.extend(JitLateModule)
 t('... on extended objects') { [sp_case_late(sx), sp_case_late(ox), sp_case_late(Object.new)] }
 
+# Array#fetch: the fetch intrinsic answers for an exact Array as well as an exact Hash, so a
+# receiver the profile cannot see (an instance variable) does not deopt on every call
+class JitHolder
+  def initialize(l) = @list = l
+  def [](i)
+    @list.fetch(i)
+  end
+  def dflt(i)
+    @list.fetch(i, :dflt)
+  end
+end
+
+def sp_afetch(a, i)
+  a.fetch(i)
+end
+
+def sp_afetch_d(a, i)
+  a.fetch(i, :none)
+end
+
+def sp_afsum(a, n)
+  s = 0
+  i = 0
+  while i < n
+    s += a.fetch(i)
+    i += 1
+  end
+  s
+end
+
+def osr_afetch(a, n, d)
+  s = 0
+  i = 0
+  while i < n
+    s += a.fetch(i % (a.size + 2), d)
+    i += 1
+  end
+  s
+end
+
+puts
+puts '--- 7e. Array#fetch ---'
+fa = [10, 20, 30]
+fho = JitHolder.new(fa)
+fhh = JitHolder.new({ 0 => :h0, "k" => :hk })
+warm { |i| fho[i % 3]; fho.dflt(i % 5); sp_afetch(fa, i % 3); sp_afetch_d(fa, i % 5 - 2) }
+t('Array#fetch through an instance variable') { [fho[0], fho[-1], fho[2], (fho[3] rescue $!.class), (fho[-4] rescue $!.class), fho.dflt(7), fho.dflt(-3)] }
+t('... a Hash through the same one') { [fhh[0], fhh["k"], (fhh[1] rescue $!.class), fhh.dflt(1), fhh.dflt("k")] }
+t('Array#fetch of odd indexes') { [sp_afetch(fa, 1.9), (sp_afetch(fa, nil) rescue $!.class), (sp_afetch(fa, "1") rescue $!.class), (sp_afetch_d(fa, 2**70) rescue $!.class)] }
+t('Array#fetch with a default') { (-5..5).map { |i| sp_afetch_d(fa, i) } }
+t('Array#fetch of a subclass, a frozen and an empty array') { [sp_afetch(JitArr[1, 2], 1), sp_afetch([5].freeze, 0), sp_afetch_d([], 0), (sp_afetch([], 0) rescue $!.class)] }
+warm { |i| sp_afsum([1, 2, 3, i], 4) }
+t('Array#fetch in a loop') { [sp_afsum([1, 2, 3, 4], 4), (sp_afsum([1, 2], 3) rescue $!.class), sp_afsum([1, 2.5], 2), (sp_afsum([1, nil], 2) rescue $!.class)] }
+t('OSR Array#fetch with a default') { [osr_afetch((0...100).to_a, 30000, 7), osr_afetch([1, 2, 3], 30000, 2.5)] }
+class Array
+  alias_method :__jit_matrix_afetch, :fetch
+  def fetch(i, *d)
+    i == 99 ? :redefined_fetch : __jit_matrix_afetch(i, *d)
+  end
+end
+t('Array#fetch redefined') { [sp_afetch(fa, 99), sp_afetch(fa, 0), fho[99], fho[1], sp_afetch_d(fa, 99)] }
+warm { |i| fho[i % 3]; sp_afetch(fa, i % 3) }
+t('Array#fetch redefined, hot again') { [sp_afetch(fa, 99), sp_afetch(fa, 0), fho[99]] }
+class Array
+  alias_method :fetch, :__jit_matrix_afetch
+end
+t('Array#fetch restored') { [(sp_afetch(fa, 99) rescue $!.class), sp_afetch(fa, 0), (fho[99] rescue $!.class)] }
+warm { |i| fho[i % 3]; sp_afetch(fa, i % 3) }
+# last for Array#fetch: a singleton fetch on one Array stops the intrinsic answering for Arrays
+sfa = [1, 2]
+def sfa.fetch(i) = :singleton_fetch
+t('Array#fetch with a singleton fetch') { [sp_afetch(sfa, 0), sp_afetch(fa, 0), fho[0], JitHolder.new(sfa)[0]] }
+warm { |i| fho[i % 3]; sp_afetch(fa, i % 3) }
+t('... hot again') { [sp_afetch(sfa, 0), sp_afetch(fa, 0), fho[0], fhh[0], JitHolder.new(sfa)[0]] }
+
 # a module that one Hash is extended with: its key? and fetch stop those intrinsics for good (Hash#[] stays)
 def sp_hget3(h, k)
   h[k]
