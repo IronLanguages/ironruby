@@ -17,7 +17,7 @@ DOTNET=/usr/local/dotnet/dotnet
 mkdir -p "$WORK"
 
 # 1. the IL (the Ruby program and the core prelude, compiled)
-"$DOTNET" build "$AOT_DIR/IronRuby.Aot" -c Release -p:DlrSourceDir=/root/workspace/dlr/src/core 2>&1 | grep -E " error |rror\(s\)" | sort -u
+"$DOTNET" build "$AOT_DIR/IronRuby.Aot" -c Release -p:DlrSourceDir=/root/workspace/dlr/src/core -p:IronRubyAotHostTfm=net10.0 2>&1 | grep -E " error |rror\(s\)" | sort -u
 "$AOT_DIR/IronRuby.Aot/bin/Release/net10.0/IronRuby.Aot" compile --prelude -o "$WORK/$NAME-il" "$RB"
 
 # 2. a DLR copy with the AOT patches

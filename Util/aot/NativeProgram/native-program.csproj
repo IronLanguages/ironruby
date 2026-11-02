@@ -27,7 +27,7 @@
   <ItemGroup>
     <Reference Include="$(RubyProgramDll)" />
     <Reference Include="$(RubyProgramDelegatesDll)" Condition="'$(RubyProgramDelegatesDll)' != '' and Exists('$(RubyProgramDelegatesDll)')" />
-    <ProjectReference Include="../IronRuby.Aot/IronRuby.Aot.csproj" />
+    <ProjectReference Include="../IronRuby.Aot/IronRuby.Aot.csproj" AdditionalProperties="IronRubyAotHostTfm=net10.0" />
     <ProjectReference Include="../../../Src/Ruby/Ruby.csproj" />
     <ProjectReference Include="../../../Src/Libraries/IronRuby.Libraries.csproj" />
     <ProjectReference Include="$(DlrSourceDir)/Microsoft.Scripting/Microsoft.Scripting.csproj" />

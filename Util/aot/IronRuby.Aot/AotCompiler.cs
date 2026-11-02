@@ -66,6 +66,47 @@ namespace IronRuby.Aot {
         /// <summary>A library's "name=mvid" of the host assemblies it is compiled for (see PrecompiledFilesAttribute.Assemblies).</summary>
         public string[] DependencyIds;
 
+        /// <summary>
+        /// A library's IronRuby tree, which all its files are in, and where that is from the directory the library goes to.
+        /// Paths under it that the code holds (__FILE__, a block's or a method's file) are compiled as calls of
+        /// PrecompiledCode.Rooted, so that a copy of the tree elsewhere runs them with its own paths.
+        /// </summary>
+        public string Root, RootFromLibrary;
+
+        // a path under Root in something other than a string constant (a symbol, a frozen string's bytes): the library
+        // then only runs from where it was compiled
+        private bool _unrelocatable;
+        private readonly Dictionary<string, Expression> _rootedStrings = new();
+
+        private string RootPrefix => Root == null ? null : Root + "/";
+
+        private bool IsRooted(string s) => RootPrefix != null && s != null && s.Contains(RootPrefix, StringComparison.Ordinal);
+
+        /// <summary>A string that may hold a path under Root: as is, or rebased onto the run-time tree.</summary>
+        private Expression StringExpression(string s) {
+            if (!IsRooted(s)) {
+                return Expression.Constant(s, typeof(string));
+            }
+            Count("paths moved with the tree");
+            return Expression.Call(typeof(PrecompiledCode).GetMethod("Rooted"),
+                Expression.Constant(s.Replace(RootPrefix, PrecompiledCode.RootMarker.ToString()), typeof(string)));
+        }
+
+        // in the code itself, once per file and string: a lazily set static field
+        private Expression RootedStringField(string s) {
+            if (!_rootedStrings.TryGetValue(s, out var field)) {
+                _rootedStrings[s] = field = NewField(typeof(string), StringExpression(s), "path");
+            }
+            return field;
+        }
+
+        private void CheckUnrelocatable(string what, string text) {
+            if (IsRooted(text)) {
+                _unrelocatable = true;
+                Count("UNRELOCATABLE: a path under the tree in a " + what);
+            }
+        }
+
         public AotCompiler(RubyContext context, string assemblyName, bool library = false) {
             _context = context;
             Library = library;
@@ -97,6 +138,7 @@ namespace IronRuby.Aot {
                     _type = _module.DefineType("RubyStartup" + i, TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
                     // a field of another file's type would load that type too
                     _constantFields.Clear();
+                    _rootedStrings.Clear();
                 }
                 var unit = _context.CreateFileUnit(paths[i]);
                 bool isMain = mainFile != null && paths[i] == Path.GetFullPath(mainFile);
@@ -131,9 +173,12 @@ namespace IronRuby.Aot {
             if (Library) {
                 if (chunks != 0) throw new NotSupportedException("a startup library initializes its constants lazily");
                 IronRuby.Aot.Compiler.LambdaCompiler.LineRecorder = null;
+                // the files relative to the tree, if they are in it
+                var recorded = paths.Select(p => RootPrefix != null && p.StartsWith(RootPrefix, StringComparison.Ordinal) ? p.Substring(RootPrefix.Length) : p).ToArray();
                 DefineStartupIndex(new CustomAttributeBuilder(
                     typeof(PrecompiledFilesAttribute).GetConstructors()[0],
-                    new object[] { paths, _entryPoints.ToArray(), paths.Select(PrecompiledCode.HashFile).ToArray(), DependencyIds ?? new string[0] }));
+                    new object[] { recorded, _entryPoints.ToArray(), paths.Select(PrecompiledCode.HashFile).ToArray(), DependencyIds ?? new string[0],
+                        Root, RootFromLibrary, !_unrelocatable }));
                 Count("line table: methods", _lines.Count);
                 Count("line table: entries", _lines.Values.Sum(l => l.Count / 2));
                 Save(outputPath, PEHeaderBuilder.CreateLibraryHeader(), default);
@@ -252,6 +297,10 @@ namespace IronRuby.Aot {
             }
 
             protected override Expression VisitConstant(ConstantExpression node) {
+                if (node.Value is string s && _c.IsRooted(s)) {
+                    var path = _c.RootedStringField(s);
+                    return path.Type == node.Type ? path : Expression.Convert(path, node.Type);
+                }
                 if (Census.IsLiteral(node.Value, node.Type)) {
                     return node;
                 }
@@ -417,18 +466,19 @@ namespace IronRuby.Aot {
                     int attributes = (int)(BlockSignatureAttributes)_dispatcherAttributes.GetValue(dispatcher);
                     return Expression.Call(typeof(PrecompiledCode).GetMethod("CreateBlockDispatcher"),
                         Expression.Constant(dispatcher.ParameterCount), Expression.Constant(postCount), Expression.Constant(attributes),
-                        Expression.Constant(dispatcher.SourcePath, typeof(string)), Expression.Constant(dispatcher.SourceLine),
+                        StringExpression(dispatcher.SourcePath), Expression.Constant(dispatcher.SourceLine),
                         SerializeSignature(dispatcher.ParameterSignature));
                 }
 
                 case RubySymbol symbol:
                     hint = "sym";
+                    CheckUnrelocatable("symbol", symbol.ToString());
                     return Expression.Call(typeof(PrecompiledCode).GetMethod("Symbol"),
                         ByteArray(symbol.String.ToByteArray()), ConstantField(symbol.Encoding, typeof(RubyEncoding)));
 
                 case string[] strings:
                     hint = "strings";
-                    return Expression.NewArrayInit(typeof(string), strings.Select(s => Expression.Constant(s, typeof(string))));
+                    return Expression.NewArrayInit(typeof(string), strings.Select(StringExpression));
 
                 case byte[] bytes:
                     hint = "bytes";
@@ -449,6 +499,7 @@ namespace IronRuby.Aot {
                 case MutableString str when str.IsFrozen:
                     // literal parts of an interpolated string: frozen, only ever copied from
                     hint = "str";
+                    CheckUnrelocatable("string literal", str.ToString());
                     return Expression.Call(typeof(PrecompiledCode).GetMethod("FrozenString"),
                         ByteArray(str.ToByteArray()), ConstantField(str.Encoding, typeof(RubyEncoding)));
 
@@ -545,7 +596,7 @@ namespace IronRuby.Aot {
                 Expression.Constant(ps.Block?.Name, typeof(string)),
                 SerializeSignature(ps.Signature));
             return Expression.Call(typeof(PrecompiledCode).GetMethod("CreateMethodBody"),
-                header, Expression.Constant(body.Document?.FileName, typeof(string)),
+                header, StringExpression(body.Document?.FileName),
                 ConstantField(AotHost.GetEncoding(body), typeof(RubyEncoding)), factory);
         }
 

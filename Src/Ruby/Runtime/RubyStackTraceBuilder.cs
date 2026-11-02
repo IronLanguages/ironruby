@@ -412,6 +412,7 @@ namespace IronRuby.Runtime {
             var sourceLine = line = frame.GetFileLineNumber();
 
             if (TryParseRubyMethodName(ref methodName, ref fileName, ref line)) {
+                Precompiled.PrecompiledCode.RebaseFrameFile(method, ref fileName);
                 if (sourceLine == 0) {
                     RubyMethodDebugInfo debugInfo;
                     if (RubyMethodDebugInfo.TryGet(method, out debugInfo)) {

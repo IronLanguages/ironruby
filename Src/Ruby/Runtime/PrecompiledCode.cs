@@ -37,14 +37,31 @@ namespace IronRuby.Runtime.Precompiled {
     /// level of each source file compiled to a static method, with the hash of the source it was
     /// compiled from.
     /// </summary>
-    [AttributeUsage(AttributeTargets.Class)]
+    [AttributeUsage(AttributeTargets.Class), CLSCompliant(false)]
     public sealed class PrecompiledFilesAttribute : Attribute {
-        public PrecompiledFilesAttribute(string[] files, string[] entryPoints, string[] hashes, string[] assemblies) {
+        public PrecompiledFilesAttribute(string[] files, string[] entryPoints, string[] hashes, string[] assemblies,
+            string root, string rootFromLibrary, bool relocatable) {
             Files = files;
             EntryPoints = entryPoints;
             Hashes = hashes;
             Assemblies = assemblies;
+            Root = root;
+            RootFromLibrary = rootFromLibrary;
+            Relocatable = relocatable;
         }
+
+        /// <summary>
+        /// The IronRuby tree the files were compiled from, and where it is from the library's directory: a copy of the
+        /// tree elsewhere (an unpacked release) finds its own root from where its library is.
+        /// </summary>
+        public string Root { get; }
+        public string RootFromLibrary { get; }
+
+        /// <summary>
+        /// Every path under <see cref="Root"/> the code holds goes through <see cref="PrecompiledCode.Rooted"/>, so the
+        /// library may run from a copy of the tree elsewhere. If not, it is only used where it was compiled.
+        /// </summary>
+        public bool Relocatable { get; }
 
         /// <summary>
         /// "name=mvid" of each assembly the library was compiled against (IronRuby and the DLR): the saved
@@ -52,7 +69,7 @@ namespace IronRuby.Runtime.Precompiled {
         /// </summary>
         public string[] Assemblies { get; }
 
-        /// <summary>Full paths of the files compiled in.</summary>
+        /// <summary>The files compiled in, relative to <see cref="Root"/>.</summary>
         public string[] Files { get; }
         /// <summary>The static method each file's top level was compiled to.</summary>
         public string[] EntryPoints { get; }
@@ -169,6 +186,28 @@ namespace IronRuby.Runtime.Precompiled {
 
         #region Startup library
 
+        /// <summary>Stands for the run-time tree's root, and the separator after it, in the paths saved code holds.</summary>
+        public const char RootMarker = '\uFDD0';
+
+        // the tree's root as compiled and as run, each with a trailing separator; equal unless the tree was moved
+        private static string _compiledRoot, _runtimeRoot;
+
+        /// <summary>A path the saved code holds, with <see cref="RootMarker"/> for the tree's root, in the tree it runs from.</summary>
+        public static string/*!*/ Rooted(string/*!*/ path) {
+            return path.Replace(RootMarker.ToString(), _runtimeRoot ?? _compiledRoot ?? "");
+        }
+
+        /// <summary>
+        /// The file of a backtrace frame of the startup library, which its method name encodes as it was compiled,
+        /// in the tree it runs from.
+        /// </summary>
+        internal static void RebaseFrameFile(MethodBase/*!*/ method, ref string file) {
+            if (file != null && _startupAssembly != null && !ReferenceEquals(_runtimeRoot, _compiledRoot) &&
+                method.DeclaringType != null && method.DeclaringType.Assembly == _startupAssembly) {
+                file = file.Replace(_compiledRoot, _runtimeRoot);
+            }
+        }
+
         /// <summary>
         /// A hash of the file's bytes, as hex: what the startup library records for each file, so that
         /// a file edited since is parsed again rather than run from stale code.
@@ -228,7 +267,12 @@ namespace IronRuby.Runtime.Precompiled {
                 return;
             }
             if (path == null) {
-                path = Path.Combine(Path.GetDirectoryName(typeof(PrecompiledCode).Assembly.Location) ?? "", "IronRuby.Startup.dll");
+                // nothing to load next to a host without assembly files (NativeAOT) or that cannot load code
+                string location = typeof(PrecompiledCode).Assembly.Location;
+                if (String.IsNullOrEmpty(location) || !System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported) {
+                    return;
+                }
+                path = Path.Combine(Path.GetDirectoryName(location), "IronRuby.Startup.dll");
                 if (!File.Exists(path)) {
                     return;
                 }
@@ -256,6 +300,19 @@ namespace IronRuby.Runtime.Precompiled {
                     }
                     return;
                 }
+                // the tree it belongs to: where it was compiled, or a copy of that tree it was moved with
+                string compiledRoot = info.Root + "/";
+                string runtimeRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path)), info.RootFromLibrary)).TrimEnd('/', '\\') + "/";
+                if (runtimeRoot == compiledRoot) {
+                    runtimeRoot = compiledRoot;
+                } else if (!info.Relocatable) {
+                    if (Trace) {
+                        Console.Error.WriteLine("IronRuby.Startup: compiled for " + compiledRoot + ", not used in " + runtimeRoot);
+                    }
+                    return;
+                }
+                _compiledRoot = compiledRoot;
+                _runtimeRoot = runtimeRoot;
                 // each file's code is a class of its own (RubyStartup<i>), loaded when the file first runs
                 var entry = (Func<int, Func<RubyScope, object, object>>)index.GetMethod("Entry").CreateDelegate(
                     typeof(Func<int, Func<RubyScope, object, object>>));
@@ -266,7 +323,7 @@ namespace IronRuby.Runtime.Precompiled {
                     Console.Error.WriteLine("IronRuby.Startup: loaded " + path + " in " + watch.Elapsed.TotalMilliseconds.ToString("F1") + " ms");
                 }
                 for (int i = 0; i < info.Files.Length; i++) {
-                    string file = info.Files[i], hash = info.Hashes[i];
+                    string file = Path.IsPathRooted(info.Files[i]) ? info.Files[i] : runtimeRoot + info.Files[i], hash = info.Hashes[i];
                     // checked when the file is first loaded: most of a library's files may never be
                     Func<bool> isCurrent = () => {
                         bool current;
