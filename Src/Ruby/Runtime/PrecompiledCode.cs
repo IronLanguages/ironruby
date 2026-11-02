@@ -130,6 +130,15 @@ namespace IronRuby.Runtime.Precompiled {
             return MutableString.CreateBinary(bytes, encoding).Freeze();
         }
 
+        /// <summary>
+        /// A frozen string the compiler made from text (the literal parts of an interpolated string): with the same
+        /// content as the compiler's, characters. Made from bytes, every interpolation appending it to its characters
+        /// would convert one of the two (Fiber.new: 3x the time of its "#{file}:#{line}").
+        /// </summary>
+        public static MutableString/*!*/ FrozenString(string/*!*/ text, RubyEncoding/*!*/ encoding) {
+            return MutableString.Create(text, encoding).Freeze();
+        }
+
         public static BlockDispatcher/*!*/ CreateBlockDispatcher(int parameterCount, int postCount, int attributesAndArity,
             string sourcePath, int sourceLine, RubyParameterSignature signature) {
             var result = BlockDispatcher.Create(parameterCount, postCount, (BlockSignatureAttributes)attributesAndArity, sourcePath, sourceLine);

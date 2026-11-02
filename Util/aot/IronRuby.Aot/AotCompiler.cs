@@ -649,10 +649,17 @@ namespace IronRuby.Aot {
                 }
 
                 case MutableString str when str.IsFrozen:
-                    // literal parts of an interpolated string: frozen, only ever copied from
+                    // literal parts of an interpolated string: frozen, only ever copied from; made of what the compiler
+                    // made them of, characters or bytes (appending one kind to the other converts)
                     hint = "str";
                     CheckUnrelocatable("string literal", str.ToString());
-                    return Expression.Call(typeof(PrecompiledCode).GetMethod("FrozenString"),
+                    if (!str.IsBinary) {
+                        Count("frozen strings (characters)");
+                        return Expression.Call(typeof(PrecompiledCode).GetMethod("FrozenString", new[] { typeof(string), typeof(RubyEncoding) }),
+                            Expression.Constant(str.ToString(), typeof(string)), ConstantField(str.Encoding, typeof(RubyEncoding)));
+                    }
+                    Count("frozen strings (bytes)");
+                    return Expression.Call(typeof(PrecompiledCode).GetMethod("FrozenString", new[] { typeof(byte[]), typeof(RubyEncoding) }),
                         ByteArray(str.ToByteArray()), ConstantField(str.Encoding, typeof(RubyEncoding)));
 
                 case InstanceVariableSite ivar:
