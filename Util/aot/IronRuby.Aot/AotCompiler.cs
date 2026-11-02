@@ -132,6 +132,13 @@ namespace IronRuby.Aot {
                     list.Add(offset); list.Add(line);
                 };
             }
+            if (Library && LoopMethodsJitted) {
+                IronRuby.Aot.Compiler.LambdaCompiler.MethodImplFlags = lambda => {
+                    if (!IsMethodOrBlock(lambda) || !LoopFinder.HasLoop(lambda)) return MethodImplAttributes.IL;
+                    Count("methods and blocks with a loop left to the JIT (AggressiveOptimization)");
+                    return MethodImplAttributes.AggressiveOptimization;
+                };
+            }
             for (int i = 0; i < paths.Length; i++) {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 if (Library && i > 0) {
@@ -174,6 +181,7 @@ namespace IronRuby.Aot {
             if (Library) {
                 if (chunks != 0) throw new NotSupportedException("a startup library initializes its constants lazily");
                 IronRuby.Aot.Compiler.LambdaCompiler.LineRecorder = null;
+                IronRuby.Aot.Compiler.LambdaCompiler.MethodImplFlags = null;
                 // the files relative to the tree, if they are in it
                 var recorded = paths.Select(p => RootPrefix != null && p.StartsWith(RootPrefix, StringComparison.Ordinal) ? p.Substring(RootPrefix.Length) : p).ToArray();
                 DefineStartupIndex(new CustomAttributeBuilder(
@@ -205,6 +213,44 @@ namespace IronRuby.Aot {
             Count("init chunks", chunks);
 
             Save(outputPath, PEHeaderBuilder.CreateExecutableHeader(), MetadataTokens.MethodDefinitionHandle(main.MetadataToken));
+        }
+
+        /// <summary>
+        /// A method or block whose own code has a loop is left to the JIT (AggressiveOptimization: crossgen2 does not compile it,
+        /// and the JIT compiles it optimized at its first call). ReadyToRun code is only replaced by optimized code after it has
+        /// been called often enough, and never while it runs: a loop that runs long in a method called once - Kernel#loop,
+        /// a fiber thread's loop - would run as ReadyToRun code to the end, calling every helper the JIT would have inlined.
+        /// File and class bodies, which run once, keep their ReadyToRun code. IR_AOT_LOOP_JIT=0 turns this off.
+        /// </summary>
+        public bool LoopMethodsJitted = Environment.GetEnvironmentVariable("IR_AOT_LOOP_JIT") != "0";
+
+        private static bool IsMethodOrBlock(LambdaExpression lambda) {
+            // the encoded Ruby frame name: "\u2111\u211c:" + label; file and class bodies are labelled <top (required)>, <main>, <class:X>...
+            const string prefix = "\u2111\u211c:";
+            return lambda.Name != null && lambda.Name.StartsWith(prefix, StringComparison.Ordinal) &&
+                lambda.Name.Length > prefix.Length && lambda.Name[prefix.Length] != '<';
+        }
+
+        // a loop in the lambda's own code, not in the lambdas nested in it
+        private sealed class LoopFinder : ExpressionVisitor {
+            private bool _found;
+
+            public static bool HasLoop(LambdaExpression lambda) {
+                var finder = new LoopFinder();
+                finder.Visit(lambda.Body);
+                return finder._found;
+            }
+
+            public override Expression Visit(Expression node) => _found ? node : base.Visit(node);
+
+            protected override Expression VisitLoop(LoopExpression node) {
+                _found = true;
+                return node;
+            }
+
+            protected override Expression VisitLambda<T>(Expression<T> node) => node;
+
+            protected override Expression VisitExtension(Expression node) => node.CanReduce ? Visit(node.Reduce()) : node;
         }
 
         /// <summary>
