@@ -1795,6 +1795,86 @@ class Symbol
 end
 t('OSR case after Symbol#=== restored') { osr_case_mix([:t, :s, 1], 20000) }
 
+# element writes a deopt takes back (JitUndoLog): the generic body re-runs the call, so every write
+# of the specialized run has to be gone first - appends that grew the hash, writes made by an inner
+# self-call, Array and Hash writes mixed, the frozen copy of a String key
+def sp_hfill(h, base, m)
+  h[base] = 1
+  h[base + 1] = 2
+  h[base + 2] = 3
+  m * m
+end
+
+def sp_hrec(h, n, m)
+  h[n] = n
+  if n > 0
+    sp_hrec(h, n - 1, m)
+  else
+    m * m
+  end
+end
+
+def sp_hswap(h, a, k, m)
+  h[k] = a[0]
+  a[0] = k
+  h[k] += 1
+  m * m
+end
+
+def sp_hstr(h, k, m)
+  h[k] = 1
+  m * m
+end
+
+def osr_hfill(h, n, at, huge)
+  acc = 0
+  i = 0
+  while i < n
+    h[i] = i
+    acc += (i == at ? huge : 1) * 4
+    i += 1
+  end
+  acc
+end
+
+module JitLateModule; end
+
+def sp_case_late(v)
+  case v
+  when JitLateModule then :late
+  when Comparable then :cmp
+  else :none
+  end
+end
+
+puts
+puts '--- 7d. element writes taken back by a deopt; modules included late ---'
+hf = {}
+warm { |i| sp_hfill(hf, i * 3, 3) }
+t('appends that grow the hash, then a deopt') { r = (0...40).map { |j| sp_hfill(hf, 1000 + j * 3, (j % 7 == 3) ? 2**40 : 2) }; [r.uniq, hf.size, hf.to_a.last(4), hf.keys.each_slice(37).map(&:first)] }
+t('... and lookups after the take-backs') { [(0..1200).count { |k| hf.key?(k) }, hf[1110], hf[1111], hf[359]] }
+hrec = {}
+warm { |i| sp_hrec(hrec, i % 5, 3) }
+t('writes of inner self-calls, deopt in the innermost') { x = {}; [sp_hrec(x, 6, 2**40), x.to_a] }
+t('... into a hash that has keys') { [sp_hrec(hrec, 9, 2**40), hrec.to_a] }
+warm { |i| sp_hswap({}, [1], i, 3) }
+t('Array and Hash writes, then a deopt') { h2 = { 5 => 1 }; a2 = [7]; [sp_hswap(h2, a2, 5, 2**40), h2.dup, a2.dup, sp_hswap(h2, a2, 6, 2**40), h2, a2] }
+warm { |i| sp_hstr({}, "k#{i}", 3) }
+t('a String key copied, then a deopt') { k = "zz".dup; x = {}; [sp_hstr(x, k, 2**40), x.keys[0].frozen?, x.keys[0].equal?(k), k.frozen?, x] }
+t('a value replaced while the hash is iterated') { x = { 1 => 2, 3 => 4 }; x.each { |kk, vv| sp_hstr(x, 1, 2) }; x }
+t('OSR appends that grow the hash, deopt mid-loop') { x = {}; [osr_hfill(x, 30000, 20001, 2**62), x.size, x.keys.first(3), x.keys.last(3), x[20001], x[20002]] }
+lv = [1, "s", 2.5, :sym, nil, [1], { a: 1 }, 1..2]
+warm { |i| sp_case_late(lv[i % lv.size]) }
+t('case of a module before it is included') { lv.map { |v| sp_case_late(v) } }
+class String; include JitLateModule; end
+t('... included into String') { lv.map { |v| sp_case_late(v) } }
+warm { |i| sp_case_late(lv[i % lv.size]) }
+class Array; include JitLateModule; end
+t('... and into Array, hot again') { lv.map { |v| sp_case_late(v) } }
+sx = "ext".dup.extend(Comparable)
+ox = Object.new.extend(JitLateModule)
+t('... on extended objects') { [sp_case_late(sx), sp_case_late(ox), sp_case_late(Object.new)] }
+
 # a module that one Hash is extended with: its key? and fetch stop those intrinsics for good (Hash#[] stays)
 def sp_hget3(h, k)
   h[k]
