@@ -1334,6 +1334,24 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// The Ruby superclass of a CLR type that no library initializer gives one: the class of its CLR base type, except
+        /// that System::Exception is Ruby's Exception, which a bare rescue lets through. A CLR exception deriving from it directly
+        /// (.NET's recommended base for custom exceptions; AggregateException) is an application error like a SystemException,
+        /// so it is a StandardError. Ruby's own exception classes get their superclasses from the library initializers; the
+        /// types emitted for Ruby subclasses of Exception (IRubyType) and control flow (StackUnwinder) keep Exception.
+        /// </summary>
+        private RubyClass/*!*/ GetClrSuperClassNoLock(Type/*!*/ type) {
+            RubyClass baseClass = GetOrCreateClassNoLock(type.BaseType);
+            if (baseClass == _exceptionClass
+                && !typeof(IRubyType).IsAssignableFrom(type) && !typeof(StackUnwinder).IsAssignableFrom(type)) {
+                // the initializers define StandardError before any such class is asked for (one made earlier keeps Exception)
+                Debug.Assert(_standardErrorClass != null);
+                return _standardErrorClass ?? baseClass;
+            }
+            return baseClass;
+        }
+
         private RubyClass/*!*/ GetOrCreateClassNoLock(Type/*!*/ type) {
             Debug.Assert(!RubyModule.IsModuleType(type));
 
@@ -1347,7 +1365,7 @@ namespace IronRuby.Runtime {
             if (type.IsByRef) {
                 baseClass = _objectClass;
             } else {
-                baseClass = GetOrCreateClassNoLock(type.BaseType);
+                baseClass = GetClrSuperClassNoLock(type);
             }
 
             TypeTracker tracker = (TypeTracker)TypeTracker.FromMemberInfo(type);
@@ -1973,7 +1991,8 @@ namespace IronRuby.Runtime {
                         }
 
                         if (super == null) {
-                            super = GetOrCreateClassNoLock(type.BaseType);
+                            // same superclass as when the type is first reached from Ruby, so the hierarchy doesn't depend on load order
+                            super = GetClrSuperClassNoLock(type);
                         }
 
                         // Use empty constant initializer rather than null so that we don't try to initialize nested types.

@@ -226,7 +226,10 @@ namespace IronRuby.Builtins {
         [ThreadStatic]
         private static List<RubyStruct> _hashing;
 
-        private sealed class RecursiveHashException : Exception {
+        // MRI throws here, which no rescue sees. It unwinds through user #hash methods, so as a StackUnwinder it is
+        // not caught by their rescue clauses either (a plain Exception subclass would be a StandardError to Ruby).
+        private sealed class RecursiveHashException : StackUnwinder {
+            public RecursiveHashException() : base(null) { }
         }
 
         public int GetHashCode(UnaryOpStorage/*!*/ hashStorage, ConversionStorage<int>/*!*/ fixnumCast) {
