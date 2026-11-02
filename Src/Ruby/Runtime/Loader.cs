@@ -91,7 +91,7 @@ namespace IronRuby.Runtime {
 
         private struct CompiledFile {
             public readonly ScriptCode/*!*/ CompiledCode;
-            // a precompiled file not yet checked against its source (see RegisterPrecompiledFile), or null
+            // a precompiled file (see RegisterPrecompiledFile): whether its source is still what it was compiled from; null for saved code
             public readonly Func<bool> IsCurrent;
 
             public CompiledFile(ScriptCode/*!*/ compiledCode)
@@ -328,8 +328,10 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Makes require/load of <paramref name="fullPath"/> run <paramref name="code"/> instead of
         /// compiling the file's source. The file is still resolved on the load path as usual.
-        /// <paramref name="isCurrent"/>, if given, is asked the first time the file is loaded whether the
-        /// code still matches the source; if not, the file is compiled from source as any other.
+        /// <paramref name="isCurrent"/> is asked each time the file is loaded whether the code still matches
+        /// the source; once it does not, the file is compiled from source as any other. While Coverage
+        /// measures (Coverage.start, which a program calls at any time), the file is compiled from source
+        /// too: the precompiled code has no coverage counters.
         /// </summary>
         internal void RegisterPrecompiledFile(string/*!*/ fullPath, ScriptCode/*!*/ code, Func<bool> isCurrent) {
             lock (_compiledFileMutex) {
@@ -356,11 +358,14 @@ namespace IronRuby.Runtime {
                     return false;
                 }
                 if (compiledFile.IsCurrent != null) {
+                    if (_context.Coverage != null) {
+                        return false;
+                    }
+                    // checked at every load, not only the first: `load' of a file edited since runs the edit
                     if (!compiledFile.IsCurrent()) {
                         _compiledFiles.Remove(fullPath);
                         return false;
                     }
-                    _compiledFiles[fullPath] = compiledFile = new CompiledFile(compiledFile.CompiledCode);
                 }
                 return true;
             }
