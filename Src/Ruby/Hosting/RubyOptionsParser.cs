@@ -853,6 +853,7 @@ namespace IronRuby.Hosting {
             // back a name it did not find unchanged, and that would be a file called irb in the
             // current directory.
             if (!ConsoleOptions.Exit && ConsoleOptions.Command == null && ConsoleOptions.FileName == null) {
+                NoProgramGiven = true;
                 string irb = StartsInteractive() ? FindMainFileFromPath("irb") : null;
                 if (irb != null && irb != "irb" && Platform.FileExists(irb)) {
                     ConsoleOptions.FileName = irb;
@@ -865,6 +866,15 @@ namespace IronRuby.Hosting {
         }
 
         /// <summary>
+        /// Whether stdin is a terminal, for a host whose own descriptor 0 is not the program's - a warm-start
+        /// worker (WarmStart) runs a request with the client's descriptors; null asks the console.
+        /// </summary>
+        internal bool? StdinIsTerminal { get; set; }
+
+        /// <summary>Set by Parse when there was neither -e nor a script, and it chose irb or stdin itself.</summary>
+        internal bool NoProgramGiven { get; private set; }
+
+        /// <summary>
         /// Whether `ironruby` with no program should be interactive: stdin is a terminal (a
         /// console on Windows, which .NET tells apart from NUL), and no option asked for stdin.
         /// </summary>
@@ -872,6 +882,9 @@ namespace IronRuby.Hosting {
             if (LanguageSetup.Options.ContainsKey("LoopOverInput") || LanguageSetup.Options.ContainsKey("CheckSyntaxOnly") ||
                 LanguageSetup.Options.ContainsKey("SkipToRubyShebang")) {
                 return false;
+            }
+            if (StdinIsTerminal.HasValue) {
+                return StdinIsTerminal.Value;
             }
             try {
                 return !Console.IsInputRedirected;

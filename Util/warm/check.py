@@ -306,6 +306,9 @@ def pty_run(argv, warm, keys=b'', delay=1.5):
     p.wait(timeout=30)
     os.close(master)
     text = out.decode('utf-8', 'replace').replace('\r\n', '\n')
+    # `ir' alone at a terminal is irb, whose banner shows one of its tips at random
+    # (IRB::StartupMessage::TIPS): not a difference between two runs.
+    text = re.sub(r'(IRB v[^\n]*\n)([^\n]*?  )?[^\n]*', r'\1\2<tip>', text)
     mode = 'cold'
     kept = []
     for l in text.splitlines(True):

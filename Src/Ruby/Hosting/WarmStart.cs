@@ -1102,6 +1102,11 @@ namespace IronRuby.Hosting {
             languageSetup.Options["ApplicationBase"] = AppDomain.CurrentDomain.BaseDirectory;
             runtimeSetup.HostType = typeof(RubyScriptHost);
             var parser = CreateOptionsParser();
+            var rubyParser = parser as RubyOptionsParser;
+            if (rubyParser != null) {
+                // `ironruby' alone starts irb at a terminal: the client's stdin decides, not this process's
+                rubyParser.StdinIsTerminal = _warmStdinIsTerminal;
+            }
             try {
                 parser.Parse(hostOptions.IgnoredArgs.ToArray(), runtimeSetup, languageSetup, PlatformAdaptationLayer);
             } catch (InvalidOptionException) {
@@ -1153,9 +1158,10 @@ namespace IronRuby.Hosting {
             }
 
             CompareConsoleOptions(_warmConsoleOptions, options, diffs);
-            if (options.Command == null && options.FileName == null && _warmStdinIsTerminal) {
-                // .NET looked at descriptor 0 once, as the warm-up started (the native terminal
-                // state behind Console.ReadLine and ReadKey): on a terminal the REPL would echo twice.
+            if (rubyParser != null && rubyParser.NoProgramGiven && _warmStdinIsTerminal) {
+                // No program at a terminal is irb (or the program typed at it): .NET looked at descriptor 0
+                // once, as the warm-up started (the native terminal state behind Console.ReadLine and
+                // ReadKey), so on a terminal the line editor would echo twice.
                 diffs.Add("an interactive session");
             }
             if (diffs.Count > 0) {
