@@ -92,14 +92,6 @@ namespace IronRuby.Runtime.Calls {
             _blockIndex = Array.IndexOf(parameters, block);
         }
 
-        internal bool TakesBlock {
-            get { return _block != null; }
-        }
-
-        internal bool AcceptsCount(int count) {
-            return count >= _mandatoryCount && (_params != null || count <= _positionalCount);
-        }
-
         /// <summary>
         /// Whether the resolver would find this overload callable with these arguments; the caller has checked the count.
         /// A block: whether one is passed (<paramref name="hasBlock"/>, the signature's) and which (<paramref name="block"/>, maybe null).
@@ -411,6 +403,23 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         internal bool AcceptsShape(int count, Proc block) {
             return count >= _mandatoryCount && (_params != null || count <= _positionalCount) && (_block == null || !_block.NotNull || block != null);
+        }
+
+        /// <summary>
+        /// Whether the rule of a call of this overload - its only one - tests the type of the argument at <paramref name="index"/> (the
+        /// positional arguments, then a params array's items), passed to the site as a <paramref name="siteType"/>: the overload
+        /// resolver restricts an argument to its type unless the parameter takes anything of the site's type (OverloadResolver.
+        /// GetRestrictedArgs). So the rule bound for one call makes any call that passes arguments of the same types where they are
+        /// tested, whatever the others are - even nil to a [NotNull] Object.
+        /// </summary>
+        internal bool RestrictsArgument(int index, Type/*!*/ siteType) {
+            int positional = 0;
+            foreach (var p in _parameters) {
+                if (p.Kind == Kind.Positional && positional++ == index || p.Kind == Kind.Params) {
+                    return !p.Type.IsAssignableFrom(siteType);
+                }
+            }
+            return true;
         }
     }
 
@@ -802,10 +811,15 @@ namespace IronRuby.Runtime.Calls {
         private LibraryCallPlan/*!*/ _plan;
         private bool _hasBlock;
 
-        // A method of several overloads: the resolver picked the plan's for arguments of these types (null for nil) and a block
-        // given or not. The choice is a function of them (it made no assumptions upon values), so it holds for a call that passes
-        // the same. A method of one overload: null, the plan says whether a call can be made (LibraryCallPlan.Accepts).
-        private Type[] _argTypes;
+        // The calls the dispatcher makes are those the rule bound for its first call would make (and no others): the arguments the
+        // rule tests the type of are of the types the first call's were (null for nil), and a block is given or not as it was. A
+        // method of one overload: the rule tests the arguments it has to convert (see LibraryCallPlan.RestrictsArgument); the
+        // others, null in _restricted, are passed as they are. A method of several overloads: every argument is tested - the
+        // resolver picked the plan's overload for arguments of these types, and the choice is a function of them (it made no
+        // assumptions upon values), so it holds for a call that passes the same. Either way the plan accepts the call (it did the
+        // first call, LibraryCallPlan.Accepts).
+        private Type/*!*/[]/*!*/ _argTypes;
+        private bool[] _restricted;
         private bool _blockGiven;
 
         // the receiver test: IRubyObject - its exact type and its immediate class's version; nil or a CLR object (plain type test,
@@ -889,7 +903,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             Proc block = blockArg as Proc;
-            if (_budget.Remaining <= 0 || blockArg != null && block == null || !Matches(block, args) || !_plan.Accepts(self, _hasBlock, block, args)) {
+            if (_budget.Remaining <= 0 || blockArg != null && block == null || !Matches(block, args)) {
                 result = null;
                 return false;
             }
@@ -944,16 +958,13 @@ namespace IronRuby.Runtime.Calls {
 
         private bool Matches(Proc block, object[]/*!*/ args) {
             var types = _argTypes;
-            if (types == null) {
-                return _plan.AcceptsShape(args.Length, block);
-            }
-
             if ((block != null) != _blockGiven || args.Length != types.Length) {
                 return false;
             }
+            var restricted = _restricted;
             for (int i = 0; i < args.Length; i++) {
                 var arg = args[i];
-                if ((arg != null ? arg.GetType() : null) != types[i]) {
+                if ((restricted == null || restricted[i]) && (arg != null ? arg.GetType() : null) != types[i]) {
                     return false;
                 }
             }
@@ -998,20 +1009,32 @@ namespace IronRuby.Runtime.Calls {
             var callArgs = new object[count];
             Array.Copy(args, first, callArgs, 0, count);
 
-            Type[] argTypes = null;
+            var argTypes = new Type[count];
+            for (int i = 0; i < count; i++) {
+                argTypes[i] = (callArgs[i] != null) ? callArgs[i].GetType() : null;
+            }
+
             LibraryCallPlan plan;
+            bool[] restricted = null;
             if (method.MethodBases.Length == 1) {
                 plan = method.GetCallPlan(0);
                 if (plan != null && !plan.AcceptsShape(count, block)) {
                     plan = null;
                 }
+                if (plan != null) {
+                    // the site's parameter types: Func<CallSite, (scope)?, self, (block)?, arguments..., result>
+                    var siteTypes = delegateType.IsGenericType ? delegateType.GetGenericArguments() : Type.EmptyTypes;
+                    if (siteTypes.Length != first + count + 2) {
+                        return null;
+                    }
+                    restricted = new bool[count];
+                    for (int i = 0; i < count; i++) {
+                        restricted[i] = plan.RestrictsArgument(i, siteTypes[first + 1 + i]);
+                    }
+                }
             } else {
                 // The overload the resolver would pick, if that can be told by the parameter types alone, else asks it. Either way
                 // the choice is made for arguments of these types, and holds for a call that passes arguments of the same.
-                argTypes = new Type[count];
-                for (int i = 0; i < count; i++) {
-                    argTypes[i] = (callArgs[i] != null) ? callArgs[i].GetType() : null;
-                }
                 var selector = method.GetOverloadSelector();
                 int index = (selector != null) ? selector.Select(target, signature.HasBlock, block, callArgs) : -1;
                 if (index == -1) {
@@ -1041,6 +1064,7 @@ namespace IronRuby.Runtime.Calls {
             dispatcher._plan = plan;
             dispatcher._hasBlock = signature.HasBlock;
             dispatcher._argTypes = argTypes;
+            dispatcher._restricted = restricted;
             dispatcher._blockGiven = block != null;
             dispatcher._isRubyObject = isRubyObject;
             dispatcher._targetType = (target != null) ? target.GetType() : null;
