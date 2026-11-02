@@ -440,8 +440,13 @@ namespace IronRuby.Builtins {
             return self.Count == 0;
         }
 
+        // Looks the key up in the table itself, as MRI does: neither #[], #key? nor the default
+        // value or proc take part.
         [RubyMethod("fetch")]
-        public static object Fetch(RubyContext/*!*/ context, BlockParam block, IDictionary<object, object>/*!*/ self, object key, [Optional]object defaultValue) {
+        public static object Fetch(BinaryOpStorage/*!*/ newStorage, BlockParam block, IDictionary<object, object>/*!*/ self,
+            object key, [Optional]object defaultValue) {
+            RubyContext context = newStorage.Context;
+
             // MRI warns whenever both are given, even if the key is present
             if (block != null && defaultValue != Missing.Value) {
                 context.ReportWarning("block supersedes default value argument");
@@ -458,10 +463,33 @@ namespace IronRuby.Builtins {
             }
 
             if (defaultValue == Missing.Value) {
-                throw RubyExceptions.CreateIndexError("key not found");
+                throw CreateKeyError(context, newStorage, self, key);
             }
 
             return defaultValue;
+        }
+
+        /// <summary>
+        /// MRI's rb_key_err_raise: KeyError.new("key not found: #{key.inspect}"), then the receiver
+        /// and the key - which KeyError#receiver and #key answer - set on it directly. KeyError is
+        /// one of the exception classes defined in Ruby (see the KeyError reopening in
+        /// Src/StdLib/ironruby/ruby4.rb); until it is, this is an IndexError.
+        /// </summary>
+        internal static Exception/*!*/ CreateKeyError(RubyContext/*!*/ context, BinaryOpStorage/*!*/ newStorage, object receiver, object key) {
+            MutableString message = MutableString.CreateMutable(RubyEncoding.UTF8).Append("key not found: ").Append(context.Inspect(key));
+
+            object keyErrorClass;
+            if (context.ObjectClass.TryGetConstant(null, "KeyError", out keyErrorClass)) {
+                var site = newStorage.GetCallSite("new");
+                Exception exception = site.Target(site, keyErrorClass, message) as Exception;
+                if (exception != null) {
+                    context.SetInstanceVariable(exception, "@__receiver", receiver);
+                    context.SetInstanceVariable(exception, "@__key", key);
+                    return exception;
+                }
+            }
+
+            return RubyExceptions.CreateIndexError(message.ToString());
         }
 
         [RubyMethod("has_key?")]

@@ -1,9 +1,8 @@
 # frozen_string_literal: false
 #
-# Ruby 4.0's monitor.rb, with the Monitor class that MRI implements in C
-# (ext/monitor/monitor.c) written out in Ruby on top of Thread::Mutex. The
-# rest - MonitorMixin and its ConditionVariable - is MRI's lib/monitor.rb as
-# it stands, doc comments aside.
+# Ruby 4.0's monitor.rb: MonitorMixin and its ConditionVariable as MRI's
+# lib/monitor.rb has them, doc comments aside. The Monitor class, which MRI
+# implements in C (ext/monitor/monitor.c), is C# here too.
 #
 # Copyright (C) 2001  Shugo Maeda <shugo@ruby-lang.org>
 #
@@ -11,92 +10,10 @@
 # You can freely distribute/modify this library.
 #
 
-class Monitor
-  def initialize
-    @mon_mutex = Thread::Mutex.new
-    @mon_owner = nil
-    @mon_count = 0
-  end
-
-  # Enters exclusive section, if it is available; answers whether it did.
-  def try_enter
-    if @mon_owner != Thread.current
-      return false unless @mon_mutex.try_lock
-      @mon_owner = Thread.current
-      @mon_count = 0
-    end
-    @mon_count += 1
-    true
-  end
-
-  # Enters exclusive section.
-  def enter
-    if @mon_owner != Thread.current
-      @mon_mutex.lock
-      @mon_owner = Thread.current
-      @mon_count = 0
-    end
-    @mon_count += 1
-    nil
-  end
-
-  # Leaves exclusive section.
-  def exit
-    mon_check_owner
-    if @mon_count <= 0
-      raise ThreadError, "monitor_exit: count:#{@mon_count}"
-    end
-    @mon_count -= 1
-    if @mon_count == 0
-      @mon_owner = nil
-      @mon_mutex.unlock
-    end
-    nil
-  end
-
-  # Enters exclusive section and executes the block. Leaves the exclusive
-  # section automatically when the block exits.
-  def synchronize
-    enter
-    begin
-      yield
-    ensure
-      exit
-    end
-  end
-
-  # Returns true if this monitor is locked by any thread
-  def mon_locked?
-    @mon_mutex.locked?
-  end
-
-  # Returns true if this monitor is locked by current thread.
-  def mon_owned?
-    @mon_mutex.locked? && @mon_owner == Thread.current
-  end
-
-  def mon_check_owner
-    unless @mon_owner == Thread.current
-      raise ThreadError, "current fiber not owner"
-    end
-    nil
-  end
-
-  # Releases the monitor for the duration of cond.wait, and takes it back -
-  # at the depth it was held - once the wait is over.
-  def wait_for_cond(cond, timeout)
-    count = @mon_count
-    @mon_owner = nil
-    @mon_count = 0
-    begin
-      cond.wait(@mon_mutex, timeout)
-      true
-    ensure
-      @mon_owner = Thread.current
-      @mon_count = count
-    end
-  end
-end
+# Monitor itself - try_enter, enter, exit, synchronize, mon_locked?, mon_owned?,
+# mon_check_owner and wait_for_cond - is C#, like MRI's ext/monitor/monitor.c:
+# Src/Libraries/Monitor/RubyMonitor.cs.
+load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Monitors'
 
 module MonitorMixin
   class ConditionVariable

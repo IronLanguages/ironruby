@@ -42,48 +42,63 @@ namespace IronRuby.StandardLibrary.Threading {
             return RubyUtils.ObjectToMutableString(context, self);
         }
         private readonly object/*!*/ _syncRoot = new object();
-        // The Ruby thread that holds the lock (the fiber group's owner) ...
-        private Thread _owner;
+
+#pragma warning disable 420 // volatile fields passed by ref to Interlocked
+        // The Ruby thread that holds the lock (the fiber group's owner) ... Taking a free lock is one
+        // compare-and-swap of this field from null; only a thread that has to wait for it uses _syncRoot.
+        private volatile Thread _owner;
         // ... and the CLR thread that actually took it. Ruby reports #owned? per *fiber* even though
-        // deadlock detection is per thread, and a fiber is a CLR thread here.
-        private Thread _ownerFiber;
+        // deadlock detection is per thread, and a fiber is a CLR thread here. Only the holder sets it to
+        // itself, so the holder can test it without a lock.
+        private volatile Thread _ownerFiber;
+        // Threads waiting in LockContended; changed under _syncRoot, read by Release without it.
+        private int _waiters;
 
         // Every locked mutex is registered so that a thread's locks can be released when it dies,
-        // which is what MRI does.
-        private static readonly HashSet<RubyMutex>/*!*/ _lockedMutexes = new HashSet<RubyMutex>();
+        // which is what MRI does. A lock taken by a thread for itself goes on that thread's own list,
+        // which only that thread touches; one taken inside a fiber - whose owning thread may die first,
+        // or be the one that releases it - goes into the shared set.
+        [ThreadStatic]
+        private static List<RubyMutex> _heldByThisThread;
+        [ThreadStatic]
+        private static int _heldPruneAt;
+        private static readonly HashSet<RubyMutex>/*!*/ _sharedLocked = new HashSet<RubyMutex>(ReferenceEqualityComparer<RubyMutex>.Instance);
+        private bool _inSharedSet;
 
         public RubyMutex() {
         }
-
-        internal object Mutex { get { return _syncRoot; } }
 
         private static Thread/*!*/ CurrentOwner {
             get { return RubyUtils.CurrentRubyThread; }
         }
 
+        /// <summary>Whether the calling fiber (CLR thread) holds the lock. Lock-free: see _ownerFiber.</summary>
+        internal bool IsHeldByCurrentFiber {
+            get { return ReferenceEquals(_ownerFiber, Thread.CurrentThread); }
+        }
+
+        internal bool IsLockedInternal {
+            get { return _owner != null; }
+        }
+
         [RubyMethod("locked?")]
         public static bool IsLocked(RubyMutex/*!*/ self) {
-            lock (self._syncRoot) {
-                return self._owner != null;
-            }
+            return self._owner != null;
         }
 
         [RubyMethod("owned?")]
         public static bool IsOwned(RubyMutex/*!*/ self) {
-            lock (self._syncRoot) {
-                return self._ownerFiber == Thread.CurrentThread;
-            }
+            return self.IsHeldByCurrentFiber;
         }
 
         [RubyMethod("try_lock")]
         public static bool TryLock(RubyMutex/*!*/ self) {
-            lock (self._syncRoot) {
-                if (self._owner != null) {
-                    return false;
-                }
-                self.Acquire();
-                return true;
+            Thread me = CurrentOwner;
+            if (Interlocked.CompareExchange(ref self._owner, me, null) != null) {
+                return false;
             }
+            self.Acquired(me);
+            return true;
         }
 
         [RubyMethod("lock")]
@@ -107,88 +122,156 @@ namespace IronRuby.StandardLibrary.Threading {
                 RubyUtils.CheckAsyncException();
             }
             Thread me = CurrentOwner;
-            lock (self._syncRoot) {
-                if (self._owner == me) {
+            if (Interlocked.CompareExchange(ref self._owner, me, null) == null) {
+                self.Acquired(me);
+                return;
+            }
+            self.LockContended(me, interruptible);
+        }
+
+        private void LockContended(Thread/*!*/ me, bool interruptible) {
+            lock (_syncRoot) {
+                if (_owner == me) {
                     // A fiber is a CLR thread here. If an asynchronous Thread#raise terminated
                     // the fiber in the narrow hand-off around #synchronize, reclaim its lock;
                     // a suspended (and therefore still alive) sibling fiber must still deadlock.
-                    if (self._ownerFiber != null && !self._ownerFiber.IsAlive) {
-                        self.Release();
+                    Thread fiber = _ownerFiber;
+                    if (fiber != null && !fiber.IsAlive) {
+                        Release();
                     } else {
                         throw new ThreadError("deadlock; recursive locking");
                     }
                 }
-                while (self._owner != null) {
-                    try {
-                        Monitor.Wait(self._syncRoot);
-                    } catch (ThreadInterruptedException) {
-                        // Thread#kill / Thread#raise nudged us; if nothing is parked the wait restarts.
-                        if (interruptible) {
-                            RubyUtils.TranslateThreadInterrupt();
+
+                // Counted before each attempt, and with a full fence: a Release that clears _owner
+                // after our attempt failed is then sure to see us waiting and pulse.
+                Interlocked.Increment(ref _waiters);
+                try {
+                    while (Interlocked.CompareExchange(ref _owner, me, null) != null) {
+                        try {
+                            Monitor.Wait(_syncRoot);
+                        } catch (ThreadInterruptedException) {
+                            // Thread#kill / Thread#raise nudged us; if nothing is parked the wait restarts.
+                            if (interruptible) {
+                                RubyUtils.TranslateThreadInterrupt();
+                            }
+                        }
+                    }
+                } finally {
+                    Interlocked.Decrement(ref _waiters);
+                }
+                Acquired(me);
+            }
+        }
+
+        // Called by the thread that has just set _owner to <paramref name="owner"/>.
+        private void Acquired(Thread/*!*/ owner) {
+            Thread current = Thread.CurrentThread;
+            _ownerFiber = current;
+            if (ReferenceEquals(owner, current)) {
+                List<RubyMutex> held = _heldByThisThread;
+                if (held == null) {
+                    _heldByThisThread = held = new List<RubyMutex>();
+                    _heldPruneAt = 16;
+                } else if (held.Count >= _heldPruneAt) {
+                    PruneHeld(held, current);
+                }
+                held.Add(this);
+            } else {
+                _inSharedSet = true;
+                lock (_sharedLocked) {
+                    _sharedLocked.Add(this);
+                }
+            }
+        }
+
+        // Drops the entries of locks this thread no longer holds: a lock is normally taken off the list
+        // when it is released, but not when another fiber of the same thread released it.
+        private static void PruneHeld(List<RubyMutex>/*!*/ held, Thread/*!*/ current) {
+            held.RemoveAll(m => !ReferenceEquals(m._ownerFiber, current));
+            _heldPruneAt = Math.Max(16, held.Count * 2);
+        }
+
+        // Called by the holder (or, for a dead holder, on its behalf) with the lock held.
+        private void Release() {
+            if (_inSharedSet) {
+                _inSharedSet = false;
+                lock (_sharedLocked) {
+                    _sharedLocked.Remove(this);
+                }
+            } else if (ReferenceEquals(_ownerFiber, Thread.CurrentThread)) {
+                List<RubyMutex> held = _heldByThisThread;
+                if (held != null) {
+                    // locks are mostly released in the reverse order they were taken
+                    for (int i = held.Count - 1; i >= 0; i--) {
+                        if (ReferenceEquals(held[i], this)) {
+                            held.RemoveAt(i);
+                            break;
                         }
                     }
                 }
-                self.Acquire();
             }
-        }
-
-        private void Acquire() {
-            _owner = CurrentOwner;
-            _ownerFiber = Thread.CurrentThread;
-            lock (_lockedMutexes) {
-                _lockedMutexes.Add(this);
-            }
-        }
-
-        private void Release() {
-            _owner = null;
             _ownerFiber = null;
-            lock (_lockedMutexes) {
-                _lockedMutexes.Remove(this);
+            Interlocked.Exchange(ref _owner, null);
+            if (Volatile.Read(ref _waiters) != 0) {
+                lock (_syncRoot) {
+                    Monitor.PulseAll(_syncRoot);
+                }
             }
-            Monitor.PulseAll(_syncRoot);
         }
 
         /// <summary>
         /// Called when a Ruby thread terminates: MRI releases every mutex the thread still holds.
+        /// Must be called on <paramref name="thread"/> itself.
         /// </summary>
         public static void ReleaseLocksOf(Thread/*!*/ thread) {
-            RubyMutex[] held;
-            lock (_lockedMutexes) {
-                held = new RubyMutex[_lockedMutexes.Count];
-                _lockedMutexes.CopyTo(held);
-            }
-            foreach (RubyMutex m in held) {
-                lock (m._syncRoot) {
-                    if (m._owner == thread || m._ownerFiber == thread) {
-                        m.Release();
+            if (ReferenceEquals(thread, Thread.CurrentThread)) {
+                List<RubyMutex> held = _heldByThisThread;
+                if (held != null && held.Count > 0) {
+                    foreach (RubyMutex m in held.ToArray()) {
+                        if (m._owner == thread || m._ownerFiber == thread) {
+                            m.Release();
+                        }
                     }
+                    held.Clear();
+                }
+            }
+
+            RubyMutex[] shared;
+            lock (_sharedLocked) {
+                if (_sharedLocked.Count == 0) {
+                    return;
+                }
+                shared = new RubyMutex[_sharedLocked.Count];
+                _sharedLocked.CopyTo(shared);
+            }
+            foreach (RubyMutex m in shared) {
+                if (m._owner == thread || m._ownerFiber == thread) {
+                    m.Release();
                 }
             }
         }
+#pragma warning restore 420
 
         /// <summary>Releases the lock if the current Ruby thread holds it; false if it does not.</summary>
         private static bool DoUnlock(RubyMutex/*!*/ self) {
-            lock (self._syncRoot) {
-                if (self._owner != CurrentOwner) {
-                    return false;
-                }
-                self.Release();
-                return true;
+            if (self._owner != CurrentOwner) {
+                return false;
             }
+            self.Release();
+            return true;
         }
 
         [RubyMethod("unlock")]
         public static RubyMutex/*!*/ Unlock(RubyMutex/*!*/ self) {
-            lock (self._syncRoot) {
-                if (self._owner == null) {
-                    throw new ThreadError("Attempt to unlock a mutex which is not locked");
-                }
-                if (self._owner != CurrentOwner) {
-                    throw new ThreadError("Attempt to unlock a mutex which is locked by another thread");
-                }
-                self.Release();
+            Thread owner = self._owner;
+            if (owner == null) {
+                throw new ThreadError("Attempt to unlock a mutex which is not locked");
             }
+            if (owner != CurrentOwner) {
+                throw new ThreadError("Attempt to unlock a mutex which is locked by another thread");
+            }
+            self.Release();
             return self;
         }
 
@@ -309,10 +392,8 @@ namespace IronRuby.StandardLibrary.Threading {
         }
 
         private static object DoSleep(RubyMutex/*!*/ self, double seconds) {
-            lock (self._syncRoot) {
-                if (self._owner != CurrentOwner) {
-                    throw new ThreadError("Attempt to unlock a mutex which is not locked");
-                }
+            if (self._owner != CurrentOwner) {
+                throw new ThreadError("Attempt to unlock a mutex which is not locked");
             }
 
             Unlock(self);

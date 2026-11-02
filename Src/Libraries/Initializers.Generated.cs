@@ -16,6 +16,7 @@
 #pragma warning disable 169 // mcs: unused private method
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.Builtins.BuiltinsLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Threading.ThreadingLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Monitors.MonitorsLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Sockets.SocketsLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.OpenSsl.OpenSslLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Digest.DigestLibraryInitializer))]
@@ -2977,6 +2978,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Object, System.Object>(IronRuby.Builtins.HashOps.SetDefaultValue)
             );
             
+            DefineLibraryMethod(module, "hash", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Builtins.Hash, System.Int32>(IronRuby.Builtins.HashOps.GetHashCode)
+            );
+            
             DefineLibraryMethod(module, "initialize", 0x52, 
                 0x00000000U, 0x00000000U, 0x00000000U, 0x00000001U, 
                 new Func<IronRuby.Builtins.Hash, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Initialize), 
@@ -4640,6 +4646,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__ir_lazy_grep_v__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.LazyGrepV)
+            );
+            
+            DefineLibraryMethod(module, "__ir_responds_to__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.RespondToStorage, System.Object, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.RespondsTo)
             );
             
             DefineLibraryMethod(module, "__ir_set_hidden_ivar__", 0x52, 
@@ -7293,6 +7304,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.RubyProcess.WaitPidPrimitive)
             );
             
+            DefineLibraryMethod(module, "clock_gettime", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyProcess.ClockGetTime)
+            );
+            
             DefineLibraryMethod(module, "egid", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.Builtins.RubyProcess.EffectiveGroupId)
@@ -8939,7 +8955,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "fetch", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Collections.Generic.IDictionary<System.Object, System.Object>, System.Object, System.Object, System.Object>(IronRuby.Builtins.IDictionaryOps.Fetch)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BlockParam, System.Collections.Generic.IDictionary<System.Object, System.Object>, System.Object, System.Object, System.Object>(IronRuby.Builtins.IDictionaryOps.Fetch)
             );
             
             DefineLibraryMethod(module, "flatten", 0x51, 
@@ -9318,7 +9334,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "hash", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<System.Int32>, System.Collections.IList, System.Int32>(IronRuby.Builtins.IListOps.GetHashCode)
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Collections.IList, System.Int32>(IronRuby.Builtins.IListOps.GetHashCode)
             );
             
             DefineLibraryMethod(module, "include?", 0x51, 
@@ -11541,6 +11557,75 @@ namespace IronRuby.StandardLibrary.Threading {
             
         }
         #endif
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Monitors {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class MonitorsLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(System.Object));
+            
+            
+            DefineGlobalClass("Monitor", typeof(IronRuby.StandardLibrary.Monitors.RubyMonitor), 0x00000008, classRef0, LoadMonitor_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+        }
+        
+        private static void LoadMonitor_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "enter", 0x11, 
+                0x00000000U, 
+                new Action<IronRuby.StandardLibrary.Monitors.RubyMonitor>(IronRuby.StandardLibrary.Monitors.RubyMonitor.Enter)
+            );
+            
+            DefineLibraryMethod(module, "exit", 0x11, 
+                0x00000000U, 
+                new Action<IronRuby.StandardLibrary.Monitors.RubyMonitor>(IronRuby.StandardLibrary.Monitors.RubyMonitor.Exit)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Monitors.RubyMonitor, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Monitors.RubyMonitor.Inspect)
+            );
+            
+            DefineLibraryMethod(module, "mon_check_owner", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Monitors.RubyMonitor, System.Object>(IronRuby.StandardLibrary.Monitors.RubyMonitor.CheckOwner)
+            );
+            
+            DefineLibraryMethod(module, "mon_locked?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Monitors.RubyMonitor, System.Boolean>(IronRuby.StandardLibrary.Monitors.RubyMonitor.IsLocked)
+            );
+            
+            DefineLibraryMethod(module, "mon_owned?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Monitors.RubyMonitor, System.Boolean>(IronRuby.StandardLibrary.Monitors.RubyMonitor.IsOwned)
+            );
+            
+            DefineLibraryMethod(module, "synchronize", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Monitors.RubyMonitor, System.Object>(IronRuby.StandardLibrary.Monitors.RubyMonitor.Synchronize)
+            );
+            
+            DefineLibraryMethod(module, "to_s", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Monitors.RubyMonitor, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Monitors.RubyMonitor.Inspect)
+            );
+            
+            DefineLibraryMethod(module, "try_enter", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Monitors.RubyMonitor, System.Boolean>(IronRuby.StandardLibrary.Monitors.RubyMonitor.TryEnter)
+            );
+            
+            DefineLibraryMethod(module, "wait_for_cond", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.StandardLibrary.Monitors.RubyMonitor, System.Object, System.Object, System.Boolean>(IronRuby.StandardLibrary.Monitors.RubyMonitor.WaitForCond)
+            );
+            
+        }
         
     }
 }

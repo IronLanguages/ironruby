@@ -264,11 +264,20 @@ namespace IronRuby.Runtime {
 
         internal RubyClass/*!*/ SelfImmediateClass {
             get {
-                if (_selfImmediateClass == null) {
-                    // thread-safe, since all threads will calculate the same result:
-                    _selfImmediateClass = RubyContext.GetImmediateClassOf(_selfObject);
+                RubyClass result = _selfImmediateClass;
+                if (result == null) {
+                    // thread-safe, since all threads will calculate the same result.
+                    // Only a singleton class is kept: an object gets one at most once, and from then on it
+                    // is the object's class for good. Until then self can gain one while this scope runs - a
+                    // def in an instance_eval block makes it lazily, as do define_singleton_method and
+                    // class << self - and a protected singleton method called on an explicit receiver must
+                    // then be checked against it, not against the class self had when the scope began.
+                    result = RubyContext.GetImmediateClassOf(_selfObject);
+                    if (result.IsSingletonClass) {
+                        _selfImmediateClass = result;
+                    }
                 }
-                return _selfImmediateClass; 
+                return result;
             }
         }
 
@@ -890,8 +899,8 @@ namespace IronRuby.Runtime {
 
                     case ScopeKind.BlockModule:
                         BlockParam blockParam = ((RubyBlockScope)scope).BlockFlowControl;
-                        Debug.Assert(blockParam.MethodLookupModule != null);
-                        return blockParam.MethodLookupModule;
+                        Debug.Assert(blockParam.IsModuleEval);
+                        return blockParam.GetMethodLookupModule(scope.SelfObject);
                 }
 
                 scope = scope.Parent;
@@ -1413,7 +1422,7 @@ var closureScope = scope as RubyClosureScope;
                     return ScopeKind.BlockMethod;
                 }
 
-                if (_blockFlowControl.MethodLookupModule == null) {
+                if (!_blockFlowControl.IsModuleEval) {
                     return ScopeKind.Block; 
                 }
 

@@ -249,7 +249,13 @@ namespace IronRuby.Builtins {
         }
         
         #region Instance Methods
-        
+
+        // Order-independent; see StructuralHash, which also covers hashes that contain themselves.
+        [RubyMethod("hash")]
+        public static int GetHashCode(UnaryOpStorage/*!*/ hashStorage, ConversionStorage<IntegerValue>/*!*/ toInt, Hash/*!*/ self) {
+            return StructuralHash.GetHashHash(hashStorage, toInt, self);
+        }
+
         [RubyMethod("[]")]
         public static object GetElement(BinaryOpStorage/*!*/ storage, IDictionary<object, object>/*!*/ self, object key) {
             object result;

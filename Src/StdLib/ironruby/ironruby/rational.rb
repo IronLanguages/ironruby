@@ -654,13 +654,28 @@ class Rational < Numeric
   # rb_convert_type_with_id(val, T_RATIONAL, "Rational", :to_r). Every test has to
   # survive a BasicObject, which answers neither #nil?, #class nor #respond_to? - and
   # which MRI converts perfectly well when it has a #to_r.
+  #
+  # A Rational is answered as it is, without a #to_r: rb_convert_type_with_id returns a
+  # value of the wanted type untouched. That is the common case - Rational(r, n) with a
+  # Rational r, as in ActiveSupport's Time#change - and it must not reach
+  # __ir_responds_to__, which gives the value a singleton class to ask: hundreds of
+  # microseconds for every new Rational. An Integer or a Float has no singleton class,
+  # so it is asked #respond_to? directly, as __ir_responds_to__ does after a TypeError.
   def self.__to_rational__(value)
-    name = nil.equal?(value) ? 'nil' : __ir_class_of__(value)
-    unless __ir_responds_to__(value, :to_r)
+    return value if ::Rational === value
+    responds =
+      if ::Integer === value || ::Float === value
+        value.respond_to?(:to_r)
+      else
+        __ir_responds_to__(value, :to_r)
+      end
+    unless responds
+      name = nil.equal?(value) ? 'nil' : __ir_class_of__(value)
       ::Kernel.raise(::TypeError, "can't convert #{name} into Rational")
     end
     result = value.to_r
     unless ::Rational === result
+      name = nil.equal?(value) ? 'nil' : __ir_class_of__(value)
       ::Kernel.raise(::TypeError,
         "can't convert #{name} into Rational (#{name}#to_r gives #{__ir_conversion_result_name__(result)})")
     end
@@ -980,6 +995,18 @@ module Kernel
   # nurat_f_rational. Rational(x) and Rational(x, nil) are different calls - the second
   # is a TypeError - so the arity is read off *args rather than from a default.
   def Rational(*args, exception: true)
+    # Rational(Integer, Integer) and Rational(Rational, Integer) - ActiveSupport's
+    # Time#change makes one of each for every Time#advance - go straight to what
+    # __convert__ ends with for them: __canonicalize__, and the Rational itself or its
+    # quotient.
+    if args.size == 2 && true.equal?(exception)
+      a1 = args[0]
+      a2 = args[1]
+      if ::Integer === a2
+        return ::Rational.__canonicalize__(a1, a2) if ::Integer === a1
+        return (a2 == 1 ? a1 : a1 / a2) if ::Rational === a1
+      end
+    end
     if args.size < 1 || args.size > 2
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)")
     end

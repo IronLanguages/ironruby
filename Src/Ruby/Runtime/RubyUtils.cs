@@ -1459,9 +1459,18 @@ namespace IronRuby.Runtime {
             // block looks methods up through the dummy singleton standing in front of their
             // class instead. It sits directly below the class, so a private method of Integer
             // is still reached; a `def' landing in it raises, which is what MRI does too.
+            //
+            // MRI makes the singleton class of an object only when the block defines something into it (see
+            // BlockParam.SetLazySingletonMethodLookup); a module's is always there.
             RubyModule lookupModule;
             if (RubyUtils.HasSingletonClass(self)) {
-                lookupModule = block.RubyContext.GetOrCreateSingletonClass(self);
+                var context = block.RubyContext;
+                if (self is RubyModule) {
+                    lookupModule = context.GetOrCreateSingletonClass(self);
+                } else {
+                    RubyClass immediate = context.GetImmediateClassOf(self);
+                    lookupModule = immediate.IsSingletonClass ? immediate : null;
+                }
             } else {
                 lookupModule = block.RubyContext.GetImmediateClassOf(self).GetDummySingletonClass();
             }
@@ -1471,9 +1480,14 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        private static bool EvaluateBlock(BlockParam/*!*/ block, RubyModule/*!*/ module, object self, object[] args, out object result) {
-            Assert.NotNull(block, module);
-            block.MethodLookupModule = module;
+        // A null module: the singleton class of self, made when a definition needs it.
+        private static bool EvaluateBlock(BlockParam/*!*/ block, RubyModule module, object self, object[] args, out object result) {
+            Assert.NotNull(block);
+            if (module != null) {
+                block.MethodLookupModule = module;
+            } else {
+                block.SetLazySingletonMethodLookup();
+            }
 
             if (args != null) {
                 result = RubyOps.Yield(args, null, self, block);
@@ -1915,6 +1929,14 @@ namespace IronRuby.Runtime {
         /// blocks on nothing.  Thread.handle_interrupt's :on_blocking only delivers at the former.
         /// </summary>
         public static void CheckAsyncException(bool atBlockingCall) {
+            // Everything below - a fiber being reclaimed, a parked signal, a parked finalizer, an
+            // exception parked by Thread#raise / #kill - is counted in _safePointRequests while it is
+            // outstanding, so with none of it there is nothing to look up. Mutex#lock and Monitor#enter
+            // come through here on every call.
+            if (Volatile.Read(ref _safePointRequests) == 0) {
+                return;
+            }
+
             // Reclamation runs CLR cleanup only. Do not enter Ruby signal/finalizer callbacks
             // or replace the unwind signal with a pending asynchronous exception.
             if (_reclaimingFiber) {

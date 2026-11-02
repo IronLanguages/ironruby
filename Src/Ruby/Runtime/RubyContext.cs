@@ -273,10 +273,11 @@ namespace IronRuby.Runtime {
         private readonly Dictionary<object, RubyInstanceData>/*!*/ _valueTypeInstanceData;
         private object/*!*/ ValueTypeInstanceDataLock { get { return _valueTypeInstanceData; } }
 
-        // The number of entries in _valueTypeInstanceData, published after each add. Entries are
-        // never removed, so zero means there is nothing to find: then a lookup - every
-        // `1.is_a?(Hash)` asks for the immediate class of an Integer - takes no lock.
-        private int _valueTypeInstanceDataCount;
+        // The CLR types of the keys of _valueTypeInstanceData, each once, published after the entry
+        // that brings a new one in is added. Entries are never removed, so a value of a type not
+        // listed has nothing to find there: then a lookup - every `1.is_a?(Hash)` asks for the
+        // immediate class of an Integer - takes no lock.
+        private Type[]/*!*/ _valueTypeInstanceDataTypes = Type.EmptyTypes;
 
         // not thread-safe: 
         private readonly RubyInstanceData/*!*/ _nilInstanceData = new RubyInstanceData(RubyUtils.NilObjectId);
@@ -2148,7 +2149,7 @@ namespace IronRuby.Runtime {
             IRubyObject rubyObj = obj as IRubyObject;
             if (rubyObj != null) {
                 return rubyObj.ImmediateClass;
-            } else if (data != null || (data = TryGetInstanceData(obj)) != null) {
+            } else if (data != null || (data = TryGetNonRubyObjectInstanceData(obj)) != null) {
                 return data.ImmediateClass;
             } else {
                 return null;
@@ -2533,13 +2534,20 @@ namespace IronRuby.Runtime {
                 return rubyObject.TryGetInstanceData();
             }
 
+            return TryGetNonRubyObjectInstanceData(obj);
+        }
+
+        // TryGetInstanceData of an object known not to be an IRubyObject.
+        private RubyInstanceData TryGetNonRubyObjectInstanceData(object obj) {
+            Debug.Assert(!(obj is IRubyObject));
+
             if (obj == null) {
                 return _nilInstanceData;
             }
 
             RubyInstanceData result;
             if (!RubyUtils.HasObjectState(obj) && !(obj is BigInteger)) {
-                if (Volatile.Read(ref _valueTypeInstanceDataCount) == 0) {
+                if (!MayHaveValueTypeInstanceData(obj.GetType())) {
                     return null;
                 }
                 lock (ValueTypeInstanceDataLock) {
@@ -2550,6 +2558,21 @@ namespace IronRuby.Runtime {
 
             TryGetClrTypeInstanceData(obj, out result);
             return result;
+        }
+
+        // Entries of _valueTypeInstanceData are never removed, and there are few kinds of them, so a
+        // value of a type none of them has has nothing to find there, and no lock needs to be taken
+        // to tell. That is the usual case: every `1.is_a?(Hash)` or `Integer === :a` asks for the
+        // immediate class of an Integer or a Symbol, while what gets instance data are rare values,
+        // such as the CLR enum values an object id has been asked of.
+        private bool MayHaveValueTypeInstanceData(Type/*!*/ type) {
+            Type[] types = Volatile.Read(ref _valueTypeInstanceDataTypes);
+            for (int i = 0; i < types.Length; i++) {
+                if (ReferenceEquals(types[i], type)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         internal bool TryGetClrTypeInstanceData(object/*!*/ obj, out RubyInstanceData result) {
@@ -2608,7 +2631,12 @@ namespace IronRuby.Runtime {
                 lock (ValueTypeInstanceDataLock) {
                     if (!_valueTypeInstanceData.TryGetValue(obj, out result)) {
                         _valueTypeInstanceData.Add(obj, result = new RubyInstanceData());
-                        Volatile.Write(ref _valueTypeInstanceDataCount, _valueTypeInstanceData.Count);
+
+                        // published after the entry is added (see MayHaveValueTypeInstanceData)
+                        Type type = obj.GetType();
+                        if (!MayHaveValueTypeInstanceData(type)) {
+                            Volatile.Write(ref _valueTypeInstanceDataTypes, ArrayUtils.Append(_valueTypeInstanceDataTypes, type));
+                        }
                     }
                 }
                 return result;

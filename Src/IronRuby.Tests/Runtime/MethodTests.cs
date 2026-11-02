@@ -849,7 +849,7 @@ class X; end
 
 c,d,x = C.new,D.new,X.new
 
-# test visibility caching:
+# test visibility caching (instance_eval makes no singleton class - Ruby 3.2 - so c is reported as an instance):
 2.times do
   [[d,c], [c,d], [x,c], [x,d]].each do |s,r| 
     s.instance_eval { r.foo } rescue p $! 
@@ -858,13 +858,71 @@ end
 "), @"
 foo
 foo
-#<NoMethodError: protected method 'foo' called for #<C:*>>
+#<NoMethodError: protected method 'foo' called for an instance of C>
 mm
 foo
 foo
-#<NoMethodError: protected method 'foo' called for #<C:*>>
+#<NoMethodError: protected method 'foo' called for an instance of C>
 mm
 ", OutputFlags.Match);
+        }
+
+        /// <summary>
+        /// A singleton class made while a scope runs - lazily, by a def in an instance_eval block - is self's class
+        /// from then on, also for the visibility of a protected method called on an explicit receiver, even when an
+        /// earlier call in the same scope already asked for self's class.
+        /// </summary>
+        public void Visibility5() {
+            TestOutput(@"
+class C; end
+
+o = C.new
+p(o.instance_eval {
+  me = self
+  [1].to_s
+  def secret; :a; end
+  singleton_class.send(:protected, :secret)
+  me.secret
+})
+
+p(C.new.instance_exec {
+  me = self
+  me.to_s
+  define_singleton_method(:secret) { :b }
+  singleton_class.send(:protected, :secret)
+  me.secret
+})
+", @"
+:a
+:b
+");
+        }
+
+        /// <summary>
+        /// A compiled protected call guards on the caller's self class, so once self gains a singleton class that
+        /// includes the method's module the same site binds again and the call is allowed.
+        /// </summary>
+        public void Visibility6() {
+            TestOutput(@"
+module M
+  protected
+  def foo; :m; end
+end
+class C; include M; end
+
+s = Object.new
+r = C.new
+p(s.instance_eval {
+  res = []
+  2.times do |i|
+    res << (r.foo rescue :denied)
+    extend(M) if i == 0
+  end
+  res
+})
+", @"
+[:denied, :m]
+");
         }
 
         public void ModuleFunctionVisibility1() {

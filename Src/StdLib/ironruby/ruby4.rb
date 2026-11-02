@@ -3,13 +3,6 @@
 # widely-used core methods added between Ruby 2.0 and 4.0.
 
 module Kernel
-  # A structure that contains itself hashes to one fixed value, whether it is an
-  # Array or a Hash: the two nest in each other, and #hash unwinds all the way out
-  # when it meets something it is already inside - see Hash#hash and Array#hash.
-  private def __ir_recursive_hash_value__
-    0x48415348
-  end
-
   # X.try_convert asks for a conversion and then insists on the result: nil when the
   # object has no such method or answers nil, the result when it is of the right kind,
   # and a TypeError naming both classes otherwise. The wording is the one ruby/spec
@@ -24,37 +17,13 @@ module Kernel
       "can't convert #{obj.class} into #{name} (#{obj.class}##{method} gives #{__ir_conversion_result_name__(converted)})")
   end
 
-  # A BasicObject has none of Kernel's methods to ask with - not even #respond_to? -
-  # so its own singleton class is asked instead, which answers for anything it or its
-  # ancestors define. An Integer or a Symbol has no singleton class to ask at all, but
-  # it does have Kernel, so it is asked directly.
-  private def __ir_responds_to__(obj, method)
-    singleton = begin
-      class << obj; self; end
-    rescue ::TypeError
-      return obj.respond_to?(method)
-    end
-
-    return true if singleton.method_defined?(method) || singleton.private_method_defined?(method)
-    singleton.method_defined?(:respond_to?) && obj.respond_to?(method)
-  end
+  # __ir_responds_to__(obj, method) is KernelOps.RespondsTo: it asks the class obj has
+  # without making obj a singleton class to ask through.
 
   # The class of an object that may not answer #class: a BasicObject has none, and MRI's
   # conversion messages name its class all the same.
   private def __ir_class_of__(obj)
     ::Kernel.instance_method(:class).bind(obj).call
-  end
-
-  # 32-bit avalanche, so that combining the per-element hashes cannot cancel equal
-  # values out. The result is brought back into signed 32-bit range: a Fixnum here
-  # is 32 bits wide, and a #hash that answered 0x80000000..0xFFFFFFFF would hand
-  # every consumer of it a Bignum.
-  private def __ir_mix32__(value)
-    value &= 0xFFFFFFFF
-    value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0xFFFFFFFF
-    value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0xFFFFFFFF
-    value ^= value >> 16
-    value >= 0x80000000 ? value - 0x100000000 : value
   end
 end
 
@@ -6869,19 +6838,6 @@ class String
   public
 end
 
-class Hash
-  # the core raises IndexError; Ruby 1.9 introduced KeyError for this
-  unless (begin; {}.fetch(:missing); rescue KeyError; true; rescue IndexError; false; end)
-    alias :fetch_raising_index_error :fetch
-
-    def fetch(key, *default, &block)
-      return fetch_raising_index_error(key, *default, &block) if !default.empty? || block
-      return self[key] if key?(key)
-      raise KeyError.new("key not found: #{key.inspect}", receiver: self, key: key)
-    end
-  end
-end
-
 # Ruby 3.4 changed Hash#inspect from {:a=>1} to {a: 1}, quoting symbol keys
 # that are not simple identifiers, and spacing the rocket for other keys.
 class Hash
@@ -8689,6 +8645,8 @@ module Process
   # Process.times returns this; MRI names the struct under Process as well as Struct.
   Tms = Struct::Tms unless const_defined?(:Tms)
 
+  # Process.clock_gettime is C# (RubyProcess.ClockGetTime); this is what a build without
+  # the C# Process module has.
   unless respond_to?(:clock_gettime)
     # .NET's Stopwatch is the monotonic source; Time.now covers the wall clock.
     def self.clock_gettime(clock_id = CLOCK_MONOTONIC, unit = :float_second)
@@ -12047,88 +12005,7 @@ class Hash
     end
   end
 
-  # Order-independent #hash. Like CRuby, a hash that (directly or indirectly)
-  # contains itself hashes to one fixed value, which is what keeps
-  # `h.hash == {x: h}.hash` true for `h = {}; h[:x] = h`. Arrays share the value
-  # and the mixer - and the stack below - because the two nest in each other.
-  private def __recursive_hash_value__
-    __ir_recursive_hash_value__
-  end
-
-  private def __mix32__(value)
-    __ir_mix32__(value)
-  end
-
-  private def __hash_digest__
-    result = __mix32__(size)
-    each { |k, v| result ^= __mix32__([k, v].hash) }
-    result
-  end
-
-  def hash
-    stack = Thread.current[:__hash_hash_stack__]
-    if stack
-      throw stack if stack.any? { |o| o.equal?(self) }
-      stack.push(self)
-      begin
-        __hash_digest__
-      ensure
-        stack.pop
-      end
-    else
-      stack = [self]
-      Thread.current[:__hash_hash_stack__] = stack
-      begin
-        boxed = catch(stack) { [__hash_digest__] }
-        boxed.is_a?(Array) ? boxed[0] : __recursive_hash_value__
-      ensure
-        Thread.current[:__hash_hash_stack__] = nil
-      end
-    end
-  end
-end
-
-class Array
-  # Order matters here, unlike in a Hash, so the elements are folded one after
-  # another rather than XOR-ed together: [1, [1, []]] and [2, [2, []]] differ, and
-  # an empty array does not hash to nothing.
-  private def __hash_digest__
-    result = __ir_mix32__(size + 0x41525259)
-    each do |item|
-      value = item.hash
-      # MRI reads what #hash answers as an integer, so an object that answers
-      # something with #to_int is asked for it.
-      value = value.to_int unless value.is_a?(::Integer)
-      result = __ir_mix32__(result ^ __ir_mix32__(value))
-    end
-    result
-  end
-
-  # An array met again while it is being hashed abandons the whole computation,
-  # which then answers the one recursive value - so an array that contains itself
-  # and an array that merely contains that one, which are #eql?, hash alike. The
-  # stack is the one Hash#hash uses, because the two nest in each other.
-  def hash
-    stack = Thread.current[:__hash_hash_stack__]
-    if stack
-      throw stack if stack.any? { |o| o.equal?(self) }
-      stack.push(self)
-      begin
-        __hash_digest__
-      ensure
-        stack.pop
-      end
-    else
-      stack = [self]
-      Thread.current[:__hash_hash_stack__] = stack
-      begin
-        boxed = catch(stack) { [__hash_digest__] }
-        boxed.is_a?(::Array) ? boxed[0] : __ir_recursive_hash_value__
-      ensure
-        Thread.current[:__hash_hash_stack__] = nil
-      end
-    end
-  end
+  # Hash#hash is the core's (HashOps), and so is Array#hash: see StructuralHash.
 end
 
 # Hash.ruby2_keywords_hash and .ruby2_keywords_hash? are the runtime's: the mark is a flag
