@@ -314,7 +314,8 @@ namespace IronRuby.Runtime.Calls {
                 var type = info.ParameterType;
 
                 if (overload.IsParamArray(i)) {
-                    if (i != infos.Count - 1 || !type.IsArray || type.GetArrayRank() != 1) {
+                    // optional parameters and a params array make candidates the resolver tells apart by other rules
+                    if (i != infos.Count - 1 || !type.IsArray || type.GetArrayRank() != 1 || positionalCount != mandatoryCount) {
                         return null;
                     }
 
@@ -414,6 +415,228 @@ namespace IronRuby.Runtime.Calls {
     }
 
     /// <summary>
+    /// The overload of a library method of several that the resolver picks for a call (RubyOverloadResolver; OverloadResolver
+    /// in the DLR), in two cases that need no conversion analysis: the only overload taking the arguments given, and the
+    /// overload that the resolver prefers to every other on the parameters' types alone. The resolver goes narrowing level by
+    /// level and takes the best of the candidates applicable on the first level that has any; a candidate whose parameter
+    /// types the arguments' types are assignable to is applicable on level None, and one that is exactly as good as another on
+    /// each parameter or better (SelectBestConversionFor: the parameter of the argument's own type; of two such, the [NotNull]
+    /// one) and better on at least one is preferred to it (OverloadResolver.GetPreferredParameters), whatever level that other
+    /// one is applicable on. Anything else is left to the resolver.
+    /// </summary>
+    internal sealed class LibraryOverloadSelector {
+        // The parameters a candidate of each overload has for a call (RubyOverloadResolver.MapSpecialParameters): the block
+        // (MissingBlockParam if the overload takes none), self and the positional ones, a params array's items expanded.
+        private sealed class Shape {
+            internal Type/*!*/ BlockType;
+            internal bool BlockNotNull;
+            internal Type/*!*/ SelfType;
+            internal bool SelfNotNull;
+            internal Type/*!*/[]/*!*/ Positional;
+            internal bool[]/*!*/ PositionalNotNull;
+            internal int Mandatory;
+            internal Type ItemType;
+            internal bool ItemNotNull;
+
+            internal bool Takes(int count, Proc block) {
+                return count >= Mandatory && (ItemType != null || count <= Positional.Length) && !(BlockNotNull && block == null);
+            }
+
+            internal Type/*!*/ GetType(int position, out bool notNull) {
+                switch (position) {
+                    case 0: notNull = BlockNotNull; return BlockType;
+                    case 1: notNull = SelfNotNull; return SelfType;
+                }
+                int i = position - 2;
+                if (i < Positional.Length) {
+                    notNull = PositionalNotNull[i];
+                    return Positional[i];
+                }
+                notNull = ItemNotNull;
+                return ItemType;
+            }
+        }
+
+        private readonly Shape/*!*/[]/*!*/ _shapes;
+
+        private LibraryOverloadSelector(Shape/*!*/[]/*!*/ shapes) {
+            _shapes = shapes;
+        }
+
+        /// <summary>
+        /// Null if some overload's parameters can't be told (by-ref, a params dictionary).
+        /// </summary>
+        internal static LibraryOverloadSelector TryCreate(OverloadInfo/*!*/[]/*!*/ overloads, SelfCallConvention callConvention) {
+            var shapes = new Shape[overloads.Length];
+            for (int k = 0; k < overloads.Length; k++) {
+                var overload = overloads[k];
+                var infos = overload.Parameters;
+                int hidden = RubyOverloadResolver.GetHiddenParameterCount(overload, callConvention);
+                if (callConvention != SelfCallConvention.SelfIsParameter || hidden == 0) {
+                    return null;
+                }
+
+                var shape = new Shape { BlockType = typeof(MissingBlockParam) };
+                var positional = new List<Type>();
+                var positionalNotNull = new List<bool>();
+                for (int i = 0; i < infos.Count; i++) {
+                    var type = infos[i].ParameterType;
+                    if (type.IsByRef || overload.IsParamDictionary(i)) {
+                        return null;
+                    }
+                    if (i < hidden - 1) {
+                        if (type == typeof(BlockParam)) {
+                            shape.BlockType = type;
+                            shape.BlockNotNull = overload.ProhibitsNull(i);
+                        }
+                    } else if (i == hidden - 1) {
+                        shape.SelfType = type;
+                        shape.SelfNotNull = overload.ProhibitsNull(i);
+                    } else if (overload.IsParamArray(i)) {
+                        if (i != infos.Count - 1 || !type.IsArray || shape.Mandatory != positional.Count) {
+                            return null;
+                        }
+                        shape.ItemType = type.GetElementType();
+                        shape.ItemNotNull = overload.ProhibitsNullItems(i);
+                    } else {
+                        if (infos[i].IsMandatory()) {
+                            if (shape.Mandatory != positional.Count) {
+                                // a mandatory parameter after an optional one
+                                return null;
+                            }
+                            shape.Mandatory++;
+                        }
+                        positional.Add(type);
+                        positionalNotNull.Add(overload.ProhibitsNull(i));
+                    }
+                }
+                shape.Positional = positional.ToArray();
+                shape.PositionalNotNull = positionalNotNull.ToArray();
+                shapes[k] = shape;
+            }
+            return new LibraryOverloadSelector(shapes);
+        }
+
+        /// <summary>
+        /// The index of the overload the resolver picks for the call, -1 if it has to be asked, -2 if no overload takes the arguments.
+        /// </summary>
+        /// <param name="hasBlock">Whether the call site passes a block (and <paramref name="block"/> is it, maybe null).</param>
+        internal int Select(object target, bool hasBlock, Proc block, object[]/*!*/ args) {
+            int count = args.Length;
+            int first = -1, taking = 0;
+            for (int k = 0; k < _shapes.Length; k++) {
+                if (_shapes[k].Takes(count, block)) {
+                    if (first < 0) {
+                        first = k;
+                    }
+                    taking++;
+                }
+            }
+            if (taking == 0) {
+                return -2;
+            }
+            if (taking == 1) {
+                return first;
+            }
+
+            // the actual arguments as the resolver has them (RubyOverloadResolver.CreateActualArguments): the block, self, the rest
+            var actual = new Type[count + 2];
+            actual[0] = !hasBlock ? typeof(MissingBlockParam) : (block != null) ? typeof(BlockParam) : typeof(DynamicNull);
+            actual[1] = (target != null) ? target.GetType() : typeof(DynamicNull);
+            for (int i = 0; i < count; i++) {
+                actual[i + 2] = (args[i] != null) ? args[i].GetType() : typeof(DynamicNull);
+            }
+
+            int result = -1;
+            for (int c = 0; c < _shapes.Length; c++) {
+                var candidate = _shapes[c];
+                if (!candidate.Takes(count, block) || !IsApplicableOnLevelNone(candidate, actual)) {
+                    continue;
+                }
+
+                bool best = true;
+                for (int d = 0; d < _shapes.Length && best; d++) {
+                    if (d != c && _shapes[d].Takes(count, block) && !IsPreferred(candidate, _shapes[d], actual)) {
+                        best = false;
+                    }
+                }
+
+                if (best) {
+                    if (result >= 0) {
+                        return -1;
+                    }
+                    result = c;
+                }
+            }
+            return result;
+        }
+
+        // Converter.CanConvertFrom on NarrowingLevel.None of the cases told apart by type alone:
+        private static bool IsApplicableOnLevelNone(Shape/*!*/ shape, Type/*!*/[]/*!*/ actual) {
+            for (int i = 0; i < actual.Length; i++) {
+                bool notNull;
+                Type type = shape.GetType(i, out notNull);
+                Type arg = actual[i];
+
+                if (i == 0) {
+                    // MissingBlockParam converts to BlockParam (not to [NotNull]), BlockParam to either, nil to BlockParam or MissingBlockParam (a class):
+                    if (arg == typeof(MissingBlockParam) ? (type == typeof(BlockParam) && notNull) :
+                        arg == typeof(DynamicNull) ? notNull : false) {
+                        return false;
+                    }
+                    continue;
+                }
+
+                if (arg == typeof(DynamicNull)) {
+                    if (notNull || type.IsValueType && type != typeof(bool)) {
+                        return false;
+                    }
+                } else if (!type.IsAssignableFrom(arg)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // OverloadResolver.GetPreferredParameters(one, two) == Candidate.One, by the parameter preferences that do not depend on conversions:
+        private static bool IsPreferred(Shape/*!*/ one, Shape/*!*/ two, Type/*!*/[]/*!*/ actual) {
+            bool better = false;
+            for (int i = 0; i < actual.Length; i++) {
+                bool notNullOne, notNullTwo;
+                Type typeOne = one.GetType(i, out notNullOne);
+                Type typeTwo = two.GetType(i, out notNullTwo);
+                Type arg = actual[i];
+
+                // ParametersEquivalent:
+                if (typeOne == typeTwo && notNullOne == notNullTwo) {
+                    continue;
+                }
+
+                // RubyOverloadResolver.SelectBestConversionFor:
+                if (arg == typeof(DynamicNull)) {
+                    // a nil block: BlockParam rather than a missing one
+                    if (i == 0 && typeOne == typeof(BlockParam) && typeTwo == typeof(MissingBlockParam)) {
+                        better = true;
+                        continue;
+                    }
+                    return false;
+                }
+
+                if (typeOne != arg) {
+                    return false;
+                }
+
+                if (typeTwo != arg || !arg.IsValueType && notNullOne) {
+                    better = true;
+                    continue;
+                }
+                return false;
+            }
+            return better;
+        }
+    }
+
+    /// <summary>
     /// The default protocol conversion of an argument passed to a [DefaultProtocol] parameter: the conversion action the rule calls
     /// (RubyOverloadResolver.Convert), here through a call site of its own, one per runtime and parameter type.
     /// </summary>
@@ -481,7 +704,7 @@ namespace IronRuby.Runtime.Calls {
         /// The calls a site makes through the dispatcher before it gets a rule: as many as the interpreter runs a rule for before
         /// compiling it, so that a site that is called this often pays for the rule only where it also pays for its compilation.
         /// </summary>
-        internal const int DefaultBudget = 32;
+        internal const int DefaultBudget = 200;
 
         internal static int Budget = DefaultBudget;
 
@@ -496,9 +719,11 @@ namespace IronRuby.Runtime.Calls {
         private bool _blockGiven;
 
         // the receiver test: IRubyObject - its exact type and its immediate class's version; nil or a CLR object (plain type test,
-        // see RubyCallAction.HasPlainClrTypeTest) - its exact type (null for nil) and the version of its class:
+        // see RubyCallAction.HasPlainClrTypeTest) - its exact type (null for nil) and the version of its class; true or false - the
+        // value too:
         private bool _isRubyObject;
         private Type _targetType;
+        private bool _bool;
         private VersionHandle _classVersion;
 
         private int _calls;
@@ -518,10 +743,66 @@ namespace IronRuby.Runtime.Calls {
             if (_isRubyObject) {
                 return self != null && self.GetType() == _targetType && ((IRubyObject)self).ImmediateClass.Version.Method == Version;
             }
-            return (self == null ? _targetType == null : self.GetType() == _targetType) && _classVersion.Method == Version;
+            return (self == null ? _targetType == null : self.GetType() == _targetType && (_targetType != typeof(bool) || (bool)self == _bool)) &&
+                _classVersion.Method == Version;
+        }
+
+        // Func<CallSite, (RubyScope)?, object, (Proc)?, object x N, object>, the shape the generated dispatchers take:
+        private static bool IsSiteDelegate(Type/*!*/ delegateType, RubyCallSignature signature) {
+            if (!delegateType.IsGenericType) {
+                return false;
+            }
+            var args = delegateType.GetGenericArguments();
+            int i = 1;
+            if (signature.HasScope && args[i++] != typeof(RubyScope)) {
+                return false;
+            }
+            if (args[i++] != typeof(object)) {
+                return false;
+            }
+            if (signature.HasBlock && args[i++] != typeof(Proc)) {
+                return false;
+            }
+            for (; i < args.Length; i++) {
+                if (args[i] != typeof(object)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Func<CallSite, TSelf, T0, ..., object> with reference types, no scope nor block:
+        private static LibraryDispatcher TryCreateTypedDispatcher(Type/*!*/ delegateType, int count, RubyCallSignature signature) {
+            if (signature.HasScope || signature.HasBlock || count > 2 || !delegateType.IsGenericType) {
+                return null;
+            }
+            var args = delegateType.GetGenericArguments();
+            if (args.Length != count + 3 || args[0] != typeof(CallSite) || args[args.Length - 1] != typeof(object) ||
+                delegateType != (count == 0 ? typeof(Func<,,>) : count == 1 ? typeof(Func<,,,>) : typeof(Func<,,,,>)).MakeGenericType(args)) {
+                return null;
+            }
+            var types = new Type[count + 1];
+            for (int i = 0; i < types.Length; i++) {
+                types[i] = args[i + 1];
+                if (types[i].IsValueType || types[i].IsPointer || types[i].IsByRef) {
+                    return null;
+                }
+            }
+            var generic = (count == 0) ? typeof(TypedLibraryDispatcher<>) : (count == 1) ? typeof(TypedLibraryDispatcher<,>) : typeof(TypedLibraryDispatcher<,,>);
+            return (LibraryDispatcher)Activator.CreateInstance(generic.MakeGenericType(types));
         }
 
         internal bool TryInvoke(RubyScope/*!*/ scope, object self, object blockArg, object[]/*!*/ args, out object result) {
+            if (_construction != null) {
+                if (_calls >= Budget || !_construction.IsCurrent(args.Length)) {
+                    result = null;
+                    return false;
+                }
+                _calls++;
+                result = _construction.Invoke(args);
+                return true;
+            }
+
             Proc block = blockArg as Proc;
             if (_calls >= Budget || blockArg != null && block == null || !Matches(block, args) || !_plan.Accepts(self, _hasBlock, block, args)) {
                 result = null;
@@ -531,6 +812,39 @@ namespace IronRuby.Runtime.Calls {
             _calls++;
             result = _plan.Invoke(_context, scope, self, _hasBlock ? block : null, args);
             return true;
+        }
+
+        // Class#new of the class that is the receiver, instead of a library method call:
+        private ObjectConstruction _construction;
+
+        /// <summary>
+        /// Class#new of a Ruby class whose instances are plain Ruby objects, made without a rule (see RubyClass.TryGetObjectConstruction).
+        /// </summary>
+        internal static object TryCreateConstruction(Type/*!*/ delegateType, RubyCallSignature signature, RubyClass/*!*/ cls,
+            RubyClass/*!*/ targetClass, int version, object[]/*!*/ args) {
+
+            int first = signature.HasScope ? 2 : 1;
+            int count = args.Length - first;
+            if (Budget <= 0 || signature.HasBlock || count < 0 || count > MaxLibraryArity || !MethodDispatcher.UntypedFuncs.Contains(delegateType) &&
+                !IsSiteDelegate(delegateType, signature)) {
+                return null;
+            }
+
+            var construction = cls.TryGetObjectConstruction(count);
+            if (construction == null) {
+                return null;
+            }
+
+            var dispatcher = CreateDispatcher(count, signature.HasScope, false);
+            dispatcher._context = cls.Context;
+            dispatcher._construction = construction;
+            dispatcher._isRubyObject = true;
+            dispatcher._targetType = cls.GetType();
+            dispatcher._classVersion = targetClass.Version;
+            dispatcher.Version = version;
+
+            object result = dispatcher.CreateDelegate(MethodDispatcher.UntypedFuncs.Contains(delegateType));
+            return (result.GetType() == delegateType) ? result : null;
         }
 
         private bool Matches(Proc block, object[]/*!*/ args) {
@@ -566,13 +880,12 @@ namespace IronRuby.Runtime.Calls {
             }
 
             bool isRubyObject = target is IRubyObject;
-            if (!isRubyObject && target != null && (target is bool || !plainClrTypeTest)) {
+            if (!isRubyObject && target != null && !(target is bool) && !plainClrTypeTest) {
                 return null;
             }
 
             // a foreign dynamic object is bound by its own meta-object (RubyMetaBinder.InteropBind)
-            if (target is IDynamicMetaObjectProvider && !(target is IRubyDynamicMetaObjectProvider) ||
-                target != null && TypeUtils.IsComObjectType(target.GetType())) {
+            if (RubyCallAction.IsForeignObject(target)) {
                 return null;
             }
 
@@ -598,19 +911,36 @@ namespace IronRuby.Runtime.Calls {
                     plan = null;
                 }
             } else {
+                // The overload the resolver would pick, if that can be told by the parameter types alone, else asks it. Either way
+                // the choice is made for arguments of these types, and holds for a call that passes arguments of the same.
                 argTypes = new Type[count];
                 for (int i = 0; i < count; i++) {
                     argTypes[i] = (callArgs[i] != null) ? callArgs[i].GetType() : null;
                 }
-                int index = method.GetResolvedOverload(binder, target, argTypes, signature.HasBlock, block != null, args);
+                var selector = method.GetOverloadSelector();
+                int index = (selector != null) ? selector.Select(target, signature.HasBlock, block, callArgs) : -1;
+                if (index == -1) {
+                    index = method.GetResolvedOverload(binder, target, argTypes, signature.HasBlock, block != null, args);
+                }
                 plan = (index >= 0) ? method.GetCallPlan(index) : null;
+                if (plan != null && !plan.AcceptsShape(count, block)) {
+                    plan = null;
+                }
             }
 
             if (plan == null || !plan.Accepts(target, signature.HasBlock, block, callArgs)) {
                 return null;
             }
 
-            var dispatcher = CreateDispatcher(count, signature.HasScope, signature.HasBlock);
+            // A site the runtime makes itself (a hook call, say) may have typed parameters:
+            bool isUntyped = MethodDispatcher.UntypedFuncs.Contains(delegateType);
+            LibraryDispatcher dispatcher;
+            if (isUntyped || IsSiteDelegate(delegateType, signature)) {
+                dispatcher = CreateDispatcher(count, signature.HasScope, signature.HasBlock);
+            } else if ((dispatcher = TryCreateTypedDispatcher(delegateType, count, signature)) == null) {
+                return null;
+            }
+
             dispatcher._context = targetClass.Context;
             dispatcher._plan = plan;
             dispatcher._hasBlock = signature.HasBlock;
@@ -618,10 +948,11 @@ namespace IronRuby.Runtime.Calls {
             dispatcher._blockGiven = block != null;
             dispatcher._isRubyObject = isRubyObject;
             dispatcher._targetType = (target != null) ? target.GetType() : null;
+            dispatcher._bool = (target is bool) ? (bool)target : false;
             dispatcher._classVersion = targetClass.Version;
             dispatcher.Version = version;
 
-            object result = dispatcher.CreateDelegate(MethodDispatcher.UntypedFuncs.Contains(delegateType));
+            object result = dispatcher.CreateDelegate(isUntyped);
             return (result.GetType() == delegateType) ? result : null;
         }
 
@@ -700,6 +1031,93 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
             return true;
+        }
+    }
+
+    public sealed class TypedLibraryDispatcher<TSelf> : LibraryDispatcher where TSelf : class {
+        public override object/*!*/ CreateDelegate(bool isUntyped) {
+            return new Func<CallSite, TSelf, object>(Invoke);
+        }
+
+        public object Invoke(CallSite/*!*/ callSite, TSelf self) {
+            object result;
+            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, ArrayUtils.EmptyObjects, out result)) {
+                return result;
+            }
+            return ((CallSite<Func<CallSite, TSelf, object>>)callSite).Update(callSite, self);
+        }
+    }
+
+    public sealed class TypedLibraryDispatcher<TSelf, T0> : LibraryDispatcher where TSelf : class where T0 : class {
+        public override object/*!*/ CreateDelegate(bool isUntyped) {
+            return new Func<CallSite, TSelf, T0, object>(Invoke);
+        }
+
+        public object Invoke(CallSite/*!*/ callSite, TSelf self, T0 arg0) {
+            object result;
+            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0 }, out result)) {
+                return result;
+            }
+            return ((CallSite<Func<CallSite, TSelf, T0, object>>)callSite).Update(callSite, self, arg0);
+        }
+    }
+
+    public sealed class TypedLibraryDispatcher<TSelf, T0, T1> : LibraryDispatcher where TSelf : class where T0 : class where T1 : class {
+        public override object/*!*/ CreateDelegate(bool isUntyped) {
+            return new Func<CallSite, TSelf, T0, T1, object>(Invoke);
+        }
+
+        public object Invoke(CallSite/*!*/ callSite, TSelf self, T0 arg0, T1 arg1) {
+            object result;
+            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0, arg1 }, out result)) {
+                return result;
+            }
+            return ((CallSite<Func<CallSite, TSelf, T0, T1, object>>)callSite).Update(callSite, self, arg0, arg1);
+        }
+    }
+
+    /// <summary>
+    /// What the rule RubyClass.BuildObjectConstructionNoFlow builds for Class#new of a plain Ruby class does: under the class's
+    /// version (its initializer), allocate a RubyObject and call a Ruby initializer that takes the arguments given - or, the
+    /// initializer being Object's (or BasicObject's) and there being no arguments, only allocate.
+    /// </summary>
+    internal sealed class ObjectConstruction {
+        private readonly RubyClass/*!*/ _class;
+        private readonly int _version;
+
+        // the initializer's body (Func<object, Proc, object x N, object>), null if it is not called:
+        private readonly Delegate _initializer;
+        private readonly int _arity;
+
+        internal ObjectConstruction(RubyClass/*!*/ cls, int version, Delegate initializer, int arity) {
+            _class = cls;
+            _version = version;
+            _initializer = initializer;
+            _arity = arity;
+        }
+
+        internal bool IsCurrent(int count) {
+            return _class.Version.Method == _version && count == _arity;
+        }
+
+        internal object/*!*/ Invoke(object[]/*!*/ args) {
+            // PropagateRetrySingleton(instance = new RubyObject(class), instance.initialize(args)):
+            var instance = new RubyObject(_class);
+            if (_initializer == null) {
+                return instance;
+            }
+
+            object result;
+            switch (args.Length) {
+                case 0: result = ((Func<object, Proc, object>)_initializer)(instance, null); break;
+                case 1: result = ((Func<object, Proc, object, object>)_initializer)(instance, null, args[0]); break;
+                case 2: result = ((Func<object, Proc, object, object, object>)_initializer)(instance, null, args[0], args[1]); break;
+                case 3: result = ((Func<object, Proc, object, object, object, object>)_initializer)(instance, null, args[0], args[1], args[2]); break;
+                case 4: result = ((Func<object, Proc, object, object, object, object, object>)_initializer)(instance, null, args[0], args[1], args[2], args[3]); break;
+                case 5: result = ((Func<object, Proc, object, object, object, object, object, object>)_initializer)(instance, null, args[0], args[1], args[2], args[3], args[4]); break;
+                default: throw Assert.Unreachable;
+            }
+            return RubyOps.PropagateRetrySingleton(instance, result);
         }
     }
 }

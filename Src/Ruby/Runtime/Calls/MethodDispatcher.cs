@@ -39,6 +39,31 @@ namespace IronRuby.Runtime.Calls {
     public abstract partial class MemberDispatcher {
         internal int Version;
 
+        // A receiver that is not a Ruby object: nil (DynamicNull), true/false or a CLR object - its exact type, the version of its
+        // class and, for true and false, the value (see MetaObjectBuilder.AddTargetTypeTest). Null for a Ruby object receiver.
+        private Type _clrType;
+        private VersionHandle _classVersion;
+        private bool _boolValue;
+
+        // the type of a Ruby method's body taking count arguments, see CreateRubyMethodLambda
+        internal static Type/*!*/ GetRubyMethodDelegateType(int count) {
+            switch (count) {
+                case 0: return typeof(Func<object, Proc, object>);
+                case 1: return typeof(Func<object, Proc, object, object>);
+                case 2: return typeof(Func<object, Proc, object, object, object>);
+                case 3: return typeof(Func<object, Proc, object, object, object, object>);
+                case 4: return typeof(Func<object, Proc, object, object, object, object, object>);
+                case 5: return typeof(Func<object, Proc, object, object, object, object, object, object>);
+                default: return null;
+            }
+        }
+
+        internal void SetClrReceiver(object target, RubyClass/*!*/ targetClass) {
+            _clrType = (target != null) ? target.GetType() : typeof(Microsoft.Scripting.Runtime.DynamicNull);
+            _boolValue = target is bool && (bool)target;
+            _classVersion = targetClass.Version;
+        }
+
         public abstract object/*!*/ CreateDelegate(bool isUntyped);
 
         /// <summary>
@@ -59,6 +84,11 @@ namespace IronRuby.Runtime.Calls {
                 if (type == typeof(RubyClass) || type == typeof(RubyModule)) {
                     return Unsafe.As<RubyModule>(self).ImmediateClass.Version.Method == Version;
                 }
+                if (type == _clrType) {
+                    return _classVersion.Method == Version && (type != typeof(bool) || (bool)self == _boolValue);
+                }
+            } else if (_clrType == typeof(Microsoft.Scripting.Runtime.DynamicNull)) {
+                return _classVersion.Method == Version;
             }
             IRubyObject obj = self as IRubyObject;
             return obj != null && obj.ImmediateClass.Version.Method == Version;

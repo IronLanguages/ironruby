@@ -194,6 +194,19 @@ namespace IronRuby.Runtime.Calls {
             return state as LibraryCallPlan;
         }
 
+        // null until made; NoSelector if the overloads' parameters can't be told
+        private object _overloadSelector;
+        private static readonly object NoSelector = new object();
+
+        internal LibraryOverloadSelector GetOverloadSelector() {
+            var selector = _overloadSelector;
+            if (selector == null) {
+                Interlocked.CompareExchange(ref _overloadSelector, (object)LibraryOverloadSelector.TryCreate(MethodBases, CallConvention) ?? NoSelector, null);
+                selector = _overloadSelector;
+            }
+            return selector as LibraryOverloadSelector;
+        }
+
         internal int GetResolvedOverload(RubyCallAction/*!*/ binder, object target, Type/*!*/[]/*!*/ argTypes, bool hasBlock, bool blockGiven,
             object[]/*!*/ args) {
 

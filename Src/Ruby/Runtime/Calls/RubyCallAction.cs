@@ -179,6 +179,12 @@ namespace IronRuby.Runtime.Calls {
             }
 
             var dispatcher = method.Info.GetDispatcher(delegateType, Signature, target, version);
+
+            // a Ruby method of a builtin class (much of the core library is written in Ruby), called on nil, true, false or a CLR object:
+            if (dispatcher == null && rubyMethod != null && !(target is IRubyObject) && (target == null || target is bool || plainClrTypeTest) &&
+                !IsForeignObject(target)) {
+                dispatcher = rubyMethod.GetClrDispatcher(delegateType, Signature, target, targetClass, version);
+            }
             if (dispatcher != null) {
                 object result = dispatcher.CreateDelegate(MethodDispatcher.UntypedFuncs.Contains(delegateType));
                 RubyBinder.DumpPrecompiledRule(this, dispatcher);
@@ -188,7 +194,12 @@ namespace IronRuby.Runtime.Calls {
             // The first calls of a library method from a site go without a rule. A rule built for a call is used for one
             // call more often than not - most of the prelude runs once - and building it costs more than many such calls.
             // Kernel#send is bound as the call it makes (DispatchIntrinsics.TryBuildSend), and so are calls while c_call
-            // is traced (the rule reports the call).
+            // is traced (the rule reports the call). The same goes for Class#new of a plain Ruby class.
+            var custom = method.Info as RubyCustomMethodInfo;
+            if (allowLibraryDispatch && custom != null && custom.IsInstanceConstructor && target is RubyClass && !passesKeywords) {
+                return LibraryDispatcher.TryCreateConstruction(delegateType, Signature, (RubyClass)target, targetClass, version, args);
+            }
+
             var libraryMethod = method.Info as RubyLibraryMethodInfo;
             if (allowLibraryDispatch && libraryMethod != null && !TracePoint.CCallTracing && !DispatchIntrinsics.IsSend(libraryMethod)) {
                 return LibraryDispatcher.TryCreate(this, delegateType, Signature, libraryMethod, targetClass, target, plainClrTypeTest, version, args);
@@ -333,6 +344,12 @@ namespace IronRuby.Runtime.Calls {
             }
 
             return (T)sharedRule;
+        }
+
+        // RubyMetaBinder.IsForeignMetaObject of the target: a dynamic object of another language is bound by its own meta-object
+        internal static bool IsForeignObject(object target) {
+            return target is IDynamicMetaObjectProvider && !(target is IRubyDynamicMetaObjectProvider) ||
+                target != null && TypeUtils.IsComObjectType(target.GetType());
         }
 
         // MetaObjectBuilder.AddTargetTypeTest tests a CLR object's type and its class version - and nothing else - in this case:
