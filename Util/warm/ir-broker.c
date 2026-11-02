@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/file.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -209,6 +210,19 @@ static void dispatch_queue(void) {
     }
 }
 
+/* A client is queued for a worker that is warming up. If that worker dies, or refill has given up, no
+   worker comes for it: send the clients beyond the warming ones cold. */
+static void bounce_unservable(void) {
+    int warming = count(WARMING);
+    while (nqueue > warming) {
+        int conn = queue[--nqueue];
+        cold_busy++;
+        logmsg("no worker left for a queued client: it starts cold");
+        send_all(conn, "B", 1);
+        close(conn);
+    }
+}
+
 static void on_accept(int lfd) {
     int conn = accept4(lfd, NULL, NULL, SOCK_CLOEXEC);
     if (conn < 0) return;
@@ -308,6 +322,16 @@ static int bind_socket(const char *path) {
         exit(1);
     }
     strcpy(addr.sun_path, path);
+    /* Two brokers started at once (IR_SERVER=auto under make -j) would both find no listener; the
+       second would unlink the first one's socket and strand it with its workers. The lock is held
+       for the broker's life (the descriptor stays open), so the one that loses it exits. */
+    char lockpath[sizeof addr.sun_path + 8];
+    snprintf(lockpath, sizeof lockpath, "%s.lock", path);
+    int lockfd = open(lockpath, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (lockfd < 0 || flock(lockfd, LOCK_EX | LOCK_NB) < 0) {
+        fprintf(stderr, "ir-broker: another broker is starting or running on %s\n", path);
+        exit(1);
+    }
     if (connect(fd, (struct sockaddr *)&addr, sizeof addr) == 0) {
         fprintf(stderr, "ir-broker: a broker is already listening on %s\n", path);
         exit(1);
@@ -419,6 +443,7 @@ int main(int argc, char **argv) {
             reap();
             refill();
             dispatch_queue();
+            bounce_unservable();
         }
         if (pfd[1].revents & POLLIN) on_accept(lfd);
         if (stop) {

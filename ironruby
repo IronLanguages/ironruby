@@ -106,7 +106,7 @@ case "$IR_SERVER" in
     # as 1, and when no pool is running, start one in the background for the invocations to come
     [ -x "$IR_ROOT/Util/warm/bin/ir-client" ] || "$IR_ROOT/Util/warm/build.sh" >/dev/null 2>&1
     if [ -x "$IR_ROOT/Util/warm/bin/ir-client" ]; then
-      exec "$IR_ROOT/Util/warm/bin/ir-client" --auto "$IR_ROOT/Util/warm/ir-server.sh" 2 \
+      exec "$IR_ROOT/Util/warm/bin/ir-client" --auto "$IR_ROOT/Util/warm/ir-server.sh" 1 \
         "$IR_BIN" "$STDLIB" "$@"
     fi ;;
   *)

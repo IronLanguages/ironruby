@@ -1107,11 +1107,21 @@ namespace IronRuby.Hosting {
                 // `ironruby' alone starts irb at a terminal: the client's stdin decides, not this process's
                 rubyParser.StdinIsTerminal = _warmStdinIsTerminal;
             }
+            // The parser warns on Console.Error (an unknown --enable feature, say), and descriptor 2 is still the
+            // broker's until the request is committed: a request it warns about goes cold, where the warning is seen.
+            var parserErrors = new StringWriter();
+            var brokerError = Console.Error;
+            Console.SetError(parserErrors);
             try {
                 parser.Parse(hostOptions.IgnoredArgs.ToArray(), runtimeSetup, languageSetup, PlatformAdaptationLayer);
             } catch (InvalidOptionException) {
                 // a cold start reports it
                 return "invalid option";
+            } finally {
+                Console.SetError(brokerError);
+            }
+            if (parserErrors.GetStringBuilder().Length > 0) {
+                return "the options parser printed a warning";
             }
             options = parser.CommonConsoleOptions as RubyConsoleOptions;
             if (options == null) {
