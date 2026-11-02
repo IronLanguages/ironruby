@@ -528,9 +528,15 @@ namespace IronRuby.Runtime.Conversions {
         // the exact type of the values converted, null for nil:
         private readonly Type _type;
 
-        private ImplicitConversionDispatcher(IImplicitConversion<TTargetType>/*!*/ conversion, object target) {
+        // Whether a value of that type converts to itself (to_str of a String, to_proc of a Proc, ...), which depends on the type
+        // alone: the type test is then all the dispatcher does, as all the rule does - without the calls of the conversion, which
+        // cost a hot site more than the rule's test (an interface call and a cast, both in code shared by all target types).
+        private readonly bool _isIdentity;
+
+        private ImplicitConversionDispatcher(IImplicitConversion<TTargetType>/*!*/ conversion, object target, bool isIdentity) {
             _conversion = conversion;
             _type = (target != null) ? target.GetType() : null;
+            _isIdentity = isIdentity;
         }
 
         /// <summary>
@@ -544,24 +550,34 @@ namespace IronRuby.Runtime.Conversions {
                 return null;
             }
 
-            var dispatcher = new ImplicitConversionDispatcher<TTargetType>(conversion, args[0]);
+            var dispatcher = new ImplicitConversionDispatcher<TTargetType>(conversion, args[0], ReferenceEquals(result, args[0]));
             return (delegateType == typeof(Func<CallSite, object, object>)) ?
                 (object)new Func<CallSite, object, object>(dispatcher.InvokeUntyped) :
                 new Func<CallSite, object, TTargetType>(dispatcher.Invoke);
         }
 
         private TTargetType Invoke(CallSite/*!*/ site, object target) {
-            TTargetType result;
-            if ((target == null ? _type == null : target.GetType() == _type) && _conversion.TryConvertImplicitly(target, out result)) {
-                return result;
+            if (target == null ? _type == null : target.GetType() == _type) {
+                if (_isIdentity) {
+                    return Unsafe.As<TTargetType>(target);
+                }
+                TTargetType result;
+                if (_conversion.TryConvertImplicitly(target, out result)) {
+                    return result;
+                }
             }
             return ((CallSite<Func<CallSite, object, TTargetType>>)site).Update(site, target);
         }
 
         private object InvokeUntyped(CallSite/*!*/ site, object target) {
-            TTargetType result;
-            if ((target == null ? _type == null : target.GetType() == _type) && _conversion.TryConvertImplicitly(target, out result)) {
-                return result;
+            if (target == null ? _type == null : target.GetType() == _type) {
+                if (_isIdentity) {
+                    return target;
+                }
+                TTargetType result;
+                if (_conversion.TryConvertImplicitly(target, out result)) {
+                    return result;
+                }
             }
             return ((CallSite<Func<CallSite, object, object>>)site).Update(site, target);
         }
