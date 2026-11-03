@@ -32,6 +32,12 @@ namespace IronRuby.Runtime.Jit {
     /// nested entry (a trap handler run at a safe point, say) leaves the log as it found it. An
     /// outlined loop commits at the top of each iteration, which only moves the count back: the
     /// entries' references are cleared once, by Release.
+    ///
+    /// "Nothing" is this thread. Another thread reading the same Hash or Array without a lock can
+    /// see a value appear, vanish on the rollback and appear again when the generic code re-runs
+    /// the write, and a rollback can put back the old value over another thread's unsynchronized
+    /// write. Neither is a state a Hash or Array the threads share under a Mutex can be seen in, and
+    /// MRI makes no promise about unsynchronized access either.
     /// </summary>
     public sealed class JitUndoLog {
         private struct Entry {

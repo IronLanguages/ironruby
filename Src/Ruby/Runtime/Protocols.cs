@@ -665,11 +665,6 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// True when <paramref name="e"/> is the NoMethodError produced by the #coerce dispatch
-        /// itself failing to find the method on <paramref name="other"/>, as opposed to a
-        /// NoMethodError raised from inside a #coerce that does exist.
-        /// </summary>
-        /// <summary>
         /// <paramref name="obj"/> has no #coerce, private or public, and its method_missing is BasicObject's,
         /// so that calling #coerce could only raise the NoMethodError IsUndefinedCoerce recognizes.
         /// </summary>
@@ -688,6 +683,11 @@ namespace IronRuby.Runtime {
                 !(method.Info.DeclaringModule == context.KernelModule && method.Info is RubyLibraryMethodInfo);
         }
 
+        /// <summary>
+        /// True when <paramref name="e"/> is the NoMethodError produced by the #coerce dispatch
+        /// itself failing to find the method on <paramref name="other"/>, as opposed to a
+        /// NoMethodError raised from inside a #coerce that does exist.
+        /// </summary>
         private static bool IsUndefinedCoerce(RubyContext/*!*/ context, MissingMethodException/*!*/ e, object other) {
             var data = RubyExceptionData.TryGetInstance(e);
             if (data == null) {
