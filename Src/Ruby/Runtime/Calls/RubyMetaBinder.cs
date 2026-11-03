@@ -106,7 +106,7 @@ namespace IronRuby.Runtime.Calls {
                 return result;
             }
 
-            result = this.LightBind<T>(args, context.CompilationThreshold);
+            result = this.LightBind<T>(args, (argArray == null) ? GetRuleCompilationThreshold(args, context) : context.CompilationThreshold);
             CacheTarget(result);
             return result;
         }
@@ -117,6 +117,14 @@ namespace IronRuby.Runtime.Calls {
         protected virtual object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
             return null;
         } 
+
+        /// <summary>
+        /// The compilation threshold of the rule bound for the arguments: lower than the context's for a call that is hot already
+        /// (see <see cref="LibraryDispatcher.GetRuleCompilationThreshold"/>).
+        /// </summary>
+        internal virtual int GetRuleCompilationThreshold(object[]/*!*/ args, RubyContext/*!*/ context) {
+            return context.CompilationThreshold;
+        }
 
         /// <summary>
         /// Returns a rule that is shared with receivers of other classes the call resolves the same for, or null (see <see cref="RuleVersionSet"/>).

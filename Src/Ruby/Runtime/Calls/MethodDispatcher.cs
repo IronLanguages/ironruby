@@ -39,6 +39,52 @@ namespace IronRuby.Runtime.Calls {
     public abstract partial class MemberDispatcher {
         internal int Version;
 
+        // A receiver that is not a Ruby object: nil (DynamicNull), true/false or a CLR object - its exact type, the version of its
+        // class and, for true and false, the value (see MetaObjectBuilder.AddTargetTypeTest). Null for a Ruby object receiver.
+        private Type _clrType;
+        private VersionHandle _classVersion;
+        private bool _boolValue;
+
+        // The type arguments of the delegate types of call sites. Type.GetGenericArguments allocates a fresh array each time, and
+        // a site's delegate type is asked for at every bind of a precompiled dispatcher; there are a few dozen such types.
+        private static readonly Dictionary<Type, Type[]>/*!*/ _delegateTypeArguments = new Dictionary<Type, Type[]>();
+
+        /// <summary>
+        /// The generic arguments of <paramref name="delegateType"/>, an empty array if it has none. The array is shared: don't change it.
+        /// </summary>
+        internal static Type/*!*/[]/*!*/ GetDelegateTypeArguments(Type/*!*/ delegateType) {
+            Type[] result;
+            lock (_delegateTypeArguments) {
+                if (_delegateTypeArguments.TryGetValue(delegateType, out result)) {
+                    return result;
+                }
+            }
+            result = delegateType.IsGenericType ? delegateType.GetGenericArguments() : Type.EmptyTypes;
+            lock (_delegateTypeArguments) {
+                _delegateTypeArguments[delegateType] = result;
+            }
+            return result;
+        }
+
+        // the type of a Ruby method's body taking count arguments, see CreateRubyMethodLambda
+        internal static Type/*!*/ GetRubyMethodDelegateType(int count) {
+            switch (count) {
+                case 0: return typeof(Func<object, Proc, object>);
+                case 1: return typeof(Func<object, Proc, object, object>);
+                case 2: return typeof(Func<object, Proc, object, object, object>);
+                case 3: return typeof(Func<object, Proc, object, object, object, object>);
+                case 4: return typeof(Func<object, Proc, object, object, object, object, object>);
+                case 5: return typeof(Func<object, Proc, object, object, object, object, object, object>);
+                default: return null;
+            }
+        }
+
+        internal void SetClrReceiver(object target, RubyClass/*!*/ targetClass) {
+            _clrType = (target != null) ? target.GetType() : typeof(Microsoft.Scripting.Runtime.DynamicNull);
+            _boolValue = target is bool && (bool)target;
+            _classVersion = targetClass.Version;
+        }
+
         public abstract object/*!*/ CreateDelegate(bool isUntyped);
 
         /// <summary>
@@ -59,6 +105,11 @@ namespace IronRuby.Runtime.Calls {
                 if (type == typeof(RubyClass) || type == typeof(RubyModule)) {
                     return Unsafe.As<RubyModule>(self).ImmediateClass.Version.Method == Version;
                 }
+                if (type == _clrType) {
+                    return _classVersion.Method == Version && (type != typeof(bool) || (bool)self == _boolValue);
+                }
+            } else if (_clrType == typeof(Microsoft.Scripting.Runtime.DynamicNull)) {
+                return _classVersion.Method == Version;
             }
             IRubyObject obj = self as IRubyObject;
             return obj != null && obj.ImmediateClass.Version.Method == Version;
@@ -66,7 +117,7 @@ namespace IronRuby.Runtime.Calls {
 
         internal static object CreateDispatcher(Type/*!*/ func, int mandatoryParamCount, bool hasScope, bool hasBlock, int version,
             Func<MethodDispatcher> parameterlessFactory, Type[] genericFactories) {
-            Type[] funcArgs = func.GetGenericArguments();
+            Type[] funcArgs = GetDelegateTypeArguments(func);
 
             // Func<CallSite, (RubyScope)?, TSelf, (Proc)?, T1, ... TN, object>
             int selfIndex = 1 + (hasScope ? 1 : 0);

@@ -38,6 +38,39 @@ namespace IronRuby.Runtime {
             Assert.NotNull(context);
             _context = context;
         }
+
+        /// <summary>
+        /// A new storage of the given type, which a library method's parameter asks for: the commonest types directly, any other
+        /// through its constructor taking the context. Activator.CreateInstance looks that constructor up by its arguments each
+        /// time (about 30 us at startup, a hundred storages made by the first calls of library methods).
+        /// </summary>
+        internal static RubyCallSiteStorage/*!*/ Create(Type/*!*/ type, RubyContext/*!*/ context) {
+            if (type == typeof(ConversionStorage<MutableString>)) {
+                return new ConversionStorage<MutableString>(context);
+            }
+            if (type == typeof(BinaryOpStorage)) {
+                return new BinaryOpStorage(context);
+            }
+            if (type == typeof(ConversionStorage<string>)) {
+                return new ConversionStorage<string>(context);
+            }
+            if (type == typeof(UnaryOpStorage)) {
+                return new UnaryOpStorage(context);
+            }
+            if (type == typeof(ConversionStorage<int>)) {
+                return new ConversionStorage<int>(context);
+            }
+            if (type == typeof(ConversionStorage<IList>)) {
+                return new ConversionStorage<IList>(context);
+            }
+            if (type == typeof(RespondToStorage)) {
+                return new RespondToStorage(context);
+            }
+            if (type == typeof(ComparisonStorage)) {
+                return new ComparisonStorage(context);
+            }
+            return (RubyCallSiteStorage)Activator.CreateInstance(type, context);
+        }
     }
 
     public class CallSiteStorage<TCallSiteFunc> : RubyCallSiteStorage where TCallSiteFunc : class {

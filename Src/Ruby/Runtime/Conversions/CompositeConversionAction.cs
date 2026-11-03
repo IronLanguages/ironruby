@@ -128,6 +128,14 @@ namespace IronRuby.Runtime.Conversions {
             return Methods.GetMethod(GetType(), "MakeShared").OpCall(Ast.Constant(_conversion));
         }
 
+        // A path (to_path, then to_str) of a String - nearly every path a library method is given - or nil is converted by the
+        // first conversion implicitly, to itself, which goes without a rule (see ImplicitConversionDispatcher): the rule is one of
+        // the first of its delegate type, whose interpretation has code JIT-compiled the first time (10 ms at `ir -e 1').
+        protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
+            return (Context != null && _conversion == CompositeConversion.ToPathToStr) ?
+                ImplicitConversionDispatcher<MutableString>.TryCreate((ConvertToPathAction)_conversions[0], delegateType, args) : null;
+        }
+
         protected override bool Build(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, bool defaultFallback) {
             Debug.Assert(defaultFallback, "custom fallback not supported");
             ProtocolConversionAction.BuildConversion(metaBuilder, args, _resultType, _conversions);

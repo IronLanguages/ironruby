@@ -65,6 +65,13 @@ namespace IronRuby.Runtime.Calls {
             get { return _args.RubyContext; }
         }
 
+        /// <summary>
+        /// Whether resolution made assumptions upon argument values - beyond their types - that the rule tests (see CanConvertFrom).
+        /// </summary>
+        internal bool HasArgumentAssumptions {
+            get { return _argumentAssumptions != null && _argumentAssumptions.Count > 0; }
+        }
+
         internal Expression/*!*/ ScopeExpression {
             get { return _args.MetaScope.Expression; }
         }
@@ -615,7 +622,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             protected override Expression ToExpression(OverloadResolver/*!*/ resolver, RestrictedArguments/*!*/ args, bool[]/*!*/ hasBeenUsed) {
-                return AstUtils.Constant(Activator.CreateInstance(ParameterInfo.ParameterType, ((RubyOverloadResolver)resolver).Context));
+                return AstUtils.Constant(RubyCallSiteStorage.Create(ParameterInfo.ParameterType, ((RubyOverloadResolver)resolver).Context));
             }
         }
 

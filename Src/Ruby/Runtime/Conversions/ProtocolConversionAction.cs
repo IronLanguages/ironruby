@@ -25,6 +25,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
@@ -474,9 +475,13 @@ namespace IronRuby.Runtime.Conversions {
         }
     }
 
-    public abstract class ConvertToReferenceTypeAction<TSelf, TTargetType> : ProtocolConversionAction<TSelf>
+    public abstract class ConvertToReferenceTypeAction<TSelf, TTargetType> : ProtocolConversionAction<TSelf>, IImplicitConversion<TTargetType>
         where TSelf : ConvertToReferenceTypeAction<TSelf, TTargetType>, new()
         where TTargetType : class {
+
+        bool IImplicitConversion<TTargetType>.TryConvertImplicitly(object target, out TTargetType result) {
+            return TryConvertImplicitly(target, out result);
+        }
 
         internal protected override bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             return TryImplicitConversionInternal(metaBuilder, args);
@@ -495,6 +500,91 @@ namespace IronRuby.Runtime.Conversions {
             }
             return false;
         }
+
+        /// <summary>
+        /// The conversion <see cref="TryImplicitConversion"/> builds into the rule for the target - it depends on the target's type
+        /// alone - made without the rule; false if it builds none (the rule then calls a conversion method, or raises).
+        /// </summary>
+        internal virtual bool TryConvertImplicitly(object target, out TTargetType result) {
+            if (target == null) {
+                result = null;
+                return true;
+            }
+            result = target as TTargetType;
+            return result != null;
+        }
+
+        // A conversion of a value that needs no conversion method - the commonest by far - goes without a rule: the dispatcher tests
+        // what the rule would (the target's exact type, see BuildConversion) and converts the same way.
+        protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
+            return (Context != null && (delegateType != typeof(Func<CallSite, object, TTargetType>) || ReturnType == typeof(TTargetType))) ?
+                ImplicitConversionDispatcher<TTargetType>.TryCreate(this, delegateType, args) : null;
+        }
+    }
+
+    internal sealed class ImplicitConversionDispatcher<TTargetType> where TTargetType : class {
+        private readonly IImplicitConversion<TTargetType>/*!*/ _conversion;
+
+        // the exact type of the values converted, null for nil:
+        private readonly Type _type;
+
+        // Whether a value of that type converts to itself (to_str of a String, to_proc of a Proc, ...), which depends on the type
+        // alone: the type test is then all the dispatcher does, as all the rule does - without the calls of the conversion, which
+        // cost a hot site more than the rule's test (an interface call and a cast, both in code shared by all target types).
+        private readonly bool _isIdentity;
+
+        private ImplicitConversionDispatcher(IImplicitConversion<TTargetType>/*!*/ conversion, object target, bool isIdentity) {
+            _conversion = conversion;
+            _type = (target != null) ? target.GetType() : null;
+            _isIdentity = isIdentity;
+        }
+
+        /// <summary>
+        /// The dispatcher of a site converting to TTargetType, or one whose result is an object (the rule's result, a reference
+        /// converted to object, is the same object) - if the conversion of the argument is implicit.
+        /// </summary>
+        internal static object TryCreate(IImplicitConversion<TTargetType>/*!*/ conversion, Type/*!*/ delegateType, object[]/*!*/ args) {
+            TTargetType result;
+            if (args.Length != 1 || delegateType != typeof(Func<CallSite, object, TTargetType>) && delegateType != typeof(Func<CallSite, object, object>) ||
+                RubyCallAction.IsForeignObject(args[0]) || !conversion.TryConvertImplicitly(args[0], out result)) {
+                return null;
+            }
+
+            var dispatcher = new ImplicitConversionDispatcher<TTargetType>(conversion, args[0], ReferenceEquals(result, args[0]));
+            return (delegateType == typeof(Func<CallSite, object, object>)) ?
+                (object)new Func<CallSite, object, object>(dispatcher.InvokeUntyped) :
+                new Func<CallSite, object, TTargetType>(dispatcher.Invoke);
+        }
+
+        private TTargetType Invoke(CallSite/*!*/ site, object target) {
+            if (target == null ? _type == null : target.GetType() == _type) {
+                if (_isIdentity) {
+                    return Unsafe.As<TTargetType>(target);
+                }
+                TTargetType result;
+                if (_conversion.TryConvertImplicitly(target, out result)) {
+                    return result;
+                }
+            }
+            return ((CallSite<Func<CallSite, object, TTargetType>>)site).Update(site, target);
+        }
+
+        private object InvokeUntyped(CallSite/*!*/ site, object target) {
+            if (target == null ? _type == null : target.GetType() == _type) {
+                if (_isIdentity) {
+                    return target;
+                }
+                TTargetType result;
+                if (_conversion.TryConvertImplicitly(target, out result)) {
+                    return result;
+                }
+            }
+            return ((CallSite<Func<CallSite, object, object>>)site).Update(site, target);
+        }
+    }
+
+    internal interface IImplicitConversion<TTargetType> where TTargetType : class {
+        bool TryConvertImplicitly(object target, out TTargetType result);
     }
 
     public abstract class TryConvertToReferenceTypeAction<TSelf, TTargetType> : ConvertToReferenceTypeAction<TSelf, TTargetType>
@@ -619,6 +709,26 @@ namespace IronRuby.Runtime.Conversions {
 
             return false;
         }
+
+        internal override bool TryConvertImplicitly(object target, out string result) {
+            if (base.TryConvertImplicitly(target, out result)) {
+                return true;
+            }
+
+            var str = target as MutableString;
+            if (str != null) {
+                result = RubyOps.ConvertMutableStringToClrString(str);
+                return true;
+            }
+
+            var symbol = target as RubySymbol;
+            if (symbol != null) {
+                result = RubyOps.ConvertSymbolToClrString(symbol);
+                return true;
+            }
+
+            return false;
+        }
     }
 
     #endregion
@@ -712,6 +822,18 @@ namespace IronRuby.Runtime.Conversions {
             if (args.Target == null && ConvertsNullToEmptyArray) {
                 // `*nil` is no elements at all - MRI 4.0 does not ask nil for #to_a
                 metaBuilder.Result = Ast.Convert(Methods.MakeArray0.OpCall(), typeof(IList));
+                return true;
+            }
+            return false;
+        }
+
+        internal override bool TryConvertImplicitly(object target, out IList result) {
+            result = target as IList;
+            if (result != null) {
+                return true;
+            }
+            if (target == null && ConvertsNullToEmptyArray) {
+                result = RubyOps.MakeArray0();
                 return true;
             }
             return false;
@@ -833,6 +955,33 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class ConvertToFixnumAction : ConvertToIntegerAction<ConvertToFixnumAction> {
         protected override string/*!*/ TargetTypeName { get { return "Integer"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToFixnumValidator; } }
+
+        // A Fixnum converts to itself (TryImplicitConversion, on a test of its exact type), without a rule; a site whose result is
+        // an object gets it boxed, as the rule's result is:
+        protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
+            if (Context == null || args.Length != 1 || !(args[0] is int)) {
+                return null;
+            }
+            return (delegateType == typeof(Func<CallSite, object, int>)) ? _FixnumIdentity :
+                (delegateType == typeof(Func<CallSite, object, object>)) ? _BoxedFixnumIdentity : (object)null;
+        }
+
+        private static readonly Func<CallSite, object, int>/*!*/ _FixnumIdentity = ConvertFixnum;
+        private static readonly Func<CallSite, object, object>/*!*/ _BoxedFixnumIdentity = ConvertFixnumBoxed;
+
+        private static int ConvertFixnum(CallSite/*!*/ site, object target) {
+            if (target is int) {
+                return (int)target;
+            }
+            return ((CallSite<Func<CallSite, object, int>>)site).Update(site, target);
+        }
+
+        private static object ConvertFixnumBoxed(CallSite/*!*/ site, object target) {
+            if (target is int) {
+                return (object)(int)target;
+            }
+            return ((CallSite<Func<CallSite, object, object>>)site).Update(site, target);
+        }
     }
 
     public sealed class ConvertToByteAction : ConvertToIntegerAction<ConvertToByteAction> {

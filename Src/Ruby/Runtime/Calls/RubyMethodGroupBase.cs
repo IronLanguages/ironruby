@@ -315,6 +315,11 @@ namespace IronRuby.Runtime.Calls {
             // a proc-converter target of a method unwinder triggered by break from a block.
             if (args.Signature.HasBlock && calleeHasBlockParam) {
                 metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
+            } else if (args.Signature.HasBlock && args.GetBlock() == null) {
+                // A nil block (`map(&nil)`) chose an overload that takes no block - where a block would choose one that does
+                // (Enumerable#map's): the rule holds for nil blocks only. (RuleControlFlowBuilder tests the block of a callee
+                // that takes one.)
+                metaBuilder.AddRestriction(Ast.Equal(args.GetMetaBlock().Expression, AstUtils.Constant(null)));
             }
 
             // add restrictions used for overload resolution:
