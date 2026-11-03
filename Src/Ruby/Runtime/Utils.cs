@@ -388,308 +388,165 @@ namespace IronRuby.Runtime {
             }
         }
 
-        internal static int IndexOf(byte[]/*!*/ array, int arrayLength, char value, int start, int count) {
-            int end = start + NormalizeCount(arrayLength, start, count);
-            for (int i = start; i < end; i++) {
-                if (array[i] == value) {
-                    return i;
-                }
-            }
+        // The searches below are ordinal: an element matches when its numeric value is equal,
+        // so a byte b matches the char (char)b and nothing else. They all go through the
+        // runtime's vectorized span searches; a needle of the other element type is converted
+        // first - widened, or narrowed after checking that it can match a byte at all.
 
-            return -1;
+        /// <summary>
+        /// The index of the first occurrence of value in data[start, start + count), or -1.
+        /// An empty value is found at start.
+        /// </summary>
+        private static int IndexOf<T>(ReadOnlySpan<T> data, ReadOnlySpan<T> value, int start, int count) where T : IEquatable<T> {
+            count = NormalizeCount(data.Length, start, count);
+            if (value.Length == 0) {
+                return count >= 0 ? start : -1;
+            }
+            if (count < value.Length) {
+                return -1;
+            }
+            int i = data.Slice(start, count).IndexOf(value);
+            return i < 0 ? -1 : start + i;
+        }
+
+        /// <summary>
+        /// The index of the last occurrence of value that lies entirely within
+        /// data[start - count + 1, start], or -1. An empty value is found at start.
+        /// </summary>
+        private static int LastIndexOf<T>(ReadOnlySpan<T> data, ReadOnlySpan<T> value, int start, int count) where T : IEquatable<T> {
+            NormalizeLastIndexOfIndices(data.Length, ref start, ref count);
+            if (value.Length == 0) {
+                return start;
+            }
+            if (count < value.Length) {
+                return -1;
+            }
+            int finish = start - count + 1;
+            int i = data.Slice(finish, count).LastIndexOf(value);
+            return i < 0 ? -1 : finish + i;
+        }
+
+        private static char[]/*!*/ Widen(byte[]/*!*/ bytes) {
+            var result = new char[bytes.Length];
+            Encoding.Latin1.GetChars(bytes, result);
+            return result;
+        }
+
+        /// <summary>
+        /// The bytes equal to the chars of str, or null if a char is above ÿ and so can't
+        /// be equal to any byte.
+        /// </summary>
+        private static byte[] Narrow(string/*!*/ str) {
+            if (str.AsSpan().IndexOfAnyExceptInRange('\0', 'ÿ') >= 0) {
+                return null;
+            }
+            var result = new byte[str.Length];
+            Encoding.Latin1.GetBytes(str, result);
+            return result;
+        }
+
+        internal static int IndexOf(byte[]/*!*/ array, int arrayLength, char value, int start, int count) {
+            if (value > 0xff) {
+                return -1;
+            }
+            byte b = (byte)value;
+            return IndexOf(new ReadOnlySpan<byte>(array, 0, arrayLength), new ReadOnlySpan<byte>(ref b), start, count);
         }
 
         internal static int IndexOf(char[]/*!*/ array, int arrayLength, byte value, int start, int count) {
-            int end = start + NormalizeCount(arrayLength, start, count);
-            for (int i = start; i < end; i++) {
-                if (array[i] == value) {
-                    return i;
-                }
-            }
-
-            return -1;
+            char c = (char)value;
+            return IndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), new ReadOnlySpan<char>(ref c), start, count);
         }
 
         internal static int IndexOf(string/*!*/ str, byte value, int start, int count) {
-            int end = start + NormalizeCount(str.Length, start, count);
-            for (int i = start; i < end; i++) {
-                if (str[i] == value) {
-                    return i;
-                }
-            }
-
-            return -1;
+            char c = (char)value;
+            return IndexOf(str.AsSpan(), new ReadOnlySpan<char>(ref c), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
         internal static int IndexOf(byte[]/*!*/ array, int arrayLength, string/*!*/ str, int start, int count) {
-            count = NormalizeCount(arrayLength, start, count);
-
-            int finish = start + count - str.Length;
-            for (int i = start; i <= finish; i++) {
-                bool match = true;
-                for (int j = 0; j < str.Length; j++) {
-                    if (str[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
+            byte[] bytes = Narrow(str);
+            if (bytes == null) {
+                return -1;
             }
-            return -1;
+            return IndexOf(new ReadOnlySpan<byte>(array, 0, arrayLength), bytes, start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
         internal static int IndexOf(char[]/*!*/ array, int arrayLength, string/*!*/ str, int start, int count) {
-            count = NormalizeCount(arrayLength, start, count);
-
-            int finish = start + count - str.Length;
-            for (int i = start; i <= finish; i++) {
-                bool match = true;
-                for (int j = 0; j < str.Length; j++) {
-                    if (str[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+            return IndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), str.AsSpan(), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
         internal static int IndexOf(byte[]/*!*/ array, int arrayLength, byte[]/*!*/ bytes, int start, int count) {
-            count = NormalizeCount(arrayLength, start, count);
-
-            int finish = start + count - bytes.Length;
-            for (int i = start; i <= finish; i++) {
-                bool match = true;
-                for (int j = 0; j < bytes.Length; j++) {
-                    if (bytes[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+            return IndexOf(new ReadOnlySpan<byte>(array, 0, arrayLength), bytes, start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
         internal static int IndexOf(char[]/*!*/ array, int arrayLength, byte[]/*!*/ bytes, int start, int count) {
-            count = NormalizeCount(arrayLength, start, count);
-
-            int finish = start + count - bytes.Length;
-            for (int i = start; i <= finish; i++) {
-                bool match = true;
-                for (int j = 0; j < bytes.Length; j++) {
-                    if (bytes[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+            return IndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), Widen(bytes), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
         internal static int IndexOf(string/*!*/ str, byte[]/*!*/ bytes, int start, int count) {
-            count = NormalizeCount(str.Length, start, count);
-
-            int finish = start + count - bytes.Length;
-            for (int i = start; i <= finish; i++) {
-                bool match = true;
-                for (int j = 0; j < bytes.Length; j++) {
-                    if (bytes[j] != str[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+            return IndexOf(str.AsSpan(), Widen(bytes), start, count);
         }
 
         internal static int LastIndexOf(char[]/*!*/ array, int arrayLength, byte value, int start, int count) {
-            NormalizeLastIndexOfIndices(arrayLength, ref start, ref count);
-            int end = start - count;
-            for (int i = start; i > end; i--) {
-                if (array[i] == value) {
-                    return i;
-                }
-            }
-
-            return -1;
+            char c = (char)value;
+            return LastIndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), new ReadOnlySpan<char>(ref c), start, count);
         }
 
         internal static int LastIndexOf(string/*!*/ str, byte value, int start, int count) {
-            NormalizeLastIndexOfIndices(str.Length, ref start, ref count);
-            int end = start - count;
-            for (int i = start; i > end; i--) {
-                if (str[i] == value) {
-                    return i;
-                }
-            }
-
-            return -1;
+            char c = (char)value;
+            return LastIndexOf(str.AsSpan(), new ReadOnlySpan<char>(ref c), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.LastIndexOf on ASCII strings.
         /// </summary>
         internal static int LastIndexOf(byte[]/*!*/ array, int arrayLength, string/*!*/ value, int start, int count) {
-            NormalizeLastIndexOfIndices(arrayLength, ref start, ref count);
-            int finish = start - count + 1;
-
-            if (value.Length == 0) {
-                return start;
+            byte[] bytes = Narrow(value);
+            if (bytes == null) {
+                // (an empty value is always narrowed, so this can't skip its answer, start)
+                return -1;
             }
-
-            for (int i = start - value.Length + 1; i >= finish; i--) {
-                bool match = true;
-                for (int j = 0; j < value.Length; j++) {
-                    if (value[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+            return LastIndexOf(new ReadOnlySpan<byte>(array, 0, arrayLength), bytes, start, count);
         }
 
         internal static int LastIndexOf(char[]/*!*/ array, int arrayLength, string/*!*/ value, int start, int count) {
-            NormalizeLastIndexOfIndices(arrayLength, ref start, ref count);
-            int finish = start - count + 1;
-
-            if (value.Length == 0) {
-                return start;
-            }
-
-            for (int i = start - value.Length + 1; i >= finish; i--) {
-                bool match = true;
-                for (int j = 0; j < value.Length; j++) {
-                    if (value[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+            return LastIndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), value.AsSpan(), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.LastIndexOf on ASCII strings.
         /// </summary>
         internal static int LastIndexOf(byte[]/*!*/ array, int arrayLength, byte[]/*!*/ value, int start, int count) {
-            NormalizeLastIndexOfIndices(arrayLength, ref start, ref count);
-            int finish = start - count + 1;
-
-            if (value.Length == 0) {
-                return start;
-            }
-
-            for (int i = start - value.Length + 1; i >= finish; i--) {
-                bool match = true;
-                for (int j = 0; j < value.Length; j++) {
-                    if (value[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+            return LastIndexOf(new ReadOnlySpan<byte>(array, 0, arrayLength), value, start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.LastIndexOf on ASCII strings.
         /// </summary>
         internal static int LastIndexOf(char[]/*!*/ array, int arrayLength, byte[]/*!*/ value, int start, int count) {
-            NormalizeLastIndexOfIndices(arrayLength, ref start, ref count);
-            int finish = start - count + 1;
-
-            if (value.Length == 0) {
-                return start;
-            }
-
-            for (int i = start - value.Length + 1; i >= finish; i--) {
-                bool match = true;
-                for (int j = 0; j < value.Length; j++) {
-                    if (value[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+            return LastIndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), Widen(value), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.LastIndexOf on ASCII strings.
         /// </summary>
         internal static int LastIndexOf(string/*!*/ str, byte[]/*!*/ value, int start, int count) {
-            NormalizeLastIndexOfIndices(str.Length, ref start, ref count);
-            int finish = start - count + 1;
-
-            if (value.Length == 0) {
-                return start;
-            }
-
-            for (int i = start - value.Length + 1; i >= finish; i--) {
-                bool match = true;
-                for (int j = 0; j < value.Length; j++) {
-                    if (value[j] != str[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+            return LastIndexOf(str.AsSpan(), Widen(value), start, count);
         }
 
         internal static int ValueCompareTo(this byte[]/*!*/ array, int itemCount, byte[]/*!*/ other) {
