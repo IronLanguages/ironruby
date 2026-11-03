@@ -809,6 +809,7 @@ namespace IronRuby.Tests {
                 Backtrace5,
                 Backtrace6,
                 Backtrace7,
+                Backtrace8,
 
                 Dlr_RubySnippet,
                 Dlr_ClrSubtype,

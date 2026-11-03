@@ -650,6 +650,16 @@ namespace IronRuby.Runtime {
                     return false;
                 }
 
+                // A rethrow through ExceptionDispatchInfo keeps the frames the exception came through and
+                // adds those it is rethrown from, the first of them ExceptionDispatchInfo.Throw itself: a
+                // bookkeeping frame, never a Ruby one. The DLR's interpreter rethrows an exception that a
+                // frame has no handler for this way, once the finally blocks on its way have run (upstream
+                // IronLanguages/dlr #371), which put ":0:in 'Throw'" on top of every backtrace of an exception
+                // leaving an interpreted frame. Ruby code calling ExceptionDispatchInfo.Throw gets the same.
+                if (type == typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo)) {
+                    return false;
+                }
+
                 // Without dynamic code (NativeAOT, or IsDynamicCodeSupported=false in a JIT process)
                 // the DLR hands rules whose delegate type has no native thunk to System.Linq.Expressions'
                 // interpreter, whose delegates call it through thunks in System.Dynamic.Utils and by

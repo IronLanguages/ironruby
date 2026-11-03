@@ -275,6 +275,30 @@ Backtrace6.rb:0
 ");
         }
         
+        /// <summary>
+        /// A frame of ExceptionDispatchInfo.Throw is bookkeeping, not a Ruby frame: a rethrow through it keeps the frames the
+        /// exception came through. The DLR's interpreter (IronLanguages/dlr #371) rethrows an exception a frame has no handler
+        /// for that way, which put ":0:in 'Throw'" on top of every backtrace of an exception leaving an interpreted frame.
+        /// </summary>
+        public void Backtrace8() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+def f
+  System::Runtime::ExceptionServices::ExceptionDispatchInfo.throw(System::InvalidOperationException.new('x'))
+end
+begin
+  f
+rescue System::InvalidOperationException => e
+  puts e.backtrace[0].sub(/:\d+:/, ':N:').sub('Object#', '')
+  puts e.backtrace.grep(/Throw/).size
+end
+");
+            }, @"
+Backtrace8.rb:N:in 'f'
+0
+");
+        }
+
         public void Backtrace7() {
             // TODO: start name by \0 -> bug in reflection?
             StringBuilder sb = new StringBuilder();
