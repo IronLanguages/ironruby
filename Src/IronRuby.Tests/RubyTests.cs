@@ -57,6 +57,7 @@ namespace IronRuby.Tests {
                 RubyArray_Add,
                 RubyArray_Remove,
                 RubyArray_Insert,
+                RubyArray_InsertAfterShift,
                 RubyArray_Misc,
                 RubyArray_Indexer,
      
