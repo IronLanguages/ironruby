@@ -134,6 +134,7 @@ namespace IronRuby.Tests {
                 MethodCallCaching_MethodMissing5,
                 LibraryDispatcherBudget1,
                 LibraryDispatcherBudget2,
+                LibraryMethodNilBlock1,
 
                 NumericLiterals1,
                 NumericOps1,

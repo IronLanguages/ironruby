@@ -504,6 +504,37 @@ obj.f");
         }
 
         /// <summary>
+        /// A nil block chooses an overload of a library method that takes no block, where a block chooses one that does: the rule
+        /// bound for a nil block holds for nil blocks only. (It took later calls with a block too, and ignored the block.)
+        /// </summary>
+        public void LibraryMethodNilBlock1() {
+            int saved = LibraryDispatcher.BudgetOverride;
+            LibraryDispatcher.BudgetOverride = 0;
+            try {
+                TestOutput(@"
+f = ->(a, b) { a.sort_by(&b) }
+g = ->(a, b) { a.map(&b) }
+2.times do
+  p f.([2, 1], nil).class, g.([1], nil).class
+  b = proc { |v| -v }
+  p f.([1, 2], b), g.([1], b)
+end
+", @"
+Enumerator
+Enumerator
+[2, 1]
+[-1]
+Enumerator
+Enumerator
+[2, 1]
+[-1]
+");
+            } finally {
+                LibraryDispatcher.BudgetOverride = saved;
+            }
+        }
+
+        /// <summary>
         /// Checks that if the same site is used twice and the first use failes on parameter conversion the second use is not affected.
         /// </summary>
         public void MethodCallCaching7() {
