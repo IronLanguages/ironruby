@@ -37,6 +37,88 @@ namespace IronRuby.Runtime.Jit {
         private bool _hashWrite;
         private MSA.ParameterExpression _undoLog, _undoMark;
 
+        // ---- values only ever stored -------------------------------------------------------
+        // `a[i] = v' stores the box v is: the generic code moves boxes around, so a v the body only
+        // ever stores costs no allocation there. A v the body carries as a CLR int or double has to
+        // be boxed again for each store - a new 24-byte object per element, which a collection
+        // then keeps, so that filling a large Array ran 2x slower than the generic code for the
+        // garbage collector's sake. A local (or a loop slot, or a parameter: JitScreen) that the
+        // body reads only as the value it stores is therefore carried as an object from the start,
+        // boxed where it is assigned, if it is assigned at all.
+
+        private HashSet<string> _storedOnly;
+
+        /// <summary>The body reads the local only as the value of an element or instance variable store.</summary>
+        private bool IsStoredOnly(LocalVariable/*!*/ local) {
+            if (_storedOnly == null) {
+                var walker = new StoredOnlyWalker(_loop != null);
+                if (_loop != null) {
+                    walker.Walk(_loop);
+                } else if (_ast.Body != null) {
+                    walker.Walk(_ast.Body);
+                }
+                _storedOnly = walker.StoredOnly();
+            }
+            return _storedOnly.Contains(Key(local));
+        }
+
+        /// <summary>
+        /// Collects the locals read only as `x[i] = v' or `@x = v' stores, by Key. Anything the walk does
+        /// not see (a block, the values of a parallel assignment) is in a body Emit refuses anyway, and
+        /// a local wrongly carried as an object is only slower, never wrong.
+        /// </summary>
+        private sealed class StoredOnlyWalker : Walker {
+            private readonly bool _byDepth;
+            private readonly HashSet<string>/*!*/ _stored = new HashSet<string>();
+            private readonly HashSet<string>/*!*/ _other = new HashSet<string>();
+
+            internal StoredOnlyWalker(bool byDepth) {
+                _byDepth = byDepth;
+            }
+
+            private string/*!*/ Key(LocalVariable/*!*/ local) {
+                return _byDepth ? local.Name + "@" + local.DefinitionLexicalDepth : local.Name;
+            }
+
+            internal HashSet<string>/*!*/ StoredOnly() {
+                _stored.ExceptWith(_other);
+                return _stored;
+            }
+
+            public override bool Enter(SimpleAssignmentExpression/*!*/ node) {
+                var target = node.Left as LocalVariable;
+                if (target != null) {
+                    // an assignment is not a read - but `x op= v' reads x
+                    if (node.Operation != null) { _other.Add(Key(target)); }
+                    node.Right.Walk(this);
+                    return false;
+                }
+                var stored = node.Right as LocalVariable;
+                if (node.Operation == null && stored != null && (node.Left is ArrayItemAccess || node.Left is InstanceVariable)) {
+                    node.Left.Walk(this);
+                    _stored.Add(Key(stored));
+                    return false;
+                }
+                return true;
+            }
+
+            public override bool Enter(LocalVariable/*!*/ node) {
+                _other.Add(Key(node));
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// A value boxed to be stored: as Coerce boxes it, except that an int goes through the DLR's
+        /// cache of small boxed ints, as the results of the generic code's Integer operations do.
+        /// </summary>
+        private MSA.Expression/*!*/ BoxForStore(MSA.Expression/*!*/ e, JT type) {
+            if (type == JT.Int && !(e is MSA.ConstantExpression)) {
+                return Ast.Call(typeof(Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers).GetMethod("Int32ToObject"), e);
+            }
+            return Coerce(e, type, JT.Obj);
+        }
+
         // ---- constants ---------------------------------------------------------------------
 
         /// <summary>`C', `::C', `A::B': the value the constant has now, under the constant version guard.</summary>
@@ -841,9 +923,9 @@ namespace IronRuby.Runtime.Jit {
             }
             type = valueType;
             var store = (indexType == JT.Obj)
-                ? Ast.Call(JitRuntime.M("IndexStoreObj"), Ast.Constant(_context), recvTemp, indexTemp, Coerce(valueTemp, valueType, JT.Obj),
+                ? Ast.Call(JitRuntime.M("IndexStoreObj"), Ast.Constant(_context), recvTemp, indexTemp, BoxForStore(valueTemp, valueType),
                     Ast.Constant(arrays), Ast.Constant(hashes), _undoLog)
-                : Ast.Call(JitRuntime.M("IndexStore" + suffix), recvTemp, indexTemp, Coerce(valueTemp, valueType, JT.Obj),
+                : Ast.Call(JitRuntime.M("IndexStore" + suffix), recvTemp, indexTemp, BoxForStore(valueTemp, valueType),
                     Ast.Constant(arrays), Ast.Constant(hashes), _undoLog);
             return Ast.Block(ClrType(valueType), new[] { recvTemp, indexTemp, valueTemp },
                 Ast.Assign(recvTemp, recv),

@@ -542,7 +542,8 @@ namespace IronRuby.Runtime.Jit {
                 log.Replaced(hash, hash.JitKeyAt(i), i, hash.JitReplaceAt(i, value));
                 return;
             }
-            object boxed = ScriptingRuntimeHelpers.Int32ToObject(key);
+            // `h[i] = i': the key is the box the value already is, as it is in the generic code
+            object boxed = (value is int && (int)value == key) ? value : ScriptingRuntimeHelpers.Int32ToObject(key);
             hash.JitAppend(boxed, hashCode, value);
             log.Appended(hash, boxed);
         }

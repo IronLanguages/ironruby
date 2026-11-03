@@ -86,8 +86,8 @@ namespace IronRuby.Runtime.Jit {
         private int _perCountMandatory = -1;
         private int _countsSeen;
 
-        // Parameters the body only ever stores into an instance variable: kept as the boxed
-        // objects they arrived as, whatever their type (JitScreen's otherUses).
+        // Parameters the body only ever stores into an instance variable or an element: kept as
+        // the boxed objects they arrived as, whatever their type (JitScreen's otherUses).
         private bool[] _storedOnly;
 
         // The scope the method was defined in, which its constants resolve in (JitCompiler.EmitConstant).

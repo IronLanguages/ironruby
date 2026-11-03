@@ -909,7 +909,8 @@ namespace IronRuby.Runtime.Jit {
             MSA.ParameterExpression p;
             if (!TryLookup(Key(local), out p, out type)) {
                 if (_loop != null) {
-                    BindLoopLocal(local, JT.None, out p, out type);
+                    // a local only stored is an object slot, holding the box it holds (IsStoredOnly)
+                    BindLoopLocal(local, IsStoredOnly(local) ? JT.Obj : JT.None, out p, out type);
                     return LoadLoopSlot(p);
                 }
                 // A local read before any assignment is nil in Ruby; not modelled.
@@ -949,11 +950,17 @@ namespace IronRuby.Runtime.Jit {
             MSA.ParameterExpression p;
             JT lt;
             bool known = TryLookup(Key(target), out p, out lt);
+            bool storedOnly = (op == null) && IsNumeric(rhsType) && IsStoredOnly(target);
             if (!known && _loop != null) {
                 // The slot exists in the tuple whether or not the loop has read it yet, and it
                 // is written back on the way out, so it has to be bound rather than declared.
                 // `x op= v' reads x first, so an object v says nothing about what x holds
-                known = BindLoopLocal(target, (op != null && rhsType == JT.Obj) ? JT.None : rhsType, out p, out lt);
+                known = BindLoopLocal(target, storedOnly ? JT.Obj : (op != null && rhsType == JT.Obj) ? JT.None : rhsType, out p, out lt);
+            }
+            if (!known && storedOnly) {
+                // read only to be stored: carried boxed, boxed once here (IsStoredOnly)
+                rhs = BoxForStore(rhs, rhsType);
+                rhsType = JT.Obj;
             }
 
             if (op != null) {
@@ -974,7 +981,7 @@ namespace IronRuby.Runtime.Jit {
             if (known) {
                 if (lt == JT.Obj && rhsType != JT.Obj) {
                     // an object local holds any value, boxed
-                    rhs = Coerce(rhs, rhsType, JT.Obj);
+                    rhs = BoxForStore(rhs, rhsType);
                     rhsType = JT.Obj;
                 }
                 if (lt != rhsType) {
@@ -1719,9 +1726,9 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>The node kind that said no, for the histogram.</summary>
         private string _rejectedBy;
 
-        // Locals read anywhere other than straight into an instance variable (`@a = a'), or
-        // assigned. A parameter not in here is only ever stored, so it is best carried boxed:
-        // unboxing it on entry would only mean boxing it again for the store.
+        // Locals read anywhere other than straight into an instance variable (`@a = a') or an
+        // element (`a[i] = v'), or assigned. A parameter not in here is only ever stored, so it is
+        // best carried boxed: unboxing it on entry would only mean boxing it again for each store.
         private readonly HashSet<string>/*!*/ _otherUses = new HashSet<string>();
 
         private readonly JitKeywords _keywords;
@@ -1748,7 +1755,7 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>
         /// <paramref name="otherUses"/>: the locals the body reads other than as the value of an
-        /// instance variable assignment, or assigns.
+        /// instance variable or element assignment, or assigns.
         /// </summary>
         internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, JitKeywords keywords, out string rejectedBy, out HashSet<string> otherUses) {
             var s = new JitScreen(ast, keywords);
@@ -1880,7 +1887,12 @@ namespace IronRuby.Runtime.Jit {
                 if (element != null) {
                     var indexArgs = element.Arguments.Expressions;
                     if (element.Block != null || indexArgs.Length != 1 || indexArgs[0] is SplattedArgument) { return No(node); }
-                    return Walk(element.Array) && Walk(indexArgs[0]) && ((op != null) ? WalkOperand(assign.Right) : Walk(assign.Right));
+                    if (!Walk(element.Array) || !Walk(indexArgs[0])) { return false; }
+                    if (op != null) { return WalkOperand(assign.Right); }
+                    // a local stored as the element is only stored, as it is into an instance variable
+                    var storedElement = assign.Right as LocalVariable;
+                    if (storedElement != null && storedElement.DefinitionLexicalDepth == _scopeDepth) { ++_nodes; return true; }
+                    return Walk(assign.Right);
                 }
 
                 var ivarTarget = assign.Left as InstanceVariable;
