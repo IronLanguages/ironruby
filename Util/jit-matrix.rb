@@ -2127,6 +2127,246 @@ warm { |i| sp_aget(a, i % 3) }
 t('Hash#[] with a singleton [], hot again') { [sp_hget(sh, 1), sp_hget(h, 1), sp_aget([4, 5], 1)] }
 t('OSR Hash#[] reads after a singleton []') { [osr_hash_read({ 0 => 1, 1 => 2 }, 20000), osr_hash_read(sh, 20000)] }
 
+# ---------------------------------------------------------------- 7f. Integer vs Float, stores, tracing
+
+# An Integer and a Float compare exactly (rb_integer_float_cmp): a long past 2**53 is not the
+# double it rounds to. x is profiled as a long, f as a Float.
+def sp_lf_cmp(x, f)
+  r = 0
+  r += 1 if x == f
+  r += 2 if x < f
+  r += 4 if x <= f
+  r += 8 if x > f
+  r += 16 if x >= f
+  r += 32 if x != f
+  r += 64 if f == x
+  r += 128 if f < x
+  r += 256 if f <= x
+  r += 512 if f > x
+  r += 1024 if f >= x
+  r += 2048 if f != x
+  r
+end
+
+# the same with the Integer an element, which is speculated to be a number next to the Float
+def sp_ef_cmp(a, f)
+  r = 0
+  r += 1 if a[0] == f
+  r += 2 if a[0] < f
+  r += 4 if a[0] <= f
+  r += 8 if a[0] > f
+  r += 16 if a[0] >= f
+  r += 32 if a[0] != f
+  r += 64 if f == a[0]
+  r += 128 if f < a[0]
+  r += 256 if f <= a[0]
+  r += 512 if f > a[0]
+  r += 1024 if f >= a[0]
+  r += 2048 if f != a[0]
+  r
+end
+
+# an outlined loop with an object slot (r holds nil when it turns hot) comparing a long to a Float
+def osr_lf_cmp(big, fl, n)
+  i = 0
+  r = nil
+  while i < n
+    x = big + (i & 0)
+    r = (x == fl)
+    i += 1
+  end
+  r
+end
+
+# a parameter and a local only ever stored: carried as the boxes they are
+def sp_store_param(a, n, v)
+  i = 0
+  while i < n
+    a[i] = v
+    i += 1
+  end
+  a
+end
+
+def sp_store_local(a, n, k)
+  i = 0
+  while i < n
+    v = i * k
+    a[i] = v
+    i += 1
+  end
+  a
+end
+
+def sp_hash_ii(h, n)
+  i = 0
+  while i < n
+    h[i] = i
+    i += 1
+  end
+  h
+end
+
+def osr_store(a, n, v)
+  i = 0
+  while i < n
+    a[i % 7] = v
+    i += 1
+  end
+  a
+end
+
+def osr_store_local(a, n, k)
+  i = 0
+  while i < n
+    w = i * k
+    a[i % 7] = w
+    i += 1
+  end
+  a
+end
+
+puts
+puts '--- 7f. Integer against Float, values only stored, TracePoint and Coverage ---'
+warm { |i| sp_lf_cmp(2**40 + i, 1.5 * i); sp_ef_cmp([i * 10**12], 1.5) }
+LF_PAIRS = [[2**53 + 1, 2.0**53], [2**53 + 1, 2.0**53 + 2], [-(2**53 + 1), -(2.0**53)], [2**53, 2.0**53], [2**62, 2.0**62],
+  [2**62 + 1, 2.0**62], [2**63 - 1, 2.0**63], [-2**63, -(2.0**63)], [-2**63 + 1, -(2.0**63)], [2**53 + 1, 1e15 + 0.5],
+  [-(2**53 + 1), -1e15 - 0.5], [2**53 + 1, Float::NAN], [2**53 + 1, Float::INFINITY], [2**53 + 1, -Float::INFINITY],
+  [2**40, 2.0**40], [2**40, 2.0**40 + 0.5], [5, 5.0], [5, Float::NAN], [2**62, 1e300], [-2**62, -1e300]]
+t('Integer <=> Float, the Integer a long') { LF_PAIRS.map { |x, f| sp_lf_cmp(x, f) } }
+t('... the Integer an element') { LF_PAIRS.map { |x, f| sp_ef_cmp([x], f) } }
+t('... the element a Float or not a number') { [sp_ef_cmp([2.0**53], 2.0**53), sp_ef_cmp([Float::NAN], 1.0), (sp_ef_cmp([nil], 1.0) rescue $!.class), (sp_ef_cmp([2**70], 1.0) rescue $!.class)] }
+t('OSR long == Float, r nil at entry') { [osr_lf_cmp(2**53 + 1, 2.0**53, 30000), osr_lf_cmp(2**53, 2.0**53, 30000), osr_lf_cmp(7, 7.0, 30000)] }
+warm { |i| sp_store_param([0, 0, 0], 3, i * 1000); sp_store_local([0, 0, 0], 3, i); sp_hash_ii({}, 3) }
+t('a parameter only stored') { [sp_store_param([0, 0], 2, 5000), sp_store_param([0, 0], 2, 2.5), sp_store_param([0], 1, "s"), sp_store_param([0], 1, nil), sp_store_param([0], 1, 2**70)] }
+t('a local only stored') { [sp_store_local([0, 0, 0], 3, 7), sp_store_local([0, 0, 0], 3, 2**40), sp_store_local([0, 0], 2, 1.5)] }
+t('h[i] = i') { h2 = sp_hash_ii({}, 2000); [h2.size, h2[1999], h2.keys.sum, h2.values.sum, h2.keys.all? { |k| h2[k] == k }] }
+t('OSR a slot only stored') { [osr_store([0] * 7, 30000, 5000), osr_store([0] * 7, 30000, 2.5), osr_store([0] * 7, 30000, :s)] }
+t('OSR a local only stored') { [osr_store_local([0] * 7, 30000, 3), osr_store_local([0] * 7, 30000, 2**40), osr_store_local([0] * 7, 30000, 0.5)] }
+# A store of a value the method only stores allocates no box of its own (IronRuby: the CLR's
+# allocation counter; CRuby just runs the block).
+def jit_alloc
+  return (yield; :ok) unless defined?(System::GC)
+  b0 = System::GC.GetAllocatedBytesForCurrentThread
+  yield
+  b = System::GC.GetAllocatedBytesForCurrentThread - b0
+  b < 8000 ? :ok : b
+end
+sa = [0] * 1000
+warm { |i| sp_store_param(sa, 1000, 5000) }
+osr_store(sa, 30000, 5000)
+# (the outlined loop is entered at once now; 1000 iterations keep the generic loop's i among the cached boxes)
+t('1000 stores of a parameter allocate nothing per store') { [jit_alloc { sp_store_param(sa, 1000, 5000) }, jit_alloc { osr_store(sa, 1000, 5000) }] }
+
+# A core method made private before a method using it turns hot: called with a receiver, it raises.
+def sp_priv_get(h, k)
+  h[k]
+end
+
+def sp_priv_key(h, k)
+  h.key?(k)
+end
+
+def sp_priv_add(a, b)
+  a + b
+end
+pr = []
+class Hash
+  private :[], :key?
+end
+HOT.times { |i| pr[0] = (sp_priv_get({ 1 => 2 }, 1) rescue $!.class); pr[1] = (sp_priv_key({ 1 => 2 }, 1) rescue $!.class) }
+class Hash
+  public :[], :key?
+end
+class Integer
+  private :+
+end
+HOT.times { |i| pr[2] = (sp_priv_add(i, 1) rescue $!.class) }
+class Integer
+  public :+
+end
+t('Hash#[], #key? and Integer#+ made private') { pr }
+warm { |i| sp_priv_get({ 1 => 2 }, 1); sp_priv_key({ 1 => 2 }, 1); sp_priv_add(i, 1) }
+t('... public again, hot') { [sp_priv_get({ 1 => 2 }, 1), sp_priv_key({ 1 => 2 }, 1), sp_priv_add(1, 2)] }
+
+# TracePoint: a method the JIT specialized delivers :call, :line and :return to an enabled TracePoint,
+# :c_call and :line alone included (neither of which changes the method version)
+def sp_tr_kind(v)
+  case v
+  when Integer then 1
+  else 2
+  end
+end
+
+def sp_tr_get(h, k)
+  h[k]
+end
+
+def sp_tr_add(a, b)
+  a + b
+end
+
+def osr_tr_loop(n)
+  i = 0
+  s = 0
+  while i < n
+    s += i
+    i += 1
+  end
+  s
+end
+TR_NAMES = [:sp_tr_kind, :sp_tr_get, :sp_tr_add, :osr_tr_loop]
+th = { 1 => 2 }
+warm { |i| sp_tr_kind(i); sp_tr_get(th, 1); sp_tr_add(i, 1) }
+osr_tr_loop(30000)
+[[:call, :line, :return, :c_call], [:line], [:call], [:c_call]].each do |events|
+  counts = Hash.new(0)
+  tp = TracePoint.new(*events) do |tr|
+    if tr.event == :c_call
+      counts[[:c_call, tr.method_id]] += 1 if tr.method_id == :[] && tr.path == __FILE__
+    elsif TR_NAMES.include?(tr.method_id) && tr.path == __FILE__
+      counts[[tr.event, tr.method_id]] += 1
+    end
+  end
+  tp.enable
+  200.times { |i| sp_tr_kind(i); sp_tr_get(th, 1); sp_tr_add(i, 1) }
+  osr_tr_loop(3000)
+  tp.disable
+  t("TracePoint #{events.inspect} on specialized methods") { counts.sort_by(&:inspect) }
+  warm { |i| sp_tr_kind(i); sp_tr_get(th, 1); sp_tr_add(i, 1) }
+  osr_tr_loop(30000)
+end
+t('... specialized again') { [sp_tr_kind(1), sp_tr_get(th, 1), sp_tr_add(1, 2), osr_tr_loop(30000)] }
+
+# Coverage: a method in a file loaded under Coverage.start counts its lines whether or not it is hot
+require 'coverage'
+cov_file = "/tmp/jit-matrix-cov-#{$$}.rb"
+File.write(cov_file, <<~RUBY)
+  def cov_kind(v)
+    case v
+    when Integer then 1
+    when String then 2
+    else 3
+    end
+  end
+  def cov_add(a, b)
+    a + b
+  end
+  def cov_loop(n)
+    i = 0
+    while i < n
+      i += 1
+    end
+    i
+  end
+RUBY
+Coverage.start(lines: true)
+load cov_file
+2000.times { |i| cov_kind(i); cov_kind("s"); cov_add(i, 1) }
+cov_loop(50000)
+t('Coverage of hot methods and loops') { Coverage.result[cov_file][:lines] }
+File.delete(cov_file)
+
 # ---------------------------------------------------------------- 8. Integer#+ redefined
 
 def sp_plus(a, b)
