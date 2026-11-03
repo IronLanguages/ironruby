@@ -238,9 +238,6 @@ namespace IronRuby.Runtime {
         
         private readonly Stopwatch _upTime;
 
-        // TODO: thread-safety
-        internal Action<Expression, MSA.DynamicExpression> CallSiteCreated { get; set; }
-
         #endregion
 
         #region Look-aside tables

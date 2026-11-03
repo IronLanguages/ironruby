@@ -175,12 +175,6 @@ namespace IronRuby.Compiler.Ast {
             var call = node as MethodCall;
             siteBuilder.IsVariableCall = call != null && call.IsVariableCall;
             var dynamicSite = siteBuilder.MakeCallAction(methodName, hasImplicitSelf);
-#if FEATURE_CALL_SITE_TRACER
-            if (gen.Context.CallSiteCreated != null) {
-                gen.Context.CallSiteCreated(node, dynamicSite);
-            }
-#endif
-
             MSA.Expression result = gen.DebugMark(dynamicSite, methodName);
 
             if (block != null) {

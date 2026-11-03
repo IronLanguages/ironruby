@@ -8,9 +8,6 @@
     <NoWarn>$(NoWarn);CS0618;SYSLIB0012</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Remove="Properties\AssemblyInfo.cs" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />
     <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj" />
     <ProjectReference Include="..\Libraries.Yaml\IronRuby.Libraries.Yaml.csproj" />
