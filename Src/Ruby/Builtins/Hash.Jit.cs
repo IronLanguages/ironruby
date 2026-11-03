@@ -76,8 +76,8 @@ namespace IronRuby.Builtins {
         internal int JitFindFixnum(int key, out int hashCode) {
             var comparer = _comparer;
             if (comparer == IdentityComparer.Instance) {
-                // IdentityComparer hashes and compares an int by value
-                hashCode = key;
+                // IdentityComparer compares an int by value, and hashes it as it hashes any Fixnum
+                hashCode = IdentityComparer.FixnumHashCode(key);
             } else if (comparer.GetType() == typeof(IronRuby.Runtime.EqualityComparer)) {
                 hashCode = RubyUtils.GetFixnumHashCode(key);
             } else {

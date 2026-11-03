@@ -154,5 +154,53 @@ can't add a new key into hash during iteration
 0
 ");
         }
+
+        /// <summary>
+        /// A JIT-specialized `h[k] = v' of a new key while h is being iterated deopts, and the generic code raises
+        /// the RuntimeError a new key during iteration is (JitRuntime.HashStoreInt/HashStoreObj).
+        /// </summary>
+        public void HashIteration_JitStore1() {
+            TestOutput(@"
+def jit_store_int(h, k) = (h[k] = 1)
+def jit_store_obj(h, k) = (h[k] = 1)
+h = {}
+200.times { |i| jit_store_int(h, i); jit_store_obj(h, ""k#{i % 7}"") }
+g = {1 => 1}
+[[:jit_store_int, 99], [:jit_store_obj, 'new']].each do |m, k|
+  begin
+    g.each { |_, _| send(m, g, k) }
+    p :no_error
+  rescue RuntimeError => e
+    puts e.message
+  end
+  g.each { |_, _| send(m, g, 1) }
+  p g
+end
+", @"
+can't add a new key into hash during iteration
+{1 => 1}
+can't add a new key into hash during iteration
+{1 => 1}
+");
+        }
+
+        /// <summary>
+        /// A compare_by_identity hash finds an Integer key the JIT looks up unboxed with the hash code the
+        /// comparer gives the boxed one - which for -2**31 is not the value itself.
+        /// </summary>
+        public void HashIdentity_JitFixnumKey1() {
+            TestOutput(@"
+def jit_get(h, k) = h[k]
+def jit_key(h, k) = h.key?(k)
+ih = {}.compare_by_identity
+ih[-2**31] = :min
+ih[2**31 - 1] = :max
+ih[5] = :five
+200.times { jit_get(ih, 5); jit_key(ih, 5) }
+p [jit_get(ih, -2**31), jit_get(ih, 2**31 - 1), jit_get(ih, 5), jit_key(ih, -2**31), jit_get(ih, 6)]
+", @"
+[:min, :max, :five, true, nil]
+");
+        }
     }
 }
