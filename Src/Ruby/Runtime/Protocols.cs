@@ -611,10 +611,13 @@ namespace IronRuby.Runtime {
 
         private static bool TryCoerce(BinaryOpStorage/*!*/ coercionStorage, object self, object other, out IList pair, bool nilMeansNotCoercible) {
             // rb_check_funcall: a respond_to? the object defines for itself is asked first, and
-            // a false from it means there is no #coerce to call.
+            // a false from it means there is no #coerce to call. It is asked through the context's
+            // respond_to? site: the storage holds one site, named by its first use, so once a call
+            // had made it the #coerce site, this was a call of coerce(:coerce) - a NoMethodError for an
+            // operand without #coerce, the wrong argument for one with it. A rule's storages only ever
+            // served operands of one class; a library dispatcher's serve every call of its site.
             if (HasUserDefinedRespondTo(coercionStorage.Context, other)) {
-                var respondTo = coercionStorage.GetCallSite("respond_to?");
-                if (!IsTrue(respondTo.Target(respondTo, other, coercionStorage.Context.EncodeIdentifier("coerce")))) {
+                if (!coercionStorage.Context.RespondTo(other, "coerce")) {
                     pair = null;
                     return false;
                 }

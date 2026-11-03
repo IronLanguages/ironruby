@@ -535,6 +535,43 @@ Enumerator
         }
 
         /// <summary>
+        /// The #coerce protocol asks an operand's own respond_to? first (rb_check_funcall). The coercion storage holds one site,
+        /// named by its first use: once a call of the site had made it the #coerce site, a later operand's respond_to? went
+        /// through it as coerce(:coerce) - a NoMethodError for an operand without #coerce, the wrong argument for one with it.
+        /// A rule's storages served the operands of one class; a dispatcher's serve every call of its site.
+        /// </summary>
+        public void CoerceRespondTo1() {
+            const string script = @"
+class C; end
+class Symbol; def coerce(o); $k += 1; [o, 1]; end; end
+def cmp(v); 1 <=> v; end
+$k = 0
+p cmp(C.new), cmp(:s)
+class C; def respond_to?(n, priv = false); $c += 1 if n == :coerce; super; end; end
+$c = 0
+p cmp(C.new), cmp(:s), $c, $k
+";
+            const string expected = @"
+nil
+0
+nil
+0
+1
+2
+";
+            TestOutput(script, expected);
+
+            // rules only: the same site serves the second cmp(C.new) through the rule of the first
+            int saved = LibraryDispatcher.BudgetOverride;
+            LibraryDispatcher.BudgetOverride = 0;
+            try {
+                TestOutput(script, expected);
+            } finally {
+                LibraryDispatcher.BudgetOverride = saved;
+            }
+        }
+
+        /// <summary>
         /// Checks that if the same site is used twice and the first use failes on parameter conversion the second use is not affected.
         /// </summary>
         public void MethodCallCaching7() {

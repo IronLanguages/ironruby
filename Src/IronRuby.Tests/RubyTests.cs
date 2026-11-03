@@ -135,6 +135,7 @@ namespace IronRuby.Tests {
                 LibraryDispatcherBudget1,
                 LibraryDispatcherBudget2,
                 LibraryMethodNilBlock1,
+                CoerceRespondTo1,
 
                 NumericLiterals1,
                 NumericOps1,
