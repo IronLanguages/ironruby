@@ -2308,6 +2308,14 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("reverse")]
         public static IList/*!*/ Reverse(UnaryOpStorage/*!*/ allocateStorage, IList/*!*/ self) {
+            var array = self as RubyArray;
+            if (array != null) {
+                // one block copy and an in-place reverse rather than an interface call per element
+                var result = new RubyArray(array);
+                result.Reverse();
+                return result;
+            }
+
             IList reversedList = CreateResultArray(allocateStorage, self);
             if (reversedList is RubyArray) {
                 (reversedList as RubyArray).AddCapacity(self.Count);
