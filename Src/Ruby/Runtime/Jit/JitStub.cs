@@ -734,7 +734,7 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            MSA.Expression test = null;
+            MSA.Expression test = NotTracing();
             if (pinnedClass != null) {
                 test = And(test, Ast.ReferenceEqual(
                     Ast.Call(JitRuntime.M("ClassOf"), Ast.Constant(_context), self),
@@ -871,7 +871,7 @@ namespace IronRuby.Runtime.Jit {
                 values[_positional + j] = slots[JitKeywordCall.MaxPositional + j];
             }
 
-            MSA.Expression test = VersionTest(version, spec, code.UsesConstants);
+            MSA.Expression test = Ast.AndAlso(VersionTest(version, spec, code.UsesConstants), NotTracing());
             // the separation check on the last positional, as in BuildEntry
             if (_positional > 0 && code.ParameterTypes[_positional - 1] == JT.Obj) {
                 test = And(test, Ast.Not(Ast.Call(typeof(RubyOps).GetMethod("IsKeywordArgumentsHash"), values[_positional - 1])));
@@ -975,7 +975,7 @@ namespace IronRuby.Runtime.Jit {
             MSA.ParameterExpression/*!*/ blk, MSA.ParameterExpression[]/*!*/ args, int count, RubyClass pinnedClass,
             Specialization/*!*/ spec) {
 
-            MSA.Expression test = null;
+            MSA.Expression test = NotTracing();
             if (pinnedClass != null && code.EmittedSelfCall) {
                 test = And(test, Ast.ReferenceEqual(
                     Ast.Call(JitRuntime.M("ClassOf"), Ast.Constant(_context), self),
@@ -1029,6 +1029,15 @@ namespace IronRuby.Runtime.Jit {
                 );
             }
             return (test != null) ? Ast.Condition(test, fast, GenericCall(self, blk, args), typeof(object)) : fast;
+        }
+
+        /// <summary>
+        /// No TracePoint is enabled: a typed body has no :call, :line, :return or :c_call hooks, so while
+        /// one is the generic body runs instead. A TracePoint is enabled and disabled at any time, which
+        /// the method version does not follow, so this is tested on every entry - one static read.
+        /// </summary>
+        private static MSA.Expression/*!*/ NotTracing() {
+            return Ast.Equal(Ast.Field(null, typeof(TracePoint).GetField("ActiveEvents")), Ast.Constant(0));
         }
 
         /// <summary>The entry guard: the method version, and the constant version if the body folded constants.</summary>
@@ -1126,7 +1135,8 @@ namespace IronRuby.Runtime.Jit {
                     defaults = null;
                 }
             }
-            // Tracing and coverage need the real frame.
+            // Tracing and coverage need the real frame. (A TracePoint enabled at run time is the
+            // entry's NotTracing guard; a body that counts its lines is not handed here at all.)
             if (context.RubyOptions.EnableTracing || context.RubyOptions.Profile) { return generic; }
 
             // A body the compiler can never accept, whatever types it is called with, is not

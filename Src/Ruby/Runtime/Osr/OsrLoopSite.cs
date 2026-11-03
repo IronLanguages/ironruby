@@ -29,6 +29,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
 using IronRuby.Runtime.Jit;
 
@@ -127,6 +128,11 @@ namespace IronRuby.Runtime.Osr {
         /// </summary>
         public object Run(object[]/*!*/ tuples) {
             Entered++;
+            if (TracePoint.ActiveEvents != 0) {
+                // a TracePoint wants the loop's :line events, which only the generic loop has
+                ReArmCountdown();
+                return Retry;
+            }
             var typed = _typed;
             if (typed == null && !_tried) {
                 typed = Compile(tuples);
