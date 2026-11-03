@@ -1403,6 +1403,14 @@ namespace IronRuby.Runtime.Jit {
                 if ((lt == JT.Obj && IsNumeric(rt)) || (IsNumeric(lt) && rt == JT.Obj)) {
                     return EmitSpeculatedBinary(node.MethodName, l, lt, node.Target, r, rt, args.Expressions[0], out type);
                 }
+                if (lt == JT.Obj && rt == JT.Obj && JitScreen.IsBinaryOperator(node.MethodName) &&
+                    HoldsIntegerElements(node.Target) && HoldsIntegerElements(args.Expressions[0])) {
+                    // `b[i] + a[i]' in an outlined loop, both Arrays of Integers now: the receiver is speculated
+                    // to be an Integer, and then the argument is speculated next to it as above.
+                    _canDeopt = true;
+                    return EmitSpeculatedBinary(node.MethodName, Ast.Call(JitRuntime.M("SpeculateLong"), l), JT.Lng, null,
+                        r, rt, args.Expressions[0], out type);
+                }
             }
 
             throw Bail("call: " + node.MethodName + "/" + argc);

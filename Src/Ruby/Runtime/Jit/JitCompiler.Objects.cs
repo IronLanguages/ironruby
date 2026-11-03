@@ -603,10 +603,7 @@ namespace IronRuby.Runtime.Jit {
             JT other = leftObject ? rt : lt;
             RExpr objectNode = leftObject ? lnode : rnode;
             if (objectNode != null) {
-                Type t = ObservedType(objectNode);
-                if (t != null && t != MixedTypes && t != typeof(int) && t != typeof(long) && t != typeof(double)) {
-                    throw Bail("operator " + op + " on a " + ((t == typeof(void)) ? "nil" : t.Name));
-                }
+                RequireNumericObservation(objectNode, op);
             }
             MSA.Expression number;
             JT numberType;
@@ -637,6 +634,36 @@ namespace IronRuby.Runtime.Jit {
             return leftObject
                 ? EmitBinary(op, number, numberType, r, rt, out type)
                 : EmitBinary(op, l, lt, number, numberType, out type);
+        }
+
+        /// <summary>
+        /// `a[i]' in an outlined loop, a a local holding an Array whose elements, sampled, are all Integers:
+        /// worth speculating to be an Integer even next to another object (a deopt tells otherwise).
+        /// </summary>
+        private bool HoldsIntegerElements(RExpr/*!*/ operand) {
+            var read = operand as MethodCall;
+            if (read == null || read.MethodName != "[]" || read.Block != null || read.Arguments == null ||
+                read.Arguments.Expressions.Length != 1 || !(read.Target is LocalVariable) || _loop == null || _peekLocal == null) {
+                return false;
+            }
+            var peek = _peekLocal((LocalVariable)read.Target);
+            var array = peek.HasValue ? peek.Value.Value as RubyArray : null;
+            if (array == null || array.Count == 0) { return false; }
+            const int Samples = 16;
+            int step = Math.Max(1, array.Count / Samples);
+            for (int i = 0; i < array.Count; i += step) {
+                object element = array[i];
+                if (!(element is int) && !(element is long)) { return false; }
+            }
+            return true;
+        }
+
+        /// <summary>An operand the profile has only ever seen as something other than a number is not speculated to be one.</summary>
+        private void RequireNumericObservation(RExpr/*!*/ operand, string/*!*/ op) {
+            Type t = ObservedType(operand);
+            if (t != null && t != MixedTypes && t != typeof(int) && t != typeof(long) && t != typeof(double)) {
+                throw Bail("operator " + op + " on a " + ((t == typeof(void)) ? "nil" : t.Name));
+            }
         }
 
         // ---- Array#[], Hash#[], #key?, #fetch, #[]= ------------------------------------------
