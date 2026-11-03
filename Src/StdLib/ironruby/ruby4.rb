@@ -4454,22 +4454,6 @@ class Numeric
   end unless method_defined?(:clamp)
 end
 
-# Integer#clamp(min, max) with two Integer bounds - `light.clamp(0, 31)' in a renderer's
-# inner loop - without Comparable#clamp's splat, argument-count dispatch and three `<=>'
-# calls, which made it three times slower than MRI's. Any other form (a Range, nil or
-# non-Integer bounds) is Comparable#clamp's, errors included.
-class Integer
-  def clamp(min, max = (range_form = true; nil))
-    if !range_form && Integer === min && Integer === max
-      raise ArgumentError, "min argument must be less than or equal to max argument" if min > max
-      return min if self < min
-      return max if self > max
-      return self
-    end
-    range_form ? super(min) : super(min, max)
-  end
-end
-
 unless defined?(KeyError)
   class KeyError < IndexError
     def initialize(message = nil, receiver: nil, key: nil)

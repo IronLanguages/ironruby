@@ -86,11 +86,12 @@ t('every element bumped exactly once') { a.tally.to_a }
 
 def store_then_overflow(a, k)
   acc = 1
+  limit = 2**62             # outside the loop: the emitter has no Integer#**
   i = 0
   while i < a.size
     a[i] = i
     acc = acc * k           # out of Int64 at some point: deopt after the store
-    acc = 1 if acc > 2**40
+    acc = 1 if acc > limit  # so acc * k leaves Int64 before the reset
     i += 1
   end
   [acc, a.sum]
@@ -109,7 +110,11 @@ def two_stores(a, b, poison)
 end
 poison = Array.new(N, 1)
 poison[N - 11] = nil
-t('two stores, then nil') { two_stores(Array.new(N, 3), Array.new(N, 1), poison) }
+a = Array.new(N, 3)
+b = Array.new(N, 1)
+t('two stores, then nil') { two_stores(a, b, poison) }
+# the iteration that met nil stored into both before it raised: each store exactly once
+t('both arrays around the failed iteration') { [a[N - 12, 3], b[N - 12, 3], a.sum, b.sum] }
 
 # ---------------------------------------------------------------- 3. elements, indexes
 
@@ -138,14 +143,14 @@ def indexes(a)
   misses = 0
   i = 0
   while i < N
-    v = a[i - 3000]          # negative, then in range, then past the end
+    v = a[i - 2500]          # negative, then in range, then past the end - all after OSR
     s += v if v
     misses += 1 unless v
     i += 1
   end
   [s, misses]
 end
-t('negative and past-the-end indexes') { indexes(Array.new(4000) { |i| i * 3 }) }
+t('negative and past-the-end indexes') { indexes(Array.new(3000) { |i| i * 3 }) }
 
 def float_index(a)
   s = 0
@@ -266,6 +271,9 @@ module Grid
   end
 end
 t('constant in the loop') { Grid.fill(Array.new(N, 0)) }
+# 750 iterations a call and the countdown is the loop's: two more calls get it specialized
+# with WIDTH = 8 compiled in, so the reassignment below meets a copy that is already there
+2.times { Grid.fill(Array.new(N, 0)) }
 Grid.send(:remove_const, :WIDTH)
 Grid.const_set(:WIDTH, 3)
 t('constant reassigned') { Grid.fill(Array.new(N, 0)) }
