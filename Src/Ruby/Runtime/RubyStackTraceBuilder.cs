@@ -63,7 +63,7 @@ namespace IronRuby.Runtime {
             : this(context) {
             // Compiled trace: contains frames starting with the throw site up to the first filter/catch that the exception was caught by:
             StackTrace throwSiteTrace = GetClrStackTrace(exception, _needsClrFileInfo);
-            _interpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
+            _interpretedFrames = GetInterpretedFrames(exception);
             AddExceptionBacktrace(throwSiteTrace, catchSiteTrace, isCatchSiteInterpreted);
         }
 
@@ -107,7 +107,7 @@ namespace IronRuby.Runtime {
                 // the exception's own trace grows as it is rethrown, and a raise of it starts it over:
                 ThrowSiteTrace = GetClrStackTrace(exception, NeedsClrFileInfo(context));
                 // the interpreter's frames are saved on the exception once, and raise clears them:
-                InterpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
+                InterpretedFrames = GetInterpretedFrames(exception);
                 CatchSiteTrace = catchSiteTrace;
                 IsCatchSiteInterpreted = isCatchSiteInterpreted;
             }
@@ -115,6 +115,24 @@ namespace IronRuby.Runtime {
             internal RubyArray/*!*/ Build() {
                 return new RubyStackTraceBuilder(this).RubyTrace;
             }
+        }
+
+        /// <summary>
+        /// The interpreted frames of the exception's trace: those the interpreter saved on it when it left an interpreted frame
+        /// (Interpreter.HandleException) - or, if it has left none yet, the thread's interpreted frames, every one of them still on
+        /// the stack. The trace is taken where the first Ruby frame sees the exception go by (RubyExceptionData.CaptureExceptionTrace):
+        /// an exception filter, which compiled code runs while the stack is searched for a handler, before any frame has been left.
+        /// An exception that a compiled rule or library method throws into a compiled Ruby method is seen by that method's filter
+        /// before any interpreted frame - its callers' - has saved anything; without them every interpreted frame in the trace, and
+        /// the library frames reported with an interpreted frame's line, went missing (the backtrace ended at the compiled frames).
+        /// </summary>
+        private static IList<InterpretedFrameInfo> GetInterpretedFrames(Exception/*!*/ exception) {
+            var saved = InterpretedFrame.GetExceptionStackTrace(exception);
+            if (saved != null) {
+                return saved;
+            }
+            var current = InterpretedFrame.CurrentFrame.Value;
+            return (current != null) ? new List<InterpretedFrameInfo>(current.GetStackTraceDebugInfo()) : null;
         }
 
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames)
