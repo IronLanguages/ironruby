@@ -601,7 +601,10 @@ namespace IronRuby.Runtime.Jit {
             return CompareWideLongDouble(x, y);
         }
 
-        /// <summary>CompareLongDouble for an x past 2**53 either way.</summary>
+        /// <summary>
+        /// CompareLongDouble for an x past 2**53 either way - exact for any x, and what the method JIT asks
+        /// when x converted to a double ties with y (JitCompiler.EmitIntegerFloatCompare).
+        /// </summary>
         public static int CompareWideLongDouble(long x, double y) {
             if (Double.IsNaN(y)) { return 2; }
             if (y >= 9223372036854775808.0) { return -1; }     // 2**63 and up, Infinity included

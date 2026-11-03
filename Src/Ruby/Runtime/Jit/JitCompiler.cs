@@ -1634,9 +1634,11 @@ namespace IronRuby.Runtime.Jit {
         /// rb_integer_float_cmp and rb_integer_float_eq) - and a long past 2**53 does not convert to
         /// a double exactly: `2**53 + 1 == 2.0**53' is false, though (double)(2**53 + 1) is 2.0**53.
         /// A long that is a widened int, or a constant within 2**53, does convert exactly, and is
-        /// compared as a double. Any other is tested: within 2**53 it is compared as a double too,
-        /// and only past that through JitRuntime.CompareWideLongDouble - a range test, where
-        /// comparing as doubles was a conversion.
+        /// compared as a double. Any other is converted all the same: the nearest double to x orders
+        /// against f as x does unless the two are equal (f is a double, so it is at least the next
+        /// one up when it is above x's double, which x is short of). Only when they are equal does
+        /// JitRuntime.CompareWideLongDouble work out the exact order, which costs the common case
+        /// no more than a second test of the flags the first comparison set.
         /// </summary>
         private MSA.Expression/*!*/ EmitIntegerFloatCompare(string/*!*/ op, MSA.Expression/*!*/ l, JT lt, MSA.Expression/*!*/ r, JT rt,
             out JT type) {
@@ -1649,20 +1651,27 @@ namespace IronRuby.Runtime.Jit {
             }
             var integer = Ast.Variable(typeof(long), "#integer");
             var number = Ast.Variable(typeof(double), "#float");
+            var asDouble = Ast.Variable(typeof(double), "#integerAsDouble");
             var integerValue = Ast.Assign(integer, integerLeft ? l : r);
             var floatValue = Ast.Assign(number, Coerce(integerLeft ? r : l, integerLeft ? rt : lt, JT.Dbl));
-            // -2**53 <= integer <= 2**53, as one unsigned comparison (the add wraps for a long near the top,
-            // which is out of range either way)
-            var inRange = Ast.LessThanOrEqual(
-                Ast.Convert(Ast.Add(integer, Ast.Constant(1L << 53)), typeof(ulong)),
-                Ast.Constant(1UL << 54));
-            var asDouble = Ast.Convert(integer, typeof(double));
-            var narrow = integerLeft ? EmitCompare(op, asDouble, number, out type) : EmitCompare(op, number, asDouble, out type);
-            var wide = OrderTest(integerLeft ? op : Mirror(op), Ast.Call(JitRuntime.M("CompareWideLongDouble"), integer, number), out type);
-            return Ast.Block(typeof(bool), new[] { integer, number },
+            // x's relation to f; on a tie x's double is f, so f is no NaN and the order is -1, 0 or 1
+            string relation = integerLeft ? op : Mirror(op);
+            MSA.Expression tie = Ast.Equal(asDouble, number);
+            MSA.Expression ordered = OrderTest(relation, Ast.Call(JitRuntime.M("CompareWideLongDouble"), integer, number), out type);
+            MSA.Expression test;
+            switch (relation) {
+                case "<": case "<=": test = Ast.OrElse(Ast.LessThan(asDouble, number), Ast.AndAlso(tie, ordered)); break;
+                case ">": case ">=": test = Ast.OrElse(Ast.GreaterThan(asDouble, number), Ast.AndAlso(tie, ordered)); break;
+                case "==": test = Ast.AndAlso(tie, ordered); break;
+                case "!=": test = Ast.OrElse(Ast.NotEqual(asDouble, number), ordered); break;
+                default: throw JitBailout.Instance;
+            }
+            type = JT.Bool;
+            return Ast.Block(typeof(bool), new[] { integer, number, asDouble },
                 integerLeft ? integerValue : floatValue,
                 integerLeft ? floatValue : integerValue,
-                Ast.Condition(inRange, narrow, wide)
+                Ast.Assign(asDouble, Ast.Convert(integer, typeof(double))),
+                test
             );
         }
 

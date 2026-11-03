@@ -2167,6 +2167,20 @@ def sp_ef_cmp(a, f)
 end
 
 # an outlined loop with an object slot (r holds nil when it turns hot) comparing a long to a Float
+# every relation both ways in an outlined loop, folded into one number (x a long, f a Float: both typed)
+def osr_lf_rel(xs, fs)
+  i = 0
+  acc = 0
+  n = xs.size
+  while i < n
+    x = xs[i] + 0
+    f = fs[i] * 1.0
+    acc = (acc * 31 + (x < f ? 1 : 0) + (f <= x ? 2 : 0) + (x == f ? 4 : 0) + (f != x ? 8 : 0) + (x >= f ? 16 : 0) + (f > x ? 32 : 0)) % 1_000_003
+    i += 1
+  end
+  acc
+end
+
 def osr_lf_cmp(big, fl, n)
   i = 0
   r = nil
@@ -2236,6 +2250,20 @@ LF_PAIRS = [[2**53 + 1, 2.0**53], [2**53 + 1, 2.0**53 + 2], [-(2**53 + 1), -(2.0
 t('Integer <=> Float, the Integer a long') { LF_PAIRS.map { |x, f| sp_lf_cmp(x, f) } }
 t('... the Integer an element') { LF_PAIRS.map { |x, f| sp_ef_cmp([x], f) } }
 t('... the element a Float or not a number') { [sp_ef_cmp([2.0**53], 2.0**53), sp_ef_cmp([Float::NAN], 1.0), (sp_ef_cmp([nil], 1.0) rescue $!.class), (sp_ef_cmp([2**70], 1.0) rescue $!.class)] }
+# ties and near-ties: x's own double, the doubles either side of it and x's double plus a half, around
+# 2**53, 3 * 2**52, 2**62 and the ends of the Int64 range
+lf_near = []
+[2**53, 3 * 2**52, 2**60 + 2**7, 2**62, 2**63 - 1, -(2**63), -(2**53)].each do |b|
+  [-1025, -3, -1, 0, 1, 3, 1025].each do |d|
+    x = (b + d).clamp(-(2**63), 2**63 - 1)
+    lf_near << [x, x.to_f] << [x, x.to_f.next_float] << [x, x.to_f.prev_float] << [x, x.to_f + 0.5]
+  end
+end
+lf_digest = ->(rs) { rs.each_slice(28).map { |sl| sl.inject(0) { |h, v| (h * 4099 + v) % 1_000_000_007 } } }
+t('... ties and near-ties, the Integer a long') { lf_digest.(lf_near.map { |x, f| sp_lf_cmp(x, f) }) }
+t('... ties and near-ties, the Integer an element') { lf_digest.(lf_near.map { |x, f| sp_ef_cmp([x], f) }) }
+osr_lf_rel([1, 2**40], [1.5, 2.0**40])
+t('... ties and near-ties, an outlined loop') { osr_lf_rel(lf_near.map(&:first) * 200, lf_near.map(&:last) * 200) }
 t('OSR long == Float, r nil at entry') { [osr_lf_cmp(2**53 + 1, 2.0**53, 30000), osr_lf_cmp(2**53, 2.0**53, 30000), osr_lf_cmp(7, 7.0, 30000)] }
 warm { |i| sp_store_param([0, 0, 0], 3, i * 1000); sp_store_local([0, 0, 0], 3, i); sp_hash_ii({}, 3) }
 t('a parameter only stored') { [sp_store_param([0, 0], 2, 5000), sp_store_param([0, 0], 2, 2.5), sp_store_param([0], 1, "s"), sp_store_param([0], 1, nil), sp_store_param([0], 1, 2**70)] }
