@@ -128,8 +128,8 @@ namespace IronRuby.Runtime.Osr {
         /// </summary>
         public object Run(object[]/*!*/ tuples) {
             Entered++;
-            if (TracePoint.ActiveEvents != 0) {
-                // a TracePoint wants the loop's :line events, which only the generic loop has
+            if ((TracePoint.ActiveEvents & JitStub.TypedBodyEvents) != 0) {
+                // a TracePoint wants the loop's :line (or :c_call...) events, which only the generic loop has
                 ReArmCountdown();
                 return Retry;
             }

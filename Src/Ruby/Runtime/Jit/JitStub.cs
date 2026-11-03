@@ -1032,12 +1032,24 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// No TracePoint is enabled: a typed body has no :call, :line, :return or :c_call hooks, so while
-        /// one is the generic body runs instead. A TracePoint is enabled and disabled at any time, which
-        /// the method version does not follow, so this is tested on every entry - one static read.
+        /// The events a typed body (or an outlined loop) would not deliver: it has no :line, :call or
+        /// :return hooks, and the library methods it inlines no :c_call or :c_return ones (the block
+        /// events are in for safety; a typed body has no blocks). It raises, rescues, defines classes
+        /// and switches fibers only through the generic code, so a TracePoint on :raise, :rescue,
+        /// :class, :end, :thread_*, :fiber_switch or :script_compiled leaves it running.
+        /// </summary>
+        internal const int TypedBodyEvents = (int)(TraceEvents.Line | TraceEvents.Call | TraceEvents.Return |
+            TraceEvents.CCall | TraceEvents.CReturn | TraceEvents.BCall | TraceEvents.BReturn);
+
+        /// <summary>
+        /// No TracePoint is enabled for an event the typed body would not deliver (TypedBodyEvents), so
+        /// while one is the generic body runs instead. A TracePoint is enabled and disabled at any time,
+        /// which the method version does not follow, so this is tested on every entry - one static read.
         /// </summary>
         private static MSA.Expression/*!*/ NotTracing() {
-            return Ast.Equal(Ast.Field(null, typeof(TracePoint).GetField("ActiveEvents")), Ast.Constant(0));
+            return Ast.Equal(
+                Ast.And(Ast.Field(null, typeof(TracePoint).GetField("ActiveEvents")), Ast.Constant(TypedBodyEvents)),
+                Ast.Constant(0));
         }
 
         /// <summary>The entry guard: the method version, and the constant version if the body folded constants.</summary>

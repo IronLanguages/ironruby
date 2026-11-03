@@ -2338,6 +2338,30 @@ osr_tr_loop(30000)
 end
 t('... specialized again') { [sp_tr_kind(1), sp_tr_get(th, 1), sp_tr_add(1, 2), osr_tr_loop(30000)] }
 
+# :c_return is delivered for an inlined Hash#[] too; a TracePoint on :raise, :rescue or :class only,
+# which the specialized code does leave running, still sees every raise (a miss deopts to the generic
+# code, which raises) and the class body
+def sp_tr_fetch(h, k)
+  h.fetch(k)
+end
+warm { |i| sp_tr_fetch(th, 1) }
+[[:c_return], [:raise], [:raise, :rescue, :class]].each do |events|
+  counts = Hash.new(0)
+  tp = TracePoint.new(*events) do |tr|
+    case tr.event
+    when :c_return then counts[[:c_return, tr.method_id]] += 1 if tr.method_id == :[] && tr.path == __FILE__
+    when :raise, :rescue then counts[[tr.event, tr.raised_exception.class]] += 1
+    else counts[[tr.event]] += 1
+    end
+  end
+  tp.enable
+  200.times { |i| sp_tr_get(th, 1); sp_tr_kind(i); (sp_tr_fetch(th, i % 2) rescue nil); osr_tr_loop(i) }
+  class JitMatrixTracedClass; end
+  tp.disable
+  t("TracePoint #{events.inspect} on specialized methods") { counts.sort_by(&:inspect) }
+end
+t('... and after') { [sp_tr_kind(1), sp_tr_get(th, 1), sp_tr_fetch(th, 1), (sp_tr_fetch(th, 0) rescue $!.class)] }
+
 # Coverage: a method in a file loaded under Coverage.start counts its lines whether or not it is hot
 require 'coverage'
 cov_file = "/tmp/jit-matrix-cov-#{$$}.rb"
