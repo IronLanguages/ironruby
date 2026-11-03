@@ -373,25 +373,70 @@ How it stays correct:
 
 - The library records the MVIDs of the host's IronRuby, Microsoft.Dynamic and
   Microsoft.Scripting, and is ignored as a whole if they differ. It also records a hash of each
-  file's source, checked when the file is first required; an edited file is compiled from source.
+  file's source, checked each time the file is loaded; an edited file is compiled from source.
+  So a `load` of a file edited during the run runs the edit, as without the library.
 - It is only used by the first runtime of a process (its static fields hold that runtime's
-  objects). It is not used under `-d`, coverage, profiling, tracing or frozen-string-literal
-  options, nor for `load(file, true)`.
+  objects, and keep it alive for the life of the process). It is not used under `-d`, coverage,
+  profiling, tracing or frozen-string-literal options, nor for `load(file, true)`. While
+  `Coverage` measures, which a program may start at any time (SimpleCov, test runners), its files
+  are compiled from source too: a file required after `Coverage.start` is in `Coverage.result`
+  (it was missing with the library before).
 - There is no PDB. The compiler records each sequence point's IL offset, and the library carries
-  the line table (`RubyStartupIndex.Lines()`), which the backtrace builder reads. Frame labels
-  are worked out from the qualified lexical nesting (`Gem::Requirement.parse`). Backtraces
+  the line table (`RubyStartupIndex.Lines()`), which the backtrace builder reads. Backtraces
   through rubygems code match the interpreted ones. That includes a `require` LoadError's: a
   compiled catch site is now skipped as a frame, not as the first frame reported, which had
   dropped the caller of gem_compat.rb's `Kernel#require` block. The same happened without the
   library once that block was compiled, after 200 calls.
+- Frame labels. The runtime labels a method after the module its `def` runs for; the compiler
+  can only guess that from the lexical nesting. It guesses the copy most calls go to:
+  `module_function` methods as the module's singleton methods (`FileUtils.mkdir_p`), except in
+  Kernel and in modules the startup files `extend` (Gem::Deprecate); `class << Time` and
+  `def Time.x` as Time's; `X = Class.new do ... end` (and Module.new, Struct.new, Data.define)
+  as X's. Each compiled method body carries the label it was compiled with. When the runtime would
+  label the method otherwise (the other copy of a module function, a `def` in `class_eval` or in a
+  block), `RubyMethodBody` compiles that `def` from its source, as without the library:
+  `PrecompiledCode.ParseDefinition` reads it from the file while the file still has the hash the
+  library recorded, with the file's `frozen_string_literal` comment in front. Labels are then
+  those of the base and CRuby (`FileUtils.fu_mkdir`, `Time.make_time`, `Dir::Tmpname.create`,
+  and `FileUtils#mkdir_p` for the included copy). `IR_STARTUP_DLL_TRACE=1` says which defs are
+  compiled from source; `ir -e 1`, `require "set"`/`"json"` and requiring optparse, time,
+  tempfile, pp, fileutils, date, stringio, strscan, delegate, tmpdir and io/console compile none.
+- Other threads' backtraces (`Thread#backtrace`, `#backtrace_locations`) are built from the
+  interpreter's frame chain, because .NET cannot walk another thread's stack, and precompiled
+  code is compiled code from its first call. Without help, `Kernel#loop`, `Set#each` and
+  `Monitor#synchronize` were missing from every thread dump. So each method or block that runs
+  a block (a `yield`, or a block parameter) or a loop keeps a frame of its own,
+  `PrecompiledFrames`: its encoded name, its current line (set at each statement) and the
+  interpreted frame it was entered from, which places it among the interpreted frames. That is
+  363 of the 2,379 methods and 68 blocks. Thread dumps through these now match those without the
+  library, except that `Kernel#sleep` shows once, as in CRuby (ruby4.rb's wrapper made it show
+  twice). The other precompiled methods still have no frame there, like methods the runtime has
+  compiled because they are hot, with or without the library. In a thread waiting for a monitor
+  another thread holds, `Monitor#enter` is missing below `Monitor#synchronize`. A frame costs a
+  thread-static read and a few stores per call: the tiniest iterators (`Kernel#tap`, `#then`)
+  give back the library's gain and run at the base's speed. `IR_AOT_THREAD_FRAMES=0` at compile
+  time turns the frames off.
 - `const_set` and `autoload` record their caller's location (`const_source_location`, "previous
   definition was here"). Compiled code would need a CLR stack walk for that, about 0.2 ms each.
   Instead, the compiler puts `PrecompiledCode.NoteCallLocation(scope, file, line)` before each
-  such call (19 in the startup files), and both methods take the caller's scope, which only the
-  noted call can match. Not covered: constants that ruby4.rb itself makes with `const_set` or
-  `autoload` (`Errno::*`, the `Set` autoload) have no location, as C-defined ones in MRI. Without
-  the library they were reported at gem_prelude.rb:9, the line that requires ruby4.rb.
+  such call (19 in the startup files), and clears the note when the call returns. Both methods
+  take the caller's scope, which only the noted call can match. Not covered: constants that
+  ruby4.rb itself makes with `const_set` or `autoload` (`Errno::*`, the `Set` autoload) have no
+  location, as C-defined ones in MRI. Without the library they were reported at
+  gem_prelude.rb:9, the line that requires ruby4.rb.
+- The literal parts of an interpolated string are made of characters, as the compiler makes
+  them. Made from bytes, each interpolation converted one side: `Fiber.new` took 3x the time in
+  its `"#{file}:#{line}"`.
 - Each file's code is a class of its own (`RubyStartup<i>`), loaded when the file first runs.
+  Its constants are static fields, each made the first time the code needs it (`k ?? (k =
+  init)`, unsynchronized). Two threads that first run the same code together may each make one
+  (a call site, a frozen literal); that is harmless, as each is equivalent.
+- `Util/aot/check-startup.sh` (about 5 s) checks what the library must not change. It runs
+  `startup-checks.rb` with and without the library and compares: coverage after a run-time
+  `Coverage.start`, the frame labels above, frozen literals of a def compiled from source,
+  interpolation, and other threads' backtraces through `loop`, `Set#each`, `Monitor#synchronize`,
+  `MonitorMixin#mon_synchronize` and `then` (19 lines, the same). It also checks that a copy of
+  the tree elsewhere uses the library, and that `load` of an edited library file runs the edit.
 
 Call sites. Every dynamic site of the saved code is a static `CallSite<T>` made with the runtime's
 binder, and it binds on first execution as interpreted code does. The sites have the interpreter's
@@ -419,43 +464,67 @@ compiler now marks each method or block whose own code has a loop (70 in the sta
 call. File and class bodies, which run once, keep their ReadyToRun code. `IR_AOT_LOOP_JIT=0` at
 compile time turns this off.
 
-Measured on 97fe9183 + this (R2R host, bench-lock, interleaved; best / median, peak RSS):
+Measured on 97fe9183 + this (R2R host, bench-lock, interleaved, N=21, load average 4-5; best /
+median, peak RSS):
 
 | | base | library off (`IR_STARTUP_DLL=none`) | library |
 |---|---|---|---|
-| `ir -e 1` | 0.675 / 0.784 s, 106 MB | 0.692 / 0.789 s, 106 MB | 0.576 / 0.672 s, 112 MB |
-| `-e 'require "set"; require "json"'` | 0.782 / 0.943 s, 110 MB | 0.823 / 0.939 s, 109 MB | 0.693 / 0.792 s, 124 MB |
-| `Util/bench/bench.rb --list` | 0.848 / 0.900 s, 111 MB | 0.849 / 0.885 s, 111 MB | 0.717 / 0.760 s, 113 MB |
+| `ir -e 1` | 0.677 / 0.758 s, 106 MB | 0.660 / 0.749 s, 106 MB | 0.570 / 0.648 s, 112 MB |
+| `-e 'require "set"; require "json"'` | 0.795 / 0.834 s, 110 MB | 0.773 / 0.829 s, 110 MB | 0.664 / 0.699 s, 125 MB |
+| `Util/bench/bench.rb --list` | 0.731 / 0.798 s, 111 MB | 0.740 / 0.800 s, 111 MB | 0.637 / 0.673 s, 114 MB |
+| `-e` requiring optparse, time, tempfile, pp, fileutils | 1.538 / 1.658 s, 132 MB | 1.566 / 1.699 s, 132 MB | 1.071 / 1.161 s, 139 MB |
 
-That is N=21 on a loaded box (load average 11-13). On a quieter box, N=11, `ir -e 1` was 0.676 /
-0.722 s for the base and 0.557 / 0.599 s with the library. The release archive (package-release.sh,
-self-contained composite host, unpacked elsewhere, N=11) goes from 0.668 / 0.707 s to 0.574 /
-0.594 s, and `require "set"; require "json"` from 0.854 / 0.879 s to 0.695 / 0.715 s.
+That is 15-16 % off `ir -e 1` and `require "set"; require "json"`, and 30 % off a program that
+requires five of the libraries. The frames for other threads' backtraces (above) cost no startup
+time: `ir -e 1` was 0.658 / 0.673 s with them and 0.639 / 0.669 s without (N=15). The release
+archive (package-release.sh, self-contained composite host, unpacked elsewhere, N=11, measured
+before those frames) goes from 0.668 / 0.707 s to 0.574 / 0.594 s, and `require "set"; require
+"json"` from 0.854 / 0.879 s to 0.695 / 0.715 s.
 
 Peak RSS grows by 6 MB, or by 14 MB once json is loaded. That is a transient peak: 3 s after
 `require "json"`, the process holds 100 MB RSS with the library and 105 MB without it (39 against
 43 MB anonymous).
 
-The library is 32 MB (ReadyToRun) for 46 files. spec/language passes with it (80 files, 2934
-examples, 5563 expectations, 0 failures, 0 errors), as do spec/core/module, kernel, exception,
-enumerator and fiber, with the same counts as without it. Warm start workers (Util/warm) are a
-process's first runtime, so they load the library too, and `check.py` still gives 0 failures and
-its 2 known gaps. The NativeAOT host never looks for the library, and it passes spec/language
-unchanged. Steady state is unchanged:
+The library is 32.5 MB (ReadyToRun) for 46 files. spec/language passes with it (80 files, 2934
+examples, 5563 expectations, 0 failures, 0 errors). So do spec/core/thread, fiber, enumerator,
+exception, module, kernel, process, set and argf and spec/library/coverage, monitor, time,
+tmpdir, delegate, optionparser, stringio, date, tempfile, pp, rubygems and rbconfig, with the same
+results as the base. Warm start workers (Util/warm) are a process's first runtime, so they load
+the library too, and `check.py` still gives 0 failures and its 2 known gaps. The NativeAOT host
+never looks for the library. Steady state is flat overall, with one exception (`fiber_new`):
 
 - Util/bench, all 67 rows, best of 5 at scale 1, R2R base against R2R with the library: geomean
-  1.003.
-- Rows above 1.08 were re-measured, best of 8 at scale 3. `enum_next_gen` is 0.97 and
-  `enum_next_array` 0.95. `case_when` (1.07) and `new_kwargs` (1.07) are slower than the base, but
-  they are 1.01 and 0.98 library off -> on, so the library is not the cause.
-- One row is slower with the library: `mandelbrot`, by 6-8 % (about 5 ms of 80 ms). It shows only
-  as the first run of bench.rb's top-level block, and still does after a 0.5 s sleep, so it is not
-  background tier-up. Run elsewhere, the same loop is not slower:
-  - in a method, its first call is faster with the library (71 against 88 ms) and later calls
-    are the same;
-  - in a top-level proc alone, its first run is faster too (73 against 96 ms median).
-- ruby-bench (R2R, best timed iteration): `fib`, `nbody` and `erubi` are within noise, and their
-  whole-process wall time is 6-16 % lower.
+  1.006.
+- The rows above 1.06 there, and the fiber rows, re-measured best of 8 at scale 3, library
+  against base: `enum_next_gen` 0.98, `select_loop` 0.97, `block_literal_cfunc` 1.01,
+  `mandelbrot` 0.93, `const_scoped` 1.03, `respond_to` 1.05, `gvar_get` 1.07, `call_kw_omitted`
+  1.00, `lambda_call` 0.94, `then_call` 0.98 and `fiber_switch` 0.89. (`gvar_get` is 1.05 with
+  the library off too, so the library is not the cause.)
+- `fiber_new` is 1.18x the base at scale 3 (1.070 against 0.907 s; library off 0.926 s). It is a
+  warm-up effect, and only on a single core. 2,500 `Fiber.new { }.resume` per segment, medians
+  of 4 runs under bench-lock, base / library:
+  - the first segment is faster with the library: 0.315 / 0.250 s;
+  - the next six, the first second or so of fiber churn, are slower: 0.767 / 1.014 s together;
+  - from then on both take 0.062 s per segment.
+
+  The main thread spends most of that time spinning and yielding in the fiber handoff
+  (`ReuseFiberThread`, `FiberMailbox`) while the fiber threads run. The likeliest cause, not
+  proven: until .NET's tiering replaces it, the library's ReadyToRun code for `Fiber#initialize`,
+  `#resume` and `.__switch__` is slower than the optimized dynamic methods the base compiles them
+  to after 200 calls. Measured without bench-lock (all cores, a loaded box) the difference was
+  within noise. Crossgen2 with cross-module inlining (`--opt-cross-module` for IronRuby and the
+  DLR, +0.9 MB) did not change it.
+- Precompiled stdlib methods called in a loop (best in-process run of 5, 4 interleaved runs;
+  library against base): `Monitor#synchronize` 0.86, `Enumerator#next` 0.83, `JSON.parse` 0.91,
+  `SimpleDelegator` 1.02, `StringIO` 0.99, `Date._parse` 1.03. Slower are `Time.parse` +
+  `Time.iso8601` at 1.08 (1.07-1.14 against library off) and `OptionParser.new` + `#parse` at
+  1.05. The latter also warms up more slowly (first runs 0.63 against 0.53 s), and is the same
+  after a few seconds.
+- The thread frames cost the tiniest iterators what the library gained on them: `Kernel#tap` in
+  a loop is 1.05-1.08x the base (1.14-1.24x the library without frames). `inject`,
+  `each_with_index` and `loop` are 0.98-1.06 of the base, and `Kernel#then` 0.83-0.94.
+- ruby-bench (R2R, best timed iteration of 4 rounds), library against base: `fib` 32 / 32 ms,
+  `nbody` 190 / 187 ms, `erubi` 850 / 890 ms. Whole-process wall time is 5-15 % lower.
 
 Where the time goes with the library (`IR_PHASE_TIMES=1`, one run each, bench-lock), without
 -> with:
@@ -506,7 +575,8 @@ Also measured, and not worth pursuing:
   - Not run: specs, `eval`/`binding` in compiled code, `define_method`, refinements,
     coverage, TracePoint (compiled with `SavePath` set, which turns off OSR and coverage).
   - Frame labels come from lexical nesting and may be wrong for methods defined through
-    `class_eval` and similar.
+    `class_eval` and similar. (The startup library compiles such a `def` from its source; see
+    part D.)
   - Lazy constant initialization races benignly: two threads may create two `RubyMethodBody`
     objects for one `def` at first use.
   - `RuntimeVariablesExpression` and `Quote` are not supported by the port.
