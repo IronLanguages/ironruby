@@ -54,6 +54,14 @@ namespace IronRuby.Builtins {
 
         // Replaces the data in dest with the data from src
         internal static T ReplaceData<T>(T dest, IEnumerable<KeyValuePair<object, object>> src) where T : IDictionary<object, object> {
+            // Hash#dup, #merge, #replace, Hash[hash]: copy the entries with the hash codes they
+            // already have instead of re-inserting, and so re-hashing, every key.
+            var destHash = dest as Hash;
+            var srcHash = src as Hash;
+            if (destHash != null && srcHash != null && destHash.TryCopyEntriesFrom(srcHash)) {
+                return dest;
+            }
+
             dest.Clear();
             foreach (KeyValuePair<object, object> pair in src) {
                 dest[pair.Key] = pair.Value;

@@ -583,6 +583,54 @@ namespace IronRuby.Builtins {
             return false;
         }
 
+        /// <summary>
+        /// Replaces the entries with <paramref name="source"/>'s, in its order. Under the same
+        /// comparer the hash codes source has stored are this hash's as well, so its live entries
+        /// are copied as they are and the buckets re-chained from them: no key is asked for #hash
+        /// or #eql? again, as one <c>this[key] = value</c> per entry has to. Returns false, and
+        /// changes nothing, when the comparers differ or source is this hash.
+        /// </summary>
+        public bool TryCopyEntriesFrom(Hash/*!*/ source) {
+            if (ReferenceEquals(source, this) || !ReferenceEquals(source._comparer, _comparer)) {
+                return false;
+            }
+
+            Clear();
+            int liveCount = source._liveCount;
+            if (liveCount == 0) {
+                return true;
+            }
+            if (_iterationLevel > 0) {
+                // what the first this[key] = value would raise
+                throw RubyExceptions.CreateRuntimeError("can't add a new key into hash during iteration");
+            }
+
+            int size = GetPrime(liveCount);
+            var entries = new Entry[size];
+            Entry[] sourceEntries = source._entries;
+            if (liveCount == source._count - source._start) {
+                Array.Copy(sourceEntries, source._start, entries, 0, liveCount);
+            } else {
+                int dst = 0;
+                for (int src = source._start; src < source._count; src++) {
+                    if (sourceEntries[src].Next != TombstoneNext) {
+                        entries[dst++] = sourceEntries[src];
+                    }
+                }
+            }
+
+            _entries = entries;
+            _buckets = new int[size];
+            _fastModMultiplier = UInt64.MaxValue / (uint)size + 1;
+            _count = liveCount;
+            _liveCount = liveCount;
+            _start = 0;
+            LinkBuckets();
+            _version++;
+            _stamp++;
+            return true;
+        }
+
         public void Clear() {
             if (_count > 0) {
                 if (_buckets != null) {
