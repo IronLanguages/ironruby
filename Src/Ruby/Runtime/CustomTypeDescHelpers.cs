@@ -179,53 +179,6 @@ namespace IronRuby.Runtime {
 
         #endregion
 
-#if EXPOSE_INSTANCE_VARS
-        class RubyInstanceVariableDescriptor : PropertyDescriptor {
-            private readonly string _name;
-            private readonly Type _propertyType;
-            private readonly Type _componentType;
-
-            internal RubyInstanceVariableDescriptor(string name, Type propertyType, Type componentType)
-                : base(name, null) {
-                _name = name;
-                _propertyType = propertyType;
-                _componentType = componentType;
-            }
-
-            public override object GetValue(object component) {
-                object value;
-                GetClass(component).Context.TryGetInstanceVariable(component, _name, out value);
-                return value;
-            }
-            public override void SetValue(object component, object value) {
-                GetClass(component).Context.SetInstanceVariable(component, _name, value);
-            }
-
-            public override bool CanResetValue(object component) {
-                return false;
-            }
-
-            public override Type ComponentType {
-                get { return _componentType; }
-            }
-
-            public override bool IsReadOnly {
-                get { return false; }
-            }
-
-            public override Type PropertyType {
-                get { return _propertyType; }
-            }
-
-            public override void ResetValue(object component) {
-            }
-
-            public override bool ShouldSerializeValue(object component) {
-                return false;
-            }
-        }
-#endif // EXPOSE_INSTANCE_VARS
-
         class RubyPropertyDescriptor : PropertyDescriptor {
             private readonly string/*!*/ _name;
             private readonly Type/*!*/ _propertyType;
