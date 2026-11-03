@@ -309,9 +309,6 @@ namespace IronRuby.Runtime {
             return assembly.GetName().Name;
         }
 
-        private void InitializeInterpretedFrames() {
-        }
-
         public RubyArray/*!*/ RubyTrace {
             get { return _trace; }
         }
@@ -721,16 +718,6 @@ namespace IronRuby.Runtime {
                 return true;
             }
             return false;
-        }
-
-        private static string ParseRubyMethodName(string/*!*/ lambdaName) {
-            if (!lambdaName.StartsWith(RubyMethodPrefix, StringComparison.Ordinal)) {
-                return lambdaName;
-            }
-
-            int nameEnd = lambdaName.IndexOf(NamePartsSeparator, RubyMethodPrefix.Length);
-            string name = lambdaName.Substring(RubyMethodPrefix.Length, nameEnd - RubyMethodPrefix.Length);
-            return (name != TopLevelMethodName) ? name : null;
         }
     }
 }

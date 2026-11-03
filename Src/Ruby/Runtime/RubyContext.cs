@@ -810,13 +810,6 @@ namespace IronRuby.Runtime {
             get { return _binder; }
         }
 
-        /// <summary>
-        /// Clears thread static variables.
-        /// </summary>
-        internal static void ClearThreadStatics() {
-            _currentException = null;
-        }
-
         private void InitializeGlobalVariables() {
             // special variables:
             Runtime.GlobalVariables.DefineVariablesNoLock(this);
@@ -1248,12 +1241,6 @@ namespace IronRuby.Runtime {
             Assert.NotNull(type, module);
             _moduleCache[type] = module;
             _classReadCache.TryRemove(type, out _);
-        }
-
-        internal void AddNamespaceToCacheNoLock(NamespaceTracker/*!*/ namespaceTracker, RubyModule/*!*/ module) {
-            Assert.NotNull(namespaceTracker, module);
-
-            _namespaceCache.Add(namespaceTracker, module);
         }
 
         internal RubyModule/*!*/ GetOrCreateModule(NamespaceTracker/*!*/ tracker) {
