@@ -11,6 +11,7 @@ namespace IronRuby.Aot {
             switch (args[0]) {
                 case "census": return Census.Run(rest);
                 case "compile": return CompileCommand.Run(rest);
+                case "startup": return StartupCommand.Run(rest);
                 case "selftest": return SelfTest.Run(rest.Length > 0 ? rest[0] : "aot-selftest");
                 default:
                     Console.Error.WriteLine("unknown command " + args[0]);

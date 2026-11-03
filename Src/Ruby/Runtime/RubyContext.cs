@@ -3672,7 +3672,12 @@ namespace IronRuby.Runtime {
                 gen.Coverage = coverage.GetCoverage(ast, sourceUnit.Path, options.IsEval, options.InitialLocation.Line, sourceUnit.GetCode());
             }
 
-            return ast.Transform<T>(gen);
+            bool timed = PhaseTimer.Enter(PhaseTimer.Transform);
+            try {
+                return ast.Transform<T>(gen);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
         }
 
         private CoverageState _coverage;

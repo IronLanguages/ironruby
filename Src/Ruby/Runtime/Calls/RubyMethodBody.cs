@@ -60,10 +60,18 @@ namespace IronRuby.Runtime.Calls {
         // method's header (name, parameters, location), not its body.
         private readonly Func<RubyScope, RubyModule, Delegate> _precompiled;
 
+        // A precompiled method the JIT may specialize: its def's source, which the JIT's AST is parsed from (see Compile).
+        private readonly string _jitSource;
+
+        // The label the precompiled body's frames carry, which the compiler worked out from the lexical nesting (see Compile).
+        private readonly string _precompiledLabel;
+
         internal RubyMethodBody(MethodDeclaration/*!*/ header, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding,
-            Func<RubyScope, RubyModule, Delegate>/*!*/ precompiled)
+            Func<RubyScope, RubyModule, Delegate>/*!*/ precompiled, string jitSource, string label)
             : this(header, document, encoding, (LineCoverage)null) {
             _precompiled = precompiled;
+            _jitSource = jitSource;
+            _precompiledLabel = label;
         }
 
         /// <summary>
@@ -277,10 +285,43 @@ namespace IronRuby.Runtime.Calls {
         }
 
         private Delegate/*!*/ Compile(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            bool timed = PhaseTimer.Enter(_precompiled != null ? PhaseTimer.Precompiled : PhaseTimer.DefCompile);
+            try {
+                return CompileNoTiming(declaringScope, declaringModule);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
+        }
+
+        private Delegate/*!*/ CompileNoTiming(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
             if (_precompiled != null) {
-                return _precompiled(declaringScope, declaringModule);
+                // The frame label of the compiled body was worked out from the lexical nesting. A def run for another module
+                // - the singleton copy module_function makes (or the instance one), a def in class_eval or in a block - is
+                // compiled from its source, as it is without the library, so that its frames are labelled after the module
+                // the runtime gives it ("FileUtils.mkdir_p" or "FileUtils#mkdir_p").
+                if (_precompiledLabel != null && _precompiledLabel != MethodDeclaration.QualifyFrameLabel(_ast.Name, declaringModule)) {
+                    var source = Precompiled.PrecompiledCode.ParseDefinition(declaringScope.RubyContext, _ast, _encoding,
+                        _document != null ? _document.FileName : null);
+                    if (source != null) {
+                        return CompileFromSyntaxTree(source, declaringScope, declaringModule);
+                    }
+                }
+                var compiled = _precompiled(declaringScope, declaringModule);
+                // -X:JIT, as below: from the def's AST, which the library keeps the source of for the methods it may specialize
+                var jitContext = declaringScope.RubyContext;
+                if (_jitSource != null && jitContext.RubyOptions.Jit && !IronRuby.Runtime.Jit.JitRuntime.Disabled) {
+                    var ast = Precompiled.PrecompiledCode.ParseJitSource(jitContext, _jitSource, _ast, _document != null ? _document.FileName : null);
+                    if (ast != null) {
+                        compiled = IronRuby.Runtime.Jit.JitStub.Wrap(compiled, ast, jitContext, declaringModule, declaringScope);
+                    }
+                }
+                return compiled;
             }
 
+            return CompileFromSyntaxTree(_ast, declaringScope, declaringModule);
+        }
+
+        private Delegate/*!*/ CompileFromSyntaxTree(MethodDeclaration/*!*/ ast, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
             // TODO: remove options
             AstGenerator gen = new AstGenerator(declaringScope.RubyContext, new RubyCompilerOptions(), _document, _encoding, false);
             gen.Coverage = _coverage;
@@ -298,7 +339,13 @@ namespace IronRuby.Runtime.Calls {
                 _compiledWithoutDefinitionRefinements = true;
             }
 
-            MSA.LambdaExpression lambda = _ast.TransformBody(gen, declaringScope, declaringModule, definitionRefinements);
+            MSA.LambdaExpression lambda;
+            bool timed = PhaseTimer.Enter(PhaseTimer.DefTransform);
+            try {
+                lambda = ast.TransformBody(gen, declaringScope, declaringModule, definitionRefinements);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
             var result = RubyScriptCode.CompileLambda(lambda, declaringScope.RubyContext);
 
             // -X:JIT: hand the generic body to the method JIT, which may put a profiling
@@ -307,7 +354,7 @@ namespace IronRuby.Runtime.Calls {
             // for Coverage keeps them: a typed body has no line counters.
             var context = declaringScope.RubyContext;
             if (context.RubyOptions.Jit && _coverage == null) {
-                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, _ast, context, declaringModule, declaringScope);
+                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, ast, context, declaringModule, declaringScope);
             }
             return result;
         }

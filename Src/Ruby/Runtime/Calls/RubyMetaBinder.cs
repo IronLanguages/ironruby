@@ -63,6 +63,21 @@ namespace IronRuby.Runtime.Calls {
         public abstract Expression CreateExpression();
 
         public sealed override T BindDelegate<T>(CallSite<T> site, object[] args) {
+            bool timed = PhaseTimer.Enter(PhaseTimer.Bind);
+            long start = PhaseTimer.BindTrace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+            if (timed) PhaseTimer.EnterBindInclusive();
+            try {
+                return BindDelegateNoTiming(site, args);
+            } finally {
+                if (timed) PhaseTimer.ExitBindInclusive();
+                PhaseTimer.Exit(timed);
+                if (PhaseTimer.BindTrace) {
+                    PhaseTimer.TraceBind(this, args, start);
+                }
+            }
+        }
+
+        private T BindDelegateNoTiming<T>(CallSite<T> site, object[] args) where T : class {
             object firstArg = args[0];
             ArgumentArray argArray = firstArg as ArgumentArray;
             Type delegateType = typeof(T);
@@ -74,6 +89,7 @@ namespace IronRuby.Runtime.Calls {
                 object precompiled = BindPrecompiled(delegateType, args);
                 if (precompiled != null) {
                     result = (T)precompiled;
+                    if (PhaseTimer.BindTrace) PhaseTimer.BindKind = "pre";
                     CacheTarget(result);
                     return result;
                 }
@@ -103,6 +119,7 @@ namespace IronRuby.Runtime.Calls {
             }
 #endif
             if (argArray == null && (result = BindShared<T>(args)) != null) {
+                if (PhaseTimer.BindTrace) PhaseTimer.BindKind = PhaseTimer.BindKind == "rule" ? "shared-new" : "shared-hit";
                 return result;
             }
 
@@ -134,6 +151,16 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public override DynamicMetaObject/*!*/ Bind(DynamicMetaObject/*!*/ scopeOrContextOrTargetOrArgArray, DynamicMetaObject/*!*/[]/*!*/ args) {
+            bool timed = PhaseTimer.Enter(PhaseTimer.BindRule);
+            try {
+                return BindNoTiming(scopeOrContextOrTargetOrArgArray, args);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
+        }
+
+        private DynamicMetaObject/*!*/ BindNoTiming(DynamicMetaObject/*!*/ scopeOrContextOrTargetOrArgArray, DynamicMetaObject/*!*/[]/*!*/ args) {
+            if (PhaseTimer.BindTrace) PhaseTimer.BindKind = "rule";
             PerfTrack.NoteEvent(PerfTrack.Categories.Binding, "Ruby: " + GetType().Name + Signature.ToString() + ": Bind");
 
             var callArgs = new CallArguments(_context, scopeOrContextOrTargetOrArgArray, args, Signature);

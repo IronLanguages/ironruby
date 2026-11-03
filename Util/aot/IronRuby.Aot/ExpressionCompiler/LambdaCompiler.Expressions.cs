@@ -1,5 +1,5 @@
 // Ported from the Microsoft Reference Source (System.Core, MIT License); see ../../README.md.
-using System; using System.Collections.Generic; using System.Collections.ObjectModel; using System.Diagnostics; using System.Linq.Expressions; using System.Reflection; using System.Reflection.Emit; using System.Runtime.CompilerServices; using Closure = IronRuby.Aot.Runtime.Closure; using RuntimeOps = IronRuby.Aot.Runtime.RuntimeOps;
+using System; using System.Collections.Generic; using System.Collections.ObjectModel; using System.Diagnostics; using System.Linq.Expressions; using System.Reflection; using System.Reflection.Emit; using System.Runtime.CompilerServices; using Closure = IronRuby.Runtime.Precompiled.Closure; using RuntimeOps = IronRuby.Runtime.Precompiled.RuntimeOps;
 /* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
@@ -735,11 +735,20 @@ namespace IronRuby.Aot.Compiler {
             }
         }
 
+        /// <summary>
+        /// Called with (method name, IL offset, line) for each sequence point when set: the startup
+        /// library keeps a line table of its own (there is no PDB), which the backtrace builder reads.
+        /// </summary>
+        internal static Action<string, int, int> LineRecorder;
+
         private void EmitDebugInfoExpression(Expression expr) {
+            var node = (DebugInfoExpression)expr;
+            if (LineRecorder != null && !node.IsClear && _method is MethodBuilder) {
+                LineRecorder(_method.Name, _ilg.ILOffset, node.StartLine);
+            }
             if (!EmitDebugSymbols) {
                 return;
             }
-            var node = (DebugInfoExpression)expr;
 
             if (node.IsClear && _sequencePointCleared) {
                 // Emitting another clearance after one clearance does not

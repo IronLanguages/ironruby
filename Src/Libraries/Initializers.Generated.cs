@@ -6184,8 +6184,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "autoload", 0x51, 
-                0x00020004U, 
-                new Action<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.SetAutoloadedConstant)
+                0x00040008U, 
+                new Action<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.SetAutoloadedConstant)
             );
             
             DefineLibraryMethod(module, "autoload?", 0x51, 
@@ -6247,8 +6247,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "const_set", 0x51, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.RubyModule, System.String, System.Object, System.Object>(IronRuby.Builtins.ModuleOps.SetConstantValue)
+                0x00020004U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, System.Object, System.Object>(IronRuby.Builtins.ModuleOps.SetConstantValue)
             );
             
             DefineLibraryMethod(module, "const_source_location", 0x51, 

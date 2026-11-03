@@ -133,11 +133,16 @@ namespace IronRuby.Runtime {
             }
 
             InterpretedFrame frame;
-            if (!InterpretedFrame.CurrentFrame.TryGetValue(thread, out frame) || frame == null) {
+            if (!InterpretedFrame.CurrentFrame.TryGetValue(thread, out frame)) {
+                frame = null;
+            }
+            // the startup library's frames that run a block, which the interpreted chain does not have
+            var precompiled = Precompiled.PrecompiledFrames.Snapshot(thread);
+            if (frame == null && precompiled.Length == 0) {
                 return null;
             }
 
-            return new RubyStackTraceBuilder(context, frame).RubyTrace;
+            return new RubyStackTraceBuilder(context, frame, precompiled).RubyTrace;
 #else
             return null;
 #endif

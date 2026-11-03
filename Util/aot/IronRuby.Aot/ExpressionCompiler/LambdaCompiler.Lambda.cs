@@ -1,5 +1,5 @@
 // Ported from the Microsoft Reference Source (System.Core, MIT License); see ../../README.md.
-using System; using System.Collections.Generic; using System.Collections.ObjectModel; using System.Diagnostics; using System.Linq.Expressions; using System.Reflection; using System.Reflection.Emit; using System.Runtime.CompilerServices; using Closure = IronRuby.Aot.Runtime.Closure; using RuntimeOps = IronRuby.Aot.Runtime.RuntimeOps;
+using System; using System.Collections.Generic; using System.Collections.ObjectModel; using System.Diagnostics; using System.Linq.Expressions; using System.Reflection; using System.Reflection.Emit; using System.Runtime.CompilerServices; using Closure = IronRuby.Runtime.Precompiled.Closure; using RuntimeOps = IronRuby.Runtime.Precompiled.RuntimeOps;
 /* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
@@ -31,6 +31,9 @@ namespace IronRuby.Aot.Compiler {
     /// </summary>
     partial class LambdaCompiler {
         private static int _Counter;
+
+        /// <summary>The implementation flags of the method a nested lambda is compiled to (IronRuby.Aot: AggressiveOptimization).</summary>
+        internal static Func<LambdaExpression, MethodImplAttributes> MethodImplFlags;
 
         internal void EmitConstantArray<T>(T[] array) {
             // Emit as runtime constant if possible
@@ -117,6 +120,10 @@ namespace IronRuby.Aot.Compiler {
                 // When the lambda does not have a name or the name is empty, generate a unique name for it.
                 string name = String.IsNullOrEmpty(lambda.Name) ? GetUniqueMethodName() : lambda.Name;
                 MethodBuilder mb = _typeBuilder.DefineMethod(name, MethodAttributes.Private | MethodAttributes.Static);
+                var implFlags = MethodImplFlags != null ? MethodImplFlags(lambda) : MethodImplAttributes.IL;
+                if (implFlags != MethodImplAttributes.IL) {
+                    mb.SetImplementationFlags(implFlags);
+                }
                 impl = new LambdaCompiler(_tree, lambda, mb);
             }
 

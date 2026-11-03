@@ -85,17 +85,42 @@
   <!-- A Release build on Linux also produces the ReadyToRun host (Util/publish-r2r.sh), which ir.sh runs by default:
        it starts about a third faster. The publish is a RuntimeIdentifier build of its own, so the target stays out of
        it, and IronRubyNestedR2R stops a publish from running it again. A failed publish only warns: the IL build is
-       still good, and ir.sh does not pick a host older than the build. -->
+       still good, and ir.sh does not pick a host older than the build.
+
+       The host gets the startup library too (Util/aot/build-startup.sh, IronRuby.Startup.dll): the Ruby code every
+       start runs - the core prelude, rubygems and the rest - compiled ahead of time against exactly this host, so that
+       `ir -e 1` does not parse, transform and LightCompile it (~17% faster to start, 32 MB on disk, ~6 MB more RSS).
+       It needs the .NET 10 SDK and runtime; without them, or if it fails, the host goes without it, which costs only
+       the speedup. -p:IronRubyStartupLibrary=false leaves it out. -->
+  <PropertyGroup>
+    <IronRubyStartupLibrary Condition="'$(IronRubyStartupLibrary)' == ''">true</IronRubyStartupLibrary>
+  </PropertyGroup>
   <Target Name="IronRubyReadyToRunHost" AfterTargets="Build"
           Condition="'$(Configuration)' == 'Release' and '$(TargetFramework)' != '' and '$(RuntimeIdentifier)' == '' and '$(IronRubyNestedR2R)' != 'true' and '$(IronRubyR2R)' != 'false' and $([MSBuild]::IsOSPlatform('Linux'))">
     <!-- The host is published next to the old one and swapped in only once the publish succeeded: a publish that
          fails halfway (it has hit an IOException race in Src/Prism/bin/.../linux-x64) would otherwise leave a host
-         with some assemblies new and some old. One retry, since that race does not repeat. -->
+         with some assemblies new and some old. One retry, since that race does not repeat; the retry's exit status
+         decides (IgnoreStandardErrorWarningFormat), not the error lines the failed first attempt printed, which would
+         otherwise turn a good publish into ExitCode -1 and skip the swap. The startup library is built against the new
+         host before the swap, so the two always go in together. -->
     <PropertyGroup>
       <_IrR2RDir>$(MSBuildProjectDirectory)/bin/R2R/$(TargetFramework)</_IrR2RDir>
       <_IrR2RNew>$(_IrR2RDir).new</_IrR2RNew>
       <_IrR2RPublish>&quot;$(DOTNET_HOST_PATH)&quot; publish &quot;$(MSBuildProjectFullPath)&quot; -c Release -r linux-x64 --self-contained false -f $(TargetFramework) -p:PublishReadyToRun=true -p:IronRubyNestedR2R=true -p:IronRubyTargetFrameworks=$(TargetFramework) -p:DlrSourceDir=&quot;$(DlrSourceDir)&quot; -o &quot;$(_IrR2RNew)&quot; -nologo</_IrR2RPublish>
+      <_IrR2RPublishExit>-1</_IrR2RPublishExit>
+      <_IrStartupExit></_IrStartupExit>
     </PropertyGroup>
-    <Exec ContinueOnError="WarnAndContinue" Command="rm -rf &quot;$(_IrR2RNew)&quot; &amp;&amp; ( $(_IrR2RPublish) || $(_IrR2RPublish) ) &amp;&amp; rm -rf &quot;$(_IrR2RDir)&quot; &amp;&amp; mv &quot;$(_IrR2RNew)&quot; &quot;$(_IrR2RDir)&quot;" />
+    <Exec ContinueOnError="WarnAndContinue" IgnoreStandardErrorWarningFormat="true"
+          Command="rm -rf &quot;$(_IrR2RNew)&quot; &amp;&amp; ( $(_IrR2RPublish) || $(_IrR2RPublish) )">
+      <Output TaskParameter="ExitCode" PropertyName="_IrR2RPublishExit" />
+    </Exec>
+    <Exec Condition="'$(_IrR2RPublishExit)' == '0' and '$(IronRubyStartupLibrary)' == 'true'" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="high"
+          Command="sh &quot;$(MSBuildProjectDirectory)/../../Util/aot/build-startup.sh&quot; --host &quot;$(_IrR2RNew)&quot; --tfm $(TargetFramework) --dlr &quot;$(DlrSourceDir)&quot;">
+      <Output TaskParameter="ExitCode" PropertyName="_IrStartupExit" />
+    </Exec>
+    <Warning Condition="'$(_IrStartupExit)' != '' and '$(_IrStartupExit)' != '0' and '$(_IrStartupExit)' != '3'"
+             Text="The startup library (Util/aot/build-startup.sh) failed with exit code $(_IrStartupExit): the R2R host runs without it." />
+    <Exec Condition="'$(_IrR2RPublishExit)' == '0'" ContinueOnError="WarnAndContinue" Command="rm -rf &quot;$(_IrR2RDir)&quot; &amp;&amp; mv &quot;$(_IrR2RNew)&quot; &quot;$(_IrR2RDir)&quot;" />
   </Target>
 </Project>

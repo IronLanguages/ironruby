@@ -65,6 +65,9 @@ namespace IronRuby.Prism {
             _lineCount = _lineStarts.Length;
         }
 
+        // IR_EAGER_DEF_BODIES=1 maps every method body at parse time, as before lazy mapping (for measuring it)
+        private static readonly bool _EagerDefBodies = Environment.GetEnvironmentVariable("IR_EAGER_DEF_BODIES") == "1";
+
         public static SourceUnitTree Parse(SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options, ErrorSink/*!*/ errorSink) {
             // eval("...", binding, file, line) reports __LINE__ and backtraces from `line`, which is
             // what RubyCompilerOptions.InitialLocation carries. Only the old parser ever read it, so
@@ -75,9 +78,17 @@ namespace IronRuby.Prism {
                 commandLine = CommandLineFlags(context.RubyOptions, sourceUnit.Path);
                 mainScript = sourceUnit.Path != "-e";
             }
-            return ParseText(sourceUnit.GetCode(), sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
-                options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval,
-                options.EvalSourceEncoding, commandLine, mainScript);
+            if (IronRuby.Runtime.Precompiled.PrecompiledCode.Trace) {
+                Console.Error.WriteLine("IronRuby.Startup: parsing " + (sourceUnit.Path ?? "(no path)") + " (" + sourceUnit.GetCode().Length + " chars, " + options.FactoryKind + ")");
+            }
+            bool timed = PhaseTimer.Enter(PhaseTimer.Bridge);
+            try {
+                return ParseText(sourceUnit.GetCode(), sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
+                    options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval,
+                    options.EvalSourceEncoding, commandLine, mainScript);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
         }
 
         /// <summary>
@@ -152,7 +163,7 @@ namespace IronRuby.Prism {
             // Method bodies are mapped when the method is first called (see Def) - most methods a file
             // defines never are. Not for eval'd code, seldom around long enough to pay that back, nor while
             // Coverage measures: its walk of the tree wants every body.
-            bool deferBodies = !isEval && context != null && context.Coverage == null;
+            bool deferBodies = !isEval && context != null && context.Coverage == null && !_EagerDefBodies;
 
             // A UTF-8 source may hold bytes that are not UTF-8, read in as escapes (see
             // RubyContext.GetSourceReader); the escaping encoding gives prism those bytes back.
@@ -1870,7 +1881,12 @@ namespace IronRuby.Prism {
             }
 
             public Body/*!*/ Materialize() {
-                return _bridge.MaterializeBody(_node, _scope, _span, _prologue, _zsuperArguments);
+                bool timed = PhaseTimer.Enter(PhaseTimer.DefBridge);
+                try {
+                    return _bridge.MaterializeBody(_node, _scope, _span, _prologue, _zsuperArguments);
+                } finally {
+                    PhaseTimer.Exit(timed);
+                }
             }
         }
 

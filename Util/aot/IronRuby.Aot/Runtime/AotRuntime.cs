@@ -45,61 +45,11 @@ namespace IronRuby.Aot.Runtime {
         /// <summary>The runtime the compiled code runs in (one per process, as the program has one).</summary>
         public static RubyContext Context => _context;
 
+        // The constants the saved code re-creates on first use come from IronRuby.Runtime.Precompiled.PrecompiledCode,
+        // which is bound to this runtime below.
+
         /// <summary>Number of times any Ruby parser ran in this process (IR_AOT_TRACE / IR_AOT_FORBID_PARSE).</summary>
         public static int ParseCount;
-
-        #region Constants the saved code re-creates at load time
-
-        public static RubySymbol Symbol(byte[] bytes, RubyEncoding encoding) => _context.CreateSymbol(bytes, encoding);
-
-        public static BlockDispatcher CreateBlockDispatcher(int parameterCount, int postCount, int attributesAndArity,
-            string sourcePath, int sourceLine, RubyParameterSignature signature) {
-            var result = BlockDispatcher.Create(parameterCount, postCount, (BlockSignatureAttributes)attributesAndArity, sourcePath, sourceLine);
-            result.ParameterSignature = signature;
-            return result;
-        }
-
-        public static RubyParameterSignature Signature(string[] kinds, string[] names, int leadingCount, int optionalCount, int postCount,
-            bool hasRest, int requiredKeywordCount, bool hasKeywords, bool hasKeywordRest, string[] implicitParameterNames) {
-            var ps = new RubyParameterSignature.Parameter[kinds.Length];
-            for (int i = 0; i < ps.Length; i++) ps[i] = new RubyParameterSignature.Parameter(kinds[i], names[i]);
-            return new RubyParameterSignature(ps, leadingCount, optionalCount, postCount, hasRest, requiredKeywordCount, hasKeywords, hasKeywordRest) {
-                ImplicitParameterNames = implicitParameterNames
-            };
-        }
-
-        private static SourceSpan Span(int[] s) =>
-            new SourceSpan(new SourceLocation(s[0], s[1], s[2]), new SourceLocation(s[3], s[4], s[5]));
-
-        /// <summary>
-        /// The header of a `def': the AST node the runtime consults for the name, parameters,
-        /// arity and location, without a body - that is compiled IL, reached through the factory.
-        /// </summary>
-        public static MethodDefinition MethodHeader(string name, bool hasTarget, bool usesBlock, int[] location,
-            string[] mandatory, int leadingMandatoryCount, string[] optional, string unsplat, string block,
-            RubyParameterSignature signature) {
-            var span = Span(location);
-            LeftValue[] m = mandatory.Select(n => (LeftValue)new LocalVariable(n, span, 0)).ToArray();
-            SimpleAssignmentExpression[] o = optional.Select(n =>
-                new SimpleAssignmentExpression(new LocalVariable(n, span, 0), Literal.Nil(span), null, span)).ToArray();
-            var parameters = new Parameters(m, leadingMandatoryCount, o,
-                unsplat != null ? new LocalVariable(unsplat, span, 0) : null,
-                block != null ? new LocalVariable(block, span, 0) : null, span) {
-                Signature = signature
-            };
-            var body = new Body(new Statements(), null, null, null, span);
-            return new MethodDefinition(new MethodLexicalScope(new TopStaticLexicalScope(null)), hasTarget ? new SelfReference(span) : null, name, parameters, body, span) {
-                UsesBlock = usesBlock
-            };
-        }
-
-        public static RubyMethodBody CreateMethodBody(MethodDefinition header, string documentPath, RubyEncoding encoding,
-            Func<RubyScope, RubyModule, Delegate> factory) {
-            var document = documentPath != null ? MSA.Expression.SymbolDocument(documentPath) : null;
-            return new RubyMethodBody(header, document, encoding, factory);
-        }
-
-        #endregion
 
         #region Startup
 
@@ -152,6 +102,7 @@ namespace IronRuby.Aot.Runtime {
             var runtime = IronRuby.Ruby.CreateRuntime(setup);
             var engine = IronRuby.Ruby.GetEngine(runtime);
             _context = (RubyContext)HostingHelpers.GetLanguageContext(engine);
+            IronRuby.Runtime.Precompiled.PrecompiledCode.Context = _context;
 
             for (int i = 0; i < info.InitChunks; i++) {
                 program.GetMethod("__init" + i, BindingFlags.Public | BindingFlags.Static).Invoke(null, null);
@@ -180,7 +131,7 @@ namespace IronRuby.Aot.Runtime {
                 } else {
                     // a precompiled library file: `require` still resolves it on the load path,
                     // then runs this code instead of compiling what it found there
-                    _context.Loader.RegisterPrecompiledFile(path, new RubyScriptCode(target, _context.CreateFileUnit(path), TopScopeFactoryKind.File));
+                    _context.Loader.RegisterPrecompiledFile(path, new RubyScriptCode(target, _context.CreateFileUnit(path), TopScopeFactoryKind.File), null);
                 }
             }
             if (trace != null) {

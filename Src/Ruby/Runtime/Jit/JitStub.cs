@@ -1094,26 +1094,38 @@ namespace IronRuby.Runtime.Jit {
         // ---- factory -----------------------------------------------------------------------
 
         /// <summary>
-        /// Decides, statically and cheaply, whether a method is worth putting a stub on, and
-        /// returns the trampoline that replaces the generic delegate. Returns the generic
-        /// delegate unchanged when it is not.
+        /// Whether <see cref="Wrap"/> puts a stub on a method with this AST, whatever the run-time options: what the
+        /// precompiled startup library (Util/aot) asks of each `def' it compiles, which then keeps the def's source for
+        /// the JIT (see RubyMethodBody, PrecompiledCode.ParseJitSource).
         /// </summary>
-        internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule) {
-            return Wrap(generic, ast, context, declaringModule, null);
+        internal static bool IsCandidate(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context) {
+            JitKeywords keywords;
+            bool[] hasDefault, storedOnly;
+            object[] defaults;
+            bool perCount;
+            int arity;
+            string rejectedBy;
+            return Screen(ast, context, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy);
         }
 
-        internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule,
-            RubyScope declaringScope) {
-            if (JitRuntime.Disabled) { return generic; }
-            JitRuntime.HookStats();
+        // The static part of Wrap's decision; rejectedBy is set when the screen (not the parameter list) refused the body.
+        private static bool Screen(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, out JitKeywords keywords, out bool[] hasDefault,
+            out object[] defaults, out bool perCount, out bool[] storedOnly, out int arity, out string rejectedBy) {
+            keywords = null;
+            hasDefault = null;
+            defaults = null;
+            perCount = false;
+            storedOnly = null;
+            rejectedBy = null;
+            arity = 0;
 
             var ps = ast.Parameters;
-            if (ps.Unsplat != null || ps.Block != null || ast.UsesBlock) { return generic; }
+            if (ps.Unsplat != null || ps.Block != null || ast.UsesBlock) { return false; }
             int mandatoryCount = ps.Mandatory.Length;
-            int arity = mandatoryCount + ps.Optional.Length;
-            if (arity > MaxArity) { return generic; }
+            arity = mandatoryCount + ps.Optional.Length;
+            if (arity > MaxArity) { return false; }
             for (int i = 0; i < mandatoryCount; i++) {
-                if (!(ps.Mandatory[i] is LocalVariable)) { return generic; }
+                if (!(ps.Mandatory[i] is LocalVariable)) { return false; }
             }
 
             // An optional parameter is taken when its default is a literal the typed body could
@@ -1123,16 +1135,12 @@ namespace IronRuby.Runtime.Jit {
             // with keywords has no other optional one (PrismAstBridge lowers that mix to a splat).
             // Any other default makes it a method with per-count bodies (TrySpecializePerCount), which
             // evaluate the defaults the call left out themselves; JitScreen checks that they can.
-            JitKeywords keywords = null;
-            bool[] hasDefault = null;
-            object[] defaults = null;
-            bool perCount = false;
             if (ps.Optional.Length > 0 && (keywords = JitKeywords.TryRecognize(ast, context)) == null) {
                 hasDefault = new bool[arity];
                 defaults = new object[arity];
                 for (int i = 0; i < ps.Optional.Length; i++) {
                     var opt = ps.Optional[i];
-                    if (!(opt.Left is LocalVariable)) { return generic; }
+                    if (!(opt.Left is LocalVariable)) { return false; }
                     var literal = opt.Right as Literal;
                     object v = (literal != null) ? literal.Value : null;
                     if (literal == null || !(v == null || v is bool || v is int || v is double)) {
@@ -1147,24 +1155,17 @@ namespace IronRuby.Runtime.Jit {
                     defaults = null;
                 }
             }
-            // Tracing and coverage need the real frame. (A TracePoint enabled at run time is the
-            // entry's NotTracing guard; a body that counts its lines is not handed here at all.)
-            if (context.RubyOptions.EnableTracing || context.RubyOptions.Profile) { return generic; }
-
             // A body the compiler can never accept, whatever types it is called with, is not
             // wrapped at all. Once wrapped, the trampoline is what the runtime caches and bakes
             // into call site rules, so a method declined later still pays one extra indirect
             // call on every call for the life of the process.
-            string rejectedBy;
             HashSet<string> otherUses;
             if (!JitScreen.CanEverCompile(ast, keywords, out rejectedBy, out otherUses)) {
-                JitRuntime.RecordScreenRejection(rejectedBy);
-                return generic;
+                return false;
             }
 
             // over the typed body's parameters: the positionals, then a keyword method's keyword locals
             int typedCount = mandatoryCount + ((keywords != null) ? keywords.Count : ps.Optional.Length);
-            bool[] storedOnly = null;
             for (int i = 0; i < typedCount; i++) {
                 string name = (i < mandatoryCount) ? ((LocalVariable)ps.Mandatory[i]).Name
                     : (keywords != null) ? keywords.LocalNames[i - mandatoryCount]
@@ -1174,6 +1175,38 @@ namespace IronRuby.Runtime.Jit {
                     storedOnly[i] = true;
                 }
             }
+            return true;
+        }
+
+        /// <summary>
+        /// Decides, statically and cheaply, whether a method is worth putting a stub on, and
+        /// returns the trampoline that replaces the generic delegate. Returns the generic
+        /// delegate unchanged when it is not.
+        /// </summary>
+        internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule) {
+            return Wrap(generic, ast, context, declaringModule, null);
+        }
+
+        internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule,
+            RubyScope declaringScope) {
+            if (JitRuntime.Disabled) { return generic; }
+            JitRuntime.HookStats();
+
+            // Tracing and coverage need the real frame. (A TracePoint enabled at run time is the
+            // entry's NotTracing guard; a body that counts its lines is not handed here at all.)
+            if (context.RubyOptions.EnableTracing || context.RubyOptions.Profile) { return generic; }
+
+            JitKeywords keywords;
+            bool[] hasDefault, storedOnly;
+            object[] defaults;
+            bool perCount;
+            int arity;
+            string rejectedBy;
+            if (!Screen(ast, context, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy)) {
+                if (rejectedBy != null) { JitRuntime.RecordScreenRejection(rejectedBy); }
+                return generic;
+            }
+            int mandatoryCount = ast.Parameters.Mandatory.Length;
 
             JitStub stub;
             switch (arity) {
