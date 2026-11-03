@@ -27,6 +27,7 @@ using System.Dynamic;
 using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Runtime.Conversions;
@@ -742,61 +743,98 @@ namespace IronRuby.Runtime.Calls {
     /// A precompiled dispatcher for the first calls of a library method from a call site - a site that may well never be called again,
     /// as most of the prelude's are not. It calls the method through a <see cref="LibraryCallPlan"/>, on the receiver test of a rule (the
     /// class version, see <see cref="MetaObjectBuilder.AddTargetTypeTest"/>) and the overload resolver's choice made again for each call.
-    /// Once the site has made as many calls through dispatchers as the interpreter runs a rule for before it compiles it (see
-    /// <see cref="SiteBudget"/>), it is handed back to the binder for good, which then builds the rules a site that is hot should have.
+    /// Once it has made as many calls as the interpreter runs a rule for before it compiles it (see <see cref="IsHot"/>), it hands its
+    /// sites back to the binder for good, which then builds the rule a call that is hot should have.
     /// The dispatcher stands in for the interpreted rule, and does what that rule does beyond the call: it saves the interpreted frames to
     /// an exception that passes it (see <see cref="SaveInterpretedFrames"/>).
     /// </summary>
     public abstract partial class LibraryDispatcher : MemberDispatcher {
         /// <summary>
-        /// The calls a site makes through dispatchers before it gets rules, if not -1: for tests.
+        /// The calls a dispatcher makes before it is spent, if not -1: for tests.
         /// </summary>
         internal static int BudgetOverride = -1;
 
         // Microsoft.Scripting.Interpreter.LightCompiler.DefaultCompilationThreshold, which a negative threshold stands for:
         private const int DefaultCompilationThreshold = 32;
 
+        // The most spent dispatchers a binder keeps (see IsHot):
+        private const int MaxSpentDispatchers = 8;
+
         /// <summary>
-        /// The calls a site can still make through dispatchers. The budget is the site's rather than a dispatcher's: a site that sees
-        /// receivers of several classes gets a dispatcher for each, and would otherwise get fresh ones for as long as it runs - a
-        /// dispatcher drops out of the site's cache once it is spent, and the next call of its class finds none to tell it the site
-        /// is hot. A dispatcher another site finds in the binder's cache counts that site's calls here too, which only makes the
-        /// site that made it hot sooner.
+        /// The calls the dispatcher can still make: as many as the interpreter runs a rule for before it compiles it
+        /// (RubyContext.CompilationThreshold when the dispatcher is made: 200 while the core prelude loads, 32 after it) - the calls the
+        /// rule would have made interpreted, which is all a dispatcher stands in for. So a call made this often pays for a rule only
+        /// where it also pays for compiling it, and none where the rule would have been compiled right away (-X:NoAdaptiveCompilation,
+        /// a threshold of 0 or 1).
         /// </summary>
         /// <remarks>
-        /// A site gets as many calls as the interpreter runs the site's rule for before it compiles it (RubyContext.CompilationThreshold
-        /// when the site is first bound: 200 while the core prelude loads, 32 after it): the calls a rule would have made interpreted,
-        /// which is all a dispatcher stands in for. So a site called this often pays for a rule only where it also pays for compiling
-        /// it, and none where the rule would have been compiled right away (-X:NoAdaptiveCompilation, a threshold of 0 or 1).
+        /// The budget is the dispatcher's, as an interpreted rule's count of calls is the rule's: the binder caches the dispatcher, and
+        /// every site that finds it there spends the budget too. A spent dispatcher is kept by its binder (<see cref="RubyCallAction.
+        /// SpentDispatchers"/>): the next bind of a call it would have taken, from any site, builds the rule (<see cref="IsHot"/>), which
+        /// the binder caches in turn for the other sites. A dispatcher of its own for each such site instead, with a budget of its own,
+        /// would be spent by the sites that find it in the cache and be followed by another, as long as the sites are called - as would
+        /// the dispatchers of a site that sees receivers of several classes, whose spent dispatcher drops out of the site's cache.
+        /// No state is kept per site (a weak table of sites is a handle more for every collection to scan).
         /// </remarks>
-        internal sealed class SiteBudget {
-            internal int Remaining;
+        private int _remaining;
 
-            internal SiteBudget(int remaining) {
-                Remaining = remaining;
-            }
-        }
-
-        private static readonly ConditionalWeakTable<CallSite, SiteBudget>/*!*/ _siteBudgets = new ConditionalWeakTable<CallSite, SiteBudget>();
+        // the binder that made the dispatcher, which keeps it once it is spent:
+        private RubyCallAction/*!*/ _binder;
 
         /// <summary>
-        /// Whether the site may still make calls through dispatchers.
+        /// Whether the binder may make a dispatcher for a call on the target: the context's rules are interpreted for some calls before
+        /// they are compiled, and the call is not hot.
         /// </summary>
-        internal static bool MayDispatch(CallSite/*!*/ site, RubyContext/*!*/ context) {
-            SiteBudget budget;
-            return _siteBudgets.TryGetValue(site, out budget) ? budget.Remaining > 0 : GetInitialBudget(context) > 0;
+        internal static bool MayDispatch(RubyCallAction/*!*/ binder, object target) {
+            return GetInitialBudget(binder.Context) > 0 && !IsHot(binder, target);
         }
 
         /// <summary>
-        /// The budget of a site that may still make calls through dispatchers (see <see cref="MayDispatch"/>), for a dispatcher made for it.
+        /// Whether a dispatcher the binder made has spent its budget on calls on receivers like the target: one of its spent
+        /// dispatchers would take a call on it (its receiver test holds - the target is of the same class, which has not changed since).
         /// </summary>
-        private static SiteBudget/*!*/ GetSiteBudget(CallSite/*!*/ site, RubyContext/*!*/ context) {
-            SiteBudget budget;
-            if (!_siteBudgets.TryGetValue(site, out budget)) {
-                int calls = GetInitialBudget(context);
-                budget = _siteBudgets.GetValue(site, _ => new SiteBudget(calls));
+        internal static bool IsHot(RubyCallAction/*!*/ binder, object target) {
+            var spent = Volatile.Read(ref binder.SpentDispatchers);
+            if (spent != null) {
+                for (int i = 0; i < spent.Length; i++) {
+                    if (spent[i].IsCurrent(target)) {
+                        return true;
+                    }
+                }
             }
-            return budget;
+            return false;
+        }
+
+        // A spent dispatcher is kept by its binder (see IsHot) - with the latest others whose class has not changed since (a dispatcher
+        // of a class that changed takes no calls ever again, see IsCurrent).
+        private void OnSpent() {
+            while (true) {
+                var spent = Volatile.Read(ref _binder.SpentDispatchers);
+                var kept = new List<LibraryDispatcher>(MaxSpentDispatchers) { this };
+                if (spent != null) {
+                    for (int i = 0; i < spent.Length && kept.Count < MaxSpentDispatchers; i++) {
+                        if (spent[i] != this && spent[i]._classVersion.Method == spent[i].Version) {
+                            kept.Add(spent[i]);
+                        }
+                    }
+                }
+                if (Interlocked.CompareExchange(ref _binder.SpentDispatchers, kept.ToArray(), spent) == spent) {
+                    return;
+                }
+            }
+        }
+
+        // One call more made through the dispatcher, of the budget it may make (see _remaining)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void Spend() {
+            if (--_remaining == 0) {
+                OnSpent();
+            }
+        }
+
+        private void SetBudget(RubyCallAction/*!*/ binder, RubyContext/*!*/ context) {
+            _binder = binder;
+            _remaining = GetInitialBudget(context);
         }
 
         private static int GetInitialBudget(RubyContext/*!*/ context) {
@@ -804,14 +842,14 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
-        /// The compilation threshold of a rule bound for the site: once a site has spent its budget on dispatchers, it has made the
-        /// calls the rule would have run interpreted, and the rule is compiled after the fewest the interpreter allows (in the
-        /// background, as any rule) - as it would have been by now. The rule's frames then are what they would have been too: an
-        /// interpreted rule has an interpreter frame of its own, which shows in the CLR stack a backtrace is made of.
+        /// The compilation threshold of a rule the binder builds for a call on the target: once a dispatcher has spent its budget on
+        /// calls like it, they have made the calls the rule would have run interpreted, and the rule is compiled after the fewest the
+        /// interpreter allows (in the background, as any rule) - as it would have been by now. The rule's frames then are what they
+        /// would have been too: an interpreted rule has an interpreter frame of its own, which shows in the CLR stack a backtrace is
+        /// made of.
         /// </summary>
-        internal static int GetRuleCompilationThreshold(CallSite/*!*/ site, RubyContext/*!*/ context) {
-            SiteBudget budget;
-            return (_siteBudgets.TryGetValue(site, out budget) && budget.Remaining <= 0) ? MinAsyncCompilationThreshold : context.CompilationThreshold;
+        internal static int GetRuleCompilationThreshold(RubyCallAction/*!*/ binder, object target, RubyContext/*!*/ context) {
+            return IsHot(binder, target) ? MinAsyncCompilationThreshold : context.CompilationThreshold;
         }
 
         // the lowest threshold the interpreter compiles a lambda with in the background rather than before it runs it the first time:
@@ -867,7 +905,15 @@ namespace IronRuby.Runtime.Calls {
         private VersionHandle _classVersion;
         private RubyCallAction.ClrReceiverTest _clrTest;
 
-        private SiteBudget/*!*/ _budget;
+        /// <summary>
+        /// Whether the dispatcher may make the call on <paramref name="self"/>: it is not spent and its receiver test holds - before the
+        /// site's arguments are packed for <see cref="TryInvoke"/>. A spent dispatcher stays in the binder's cache, where every site that
+        /// misses its own rules tries it.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool CanCall(object self) {
+            return _remaining > 0 && IsCurrent(self);
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool IsCurrent(object self) {
@@ -945,11 +991,11 @@ namespace IronRuby.Runtime.Calls {
             if (_rubyCall != null) {
                 // the rule passes the block and the arguments as they are (RubyMethodInfo.BuildCallNoFlow):
                 Proc rubyBlock = blockArg as Proc;
-                if (_budget.Remaining <= 0 || blockArg != null && rubyBlock == null || _splatCount >= 0 && (args = ExpandSplat(args)) == null) {
+                if (_remaining <= 0 || blockArg != null && rubyBlock == null || _splatCount >= 0 && (args = ExpandSplat(args)) == null) {
                     result = null;
                     return false;
                 }
-                _budget.Remaining--;
+                Spend();
                 try {
                     result = _rubyCall.Invoke(self, rubyBlock, args);
                 } catch (Exception e) {
@@ -961,11 +1007,11 @@ namespace IronRuby.Runtime.Calls {
 
             if (_send != null) {
                 Proc sendBlock = blockArg as Proc;
-                if (_budget.Remaining <= 0 || blockArg != null && sendBlock == null || !_send.Matches(args)) {
+                if (_remaining <= 0 || blockArg != null && sendBlock == null || !_send.Matches(args)) {
                     result = null;
                     return false;
                 }
-                _budget.Remaining--;
+                Spend();
                 try {
                     result = _send.Invoke(scope, self, sendBlock, args);
                 } catch (Exception e) {
@@ -977,11 +1023,11 @@ namespace IronRuby.Runtime.Calls {
 
             if (_construction != null) {
                 Proc initializerBlock = blockArg as Proc;
-                if (_budget.Remaining <= 0 || !_construction.IsCurrent(args.Length) || blockArg != null && initializerBlock == null) {
+                if (_remaining <= 0 || !_construction.IsCurrent(args.Length) || blockArg != null && initializerBlock == null) {
                     result = null;
                     return false;
                 }
-                _budget.Remaining--;
+                Spend();
                 try {
                     result = _construction.Invoke(args, initializerBlock);
                 } catch (Exception e) {
@@ -992,14 +1038,14 @@ namespace IronRuby.Runtime.Calls {
             }
 
             Proc block = blockArg as Proc;
-            if (_budget.Remaining <= 0 || blockArg != null && block == null ||
+            if (_remaining <= 0 || blockArg != null && block == null ||
                 _splatCount >= 0 && ((args = ExpandSplat(args)) == null || _splatCount > 0 && RubyOps.IsKeywordArgumentsHash(args[args.Length - 1])) ||
                 !Matches(block, args)) {
                 result = null;
                 return false;
             }
 
-            _budget.Remaining--;
+            Spend();
             try {
                 result = _plan.Invoke(_context, scope, self, _hasBlock ? block : null, args);
             } catch (Exception e) {
@@ -1038,7 +1084,7 @@ namespace IronRuby.Runtime.Calls {
         /// the method on the receiver as a call of it would. The dispatcher makes that call as a dispatcher of a call of the method
         /// would (a Ruby method's, a define_method one's, a library method's), with the receiver as self.
         /// </summary>
-        internal static object TryCreateMethodObjectCall(CallSite/*!*/ site, RubyCallAction/*!*/ binder, Type/*!*/ delegateType,
+        internal static object TryCreateMethodObjectCall(RubyCallAction/*!*/ binder, Type/*!*/ delegateType,
             RubyCallSignature signature, RubyMethod/*!*/ method, RubyClass/*!*/ methodClass, RubyCallAction.ClrReceiverTest clrTest, int version,
             object[]/*!*/ args) {
 
@@ -1062,14 +1108,14 @@ namespace IronRuby.Runtime.Calls {
                 if (TracePoint.CCallTracing || DispatchIntrinsics.IsSend(libraryMethod)) {
                     return null;
                 }
-                return TryCreate(site, binder, delegateType, signature, libraryMethod, receiverClass, receiver, RubyCallAction.ClrReceiverTest.Plain,
+                return TryCreate(binder, delegateType, signature, libraryMethod, receiverClass, receiver, RubyCallAction.ClrReceiverTest.Plain,
                     version, receiverArgs, methodObject);
             } else if (infoType != typeof(RubyLambdaMethodInfo) && infoType != typeof(RubyMethodInfo)) {
                 return null;
             }
 
             // a Ruby method is called by the Method's name, an alias maybe
-            return TryCreateRubyCall(site, delegateType, signature, info, receiverClass, receiver, RubyCallAction.ClrReceiverTest.Plain, version,
+            return TryCreateRubyCall(binder, delegateType, signature, info, receiverClass, receiver, RubyCallAction.ClrReceiverTest.Plain, version,
                 receiverArgs, methodObject, method.Name);
         }
 
@@ -1078,7 +1124,7 @@ namespace IronRuby.Runtime.Calls {
         /// implicit self (DispatchIntrinsics.TryBuildSend) on a test of the symbol; the dispatcher makes that call through a site of
         /// its own (see <see cref="SendCall"/>), which binds it as any call is bound.
         /// </summary>
-        internal static object TryCreateSend(CallSite/*!*/ site, Type/*!*/ delegateType, RubyCallSignature signature, RubyClass/*!*/ targetClass,
+        internal static object TryCreateSend(RubyCallAction/*!*/ binder, Type/*!*/ delegateType, RubyCallSignature signature, RubyClass/*!*/ targetClass,
             object target, RubyCallAction.ClrReceiverTest clrTest, int version, object[]/*!*/ args) {
 
             bool isRubyObject = target is IRubyObject;
@@ -1093,10 +1139,6 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            if (!MayDispatch(site, targetClass.Context)) {
-                return null;
-            }
-
             var send = SendCall.TryCreate(targetClass.Context, signature, args[first] as RubySymbol, count - 1);
             if (send == null) {
                 return null;
@@ -1108,7 +1150,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             var dispatcher = CreateDispatcher(count, signature.HasScope, signature.HasBlock);
-            dispatcher._budget = GetSiteBudget(site, targetClass.Context);
+            dispatcher.SetBudget(binder, targetClass.Context);
             dispatcher._context = targetClass.Context;
             dispatcher._send = send;
             dispatcher._isRubyObject = isRubyObject;
@@ -1151,7 +1193,7 @@ namespace IronRuby.Runtime.Calls {
         /// <param name="clrTest">The test of a CLR object receiver (not nil, true or false) the rule would make.</param>
         /// <param name="methodObject">A call of Method#call that calls the method, on <paramref name="target"/> (see <see cref="MethodObjectCall"/>).</param>
         /// <param name="name">The name a Ruby method (RubyMethodInfo) is called by, if not its own: an alias.</param>
-        internal static object TryCreateRubyCall(CallSite/*!*/ site, Type/*!*/ delegateType, RubyCallSignature signature, RubyMemberInfo/*!*/ method,
+        internal static object TryCreateRubyCall(RubyCallAction/*!*/ binder, Type/*!*/ delegateType, RubyCallSignature signature, RubyMemberInfo/*!*/ method,
             RubyClass/*!*/ targetClass, object target, RubyCallAction.ClrReceiverTest clrTest, int version, object[]/*!*/ args,
             MethodObjectCall methodObject = null, string name = null) {
 
@@ -1180,10 +1222,6 @@ namespace IronRuby.Runtime.Calls {
                 argumentCount = count - 1 + splatCount;
             }
 
-            if (!MayDispatch(site, targetClass.Context)) {
-                return null;
-            }
-
             RubyMemberCall plan;
             if (method is RubyMethodInfo) {
                 plan = RubyMethodCallPlan.TryCreate((RubyMethodInfo)method, argumentCount, name ?? ((RubyMethodInfo)method).DefinitionName);
@@ -1204,7 +1242,7 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            dispatcher._budget = GetSiteBudget(site, targetClass.Context);
+            dispatcher.SetBudget(binder, targetClass.Context);
             dispatcher._context = targetClass.Context;
             dispatcher._rubyCall = plan;
             dispatcher._splatCount = splatCount;
@@ -1226,17 +1264,13 @@ namespace IronRuby.Runtime.Calls {
         /// <summary>
         /// Class#new of a Ruby class whose instances are plain Ruby objects, made without a rule (see RubyClass.TryGetObjectConstruction).
         /// </summary>
-        internal static object TryCreateConstruction(CallSite/*!*/ site, Type/*!*/ delegateType, RubyCallSignature signature, RubyClass/*!*/ cls,
+        internal static object TryCreateConstruction(RubyCallAction/*!*/ binder, Type/*!*/ delegateType, RubyCallSignature signature, RubyClass/*!*/ cls,
             RubyClass/*!*/ targetClass, int version, object[]/*!*/ args) {
 
             int first = (signature.HasScope ? 2 : 1) + (signature.HasBlock ? 1 : 0);
             int count = args.Length - first;
             if (count < 0 || count > MaxLibraryArity || !MethodDispatcher.UntypedFuncs.Contains(delegateType) &&
                 !IsSiteDelegate(delegateType, signature)) {
-                return null;
-            }
-
-            if (!MayDispatch(site, cls.Context)) {
                 return null;
             }
 
@@ -1252,7 +1286,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             var dispatcher = CreateDispatcher(count, signature.HasScope, signature.HasBlock);
-            dispatcher._budget = GetSiteBudget(site, cls.Context);
+            dispatcher.SetBudget(binder, cls.Context);
             dispatcher._context = cls.Context;
             dispatcher._construction = construction;
             dispatcher._isRubyObject = true;
@@ -1285,13 +1319,9 @@ namespace IronRuby.Runtime.Calls {
 
         /// <param name="clrTest">The test of a CLR object receiver (not nil, true or false) the rule would make.</param>
         /// <param name="methodObject">A call of Method#call that calls the method, on <paramref name="target"/> (see <see cref="MethodObjectCall"/>).</param>
-        internal static object TryCreate(CallSite/*!*/ site, RubyCallAction/*!*/ binder, Type/*!*/ delegateType, RubyCallSignature signature,
+        internal static object TryCreate(RubyCallAction/*!*/ binder, Type/*!*/ delegateType, RubyCallSignature signature,
             RubyLibraryMethodInfo/*!*/ method, RubyClass/*!*/ targetClass, object target, RubyCallAction.ClrReceiverTest clrTest, int version,
             object[]/*!*/ args, MethodObjectCall methodObject = null) {
-
-            if (!MayDispatch(site, targetClass.Context)) {
-                return null;
-            }
 
             // The type test of the rule (see MetaObjectBuilder.AddTargetTypeTest) we can do without the rule: a Ruby object's,
             // nil's and the plain one of a CLR object, true's and false's (told apart by value):
@@ -1399,7 +1429,7 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            dispatcher._budget = GetSiteBudget(site, targetClass.Context);
+            dispatcher.SetBudget(binder, targetClass.Context);
             dispatcher._context = targetClass.Context;
             dispatcher._plan = plan;
             dispatcher._splatCount = splatCount;
@@ -1507,7 +1537,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke(CallSite/*!*/ callSite, TSelf self) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, ArrayUtils.EmptyObjects, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, null, ArrayUtils.EmptyObjects, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TSelf, object>>)callSite).Update(callSite, self);
@@ -1521,7 +1551,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke(CallSite/*!*/ callSite, TSelf self, T0 arg0) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TSelf, T0, object>>)callSite).Update(callSite, self, arg0);
@@ -1535,7 +1565,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke(CallSite/*!*/ callSite, TSelf self, T0 arg0, T1 arg1) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0, arg1 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0, arg1 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TSelf, T0, T1, object>>)callSite).Update(callSite, self, arg0, arg1);

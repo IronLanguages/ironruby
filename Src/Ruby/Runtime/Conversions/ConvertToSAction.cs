@@ -24,7 +24,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
@@ -49,7 +48,7 @@ namespace IronRuby.Runtime.Conversions {
             return result != null;
         }
 
-        internal override object BindPrecompiled(CallSite/*!*/ site, Type/*!*/ delegateType, object[]/*!*/ args) {
+        protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
             return (Context != null) ? ImplicitConversionDispatcher<MutableString>.TryCreate(this, delegateType, args) : null;
         }
 

@@ -516,7 +516,7 @@ namespace IronRuby.Runtime.Conversions {
 
         // A conversion of a value that needs no conversion method - the commonest by far - goes without a rule: the dispatcher tests
         // what the rule would (the target's exact type, see BuildConversion) and converts the same way.
-        internal override object BindPrecompiled(CallSite/*!*/ site, Type/*!*/ delegateType, object[]/*!*/ args) {
+        protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
             return (Context != null && (delegateType != typeof(Func<CallSite, object, TTargetType>) || ReturnType == typeof(TTargetType))) ?
                 ImplicitConversionDispatcher<TTargetType>.TryCreate(this, delegateType, args) : null;
         }
@@ -958,7 +958,7 @@ namespace IronRuby.Runtime.Conversions {
 
         // A Fixnum converts to itself (TryImplicitConversion, on a test of its exact type), without a rule; a site whose result is
         // an object gets it boxed, as the rule's result is:
-        internal override object BindPrecompiled(CallSite/*!*/ site, Type/*!*/ delegateType, object[]/*!*/ args) {
+        protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
             if (Context == null || args.Length != 1 || !(args[0] is int)) {
                 return null;
             }

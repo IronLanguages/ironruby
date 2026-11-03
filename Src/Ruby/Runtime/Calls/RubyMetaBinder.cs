@@ -71,7 +71,7 @@ namespace IronRuby.Runtime.Calls {
             if (argArray != null) {
                 firstArg = argArray.GetArgument(0);
             } else {
-                object precompiled = BindPrecompiled(site, delegateType, args);
+                object precompiled = BindPrecompiled(delegateType, args);
                 if (precompiled != null) {
                     result = (T)precompiled;
                     CacheTarget(result);
@@ -106,7 +106,7 @@ namespace IronRuby.Runtime.Calls {
                 return result;
             }
 
-            result = this.LightBind<T>(args, LibraryDispatcher.GetRuleCompilationThreshold(site, context));
+            result = this.LightBind<T>(args, (argArray == null) ? GetRuleCompilationThreshold(args, context) : context.CompilationThreshold);
             CacheTarget(result);
             return result;
         }
@@ -114,10 +114,17 @@ namespace IronRuby.Runtime.Calls {
         /// <summary>
         /// Returns a precompiled rule delegate or null, if not available for the given delegate type and arguments.
         /// </summary>
-        /// <param name="site">The site bound; the first calls a site makes of a library method may go through a <see cref="LibraryDispatcher"/>.</param>
-        internal virtual object BindPrecompiled(CallSite/*!*/ site, Type/*!*/ delegateType, object[]/*!*/ args) {
+        protected virtual object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
             return null;
         } 
+
+        /// <summary>
+        /// The compilation threshold of the rule bound for the arguments: lower than the context's for a call that is hot already
+        /// (see <see cref="LibraryDispatcher.GetRuleCompilationThreshold"/>).
+        /// </summary>
+        internal virtual int GetRuleCompilationThreshold(object[]/*!*/ args, RubyContext/*!*/ context) {
+            return context.CompilationThreshold;
+        }
 
         /// <summary>
         /// Returns a rule that is shared with receivers of other classes the call resolves the same for, or null (see <see cref="RuleVersionSet"/>).

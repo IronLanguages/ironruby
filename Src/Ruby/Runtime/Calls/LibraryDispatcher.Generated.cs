@@ -50,7 +50,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke(CallSite/*!*/ callSite, object self) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, ArrayUtils.EmptyObjects, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, null, ArrayUtils.EmptyObjects, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, object>>)callSite).Update(callSite, self);
@@ -66,7 +66,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, (object)proc, ArrayUtils.EmptyObjects, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, (object)proc, ArrayUtils.EmptyObjects, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, TProc, object>>)callSite).Update(callSite, self, proc);
@@ -82,7 +82,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope scope, object self) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, null, ArrayUtils.EmptyObjects, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, null, ArrayUtils.EmptyObjects, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, object>>)callSite).Update(callSite, scope, self);
@@ -98,7 +98,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope scope, object self, TProc proc) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, (object)proc, ArrayUtils.EmptyObjects, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, (object)proc, ArrayUtils.EmptyObjects, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, TProc, object>>)callSite).Update(callSite, scope, self, proc);
@@ -112,7 +112,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke(CallSite/*!*/ callSite, object self, object arg0) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, object, object>>)callSite).Update(callSite, self, arg0);
@@ -128,7 +128,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc, object arg0) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, (object)proc, new object[] { arg0 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, (object)proc, new object[] { arg0 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, TProc, object, object>>)callSite).Update(callSite, self, proc, arg0);
@@ -144,7 +144,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope scope, object self, object arg0) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, null, new object[] { arg0 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, null, new object[] { arg0 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, object, object>>)callSite).Update(callSite, scope, self, arg0);
@@ -160,7 +160,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope scope, object self, TProc proc, object arg0) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, (object)proc, new object[] { arg0 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, (object)proc, new object[] { arg0 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, TProc, object, object>>)callSite).Update(callSite, scope, self, proc, arg0);
@@ -174,7 +174,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke(CallSite/*!*/ callSite, object self, object arg0, object arg1) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0, arg1 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0, arg1 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, object, object, object>>)callSite).Update(callSite, self, arg0, arg1);
@@ -190,7 +190,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc, object arg0, object arg1) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, (object)proc, new object[] { arg0, arg1 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, (object)proc, new object[] { arg0, arg1 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, TProc, object, object, object>>)callSite).Update(callSite, self, proc, arg0, arg1);
@@ -206,7 +206,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope scope, object self, object arg0, object arg1) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, null, new object[] { arg0, arg1 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, null, new object[] { arg0, arg1 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, object, object, object>>)callSite).Update(callSite, scope, self, arg0, arg1);
@@ -222,7 +222,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope scope, object self, TProc proc, object arg0, object arg1) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, (object)proc, new object[] { arg0, arg1 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, (object)proc, new object[] { arg0, arg1 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, TProc, object, object, object>>)callSite).Update(callSite, scope, self, proc, arg0, arg1);
@@ -236,7 +236,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke(CallSite/*!*/ callSite, object self, object arg0, object arg1, object arg2) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0, arg1, arg2 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0, arg1, arg2 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, object, object, object, object>>)callSite).Update(callSite, self, arg0, arg1, arg2);
@@ -252,7 +252,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc, object arg0, object arg1, object arg2) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, (object)proc, new object[] { arg0, arg1, arg2 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, (object)proc, new object[] { arg0, arg1, arg2 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, TProc, object, object, object, object>>)callSite).Update(callSite, self, proc, arg0, arg1, arg2);
@@ -268,7 +268,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope scope, object self, object arg0, object arg1, object arg2) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, null, new object[] { arg0, arg1, arg2 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, null, new object[] { arg0, arg1, arg2 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, object, object, object, object>>)callSite).Update(callSite, scope, self, arg0, arg1, arg2);
@@ -284,7 +284,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope scope, object self, TProc proc, object arg0, object arg1, object arg2) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, (object)proc, new object[] { arg0, arg1, arg2 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, (object)proc, new object[] { arg0, arg1, arg2 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, TProc, object, object, object, object>>)callSite).Update(callSite, scope, self, proc, arg0, arg1, arg2);
@@ -298,7 +298,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke(CallSite/*!*/ callSite, object self, object arg0, object arg1, object arg2, object arg3) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0, arg1, arg2, arg3 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0, arg1, arg2, arg3 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, object, object, object, object, object>>)callSite).Update(callSite, self, arg0, arg1, arg2, arg3);
@@ -314,7 +314,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc, object arg0, object arg1, object arg2, object arg3) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, (object)proc, new object[] { arg0, arg1, arg2, arg3 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, (object)proc, new object[] { arg0, arg1, arg2, arg3 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, TProc, object, object, object, object, object>>)callSite).Update(callSite, self, proc, arg0, arg1, arg2, arg3);
@@ -330,7 +330,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope scope, object self, object arg0, object arg1, object arg2, object arg3) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, null, new object[] { arg0, arg1, arg2, arg3 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, null, new object[] { arg0, arg1, arg2, arg3 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, object, object, object, object, object>>)callSite).Update(callSite, scope, self, arg0, arg1, arg2, arg3);
@@ -346,7 +346,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope scope, object self, TProc proc, object arg0, object arg1, object arg2, object arg3) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, (object)proc, new object[] { arg0, arg1, arg2, arg3 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, (object)proc, new object[] { arg0, arg1, arg2, arg3 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, TProc, object, object, object, object, object>>)callSite).Update(callSite, scope, self, proc, arg0, arg1, arg2, arg3);
@@ -360,7 +360,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke(CallSite/*!*/ callSite, object self, object arg0, object arg1, object arg2, object arg3, object arg4) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0, arg1, arg2, arg3, arg4 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, null, new object[] { arg0, arg1, arg2, arg3, arg4 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, object, object, object, object, object, object>>)callSite).Update(callSite, self, arg0, arg1, arg2, arg3, arg4);
@@ -376,7 +376,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc, object arg0, object arg1, object arg2, object arg3, object arg4) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(null), self, (object)proc, new object[] { arg0, arg1, arg2, arg3, arg4 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(null), self, (object)proc, new object[] { arg0, arg1, arg2, arg3, arg4 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, object, TProc, object, object, object, object, object, object>>)callSite).Update(callSite, self, proc, arg0, arg1, arg2, arg3, arg4);
@@ -392,7 +392,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope scope, object self, object arg0, object arg1, object arg2, object arg3, object arg4) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, null, new object[] { arg0, arg1, arg2, arg3, arg4 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, null, new object[] { arg0, arg1, arg2, arg3, arg4 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, object, object, object, object, object, object>>)callSite).Update(callSite, scope, self, arg0, arg1, arg2, arg3, arg4);
@@ -408,7 +408,7 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope scope, object self, TProc proc, object arg0, object arg1, object arg2, object arg3, object arg4) {
             object result;
-            if (IsCurrent(self) && TryInvoke(GetScope(scope), self, (object)proc, new object[] { arg0, arg1, arg2, arg3, arg4 }, out result)) {
+            if (CanCall(self) && TryInvoke(GetScope(scope), self, (object)proc, new object[] { arg0, arg1, arg2, arg3, arg4 }, out result)) {
                 return result;
             }
             return ((CallSite<Func<CallSite, TScope, object, TProc, object, object, object, object, object, object>>)callSite).Update(callSite, scope, self, proc, arg0, arg1, arg2, arg3, arg4);
