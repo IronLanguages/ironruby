@@ -202,5 +202,47 @@ p [jit_get(ih, -2**31), jit_get(ih, 2**31 - 1), jit_get(ih, 5), jit_key(ih, -2**
 [:min, :max, :five, true, nil]
 ");
         }
+
+        /// <summary>
+        /// Hash#fetch is the library method on master (no longer the prelude's): the JIT still specializes a
+        /// method that calls it, and a miss still deopts to the generic call, which raises the KeyError.
+        /// </summary>
+        public void HashFetch_Jit1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+def jit_fetch1(h, k) = h.fetch(k)
+def jit_fetch2(h, k) = h.fetch(k, :d)
+h = {1 => :one, :a => :sym, 'b' => :str}
+200.times { |i| jit_fetch1(h, 1); jit_fetch2(h, i) }
+p [jit_fetch1(h, :a), jit_fetch1(h, 'b'), jit_fetch2(h, 2), jit_fetch2(h, :a)]
+begin
+  jit_fetch1(h, 2)
+rescue KeyError => e
+  p [e.message, e.key, e.receiver.equal?(h)]
+end
+", @"
+[:sym, :str, :d, :sym]
+[""key not found: 2"", 2, true]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 2, System.String.Format("methods specialized: {0} (expected 2)", specializedHere));
+        }
+
+        /// <summary>
+        /// The KeyError of Hash#fetch is seen by a TracePoint on :raise, as MRI's rb_key_err_raise is (and as the
+        /// prelude's Hash#fetch, which raised it from Ruby, was).
+        /// </summary>
+        public void HashFetch_TraceRaise1() {
+            TestOutput(@"
+c = Hash.new(0)
+tp = TracePoint.new(:raise, :rescue) { |t| c[[t.event, t.raised_exception.class]] += 1 }
+tp.enable
+3.times { begin; {}.fetch(:x); rescue KeyError; end }
+tp.disable
+p c
+", @"
+{[:raise, KeyError] => 3, [:rescue, KeyError] => 3}
+");
+        }
     }
 }

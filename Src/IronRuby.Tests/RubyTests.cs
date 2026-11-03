@@ -368,6 +368,8 @@ namespace IronRuby.Tests {
                 HashIteration_Mutation1,
                 HashIteration_JitStore1,
                 HashIdentity_JitFixnumKey1,
+                HashFetch_Jit1,
+                HashFetch_TraceRaise1,
                 Scenario_RubyArgSplatting1,
                 Scenario_RubyArgSplatting2,
                 Scenario_RubyArgSplatting3,

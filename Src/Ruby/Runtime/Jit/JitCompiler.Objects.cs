@@ -774,27 +774,23 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// Hash#fetch is the prelude's (it raises KeyError, which the library method does not): for
-        /// fetch(k) `key?(k) ? self[k] : raise', for fetch(k, d) the library method under the name
-        /// fetch_raising_index_error, which answers d for a key that is not there.
+        /// Hash#fetch is the library method (IDictionaryOps.Fetch), which looks the key up in the table
+        /// itself: for fetch(k) the value or a KeyError, for fetch(k, d) the value or d.
         /// </summary>
-        private bool IsPreludeHashFetch() {
+        private bool IsLibraryHashFetch() {
             var hash = HashClass;
-            var resolved = hash.ResolveMethod("fetch", VisibilityContext.AllVisible);
-            var info = resolved.Found ? resolved.Info as RubyMethodInfo : null;
-            if (info == null || info.DeclaringModule != hash || info.Document == null || !RubyStackTraceBuilder.IsInternalFile(info.Document.FileName)) {
+            if (!IsPlainLibraryMethod(hash, "fetch")) {
                 return false;
             }
-            var original = hash.ResolveMethod("fetch_raising_index_error", VisibilityContext.AllVisible);
-            var library = original.Found ? original.Info as RubyLibraryMethodInfo : null;
+            var resolved = hash.ResolveMethod("fetch", VisibilityContext.AllVisible, _refinements);
+            var library = resolved.Found ? resolved.Info as RubyLibraryMethodInfo : null;
             if (library == null) { return false; }
             foreach (var member in library.GetMembers()) {
                 if (member.Name != "Fetch" || member.DeclaringType == null || member.DeclaringType.FullName != "IronRuby.Builtins.IDictionaryOps") {
                     return false;
                 }
             }
-            return HasPlainInstances(hash, "fetch") && HasPlainInstances(hash, "fetch_raising_index_error")
-                && IsPlainLibraryMethod(hash, "key?") && IsPlainLibraryMethod(hash, "[]");
+            return true;
         }
 
         /// <summary>
@@ -831,8 +827,8 @@ namespace IronRuby.Runtime.Jit {
                 // Array#fetch (the library method) as well as Hash#fetch: `@list.fetch(i)' on a receiver
                 // the profile cannot see would otherwise deopt on every call
                 bool fetchArrays = IsPlainLibraryMethod(ArrayClass, "fetch") && IsPublic(ArrayClass, "fetch");
-                bool fetchHashes = IsPreludeHashFetch() && IsPublic(HashClass, "fetch") && KeyLookupIsPlain();
-                if (!fetchArrays && !fetchHashes) { throw Bail("fetch is neither Array's nor the prelude's"); }
+                bool fetchHashes = IsLibraryHashFetch() && IsPublic(HashClass, "fetch") && KeyLookupIsPlain();
+                if (!fetchArrays && !fetchHashes) { throw Bail("fetch is neither Array's nor Hash's library method"); }
                 RequireCollectionReceiver(node.Target, fetchArrays, fetchHashes, name);
                 type = JT.Obj;
                 bool intKey = (keyType == JT.Int);
