@@ -1452,6 +1452,13 @@ namespace IronRuby.Runtime.Calls {
             return (result.GetType() == delegateType) ? result : null;
         }
 
+        // The parameterless construction of a value type with no such constructor (RubyOps.CreateDefaultValue<T>), which the
+        // rule builds itself.
+        private static bool IsDefaultValueConstruction(System.Reflection.MethodBase method) {
+            var info = method as System.Reflection.MethodInfo;
+            return info != null && info.IsGenericMethod && info.GetGenericMethodDefinition() == RubyOps.CreateDefaultValueMethod;
+        }
+
         /// <summary>
         /// The index of the overload the rule would call (RubyMethodGroupBase.ResolveOverload) - if the choice depends on the types
         /// of the arguments only - or -1.
@@ -1472,7 +1479,7 @@ namespace IronRuby.Runtime.Calls {
                 method.CallConvention, method.ImplicitProtocolConversions, out resolver);
 
             if (!bindingTarget.Success || resolver.HasArgumentAssumptions ||
-                ReferenceEquals(bindingTarget.Overload.ReflectionInfo, Methods.CreateDefaultInstance)) {
+                IsDefaultValueConstruction(bindingTarget.Overload.ReflectionInfo)) {
                 return -1;
             }
 

@@ -238,7 +238,7 @@ bar
                 Engine.Execute(@"
 puts method_missing(:bar) rescue p $!
 ", scope), @"
-#<NoMethodError: undefined method `bar' for main>
+#<NoMethodError: undefined method 'bar' for main>
 ");
         }
 

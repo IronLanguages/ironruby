@@ -9,6 +9,10 @@
   </PropertyGroup>
   <ItemGroup>
     <RuntimeHostConfigurationOption Include="System.Text.Encoding.EnableUnsafeUTF7Encoding" Value="true" />
+    <!-- As in Ruby.Console.csproj: on Unix .NET emulates FileShare with a flock(2) of its own on
+         every file it opens, so File#flock(LOCK_EX) waited forever on a second File.open of the
+         same file in the suite, where ir (which turns the emulation off) does not. -->
+    <RuntimeHostConfigurationOption Include="System.IO.DisableFileLocking" Value="true" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />

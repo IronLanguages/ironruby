@@ -58,7 +58,7 @@ namespace IronRuby.Compiler.Ast {
             _right = right;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             string setterName = _memberName + "=";
 
             MSA.Expression transformedLeftTarget = _leftTarget.TransformRead(gen);

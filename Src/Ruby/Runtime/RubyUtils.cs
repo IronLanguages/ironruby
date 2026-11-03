@@ -35,6 +35,7 @@ using Microsoft.Scripting;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
+using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Actions.Calls;
 using IronRuby.Runtime.Conversions;
 
@@ -693,7 +694,7 @@ namespace IronRuby.Runtime {
 
         public static void CheckClassVariableName(string name) {
             if (!Tokenizer.IsClassVariableName(name)) {
-                throw RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as a class variable name", name));
+                throw RubyExceptions.CreateNameError(String.Format("'{0}' is not allowed as a class variable name", name));
             }
         }
 
@@ -731,7 +732,7 @@ namespace IronRuby.Runtime {
         public static void CheckClassVariableName(RubyContext/*!*/ context, object receiver, string/*!*/ name, object nameArg) {
             if (!Tokenizer.IsClassVariableName(name)) {
                 throw RubyExceptions.WithNameAndReceiver(
-                    RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as a class variable name", name)),
+                    RubyExceptions.CreateNameError(String.Format("'{0}' is not allowed as a class variable name", name)),
                     GetVariableNameForError(context, name, nameArg), receiver);
             }
         }
@@ -813,6 +814,13 @@ namespace IronRuby.Runtime {
             sourcePath = null;
             sourceLine = 0;
 
+            // Nothing but the core prelude is running, and its frames are not in a backtrace: the
+            // interpreted frame below would be one of the prelude's, and the walk would come back
+            // empty, after ~1ms, for each of its const_set calls (Errno and Encoding make hundreds).
+            if (context.Loader.IsLoadingCorePrelude) {
+                return false;
+            }
+
             // Fast path: the interpreter's frame chain already knows where we are; a CLR stack walk
             // with file info costs ~1ms and this is called once per Module#const_set.
             if (RubyStackTraceBuilder.TryGetInterpretedFrameLocation(out sourcePath, out sourceLine)) {
@@ -821,10 +829,8 @@ namespace IronRuby.Runtime {
             sourcePath = null;
             sourceLine = 0;
 
-            // Nothing but the core prelude is running, and its frames are not in a backtrace: the
-            // walk below would come back empty, after ~1ms, for each of the prelude's const_set calls
-            // (Errno and Encoding make hundreds).
-            if (context.Loader.IsLoadingCorePrelude || Precompiled.PrecompiledCode.IsRunningOnThread) {
+            // Startup-library code is running, and its frames are not in a backtrace either.
+            if (Precompiled.PrecompiledCode.IsRunningOnThread) {
                 return false;
             }
 
@@ -1063,6 +1069,12 @@ namespace IronRuby.Runtime {
         internal static RubyModule/*!*/ GetModuleFromObject(RubyScope/*!*/ scope, object obj) {
             RubyModule module = obj as RubyModule;
             if (module == null) {
+                // a type group (System::Nullable is Nullable and Nullable<T>) qualifies a constant as its non-generic member:
+                var typeGroup = obj as TypeGroup;
+                Type nonGenericType;
+                if (typeGroup != null && typeGroup.TryGetNonGenericType(out nonGenericType)) {
+                    return scope.RubyContext.GetModule(nonGenericType);
+                }
                 throw CreateNotModuleException(scope, obj);
             }
             return module;
@@ -1094,7 +1106,7 @@ namespace IronRuby.Runtime {
                 }
 
                 if (module.Context != target.Context) {
-                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module `{0}' into `{1}' (runtime mismatch)",
+                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module '{0}' into '{1}' (runtime mismatch)",
                         module.GetName(target.Context), target.GetName(module.Context)
                     ));
                 }
@@ -1121,7 +1133,7 @@ namespace IronRuby.Runtime {
                 }
 
                 if (module.Context != target.Context) {
-                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module `{0}' into `{1}' (runtime mismatch)",
+                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module '{0}' into '{1}' (runtime mismatch)",
                         module.GetName(target.Context), target.GetName(module.Context)
                     ));
                 }
@@ -1426,13 +1438,21 @@ namespace IronRuby.Runtime {
         public static object EvaluateRefinementBlock(RubyModule/*!*/ holder, RubyModule/*!*/ refinement, BlockParam/*!*/ block) {
             Proc proc = block.Proc;
             RefinementActivation saved = proc.RefinementOverride;
-            proc.RefinementOverride = RefinementActivation.CreateSingle(proc.LocalScope.GetActiveRefinements(), holder);
-            holder.Context.RefinementVersion++;
+            RefinementActivation active = RefinementActivation.CreateSingle(proc.LocalScope.GetActiveRefinements(), holder);
+
+            // While the count is not zero the lexical walk looks at every block's override, and the rules that
+            // read a method's record for a block in it fail (RubyScope.GetLexicalRefinements, RubyCallAction.Resolve).
+            // Nothing that can throw comes between the increment and the try, whose finally undoes it: a count left
+            // above zero would turn those fast paths off for the rest of the process.
+            Interlocked.Increment(ref RubyOps.RefineBlocksRunning);
             try {
+                proc.RefinementOverride = active;
+                holder.Context.RefinementVersion++;
                 return EvaluateInModule(refinement, block, null);
             } finally {
                 proc.RefinementOverride = saved;
                 holder.Context.RefinementVersion++;
+                Interlocked.Decrement(ref RubyOps.RefineBlocksRunning);
             }
         }
 
@@ -1457,9 +1477,18 @@ namespace IronRuby.Runtime {
             // block looks methods up through the dummy singleton standing in front of their
             // class instead. It sits directly below the class, so a private method of Integer
             // is still reached; a `def' landing in it raises, which is what MRI does too.
+            //
+            // MRI makes the singleton class of an object only when the block defines something into it (see
+            // BlockParam.SetLazySingletonMethodLookup); a module's is always there.
             RubyModule lookupModule;
             if (RubyUtils.HasSingletonClass(self)) {
-                lookupModule = block.RubyContext.GetOrCreateSingletonClass(self);
+                var context = block.RubyContext;
+                if (self is RubyModule) {
+                    lookupModule = context.GetOrCreateSingletonClass(self);
+                } else {
+                    RubyClass immediate = context.GetImmediateClassOf(self);
+                    lookupModule = immediate.IsSingletonClass ? immediate : null;
+                }
             } else {
                 lookupModule = block.RubyContext.GetImmediateClassOf(self).GetDummySingletonClass();
             }
@@ -1469,9 +1498,14 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        private static bool EvaluateBlock(BlockParam/*!*/ block, RubyModule/*!*/ module, object self, object[] args, out object result) {
-            Assert.NotNull(block, module);
-            block.MethodLookupModule = module;
+        // A null module: the singleton class of self, made when a definition needs it.
+        private static bool EvaluateBlock(BlockParam/*!*/ block, RubyModule module, object self, object[] args, out object result) {
+            Assert.NotNull(block);
+            if (module != null) {
+                block.MethodLookupModule = module;
+            } else {
+                block.SetLazySingletonMethodLookup();
+            }
 
             if (args != null) {
                 result = RubyOps.Yield(args, null, self, block);
@@ -1589,6 +1623,32 @@ namespace IronRuby.Runtime {
 
 #if FEATURE_THREAD
 #if FEATURE_EXCEPTION_STATE
+        // Unwinds only discarded fiber stacks. Set before throwing, cleared by the worker
+        // boundary after CLR finally cleanup has completed; Ruby ensure bodies consult it.
+        public sealed class FiberReclaimSignal : StackUnwinder {
+            public FiberReclaimSignal() : base(null) { }
+        }
+
+        [ThreadStatic]
+        private static bool _reclaimingFiber;
+
+        public static bool IsReclaimingFiber { get { return _reclaimingFiber; } }
+
+        public static void BeginFiberReclamation() {
+            if (!_reclaimingFiber) {
+                _reclaimingFiber = true;
+                RequestSafePoint();
+            }
+            throw new FiberReclaimSignal();
+        }
+
+        public static void EndFiberReclamation() {
+            if (_reclaimingFiber) {
+                _reclaimingFiber = false;
+                SafePointRequestDone();
+            }
+        }
+
         /// <summary>
         /// Control-flow exception used to unwind a thread that was killed with Thread#kill / #exit / #terminate.
         /// Deriving from StackUnwinder makes RubyOps.CanRescue skip it, so - exactly like in MRI - a killed
@@ -1887,6 +1947,21 @@ namespace IronRuby.Runtime {
         /// blocks on nothing.  Thread.handle_interrupt's :on_blocking only delivers at the former.
         /// </summary>
         public static void CheckAsyncException(bool atBlockingCall) {
+            // Everything below - a fiber being reclaimed, a parked signal, a parked finalizer, an
+            // exception parked by Thread#raise / #kill - is counted in _safePointRequests while it is
+            // outstanding, so with none of it there is nothing to look up. Mutex#lock and Monitor#enter
+            // come through here on every call.
+            if (Volatile.Read(ref _safePointRequests) == 0) {
+                return;
+            }
+
+            // Reclamation runs CLR cleanup only. Do not enter Ruby signal/finalizer callbacks
+            // or replace the unwind signal with a pending asynchronous exception.
+            if (_reclaimingFiber) {
+                // A CLR catch(Exception) can swallow a control-flow signal. Keep the request
+                // active until the worker boundary, so another Ruby entry cannot continue it.
+                throw new FiberReclaimSignal();
+            }
             // Trap handlers run on the main thread at a safe point, like MRI's interrupt check.
             // The hook is installed by the Signal library, which lives in another assembly.
             Action safePoint = SafePointHandler;
@@ -1972,6 +2047,29 @@ namespace IronRuby.Runtime {
         #endregion
 
         #region Paths
+
+        /// <summary>
+        /// Whether the first line of a script is a #! line that runs IronRuby's own launcher. MRI
+        /// and prism take a #! line without "ruby" in it as the start of some other program and
+        /// look further down for the Ruby one; but RubyGems and Rails write binstubs from
+        /// RbConfig's ruby_install_name, which was "ir", so `rails new` started bin/rails with
+        /// "#!/usr/bin/env ir.exe" - a Ruby script that does not say "ruby". It is "ironruby"
+        /// now, which does; this keeps the binstubs written before that running.
+        /// </summary>
+        public static bool ShebangNamesIronRuby(string/*!*/ code) {
+            if (code == null || !code.StartsWith("#!", StringComparison.Ordinal)) {
+                return false;
+            }
+            int end = code.IndexOf('\n');
+            string shebang = (end < 0) ? code.Substring(2) : code.Substring(2, end - 2);
+            foreach (string word in shebang.Split(new[] { ' ', '\t', '\r', '/', '\\', '"', '\'' }, StringSplitOptions.RemoveEmptyEntries)) {
+                switch (word.ToLowerInvariant()) {
+                    case "ir": case "ir.exe": case "ir.cmd": case "ir.sh":
+                        return true;
+                }
+            }
+            return false;
+        }
 
         // '\' is only a path separator on Windows. On Unix it is an ordinary character in a
         // file name, and rewriting it silently loses files: mspec's own rm_r expands the path
@@ -2214,7 +2312,7 @@ namespace IronRuby.Runtime {
                     if (length == 1 || path[1] == '/' || (FileSystemUsesDriveLetters && path[1] == '\\')) {
                         string homeDirectory = RubyEnvironment.GetVariable(platform, "HOME");
                         if (homeDirectory == null) {
-                            throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
+                            throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding '~'");
                         }
 
                         if (length <= 2) {

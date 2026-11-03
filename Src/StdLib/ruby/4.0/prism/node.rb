@@ -416,8 +416,12 @@ module Prism
 
   # Represents the use of the `alias` keyword to alias a global variable.
   #
-  #     alias $foo $bar
-  #     ^^^^^^^^^^^^^^^
+  # ```rb
+  # alias $foo $bar
+  # ^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YWxpYXMgJGZvbyAkYmFyCg)
   class AliasGlobalVariableNode < Node
     # @rbs @new_name: (GlobalVariableReadNode | BackReferenceReadNode | NumberedReferenceReadNode)
     # @rbs @old_name: (GlobalVariableReadNode | BackReferenceReadNode | NumberedReferenceReadNode)
@@ -533,8 +537,12 @@ module Prism
     #
     # Represents the new name of the global variable that can be used after aliasing.
     #
-    #     alias $foo $bar
-    #           ^^^^
+    # ```rb
+    # alias $foo $bar
+    #       ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YWxpYXMgJGZvbyAkYmFyCg)
     #
     #: () -> (GlobalVariableReadNode | BackReferenceReadNode | NumberedReferenceReadNode)
     def new_name
@@ -546,8 +554,12 @@ module Prism
     #
     # Represents the old name of the global variable that can be used before aliasing.
     #
-    #     alias $foo $bar
-    #                ^^^^
+    # ```rb
+    # alias $foo $bar
+    #            ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YWxpYXMgJGZvbyAkYmFyCg)
     #
     #: () -> (GlobalVariableReadNode | BackReferenceReadNode | NumberedReferenceReadNode)
     def old_name
@@ -560,8 +572,12 @@ module Prism
     #
     # The Location of the `alias` keyword.
     #
-    #     alias $foo $bar
-    #     ^^^^^
+    # ```rb
+    # alias $foo $bar
+    # ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YWxpYXMgJGZvbyAkYmFyCg)
     #
     #: () -> Location
     def keyword_loc
@@ -604,8 +620,12 @@ module Prism
 
   # Represents the use of the `alias` keyword to alias a method.
   #
-  #     alias foo bar
-  #     ^^^^^^^^^^^^^
+  # ```rb
+  # alias foo bar
+  # ^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YWxpYXMgZm9vIGJhcgo)
   class AliasMethodNode < Node
     # @rbs @new_name: (SymbolNode | InterpolatedSymbolNode)
     # @rbs @old_name: (SymbolNode | InterpolatedSymbolNode)
@@ -721,14 +741,18 @@ module Prism
     #
     # Represents the new name of the method that will be aliased.
     #
-    #     alias foo bar
-    #           ^^^
+    # ```rb
+    # alias foo bar
+    #       ^^^
     #
-    #     alias :foo :bar
-    #           ^^^^
+    # alias :foo :bar
+    #       ^^^^
     #
-    #     alias :"#{foo}" :"#{bar}"
-    #           ^^^^^^^^^
+    # alias :"#{foo}" :"#{bar}"
+    #       ^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YWxpYXMgZm9vIGJhcgoKYWxpYXMgOmZvbyA6YmFyCgphbGlhcyA6IiN7Zm9vfSIgOiIje2Jhcn0iCg)
     #
     #: () -> (SymbolNode | InterpolatedSymbolNode)
     def new_name
@@ -740,14 +764,18 @@ module Prism
     #
     # Represents the old name of the method that will be aliased.
     #
-    #     alias foo bar
-    #               ^^^
+    # ```rb
+    # alias foo bar
+    #           ^^^
     #
-    #     alias :foo :bar
-    #                ^^^^
+    # alias :foo :bar
+    #            ^^^^
     #
-    #     alias :"#{foo}" :"#{bar}"
-    #                     ^^^^^^^^^
+    # alias :"#{foo}" :"#{bar}"
+    #                 ^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YWxpYXMgZm9vIGJhcgoKYWxpYXMgOmZvbyA6YmFyCgphbGlhcyA6IiN7Zm9vfSIgOiIje2Jhcn0iCg)
     #
     #: () -> (SymbolNode | InterpolatedSymbolNode)
     def old_name
@@ -760,8 +788,12 @@ module Prism
     #
     # Represents the Location of the `alias` keyword.
     #
-    #     alias foo bar
-    #     ^^^^^
+    # ```rb
+    # alias foo bar
+    # ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YWxpYXMgZm9vIGJhcgo)
     #
     #: () -> Location
     def keyword_loc
@@ -804,8 +836,12 @@ module Prism
 
   # Represents an alternation pattern in pattern matching.
   #
-  #     foo => bar | baz
-  #            ^^^^^^^^^
+  # ```rb
+  # foo => bar | baz
+  #        ^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IGJhciB8IGJhego)
   class AlternationPatternNode < Node
     # @rbs @left: Prism::node
     # @rbs @right: Prism::node
@@ -921,8 +957,12 @@ module Prism
     #
     # Represents the left side of the expression.
     #
-    #     foo => bar | baz
-    #            ^^^
+    # ```rb
+    # foo => bar | baz
+    #        ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IGJhciB8IGJhego)
     #
     #: () -> Prism::node
     def left
@@ -934,8 +974,12 @@ module Prism
     #
     # Represents the right side of the expression.
     #
-    #     foo => bar | baz
-    #                  ^^^
+    # ```rb
+    # foo => bar | baz
+    #              ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IGJhciB8IGJhego)
     #
     #: () -> Prism::node
     def right
@@ -948,8 +992,12 @@ module Prism
     #
     # Represents the alternation operator Location.
     #
-    #     foo => bar | baz
-    #                ^
+    # ```rb
+    # foo => bar | baz
+    #            ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IGJhciB8IGJhego)
     #
     #: () -> Location
     def operator_loc
@@ -992,8 +1040,12 @@ module Prism
 
   # Represents the use of the `&&` operator or the `and` keyword.
   #
-  #     left and right
-  #     ^^^^^^^^^^^^^^
+  # ```rb
+  # left and right
+  # ^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#bGVmdCBhbmQgcmlnaHQK)
   class AndNode < Node
     # @rbs @left: Prism::node
     # @rbs @right: Prism::node
@@ -1109,11 +1161,15 @@ module Prism
     #
     # Represents the left side of the expression. It can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     left and right
-    #     ^^^^
+    # ```rb
+    # left and right
+    # ^^^^
     #
-    #     1 && 2
-    #     ^
+    # 1 && 2
+    # ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#bGVmdCBhbmQgcmlnaHQKCjEgJiYgMgo)
     #
     #: () -> Prism::node
     def left
@@ -1125,11 +1181,15 @@ module Prism
     #
     # Represents the right side of the expression.
     #
-    #     left && right
-    #             ^^^^^
+    # ```rb
+    # left && right
+    #         ^^^^^
     #
-    #     1 and 2
-    #           ^
+    # 1 and 2
+    #       ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#bGVmdCAmJiByaWdodAoKMSBhbmQgMgo)
     #
     #: () -> Prism::node
     def right
@@ -1142,8 +1202,12 @@ module Prism
     #
     # The Location of the `and` keyword or the `&&` operator.
     #
-    #     left and right
-    #          ^^^
+    # ```rb
+    # left and right
+    #      ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#bGVmdCBhbmQgcmlnaHQK)
     #
     #: () -> Location
     def operator_loc
@@ -1186,8 +1250,12 @@ module Prism
 
   # Represents a set of arguments to a method or a keyword.
   #
-  #     return foo, bar, baz
-  #            ^^^^^^^^^^^^^
+  # ```rb
+  # return foo, bar, baz
+  #        ^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#cmV0dXJuIGZvbywgYmFyLCBiYXoK)
   class ArgumentsNode < Node
     # @rbs @arguments: Array[Prism::node]
 
@@ -1335,8 +1403,12 @@ module Prism
     #
     # The list of arguments, if present. These can be any [non-void expressions](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     foo(bar, baz)
-    #         ^^^^^^^^
+    # ```rb
+    # foo(bar, baz)
+    #     ^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vKGJhciwgYmF6KQo)
     #
     #: () -> Array[Prism::node]
     def arguments
@@ -1358,8 +1430,12 @@ module Prism
 
   # Represents an array literal. This can be a regular array using brackets or a special array using % like %w or %i.
   #
-  #     [1, 2, 3]
-  #     ^^^^^^^^^
+  # ```rb
+  # [1, 2, 3]
+  # ^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#WzEsIDIsIDNdCg)
   class ArrayNode < Node
     # @rbs @elements: Array[Prism::node]
     # @rbs @opening_loc: Location?
@@ -1494,10 +1570,14 @@ module Prism
     #
     # Represents the optional source Location for the opening token.
     #
-    #     [1,2,3]                 # "["
-    #     %w[foo bar baz]         # "%w["
-    #     %I(apple orange banana) # "%I("
-    #     foo = 1, 2, 3           # nil
+    # ```rb
+    # [1,2,3]                 # "["
+    # %w[foo bar baz]         # "%w["
+    # %I(apple orange banana) # "%I("
+    # foo = 1, 2, 3           # nil
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#WzEsMiwzXSAgICAgICAgICAgICAgICAgIyAiWyIKJXdbZm9vIGJhciBiYXpdICAgICAgICAgIyAiJXdbIgolSShhcHBsZSBvcmFuZ2UgYmFuYW5hKSAjICIlSSgiCmZvbyA9IDEsIDIsIDMgICAgICAgICAgICMgbmlsCg)
     #
     #: () -> Location?
     def opening_loc
@@ -1526,10 +1606,14 @@ module Prism
     #
     # Represents the optional source Location for the closing token.
     #
-    #     [1,2,3]                 # "]"
-    #     %w[foo bar baz]         # "]"
-    #     %I(apple orange banana) # ")"
-    #     foo = 1, 2, 3           # nil
+    # ```rb
+    # [1,2,3]                 # "]"
+    # %w[foo bar baz]         # "]"
+    # %I(apple orange banana) # ")"
+    # foo = 1, 2, 3           # nil
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#WzEsMiwzXSAgICAgICAgICAgICAgICAgIyAiXSIKJXdbZm9vIGJhciBiYXpdICAgICAgICAgIyAiXSIKJUkoYXBwbGUgb3JhbmdlIGJhbmFuYSkgIyAiKSIKZm9vID0gMSwgMiwgMyAgICAgICAgICAgIyBuaWwK)
     #
     #: () -> Location?
     def closing_loc
@@ -1589,20 +1673,24 @@ module Prism
 
   # Represents an array pattern in pattern matching.
   #
-  #     foo in 1, 2
-  #            ^^^^
+  # ```rb
+  # foo in 1, 2
+  #        ^^^^
   #
-  #     foo in [1, 2]
-  #            ^^^^^^
+  # foo in [1, 2]
+  #        ^^^^^^
   #
-  #     foo in *bar
-  #            ^^^^
+  # foo in *bar
+  #        ^^^^
   #
-  #     foo in Bar[]
-  #            ^^^^^
+  # foo in Bar[]
+  #        ^^^^^
   #
-  #     foo in Bar[1, 2, 3]
-  #            ^^^^^^^^^^^^
+  # foo in Bar[1, 2, 3]
+  #        ^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIDEsIDIKCmZvbyBpbiBbMSwgMl0KCmZvbyBpbiAqYmFyCgpmb28gaW4gQmFyW10KCmZvbyBpbiBCYXJbMSwgMiwgM10K)
   class ArrayPatternNode < Node
     # @rbs @constant: (ConstantPathNode | ConstantReadNode)?
     # @rbs @requireds: Array[Prism::node]
@@ -1735,14 +1823,18 @@ module Prism
     #
     # Represents the optional constant preceding the Array
     #
-    #     foo in Bar[]
-    #            ^^^
+    # ```rb
+    # foo in Bar[]
+    #        ^^^
     #
-    #     foo in Bar[1, 2, 3]
-    #            ^^^
+    # foo in Bar[1, 2, 3]
+    #        ^^^
     #
-    #     foo in Bar::Baz[1, 2, 3]
-    #            ^^^^^^^^
+    # foo in Bar::Baz[1, 2, 3]
+    #        ^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIEJhcltdCgpmb28gaW4gQmFyWzEsIDIsIDNdCgpmb28gaW4gQmFyOjpCYXpbMSwgMiwgM10K)
     #
     #: () -> (ConstantPathNode | ConstantReadNode)?
     def constant
@@ -1754,8 +1846,12 @@ module Prism
     #
     # Represents the required elements of the array pattern.
     #
-    #     foo in [1, 2]
-    #             ^  ^
+    # ```rb
+    # foo in [1, 2]
+    #         ^  ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIFsxLCAyXQo)
     #
     #: () -> Array[Prism::node]
     def requireds
@@ -1767,8 +1863,12 @@ module Prism
     #
     # Represents the rest element of the array pattern.
     #
-    #     foo in *bar
-    #            ^^^^
+    # ```rb
+    # foo in *bar
+    #        ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluICpiYXIK)
     #
     #: () -> (ImplicitRestNode | SplatNode)?
     def rest
@@ -1780,8 +1880,12 @@ module Prism
     #
     # Represents the elements after the rest element of the array pattern.
     #
-    #     foo in *bar, baz
-    #                  ^^^
+    # ```rb
+    # foo in *bar, baz
+    #              ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluICpiYXIsIGJhego)
     #
     #: () -> Array[Prism::node]
     def posts
@@ -1794,8 +1898,12 @@ module Prism
     #
     # Represents the opening Location of the array pattern.
     #
-    #     foo in [1, 2]
-    #            ^
+    # ```rb
+    # foo in [1, 2]
+    #        ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIFsxLCAyXQo)
     #
     #: () -> Location?
     def opening_loc
@@ -1824,8 +1932,12 @@ module Prism
     #
     # Represents the closing Location of the array pattern.
     #
-    #     foo in [1, 2]
-    #                 ^
+    # ```rb
+    # foo in [1, 2]
+    #             ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIFsxLCAyXQo)
     #
     #: () -> Location?
     def closing_loc
@@ -1888,8 +2000,12 @@ module Prism
 
   # Represents a hash key/value pair.
   #
-  #     { a => b }
-  #       ^^^^^^
+  # ```rb
+  # { a => b }
+  #   ^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#eyBhID0-IGIgfQo)
   class AssocNode < Node
     # @rbs @key: Prism::node
     # @rbs @value: Prism::node
@@ -2005,14 +2121,18 @@ module Prism
     #
     # The key of the association. This can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     { a: b }
-    #       ^
+    # ```rb
+    # { a: b }
+    #   ^
     #
-    #     { foo => bar }
-    #       ^^^
+    # { foo => bar }
+    #   ^^^
     #
-    #     { def a; end => 1 }
-    #       ^^^^^^^^^^
+    # { def a; end => 1 }
+    #   ^^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#eyBhOiBiIH0KCnsgZm9vID0-IGJhciB9Cgp7IGRlZiBhOyBlbmQgPT4gMSB9Cg)
     #
     #: () -> Prism::node
     def key
@@ -2024,11 +2144,15 @@ module Prism
     #
     # The value of the association, if present. This can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     { foo => bar }
-    #              ^^^
+    # ```rb
+    # { foo => bar }
+    #          ^^^
     #
-    #     { x: 1 }
-    #          ^
+    # { x: 1 }
+    #      ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#eyBmb28gPT4gYmFyIH0KCnsgeDogMSB9Cg)
     #
     #: () -> Prism::node
     def value
@@ -2041,8 +2165,12 @@ module Prism
     #
     # The Location of the `=>` operator, if present.
     #
-    #     { foo => bar }
-    #           ^^
+    # ```rb
+    # { foo => bar }
+    #       ^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#eyBmb28gPT4gYmFyIH0K)
     #
     #: () -> Location?
     def operator_loc
@@ -2090,8 +2218,12 @@ module Prism
 
   # Represents a splat in a hash literal.
   #
-  #     { **foo }
-  #       ^^^^^
+  # ```rb
+  # { **foo }
+  #   ^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#eyAqKmZvbyB9Cg)
   class AssocSplatNode < Node
     # @rbs @value: Prism::node?
     # @rbs @operator_loc: Location
@@ -2205,8 +2337,12 @@ module Prism
     #
     # The value to be splatted, if present. Will be missing when keyword rest argument forwarding is used.
     #
-    #     { **foo }
-    #         ^^^
+    # ```rb
+    # { **foo }
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#eyAqKmZvbyB9Cg)
     #
     #: () -> Prism::node?
     def value
@@ -2219,8 +2355,12 @@ module Prism
     #
     # The Location of the `**` operator.
     #
-    #     { **x }
-    #       ^^
+    # ```rb
+    # { **x }
+    #   ^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#eyAqKnggfQo)
     #
     #: () -> Location
     def operator_loc
@@ -2262,8 +2402,12 @@ module Prism
 
   # Represents reading a reference to a field in the previous match.
   #
-  #     $'
-  #     ^^
+  # ```rb
+  # $'
+  # ^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#JCcK)
   class BackReferenceReadNode < Node
     # @rbs @name: Symbol
 
@@ -2370,9 +2514,13 @@ module Prism
     #
     # The name of the back-reference variable, including the leading `$`.
     #
-    #     $& # name `:$&`
+    # ```rb
+    # $& # name `:$&`
     #
-    #     $+ # name `:$+`
+    # $+ # name `:$+`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#JCYgIyBuYW1lIGA6JCZgCgokKyAjIG5hbWUgYDokK2AK)
     #
     #: () -> Symbol
     def name
@@ -2392,10 +2540,14 @@ module Prism
 
   # Represents a begin statement.
   #
-  #     begin
-  #       foo
-  #     end
-  #     ^^^^^
+  # ```rb
+  # begin
+  #   foo
+  # end
+  # ^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YmVnaW4KICBmb28KZW5kCg)
   class BeginNode < Node
     # @rbs @begin_keyword_loc: Location?
     # @rbs @statements: StatementsNode?
@@ -2529,8 +2681,12 @@ module Prism
     #
     # Represents the Location of the `begin` keyword.
     #
-    #     begin x end
-    #     ^^^^^
+    # ```rb
+    # begin x end
+    # ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YmVnaW4geCBlbmQK)
     #
     #: () -> Location?
     def begin_keyword_loc
@@ -2558,8 +2714,12 @@ module Prism
     #
     # Represents the statements within the begin block.
     #
-    #     begin x end
-    #           ^
+    # ```rb
+    # begin x end
+    #       ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YmVnaW4geCBlbmQK)
     #
     #: () -> StatementsNode?
     def statements
@@ -2571,8 +2731,12 @@ module Prism
     #
     # Represents the rescue clause within the begin block.
     #
-    #     begin x; rescue y; end
-    #              ^^^^^^^^
+    # ```rb
+    # begin x; rescue y; end
+    #          ^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YmVnaW4geDsgcmVzY3VlIHk7IGVuZAo)
     #
     #: () -> RescueNode?
     def rescue_clause
@@ -2584,8 +2748,12 @@ module Prism
     #
     # Represents the else clause within the begin block.
     #
-    #     begin x; rescue y; else z; end
-    #                        ^^^^^^^^^^^
+    # ```rb
+    # begin x; rescue y; else z; end
+    #                    ^^^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YmVnaW4geDsgcmVzY3VlIHk7IGVsc2UgejsgZW5kCg)
     #
     #: () -> ElseNode?
     def else_clause
@@ -2597,8 +2765,12 @@ module Prism
     #
     # Represents the ensure clause within the begin block.
     #
-    #     begin x; ensure y; end
-    #              ^^^^^^^^
+    # ```rb
+    # begin x; ensure y; end
+    #          ^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YmVnaW4geDsgZW5zdXJlIHk7IGVuZAo)
     #
     #: () -> EnsureNode?
     def ensure_clause
@@ -2611,8 +2783,12 @@ module Prism
     #
     # Represents the Location of the `end` keyword.
     #
-    #     begin x end
-    #             ^^^
+    # ```rb
+    # begin x end
+    #         ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YmVnaW4geCBlbmQK)
     #
     #: () -> Location?
     def end_keyword_loc
@@ -2673,8 +2849,12 @@ module Prism
 
   # Represents a block argument using `&`.
   #
-  #     bar(&args)
-  #         ^^^^^
+  # ```rb
+  # bar(&args)
+  #     ^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YmFyKCZhcmdzKQo)
   class BlockArgumentNode < Node
     # @rbs @expression: Prism::node?
     # @rbs @operator_loc: Location
@@ -2788,8 +2968,12 @@ module Prism
     #
     # The expression that is being passed as a block argument. This can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     foo(&args)
-    #          ^^^^
+    # ```rb
+    # foo(&args)
+    #      ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vKCZhcmdzKQo)
     #
     #: () -> Prism::node?
     def expression
@@ -2802,8 +2986,12 @@ module Prism
     #
     # Represents the Location of the `&` operator.
     #
-    #     foo(&args)
-    #         ^
+    # ```rb
+    # foo(&args)
+    #     ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vKCZhcmdzKQo)
     #
     #: () -> Location
     def operator_loc
@@ -2845,8 +3033,12 @@ module Prism
 
   # Represents a block local variable.
   #
-  #     a { |; b| }
-  #            ^
+  # ```rb
+  # a { |; b| }
+  #        ^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YSB7IHw7IGJ8IH0K)
   class BlockLocalVariableNode < Node
     # @rbs @name: Symbol
 
@@ -2961,8 +3153,12 @@ module Prism
     #
     # The name of the block local variable.
     #
-    #     a { |; b| } # name `:b`
-    #            ^
+    # ```rb
+    # a { |; b| } # name `:b`
+    #        ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSB7IHw7IGJ8IH0gIyBuYW1lIGA6YmAK)
     #
     #: () -> Symbol
     def name
@@ -2983,8 +3179,12 @@ module Prism
 
   # Represents a block of ruby code.
   #
-  #     [1, 2, 3].each { |i| puts x }
-  #                    ^^^^^^^^^^^^^^
+  # ```rb
+  # [1, 2, 3].each { |i| puts x }
+  #                ^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#WzEsIDIsIDNdLmVhY2ggeyB8aXwgcHV0cyB4IH0K)
   class BlockNode < Node
     # @rbs @locals: Array[Symbol]
     # @rbs @parameters: (BlockParametersNode | NumberedParametersNode | ItParametersNode)?
@@ -3110,8 +3310,12 @@ module Prism
     #
     # The local variables declared in the block.
     #
-    #     [1, 2, 3].each { |i| puts x } # locals: [:i]
-    #                       ^
+    # ```rb
+    # [1, 2, 3].each { |i| puts x } # locals: [:i]
+    #                   ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#WzEsIDIsIDNdLmVhY2ggeyB8aXwgcHV0cyB4IH0gIyBsb2NhbHM6IFs6aV0K)
     #
     #: () -> Array[Symbol]
     def locals
@@ -3123,12 +3327,16 @@ module Prism
     #
     # The parameters of the block.
     #
-    #     [1, 2, 3].each { |i| puts x }
-    #                      ^^^
-    #     [1, 2, 3].each { puts _1 }
-    #                    ^^^^^^^^^^^
-    #     [1, 2, 3].each { puts it }
-    #                    ^^^^^^^^^^^
+    # ```rb
+    # [1, 2, 3].each { |i| puts x }
+    #                  ^^^
+    # [1, 2, 3].each { puts _1 }
+    #                ^^^^^^^^^^^
+    # [1, 2, 3].each { puts it }
+    #                ^^^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#WzEsIDIsIDNdLmVhY2ggeyB8aXwgcHV0cyB4IH0KClsxLCAyLCAzXS5lYWNoIHsgcHV0cyBfMSB9CgpbMSwgMiwgM10uZWFjaCB7IHB1dHMgaXQgfQo)
     #
     #: () -> (BlockParametersNode | NumberedParametersNode | ItParametersNode)?
     def parameters
@@ -3140,8 +3348,12 @@ module Prism
     #
     # The body of the block.
     #
-    #     [1, 2, 3].each { |i| puts x }
-    #                          ^^^^^^
+    # ```rb
+    # [1, 2, 3].each { |i| puts x }
+    #                      ^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#WzEsIDIsIDNdLmVhY2ggeyB8aXwgcHV0cyB4IH0K)
     #
     #: () -> (StatementsNode | BeginNode)?
     def body
@@ -3154,8 +3366,12 @@ module Prism
     #
     # Represents the Location of the opening `{` or `do`.
     #
-    #     [1, 2, 3].each { |i| puts x }
-    #                    ^
+    # ```rb
+    # [1, 2, 3].each { |i| puts x }
+    #                ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#WzEsIDIsIDNdLmVhY2ggeyB8aXwgcHV0cyB4IH0K)
     #
     #: () -> Location
     def opening_loc
@@ -3179,8 +3395,12 @@ module Prism
     #
     # Represents the Location of the closing `}` or `end`.
     #
-    #     [1, 2, 3].each { |i| puts x }
-    #                                 ^
+    # ```rb
+    # [1, 2, 3].each { |i| puts x }
+    #                             ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#WzEsIDIsIDNdLmVhY2ggeyB8aXwgcHV0cyB4IH0K)
     #
     #: () -> Location
     def closing_loc
@@ -3236,9 +3456,13 @@ module Prism
 
   # Represents a block parameter of a method, block, or lambda definition.
   #
-  #     def a(&b)
-  #           ^^
-  #     end
+  # ```rb
+  # def a(&b)
+  #       ^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoJmIpCgplbmQK)
   class BlockParameterNode < Node
     # @rbs @name: Symbol?
     # @rbs @name_loc: Location?
@@ -3360,9 +3584,13 @@ module Prism
     #
     # The name of the block parameter.
     #
-    #     def a(&b) # name `:b`
-    #            ^
-    #     end
+    # ```rb
+    # def a(&b) # name `:b`
+    #        ^
+    # end
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoJmIpICMgbmFtZSBgOmJgCgplbmQK)
     #
     #: () -> Symbol?
     def name
@@ -3375,8 +3603,12 @@ module Prism
     #
     # Represents the Location of the block parameter name.
     #
-    #     def a(&b)
-    #            ^
+    # ```rb
+    # def a(&b)
+    #        ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoJmIpCg)
     #
     #: () -> Location?
     def name_loc
@@ -3405,9 +3637,13 @@ module Prism
     #
     # Represents the Location of the `&` operator.
     #
-    #     def a(&b)
-    #           ^
-    #     end
+    # ```rb
+    # def a(&b)
+    #       ^
+    # end
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoJmIpCgplbmQK)
     #
     #: () -> Location
     def operator_loc
@@ -3451,12 +3687,16 @@ module Prism
 
   # Represents a block's parameters declaration.
   #
-  #     -> (a, b = 1; local) { }
-  #        ^^^^^^^^^^^^^^^^^
+  # ```rb
+  # -> (a, b = 1; local) { }
+  #    ^^^^^^^^^^^^^^^^^
   #
-  #     foo do |a, b = 1; local|
-  #            ^^^^^^^^^^^^^^^^^
-  #     end
+  # foo do |a, b = 1; local|
+  #        ^^^^^^^^^^^^^^^^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#LT4gKGEsIGIgPSAxOyBsb2NhbCkgeyB9Cgpmb28gZG8gfGEsIGIgPSAxOyBsb2NhbHwKCmVuZAo)
   class BlockParametersNode < Node
     # @rbs @parameters: ParametersNode?
     # @rbs @locals: Array[BlockLocalVariableNode]
@@ -3579,12 +3819,16 @@ module Prism
     #
     # Represents the parameters of the block.
     #
-    #     -> (a, b = 1; local) { }
-    #         ^^^^^^^^
+    # ```rb
+    # -> (a, b = 1; local) { }
+    #     ^^^^^^^^
     #
-    #     foo do |a, b = 1; local|
-    #             ^^^^^^^^
-    #     end
+    # foo do |a, b = 1; local|
+    #         ^^^^^^^^
+    # end
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#LT4gKGEsIGIgPSAxOyBsb2NhbCkgeyB9Cgpmb28gZG8gfGEsIGIgPSAxOyBsb2NhbHwKCmVuZAo)
     #
     #: () -> ParametersNode?
     def parameters
@@ -3596,12 +3840,16 @@ module Prism
     #
     # Represents the local variables of the block.
     #
-    #     -> (a, b = 1; local) { }
-    #                   ^^^^^
+    # ```rb
+    # -> (a, b = 1; local) { }
+    #               ^^^^^
     #
-    #     foo do |a, b = 1; local|
-    #                       ^^^^^
-    #     end
+    # foo do |a, b = 1; local|
+    #                   ^^^^^
+    # end
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#LT4gKGEsIGIgPSAxOyBsb2NhbCkgeyB9Cgpmb28gZG8gfGEsIGIgPSAxOyBsb2NhbHwKCmVuZAo)
     #
     #: () -> Array[BlockLocalVariableNode]
     def locals
@@ -3614,12 +3862,16 @@ module Prism
     #
     # Represents the opening Location of the block parameters.
     #
-    #     -> (a, b = 1; local) { }
-    #        ^
+    # ```rb
+    # -> (a, b = 1; local) { }
+    #    ^
     #
-    #     foo do |a, b = 1; local|
-    #            ^
-    #     end
+    # foo do |a, b = 1; local|
+    #        ^
+    # end
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#LT4gKGEsIGIgPSAxOyBsb2NhbCkgeyB9Cgpmb28gZG8gfGEsIGIgPSAxOyBsb2NhbHwKCmVuZAo)
     #
     #: () -> Location?
     def opening_loc
@@ -3648,12 +3900,16 @@ module Prism
     #
     # Represents the closing Location of the block parameters.
     #
-    #     -> (a, b = 1; local) { }
-    #                        ^
+    # ```rb
+    # -> (a, b = 1; local) { }
+    #                    ^
     #
-    #     foo do |a, b = 1; local|
-    #                            ^
-    #     end
+    # foo do |a, b = 1; local|
+    #                        ^
+    # end
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#LT4gKGEsIGIgPSAxOyBsb2NhbCkgeyB9Cgpmb28gZG8gfGEsIGIgPSAxOyBsb2NhbHwKCmVuZAo)
     #
     #: () -> Location?
     def closing_loc
@@ -3713,8 +3969,12 @@ module Prism
 
   # Represents the use of the `break` keyword.
   #
-  #     break foo
-  #     ^^^^^^^^^
+  # ```rb
+  # break foo
+  # ^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YnJlYWsgZm9vCg)
   class BreakNode < Node
     # @rbs @arguments: ArgumentsNode?
     # @rbs @keyword_loc: Location
@@ -3828,8 +4088,12 @@ module Prism
     #
     # The arguments to the break statement, if present. These can be any [non-void expressions](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     break foo
-    #           ^^^
+    # ```rb
+    # break foo
+    #       ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YnJlYWsgZm9vCg)
     #
     #: () -> ArgumentsNode?
     def arguments
@@ -3842,8 +4106,12 @@ module Prism
     #
     # The Location of the `break` keyword.
     #
-    #     break foo
-    #     ^^^^^
+    # ```rb
+    # break foo
+    # ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YnJlYWsgZm9vCg)
     #
     #: () -> Location
     def keyword_loc
@@ -3885,8 +4153,12 @@ module Prism
 
   # Represents the use of the `&&=` operator on a call.
   #
-  #     foo.bar &&= value
-  #     ^^^^^^^^^^^^^^^^^
+  # ```rb
+  # foo.bar &&= value
+  # ^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciAmJj0gdmFsdWUK)
   class CallAndWriteNode < Node
     # @rbs @receiver: Prism::node?
     # @rbs @call_operator_loc: Location?
@@ -4051,8 +4323,12 @@ module Prism
     #
     # The object that the method is being called on. This can be either `nil` or any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     foo.bar &&= value
-    #     ^^^
+    # ```rb
+    # foo.bar &&= value
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciAmJj0gdmFsdWUK)
     #
     #: () -> Prism::node?
     def receiver
@@ -4065,8 +4341,12 @@ module Prism
     #
     # Represents the Location of the call operator.
     #
-    #     foo.bar &&= value
-    #        ^
+    # ```rb
+    # foo.bar &&= value
+    #    ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciAmJj0gdmFsdWUK)
     #
     #: () -> Location?
     def call_operator_loc
@@ -4095,8 +4375,12 @@ module Prism
     #
     # Represents the Location of the message.
     #
-    #     foo.bar &&= value
-    #         ^^^
+    # ```rb
+    # foo.bar &&= value
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciAmJj0gdmFsdWUK)
     #
     #: () -> Location?
     def message_loc
@@ -4124,8 +4408,12 @@ module Prism
     #
     # Represents the name of the method being called.
     #
-    #     foo.bar &&= value # read_name `:bar`
-    #         ^^^
+    # ```rb
+    # foo.bar &&= value # read_name `:bar`
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciAmJj0gdmFsdWUgIyByZWFkX25hbWUgYDpiYXJgCg)
     #
     #: () -> Symbol
     def read_name
@@ -4137,8 +4425,12 @@ module Prism
     #
     # Represents the name of the method being written to.
     #
-    #     foo.bar &&= value # write_name `:bar=`
-    #         ^^^
+    # ```rb
+    # foo.bar &&= value # write_name `:bar=`
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciAmJj0gdmFsdWUgIyB3cml0ZV9uYW1lIGA6YmFyPWAK)
     #
     #: () -> Symbol
     def write_name
@@ -4151,8 +4443,12 @@ module Prism
     #
     # Represents the Location of the operator.
     #
-    #     foo.bar &&= value
-    #             ^^^
+    # ```rb
+    # foo.bar &&= value
+    #         ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciAmJj0gdmFsdWUK)
     #
     #: () -> Location
     def operator_loc
@@ -4175,8 +4471,12 @@ module Prism
     #
     # Represents the value being assigned.
     #
-    #     foo.bar &&= value
-    #                 ^^^^^
+    # ```rb
+    # foo.bar &&= value
+    #             ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciAmJj0gdmFsdWUK)
     #
     #: () -> Prism::node
     def value
@@ -4233,23 +4533,27 @@ module Prism
 
   # Represents a method call, in all of the various forms that can take.
   #
-  #     foo
-  #     ^^^
+  # ```rb
+  # foo
+  # ^^^
   #
-  #     foo()
-  #     ^^^^^
+  # foo()
+  # ^^^^^
   #
-  #     +foo
-  #     ^^^^
+  # +foo
+  # ^^^^
   #
-  #     foo + bar
-  #     ^^^^^^^^^
+  # foo + bar
+  # ^^^^^^^^^
   #
-  #     foo.bar
-  #     ^^^^^^^
+  # foo.bar
+  # ^^^^^^^
   #
-  #     foo&.bar
-  #     ^^^^^^^^
+  # foo&.bar
+  # ^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vCgpmb28oKQoKK2ZvbwoKZm9vICsgYmFyCgpmb28uYmFyCgpmb28mLmJhcgo)
   class CallNode < Node
     # @rbs @receiver: Prism::node?
     # @rbs @call_operator_loc: Location?
@@ -4424,14 +4728,18 @@ module Prism
     #
     # The object that the method is being called on. This can be either `nil` or any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     foo.bar
-    #     ^^^
+    # ```rb
+    # foo.bar
+    # ^^^
     #
-    #     +foo
-    #      ^^^
+    # +foo
+    #  ^^^
     #
-    #     foo + bar
-    #     ^^^
+    # foo + bar
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhcgoKK2ZvbwoKZm9vICsgYmFyCg)
     #
     #: () -> Prism::node?
     def receiver
@@ -4444,11 +4752,15 @@ module Prism
     #
     # Represents the Location of the call operator.
     #
-    #     foo.bar
-    #        ^
+    # ```rb
+    # foo.bar
+    #    ^
     #
-    #     foo&.bar
-    #        ^^
+    # foo&.bar
+    #    ^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhcgoKZm9vJi5iYXIK)
     #
     #: () -> Location?
     def call_operator_loc
@@ -4476,8 +4788,12 @@ module Prism
     #
     # Represents the name of the method being called.
     #
-    #     foo.bar # name `:foo`
-    #     ^^^
+    # ```rb
+    # foo.bar # name `:foo`
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciAjIG5hbWUgYDpmb29gCg)
     #
     #: () -> Symbol
     def name
@@ -4490,8 +4806,12 @@ module Prism
     #
     # Represents the Location of the message.
     #
-    #     foo.bar
-    #         ^^^
+    # ```rb
+    # foo.bar
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhcgo)
     #
     #: () -> Location?
     def message_loc
@@ -4520,8 +4840,12 @@ module Prism
     #
     # Represents the Location of the left parenthesis.
     #
-    #     foo(bar)
-    #        ^
+    # ```rb
+    # foo(bar)
+    #    ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vKGJhcikK)
     #
     #: () -> Location?
     def opening_loc
@@ -4549,8 +4873,12 @@ module Prism
     #
     # Represents the arguments to the method call. These can be any [non-void expressions](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     foo(bar)
-    #         ^^^
+    # ```rb
+    # foo(bar)
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vKGJhcikK)
     #
     #: () -> ArgumentsNode?
     def arguments
@@ -4563,8 +4891,12 @@ module Prism
     #
     # Represents the Location of the right parenthesis.
     #
-    #     foo(bar)
-    #            ^
+    # ```rb
+    # foo(bar)
+    #        ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vKGJhcikK)
     #
     #: () -> Location?
     def closing_loc
@@ -4593,11 +4925,15 @@ module Prism
     #
     # Represents the Location of the equal sign, in the case that this is an attribute write.
     #
-    #     foo.bar = value
-    #             ^
+    # ```rb
+    # foo.bar = value
+    #         ^
     #
-    #     foo[bar] = value
-    #              ^
+    # foo[bar] = value
+    #          ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciA9IHZhbHVlCgpmb29bYmFyXSA9IHZhbHVlCg)
     #
     #: () -> Location?
     def equal_loc
@@ -4625,8 +4961,12 @@ module Prism
     #
     # Represents the block that is being passed to the method.
     #
-    #     foo { |a| a }
-    #         ^^^^^^^^^
+    # ```rb
+    # foo { |a| a }
+    #     ^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIHsgfGF8IGEgfQo)
     #
     #: () -> (BlockNode | BlockArgumentNode)?
     def block
@@ -4705,8 +5045,12 @@ module Prism
 
   # Represents the use of an assignment operator on a call.
   #
-  #     foo.bar += baz
-  #     ^^^^^^^^^^^^^^
+  # ```rb
+  # foo.bar += baz
+  # ^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciArPSBiYXoK)
   class CallOperatorWriteNode < Node
     # @rbs @receiver: Prism::node?
     # @rbs @call_operator_loc: Location?
@@ -4873,8 +5217,12 @@ module Prism
     #
     # The object that the method is being called on. This can be either `nil` or any [non-void expressions](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     foo.bar += value
-    #     ^^^
+    # ```rb
+    # foo.bar += value
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciArPSB2YWx1ZQo)
     #
     #: () -> Prism::node?
     def receiver
@@ -4887,8 +5235,12 @@ module Prism
     #
     # Represents the Location of the call operator.
     #
-    #     foo.bar += value
-    #        ^
+    # ```rb
+    # foo.bar += value
+    #    ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciArPSB2YWx1ZQo)
     #
     #: () -> Location?
     def call_operator_loc
@@ -4917,8 +5269,12 @@ module Prism
     #
     # Represents the Location of the message.
     #
-    #     foo.bar += value
-    #         ^^^
+    # ```rb
+    # foo.bar += value
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciArPSB2YWx1ZQo)
     #
     #: () -> Location?
     def message_loc
@@ -4946,8 +5302,12 @@ module Prism
     #
     # Represents the name of the method being called.
     #
-    #     foo.bar += value # read_name `:bar`
-    #         ^^^
+    # ```rb
+    # foo.bar += value # read_name `:bar`
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciArPSB2YWx1ZSAjIHJlYWRfbmFtZSBgOmJhcmAK)
     #
     #: () -> Symbol
     def read_name
@@ -4959,8 +5319,12 @@ module Prism
     #
     # Represents the name of the method being written to.
     #
-    #     foo.bar += value # write_name `:bar=`
-    #         ^^^
+    # ```rb
+    # foo.bar += value # write_name `:bar=`
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciArPSB2YWx1ZSAjIHdyaXRlX25hbWUgYDpiYXI9YAo)
     #
     #: () -> Symbol
     def write_name
@@ -4972,8 +5336,12 @@ module Prism
     #
     # Represents the binary operator being used.
     #
-    #     foo.bar += value # binary_operator `:+`
-    #             ^
+    # ```rb
+    # foo.bar += value # binary_operator `:+`
+    #         ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciArPSB2YWx1ZSAjIGJpbmFyeV9vcGVyYXRvciBgOitgCg)
     #
     #: () -> Symbol
     def binary_operator
@@ -4986,8 +5354,12 @@ module Prism
     #
     # Represents the Location of the binary operator.
     #
-    #     foo.bar += value
-    #             ^^
+    # ```rb
+    # foo.bar += value
+    #         ^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciArPSB2YWx1ZQo)
     #
     #: () -> Location
     def binary_operator_loc
@@ -5010,8 +5382,12 @@ module Prism
     #
     # Represents the value being assigned.
     #
-    #     foo.bar += value
-    #                ^^^^^
+    # ```rb
+    # foo.bar += value
+    #            ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciArPSB2YWx1ZQo)
     #
     #: () -> Prism::node
     def value
@@ -5059,8 +5435,12 @@ module Prism
 
   # Represents the use of the `||=` operator on a call.
   #
-  #     foo.bar ||= value
-  #     ^^^^^^^^^^^^^^^^^
+  # ```rb
+  # foo.bar ||= value
+  # ^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciB8fD0gdmFsdWUK)
   class CallOrWriteNode < Node
     # @rbs @receiver: Prism::node?
     # @rbs @call_operator_loc: Location?
@@ -5225,8 +5605,12 @@ module Prism
     #
     # The object that the method is being called on. This can be either `nil` or any [non-void expressions](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     foo.bar ||= value
-    #     ^^^
+    # ```rb
+    # foo.bar ||= value
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciB8fD0gdmFsdWUK)
     #
     #: () -> Prism::node?
     def receiver
@@ -5239,8 +5623,12 @@ module Prism
     #
     # Represents the Location of the call operator.
     #
-    #     foo.bar ||= value
-    #        ^
+    # ```rb
+    # foo.bar ||= value
+    #    ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciB8fD0gdmFsdWUK)
     #
     #: () -> Location?
     def call_operator_loc
@@ -5269,8 +5657,12 @@ module Prism
     #
     # Represents the Location of the message.
     #
-    #     foo.bar ||= value
-    #         ^^^
+    # ```rb
+    # foo.bar ||= value
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciB8fD0gdmFsdWUK)
     #
     #: () -> Location?
     def message_loc
@@ -5298,8 +5690,12 @@ module Prism
     #
     # Represents the name of the method being called.
     #
-    #     foo.bar ||= value # read_name `:bar`
-    #         ^^^
+    # ```rb
+    # foo.bar ||= value # read_name `:bar`
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciB8fD0gdmFsdWUgIyByZWFkX25hbWUgYDpiYXJgCg)
     #
     #: () -> Symbol
     def read_name
@@ -5311,8 +5707,12 @@ module Prism
     #
     # Represents the name of the method being written to.
     #
-    #     foo.bar ||= value # write_name `:bar=`
-    #         ^^^
+    # ```rb
+    # foo.bar ||= value # write_name `:bar=`
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciB8fD0gdmFsdWUgIyB3cml0ZV9uYW1lIGA6YmFyPWAK)
     #
     #: () -> Symbol
     def write_name
@@ -5325,8 +5725,12 @@ module Prism
     #
     # Represents the Location of the operator.
     #
-    #     foo.bar ||= value
-    #             ^^^
+    # ```rb
+    # foo.bar ||= value
+    #         ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciB8fD0gdmFsdWUK)
     #
     #: () -> Location
     def operator_loc
@@ -5349,8 +5753,12 @@ module Prism
     #
     # Represents the value being assigned.
     #
-    #     foo.bar ||= value
-    #                 ^^^^^
+    # ```rb
+    # foo.bar ||= value
+    #             ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciB8fD0gdmFsdWUK)
     #
     #: () -> Prism::node
     def value
@@ -5407,16 +5815,20 @@ module Prism
 
   # Represents assigning to a method call.
   #
-  #     foo.bar, = 1
+  # ```rb
+  # foo.bar, = 1
+  # ^^^^^^^
+  #
+  # begin
+  # rescue => foo.bar
+  #           ^^^^^^^
+  # end
+  #
+  # for foo.bar in baz do end
   #     ^^^^^^^
+  # ```
   #
-  #     begin
-  #     rescue => foo.bar
-  #               ^^^^^^^
-  #     end
-  #
-  #     for foo.bar in baz do end
-  #         ^^^^^^^
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciwgPSAxCgpiZWdpbgpyZXNjdWUgPT4gZm9vLmJhcgoKZW5kCgpmb3IgZm9vLmJhciBpbiBiYXogZG8gZW5kCg)
   class CallTargetNode < Node
     # @rbs @receiver: Prism::node
     # @rbs @call_operator_loc: Location
@@ -5567,8 +5979,12 @@ module Prism
     #
     # The object that the method is being called on. This can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     foo.bar = 1
-    #     ^^^
+    # ```rb
+    # foo.bar = 1
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciA9IDEK)
     #
     #: () -> Prism::node
     def receiver
@@ -5581,8 +5997,12 @@ module Prism
     #
     # Represents the Location of the call operator.
     #
-    #     foo.bar = 1
-    #        ^
+    # ```rb
+    # foo.bar = 1
+    #    ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciA9IDEK)
     #
     #: () -> Location
     def call_operator_loc
@@ -5605,8 +6025,12 @@ module Prism
     #
     # Represents the name of the method being called.
     #
-    #     foo.bar = 1 # name `:foo`
-    #     ^^^
+    # ```rb
+    # foo.bar = 1 # name `:foo`
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciA9IDEgIyBuYW1lIGA6Zm9vYAo)
     #
     #: () -> Symbol
     def name
@@ -5619,8 +6043,12 @@ module Prism
     #
     # Represents the Location of the message.
     #
-    #     foo.bar = 1
-    #         ^^^
+    # ```rb
+    # foo.bar = 1
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhciA9IDEK)
     #
     #: () -> Location
     def message_loc
@@ -5675,8 +6103,12 @@ module Prism
 
   # Represents assigning to a local variable in pattern matching.
   #
-  #     foo => [bar => baz]
-  #             ^^^^^^^^^^
+  # ```rb
+  # foo => [bar => baz]
+  #         ^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IFtiYXIgPT4gYmF6XQo)
   class CapturePatternNode < Node
     # @rbs @value: Prism::node
     # @rbs @target: LocalVariableTargetNode
@@ -5792,8 +6224,12 @@ module Prism
     #
     # Represents the value to capture.
     #
-    #     foo => bar
-    #            ^^^
+    # ```rb
+    # foo => bar
+    #        ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IGJhcgo)
     #
     #: () -> Prism::node
     def value
@@ -5805,8 +6241,12 @@ module Prism
     #
     # Represents the target of the capture.
     #
-    #     foo => bar
-    #     ^^^
+    # ```rb
+    # foo => bar
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IGJhcgo)
     #
     #: () -> LocalVariableTargetNode
     def target
@@ -5819,8 +6259,12 @@ module Prism
     #
     # Represents the Location of the `=>` operator.
     #
-    #     foo => bar
-    #         ^^
+    # ```rb
+    # foo => bar
+    #     ^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IGJhcgo)
     #
     #: () -> Location
     def operator_loc
@@ -5863,10 +6307,14 @@ module Prism
 
   # Represents the use of a case statement for pattern matching.
   #
-  #     case true
-  #     in false
-  #     end
-  #     ^^^^^^^^^
+  # ```rb
+  # case true
+  # in false
+  # end
+  # ^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlCmluIGZhbHNlCmVuZAo)
   class CaseMatchNode < Node
     # @rbs @predicate: Prism::node?
     # @rbs @conditions: Array[InNode]
@@ -5994,8 +6442,12 @@ module Prism
     #
     # Represents the predicate of the case match. This can be either `nil` or any [non-void expressions](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     case true; in false; end
-    #          ^^^^
+    # ```rb
+    # case true; in false; end
+    #      ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlOyBpbiBmYWxzZTsgZW5kCg)
     #
     #: () -> Prism::node?
     def predicate
@@ -6007,8 +6459,12 @@ module Prism
     #
     # Represents the conditions of the case match.
     #
-    #     case true; in false; end
-    #                ^^^^^^^^
+    # ```rb
+    # case true; in false; end
+    #            ^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlOyBpbiBmYWxzZTsgZW5kCg)
     #
     #: () -> Array[InNode]
     def conditions
@@ -6020,8 +6476,12 @@ module Prism
     #
     # Represents the else clause of the case match.
     #
-    #     case true; in false; else; end
-    #                          ^^^^^^^^^
+    # ```rb
+    # case true; in false; else; end
+    #                      ^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlOyBpbiBmYWxzZTsgZWxzZTsgZW5kCg)
     #
     #: () -> ElseNode?
     def else_clause
@@ -6034,8 +6494,12 @@ module Prism
     #
     # Represents the Location of the `case` keyword.
     #
-    #     case true; in false; end
-    #     ^^^^
+    # ```rb
+    # case true; in false; end
+    # ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlOyBpbiBmYWxzZTsgZW5kCg)
     #
     #: () -> Location
     def case_keyword_loc
@@ -6059,8 +6523,12 @@ module Prism
     #
     # Represents the Location of the `end` keyword.
     #
-    #     case true; in false; end
-    #                          ^^^
+    # ```rb
+    # case true; in false; end
+    #                      ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlOyBpbiBmYWxzZTsgZW5kCg)
     #
     #: () -> Location
     def end_keyword_loc
@@ -6116,10 +6584,14 @@ module Prism
 
   # Represents the use of a case statement.
   #
-  #     case true
-  #     when false
-  #     end
-  #     ^^^^^^^^^^
+  # ```rb
+  # case true
+  # when false
+  # end
+  # ^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlCndoZW4gZmFsc2UKZW5kCg)
   class CaseNode < Node
     # @rbs @predicate: Prism::node?
     # @rbs @conditions: Array[WhenNode]
@@ -6247,8 +6719,12 @@ module Prism
     #
     # Represents the predicate of the case statement. This can be either `nil` or any [non-void expressions](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     case true; when false; end
-    #          ^^^^
+    # ```rb
+    # case true; when false; end
+    #      ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlOyB3aGVuIGZhbHNlOyBlbmQK)
     #
     #: () -> Prism::node?
     def predicate
@@ -6260,8 +6736,12 @@ module Prism
     #
     # Represents the conditions of the case statement.
     #
-    #     case true; when false; end
-    #                ^^^^^^^^^^
+    # ```rb
+    # case true; when false; end
+    #            ^^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlOyB3aGVuIGZhbHNlOyBlbmQK)
     #
     #: () -> Array[WhenNode]
     def conditions
@@ -6273,8 +6753,12 @@ module Prism
     #
     # Represents the else clause of the case statement.
     #
-    #     case true; when false; else; end
-    #                            ^^^^^^^^^
+    # ```rb
+    # case true; when false; else; end
+    #                        ^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlOyB3aGVuIGZhbHNlOyBlbHNlOyBlbmQK)
     #
     #: () -> ElseNode?
     def else_clause
@@ -6287,8 +6771,12 @@ module Prism
     #
     # Represents the Location of the `case` keyword.
     #
-    #     case true; when false; end
-    #     ^^^^
+    # ```rb
+    # case true; when false; end
+    # ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlOyB3aGVuIGZhbHNlOyBlbmQK)
     #
     #: () -> Location
     def case_keyword_loc
@@ -6312,8 +6800,12 @@ module Prism
     #
     # Represents the Location of the `end` keyword.
     #
-    #     case true; when false; end
-    #                            ^^^
+    # ```rb
+    # case true; when false; end
+    #                        ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlOyB3aGVuIGZhbHNlOyBlbmQK)
     #
     #: () -> Location
     def end_keyword_loc
@@ -6369,8 +6861,12 @@ module Prism
 
   # Represents a class declaration involving the `class` keyword.
   #
-  #     class Foo end
-  #     ^^^^^^^^^^^^^
+  # ```rb
+  # class Foo end
+  # ^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2xhc3MgRm9vIGVuZAo)
   class ClassNode < Node
     # @rbs @locals: Array[Symbol]
     # @rbs @class_keyword_loc: Location
@@ -6519,8 +7015,12 @@ module Prism
     #
     # Represents the Location of the `class` keyword.
     #
-    #     class Foo end
-    #     ^^^^^
+    # ```rb
+    # class Foo end
+    # ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2xhc3MgRm9vIGVuZAo)
     #
     #: () -> Location
     def class_keyword_loc
@@ -6554,8 +7054,12 @@ module Prism
     #
     # Represents the Location of the `<` operator.
     #
-    #     class Foo < Bar
-    #               ^
+    # ```rb
+    # class Foo < Bar
+    #           ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2xhc3MgRm9vIDwgQmFyCg)
     #
     #: () -> Location?
     def inheritance_operator_loc
@@ -6583,8 +7087,12 @@ module Prism
     #
     # Represents the superclass of the class.
     #
-    #     class Foo < Bar
-    #                 ^^^
+    # ```rb
+    # class Foo < Bar
+    #             ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2xhc3MgRm9vIDwgQmFyCg)
     #
     #: () -> Prism::node?
     def superclass
@@ -6596,8 +7104,12 @@ module Prism
     #
     # Represents the body of the class.
     #
-    #     class Foo; bar; end
-    #                ^^^
+    # ```rb
+    # class Foo; bar; end
+    #            ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2xhc3MgRm9vOyBiYXI7IGVuZAo)
     #
     #: () -> (StatementsNode | BeginNode)?
     def body
@@ -6610,8 +7122,12 @@ module Prism
     #
     # Represents the Location of the `end` keyword.
     #
-    #     class Foo end
-    #               ^^^
+    # ```rb
+    # class Foo end
+    #           ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2xhc3MgRm9vIGVuZAo)
     #
     #: () -> Location
     def end_keyword_loc
@@ -6634,7 +7150,11 @@ module Prism
     #
     # The name of the class.
     #
-    #     class Foo end # name `:Foo`
+    # ```rb
+    # class Foo end # name `:Foo`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2xhc3MgRm9vIGVuZCAjIG5hbWUgYDpGb29gCg)
     #
     #: () -> Symbol
     def name
@@ -6692,8 +7212,12 @@ module Prism
 
   # Represents the use of the `&&=` operator for assignment to a class variable.
   #
-  #     @@target &&= value
-  #     ^^^^^^^^^^^^^^^^^^
+  # ```rb
+  # @@target &&= value
+  # ^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QEB0YXJnZXQgJiY9IHZhbHVlCg)
   class ClassVariableAndWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -6811,8 +7335,12 @@ module Prism
     #
     # The name of the class variable, which is a `@@` followed by an [identifier](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#identifiers).
     #
-    #     @@target &&= value # name `:@@target`
-    #     ^^^^^^^^
+    # ```rb
+    # @@target &&= value # name `:@@target`
+    # ^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QEB0YXJnZXQgJiY9IHZhbHVlICMgbmFtZSBgOkBAdGFyZ2V0YAo)
     #
     #: () -> Symbol
     def name
@@ -6825,8 +7353,12 @@ module Prism
     #
     # Represents the Location of the variable name.
     #
-    #     @@target &&= value
-    #     ^^^^^^^^
+    # ```rb
+    # @@target &&= value
+    # ^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QEB0YXJnZXQgJiY9IHZhbHVlCg)
     #
     #: () -> Location
     def name_loc
@@ -6850,8 +7382,12 @@ module Prism
     #
     # Represents the Location of the `&&=` operator.
     #
-    #     @@target &&= value
-    #              ^^^
+    # ```rb
+    # @@target &&= value
+    #          ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QEB0YXJnZXQgJiY9IHZhbHVlCg)
     #
     #: () -> Location
     def operator_loc
@@ -6874,8 +7410,12 @@ module Prism
     #
     # Represents the value being assigned. This can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     @@target &&= value
-    #                  ^^^^^
+    # ```rb
+    # @@target &&= value
+    #              ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QEB0YXJnZXQgJiY9IHZhbHVlCg)
     #
     #: () -> Prism::node
     def value
@@ -6908,8 +7448,12 @@ module Prism
 
   # Represents assigning to a class variable using an operator that isn't `=`.
   #
-  #     @@target += value
-  #     ^^^^^^^^^^^^^^^^^
+  # ```rb
+  # @@target += value
+  # ^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QEB0YXJnZXQgKz0gdmFsdWUK)
   class ClassVariableOperatorWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -7115,8 +7659,12 @@ module Prism
 
   # Represents the use of the `||=` operator for assignment to a class variable.
   #
-  #     @@target ||= value
-  #     ^^^^^^^^^^^^^^^^^^
+  # ```rb
+  # @@target ||= value
+  # ^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QEB0YXJnZXQgfHw9IHZhbHVlCg)
   class ClassVariableOrWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -7319,8 +7867,12 @@ module Prism
 
   # Represents referencing a class variable.
   #
-  #     @@foo
-  #     ^^^^^
+  # ```rb
+  # @@foo
+  # ^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QEBmb28K)
   class ClassVariableReadNode < Node
     # @rbs @name: Symbol
 
@@ -7427,9 +7979,13 @@ module Prism
     #
     # The name of the class variable, which is a `@@` followed by an [identifier](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#identifiers).
     #
-    #     @@abc   # name `:@@abc`
+    # ```rb
+    # @@abc   # name `:@@abc`
     #
-    #     @@_test # name `:@@_test`
+    # @@_test # name `:@@_test`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QEBhYmMgICAjIG5hbWUgYDpAQGFiY2AKCkBAX3Rlc3QgIyBuYW1lIGA6QEBfdGVzdGAK)
     #
     #: () -> Symbol
     def name
@@ -7449,8 +8005,12 @@ module Prism
 
   # Represents writing to a class variable in a context that doesn't have an explicit value.
   #
-  #     @@foo, @@bar = baz
-  #     ^^^^^  ^^^^^
+  # ```rb
+  # @@foo, @@bar = baz
+  # ^^^^^  ^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QEBmb28sIEBAYmFyID0gYmF6Cg)
   class ClassVariableTargetNode < Node
     # @rbs @name: Symbol
 
@@ -7575,8 +8135,12 @@ module Prism
 
   # Represents writing to a class variable.
   #
-  #     @@foo = 1
-  #     ^^^^^^^^^
+  # ```rb
+  # @@foo = 1
+  # ^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QEBmb28gPSAxCg)
   class ClassVariableWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -7694,9 +8258,13 @@ module Prism
     #
     # The name of the class variable, which is a `@@` followed by an [identifier](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#identifiers).
     #
-    #     @@abc = 123     # name `@@abc`
+    # ```rb
+    # @@abc = 123     # name `@@abc`
     #
-    #     @@_test = :test # name `@@_test`
+    # @@_test = :test # name `@@_test`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QEBhYmMgPSAxMjMgICAgICMgbmFtZSBgQEBhYmNgCgpAQF90ZXN0ID0gOnRlc3QgIyBuYW1lIGBAQF90ZXN0YAo)
     #
     #: () -> Symbol
     def name
@@ -7709,8 +8277,12 @@ module Prism
     #
     # The Location of the variable name.
     #
-    #     @@foo = :bar
-    #     ^^^^^
+    # ```rb
+    # @@foo = :bar
+    # ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QEBmb28gPSA6YmFyCg)
     #
     #: () -> Location
     def name_loc
@@ -7733,11 +8305,15 @@ module Prism
     #
     # The value to write to the class variable. This can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     @@foo = :bar
-    #             ^^^^
+    # ```rb
+    # @@foo = :bar
+    #         ^^^^
     #
-    #     @@_xyz = 123
-    #              ^^^
+    # @@_xyz = 123
+    #          ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QEBmb28gPSA6YmFyCgpAQF94eXogPSAxMjMK)
     #
     #: () -> Prism::node
     def value
@@ -7750,8 +8326,12 @@ module Prism
     #
     # The Location of the `=` operator.
     #
-    #     @@foo = :bar
-    #           ^
+    # ```rb
+    # @@foo = :bar
+    #       ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QEBmb28gPSA6YmFyCg)
     #
     #: () -> Location
     def operator_loc
@@ -7795,8 +8375,12 @@ module Prism
 
   # Represents the use of the `&&=` operator for assignment to a constant.
   #
-  #     Target &&= value
-  #     ^^^^^^^^^^^^^^^^
+  # ```rb
+  # Target &&= value
+  # ^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#VGFyZ2V0ICYmPSB2YWx1ZQo)
   class ConstantAndWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -7999,8 +8583,12 @@ module Prism
 
   # Represents assigning to a constant using an operator that isn't `=`.
   #
-  #     Target += value
-  #     ^^^^^^^^^^^^^^^
+  # ```rb
+  # Target += value
+  # ^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#VGFyZ2V0ICs9IHZhbHVlCg)
   class ConstantOperatorWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -8206,8 +8794,12 @@ module Prism
 
   # Represents the use of the `||=` operator for assignment to a constant.
   #
-  #     Target ||= value
-  #     ^^^^^^^^^^^^^^^^
+  # ```rb
+  # Target ||= value
+  # ^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#VGFyZ2V0IHx8PSB2YWx1ZQo)
   class ConstantOrWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -8410,8 +9002,12 @@ module Prism
 
   # Represents the use of the `&&=` operator for assignment to a constant path.
   #
-  #     Parent::Child &&= value
-  #     ^^^^^^^^^^^^^^^^^^^^^^^
+  # ```rb
+  # Parent::Child &&= value
+  # ^^^^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#UGFyZW50OjpDaGlsZCAmJj0gdmFsdWUK)
   class ConstantPathAndWriteNode < Node
     # @rbs @target: ConstantPathNode
     # @rbs @operator_loc: Location
@@ -8589,8 +9185,12 @@ module Prism
 
   # Represents accessing a constant through a path of `::` operators.
   #
-  #     Foo::Bar
-  #     ^^^^^^^^
+  # ```rb
+  # Foo::Bar
+  # ^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Rm9vOjpCYXIK)
   class ConstantPathNode < Node
     # @rbs @parent: Prism::node?
     # @rbs @name: Symbol?
@@ -8710,14 +9310,18 @@ module Prism
     #
     # The left-hand node of the path, if present. It can be `nil` or any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression). It will be `nil` when the constant lookup is at the root of the module tree.
     #
-    #     Foo::Bar
-    #     ^^^
+    # ```rb
+    # Foo::Bar
+    # ^^^
     #
-    #     self::Test
-    #     ^^^^
+    # self::Test
+    # ^^^^
     #
-    #     a.b::C
-    #     ^^^
+    # a.b::C
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Rm9vOjpCYXIKCnNlbGY6OlRlc3QKCmEuYjo6Qwo)
     #
     #: () -> Prism::node?
     def parent
@@ -8740,11 +9344,15 @@ module Prism
     #
     # The Location of the `::` delimiter.
     #
-    #     ::Foo
-    #     ^^
+    # ```rb
+    # ::Foo
+    # ^^
     #
-    #     One::Two
-    #        ^^
+    # One::Two
+    #    ^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#OjpGb28KCk9uZTo6VHdvCg)
     #
     #: () -> Location
     def delimiter_loc
@@ -8768,11 +9376,15 @@ module Prism
     #
     # The Location of the name of the constant.
     #
-    #     ::Foo
-    #       ^^^
+    # ```rb
+    # ::Foo
+    #   ^^^
     #
-    #     One::Two
-    #          ^^^
+    # One::Two
+    #      ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#OjpGb28KCk9uZTo6VHdvCg)
     #
     #: () -> Location
     def name_loc
@@ -8816,8 +9428,12 @@ module Prism
 
   # Represents assigning to a constant path using an operator that isn't `=`.
   #
-  #     Parent::Child += value
-  #     ^^^^^^^^^^^^^^^^^^^^^^
+  # ```rb
+  # Parent::Child += value
+  # ^^^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#UGFyZW50OjpDaGlsZCArPSB2YWx1ZQo)
   class ConstantPathOperatorWriteNode < Node
     # @rbs @target: ConstantPathNode
     # @rbs @binary_operator_loc: Location
@@ -8998,8 +9614,12 @@ module Prism
 
   # Represents the use of the `||=` operator for assignment to a constant path.
   #
-  #     Parent::Child ||= value
-  #     ^^^^^^^^^^^^^^^^^^^^^^^
+  # ```rb
+  # Parent::Child ||= value
+  # ^^^^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#UGFyZW50OjpDaGlsZCB8fD0gdmFsdWUK)
   class ConstantPathOrWriteNode < Node
     # @rbs @target: ConstantPathNode
     # @rbs @operator_loc: Location
@@ -9177,8 +9797,12 @@ module Prism
 
   # Represents writing to a constant path in a context that doesn't have an explicit value.
   #
-  #     Foo::Foo, Bar::Bar = baz
-  #     ^^^^^^^^  ^^^^^^^^
+  # ```rb
+  # Foo::Foo, Bar::Bar = baz
+  # ^^^^^^^^  ^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Rm9vOjpGb28sIEJhcjo6QmFyID0gYmF6Cg)
   class ConstantPathTargetNode < Node
     # @rbs @parent: Prism::node?
     # @rbs @name: Symbol?
@@ -9383,14 +10007,18 @@ module Prism
 
   # Represents writing to a constant path.
   #
-  #     ::Foo = 1
-  #     ^^^^^^^^^
+  # ```rb
+  # ::Foo = 1
+  # ^^^^^^^^^
   #
-  #     Foo::Bar = 1
-  #     ^^^^^^^^^^^^
+  # Foo::Bar = 1
+  # ^^^^^^^^^^^^
   #
-  #     ::Foo::Bar = 1
-  #     ^^^^^^^^^^^^^^
+  # ::Foo::Bar = 1
+  # ^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#OjpGb28gPSAxCgpGb286OkJhciA9IDEKCjo6Rm9vOjpCYXIgPSAxCg)
   class ConstantPathWriteNode < Node
     # @rbs @target: ConstantPathNode
     # @rbs @operator_loc: Location
@@ -9506,11 +10134,15 @@ module Prism
     #
     # A node representing the constant path being written to.
     #
-    #     Foo::Bar = 1
-    #     ^^^^^^^^
+    # ```rb
+    # Foo::Bar = 1
+    # ^^^^^^^^
     #
-    #     ::Foo = :abc
-    #     ^^^^^
+    # ::Foo = :abc
+    # ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Rm9vOjpCYXIgPSAxCgo6OkZvbyA9IDphYmMK)
     #
     #: () -> ConstantPathNode
     def target
@@ -9523,8 +10155,12 @@ module Prism
     #
     # The Location of the `=` operator.
     #
-    #     ::ABC = 123
-    #           ^
+    # ```rb
+    # ::ABC = 123
+    #       ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#OjpBQkMgPSAxMjMK)
     #
     #: () -> Location
     def operator_loc
@@ -9547,8 +10183,12 @@ module Prism
     #
     # The value to write to the constant path. It can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     FOO::BAR = :abc
-    #                ^^^^
+    # ```rb
+    # FOO::BAR = :abc
+    #            ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Rk9POjpCQVIgPSA6YWJjCg)
     #
     #: () -> Prism::node
     def value
@@ -9580,8 +10220,12 @@ module Prism
 
   # Represents referencing a constant.
   #
-  #     Foo
-  #     ^^^
+  # ```rb
+  # Foo
+  # ^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Rm9vCg)
   class ConstantReadNode < Node
     # @rbs @name: Symbol
 
@@ -9688,9 +10332,13 @@ module Prism
     #
     # The name of the [constant](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#constants).
     #
-    #     X              # name `:X`
+    # ```rb
+    # X              # name `:X`
     #
-    #     SOME_CONSTANT  # name `:SOME_CONSTANT`
+    # SOME_CONSTANT  # name `:SOME_CONSTANT`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#WCAgICAgICAgICAgICAgIyBuYW1lIGA6WGAKClNPTUVfQ09OU1RBTlQgICMgbmFtZSBgOlNPTUVfQ09OU1RBTlRgCg)
     #
     #: () -> Symbol
     def name
@@ -9710,8 +10358,12 @@ module Prism
 
   # Represents writing to a constant in a context that doesn't have an explicit value.
   #
-  #     Foo, Bar = baz
-  #     ^^^  ^^^
+  # ```rb
+  # Foo, Bar = baz
+  # ^^^  ^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Rm9vLCBCYXIgPSBiYXoK)
   class ConstantTargetNode < Node
     # @rbs @name: Symbol
 
@@ -9836,8 +10488,12 @@ module Prism
 
   # Represents writing to a constant.
   #
-  #     Foo = 1
-  #     ^^^^^^^
+  # ```rb
+  # Foo = 1
+  # ^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Rm9vID0gMQo)
   class ConstantWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -9955,9 +10611,13 @@ module Prism
     #
     # The name of the [constant](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#constants).
     #
-    #     Foo = :bar # name `:Foo`
+    # ```rb
+    # Foo = :bar # name `:Foo`
     #
-    #     XYZ = 1    # name `:XYZ`
+    # XYZ = 1    # name `:XYZ`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Rm9vID0gOmJhciAjIG5hbWUgYDpGb29gCgpYWVogPSAxICAgICMgbmFtZSBgOlhZWmAK)
     #
     #: () -> Symbol
     def name
@@ -9970,8 +10630,12 @@ module Prism
     #
     # The Location of the constant name.
     #
-    #     FOO = 1
-    #     ^^^
+    # ```rb
+    # FOO = 1
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Rk9PID0gMQo)
     #
     #: () -> Location
     def name_loc
@@ -9994,11 +10658,15 @@ module Prism
     #
     # The value to write to the constant. It can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     FOO = :bar
-    #           ^^^^
+    # ```rb
+    # FOO = :bar
+    #       ^^^^
     #
-    #     MyClass = Class.new
-    #               ^^^^^^^^^
+    # MyClass = Class.new
+    #           ^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Rk9PID0gOmJhcgoKTXlDbGFzcyA9IENsYXNzLm5ldwo)
     #
     #: () -> Prism::node
     def value
@@ -10011,8 +10679,12 @@ module Prism
     #
     # The Location of the `=` operator.
     #
-    #     FOO = :bar
-    #         ^
+    # ```rb
+    # FOO = :bar
+    #     ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Rk9PID0gOmJhcgo)
     #
     #: () -> Location
     def operator_loc
@@ -10056,9 +10728,13 @@ module Prism
 
   # Represents a method definition.
   #
-  #     def method
-  #     end
-  #     ^^^^^^^^^^
+  # ```rb
+  # def method
+  # end
+  # ^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIG1ldGhvZAplbmQK)
   class DefNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -10520,8 +11196,12 @@ module Prism
 
   # Represents the use of the `defined?` keyword.
   #
-  #     defined?(a)
-  #     ^^^^^^^^^^^
+  # ```rb
+  # defined?(a)
+  # ^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmaW5lZD8oYSkK)
   class DefinedNode < Node
     # @rbs @lparen_loc: Location?
     # @rbs @value: Prism::node
@@ -10768,8 +11448,12 @@ module Prism
 
   # Represents an `else` clause in a `case`, `if`, or `unless` statement.
   #
-  #     if a then b else c end
-  #                 ^^^^^^^^^^
+  # ```rb
+  # if a then b else c end
+  #             ^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#aWYgYSB0aGVuIGIgZWxzZSBjIGVuZAo)
   class ElseNode < Node
     # @rbs @else_keyword_loc: Location
     # @rbs @statements: StatementsNode?
@@ -10976,8 +11660,12 @@ module Prism
 
   # Represents an interpolated set of statements.
   #
-  #     "foo #{bar}"
-  #          ^^^^^^
+  # ```rb
+  # "foo #{bar}"
+  #      ^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ImZvbyAje2Jhcn0iCg)
   class EmbeddedStatementsNode < Node
     # @rbs @opening_loc: Location
     # @rbs @statements: StatementsNode?
@@ -11179,8 +11867,12 @@ module Prism
 
   # Represents an interpolated variable.
   #
-  #     "foo #@bar"
-  #          ^^^^^
+  # ```rb
+  # "foo #@bar"
+  #      ^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ImZvbyAjQGJhciIK)
   class EmbeddedVariableNode < Node
     # @rbs @operator_loc: Location
     # @rbs @variable: (InstanceVariableReadNode | ClassVariableReadNode | GlobalVariableReadNode | BackReferenceReadNode | NumberedReferenceReadNode)
@@ -11343,12 +12035,16 @@ module Prism
 
   # Represents an `ensure` clause in a `begin` statement.
   #
-  #     begin
-  #       foo
-  #     ensure
-  #     ^^^^^^
-  #       bar
-  #     end
+  # ```rb
+  # begin
+  #   foo
+  # ensure
+  # ^^^^^^
+  #   bar
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YmVnaW4KICBmb28KZW5zdXJlCgogIGJhcgplbmQK)
   class EnsureNode < Node
     # @rbs @ensure_keyword_loc: Location
     # @rbs @statements: StatementsNode?
@@ -11676,8 +12372,12 @@ module Prism
 
   # Represents the use of the literal `false` keyword.
   #
-  #     false
-  #     ^^^^^
+  # ```rb
+  # false
+  # ^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZmFsc2UK)
   class FalseNode < Node
 
     # Initialize a new FalseNode node.
@@ -11788,17 +12488,21 @@ module Prism
 
   # Represents a find pattern in pattern matching.
   #
-  #     foo in *bar, baz, *qux
-  #            ^^^^^^^^^^^^^^^
+  # ```rb
+  # foo in *bar, baz, *qux
+  #        ^^^^^^^^^^^^^^^
   #
-  #     foo in [*bar, baz, *qux]
-  #            ^^^^^^^^^^^^^^^^^
+  # foo in [*bar, baz, *qux]
+  #        ^^^^^^^^^^^^^^^^^
   #
-  #     foo in Foo(*bar, baz, *qux)
-  #            ^^^^^^^^^^^^^^^^^^^^
+  # foo in Foo(*bar, baz, *qux)
+  #        ^^^^^^^^^^^^^^^^^^^^
   #
-  #     foo => *bar, baz, *qux
-  #            ^^^^^^^^^^^^^^^
+  # foo => *bar, baz, *qux
+  #        ^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluICpiYXIsIGJheiwgKnF1eAoKZm9vIGluIFsqYmFyLCBiYXosICpxdXhdCgpmb28gaW4gRm9vKCpiYXIsIGJheiwgKnF1eCkKCmZvbyA9PiAqYmFyLCBiYXosICpxdXgK)
   class FindPatternNode < Node
     # @rbs @constant: (ConstantPathNode | ConstantReadNode)?
     # @rbs @left: SplatNode
@@ -11931,8 +12635,12 @@ module Prism
     #
     # Represents the optional constant preceding the pattern
     #
-    #     foo in Foo(*bar, baz, *qux)
-    #            ^^^
+    # ```rb
+    # foo in Foo(*bar, baz, *qux)
+    #        ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIEZvbygqYmFyLCBiYXosICpxdXgpCg)
     #
     #: () -> (ConstantPathNode | ConstantReadNode)?
     def constant
@@ -11944,11 +12652,15 @@ module Prism
     #
     # Represents the first wildcard node in the pattern.
     #
-    #     foo in *bar, baz, *qux
-    #            ^^^^
+    # ```rb
+    # foo in *bar, baz, *qux
+    #        ^^^^
     #
-    #     foo in Foo(*bar, baz, *qux)
-    #                ^^^^
+    # foo in Foo(*bar, baz, *qux)
+    #            ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluICpiYXIsIGJheiwgKnF1eAoKZm9vIGluIEZvbygqYmFyLCBiYXosICpxdXgpCg)
     #
     #: () -> SplatNode
     def left
@@ -11960,11 +12672,15 @@ module Prism
     #
     # Represents the nodes in between the wildcards.
     #
-    #     foo in *bar, baz, *qux
-    #                  ^^^
+    # ```rb
+    # foo in *bar, baz, *qux
+    #              ^^^
     #
-    #     foo in Foo(*bar, baz, 1, *qux)
-    #                      ^^^^^^
+    # foo in Foo(*bar, baz, 1, *qux)
+    #                  ^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluICpiYXIsIGJheiwgKnF1eAoKZm9vIGluIEZvbygqYmFyLCBiYXosIDEsICpxdXgpCg)
     #
     #: () -> Array[Prism::node]
     def requireds
@@ -11976,11 +12692,15 @@ module Prism
     #
     # Represents the second wildcard node in the pattern.
     #
-    #     foo in *bar, baz, *qux
-    #                       ^^^^
+    # ```rb
+    # foo in *bar, baz, *qux
+    #                   ^^^^
     #
-    #     foo in Foo(*bar, baz, *qux)
-    #                           ^^^^
+    # foo in Foo(*bar, baz, *qux)
+    #                       ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluICpiYXIsIGJheiwgKnF1eAoKZm9vIGluIEZvbygqYmFyLCBiYXosICpxdXgpCg)
     #
     #: () -> SplatNode
     def right
@@ -11993,11 +12713,15 @@ module Prism
     #
     # The Location of the opening brace.
     #
-    #     foo in [*bar, baz, *qux]
-    #            ^
+    # ```rb
+    # foo in [*bar, baz, *qux]
+    #        ^
     #
-    #     foo in Foo(*bar, baz, *qux)
-    #               ^
+    # foo in Foo(*bar, baz, *qux)
+    #           ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIFsqYmFyLCBiYXosICpxdXhdCgpmb28gaW4gRm9vKCpiYXIsIGJheiwgKnF1eCkK)
     #
     #: () -> Location?
     def opening_loc
@@ -12026,11 +12750,15 @@ module Prism
     #
     # The Location of the closing brace.
     #
-    #     foo in [*bar, baz, *qux]
-    #                            ^
+    # ```rb
+    # foo in [*bar, baz, *qux]
+    #                        ^
     #
-    #     foo in Foo(*bar, baz, *qux)
-    #                               ^
+    # foo in Foo(*bar, baz, *qux)
+    #                           ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIFsqYmFyLCBiYXosICpxdXhdCgpmb28gaW4gRm9vKCpiYXIsIGJheiwgKnF1eCkK)
     #
     #: () -> Location?
     def closing_loc
@@ -12092,8 +12820,12 @@ module Prism
 
   # Represents the use of the `..` or `...` operators to create flip flops.
   #
-  #     baz if foo .. bar
-  #            ^^^^^^^^^^
+  # ```rb
+  # baz if foo .. bar
+  #        ^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YmF6IGlmIGZvbyAuLiBiYXIK)
   class FlipFlopNode < Node
     # @rbs @left: Prism::node?
     # @rbs @right: Prism::node?
@@ -12283,8 +13015,12 @@ module Prism
 
   # Represents a floating point number literal.
   #
-  #     1.0
-  #     ^^^
+  # ```rb
+  # 1.0
+  # ^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#MS4wCg)
   class FloatNode < Node
     # @rbs @value: Float
 
@@ -12409,8 +13145,12 @@ module Prism
 
   # Represents the use of the `for` keyword.
   #
-  #     for i in a end
-  #     ^^^^^^^^^^^^^^
+  # ```rb
+  # for i in a end
+  # ^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9yIGkgaW4gYSBlbmQK)
   class ForNode < Node
     # @rbs @index: (LocalVariableTargetNode | InstanceVariableTargetNode | ClassVariableTargetNode | GlobalVariableTargetNode | ConstantTargetNode | ConstantPathTargetNode | CallTargetNode | IndexTargetNode | MultiTargetNode)
     # @rbs @collection: Prism::node
@@ -12546,8 +13286,12 @@ module Prism
     #
     # The index expression for `for` loops.
     #
-    #     for i in a end
-    #         ^
+    # ```rb
+    # for i in a end
+    #     ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9yIGkgaW4gYSBlbmQK)
     #
     #: () -> (LocalVariableTargetNode | InstanceVariableTargetNode | ClassVariableTargetNode | GlobalVariableTargetNode | ConstantTargetNode | ConstantPathTargetNode | CallTargetNode | IndexTargetNode | MultiTargetNode)
     def index
@@ -12559,8 +13303,12 @@ module Prism
     #
     # The collection to iterate over.
     #
-    #     for i in a end
-    #              ^
+    # ```rb
+    # for i in a end
+    #          ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9yIGkgaW4gYSBlbmQK)
     #
     #: () -> Prism::node
     def collection
@@ -12572,10 +13320,14 @@ module Prism
     #
     # Represents the body of statements to execute for each iteration of the loop.
     #
-    #     for i in a
-    #       foo(i)
-    #       ^^^^^^
-    #     end
+    # ```rb
+    # for i in a
+    #   foo(i)
+    #   ^^^^^^
+    # end
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9yIGkgaW4gYQogIGZvbyhpKQoKZW5kCg)
     #
     #: () -> StatementsNode?
     def statements
@@ -12588,8 +13340,12 @@ module Prism
     #
     # The Location of the `for` keyword.
     #
-    #     for i in a end
-    #     ^^^
+    # ```rb
+    # for i in a end
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9yIGkgaW4gYSBlbmQK)
     #
     #: () -> Location
     def for_keyword_loc
@@ -12613,8 +13369,12 @@ module Prism
     #
     # The Location of the `in` keyword.
     #
-    #     for i in a end
-    #           ^^
+    # ```rb
+    # for i in a end
+    #       ^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9yIGkgaW4gYSBlbmQK)
     #
     #: () -> Location
     def in_keyword_loc
@@ -12638,8 +13398,12 @@ module Prism
     #
     # The Location of the `do` keyword, if present.
     #
-    #     for i in a do end
-    #                ^^
+    # ```rb
+    # for i in a do end
+    #            ^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9yIGkgaW4gYSBkbyBlbmQK)
     #
     #: () -> Location?
     def do_keyword_loc
@@ -12668,8 +13432,12 @@ module Prism
     #
     # The Location of the `end` keyword.
     #
-    #     for i in a end
-    #                ^^^
+    # ```rb
+    # for i in a end
+    #            ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9yIGkgaW4gYSBlbmQK)
     #
     #: () -> Location
     def end_keyword_loc
@@ -12746,10 +13514,14 @@ module Prism
 
   # Represents forwarding all arguments to this method to another method.
   #
-  #     def foo(...)
-  #       bar(...)
-  #           ^^^
-  #     end
+  # ```rb
+  # def foo(...)
+  #   bar(...)
+  #       ^^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGZvbyguLi4pCiAgYmFyKC4uLikKCmVuZAo)
   class ForwardingArgumentsNode < Node
 
     # Initialize a new ForwardingArgumentsNode node.
@@ -12860,9 +13632,13 @@ module Prism
 
   # Represents the use of the forwarding parameter in a method, block, or lambda declaration.
   #
-  #     def foo(...)
-  #             ^^^
-  #     end
+  # ```rb
+  # def foo(...)
+  #         ^^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGZvbyguLi4pCgplbmQK)
   class ForwardingParameterNode < Node
 
     # Initialize a new ForwardingParameterNode node.
@@ -12973,12 +13749,16 @@ module Prism
 
   # Represents the use of the `super` keyword without parentheses or arguments, but which might have a block.
   #
-  #     super
-  #     ^^^^^
+  # ```rb
+  # super
+  # ^^^^^
   #
-  #     super { 123 }
-  #     ^^^^^^^^^^^^^
+  # super { 123 }
+  # ^^^^^^^^^^^^^
   #
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#c3VwZXIKCnN1cGVyIHsgMTIzIH0K)
   # If it has any other arguments, it would be a `SuperNode` instead.
   class ForwardingSuperNode < Node
     # @rbs @keyword_loc: Location
@@ -13148,8 +13928,12 @@ module Prism
 
   # Represents the use of the `&&=` operator for assignment to a global variable.
   #
-  #     $target &&= value
-  #     ^^^^^^^^^^^^^^^^^
+  # ```rb
+  # $target &&= value
+  # ^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#JHRhcmdldCAmJj0gdmFsdWUK)
   class GlobalVariableAndWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -13352,8 +14136,12 @@ module Prism
 
   # Represents assigning to a global variable using an operator that isn't `=`.
   #
-  #     $target += value
-  #     ^^^^^^^^^^^^^^^^
+  # ```rb
+  # $target += value
+  # ^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#JHRhcmdldCArPSB2YWx1ZQo)
   class GlobalVariableOperatorWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -13559,8 +14347,12 @@ module Prism
 
   # Represents the use of the `||=` operator for assignment to a global variable.
   #
-  #     $target ||= value
-  #     ^^^^^^^^^^^^^^^^^
+  # ```rb
+  # $target ||= value
+  # ^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#JHRhcmdldCB8fD0gdmFsdWUK)
   class GlobalVariableOrWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -13763,8 +14555,12 @@ module Prism
 
   # Represents referencing a global variable.
   #
-  #     $foo
-  #     ^^^^
+  # ```rb
+  # $foo
+  # ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#JGZvbwo)
   class GlobalVariableReadNode < Node
     # @rbs @name: Symbol
 
@@ -13871,9 +14667,13 @@ module Prism
     #
     # The name of the global variable, which is a `$` followed by an [identifier](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#identifier). Alternatively, it can be one of the special global variables designated by a symbol.
     #
-    #     $foo   # name `:$foo`
+    # ```rb
+    # $foo   # name `:$foo`
     #
-    #     $_Test # name `:$_Test`
+    # $_Test # name `:$_Test`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#JGZvbyAgICMgbmFtZSBgOiRmb29gCgokX1Rlc3QgIyBuYW1lIGA6JF9UZXN0YAo)
     #
     #: () -> Symbol
     def name
@@ -13893,8 +14693,12 @@ module Prism
 
   # Represents writing to a global variable in a context that doesn't have an explicit value.
   #
-  #     $foo, $bar = baz
-  #     ^^^^  ^^^^
+  # ```rb
+  # $foo, $bar = baz
+  # ^^^^  ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#JGZvbywgJGJhciA9IGJhego)
   class GlobalVariableTargetNode < Node
     # @rbs @name: Symbol
 
@@ -14019,8 +14823,12 @@ module Prism
 
   # Represents writing to a global variable.
   #
-  #     $foo = 1
-  #     ^^^^^^^^
+  # ```rb
+  # $foo = 1
+  # ^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#JGZvbyA9IDEK)
   class GlobalVariableWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -14138,9 +14946,13 @@ module Prism
     #
     # The name of the global variable, which is a `$` followed by an [identifier](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#identifier). Alternatively, it can be one of the special global variables designated by a symbol.
     #
-    #     $foo = :bar  # name `:$foo`
+    # ```rb
+    # $foo = :bar  # name `:$foo`
     #
-    #     $_Test = 123 # name `:$_Test`
+    # $_Test = 123 # name `:$_Test`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#JGZvbyA9IDpiYXIgICMgbmFtZSBgOiRmb29gCgokX1Rlc3QgPSAxMjMgIyBuYW1lIGA6JF9UZXN0YAo)
     #
     #: () -> Symbol
     def name
@@ -14153,8 +14965,12 @@ module Prism
     #
     # The Location of the global variable's name.
     #
-    #     $foo = :bar
-    #     ^^^^
+    # ```rb
+    # $foo = :bar
+    # ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#JGZvbyA9IDpiYXIK)
     #
     #: () -> Location
     def name_loc
@@ -14177,11 +14993,15 @@ module Prism
     #
     # The value to write to the global variable. It can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     $foo = :bar
-    #            ^^^^
+    # ```rb
+    # $foo = :bar
+    #        ^^^^
     #
-    #     $-xyz = 123
-    #             ^^^
+    # $-xyz = 123
+    #         ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#JGZvbyA9IDpiYXIKCiQteHl6ID0gMTIzCg)
     #
     #: () -> Prism::node
     def value
@@ -14194,8 +15014,12 @@ module Prism
     #
     # The Location of the `=` operator.
     #
-    #     $foo = :bar
-    #          ^
+    # ```rb
+    # $foo = :bar
+    #      ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#JGZvbyA9IDpiYXIK)
     #
     #: () -> Location
     def operator_loc
@@ -14239,8 +15063,12 @@ module Prism
 
   # Represents a hash literal.
   #
-  #     { a => b }
-  #     ^^^^^^^^^^
+  # ```rb
+  # { a => b }
+  # ^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#eyBhID0-IGIgfQo)
   class HashNode < Node
     # @rbs @opening_loc: Location
     # @rbs @elements: Array[AssocNode | AssocSplatNode]
@@ -14357,8 +15185,12 @@ module Prism
     #
     # The Location of the opening brace.
     #
-    #     { a => b }
-    #     ^
+    # ```rb
+    # { a => b }
+    # ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#eyBhID0-IGIgfQo)
     #
     #: () -> Location
     def opening_loc
@@ -14381,11 +15213,15 @@ module Prism
     #
     # The elements of the hash. These can be either `AssocNode`s or `AssocSplatNode`s.
     #
-    #     { a: b }
-    #       ^^^^
+    # ```rb
+    # { a: b }
+    #   ^^^^
     #
-    #     { **foo }
-    #       ^^^^^
+    # { **foo }
+    #   ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#eyBhOiBiIH0KCnsgKipmb28gfQo)
     #
     #: () -> Array[AssocNode | AssocSplatNode]
     def elements
@@ -14398,8 +15234,12 @@ module Prism
     #
     # The Location of the closing brace.
     #
-    #     { a => b }
-    #              ^
+    # ```rb
+    # { a => b }
+    #          ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#eyBhID0-IGIgfQo)
     #
     #: () -> Location
     def closing_loc
@@ -14453,17 +15293,21 @@ module Prism
 
   # Represents a hash pattern in pattern matching.
   #
-  #     foo => { a: 1, b: 2 }
-  #            ^^^^^^^^^^^^^^
+  # ```rb
+  # foo => { a: 1, b: 2 }
+  #        ^^^^^^^^^^^^^^
   #
-  #     foo => { a: 1, b: 2, **c }
-  #            ^^^^^^^^^^^^^^^^^^^
+  # foo => { a: 1, b: 2, **c }
+  #        ^^^^^^^^^^^^^^^^^^^
   #
-  #     foo => Bar[a: 1, b: 2]
-  #            ^^^^^^^^^^^^^^^
+  # foo => Bar[a: 1, b: 2]
+  #        ^^^^^^^^^^^^^^^
   #
-  #     foo in { a: 1, b: 2 }
-  #            ^^^^^^^^^^^^^^
+  # foo in { a: 1, b: 2 }
+  #        ^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IHsgYTogMSwgYjogMiB9Cgpmb28gPT4geyBhOiAxLCBiOiAyLCAqKmMgfQoKZm9vID0-IEJhclthOiAxLCBiOiAyXQoKZm9vIGluIHsgYTogMSwgYjogMiB9Cg)
   class HashPatternNode < Node
     # @rbs @constant: (ConstantPathNode | ConstantReadNode)?
     # @rbs @elements: Array[AssocNode]
@@ -14591,11 +15435,15 @@ module Prism
     #
     # Represents the optional constant preceding the Hash.
     #
-    #     foo => Bar[a: 1, b: 2]
-    #          ^^^
+    # ```rb
+    # foo => Bar[a: 1, b: 2]
+    #      ^^^
     #
-    #     foo => Bar::Baz[a: 1, b: 2]
-    #          ^^^^^^^^
+    # foo => Bar::Baz[a: 1, b: 2]
+    #      ^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IEJhclthOiAxLCBiOiAyXQoKZm9vID0-IEJhcjo6QmF6W2E6IDEsIGI6IDJdCg)
     #
     #: () -> (ConstantPathNode | ConstantReadNode)?
     def constant
@@ -14607,8 +15455,12 @@ module Prism
     #
     # Represents the explicit named hash keys and values.
     #
-    #     foo => { a: 1, b:, ** }
-    #              ^^^^^^^^
+    # ```rb
+    # foo => { a: 1, b:, ** }
+    #          ^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IHsgYTogMSwgYjosICoqIH0K)
     #
     #: () -> Array[AssocNode]
     def elements
@@ -14620,14 +15472,18 @@ module Prism
     #
     # Represents the rest of the Hash keys and values. This can be named, unnamed, or explicitly forbidden via `**nil`, this last one results in a `NoKeywordsParameterNode`.
     #
-    #     foo => { a: 1, b:, **c }
-    #                        ^^^
+    # ```rb
+    # foo => { a: 1, b:, **c }
+    #                    ^^^
     #
-    #     foo => { a: 1, b:, ** }
-    #                        ^^
+    # foo => { a: 1, b:, ** }
+    #                    ^^
     #
-    #     foo => { a: 1, b:, **nil }
-    #                        ^^^^^
+    # foo => { a: 1, b:, **nil }
+    #                    ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IHsgYTogMSwgYjosICoqYyB9Cgpmb28gPT4geyBhOiAxLCBiOiwgKiogfQoKZm9vID0-IHsgYTogMSwgYjosICoqbmlsIH0K)
     #
     #: () -> (AssocSplatNode | NoKeywordsParameterNode)?
     def rest
@@ -14640,11 +15496,15 @@ module Prism
     #
     # The Location of the opening brace.
     #
-    #     foo => { a: 1 }
-    #            ^
+    # ```rb
+    # foo => { a: 1 }
+    #        ^
     #
-    #     foo => Bar[a: 1]
-    #               ^
+    # foo => Bar[a: 1]
+    #           ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IHsgYTogMSB9Cgpmb28gPT4gQmFyW2E6IDFdCg)
     #
     #: () -> Location?
     def opening_loc
@@ -14673,11 +15533,15 @@ module Prism
     #
     # The Location of the closing brace.
     #
-    #     foo => { a: 1 }
-    #                   ^
+    # ```rb
+    # foo => { a: 1 }
+    #               ^
     #
-    #     foo => Bar[a: 1]
-    #                    ^
+    # foo => Bar[a: 1]
+    #                ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IHsgYTogMSB9Cgpmb28gPT4gQmFyW2E6IDFdCg)
     #
     #: () -> Location?
     def closing_loc
@@ -14738,14 +15602,18 @@ module Prism
 
   # Represents the use of the `if` keyword, either in the block form or the modifier form, or a ternary expression.
   #
-  #     bar if foo
-  #     ^^^^^^^^^^
+  # ```rb
+  # bar if foo
+  # ^^^^^^^^^^
   #
-  #     if foo then bar end
-  #     ^^^^^^^^^^^^^^^^^^^
+  # if foo then bar end
+  # ^^^^^^^^^^^^^^^^^^^
   #
-  #     foo ? bar : baz
-  #     ^^^^^^^^^^^^^^^
+  # foo ? bar : baz
+  # ^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YmFyIGlmIGZvbwoKaWYgZm9vIHRoZW4gYmFyIGVuZAoKZm9vID8gYmFyIDogYmF6Cg)
   class IfNode < Node
     # @rbs @if_keyword_loc: Location?
     # @rbs @predicate: Prism::node
@@ -14878,9 +15746,13 @@ module Prism
     #
     # The Location of the `if` keyword if present.
     #
-    #     bar if foo
-    #         ^^
+    # ```rb
+    # bar if foo
+    #     ^^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YmFyIGlmIGZvbwo)
     # The `if_keyword_loc` field will be `nil` when the `IfNode` represents a ternary expression.
     #
     #: () -> Location?
@@ -14909,16 +15781,20 @@ module Prism
     #
     # The node for the condition the `IfNode` is testing.
     #
-    #     if foo
+    # ```rb
+    # if foo
+    #    ^^^
+    #   bar
+    # end
+    #
+    # bar if foo
     #        ^^^
-    #       bar
-    #     end
     #
-    #     bar if foo
-    #            ^^^
+    # foo ? bar : baz
+    # ^^^
+    # ```
     #
-    #     foo ? bar : baz
-    #     ^^^
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#aWYgZm9vCgogIGJhcgplbmQKCmJhciBpZiBmb28KCmZvbyA_IGJhciA6IGJhego)
     #
     #: () -> Prism::node
     def predicate
@@ -14931,11 +15807,15 @@ module Prism
     #
     # The Location of the `then` keyword (if present) or the `?` in a ternary expression, `nil` otherwise.
     #
-    #     if foo then bar end
-    #            ^^^^
+    # ```rb
+    # if foo then bar end
+    #        ^^^^
     #
-    #     a ? b : c
-    #       ^
+    # a ? b : c
+    #   ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#aWYgZm9vIHRoZW4gYmFyIGVuZAoKYSA_IGIgOiBjCg)
     #
     #: () -> Location?
     def then_keyword_loc
@@ -14963,12 +15843,16 @@ module Prism
     #
     # Represents the body of statements that will be executed when the predicate is evaluated as truthy. Will be `nil` when no body is provided.
     #
-    #     if foo
-    #       bar
-    #       ^^^
-    #       baz
-    #       ^^^
-    #     end
+    # ```rb
+    # if foo
+    #   bar
+    #   ^^^
+    #   baz
+    #   ^^^
+    # end
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#aWYgZm9vCiAgYmFyCgogIGJhegoKZW5kCg)
     #
     #: () -> StatementsNode?
     def statements
@@ -14980,17 +15864,21 @@ module Prism
     #
     # Represents an `ElseNode` or an `IfNode` when there is an `else` or an `elsif` in the `if` statement.
     #
-    #     if foo
-    #       bar
-    #     elsif baz
-    #     ^^^^^^^^^
-    #       qux
-    #       ^^^
-    #     end
-    #     ^^^
+    # ```rb
+    # if foo
+    #   bar
+    # elsif baz
+    # ^^^^^^^^^
+    #   qux
+    #   ^^^
+    # end
+    # ^^^
     #
-    #     if foo then bar else baz end
-    #                     ^^^^^^^^^^^^
+    # if foo then bar else baz end
+    #                 ^^^^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#aWYgZm9vCiAgYmFyCmVsc2lmIGJhegoKICBxdXgKCmVuZAoKaWYgZm9vIHRoZW4gYmFyIGVsc2UgYmF6IGVuZAo)
     #
     #: () -> (ElseNode | IfNode)?
     def subsequent
@@ -15003,10 +15891,14 @@ module Prism
     #
     # The Location of the `end` keyword if present, `nil` otherwise.
     #
-    #     if foo
-    #       bar
-    #     end
-    #     ^^^
+    # ```rb
+    # if foo
+    #   bar
+    # end
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#aWYgZm9vCiAgYmFyCmVuZAo)
     #
     #: () -> Location?
     def end_keyword_loc
@@ -15077,8 +15969,12 @@ module Prism
 
   # Represents an imaginary number literal.
   #
-  #     1.0i
-  #     ^^^^
+  # ```rb
+  # 1.0i
+  # ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#MS4waQo)
   class ImaginaryNode < Node
     # @rbs @numeric: (FloatNode | IntegerNode | RationalNode)
 
@@ -15204,14 +16100,18 @@ module Prism
 
   # Represents a node that is implicitly being added to the tree but doesn't correspond directly to a node in the source.
   #
-  #     { foo: }
-  #       ^^^^
+  # ```rb
+  # { foo: }
+  #   ^^^^
   #
-  #     { Foo: }
-  #       ^^^^
+  # { Foo: }
+  #   ^^^^
   #
-  #     foo in { bar: }
-  #              ^^^^
+  # foo in { bar: }
+  #          ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#eyBmb286IH0KCnsgRm9vOiB9Cgpmb28gaW4geyBiYXI6IH0K)
   class ImplicitNode < Node
     # @rbs @value: (LocalVariableReadNode | CallNode | ConstantReadNode | LocalVariableTargetNode)
 
@@ -15337,17 +16237,21 @@ module Prism
 
   # Represents using a trailing comma to indicate an implicit rest parameter.
   #
-  #     foo { |bar,| }
-  #               ^
+  # ```rb
+  # foo { |bar,| }
+  #           ^
   #
-  #     foo in [bar,]
-  #                ^
-  #
-  #     for foo, in bar do end
+  # foo in [bar,]
   #            ^
   #
-  #     foo, = bar
+  # for foo, in bar do end
   #        ^
+  #
+  # foo, = bar
+  #    ^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIHsgfGJhcix8IH0KCmZvbyBpbiBbYmFyLF0KCmZvciBmb28sIGluIGJhciBkbyBlbmQKCmZvbywgPSBiYXIK)
   class ImplicitRestNode < Node
 
     # Initialize a new ImplicitRestNode node.
@@ -15458,8 +16362,12 @@ module Prism
 
   # Represents the use of the `in` keyword in a case statement.
   #
-  #     case a; in b then c end
-  #             ^^^^^^^^^^^
+  # ```rb
+  # case a; in b then c end
+  #         ^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSBhOyBpbiBiIHRoZW4gYyBlbmQK)
   class InNode < Node
     # @rbs @pattern: Prism::node
     # @rbs @statements: StatementsNode?
@@ -15682,8 +16590,12 @@ module Prism
 
   # Represents the use of the `&&=` operator on a call to the `[]` method.
   #
-  #     foo.bar[baz] &&= value
-  #     ^^^^^^^^^^^^^^^^^^^^^^
+  # ```rb
+  # foo.bar[baz] &&= value
+  # ^^^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhcltiYXpdICYmPSB2YWx1ZQo)
   class IndexAndWriteNode < Node
     # @rbs @receiver: Prism::node?
     # @rbs @call_operator_loc: Location?
@@ -16045,8 +16957,12 @@ module Prism
 
   # Represents the use of an assignment operator on a call to `[]`.
   #
-  #     foo.bar[baz] += value
-  #     ^^^^^^^^^^^^^^^^^^^^^
+  # ```rb
+  # foo.bar[baz] += value
+  # ^^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhcltiYXpdICs9IHZhbHVlCg)
   class IndexOperatorWriteNode < Node
     # @rbs @receiver: Prism::node?
     # @rbs @call_operator_loc: Location?
@@ -16411,8 +17327,12 @@ module Prism
 
   # Represents the use of the `||=` operator on a call to `[]`.
   #
-  #     foo.bar[baz] ||= value
-  #     ^^^^^^^^^^^^^^^^^^^^^^
+  # ```rb
+  # foo.bar[baz] ||= value
+  # ^^^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLmJhcltiYXpdIHx8PSB2YWx1ZQo)
   class IndexOrWriteNode < Node
     # @rbs @receiver: Prism::node?
     # @rbs @call_operator_loc: Location?
@@ -16774,16 +17694,20 @@ module Prism
 
   # Represents assigning to an index.
   #
-  #     foo[bar], = 1
+  # ```rb
+  # foo[bar], = 1
+  # ^^^^^^^^
+  #
+  # begin
+  # rescue => foo[bar]
+  #           ^^^^^^^^
+  # end
+  #
+  # for foo[bar] in baz do end
   #     ^^^^^^^^
+  # ```
   #
-  #     begin
-  #     rescue => foo[bar]
-  #               ^^^^^^^^
-  #     end
-  #
-  #     for foo[bar] in baz do end
-  #         ^^^^^^^^
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vW2Jhcl0sID0gMQoKYmVnaW4KcmVzY3VlID0-IGZvb1tiYXJdCgplbmQKCmZvciBmb29bYmFyXSBpbiBiYXogZG8gZW5kCg)
   class IndexTargetNode < Node
     # @rbs @receiver: Prism::node
     # @rbs @opening_loc: Location
@@ -17050,8 +17974,12 @@ module Prism
 
   # Represents the use of the `&&=` operator for assignment to an instance variable.
   #
-  #     @target &&= value
-  #     ^^^^^^^^^^^^^^^^^
+  # ```rb
+  # @target &&= value
+  # ^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QHRhcmdldCAmJj0gdmFsdWUK)
   class InstanceVariableAndWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -17254,8 +18182,12 @@ module Prism
 
   # Represents assigning to an instance variable using an operator that isn't `=`.
   #
-  #     @target += value
-  #     ^^^^^^^^^^^^^^^^
+  # ```rb
+  # @target += value
+  # ^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QHRhcmdldCArPSB2YWx1ZQo)
   class InstanceVariableOperatorWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -17461,8 +18393,12 @@ module Prism
 
   # Represents the use of the `||=` operator for assignment to an instance variable.
   #
-  #     @target ||= value
-  #     ^^^^^^^^^^^^^^^^^
+  # ```rb
+  # @target ||= value
+  # ^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QHRhcmdldCB8fD0gdmFsdWUK)
   class InstanceVariableOrWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -17665,8 +18601,12 @@ module Prism
 
   # Represents referencing an instance variable.
   #
-  #     @foo
-  #     ^^^^
+  # ```rb
+  # @foo
+  # ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QGZvbwo)
   class InstanceVariableReadNode < Node
     # @rbs @name: Symbol
 
@@ -17773,9 +18713,13 @@ module Prism
     #
     # The name of the instance variable, which is a `@` followed by an [identifier](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#identifiers).
     #
-    #     @x     # name `:@x`
+    # ```rb
+    # @x     # name `:@x`
     #
-    #     @_test # name `:@_test`
+    # @_test # name `:@_test`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QHggICAgICMgbmFtZSBgOkB4YAoKQF90ZXN0ICMgbmFtZSBgOkBfdGVzdGAK)
     #
     #: () -> Symbol
     def name
@@ -17795,8 +18739,12 @@ module Prism
 
   # Represents writing to an instance variable in a context that doesn't have an explicit value.
   #
-  #     @foo, @bar = baz
-  #     ^^^^  ^^^^
+  # ```rb
+  # @foo, @bar = baz
+  # ^^^^  ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QGZvbywgQGJhciA9IGJhego)
   class InstanceVariableTargetNode < Node
     # @rbs @name: Symbol
 
@@ -17921,8 +18869,12 @@ module Prism
 
   # Represents writing to an instance variable.
   #
-  #     @foo = 1
-  #     ^^^^^^^^
+  # ```rb
+  # @foo = 1
+  # ^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QGZvbyA9IDEK)
   class InstanceVariableWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -18040,9 +18992,13 @@ module Prism
     #
     # The name of the instance variable, which is a `@` followed by an [identifier](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#identifiers).
     #
-    #     @x = :y       # name `:@x`
+    # ```rb
+    # @x = :y       # name `:@x`
     #
-    #     @_foo = "bar" # name `@_foo`
+    # @_foo = "bar" # name `@_foo`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QHggPSA6eSAgICAgICAjIG5hbWUgYDpAeGAKCkBfZm9vID0gImJhciIgIyBuYW1lIGBAX2Zvb2AK)
     #
     #: () -> Symbol
     def name
@@ -18055,8 +19011,12 @@ module Prism
     #
     # The Location of the variable name.
     #
-    #     @_x = 1
-    #     ^^^
+    # ```rb
+    # @_x = 1
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QF94ID0gMQo)
     #
     #: () -> Location
     def name_loc
@@ -18079,11 +19039,15 @@ module Prism
     #
     # The value to write to the instance variable. It can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     @foo = :bar
-    #            ^^^^
+    # ```rb
+    # @foo = :bar
+    #        ^^^^
     #
-    #     @_x = 1234
-    #           ^^^^
+    # @_x = 1234
+    #       ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QGZvbyA9IDpiYXIKCkBfeCA9IDEyMzQK)
     #
     #: () -> Prism::node
     def value
@@ -18096,8 +19060,12 @@ module Prism
     #
     # The Location of the `=` operator.
     #
-    #     @x = y
-    #        ^
+    # ```rb
+    # @x = y
+    #    ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#QHggPSB5Cg)
     #
     #: () -> Location
     def operator_loc
@@ -18141,8 +19109,12 @@ module Prism
 
   # Represents an integer number literal.
   #
-  #     1
-  #     ^
+  # ```rb
+  # 1
+  # ^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#MQo)
   class IntegerNode < Node
     # @rbs @value: Integer
 
@@ -18300,8 +19272,12 @@ module Prism
 
   # Represents a regular expression literal that contains interpolation that is being used in the predicate of a conditional to implicitly match against the last line read by an IO object.
   #
-  #     if /foo #{bar} baz/ then end
-  #        ^^^^^^^^^^^^^^^^
+  # ```rb
+  # if /foo #{bar} baz/ then end
+  #    ^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#aWYgL2ZvbyAje2Jhcn0gYmF6LyB0aGVuIGVuZAo)
   class InterpolatedMatchLastLineNode < Node
     # @rbs @opening_loc: Location
     # @rbs @parts: Array[StringNode | EmbeddedStatementsNode | EmbeddedVariableNode]
@@ -18591,8 +19567,12 @@ module Prism
 
   # Represents a regular expression literal that contains interpolation.
   #
-  #     /foo #{bar} baz/
-  #     ^^^^^^^^^^^^^^^^
+  # ```rb
+  # /foo #{bar} baz/
+  # ^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#L2ZvbyAje2Jhcn0gYmF6Lwo)
   class InterpolatedRegularExpressionNode < Node
     # @rbs @opening_loc: Location
     # @rbs @parts: Array[StringNode | EmbeddedStatementsNode | EmbeddedVariableNode]
@@ -18882,8 +19862,12 @@ module Prism
 
   # Represents a string literal that contains interpolation.
   #
-  #     "foo #{bar} baz"
-  #     ^^^^^^^^^^^^^^^^
+  # ```rb
+  # "foo #{bar} baz"
+  # ^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ImZvbyAje2Jhcn0gYmF6Igo)
   class InterpolatedStringNode < Node
     # @rbs @opening_loc: Location?
     # @rbs @parts: Array[StringNode | EmbeddedStatementsNode | EmbeddedVariableNode | InterpolatedStringNode]
@@ -19111,8 +20095,12 @@ module Prism
 
   # Represents a symbol literal that contains interpolation.
   #
-  #     :"foo #{bar} baz"
-  #     ^^^^^^^^^^^^^^^^^
+  # ```rb
+  # :"foo #{bar} baz"
+  # ^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#OiJmb28gI3tiYXJ9IGJheiIK)
   class InterpolatedSymbolNode < Node
     # @rbs @opening_loc: Location?
     # @rbs @parts: Array[StringNode | EmbeddedStatementsNode | EmbeddedVariableNode]
@@ -19323,8 +20311,12 @@ module Prism
 
   # Represents an xstring literal that contains interpolation.
   #
-  #     `foo #{bar} baz`
-  #     ^^^^^^^^^^^^^^^^
+  # ```rb
+  # `foo #{bar} baz`
+  # ^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YGZvbyAje2Jhcn0gYmF6YAo)
   class InterpolatedXStringNode < Node
     # @rbs @opening_loc: Location
     # @rbs @parts: Array[StringNode | EmbeddedStatementsNode | EmbeddedVariableNode]
@@ -19525,8 +20517,12 @@ module Prism
 
   # Represents reading from the implicit `it` local variable.
   #
-  #     -> { it }
-  #          ^^
+  # ```rb
+  # -> { it }
+  #      ^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#LT4geyBpdCB9Cg)
   class ItLocalVariableReadNode < Node
 
     # Initialize a new ItLocalVariableReadNode node.
@@ -19637,8 +20633,12 @@ module Prism
 
   # Represents an implicit set of parameters through the use of the `it` keyword within a block or lambda.
   #
-  #     -> { it + it }
-  #     ^^^^^^^^^^^^^^
+  # ```rb
+  # -> { it + it }
+  # ^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#LT4geyBpdCArIGl0IH0K)
   class ItParametersNode < Node
 
     # Initialize a new ItParametersNode node.
@@ -19749,8 +20749,12 @@ module Prism
 
   # Represents a hash literal without opening and closing braces.
   #
-  #     foo(a: b)
-  #         ^^^^
+  # ```rb
+  # foo(a: b)
+  #     ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vKGE6IGIpCg)
   class KeywordHashNode < Node
     # @rbs @elements: Array[AssocNode | AssocSplatNode]
 
@@ -19886,9 +20890,13 @@ module Prism
 
   # Represents a keyword rest parameter to a method, block, or lambda definition.
   #
-  #     def a(**b)
-  #           ^^^
-  #     end
+  # ```rb
+  # def a(**b)
+  #       ^^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoKipiKQoKZW5kCg)
   class KeywordRestParameterNode < Node
     # @rbs @name: Symbol?
     # @rbs @name_loc: Location?
@@ -20090,8 +21098,12 @@ module Prism
 
   # Represents using a lambda literal (not the lambda method call).
   #
-  #     ->(value) { value * 2 }
-  #     ^^^^^^^^^^^^^^^^^^^^^^^
+  # ```rb
+  # ->(value) { value * 2 }
+  # ^^^^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#LT4odmFsdWUpIHsgdmFsdWUgKiAyIH0K)
   class LambdaNode < Node
     # @rbs @locals: Array[Symbol]
     # @rbs @operator_loc: Location
@@ -20361,8 +21373,12 @@ module Prism
 
   # Represents the use of the `&&=` operator for assignment to a local variable.
   #
-  #     target &&= value
-  #     ^^^^^^^^^^^^^^^^
+  # ```rb
+  # target &&= value
+  # ^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#dGFyZ2V0ICYmPSB2YWx1ZQo)
   class LocalVariableAndWriteNode < Node
     # @rbs @name_loc: Location
     # @rbs @operator_loc: Location
@@ -20579,8 +21595,12 @@ module Prism
 
   # Represents assigning to a local variable using an operator that isn't `=`.
   #
-  #     target += value
-  #     ^^^^^^^^^^^^^^^
+  # ```rb
+  # target += value
+  # ^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#dGFyZ2V0ICs9IHZhbHVlCg)
   class LocalVariableOperatorWriteNode < Node
     # @rbs @name_loc: Location
     # @rbs @binary_operator_loc: Location
@@ -20800,8 +21820,12 @@ module Prism
 
   # Represents the use of the `||=` operator for assignment to a local variable.
   #
-  #     target ||= value
-  #     ^^^^^^^^^^^^^^^^
+  # ```rb
+  # target ||= value
+  # ^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#dGFyZ2V0IHx8PSB2YWx1ZQo)
   class LocalVariableOrWriteNode < Node
     # @rbs @name_loc: Location
     # @rbs @operator_loc: Location
@@ -21018,8 +22042,12 @@ module Prism
 
   # Represents reading a local variable. Note that this requires that a local variable of the same name has already been written to in the same scope, otherwise it is parsed as a method call.
   #
-  #     foo
-  #     ^^^
+  # ```rb
+  # foo
+  # ^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vCg)
   class LocalVariableReadNode < Node
     # @rbs @name: Symbol
     # @rbs @depth: Integer
@@ -21129,13 +22157,21 @@ module Prism
     #
     # The name of the local variable, which is an [identifier](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#identifiers).
     #
-    #     x      # name `:x`
+    # ```rb
+    # x      # name `:x`
     #
-    #     _Test  # name `:_Test`
+    # _Test  # name `:_Test`
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#eCAgICAgICMgbmFtZSBgOnhgCgpfVGVzdCAgIyBuYW1lIGA6X1Rlc3RgCg)
     # Note that this can also be an underscore followed by a number for the default block parameters.
     #
-    #     _1     # name `:_1`
+    # ```rb
+    # _1     # name `:_1`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#XzEgICAgICMgbmFtZSBgOl8xYAo)
     #
     #: () -> Symbol
     def name
@@ -21147,10 +22183,14 @@ module Prism
     #
     # The number of visible scopes that should be searched to find the origin of this local variable.
     #
-    #     foo = 1; foo # depth 0
+    # ```rb
+    # foo = 1; foo # depth 0
     #
-    #     bar = 2; tap { bar } # depth 1
+    # bar = 2; tap { bar } # depth 1
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0gMTsgZm9vICMgZGVwdGggMAoKYmFyID0gMjsgdGFwIHsgYmFyIH0gIyBkZXB0aCAxCg)
     # The specific rules for calculating the depth may differ from individual Ruby implementations, as they are not specified by the language. For more information, see [the Prism documentation](https://github.com/ruby/prism/blob/main/docs/local_variable_depth.md).
     #
     #: () -> Integer
@@ -21172,11 +22212,15 @@ module Prism
 
   # Represents writing to a local variable in a context that doesn't have an explicit value.
   #
-  #     foo, bar = baz
-  #     ^^^  ^^^
+  # ```rb
+  # foo, bar = baz
+  # ^^^  ^^^
   #
-  #     foo => baz
-  #            ^^^
+  # foo => baz
+  #        ^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vLCBiYXIgPSBiYXoKCmZvbyA9PiBiYXoK)
   class LocalVariableTargetNode < Node
     # @rbs @name: Symbol
     # @rbs @depth: Integer
@@ -21315,8 +22359,12 @@ module Prism
 
   # Represents writing to a local variable.
   #
-  #     foo = 1
-  #     ^^^^^^^
+  # ```rb
+  # foo = 1
+  # ^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0gMQo)
   class LocalVariableWriteNode < Node
     # @rbs @name: Symbol
     # @rbs @depth: Integer
@@ -21437,9 +22485,13 @@ module Prism
     #
     # The name of the local variable, which is an [identifier](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#identifiers).
     #
-    #     foo = :bar # name `:foo`
+    # ```rb
+    # foo = :bar # name `:foo`
     #
-    #     abc = 123  # name `:abc`
+    # abc = 123  # name `:abc`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0gOmJhciAjIG5hbWUgYDpmb29gCgphYmMgPSAxMjMgICMgbmFtZSBgOmFiY2AK)
     #
     #: () -> Symbol
     def name
@@ -21451,10 +22503,14 @@ module Prism
     #
     # The number of semantic scopes we have to traverse to find the declaration of this variable.
     #
-    #     foo = 1         # depth 0
+    # ```rb
+    # foo = 1         # depth 0
     #
-    #     tap { foo = 1 } # depth 1
+    # tap { foo = 1 } # depth 1
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0gMSAgICAgICAgICMgZGVwdGggMAoKdGFwIHsgZm9vID0gMSB9ICMgZGVwdGggMQo)
     # The specific rules for calculating the depth may differ from individual Ruby implementations, as they are not specified by the language. For more information, see [the Prism documentation](https://github.com/ruby/prism/blob/main/docs/local_variable_depth.md).
     #
     #: () -> Integer
@@ -21468,8 +22524,12 @@ module Prism
     #
     # The Location of the variable name.
     #
-    #     foo = :bar
-    #     ^^^
+    # ```rb
+    # foo = :bar
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0gOmJhcgo)
     #
     #: () -> Location
     def name_loc
@@ -21492,15 +22552,23 @@ module Prism
     #
     # The value to write to the local variable. It can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     foo = :bar
-    #           ^^^^
+    # ```rb
+    # foo = :bar
+    #       ^^^^
     #
-    #     abc = 1234
-    #           ^^^^
+    # abc = 1234
+    #       ^^^^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0gOmJhcgoKYWJjID0gMTIzNAo)
     # Note that since the name of a local variable is known before the value is parsed, it is valid for a local variable to appear within the value of its own write.
     #
-    #     foo = foo
+    # ```rb
+    # foo = foo
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0gZm9vCg)
     #
     #: () -> Prism::node
     def value
@@ -21513,8 +22581,12 @@ module Prism
     #
     # The Location of the `=` operator.
     #
-    #     x = :y
-    #       ^
+    # ```rb
+    # x = :y
+    #   ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#eCA9IDp5Cg)
     #
     #: () -> Location
     def operator_loc
@@ -21559,8 +22631,12 @@ module Prism
 
   # Represents a regular expression literal used in the predicate of a conditional to implicitly match against the last line read by an IO object.
   #
-  #     if /foo/i then end
-  #        ^^^^^^
+  # ```rb
+  # if /foo/i then end
+  #    ^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#aWYgL2Zvby9pIHRoZW4gZW5kCg)
   class MatchLastLineNode < Node
     # @rbs @opening_loc: Location
     # @rbs @content_loc: Location
@@ -21885,8 +22961,12 @@ module Prism
 
   # Represents the use of the modifier `in` operator.
   #
-  #     foo in bar
-  #     ^^^^^^^^^^
+  # ```rb
+  # foo in bar
+  # ^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIGJhcgo)
   class MatchPredicateNode < Node
     # @rbs @value: Prism::node
     # @rbs @pattern: Prism::node
@@ -22064,8 +23144,12 @@ module Prism
 
   # Represents the use of the `=>` operator.
   #
-  #     foo => bar
-  #     ^^^^^^^^^^
+  # ```rb
+  # foo => bar
+  # ^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IGJhcgo)
   class MatchRequiredNode < Node
     # @rbs @value: Prism::node
     # @rbs @pattern: Prism::node
@@ -22181,8 +23265,12 @@ module Prism
     #
     # Represents the left-hand side of the operator.
     #
-    #     foo => bar
-    #     ^^^
+    # ```rb
+    # foo => bar
+    # ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IGJhcgo)
     #
     #: () -> Prism::node
     def value
@@ -22196,45 +23284,73 @@ module Prism
     #
     # Anything that looks like a local variable name (including `_`) will result in a `LocalVariableTargetNode`.
     #
-    #     foo => a # This is equivalent to writing `a = foo`
-    #            ^
+    # ```rb
+    # foo => a # This is equivalent to writing `a = foo`
+    #        ^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IGEgIyBUaGlzIGlzIGVxdWl2YWxlbnQgdG8gd3JpdGluZyBgYSA9IGZvb2AK)
     # Using an explicit `Array` or combining expressions with `,` will result in a `ArrayPatternNode`. This can be preceded by a constant.
     #
-    #     foo => [a]
-    #            ^^^
+    # ```rb
+    # foo => [a]
+    #        ^^^
     #
-    #     foo => a, b
-    #            ^^^^
+    # foo => a, b
+    #        ^^^^
     #
-    #     foo => Bar[a, b]
-    #            ^^^^^^^^^
+    # foo => Bar[a, b]
+    #        ^^^^^^^^^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IFthXQoKZm9vID0-IGEsIGIKCmZvbyA9PiBCYXJbYSwgYl0K)
     # If the array pattern contains at least two wildcard matches, a `FindPatternNode` is created instead.
     #
-    #     foo => *, 1, *a
-    #            ^^^^^
+    # ```rb
+    # foo => *, 1, *a
+    #        ^^^^^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-ICosIDEsICphCg)
     # Using an explicit `Hash` or a constant with square brackets and hash keys in the square brackets will result in a `HashPatternNode`.
     #
-    #     foo => { a: 1, b: }
+    # ```rb
+    # foo => { a: 1, b: }
     #
-    #     foo => Bar[a: 1, b:]
+    # foo => Bar[a: 1, b:]
     #
-    #     foo => Bar[**]
+    # foo => Bar[**]
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IHsgYTogMSwgYjogfQoKZm9vID0-IEJhclthOiAxLCBiOl0KCmZvbyA9PiBCYXJbKipdCg)
     # To use any variable that needs run time evaluation, pinning is required. This results in a `PinnedVariableNode`
     #
-    #     foo => ^a
-    #            ^^
+    # ```rb
+    # foo => ^a
+    #        ^^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IF5hCg)
     # Similar, any expression can be used with pinning. This results in a `PinnedExpressionNode`.
     #
-    #     foo => ^(a + 1)
+    # ```rb
+    # foo => ^(a + 1)
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IF4oYSArIDEpCg)
     # Anything else will result in the regular node for that expression, for example a `ConstantReadNode`.
     #
-    #     foo => CONST
+    # ```rb
+    # foo => CONST
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IENPTlNUCg)
     #
     #: () -> Prism::node
     def pattern
@@ -22247,8 +23363,12 @@ module Prism
     #
     # The Location of the operator.
     #
-    #     foo => bar
-    #         ^^
+    # ```rb
+    # foo => bar
+    #     ^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vID0-IGJhcgo)
     #
     #: () -> Location
     def operator_loc
@@ -22291,8 +23411,12 @@ module Prism
 
   # Represents writing local variables using a regular expression match with named capture groups.
   #
-  #     /(?<foo>bar)/ =~ baz
-  #     ^^^^^^^^^^^^^^^^^^^^
+  # ```rb
+  # /(?<foo>bar)/ =~ baz
+  # ^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Lyg_PGZvbz5iYXIpLyA9fiBiYXoK)
   class MatchWriteNode < Node
     # @rbs @call: CallNode
     # @rbs @targets: Array[LocalVariableTargetNode]
@@ -22434,8 +23558,12 @@ module Prism
 
   # Represents a module declaration involving the `module` keyword.
   #
-  #     module Foo end
-  #     ^^^^^^^^^^^^^^
+  # ```rb
+  # module Foo end
+  # ^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#bW9kdWxlIEZvbyBlbmQK)
   class ModuleNode < Node
     # @rbs @locals: Array[Symbol]
     # @rbs @module_keyword_loc: Location
@@ -22682,13 +23810,21 @@ module Prism
 
   # Represents a multi-target expression.
   #
-  #     a, (b, c) = 1, 2, 3
-  #        ^^^^^^
+  # ```rb
+  # a, (b, c) = 1, 2, 3
+  #    ^^^^^^
   #
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgKGIsIGMpID0gMSwgMiwgMwo)
   # This can be a part of `MultiWriteNode` as above, or the target of a `for` loop
   #
-  #     for a, b in [[1, 2], [3, 4]]
-  #         ^^^^
+  # ```rb
+  # for a, b in [[1, 2], [3, 4]]
+  #     ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9yIGEsIGIgaW4gW1sxLCAyXSwgWzMsIDRdXQo)
   class MultiTargetNode < Node
     # @rbs @lefts: Array[LocalVariableTargetNode | InstanceVariableTargetNode | ClassVariableTargetNode | GlobalVariableTargetNode | ConstantTargetNode | ConstantPathTargetNode | CallTargetNode | IndexTargetNode | MultiTargetNode | RequiredParameterNode]
     # @rbs @rest: (ImplicitRestNode | SplatNode)?
@@ -22816,13 +23952,21 @@ module Prism
     #
     # Represents the targets expressions before a splat node.
     #
-    #     a, (b, c, *) = 1, 2, 3, 4, 5
-    #         ^^^^
+    # ```rb
+    # a, (b, c, *) = 1, 2, 3, 4, 5
+    #     ^^^^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgKGIsIGMsICopID0gMSwgMiwgMywgNCwgNQo)
     # The splat node can be absent, in that case all target expressions are in the left field.
     #
-    #     a, (b, c) = 1, 2, 3, 4, 5
-    #         ^^^^
+    # ```rb
+    # a, (b, c) = 1, 2, 3, 4, 5
+    #     ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgKGIsIGMpID0gMSwgMiwgMywgNCwgNQo)
     #
     #: () -> Array[LocalVariableTargetNode | InstanceVariableTargetNode | ClassVariableTargetNode | GlobalVariableTargetNode | ConstantTargetNode | ConstantPathTargetNode | CallTargetNode | IndexTargetNode | MultiTargetNode | RequiredParameterNode]
     def lefts
@@ -22834,18 +23978,30 @@ module Prism
     #
     # Represents a splat node in the target expression.
     #
-    #     a, (b, *c) = 1, 2, 3, 4
-    #            ^^
+    # ```rb
+    # a, (b, *c) = 1, 2, 3, 4
+    #        ^^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgKGIsICpjKSA9IDEsIDIsIDMsIDQK)
     # The variable can be empty, this results in a `SplatNode` with a `nil` expression field.
     #
-    #     a, (b, *) = 1, 2, 3, 4
-    #            ^
+    # ```rb
+    # a, (b, *) = 1, 2, 3, 4
+    #        ^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgKGIsICopID0gMSwgMiwgMywgNAo)
     # If the `*` is omitted, this field will contain an `ImplicitRestNode`
     #
-    #     a, (b,) = 1, 2, 3, 4
-    #          ^
+    # ```rb
+    # a, (b,) = 1, 2, 3, 4
+    #      ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgKGIsKSA9IDEsIDIsIDMsIDQK)
     #
     #: () -> (ImplicitRestNode | SplatNode)?
     def rest
@@ -22857,8 +24013,12 @@ module Prism
     #
     # Represents the targets expressions after a splat node.
     #
-    #     a, (*, b, c) = 1, 2, 3, 4, 5
-    #            ^^^^
+    # ```rb
+    # a, (*, b, c) = 1, 2, 3, 4, 5
+    #        ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgKCosIGIsIGMpID0gMSwgMiwgMywgNCwgNQo)
     #
     #: () -> Array[LocalVariableTargetNode | InstanceVariableTargetNode | ClassVariableTargetNode | GlobalVariableTargetNode | ConstantTargetNode | ConstantPathTargetNode | CallTargetNode | IndexTargetNode | MultiTargetNode | RequiredParameterNode]
     def rights
@@ -22871,8 +24031,12 @@ module Prism
     #
     # The Location of the opening parenthesis.
     #
-    #     a, (b, c) = 1, 2, 3
-    #        ^
+    # ```rb
+    # a, (b, c) = 1, 2, 3
+    #    ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgKGIsIGMpID0gMSwgMiwgMwo)
     #
     #: () -> Location?
     def lparen_loc
@@ -22901,8 +24065,12 @@ module Prism
     #
     # The Location of the closing parenthesis.
     #
-    #     a, (b, c) = 1, 2, 3
-    #             ^
+    # ```rb
+    # a, (b, c) = 1, 2, 3
+    #         ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgKGIsIGMpID0gMSwgMiwgMwo)
     #
     #: () -> Location?
     def rparen_loc
@@ -22964,8 +24132,12 @@ module Prism
 
   # Represents a write to a multi-target expression.
   #
-  #     a, b, c = 1, 2, 3
-  #     ^^^^^^^^^^^^^^^^^
+  # ```rb
+  # a, b, c = 1, 2, 3
+  # ^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgYiwgYyA9IDEsIDIsIDMK)
   class MultiWriteNode < Node
     # @rbs @lefts: Array[LocalVariableTargetNode | InstanceVariableTargetNode | ClassVariableTargetNode | GlobalVariableTargetNode | ConstantTargetNode | ConstantPathTargetNode | CallTargetNode | IndexTargetNode | MultiTargetNode]
     # @rbs @rest: (ImplicitRestNode | SplatNode)?
@@ -23102,13 +24274,21 @@ module Prism
     #
     # Represents the targets expressions before a splat node.
     #
-    #     a, b, * = 1, 2, 3, 4, 5
-    #     ^^^^
+    # ```rb
+    # a, b, * = 1, 2, 3, 4, 5
+    # ^^^^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgYiwgKiA9IDEsIDIsIDMsIDQsIDUK)
     # The splat node can be absent, in that case all target expressions are in the left field.
     #
-    #     a, b, c = 1, 2, 3, 4, 5
-    #     ^^^^^^^
+    # ```rb
+    # a, b, c = 1, 2, 3, 4, 5
+    # ^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgYiwgYyA9IDEsIDIsIDMsIDQsIDUK)
     #
     #: () -> Array[LocalVariableTargetNode | InstanceVariableTargetNode | ClassVariableTargetNode | GlobalVariableTargetNode | ConstantTargetNode | ConstantPathTargetNode | CallTargetNode | IndexTargetNode | MultiTargetNode]
     def lefts
@@ -23120,18 +24300,30 @@ module Prism
     #
     # Represents a splat node in the target expression.
     #
-    #     a, b, *c = 1, 2, 3, 4
-    #           ^^
+    # ```rb
+    # a, b, *c = 1, 2, 3, 4
+    #       ^^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgYiwgKmMgPSAxLCAyLCAzLCA0Cg)
     # The variable can be empty, this results in a `SplatNode` with a `nil` expression field.
     #
-    #     a, b, * = 1, 2, 3, 4
-    #           ^
+    # ```rb
+    # a, b, * = 1, 2, 3, 4
+    #       ^
     #
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgYiwgKiA9IDEsIDIsIDMsIDQK)
     # If the `*` is omitted, this field will contain an `ImplicitRestNode`
     #
-    #     a, b, = 1, 2, 3, 4
-    #         ^
+    # ```rb
+    # a, b, = 1, 2, 3, 4
+    #     ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgYiwgPSAxLCAyLCAzLCA0Cg)
     #
     #: () -> (ImplicitRestNode | SplatNode)?
     def rest
@@ -23143,8 +24335,12 @@ module Prism
     #
     # Represents the targets expressions after a splat node.
     #
-    #     a, *, b, c = 1, 2, 3, 4, 5
-    #           ^^^^
+    # ```rb
+    # a, *, b, c = 1, 2, 3, 4, 5
+    #       ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgKiwgYiwgYyA9IDEsIDIsIDMsIDQsIDUK)
     #
     #: () -> Array[LocalVariableTargetNode | InstanceVariableTargetNode | ClassVariableTargetNode | GlobalVariableTargetNode | ConstantTargetNode | ConstantPathTargetNode | CallTargetNode | IndexTargetNode | MultiTargetNode]
     def rights
@@ -23157,8 +24353,12 @@ module Prism
     #
     # The Location of the opening parenthesis.
     #
-    #     (a, b, c) = 1, 2, 3
-    #     ^
+    # ```rb
+    # (a, b, c) = 1, 2, 3
+    # ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#KGEsIGIsIGMpID0gMSwgMiwgMwo)
     #
     #: () -> Location?
     def lparen_loc
@@ -23187,8 +24387,12 @@ module Prism
     #
     # The Location of the closing parenthesis.
     #
-    #     (a, b, c) = 1, 2, 3
-    #             ^
+    # ```rb
+    # (a, b, c) = 1, 2, 3
+    #         ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#KGEsIGIsIGMpID0gMSwgMiwgMwo)
     #
     #: () -> Location?
     def rparen_loc
@@ -23217,8 +24421,12 @@ module Prism
     #
     # The Location of the operator.
     #
-    #     a, b, c = 1, 2, 3
-    #             ^
+    # ```rb
+    # a, b, c = 1, 2, 3
+    #         ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgYiwgYyA9IDEsIDIsIDMK)
     #
     #: () -> Location
     def operator_loc
@@ -23241,8 +24449,12 @@ module Prism
     #
     # The value to write to the targets. It can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     a, b, c = 1, 2, 3
-    #               ^^^^^^^
+    # ```rb
+    # a, b, c = 1, 2, 3
+    #           ^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#YSwgYiwgYyA9IDEsIDIsIDMK)
     #
     #: () -> Prism::node
     def value
@@ -23300,8 +24512,12 @@ module Prism
 
   # Represents the use of the `next` keyword.
   #
-  #     next 1
-  #     ^^^^^^
+  # ```rb
+  # next 1
+  # ^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#bmV4dCAxCg)
   class NextNode < Node
     # @rbs @arguments: ArgumentsNode?
     # @rbs @keyword_loc: Location
@@ -23466,8 +24682,12 @@ module Prism
 
   # Represents the use of the `nil` keyword.
   #
-  #     nil
-  #     ^^^
+  # ```rb
+  # nil
+  # ^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#bmlsCg)
   class NilNode < Node
 
     # Initialize a new NilNode node.
@@ -23578,9 +24798,13 @@ module Prism
 
   # Represents the use of `&nil` inside method arguments.
   #
-  #     def a(&nil)
-  #           ^^^^
-  #     end
+  # ```rb
+  # def a(&nil)
+  #       ^^^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoJm5pbCkKCmVuZAo)
   class NoBlockParameterNode < Node
     # @rbs @operator_loc: Location
     # @rbs @keyword_loc: Location
@@ -23765,9 +24989,13 @@ module Prism
 
   # Represents the use of `**nil` inside method arguments.
   #
-  #     def a(**nil)
-  #           ^^^^^
-  #     end
+  # ```rb
+  # def a(**nil)
+  #       ^^^^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoKipuaWwpCgplbmQK)
   class NoKeywordsParameterNode < Node
     # @rbs @operator_loc: Location
     # @rbs @keyword_loc: Location
@@ -23952,8 +25180,12 @@ module Prism
 
   # Represents an implicit set of parameters through the use of numbered parameters within a block or lambda.
   #
-  #     -> { _1 + _2 }
-  #     ^^^^^^^^^^^^^^
+  # ```rb
+  # -> { _1 + _2 }
+  # ^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#LT4geyBfMSArIF8yIH0K)
   class NumberedParametersNode < Node
     # @rbs @maximum: Integer
 
@@ -24078,8 +25310,12 @@ module Prism
 
   # Represents reading a numbered reference to a capture in the previous match.
   #
-  #     $1
-  #     ^^
+  # ```rb
+  # $1
+  # ^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#JDEK)
   class NumberedReferenceReadNode < Node
     # @rbs @number: Integer
 
@@ -24186,11 +25422,15 @@ module Prism
     #
     # The (1-indexed, from the left) number of the capture group. Numbered references that are too large result in this value being `0`.
     #
-    #     $1          # number `1`
+    # ```rb
+    # $1          # number `1`
     #
-    #     $5432       # number `5432`
+    # $5432       # number `5432`
     #
-    #     $4294967296 # number `0`
+    # $4294967296 # number `0`
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#JDEgICAgICAgICAgIyBudW1iZXIgYDFgCgokNTQzMiAgICAgICAjIG51bWJlciBgNTQzMmAKCiQ0Mjk0OTY3Mjk2ICMgbnVtYmVyIGAwYAo)
     #
     #: () -> Integer
     def number
@@ -24210,9 +25450,13 @@ module Prism
 
   # Represents an optional keyword parameter to a method, block, or lambda definition.
   #
-  #     def a(b: 1)
-  #           ^^^^
-  #     end
+  # ```rb
+  # def a(b: 1)
+  #       ^^^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoYjogMSkKCmVuZAo)
   class OptionalKeywordParameterNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -24387,9 +25631,13 @@ module Prism
 
   # Represents an optional parameter to a method, block, or lambda definition.
   #
-  #     def a(b = 1)
-  #           ^^^^^
-  #     end
+  # ```rb
+  # def a(b = 1)
+  #       ^^^^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoYiA9IDEpCgplbmQK)
   class OptionalParameterNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -24601,8 +25849,12 @@ module Prism
 
   # Represents the use of the `||` operator or the `or` keyword.
   #
-  #     left or right
-  #     ^^^^^^^^^^^^^
+  # ```rb
+  # left or right
+  # ^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#bGVmdCBvciByaWdodAo)
   class OrNode < Node
     # @rbs @left: Prism::node
     # @rbs @right: Prism::node
@@ -24718,11 +25970,15 @@ module Prism
     #
     # Represents the left side of the expression. It can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     left or right
-    #     ^^^^
+    # ```rb
+    # left or right
+    # ^^^^
     #
-    #     1 || 2
-    #     ^
+    # 1 || 2
+    # ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#bGVmdCBvciByaWdodAoKMSB8fCAyCg)
     #
     #: () -> Prism::node
     def left
@@ -24734,11 +25990,15 @@ module Prism
     #
     # Represents the right side of the expression.
     #
-    #     left || right
-    #             ^^^^^
+    # ```rb
+    # left || right
+    #         ^^^^^
     #
-    #     1 or 2
-    #          ^
+    # 1 or 2
+    #      ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#bGVmdCB8fCByaWdodAoKMSBvciAyCg)
     #
     #: () -> Prism::node
     def right
@@ -24751,8 +26011,12 @@ module Prism
     #
     # The Location of the `or` keyword or the `||` operator.
     #
-    #     left or right
-    #          ^^
+    # ```rb
+    # left or right
+    #      ^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#bGVmdCBvciByaWdodAo)
     #
     #: () -> Location
     def operator_loc
@@ -24795,9 +26059,13 @@ module Prism
 
   # Represents the list of parameters on a method, block, or lambda definition.
   #
-  #     def a(b, c, d)
-  #           ^^^^^^^
-  #     end
+  # ```rb
+  # def a(b, c, d)
+  #       ^^^^^^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoYiwgYywgZCkKCmVuZAo)
   class ParametersNode < Node
     # @rbs @requireds: Array[RequiredParameterNode | MultiTargetNode]
     # @rbs @optionals: Array[OptionalParameterNode]
@@ -25025,8 +26293,12 @@ module Prism
 
   # Represents a parenthesized expression
   #
-  #     (10 + 34)
-  #     ^^^^^^^^^
+  # ```rb
+  # (10 + 34)
+  # ^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#KDEwICsgMzQpCg)
   class ParenthesesNode < Node
     # @rbs @body: Prism::node?
     # @rbs @opening_loc: Location
@@ -25237,8 +26509,12 @@ module Prism
 
   # Represents the use of the `^` operator for pinning an expression in a pattern matching expression.
   #
-  #     foo in ^(bar)
-  #            ^^^^^^
+  # ```rb
+  # foo in ^(bar)
+  #        ^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIF4oYmFyKQo)
   class PinnedExpressionNode < Node
     # @rbs @expression: Prism::node
     # @rbs @operator_loc: Location
@@ -25358,8 +26634,12 @@ module Prism
     #
     # The expression used in the pinned expression
     #
-    #     foo in ^(bar)
-    #              ^^^
+    # ```rb
+    # foo in ^(bar)
+    #          ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIF4oYmFyKQo)
     #
     #: () -> Prism::node
     def expression
@@ -25372,8 +26652,12 @@ module Prism
     #
     # The Location of the `^` operator
     #
-    #     foo in ^(bar)
-    #            ^
+    # ```rb
+    # foo in ^(bar)
+    #        ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIF4oYmFyKQo)
     #
     #: () -> Location
     def operator_loc
@@ -25397,8 +26681,12 @@ module Prism
     #
     # The Location of the opening parenthesis.
     #
-    #     foo in ^(bar)
-    #             ^
+    # ```rb
+    # foo in ^(bar)
+    #         ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIF4oYmFyKQo)
     #
     #: () -> Location
     def lparen_loc
@@ -25422,8 +26710,12 @@ module Prism
     #
     # The Location of the closing parenthesis.
     #
-    #     foo in ^(bar)
-    #                 ^
+    # ```rb
+    # foo in ^(bar)
+    #             ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIF4oYmFyKQo)
     #
     #: () -> Location
     def rparen_loc
@@ -25487,8 +26779,12 @@ module Prism
 
   # Represents the use of the `^` operator for pinning a variable in a pattern matching expression.
   #
-  #     foo in ^bar
-  #            ^^^^
+  # ```rb
+  # foo in ^bar
+  #        ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIF5iYXIK)
   class PinnedVariableNode < Node
     # @rbs @variable: (LocalVariableReadNode | InstanceVariableReadNode | ClassVariableReadNode | GlobalVariableReadNode | BackReferenceReadNode | NumberedReferenceReadNode | ItLocalVariableReadNode)
     # @rbs @operator_loc: Location
@@ -25600,8 +26896,12 @@ module Prism
     #
     # The variable used in the pinned expression
     #
-    #     foo in ^bar
-    #             ^^^
+    # ```rb
+    # foo in ^bar
+    #         ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIF5iYXIK)
     #
     #: () -> (LocalVariableReadNode | InstanceVariableReadNode | ClassVariableReadNode | GlobalVariableReadNode | BackReferenceReadNode | NumberedReferenceReadNode | ItLocalVariableReadNode)
     def variable
@@ -25614,8 +26914,12 @@ module Prism
     #
     # The Location of the `^` operator
     #
-    #     foo in ^bar
-    #            ^
+    # ```rb
+    # foo in ^bar
+    #        ^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIGluIF5iYXIK)
     #
     #: () -> Location
     def operator_loc
@@ -25657,8 +26961,12 @@ module Prism
 
   # Represents the use of the `END` keyword.
   #
-  #     END { foo }
-  #     ^^^^^^^^^^^
+  # ```rb
+  # END { foo }
+  # ^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#RU5EIHsgZm9vIH0K)
   class PostExecutionNode < Node
     # @rbs @statements: StatementsNode?
     # @rbs @keyword_loc: Location
@@ -25897,8 +27205,12 @@ module Prism
 
   # Represents the use of the `BEGIN` keyword.
   #
-  #     BEGIN { foo }
-  #     ^^^^^^^^^^^^^
+  # ```rb
+  # BEGIN { foo }
+  # ^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#QkVHSU4geyBmb28gfQo)
   class PreExecutionNode < Node
     # @rbs @statements: StatementsNode?
     # @rbs @keyword_loc: Location
@@ -26276,11 +27588,15 @@ module Prism
 
   # Represents the use of the `..` or `...` operators.
   #
-  #     1..2
-  #     ^^^^
+  # ```rb
+  # 1..2
+  # ^^^^
   #
-  #     c if a =~ /left/ ... b =~ /right/
-  #          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  # c if a =~ /left/ ... b =~ /right/
+  #      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#MS4uMgoKYyBpZiBhID1-IC9sZWZ0LyAuLi4gYiA9fiAvcmlnaHQvCg)
   class RangeNode < Node
     # @rbs @left: Prism::node?
     # @rbs @right: Prism::node?
@@ -26407,11 +27723,15 @@ module Prism
     #
     # The left-hand side of the range, if present. It can be either `nil` or any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     1...
-    #     ^
+    # ```rb
+    # 1...
+    # ^
     #
-    #     hello...goodbye
-    #     ^^^^^
+    # hello...goodbye
+    # ^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#MS4uLgoKaGVsbG8uLi5nb29kYnllCg)
     #
     #: () -> Prism::node?
     def left
@@ -26423,11 +27743,15 @@ module Prism
     #
     # The right-hand side of the range, if present. It can be either `nil` or any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     ..5
-    #       ^
+    # ```rb
+    # ..5
+    #   ^
     #
-    #     1...foo
-    #         ^^^
+    # 1...foo
+    #     ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#Li41CgoxLi4uZm9vCg)
     # If neither right-hand or left-hand side was included, this will be an ErrorRecoveryNode.
     #
     #: () -> Prism::node?
@@ -26483,8 +27807,12 @@ module Prism
 
   # Represents a rational number literal.
   #
-  #     1.0r
-  #     ^^^^
+  # ```rb
+  # 1.0r
+  # ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#MS4wcgo)
   class RationalNode < Node
     # @rbs @numerator: Integer
     # @rbs @denominator: Integer
@@ -26626,7 +27954,11 @@ module Prism
     #
     # The numerator of the rational number.
     #
-    #     1.5r # numerator 3
+    # ```rb
+    # 1.5r # numerator 3
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#MS41ciAjIG51bWVyYXRvciAzCg)
     #
     #: () -> Integer
     def numerator
@@ -26638,7 +27970,11 @@ module Prism
     #
     # The denominator of the rational number.
     #
-    #     1.5r # denominator 2
+    # ```rb
+    # 1.5r # denominator 2
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#MS41ciAjIGRlbm9taW5hdG9yIDIK)
     #
     #: () -> Integer
     def denominator
@@ -26660,8 +27996,12 @@ module Prism
 
   # Represents the use of the `redo` keyword.
   #
-  #     redo
-  #     ^^^^
+  # ```rb
+  # redo
+  # ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#cmVkbwo)
   class RedoNode < Node
 
     # Initialize a new RedoNode node.
@@ -26772,8 +28112,12 @@ module Prism
 
   # Represents a regular expression literal with no interpolation.
   #
-  #     /foo/i
-  #     ^^^^^^
+  # ```rb
+  # /foo/i
+  # ^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#L2Zvby9pCg)
   class RegularExpressionNode < Node
     # @rbs @opening_loc: Location
     # @rbs @content_loc: Location
@@ -27098,9 +28442,13 @@ module Prism
 
   # Represents a required keyword parameter to a method, block, or lambda definition.
   #
-  #     def a(b: )
-  #           ^^
-  #     end
+  # ```rb
+  # def a(b: )
+  #       ^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoYjogKQoKZW5kCg)
   class RequiredKeywordParameterNode < Node
     # @rbs @name: Symbol
     # @rbs @name_loc: Location
@@ -27260,9 +28608,13 @@ module Prism
 
   # Represents a required parameter to a method, block, or lambda definition.
   #
-  #     def a(b)
-  #           ^
-  #     end
+  # ```rb
+  # def a(b)
+  #       ^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoYikKCmVuZAo)
   class RequiredParameterNode < Node
     # @rbs @name: Symbol
 
@@ -27396,8 +28748,12 @@ module Prism
 
   # Represents an expression modified with a rescue.
   #
-  #     foo rescue nil
-  #     ^^^^^^^^^^^^^^
+  # ```rb
+  # foo rescue nil
+  # ^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vIHJlc2N1ZSBuaWwK)
   class RescueModifierNode < Node
     # @rbs @expression: Prism::node
     # @rbs @keyword_loc: Location
@@ -27575,12 +28931,16 @@ module Prism
 
   # Represents a rescue statement.
   #
-  #     begin
-  #     rescue Foo, *splat, Bar => ex
-  #       foo
-  #     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  #     end
+  # ```rb
+  # begin
+  # rescue Foo, *splat, Bar => ex
+  #   foo
+  # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  # end
   #
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YmVnaW4KcmVzY3VlIEZvbywgKnNwbGF0LCBCYXIgPT4gZXgKICBmb28KCmVuZAo)
   # `Foo, *splat, Bar` are in the `exceptions` field. `ex` is in the `reference` field.
   class RescueNode < Node
     # @rbs @keyword_loc: Location
@@ -27879,9 +29239,13 @@ module Prism
 
   # Represents a rest parameter to a method, block, or lambda definition.
   #
-  #     def a(*b)
-  #           ^^
-  #     end
+  # ```rb
+  # def a(*b)
+  #       ^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ZGVmIGEoKmIpCgplbmQK)
   class RestParameterNode < Node
     # @rbs @name: Symbol?
     # @rbs @name_loc: Location?
@@ -28083,8 +29447,12 @@ module Prism
 
   # Represents the use of the `retry` keyword.
   #
-  #     retry
-  #     ^^^^^
+  # ```rb
+  # retry
+  # ^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#cmV0cnkK)
   class RetryNode < Node
 
     # Initialize a new RetryNode node.
@@ -28195,8 +29563,12 @@ module Prism
 
   # Represents the use of the `return` keyword.
   #
-  #     return 1
-  #     ^^^^^^^^
+  # ```rb
+  # return 1
+  # ^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#cmV0dXJuIDEK)
   class ReturnNode < Node
     # @rbs @keyword_loc: Location
     # @rbs @arguments: ArgumentsNode?
@@ -28361,8 +29733,12 @@ module Prism
 
   # Represents the `self` keyword.
   #
-  #     self
-  #     ^^^^
+  # ```rb
+  # self
+  # ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#c2VsZgo)
   class SelfNode < Node
 
     # Initialize a new SelfNode node.
@@ -28473,9 +29849,13 @@ module Prism
 
   # This node wraps a constant write to indicate that when the value is written, it should have its shareability state modified.
   #
-  #     # shareable_constant_value: literal
-  #     C = { a: 1 }
-  #     ^^^^^^^^^^^^
+  # ```rb
+  # # shareable_constant_value: literal
+  # C = { a: 1 }
+  # ^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#IyBzaGFyZWFibGVfY29uc3RhbnRfdmFsdWU6IGxpdGVyYWwKQyA9IHsgYTogMSB9Cg)
   class ShareableConstantNode < Node
     # @rbs @write: (ConstantWriteNode | ConstantAndWriteNode | ConstantOrWriteNode | ConstantOperatorWriteNode | ConstantPathWriteNode | ConstantPathAndWriteNode | ConstantPathOrWriteNode | ConstantPathOperatorWriteNode)
 
@@ -28626,8 +30006,12 @@ module Prism
 
   # Represents a singleton class declaration involving the `class` keyword.
   #
-  #     class << self end
-  #     ^^^^^^^^^^^^^^^^^
+  # ```rb
+  # class << self end
+  # ^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2xhc3MgPDwgc2VsZiBlbmQK)
   class SingletonClassNode < Node
     # @rbs @locals: Array[Symbol]
     # @rbs @class_keyword_loc: Location
@@ -28897,8 +30281,12 @@ module Prism
 
   # Represents the use of the `__ENCODING__` keyword.
   #
-  #     __ENCODING__
-  #     ^^^^^^^^^^^^
+  # ```rb
+  # __ENCODING__
+  # ^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#X19FTkNPRElOR19fCg)
   class SourceEncodingNode < Node
 
     # Initialize a new SourceEncodingNode node.
@@ -29009,8 +30397,12 @@ module Prism
 
   # Represents the use of the `__FILE__` keyword.
   #
-  #     __FILE__
-  #     ^^^^^^^^
+  # ```rb
+  # __FILE__
+  # ^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#X19GSUxFX18K)
   class SourceFileNode < Node
     # @rbs @filepath: String
 
@@ -29168,8 +30560,12 @@ module Prism
 
   # Represents the use of the `__LINE__` keyword.
   #
-  #     __LINE__
-  #     ^^^^^^^^
+  # ```rb
+  # __LINE__
+  # ^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#X19MSU5FX18K)
   class SourceLineNode < Node
 
     # Initialize a new SourceLineNode node.
@@ -29280,8 +30676,12 @@ module Prism
 
   # Represents the use of the splat operator.
   #
-  #     [*a]
-  #      ^^
+  # ```rb
+  # [*a]
+  #  ^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#WyphXQo)
   class SplatNode < Node
     # @rbs @operator_loc: Location
     # @rbs @expression: Prism::node?
@@ -29446,8 +30846,12 @@ module Prism
 
   # Represents a set of statements contained within some scope.
   #
-  #     foo; bar; baz
-  #     ^^^^^^^^^^^^^
+  # ```rb
+  # foo; bar; baz
+  # ^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Zm9vOyBiYXI7IGJhego)
   class StatementsNode < Node
     # @rbs @body: Array[Prism::node]
 
@@ -29574,14 +30978,18 @@ module Prism
 
   # Represents a string literal, a string contained within a `%w` list, or plain string content within an interpolated string.
   #
-  #     "foo"
-  #     ^^^^^
+  # ```rb
+  # "foo"
+  # ^^^^^
   #
-  #     %w[foo]
-  #        ^^^
+  # %w[foo]
+  #    ^^^
   #
-  #     "foo #{bar} baz"
-  #      ^^^^      ^^^^
+  # "foo #{bar} baz"
+  #  ^^^^      ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#ImZvbyIKCiV3W2Zvb10KCiJmb28gI3tiYXJ9IGJheiIK)
   class StringNode < Node
     # @rbs @opening_loc: Location?
     # @rbs @content_loc: Location
@@ -29860,12 +31268,16 @@ module Prism
 
   # Represents the use of the `super` keyword with parentheses or arguments.
   #
-  #     super()
-  #     ^^^^^^^
+  # ```rb
+  # super()
+  # ^^^^^^^
   #
-  #     super foo, bar
-  #     ^^^^^^^^^^^^^^
+  # super foo, bar
+  # ^^^^^^^^^^^^^^
   #
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#c3VwZXIoKQoKc3VwZXIgZm9vLCBiYXIK)
   # If no arguments are provided (except for a block), it would be a `ForwardingSuperNode` instead.
   class SuperNode < Node
     # @rbs @keyword_loc: Location
@@ -30131,11 +31543,15 @@ module Prism
 
   # Represents a symbol literal or a symbol contained within a `%i` list.
   #
-  #     :foo
-  #     ^^^^
+  # ```rb
+  # :foo
+  # ^^^^
   #
-  #     %i[foo]
-  #        ^^^
+  # %i[foo]
+  #    ^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#OmZvbwoKJWlbZm9vXQo)
   class SymbolNode < Node
     # @rbs @opening_loc: Location?
     # @rbs @content_loc: Location
@@ -30406,8 +31822,12 @@ module Prism
 
   # Represents the use of the literal `true` keyword.
   #
-  #     true
-  #     ^^^^
+  # ```rb
+  # true
+  # ^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#dHJ1ZQo)
   class TrueNode < Node
 
     # Initialize a new TrueNode node.
@@ -30518,8 +31938,12 @@ module Prism
 
   # Represents the use of the `undef` keyword.
   #
-  #     undef :foo, :bar, :baz
-  #     ^^^^^^^^^^^^^^^^^^^^^^
+  # ```rb
+  # undef :foo, :bar, :baz
+  # ^^^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#dW5kZWYgOmZvbywgOmJhciwgOmJhego)
   class UndefNode < Node
     # @rbs @names: Array[SymbolNode | InterpolatedSymbolNode]
     # @rbs @keyword_loc: Location
@@ -30683,11 +32107,15 @@ module Prism
 
   # Represents the use of the `unless` keyword, either in the block form or the modifier form.
   #
-  #     bar unless foo
-  #     ^^^^^^^^^^^^^^
+  # ```rb
+  # bar unless foo
+  # ^^^^^^^^^^^^^^
   #
-  #     unless foo then bar end
-  #     ^^^^^^^^^^^^^^^^^^^^^^^
+  # unless foo then bar end
+  # ^^^^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YmFyIHVubGVzcyBmb28KCnVubGVzcyBmb28gdGhlbiBiYXIgZW5kCg)
   class UnlessNode < Node
     # @rbs @unless_keyword_loc: Location
     # @rbs @predicate: Prism::node
@@ -30820,11 +32248,15 @@ module Prism
     #
     # The Location of the `unless` keyword.
     #
-    #     unless cond then bar end
-    #     ^^^^^^
+    # ```rb
+    # unless cond then bar end
+    # ^^^^^^
     #
-    #     bar unless cond
-    #         ^^^^^^
+    # bar unless cond
+    #     ^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#dW5sZXNzIGNvbmQgdGhlbiBiYXIgZW5kCgpiYXIgdW5sZXNzIGNvbmQK)
     #
     #: () -> Location
     def unless_keyword_loc
@@ -30847,11 +32279,15 @@ module Prism
     #
     # The condition to be evaluated for the unless expression. It can be any [non-void expression](https://github.com/ruby/prism/blob/main/docs/parsing_rules.md#non-void-expression).
     #
-    #     unless cond then bar end
-    #            ^^^^
+    # ```rb
+    # unless cond then bar end
+    #        ^^^^
     #
-    #     bar unless cond
-    #                ^^^^
+    # bar unless cond
+    #            ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#dW5sZXNzIGNvbmQgdGhlbiBiYXIgZW5kCgpiYXIgdW5sZXNzIGNvbmQK)
     #
     #: () -> Prism::node
     def predicate
@@ -30864,8 +32300,12 @@ module Prism
     #
     # The Location of the `then` keyword, if present.
     #
-    #     unless cond then bar end
-    #                 ^^^^
+    # ```rb
+    # unless cond then bar end
+    #             ^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#dW5sZXNzIGNvbmQgdGhlbiBiYXIgZW5kCg)
     #
     #: () -> Location?
     def then_keyword_loc
@@ -30894,8 +32334,12 @@ module Prism
     # The body of statements that will executed if the unless condition is
     # falsey. Will be `nil` if no body is provided.
     #
-    #     unless cond then bar end
-    #                      ^^^
+    # ```rb
+    # unless cond then bar end
+    #                  ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#dW5sZXNzIGNvbmQgdGhlbiBiYXIgZW5kCg)
     #
     #: () -> StatementsNode?
     def statements
@@ -30907,8 +32351,12 @@ module Prism
     #
     # The else clause of the unless expression, if present.
     #
-    #     unless cond then bar else baz end
-    #                          ^^^^^^^^^^^^
+    # ```rb
+    # unless cond then bar else baz end
+    #                      ^^^^^^^^^^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#dW5sZXNzIGNvbmQgdGhlbiBiYXIgZWxzZSBiYXogZW5kCg)
     #
     #: () -> ElseNode?
     def else_clause
@@ -30921,8 +32369,12 @@ module Prism
     #
     # The Location of the `end` keyword, if present.
     #
-    #     unless cond then bar end
-    #                          ^^^
+    # ```rb
+    # unless cond then bar end
+    #                      ^^^
+    # ```
+    #
+    # [Explore code sample](https://ruby.github.io/prism/playground.html#dW5sZXNzIGNvbmQgdGhlbiBiYXIgZW5kCg)
     #
     #: () -> Location?
     def end_keyword_loc
@@ -30993,11 +32445,15 @@ module Prism
 
   # Represents the use of the `until` keyword, either in the block form or the modifier form.
   #
-  #     bar until foo
-  #     ^^^^^^^^^^^^^
+  # ```rb
+  # bar until foo
+  # ^^^^^^^^^^^^^
   #
-  #     until foo do bar end
-  #     ^^^^^^^^^^^^^^^^^^^^
+  # until foo do bar end
+  # ^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YmFyIHVudGlsIGZvbwoKdW50aWwgZm9vIGRvIGJhciBlbmQK)
   class UntilNode < Node
     # @rbs @until_keyword_loc: Location
     # @rbs @do_keyword_loc: Location?
@@ -31271,10 +32727,14 @@ module Prism
 
   # Represents the use of the `when` keyword within a case statement.
   #
-  #     case true
-  #     when true
-  #     ^^^^^^^^^
-  #     end
+  # ```rb
+  # case true
+  # when true
+  # ^^^^^^^^^
+  # end
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#Y2FzZSB0cnVlCndoZW4gdHJ1ZQoKZW5kCg)
   class WhenNode < Node
     # @rbs @when_keyword_loc: Location
     # @rbs @conditions: Array[Prism::node]
@@ -31498,11 +32958,15 @@ module Prism
 
   # Represents the use of the `while` keyword, either in the block form or the modifier form.
   #
-  #     bar while foo
-  #     ^^^^^^^^^^^^^
+  # ```rb
+  # bar while foo
+  # ^^^^^^^^^^^^^
   #
-  #     while foo do bar end
-  #     ^^^^^^^^^^^^^^^^^^^^
+  # while foo do bar end
+  # ^^^^^^^^^^^^^^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YmFyIHdoaWxlIGZvbwoKd2hpbGUgZm9vIGRvIGJhciBlbmQK)
   class WhileNode < Node
     # @rbs @while_keyword_loc: Location
     # @rbs @do_keyword_loc: Location?
@@ -31776,8 +33240,12 @@ module Prism
 
   # Represents an xstring literal with no interpolation.
   #
-  #     `foo`
-  #     ^^^^^
+  # ```rb
+  # `foo`
+  # ^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#YGZvb2AK)
   class XStringNode < Node
     # @rbs @opening_loc: Location
     # @rbs @content_loc: Location
@@ -32030,8 +33498,12 @@ module Prism
 
   # Represents the use of the `yield` keyword.
   #
-  #     yield 1
-  #     ^^^^^^^
+  # ```rb
+  # yield 1
+  # ^^^^^^^
+  # ```
+  #
+  # [Explore code sample](https://ruby.github.io/prism/playground.html#eWllbGQgMQo)
   class YieldNode < Node
     # @rbs @keyword_loc: Location
     # @rbs @lparen_loc: Location?

@@ -29,8 +29,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance | RubyMethodAttributes.Empty)]
         public static object Reinitialize(object self) {
             // takes no arguments: Object.new(1), and a `super` passing arguments up to here, are
-            // "wrong number of arguments (given 1, expected 0)" in MRI
-            return self;
+            // "wrong number of arguments (given 1, expected 0)" in MRI; answers nil, as MRI's does
+            return null;
         }
 
         #region singleton_method_added, singleton_method_removed, singleton_method_undefined, method_missing
@@ -54,8 +54,12 @@ namespace IronRuby.Builtins {
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
         [RubyStackTraceHidden]
         public static object MethodMissing(RubyContext/*!*/ context, object/*!*/ self, [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
-            // the arguments of the call that found no method are what NoMethodError#args reports
-            throw NoMethodErrorOps.SetArguments(RubyExceptions.CreateMethodMissing(context, self, name.ToString()), args);
+            // the arguments of the call that found no method are what NoMethodError#args reports,
+            // and the way the call was made (implicit receiver or not) is what #private_call? reports
+            var error = NoMethodErrorOps.SetArguments(RubyExceptions.CreateMethodMissing(context, self, name.ToString()), args);
+            RubyExceptionData.GetInstance(error).PrivateCall = RubyOps.MethodMissingPrivateCall;
+            RubyOps.MethodMissingPrivateCall = false;
+            throw error;
         }
 
         #endregion
@@ -226,8 +230,12 @@ namespace IronRuby.Builtins {
             return RubyUtils.Evaluate(code, scope, self, singleton, immediate.IsSingletonClass ? null : immediate, file, line);
         }
 
+        // Not [NotNull] params: a lone nil argument binds as the params array itself, and
+        // [NotNull] made instance_exec(nil) { } a TypeError - which is every ActiveRecord
+        // association scope, `relation.instance_exec(owner, &scope)` with no owner.
         [RubyMethod("instance_exec")]
-        public static object InstanceExec(BlockParam block, object self, [NotNull]params object[]/*!*/ args) {
+        public static object InstanceExec(BlockParam block, object self, params object[] args) {
+            args = args ?? new object[] { null };
             if (block == null) {
                 throw RubyExceptions.CreateLocalJumpError("no block given");
             }

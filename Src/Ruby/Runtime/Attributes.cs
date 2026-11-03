@@ -118,6 +118,15 @@ namespace IronRuby.Runtime {
     /// </summary>
     [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
     public sealed class RubyNotImplementedAttribute : Attribute {
+        /// <summary>
+        /// Not implemented on Windows only, where MRI defines it as the stub too (IO#ioctl); the
+        /// same build runs on Unix, where the method works.
+        /// </summary>
+        public bool OnWindowsOnly { get; set; }
+
+        internal bool AppliesHere {
+            get { return !OnWindowsOnly || System.IO.Path.DirectorySeparatorChar == '\\'; }
+        }
     }
 
     [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]

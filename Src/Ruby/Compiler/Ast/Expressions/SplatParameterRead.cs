@@ -112,7 +112,7 @@ namespace IronRuby.Compiler.Ast {
             return new SplatParameterRead(ReadKind.ShiftRest, arguments, postCount, 0, null, location);
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             var arguments = AstUtils.Box(_arguments.TransformRead(gen));
             switch (_kind) {
                 case ReadKind.Copy:

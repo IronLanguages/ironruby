@@ -417,11 +417,12 @@ namespace IronRuby.Prism.Ast {
         public PmLocation? RparenLoc;
         public PmLocation? EqualLoc;
         public PmLocation? EndKeywordLoc;
-        // Set by a loader asked for lazy method bodies: Body is null and the body is still in the
-        // serialized buffer, for PrismLoader.LoadDeferredBody; BodyContents is what the body holds
-        // (PrismLoader.Contents* bits).
+        // Set by a loader asked for lazy method bodies: Body is null and the body's subtree is still
+        // in the serialized buffer, DeferredBodyLength bytes at DeferredBodyOffset, for
+        // PrismLoader.LoadDeferredBody; BodyContents is what the body holds (PrismLoader.Contents* bits).
         public IronRuby.Prism.PrismLoader DeferredBodyLoader;
         public int DeferredBodyOffset;
+        public int DeferredBodyLength;
         public uint BodyContents;
     }
 

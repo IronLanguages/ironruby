@@ -68,6 +68,10 @@ namespace IronRuby.Runtime.Jit {
         private readonly RubyContext/*!*/ _context;
         private readonly int _scopeDepth;
 
+        // The refinements active where the code being compiled was written: the calls it binds itself
+        // (operators, the self-call) are resolved as its call sites would resolve them.
+        private RefinementActivation/*!*/ _refinements = RefinementActivation.Empty;
+
         // Locals, in nested scopes. Ruby has no block scoping, but a local first assigned
         // inside a conditionally executed region is nil on the path that skipped it, which a
         // typed int/double slot cannot represent. Declaring such a local in the region's own
@@ -112,7 +116,7 @@ namespace IronRuby.Runtime.Jit {
         private string _bailReason;
 
         private JitBailout/*!*/ Bail(string/*!*/ reason) {
-            if (JitRuntime.Verbose && _bailReason == null) { _bailReason = reason; }
+            if ((JitRuntime.Verbose || Osr.OsrLoopSite.Verbose) && _bailReason == null) { _bailReason = reason; }
             return JitBailout.Instance;
         }
 
@@ -239,7 +243,8 @@ namespace IronRuby.Runtime.Jit {
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, out List<JitLoopSlot> slots, out bool canDeopt) {
             JitLoopFacts facts;
-            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, null, null, null, null, out slots, out canDeopt, out facts);
+            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, null, null, null, null, RefinementActivation.Empty,
+                out slots, out canDeopt, out facts);
         }
 
         /// <summary>What JitLoopCompiler builds around an outlined loop besides its slots.</summary>
@@ -256,19 +261,20 @@ namespace IronRuby.Runtime.Jit {
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self,
             Func<string, JT> ivarProfile, Func<string, string> attrProfile,
             Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal, RubyScope constantScope, ReceiverHints hints,
-            out List<JitLoopSlot> slots, out bool canDeopt, out JitLoopFacts facts) {
+            RefinementActivation/*!*/ refinements, out List<JitLoopSlot> slots, out bool canDeopt, out JitLoopFacts facts) {
 
             slots = null;
             canDeopt = false;
             facts = default(JitLoopFacts);
             var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal, constantScope);
             c._hints = hints;
+            c._refinements = refinements;
             MSA.Expression body;
             try {
                 JT type;
                 body = c.EmitWhile(loop, out type);
             } catch (JitBailout) {
-                if (Osr.OsrLoopSite.Verbose && c._bailReason != null) { Console.Error.WriteLine("[osr]   bailed: {0}", c._bailReason); }
+                if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter: {0}", c._bailReason ?? "unsupported construct"); }
                 return null;
             }
             // A deopt restores the locals to what they were at the top of the iteration and
@@ -411,27 +417,29 @@ namespace IronRuby.Runtime.Jit {
         /// cannot be specialized.
         /// </summary>
         internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes) {
-            return TryCompile(ast, context, paramTypes, null);
+            return TryCompile(ast, context, paramTypes, null, RefinementActivation.Empty);
         }
 
-        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords) {
-            return TryCompile(ast, context, paramTypes, keywords, -1);
+        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords,
+            RefinementActivation/*!*/ refinements) {
+            return TryCompile(ast, context, paramTypes, keywords, refinements, -1);
         }
 
         /// <summary>
         /// <paramref name="supplied"/>: compile the body for calls that pass this many of the optional
         /// parameters, evaluating the other defaults itself; -1 for the body that takes them all.
         /// </summary>
-        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords, int supplied) {
-            return TryCompile(ast, context, paramTypes, keywords, supplied, null, null);
+        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords,
+            RefinementActivation/*!*/ refinements, int supplied) {
+            return TryCompile(ast, context, paramTypes, keywords, refinements, supplied, null, null);
         }
 
         /// <summary>
         /// <paramref name="constantScope"/>: the scope the method's constants resolve in (its declaring
         /// scope); null if the body may not fold constants.
         /// </summary>
-        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords, int supplied,
-            RubyScope constantScope, ReceiverHints hints) {
+        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords,
+            RefinementActivation/*!*/ refinements, int supplied, RubyScope constantScope, ReceiverHints hints) {
             // The self-recursive call needs the method's return type before the body has been
             // typed. Guess, compile, and re-run once if the guess was wrong.
             // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
@@ -440,6 +448,7 @@ namespace IronRuby.Runtime.Jit {
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
                 c._hints = hints;
+                c._refinements = refinements;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
@@ -766,6 +775,8 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private MSA.Expression/*!*/ Emit(RExpr/*!*/ node, out JT type) {
             if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
+            // Deep enough to run this thread out of stack: the method stays interpreted (see StackGuard).
+            if (!StackGuard.IsSufficient) { throw Bail("nested too deeply for the stack"); }
 
             var literal = node as Literal;
             if (literal != null) { return EmitLiteral(literal, out type); }
@@ -1313,8 +1324,10 @@ namespace IronRuby.Runtime.Jit {
             // `x' or `self.x' in an outlined loop, where x is an attr_reader on the loop's self: the
             // instance variable read the reader does, and no call. JitRuntime.ReadSelfAttr checks
             // self's class and the global method version on each read and deopts when either has
-            // moved; a read is not observable, so the iteration stays restartable.
-            if (argc == 0 && _attrProfile != null && (node.Target == null || node.Target is SelfReference)) {
+            // moved; a read is not observable, so the iteration stays restartable. It finds the
+            // reader as a call with no refinements active does, so only a loop written where none
+            // are (the copy's prologue checks the loop is still entered so) reads this way.
+            if (argc == 0 && _attrProfile != null && _refinements.IsEmpty && (node.Target == null || node.Target is SelfReference)) {
                 string variableName = _attrProfile(node.MethodName);
                 if (variableName != null) {
                     _canDeopt = true;
@@ -1330,7 +1343,7 @@ namespace IronRuby.Runtime.Jit {
             // same read, of o as it is in its tuple slot (the loop may not write o), typed by what
             // the variable holds in o right now - a guarded unboxing for an Integer or a Float.
             var receiverLocal = node.Target as LocalVariable;
-            if (argc == 0 && receiverLocal != null && _peekLocal != null) {
+            if (argc == 0 && receiverLocal != null && _peekLocal != null && _refinements.IsEmpty) {
                 MSA.ParameterExpression bound;
                 JT boundType;
                 if (!TryLookup(Key(receiverLocal), out bound, out boundType)) {
@@ -1357,6 +1370,21 @@ namespace IronRuby.Runtime.Jit {
             // Hash#key? and #fetch, Array/Hash #size on an object (JitCompiler.Objects.cs).
             if (node.Target != null && IsHashQuery(node.MethodName, argc)) {
                 return EmitHashQuery(node, out type);
+            }
+
+            // `f.to_i' of a Float, and `n.to_i' of an Integer, which is n.
+            if (argc == 0 && node.Target != null && node.MethodName == "to_i") {
+                JT tt;
+                var t = Emit(node.Target, out tt);
+                t = NumericIVar(node.Target, t, ref tt);
+                if (IsNumeric(tt)) {
+                    RequireBuiltin(tt, "to_i");
+                    if (tt != JT.Dbl) { type = tt; return t; }
+                    _canDeopt = true;
+                    type = JT.Lng;
+                    return Ast.Call(JitRuntime.M("FloatToLong"), t);
+                }
+                throw Bail("to_i on " + tt);
             }
 
             // Binary operators on Fixnum/Float, and Array#[] / Hash#[] on an object.
@@ -1476,8 +1504,10 @@ namespace IronRuby.Runtime.Jit {
             return JitRuntime.ClassOf(_context, sample);
         }
 
-        private static bool IsBuiltinMethod(RubyClass/*!*/ cls, string/*!*/ name) {
-            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible);
+        private bool IsBuiltinMethod(RubyClass/*!*/ cls, string/*!*/ name) {
+            // A refinement of the operator active where the code was written is what its call site would
+            // call: that is not the built-in one either.
+            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible, _refinements);
             var info = resolved.Found ? resolved.Info as RubyLibraryMethodInfo : null;
             if (info == null) { return false; }
             foreach (var member in info.GetMembers()) {
@@ -1491,7 +1521,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>The library method, and public: what a call with an explicit receiver reaches.</summary>
-        private static bool IsPublicBuiltin(RubyClass/*!*/ cls, string/*!*/ name) {
+        private bool IsPublicBuiltin(RubyClass/*!*/ cls, string/*!*/ name) {
             return IsBuiltinMethod(cls, name) && IsPublic(cls, name);
         }
 
@@ -1880,6 +1910,8 @@ namespace IronRuby.Runtime.Jit {
             // Emit gives up past MaxNodes. The screen's count is not exactly Emit's, so it only
             // rules out a body that is too big by any counting - the walk stays bounded either way.
             if (++_nodes > 2 * JitCompiler.MaxNodes) { return No(node); }
+            // Nor one nested deeper than this thread's stack goes: interpreting it is fine (see StackGuard).
+            if (!StackGuard.IsSufficient) { return No(node); }
 
             var literal = node as Literal;
             if (literal != null) {

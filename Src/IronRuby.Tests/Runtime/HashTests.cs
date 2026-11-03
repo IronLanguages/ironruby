@@ -78,7 +78,7 @@ class C
     end
 end
 
-C.new[1 => 'a', 2 => 'b'] = 'c'
+C.new[{1 => 'a', 2 => 'b'}] = 'c'    # Ruby 3.4+: without braces they are keywords, not allowed here
 ");
             }, @"abc");
         }
@@ -122,6 +122,37 @@ hash = { c => 1 }
 p hash[c]
 ");
             }, @"1");
+        }
+    
+        /// <summary>
+        /// A block may delete from the hash being iterated (the entry is then not visited) and
+        /// replace values, but may not add a key: MRI raises, rather than rebuild the table under
+        /// the iterator. Deleting used to surface a KeyNotFoundException.
+        /// </summary>
+        public void HashIteration_Mutation1() {
+            TestOutput(@"
+h = {a: 1, b: 2, c: 3}
+seen = []
+h.each { |k, v| seen << k; h.delete(:b) }
+p seen, h.keys
+h.each_key { |k| h.delete(:c) }
+p h.keys
+begin
+  h.each { |k, v| h[:z] = 1 }
+rescue RuntimeError => e
+  puts e.message
+end
+h.each { |k, v| h[:a] = 10 }
+p h.values
+p h.delete_if { |k, v| h.delete(:a); false }.size
+", @"
+[:a, :c]
+[:a, :c]
+[:a]
+can't add a new key into hash during iteration
+[10]
+0
+");
         }
     }
 }

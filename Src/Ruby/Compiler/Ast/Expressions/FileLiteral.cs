@@ -33,7 +33,7 @@ namespace IronRuby.Compiler.Ast {
             : base(location) {
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return Methods.CreateMutableStringL.OpCall(
                 gen.SourcePathConstant, AstUtils.Constant(gen.Context.GetPathEncoding())
             );

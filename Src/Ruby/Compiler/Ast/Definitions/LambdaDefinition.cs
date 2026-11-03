@@ -48,7 +48,7 @@ namespace IronRuby.Compiler.Ast {
             _block = block;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return _block.Transform(gen, true);
         }
     }

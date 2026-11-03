@@ -15,14 +15,19 @@
 #if FEATURE_CRYPTOGRAPHY
 
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.IO;
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using System.Threading;
+using System.Threading.Tasks;
 using IronRuby.StandardLibrary.Sockets;
 using System.Text;
 using IronRuby.Builtins;
@@ -553,13 +558,62 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         /// One TLS connection.  Not an MRI class: OpenSSL::SSL::SSLSocket is the
         /// Ruby class in openssl/ssl.rb and this is what it does its reading and
         /// writing through.
+        ///
+        /// Every read, write and handshake is one of SslStream's asynchronous operations,
+        /// at most one of each kind in flight.  The *_nonblock methods start one and answer
+        /// :wait_readable or :wait_writable while it runs; the blocking ones start one, or
+        /// take over the one in flight, and wait for it, at most read_timeout or
+        /// write_timeout.  The transport is the TCP socket's readiness hook
+        /// (IReadinessHook): IO.select and NIO::Selector ask it, not the socket, whether a
+        /// read would return, since an operation in flight may already have taken the
+        /// socket's bytes, and SslStream may hold bytes the socket never shows.  Asking it
+        /// whether a read would return starts that read.
         /// </summary>
         [RubyClass("Transport__")]
-        public class Transport {
+        public class Transport : IReadinessHook {
+            private RubyContext _context;
             private Socket _socket;
             private SslStream _ssl;
             private bool _verify;
             private string _hostname;
+            private int _readTimeout = Timeout.Infinite;
+            private int _writeTimeout = Timeout.Infinite;
+
+            // Guards what follows; never held while waiting.
+            private readonly object _sync = new object();
+            private Task _pendingConnect;
+            private Task<int> _pendingRead;
+            private byte[] _pendingReadBuffer;
+            private Task _pendingWrite;
+            // What a finished read brought that nobody has taken yet; _eof once it brought nothing.
+            private byte[] _readahead;
+            private int _readaheadOffset, _readaheadCount;
+            private bool _eof;
+            private bool _closed;
+            private readonly List<ReadinessWaiter>/*!*/ _waiters = new List<ReadinessWaiter>();
+
+            // A TLS record carries at most 16 KB; a non-blocking write hands over one at a time,
+            // and goes on with the next only while the last one went out at once, so that what it
+            // reports as written is about what a kernel buffer holds.
+            private const int ChunkSize = 16 * 1024;
+
+            // How much a non-blocking write hands over at most. net/protocol slices off what was
+            // written and passes the rest back, a copy of the rest every time: 16 KB a call made
+            // a 64 MB body cost gigabytes of copying before the kernel buffers were even full.
+            private const int NonBlockingWriteLimit = 1024 * 1024;
+
+            // The context's own CAs (ca_file, ca_path, cert_store): the self-signed ones
+            // are the roots, the others may complete the chain.  Null means the system
+            // store's; _systemTrust says whether the system's count as well.
+            private X509Certificate2Collection _roots;
+            private X509Certificate2Collection _intermediates;
+            private bool _systemTrust = true;
+            private Proc _verifyCallback;
+            private Exception _callbackError;
+
+            // Why the connection cannot be used any more, once a read, a write or the
+            // handshake timed out: SslStream is in an undefined state after that.
+            private string _broken;
 
             [RubyConstructor]
             public static Transport/*!*/ Create(RubyClass/*!*/ self, [NotNull]object/*!*/ io) {
@@ -568,36 +622,340 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     throw RubyExceptions.CreateTypeError("SSLSocket needs a socket to run on");
                 }
                 var result = new Transport();
+                result._context = self.Context;
                 result._socket = socket.Socket;
                 // The Ruby socket layer leaves Socket.Blocking false and does its own
                 // polling; SslStream drives the socket itself and needs it blocking.
                 result._socket.Blocking = true;
+                IoReadiness.SetHook(socket, result);
                 return result;
             }
 
+            /// <summary>
+            /// The CA certificates to check the server's chain against, as X509Certificate2s
+            /// (OpenSSL::X509::Certificate#__clr).  As in OpenSSL::X509::Store#verify, the
+            /// self-signed ones are trusted and the others only help build the chain.
+            /// system says whether the system's trust store counts as well, which it does
+            /// for a cert_store that had set_default_paths called on it.
+            /// </summary>
+            [RubyMethod("trust")]
+            public static void Trust(Transport/*!*/ self, [NotNull]IList/*!*/ certificates, bool system) {
+                var roots = new X509Certificate2Collection();
+                var intermediates = new X509Certificate2Collection();
+                foreach (object item in certificates) {
+                    var certificate = item as X509Certificate2;
+                    if (certificate == null) {
+                        throw RubyExceptions.CreateTypeError("trust anchors must be X509Certificate2s");
+                    }
+                    intermediates.Add(certificate);
+                    if (certificate.SubjectName.RawData.AsSpan().SequenceEqual(certificate.IssuerName.RawData)) {
+                        roots.Add(certificate);
+                    }
+                }
+                self._roots = roots;
+                self._intermediates = intermediates;
+                self._systemTrust = system;
+            }
+
+            /// <summary>
+            /// Called once with the chain and the SslPolicyErrors as an Integer when the
+            /// server's certificate has been checked; what it returns decides.
+            /// OpenSSL::SSL::SSLSocket runs SSLContext#verify_callback from it.
+            /// </summary>
+            [RubyMethod("verify_callback=")]
+            public static void SetVerifyCallback(Transport/*!*/ self, Proc callback) {
+                self._verifyCallback = callback;
+            }
+
+            // What a server certificate has to be good for: TLS server authentication.
+            private static readonly Oid ServerAuthentication = new Oid("1.3.6.1.5.5.7.3.1");
+
             private bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) {
-                return !_verify || errors == SslPolicyErrors.None;
+                if (!_verify) {
+                    return true;
+                }
+                // #connect gave up on this handshake (Thread#raise, Timeout), or the socket was
+                // closed under it (an open_timeout); nothing waits for an answer.
+                if (_broken != null || _closed) {
+                    return false;
+                }
+
+                // No SNI name means net/http connected to an IP address: it checks the
+                // name itself afterwards (SSLSocket#post_connection_check), as on MRI.
+                if (_hostname.Length == 0) {
+                    errors &= ~SslPolicyErrors.RemoteCertificateNameMismatch;
+                }
+
+                X509Chain custom = null;
+                X509Certificate2 leaf = null;
+                try {
+                    if (_roots != null && certificate != null) {
+                        custom = new X509Chain();
+                        var policy = custom.ChainPolicy;
+                        policy.RevocationMode = X509RevocationMode.NoCheck;
+                        policy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+                        policy.ApplicationPolicy.Add(ServerAuthentication);
+                        policy.CustomTrustStore.AddRange(_roots);
+                        policy.ExtraStore.AddRange(_intermediates);
+                        // The intermediates the server sent.
+                        if (chain != null) {
+                            policy.ExtraStore.AddRange(chain.ChainPolicy.ExtraStore);
+                        }
+                        leaf = new X509Certificate2(certificate);
+                        bool trusted = custom.Build(leaf);
+                        if (_systemTrust && (errors & SslPolicyErrors.RemoteCertificateChainErrors) == 0) {
+                            trusted = true;
+                        } else {
+                            chain = custom;
+                        }
+                        errors = trusted
+                            ? errors & ~SslPolicyErrors.RemoteCertificateChainErrors
+                            : errors | SslPolicyErrors.RemoteCertificateChainErrors;
+                    }
+
+                    if (_verifyCallback == null) {
+                        return errors == SslPolicyErrors.None;
+                    }
+
+                    // SslStream runs this on whichever thread finished reading the server's
+                    // certificate.  SSLSocket's callback handles the exceptions of
+                    // SSLContext#verify_callback itself; anything else is carried back to #connect.
+                    try {
+                        return _verifyCallback.Call(null, chain, (int)errors) is bool accepted && accepted;
+                    } catch (Exception error) {
+                        _callbackError = error;
+                        return false;
+                    }
+                } finally {
+                    custom?.Dispose();
+                    leaf?.Dispose();
+                }
             }
 
             /// <summary>
             /// The client handshake.  hostname is the SNI name and the name the
             /// certificate is checked against; verify false accepts any certificate,
-            /// which is what OpenSSL::SSL::VERIFY_NONE means.
+            /// which is what OpenSSL::SSL::VERIFY_NONE means.  timeout is in
+            /// milliseconds, -1 for none; a handshake that takes longer raises
+            /// IO::TimeoutError.
             /// </summary>
             [RubyMethod("connect")]
             public static Transport/*!*/ Connect(Transport/*!*/ self,
-                [DefaultProtocol]MutableString hostname, bool verify) {
+                [DefaultProtocol]MutableString hostname, bool verify, [DefaultProtocol, DefaultParameterValue(-1)]int timeout) {
 
-                self._verify = verify;
-                self._hostname = hostname == null ? "" : hostname.ConvertToString();
+                // The token bounds the handshake and cancels the read it is waiting in.
+                using (var cancel = timeout < 0 ? new CancellationTokenSource() : new CancellationTokenSource(timeout)) {
+                    Task task = self.StartConnect(hostname, verify, cancel.Token);
+                    try {
+                        task.Wait();
+                    } catch (AggregateException) {
+                        // FinishConnect reports it
+                    } catch (ThreadInterruptedException) {
+                        // Thread#raise or Thread#kill (Timeout.timeout among them) woke this
+                        // thread up.  The handshake goes on without it: stop it, make sure a
+                        // late certificate check does not call into Ruby, and let the
+                        // exception that was raised into this thread through.
+                        self._broken = "the TLS handshake was interrupted";
+                        cancel.Cancel();
+#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
+                        RubyUtils.TranslateThreadInterrupt();
+#endif
+                        throw;
+                    }
+                    if (cancel.IsCancellationRequested && !task.IsCompletedSuccessfully) {
+                        // An OperationCanceledException, or an IOException from the cancelled read.
+                        lock (self._sync) {
+                            self._pendingConnect = null;
+                        }
+                        throw self.TimedOut("TLS handshake timed out after " + timeout + " ms");
+                    }
+                }
+                self.FinishConnect();
+                return self;
+            }
+
+            /// <summary>
+            /// The handshake without waiting for it: the transport once it is done, else
+            /// :wait_readable, and SSLSocket#connect_nonblock asks again after IO.select.
+            /// </summary>
+            [RubyMethod("connect_nonblock")]
+            public static object/*!*/ ConnectNonBlocking(Transport/*!*/ self, [DefaultProtocol]MutableString hostname, bool verify) {
+                Task task = self.StartConnect(hostname, verify, CancellationToken.None);
+                if (!task.IsCompleted) {
+                    return self._context.CreateAsciiSymbol("wait_readable");
+                }
+                self.FinishConnect();
+                return self;
+            }
+
+            // The handshake in flight, started if it is not.
+            private Task/*!*/ StartConnect(MutableString hostname, bool verify, CancellationToken cancel) {
+                lock (_sync) {
+                    CheckUsable();
+                    if (_pendingConnect != null) {
+                        return _pendingConnect;
+                    }
+                    if (_ssl != null) {
+                        return Task.CompletedTask;
+                    }
+                    _verify = verify;
+                    _hostname = hostname == null ? "" : hostname.ConvertToString();
+                    _callbackError = null;
+                    try {
+                        _ssl = new SslStream(new NetworkStream(_socket, false), false,
+                            new RemoteCertificateValidationCallback(Validate));
+                        var options = new SslClientAuthenticationOptions { TargetHost = _hostname };
+                        _pendingConnect = _ssl.AuthenticateAsClientAsync(options, cancel);
+                    } catch (Exception error) {
+                        throw new SSLError(Unwrap(error).Message);
+                    }
+                    NotifyOnCompletion(_pendingConnect);
+                    return _pendingConnect;
+                }
+            }
+
+            private void FinishConnect() {
+                Task task;
+                lock (_sync) {
+                    task = _pendingConnect;
+                    _pendingConnect = null;
+                }
+                if (task == null) {
+                    return;
+                }
                 try {
-                    self._ssl = new SslStream(new NetworkStream(self._socket, false), false,
-                        new RemoteCertificateValidationCallback(self.Validate));
-                    self._ssl.AuthenticateAsClient(self._hostname);
+                    task.GetAwaiter().GetResult();
                 } catch (Exception error) {
+                    // The stream never authenticated: a second #connect must not find it and
+                    // call the connection made.
+                    lock (_sync) {
+                        _broken = "the TLS handshake failed";
+                    }
+                    if (_callbackError != null) {
+                        throw _callbackError;
+                    }
                     throw new SSLError(Unwrap(error).Message);
                 }
-                return self;
+            }
+
+            /// <summary>Milliseconds a blocking read may wait, -1 for ever.</summary>
+            [RubyMethod("read_timeout=")]
+            public static void SetReadTimeout(Transport/*!*/ self, [DefaultProtocol]int milliseconds) {
+                self._readTimeout = milliseconds < 0 ? Timeout.Infinite : Math.Max(milliseconds, 1);
+            }
+
+            /// <summary>Milliseconds a blocking write may wait, -1 for ever.</summary>
+            [RubyMethod("write_timeout=")]
+            public static void SetWriteTimeout(Transport/*!*/ self, [DefaultProtocol]int milliseconds) {
+                self._writeTimeout = milliseconds < 0 ? Timeout.Infinite : Math.Max(milliseconds, 1);
+            }
+
+            // Waits for an operation in flight, as a blocking call does; false when the time
+            // ran out first.  A Thread#raise or Thread#kill gets through, and the operation
+            // stays in flight for whoever asks next.
+            private static bool WaitFor(Task/*!*/ task, int milliseconds) {
+                try {
+                    return task.Wait(milliseconds);
+                } catch (AggregateException) {
+                    // done, with an error the caller reports
+                    return true;
+                } catch (ThreadInterruptedException) {
+#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
+                    RubyUtils.TranslateThreadInterrupt();
+#endif
+                    throw;
+                }
+            }
+
+            private void NotifyOnCompletion(Task/*!*/ task) {
+                if (!task.IsCompleted) {
+                    task.ContinueWith(_ => NotifyWaiters(), CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                }
+            }
+
+            private void NotifyWaiters() {
+                ReadinessWaiter[] waiters;
+                lock (_waiters) {
+                    waiters = _waiters.ToArray();
+                }
+                foreach (var waiter in waiters) {
+                    waiter.Signal();
+                }
+            }
+
+            void IReadinessHook.AddWaiter(ReadinessWaiter/*!*/ waiter) {
+                lock (_waiters) {
+                    _waiters.Add(waiter);
+                }
+            }
+
+            void IReadinessHook.RemoveWaiter(ReadinessWaiter/*!*/ waiter) {
+                lock (_waiters) {
+                    _waiters.Remove(waiter);
+                }
+            }
+
+            /// <summary>
+            /// What IO.select and NIO::Selector are told about the TCP socket under this
+            /// transport.  Before the handshake and after #close the socket answers for
+            /// itself; a broken connection is ready, so that the next call says so.
+            /// </summary>
+            bool? IReadinessHook.IsReady(int kind) {
+                lock (_sync) {
+                    if (_ssl == null || _closed) {
+                        return null;
+                    }
+                    if (_broken != null) {
+                        return true;
+                    }
+                    if (_pendingConnect != null) {
+                        return _pendingConnect.IsCompleted;
+                    }
+                    if (kind == IoReadiness.Read) {
+                        if (_readaheadCount > 0 || _eof) {
+                            return true;
+                        }
+                        if (_pendingRead == null) {
+                            try {
+                                StartRead(ChunkSize);
+                            } catch (Exception) {
+                                // the read reports it
+                                return true;
+                            }
+                        }
+                        return _pendingRead.IsCompleted;
+                    }
+                    return _pendingWrite == null ? (bool?)null : _pendingWrite.IsCompleted;
+                }
+            }
+
+            /// <summary>
+            /// Whether the server's certificate is valid for name, a host name or an IP
+            /// address: SSLSocket#post_connection_check.  As MRI's
+            /// verify_certificate_identity, a certificate without a subjectAltName is
+            /// matched on its common name, for an IP address too.
+            /// </summary>
+            [RubyMethod("matches_hostname?")]
+            public static bool MatchesHostname(Transport/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ name) {
+                var certificate = self._ssl?.RemoteCertificate;
+                string host = name.ConvertToString();
+                if (certificate == null || host.Length == 0) {
+                    return false;
+                }
+                using (var certificate2 = new X509Certificate2(certificate)) {
+                    IPAddress address, commonNameAddress;
+                    if (certificate2.Extensions["2.5.29.17"] == null && IPAddress.TryParse(host, out address)) {
+                        string commonName = certificate2.GetNameInfo(X509NameType.SimpleName, false);
+                        return IPAddress.TryParse(commonName, out commonNameAddress) && commonNameAddress.Equals(address);
+                    }
+                    try {
+                        return certificate2.MatchesHostname(host, true, true);
+                    } catch (ArgumentException) {
+                        // not a host name at all
+                        return false;
+                    }
+                }
             }
 
             // An SslStream failure arrives wrapped in an AuthenticationException whose
@@ -607,54 +965,244 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     ? error.InnerException : error;
             }
 
+            // Marks the connection unusable and builds the IO::TimeoutError to raise.
+            private Exception/*!*/ TimedOut(string/*!*/ message) {
+                _broken = message;
+                object ioClass;
+                if (_context.ObjectClass.TryGetConstant(null, "IO", out ioClass) && ioClass is RubyModule) {
+                    var error = _context.CreateLibraryException((RubyModule)ioClass, "TimeoutError", message);
+                    if (error != null) {
+                        return error;
+                    }
+                }
+                return new SSLError(message);
+            }
+
+            private void CheckUsable() {
+                if (_broken != null) {
+                    throw new SSLError("SSL connection is unusable: " + _broken);
+                }
+            }
+
+            // The stream, once the handshake is over; call with _sync held.
             private SslStream/*!*/ Stream {
                 get {
-                    if (_ssl == null) {
+                    CheckUsable();
+                    if (_closed) {
+                        throw RubyExceptions.CreateIOError("closed stream");
+                    }
+                    if (_ssl == null || _pendingConnect != null) {
                         throw new SSLError("SSL session is not started yet");
                     }
                     return _ssl;
                 }
             }
 
-            /// <summary>Up to length bytes, or nil at end of stream.</summary>
-            [RubyMethod("read")]
-            public static MutableString Read(Transport/*!*/ self, [DefaultProtocol]int length) {
-                byte[] buffer = new byte[length];
-                int read;
-                try {
-                    read = self.Stream.Read(buffer, 0, length);
-                } catch (IOException error) {
-                    throw new SSLError(Unwrap(error).Message);
+            // Errors of SslStream's operations, as Ruby sees them.
+            private Exception/*!*/ Translate(Exception/*!*/ error) {
+                if (error is ObjectDisposedException || _closed) {
+                    return RubyExceptions.CreateIOError("closed stream");
                 }
-                if (read == 0) {
-                    return null;
-                }
-                Array.Resize(ref buffer, read);
-                return MutableString.CreateBinary(buffer);
+                return new SSLError(Unwrap(error).Message);
             }
 
+            // Starts a read into a buffer of its own; call with _sync held and none in flight.
+            private void StartRead(int length) {
+                var stream = Stream;
+                _pendingReadBuffer = new byte[Math.Max(Math.Min(length, 1 << 20), ChunkSize)];
+                _pendingRead = stream.ReadAsync(_pendingReadBuffer, 0, _pendingReadBuffer.Length);
+                NotifyOnCompletion(_pendingRead);
+            }
+
+            // Moves what the finished read brought to the read-ahead; call with _sync held.
+            private void FinishRead() {
+                var task = _pendingRead;
+                _pendingRead = null;
+                int count;
+                try {
+                    count = task.GetAwaiter().GetResult();
+                } catch (Exception error) {
+                    throw Translate(error);
+                }
+                if (count == 0) {
+                    _eof = true;
+                } else {
+                    _readahead = _pendingReadBuffer;
+                    _readaheadOffset = 0;
+                    _readaheadCount = count;
+                }
+                _pendingReadBuffer = null;
+            }
+
+            // Up to length bytes of the read-ahead, or null if it is empty; call with _sync held.
+            private MutableString TakeReadahead(int length) {
+                if (_readaheadCount == 0) {
+                    return null;
+                }
+                int count = Math.Min(length, _readaheadCount);
+                var result = new byte[count];
+                Buffer.BlockCopy(_readahead, _readaheadOffset, result, 0, count);
+                _readaheadOffset += count;
+                _readaheadCount -= count;
+                if (_readaheadCount == 0) {
+                    _readahead = null;
+                }
+                return MutableString.CreateBinary(result);
+            }
+
+            /// <summary>Up to length bytes, or nil at end of stream; waits at most read_timeout.</summary>
+            [RubyMethod("read")]
+            public static MutableString Read(Transport/*!*/ self, [DefaultProtocol]int length) {
+                Task<int> task;
+                lock (self._sync) {
+                    _ = self.Stream;
+                    var data = self.TakeReadahead(length);
+                    if (data != null || self._eof) {
+                        return data;
+                    }
+                    if (self._pendingRead == null) {
+                        self.StartRead(length);
+                    }
+                    task = self._pendingRead;
+                }
+                if (!WaitFor(task, self._readTimeout)) {
+                    throw self.TimedOut("read timed out after " + self._readTimeout + " ms");
+                }
+                lock (self._sync) {
+                    if (self._pendingRead == task) {
+                        self.FinishRead();
+                    }
+                    return self.TakeReadahead(length);
+                }
+            }
+
+            /// <summary>
+            /// Up to length bytes if a read has brought them, nil at end of stream, else
+            /// :wait_readable, with a read left in flight that IO.select sees finish.
+            /// </summary>
+            [RubyMethod("read_nonblock")]
+            public static object ReadNonBlocking(Transport/*!*/ self, [DefaultProtocol]int length) {
+                lock (self._sync) {
+                    _ = self.Stream;
+                    var data = self.TakeReadahead(length);
+                    if (data != null || self._eof) {
+                        return data;
+                    }
+                    if (self._pendingRead == null) {
+                        self.StartRead(length);
+                    }
+                    if (!self._pendingRead.IsCompleted) {
+                        return self._context.CreateAsciiSymbol("wait_readable");
+                    }
+                    self.FinishRead();
+                    return self.TakeReadahead(length);
+                }
+            }
+
+            // Takes over a write in flight before another; call without _sync held.
+            private void FinishWrite(Task/*!*/ task) {
+                lock (_sync) {
+                    if (_pendingWrite == task) {
+                        _pendingWrite = null;
+                    }
+                }
+                try {
+                    task.GetAwaiter().GetResult();
+                } catch (Exception error) {
+                    throw Translate(error);
+                }
+            }
+
+            /// <summary>All of data; waits at most write_timeout.</summary>
             [RubyMethod("write")]
             public static int Write(Transport/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ data) {
                 byte[] bytes = data.ConvertToBytes();
-                try {
-                    self.Stream.Write(bytes, 0, bytes.Length);
-                    self.Stream.Flush();
-                } catch (IOException error) {
-                    throw new SSLError(Unwrap(error).Message);
+                Task pending, task;
+                lock (self._sync) {
+                    self.CheckUsable();
+                    pending = self._pendingWrite;
                 }
+                if (pending != null) {
+                    if (!WaitFor(pending, self._writeTimeout)) {
+                        throw self.TimedOut("write timed out after " + self._writeTimeout + " ms");
+                    }
+                    self.FinishWrite(pending);
+                }
+                lock (self._sync) {
+                    var stream = self.Stream;
+                    try {
+                        task = stream.WriteAsync(bytes, 0, bytes.Length);
+                    } catch (Exception error) {
+                        throw self.Translate(error);
+                    }
+                    self._pendingWrite = task;
+                    self.NotifyOnCompletion(task);
+                }
+                if (!WaitFor(task, self._writeTimeout)) {
+                    throw self.TimedOut("write timed out after " + self._writeTimeout + " ms");
+                }
+                self.FinishWrite(task);
                 return bytes.Length;
+            }
+
+            /// <summary>
+            /// How much of data was handed over - 16 KB records for as long as they go out at once,
+            /// up to 1 MB; the last may still be on its way, as bytes in a kernel buffer are - or
+            /// :wait_writable while the last one is.
+            /// </summary>
+            [RubyMethod("write_nonblock")]
+            public static object WriteNonBlocking(Transport/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ data) {
+                Task pending;
+                lock (self._sync) {
+                    self.CheckUsable();
+                    pending = self._pendingWrite;
+                    if (pending != null && !pending.IsCompleted) {
+                        return self._context.CreateAsciiSymbol("wait_writable");
+                    }
+                }
+                if (pending != null) {
+                    self.FinishWrite(pending);
+                }
+                // only what may go out: converting all of a large body on every call is a copy of it
+                byte[] bytes = data.GetBinarySlice(0, Math.Min(data.GetByteCount(), NonBlockingWriteLimit));
+                int written = 0;
+                while (written < bytes.Length) {
+                    int count = Math.Min(bytes.Length - written, ChunkSize);
+                    Task task;
+                    lock (self._sync) {
+                        var stream = self.Stream;
+                        try {
+                            task = stream.WriteAsync(bytes, written, count);
+                        } catch (Exception error) {
+                            throw self.Translate(error);
+                        }
+                        if (!task.IsCompleted) {
+                            self._pendingWrite = task;
+                            self.NotifyOnCompletion(task);
+                            return written + count;
+                        }
+                    }
+                    self.FinishWrite(task);
+                    written += count;
+                }
+                return written;
             }
 
             [RubyMethod("close")]
             public static void Close(Transport/*!*/ self) {
-                if (self._ssl != null) {
+                SslStream ssl;
+                lock (self._sync) {
+                    ssl = self._ssl;
+                    self._closed = true;
+                }
+                if (ssl != null) {
                     try {
-                        self._ssl.Dispose();
+                        ssl.Dispose();
                     } catch (Exception) {
                         // closing a connection the peer already dropped is not an error
                     }
-                    self._ssl = null;
                 }
+                self.NotifyWaiters();
             }
 
             /// <summary>The peer's certificate as DER, or nil before the handshake.</summary>
@@ -692,10 +1240,16 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 return MutableString.CreateAscii(self._ssl.NegotiatedCipherSuite.ToString());
             }
 
-            /// <summary>Bytes already decrypted and waiting, which IO.select cannot see.</summary>
+            /// <summary>Bytes already decrypted and waiting to be read.</summary>
             [RubyMethod("pending")]
             public static int Pending(Transport/*!*/ self) {
-                return self._ssl == null ? 0 : (self._ssl.CanRead && self._socket.Available > 0 ? self._socket.Available : 0);
+                lock (self._sync) {
+                    // A failed read is left for the next read to report.
+                    if (self._pendingRead != null && self._pendingRead.IsCompletedSuccessfully) {
+                        self.FinishRead();
+                    }
+                    return self._readaheadCount;
+                }
             }
         }
 #endif

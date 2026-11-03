@@ -299,19 +299,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region quo
-
-        /// <summary>
-        /// Equivalent to invoking Numeric#/; overridden in subclasses
-        /// </summary>
-        [RubyMethod("quo")]
-        public static object Quo(BinaryOpStorage/*!*/ divideStorage, object self, object other) {
-            var site = divideStorage.GetCallSite("/");
-            return site.Target(site, self, other);
-        }
-
-        #endregion
-
         #region remainder
 
         /// <summary>

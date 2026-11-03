@@ -986,7 +986,6 @@ namespace IronRuby.Hosting {
                 var request = new WarmStart.Request {
                     Cwd = Environment.CurrentDirectory,
                     Argv = new[] { Environment.ProcessPath }
-                        .Concat(RubyContext.AlternativeParser != null ? new[] { "-X:UsePrism" } : new string[0])
                         .Concat(Environment.GetCommandLineArgs().Skip(1))
                         .Concat(new[] { "-e", "nil" }).ToArray(),
                 };
@@ -1034,12 +1033,9 @@ namespace IronRuby.Hosting {
                 return reason;
             }
 
+            // -X:UsePrism is accepted and ignored, as by Main: prism is the only parser.
             var args = new List<string>(request.Argv.Skip(1));
-            bool usePrism = args.Remove("-X:UsePrism");
             while (args.Remove("-X:UsePrism")) { }
-            if (usePrism != (RubyContext.AlternativeParser != null)) {
-                return "-X:UsePrism differs";
-            }
 
             var savedEnvironment = WarmStart.CaptureEnvironment();
             string savedDirectory = Environment.CurrentDirectory;
@@ -1106,11 +1102,26 @@ namespace IronRuby.Hosting {
             languageSetup.Options["ApplicationBase"] = AppDomain.CurrentDomain.BaseDirectory;
             runtimeSetup.HostType = typeof(RubyScriptHost);
             var parser = CreateOptionsParser();
+            var rubyParser = parser as RubyOptionsParser;
+            if (rubyParser != null) {
+                // `ironruby' alone starts irb at a terminal: the client's stdin decides, not this process's
+                rubyParser.StdinIsTerminal = _warmStdinIsTerminal;
+            }
+            // The parser warns on Console.Error (an unknown --enable feature, say), and descriptor 2 is still the
+            // broker's until the request is committed: a request it warns about goes cold, where the warning is seen.
+            var parserErrors = new StringWriter();
+            var brokerError = Console.Error;
+            Console.SetError(parserErrors);
             try {
                 parser.Parse(hostOptions.IgnoredArgs.ToArray(), runtimeSetup, languageSetup, PlatformAdaptationLayer);
             } catch (InvalidOptionException) {
                 // a cold start reports it
                 return "invalid option";
+            } finally {
+                Console.SetError(brokerError);
+            }
+            if (parserErrors.GetStringBuilder().Length > 0) {
+                return "the options parser printed a warning";
             }
             options = parser.CommonConsoleOptions as RubyConsoleOptions;
             if (options == null) {
@@ -1157,9 +1168,10 @@ namespace IronRuby.Hosting {
             }
 
             CompareConsoleOptions(_warmConsoleOptions, options, diffs);
-            if (options.Command == null && options.FileName == null && _warmStdinIsTerminal) {
-                // .NET looked at descriptor 0 once, as the warm-up started (the native terminal
-                // state behind Console.ReadLine and ReadKey): on a terminal the REPL would echo twice.
+            if (rubyParser != null && rubyParser.NoProgramGiven && _warmStdinIsTerminal) {
+                // No program at a terminal is irb (or the program typed at it): .NET looked at descriptor 0
+                // once, as the warm-up started (the native terminal state behind Console.ReadLine and
+                // ReadKey), so on a terminal the line editor would echo twice.
                 diffs.Add("an interactive session");
             }
             if (diffs.Count > 0) {

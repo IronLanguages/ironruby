@@ -25,11 +25,11 @@ using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
 
-    [RubyException("NoMemoryError")]
-    public class NoMemoryError : Exception {
-        public NoMemoryError() : this(null, null) { }
-        public NoMemoryError(string message): this(message, null) { }
-        public NoMemoryError(string message, Exception inner) : base(message ?? "NoMemoryError", inner) { }
+    // The CLR's own allocation failure is Ruby's NoMemoryError, so an array or string that
+    // cannot be allocated raises something `rescue NoMemoryError` sees, rather than a
+    // System::OutOfMemoryException that no Ruby code expects.
+    [RubyException("NoMemoryError", Extends = typeof(OutOfMemoryException), Inherits = typeof(Exception))]
+    public static class NoMemoryErrorOps {
     }
 
     [RubyException("EOFError")]
@@ -315,19 +315,20 @@ namespace IronRuby.Builtins {
     [HideMethod("message")]
     public static class NoMethodErrorOps {
         /// <summary>
-        /// NoMethodError.new([message [, name [, args]]] [, receiver: obj]).
+        /// NoMethodError.new([message [, name [, args [, priv]]]] [, receiver: obj]).
         /// </summary>
         [RubyConstructor]
         public static MissingMethodException/*!*/ Factory(RubyClass/*!*/ self, params object[]/*!*/ allArgs) {
             object receiver;
             bool hasReceiver = NameErrorOps.TryTakeReceiverKeyword(ref allArgs, out receiver);
-            if (allArgs.Length > 3) {
-                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0..3)", allArgs.Length);
+            if (allArgs.Length > 4) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0..4)", allArgs.Length);
             }
 
             object message = allArgs.Length > 0 ? allArgs[0] : null;
             object name = allArgs.Length > 1 ? allArgs[1] : null;
             object args = allArgs.Length > 2 ? allArgs[2] : null;
+            bool privateCall = allArgs.Length > 3 && RubyOps.IsTrue(allArgs[3]);
 
             MissingMethodException result = new MissingMethodException(RubyExceptionData.GetClrMessage(self, message));
             RubyExceptionData.InitializeException(result, message);
@@ -338,7 +339,17 @@ namespace IronRuby.Builtins {
                 data.SetReceiver(receiver);
             }
             data.Arguments = args;
+            data.PrivateCall = privateCall;
             return result;
+        }
+
+        /// <summary>
+        /// True when the call that failed had an implicit receiver (or `self.`), the way a call to
+        /// a private method may be written.
+        /// </summary>
+        [RubyMethod("private_call?")]
+        public static bool IsPrivateCall(MissingMethodException/*!*/ self) {
+            return RubyExceptionData.GetInstance(self).PrivateCall;
         }
 
         /// <summary>
@@ -377,6 +388,33 @@ namespace IronRuby.Builtins {
 
     [RubyException("UncaughtThrowError", Extends = typeof(UncaughtThrowError), Inherits = typeof(ArgumentException))]
     public static class UncaughtThrowErrorOps {
+        /// <summary>UncaughtThrowError.new(tag, value, message = nil)</summary>
+        [RubyConstructor]
+        public static UncaughtThrowError/*!*/ Create(RubyClass/*!*/ self, object tag, object value, params object[]/*!*/ rest) {
+            if (rest.Length > 1) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0..1)", rest.Length);
+            }
+            object message = rest.Length == 1 ? rest[0] : null;
+            if (message != null && !(message is MutableString)) {
+                throw RubyExceptions.CreateImplicitConversionError(self.Context.GetClassDisplayName(message), "String");
+            }
+            var result = new UncaughtThrowError(message != null ? ((MutableString)message).ConvertToString() : null, tag, value);
+            result.FormatsTag = true;
+            result.HasMessage = message != null;
+            RubyExceptionData.InitializeException(result, message);
+            return result;
+        }
+
+        [RubyMethod("__ir_formats_tag__")]
+        public static bool FormatsTag(UncaughtThrowError/*!*/ self) {
+            return self.FormatsTag;
+        }
+
+        [RubyMethod("__ir_has_message__")]
+        public static bool HasMessage(UncaughtThrowError/*!*/ self) {
+            return self.HasMessage;
+        }
+
         [RubyMethod("tag")]
         public static object Tag(UncaughtThrowError/*!*/ self) {
             return self.Tag;

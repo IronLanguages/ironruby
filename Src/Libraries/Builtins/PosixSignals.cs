@@ -96,7 +96,7 @@ namespace IronRuby.Builtins {
 
             int number;
             if (!_numbers.TryGetValue(bare, out number)) {
-                throw RubyExceptions.CreateArgumentError("unsupported signal `{0}'",
+                throw RubyExceptions.CreateArgumentError("unsupported signal '{0}'",
                     name.StartsWith("SIG", StringComparison.Ordinal) ? name : "SIG" + name);
             }
             return negated ? -number : number;
@@ -194,6 +194,18 @@ namespace IronRuby.Builtins {
         /// to the prelude, which knows how to turn it into the right class.
         /// </summary>
         internal static int Kill(int pid, int signal) {
+            if (RubyProcess.IsWindows) {
+                // MRI's win32 kill() raise()s a signal a process sends itself (any but 0 and KILL), so
+                // its trap handler runs. The main thread has run it already (RubyProcess.Kill); from any
+                // other thread it is parked for the main one, as a delivered signal would be.
+                if (pid == Environment.ProcessId && signal != 0 && signal != SignalKill) {
+                    if (HasHandler(signal)) {
+                        Enqueue(signal);
+                    }
+                    return 0;
+                }
+                return WindowsSpawn.Kill(pid, signal);
+            }
             if (SysKill(pid, signal) == 0) {
                 return 0;
             }
@@ -411,6 +423,7 @@ namespace IronRuby.Builtins {
         }
 
         private const int SignalInterrupt = 2;
+        private const int SignalKill = 9;
 
         /// <summary>
         /// MRI answers the canonical spelling of a symbolic handler, not the one it was given:

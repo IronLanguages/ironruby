@@ -24,6 +24,8 @@ using IronRuby.Runtime;
 using System.Collections.Generic;
 using System.IO;
 using System.Globalization;
+using System.Reflection;
+using System.Runtime.InteropServices;
 
 namespace IronRuby.Builtins {
 
@@ -627,6 +629,74 @@ namespace IronRuby.Builtins {
             return new RubyArray();
         }
 
+        #region clock_gettime
+
+        // The symbols clock_gettime compares its arguments with, made once per context. The clock
+        // constants (Process::CLOCK_REALTIME and the rest) are Symbols named after themselves - ruby4.rb
+        // defines them - so a clock id is told apart by identity, as `case clock_id when CLOCK_REALTIME`
+        // did in the Ruby definition this replaces.
+        private sealed class ClockSymbols {
+            public readonly RubyContext/*!*/ Context;
+            public readonly RubySymbol/*!*/ Realtime, FloatSecond, FloatMillisecond, FloatMicrosecond, Second, Millisecond, Microsecond, Nanosecond;
+
+            public ClockSymbols(RubyContext/*!*/ context) {
+                Context = context;
+                Realtime = context.CreateAsciiSymbol("CLOCK_REALTIME");
+                FloatSecond = context.CreateAsciiSymbol("float_second");
+                FloatMillisecond = context.CreateAsciiSymbol("float_millisecond");
+                FloatMicrosecond = context.CreateAsciiSymbol("float_microsecond");
+                Second = context.CreateAsciiSymbol("second");
+                Millisecond = context.CreateAsciiSymbol("millisecond");
+                Microsecond = context.CreateAsciiSymbol("microsecond");
+                Nanosecond = context.CreateAsciiSymbol("nanosecond");
+            }
+        }
+
+        private static ClockSymbols _clockSymbols;
+
+        private static ClockSymbols/*!*/ GetClockSymbols(RubyContext/*!*/ context) {
+            ClockSymbols symbols = _clockSymbols;
+            if (symbols == null || symbols.Context != context) {
+                _clockSymbols = symbols = new ClockSymbols(context);
+            }
+            return symbols;
+        }
+
+        // ActiveSupport::Notifications reads the monotonic clock twice for every event it
+        // instruments (each SQL query, each render), so this is C# rather than Ruby. .NET's Stopwatch
+        // is the monotonic source and serves every clock but CLOCK_REALTIME, which is the system clock.
+        [RubyMethod("clock_gettime", RubyMethodAttributes.PublicSingleton)]
+        public static object ClockGetTime(ConversionStorage<MutableString>/*!*/ tosConversion, RubyModule/*!*/ self,
+            [Optional]object clockId, [Optional]object unit) {
+
+            ClockSymbols symbols = GetClockSymbols(self.Context);
+            double seconds;
+            if (clockId == symbols.Realtime) {
+                seconds = (double)(DateTime.UtcNow.Ticks - RubyTime.Epoch.Ticks) / TimeSpan.TicksPerSecond;
+            } else {
+                seconds = (double)Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+            }
+
+            if (unit == Missing.Value || unit == null || unit == symbols.FloatSecond) {
+                return seconds;
+            } else if (unit == symbols.FloatMillisecond) {
+                return seconds * 1000.0;
+            } else if (unit == symbols.FloatMicrosecond) {
+                return seconds * 1000000.0;
+            } else if (unit == symbols.Second) {
+                return ClrFloat.ToInt(seconds);
+            } else if (unit == symbols.Millisecond) {
+                return ClrFloat.ToInt(seconds * 1000);
+            } else if (unit == symbols.Microsecond) {
+                return ClrFloat.ToInt(seconds * 1000000);
+            } else if (unit == symbols.Nanosecond) {
+                return ClrFloat.ToInt(seconds * 1000000000);
+            } else {
+                throw RubyExceptions.CreateArgumentError("unexpected unit: " + Protocols.ConvertToString(tosConversion, unit).ToString());
+            }
+        }
+
+        #endregion
     }
 
     #region Struct::Tms

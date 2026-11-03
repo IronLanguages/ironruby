@@ -18,7 +18,5 @@ Gem::Specification.new do |s|
   s.files = [
     "lib/date.rb".freeze,
     "lib/date/format.rb".freeze,
-    "lib/date/delta.rb".freeze,
-    "lib/date/delta/parser.rb".freeze,
   ]
 end

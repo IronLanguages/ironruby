@@ -25,7 +25,7 @@
 //     PUMA_REQUEST_PATH_MAX_LENGTH, PUMA_QUERY_STRING_MAX_LENGTH) are read from the environment
 //     when the parser is first used, as puma's JRuby parser does - there is no compile step
 //     here to hand them to.
-//   * Puma::MiniSSL (TLS) is not part of this file; see Src/StdLib/ironruby/puma/puma_http11.rb.
+//   * Puma::MiniSSL (TLS) is not part of this file; it is in MiniSsl.cs.
 
 using System;
 using System.Collections.Generic;
@@ -37,7 +37,7 @@ using Microsoft.Scripting.Runtime;
 namespace IronRuby.StandardLibrary.Puma {
 
     [RubyModule("Puma")]
-    public static class PumaModule {
+    public static partial class PumaModule {
 
         [RubyException("HttpParserError")]
         public class HttpParserError : SystemException {

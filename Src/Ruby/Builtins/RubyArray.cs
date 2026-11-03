@@ -281,12 +281,20 @@ namespace IronRuby.Builtins {
         /// <returns>The index of the first slot that will contain the new elements.</returns>
         private int ResizeForAppend(int additionalCount, bool clear) {
             int oldCount = _count;
+            if (additionalCount < 0 || additionalCount > Int32.MaxValue - oldCount) {
+                // the count would overflow: no such array can be allocated (Ruby: NoMemoryError)
+                throw new OutOfMemoryException();
+            }
             _count += additionalCount;
 
             if (_start + oldCount > _content.Length - additionalCount) {
-                // not enough space for additional items:
+                // not enough space for additional items. Sliding the elements back to the front of
+                // the buffer costs a copy of all of them, so it is only worth it when that frees a
+                // good part of it: an array used as a queue (push at the end, shift at the front)
+                // has one free slot in front after each shift, and sliding for every push made
+                // each push O(n). Below half, the buffer grows as if it were full.
                 object[] newContent;
-                if (_count > _content.Length) {
+                if (_count > _content.Length || _start < oldCount / 2) {
                     newContent = new object[Utils.GetExpandedSize(_content, _count)];
                 } else {
                     newContent = _content;
@@ -427,12 +435,18 @@ namespace IronRuby.Builtins {
 
         private int ResizeForInsertion(int index, int size) {
             if (_count + size > _content.Length) {
-                object[] newContent = new object[Utils.GetExpandedSize(_content, _count + size)];
-                Array.Copy(_content, _start, newContent, 0, index);
-                Array.Copy(_content, _start + index, newContent, index + size, _count - index);
-                _count += size;
+                int newCount = _count + size;
+                object[] newContent = new object[Utils.GetExpandedSize(_content, newCount)];
+                // An insertion near the front (unshift) gets the free space in front of the
+                // elements, where the next one will want it, so a run of unshifts costs a copy per
+                // doubling rather than a copy of the whole array each; anything else gets it behind.
+                int newStart = (index < _count / 2) ? newContent.Length - newCount : 0;
+                Array.Copy(_content, _start, newContent, newStart, index);
+                Array.Copy(_content, _start + index, newContent, newStart + index + size, _count - index);
                 _content = newContent;
-                return index;
+                _start = newStart;
+                _count = newCount;
+                return newStart + index;
             }
 
             int rindex = _start + index;

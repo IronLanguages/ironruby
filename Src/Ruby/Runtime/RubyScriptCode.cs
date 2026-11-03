@@ -136,16 +136,21 @@ namespace IronRuby.Runtime {
                 return CompileDebug(lambda);
             } 
 #endif
-            if (noAdaptiveCompilation) {
-                Delegate result = lambda.Compile();
+            long traceStart = StartupTrace.Now();
+            try {
+                if (noAdaptiveCompilation) {
+                    Delegate result = lambda.Compile();
 #if NETFRAMEWORK
-                // DLR closures should not be used:
-                Debug.Assert(!(result.Target is Closure) || ((Closure)result.Target).Locals == null);
+                    // DLR closures should not be used:
+                    Debug.Assert(!(result.Target is Closure) || ((Closure)result.Target).Locals == null);
 #endif
-                return result;
-            } 
+                    return result;
+                }
 
-            return lambda.LightCompile(compilationThreshold);
+                return lambda.LightCompile(compilationThreshold);
+            } finally {
+                StartupTrace.Compiled(traceStart);
+            }
         }
 
 #if FEATURE_PDBEMIT

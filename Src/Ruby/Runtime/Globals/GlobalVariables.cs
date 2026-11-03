@@ -43,6 +43,7 @@ namespace IronRuby.Runtime {
         ErrorOutputStream,
         SafeLevel,
         Verbose,
+        WarningLevel,
         KCode,
         IgnoreCase,
         ChildProcessExitStatus
@@ -80,6 +81,7 @@ namespace IronRuby.Runtime {
 
         public static readonly GlobalVariable SafeLevel = new SpecialGlobalVariableInfo(GlobalVariableId.SafeLevel);
         public static readonly GlobalVariable Verbose = new SpecialGlobalVariableInfo(GlobalVariableId.Verbose);
+        public static readonly GlobalVariable WarningLevel = new SpecialGlobalVariableInfo(GlobalVariableId.WarningLevel);
         public static readonly GlobalVariable KCode = new SpecialGlobalVariableInfo(GlobalVariableId.KCode);
         public static readonly GlobalVariable IgnoreCase = new SpecialGlobalVariableInfo(GlobalVariableId.IgnoreCase);
         public static readonly GlobalVariable ChildProcessExitStatus = new SpecialGlobalVariableInfo(GlobalVariableId.ChildProcessExitStatus);

@@ -241,8 +241,8 @@ module GemCatalog
     'sawyer'          => { require: 'sawyer',          gem: true, exercise: 'sawyer',      status: :works },
     'listen'          => { require: 'listen',          gem: true, exercise: 'listen',      status: :works },
     'chunky_png'      => { require: 'chunky_png',      gem: true, exercise: 'chunky_png',  status: :works },
-    'prawn'           => { require: 'prawn',           gem: true, status: :broken,
-                           note: 'pins bigdecimal ~> 3.1; IronRuby has 4.0.1 built in, so RubyGems builds the C one' },
+    'prawn'           => { require: 'prawn',           gem: true, exercise: 'prawn',       status: :works,
+                           note: 'ttfunk pins bigdecimal ~> 3.1; read as >= 3.1 against the built-in 4.0.1' },
     'standard'        => { require: 'standard',        gem: true, exercise: 'standard', status: :works },
     'bcrypt'          => { require: 'bcrypt',          gem: true, status: :impossible,
                            note: 'C extension (the Blowfish KDF); a .NET port is a real project' },
@@ -294,7 +294,7 @@ module GemCatalog
 
   # The pure-Ruby default/bundled gems that go on $LOAD_PATH for every run, so
   # that a gem's dependencies (net-protocol, prettyprint, ...) resolve to the
-  # modern copy rather than IronRuby's 1.9 tree.  Native gems are excluded:
+  # modern copy rather than to nothing at all.  Native gems are excluded:
   # their lib/ is a stub that only requires a .so.  test-unit is excluded too -
   # its lib/test/unit.rb would shadow the one the suites are run with.
   PATH_GEMS = %w[

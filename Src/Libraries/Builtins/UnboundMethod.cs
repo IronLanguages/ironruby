@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Text;
 using System.Runtime.CompilerServices;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
@@ -107,7 +108,7 @@ namespace IronRuby.Builtins {
 
             if (constraint.IsClass && !context.IsKindOf(target, constraint)) {
                 throw RubyExceptions.CreateTypeError(
-                    "bind argument must be an instance of {0}", constraint.GetName(context)
+                    "bind argument must be an instance of {0}", constraint.GetNonNullName(context)
                 );
             }
             
@@ -217,9 +218,19 @@ namespace IronRuby.Builtins {
             if (targetModule != null && declaringSingleton != null && declaringSingleton.IsSingletonClass) {
                 var attached = declaringSingleton.SingletonClassOf;
                 var attachedModule = attached as RubyModule;
-                result.Append(attachedModule != null
-                    ? attachedModule.GetDisplayName(context, false)
-                    : context.Inspect(attached));
+                // a class method looked up on a subclass: Sub(Base).cm
+                var targetSingleton = targetModule as RubyClass;
+                var targetAttached = (targetSingleton != null && targetSingleton.IsSingletonClass) ? targetSingleton.SingletonClassOf as RubyModule : null;
+                if (attachedModule != null && targetAttached != null && !ReferenceEquals(targetAttached, attachedModule)) {
+                    result.Append(targetAttached.GetDisplayName(context, false));
+                    result.Append('(');
+                    result.Append(attachedModule.GetDisplayName(context, false));
+                    result.Append(')');
+                } else {
+                    result.Append(attachedModule != null
+                        ? attachedModule.GetDisplayName(context, false)
+                        : context.Inspect(attached));
+                }
                 result.Append('.');
             } else {
                 RubyModule origin = targetModule ?? declaringModule;
@@ -250,6 +261,10 @@ namespace IronRuby.Builtins {
                 result.Append("(*)");
             } else if (signature != null) {
                 result.Append(signature.ToParameterListString());
+            } else {
+                // a library method or an attribute accessor: MRI prints the parameter list
+                // from #parameters, "_" standing for a required parameter with no name
+                result.Append(FormatParameterArray(info.GetRubyParameterArray()));
             }
 
             var location = isMissingMethod ? null : GetSourceLocation(info);
@@ -262,6 +277,36 @@ namespace IronRuby.Builtins {
 
             result.Append('>');
             return result; 
+        }
+
+        private static string/*!*/ FormatParameterArray(RubyArray/*!*/ parameters) {
+            var result = new StringBuilder("(");
+            foreach (object item in parameters) {
+                var parameter = item as RubyArray;
+                if (parameter == null || parameter.Count == 0) {
+                    continue;
+                }
+                string kind = parameter[0].ToString();
+                string name = parameter.Count > 1 ? parameter[1].ToString() : null;
+                string text;
+                switch (kind) {
+                    case "req": text = name ?? "_"; break;
+                    case "opt": text = (name ?? "_") + "=..."; break;
+                    case "rest": text = "*" + (name == "*" ? null : name); break;
+                    case "keyreq": text = (name ?? "_") + ":"; break;
+                    case "key": text = (name ?? "_") + ": ..."; break;
+                    case "keyrest": text = "**" + (name == "**" ? null : name); break;
+                    case "nokey": text = "**nil"; break;
+                    case "block": text = "&" + (name == "&" ? null : name); break;
+                    default: continue;
+                }
+                if (result.Length > 1) {
+                    result.Append(", ");
+                }
+                result.Append(text);
+            }
+            result.Append(')');
+            return result.ToString();
         }
 
         [RubyMethod("of")]
@@ -297,13 +342,28 @@ namespace IronRuby.Builtins {
             return self.Info.GetRubyParameterArray();
         }
 
+        // "Kernel#tap", "Dir.glob": how InternalMethods.SourceFiles names a method.
+        private static string/*!*/ InternalMethodKey(RubyMethodInfo/*!*/ info) {
+            RubyModule owner = info.DeclaringModule;
+            var singleton = owner.IsSingletonClass ? ((RubyClass)owner).SingletonClassOf as RubyModule : null;
+            return (singleton != null)
+                ? singleton.Name + "." + info.DefinitionName
+                : owner.Name + "#" + info.DefinitionName;
+        }
+
         internal static RubyArray GetSourceLocation(RubyMemberInfo/*!*/ info) {
             RubyMethodInfo rubyInfo = info as RubyMethodInfo;
             if (rubyInfo != null) {
                 string file = rubyInfo.Document.FileName;
-                // a core method written in Ruby is where MRI's are: <internal:kernel> and the like
-                if (RubyStackTraceBuilder.IsInternalFile(file) && rubyInfo.DeclaringModule.Name != null) {
-                    file = "<internal:" + rubyInfo.DeclaringModule.Name.ToLowerInvariant() + ">";
+                // A core method IronRuby writes in Ruby is located where MRI's is when MRI writes it
+                // in Ruby too (<internal:kernel> for Kernel#tap); where MRI's is C, it has no
+                // location at all, as a C method has none - method_source and pry rely on that.
+                if (RubyStackTraceBuilder.IsInternalFile(file)) {
+                    string mriFile;
+                    if (!InternalMethods.SourceFiles.TryGetValue(InternalMethodKey(rubyInfo), out mriFile)) {
+                        return null;
+                    }
+                    file = mriFile;
                 }
                 return new RubyArray(2) {
                     rubyInfo.DeclaringModule.Context.EncodePath(file),

@@ -147,6 +147,11 @@ namespace IronRuby.Compiler.Ast {
         /// source order, and queues the temporaries for the write phase to use in the same order.
         /// </summary>
         private void EvaluateTargets(AstGenerator/*!*/ gen, AstBlock/*!*/ evaluation, Queue<MSA.Expression>/*!*/ targets) {
+            // Nested targets ((a, b), c) recurse through here (see StackGuard).
+            if (!IronRuby.Runtime.StackGuard.IsSufficient) {
+                IronRuby.Runtime.StackGuard.RunOnFreshStack(() => EvaluateTargets(gen, evaluation, targets));
+                return;
+            }
             foreach (var lvalue in _leftValues) {
                 var nested = lvalue as CompoundLeftValue;
                 if (nested != null) {
@@ -176,6 +181,10 @@ namespace IronRuby.Compiler.Ast {
 
             var nested = lvalue as CompoundLeftValue;
             if (nested != null) {
+                // (see EvaluateTargets)
+                if (!IronRuby.Runtime.StackGuard.IsSufficient) {
+                    return IronRuby.Runtime.StackGuard.RunOnFreshStack(() => nested.TransformWrite(gen, rightValue, true, targets));
+                }
                 return nested.TransformWrite(gen, rightValue, true, targets);
             }
             return targets != null

@@ -69,11 +69,14 @@ namespace IronRuby.Builtins {
             return context.ResolveMethod(obj, name, VisibilityContext.AllVisible).Found;
         }
 
+        // MRI's time.c makes these Rationals itself (quov, rb_rational_new) rather than calling
+        // Kernel#Rational, and an ExactNum is already in lowest terms, so the Rational is made
+        // directly: Time#subsec runs on every TZInfo period lookup ActiveSupport does.
         internal static object MakeRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, ExactNum value) {
 
-            return KernelOps.ToRational(storage, scope, scope.SelfObject,
-                Protocols.Normalize(value.Numerator), Protocols.Normalize(value.Denominator));
+            return KernelOps.CreateCanonicalRational(scope.RubyContext, value.Numerator, value.Denominator)
+                ?? KernelOps.ToRational(storage, scope, Protocols.Normalize(value.Numerator), Protocols.Normalize(value.Denominator));
         }
 
         #endregion
@@ -112,7 +115,8 @@ namespace IronRuby.Builtins {
             if (value is double) {
                 double d = (double)value;
                 if (Double.IsNaN(d) || Double.IsInfinity(d)) {
-                    throw RubyExceptions.CreateRangeError("float {0} out of range of integer", d);
+                    // MRI: a Time cannot be made from an Infinity or a NaN (FloatDomainError)
+                    throw new FloatDomainError(Double.IsNaN(d) ? "NaN" : (d < 0 ? "-Infinity" : "Infinity"));
                 }
                 result = ExactNum.FromDouble(d);
                 return true;
@@ -173,7 +177,8 @@ namespace IronRuby.Builtins {
         private static ExactNum ToExactComponent(RubyContext/*!*/ context, object value) {
             MutableString str = value as MutableString;
             if (str != null) {
-                return ExactNum.FromInteger(ToBigInteger(MutableStringOps.ToInteger(str, 10)));
+                // obj2subsecx: a String is converted like Integer(), so "1.5" and "x" are errors
+                return ExactNum.FromInteger(ToBigInteger(KernelOps.ToInteger((object)null, str, 10)));
             }
             return ToExact(context, value);
         }
@@ -183,10 +188,29 @@ namespace IronRuby.Builtins {
                 return (int)value;
             }
             if (value is MutableString) {
-                return checked((int)MutableStringOps.ToInteger((MutableString)value, 10));
+                // obj2int: a String component is converted like Integer(), so "1.5" and "x" are
+                // ArgumentErrors rather than 1 and 0.
+                return ToInt32(KernelOps.ToInteger((object)null, (MutableString)value, 10));
             }
             ExactNum exact = ToExact(context, value);
-            return (int)exact.Floor();
+            return ToInt32(exact.Floor());
+        }
+
+        /// <summary>NUM2INT: a value outside int is a RangeError, as MRI reports it.</summary>
+        private static int ToInt32(object value) {
+            if (value is int) {
+                return (int)value;
+            }
+            BigInteger big = (value is BigInteger) ? (BigInteger)value : new BigInteger((long)value);
+            return ToInt32(big);
+        }
+
+        private static int ToInt32(BigInteger value) {
+            if (value > Int32.MaxValue || value < Int32.MinValue) {
+                throw RubyExceptions.CreateRangeError(String.Format(CultureInfo.InvariantCulture,
+                    "integer {0} too {1} to convert to 'int'", value, value.Sign < 0 ? "small" : "big"));
+            }
+            return (int)value;
         }
 
         #endregion
@@ -416,6 +440,20 @@ namespace IronRuby.Builtins {
         }
 
         private static object GetInOption(IDictionary<object, object> options) {
+            return GetInOption(options, false);
+        }
+
+        private static object GetInOption(IDictionary<object, object> options, bool allowPrecision) {
+            if (options != null) {
+                // in: is the only keyword Time.now and Time.at take; Time.new also takes precision:.
+                foreach (var key in options.Keys) {
+                    var symbol = key as RubySymbol;
+                    string name = symbol != null ? symbol.ToString() : null;
+                    if (name != "in" && !(allowPrecision && name == "precision")) {
+                        throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", symbol != null ? ":" + name : key.ToString());
+                    }
+                }
+            }
             bool found;
             return GetOption(options, "in", out found);
         }
@@ -494,7 +532,7 @@ namespace IronRuby.Builtins {
         /// <summary>Time.new(year, month, day, hour, min, sec, utc_offset) / Time.new(in: zone)</summary>
         private static RubyTime/*!*/ CreateFromComponents(RubyContext/*!*/ context, RubyClass owner, object[]/*!*/ args) {
             var options = ExtractOptions(ref args);
-            object inZone = GetInOption(options);
+            object inZone = GetInOption(options, true);
 
             if (args.Length == 0) {
                 return NowInternal(context, owner, inZone);
@@ -532,10 +570,6 @@ namespace IronRuby.Builtins {
             return AssembleTime(context, year, month, day, hour, minute, second, kind, offset, zoneObject, true);
         }
 
-        private static readonly Regex/*!*/ _isoPattern = new Regex(
-            @"^(?<y>\d{4,})(-(?<mon>\d{2})(-(?<d>\d{2})([T ](?<h>\d{2}):(?<min>\d{2}):(?<s>\d{2})(\.(?<frac>\d+))?)?)?)?" +
-            @"( ?(?<off>Z|[+-]\d{2}(:?\d{2}(:?\d{2})?)?))?\z", RegexOptions.CultureInvariant);
-
         /// <summary>
         /// Time.new with a single String argument. Every message the specs check for is
         /// allowed to be the generic "can't parse:" form, so the failure modes are not
@@ -549,10 +583,10 @@ namespace IronRuby.Builtins {
             }
 
             string text = str.ConvertToString();
-            Match m = _isoPattern.Match(text);
-            if (!m.Success || (m.Groups["mon"].Success && !m.Groups["h"].Success)) {
-                throw RubyExceptions.CreateArgumentError("can't parse: {0}", context.Inspect(str).ToString());
-            }
+            int year, month = 1, day = 1, hour = 0, minute = 0;
+            ExactNum second = ExactNum.Zero;
+            string fraction = null, zoneText = null;
+            ParseTimeText(context, str, text, out year, ref month, ref day, ref hour, ref minute, ref second, ref fraction, ref zoneText);
 
             int precision = 9;
             bool precisionGiven;
@@ -567,18 +601,8 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            int year = Int32.Parse(m.Groups["y"].Value, CultureInfo.InvariantCulture);
-            int month = m.Groups["mon"].Success ? Int32.Parse(m.Groups["mon"].Value, CultureInfo.InvariantCulture) : 1;
-            int day = m.Groups["d"].Success ? Int32.Parse(m.Groups["d"].Value, CultureInfo.InvariantCulture) : 1;
-            int hour = m.Groups["h"].Success ? Int32.Parse(m.Groups["h"].Value, CultureInfo.InvariantCulture) : 0;
-            int minute = m.Groups["min"].Success ? Int32.Parse(m.Groups["min"].Value, CultureInfo.InvariantCulture) : 0;
-
-            ExactNum second = m.Groups["s"].Success
-                ? ExactNum.FromInteger(Int32.Parse(m.Groups["s"].Value, CultureInfo.InvariantCulture))
-                : ExactNum.Zero;
-
-            if (m.Groups["frac"].Success) {
-                string digits = m.Groups["frac"].Value;
+            if (fraction != null) {
+                string digits = fraction;
                 if (precision >= 0 && digits.Length > precision) {
                     digits = digits.Substring(0, precision);
                 }
@@ -588,15 +612,130 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            object zone = m.Groups["off"].Success
-                ? MutableString.CreateAscii(m.Groups["off"].Value)
-                : inZone;
+            object zone = zoneText != null ? MutableString.CreateAscii(zoneText) : inZone;
 
             ExactNum offset;
             object zoneObject;
             RubyTimeZoneKind kind = ResolveZone(context, owner, zone, out offset, out zoneObject);
 
             return AssembleTime(context, year, month, day, hour, minute, second, kind, offset, zoneObject, true);
+        }
+
+        private static bool IsAsciiDigit(char c) {
+            return c >= '0' && c <= '9';
+        }
+
+        private static bool IsAsciiSpace(char c) {
+            return c == ' ' || (c >= '\t' && c <= '\r');
+        }
+
+        /// <summary>
+        /// MRI's time_init_parse: "YYYY[-MM[-DD[ HH:MM:SS[.fraction]]]] [zone]", with its messages
+        /// for what is missing or malformed.
+        /// </summary>
+        private static void ParseTimeText(RubyContext/*!*/ context, MutableString/*!*/ str, string/*!*/ text, out int year,
+            ref int month, ref int day, ref int hour, ref int minute, ref ExactNum second, ref string fraction, ref string zoneText) {
+
+            int pos = 0, end = text.Length;
+            int digits = 0;
+            while (pos + digits < end && IsAsciiDigit(text[pos + digits])) {
+                digits++;
+            }
+            if (digits == 0) {
+                throw RubyExceptions.CreateArgumentError("can't parse: {0}", context.Inspect(str).ToString());
+            }
+            if (digits < 4) {
+                throw RubyExceptions.CreateArgumentError("year must be 4 or more digits: {0}", text.Substring(pos, digits));
+            }
+            year = ToInt32(BigInteger.Parse(text.Substring(pos, digits), CultureInfo.InvariantCulture));
+            pos += digits;
+
+            if (pos < end && text[pos] == '-') {
+                month = TwoDigits(text, ref pos, "mon");
+                if (pos < end && text[pos] == '-') {
+                    day = TwoDigits(text, ref pos, "mday");
+                }
+                if (pos < end && (text[pos] == ' ' || text[pos] == 'T')) {
+                    int timePart = pos + 1;
+                    hour = TwoDigits(text, ref pos, "hour");
+                    if (pos < end && text[pos] == '.') {
+                        throw RubyExceptions.CreateArgumentError("fraction hour is not supported: {0}", text.Substring(timePart, pos + 1 - timePart));
+                    }
+                    if (pos < end && text[pos] == ':') {
+                        minute = TwoDigits(text, ref pos, "min");
+                        if (pos < end && text[pos] == '.') {
+                            throw RubyExceptions.CreateArgumentError("fraction min is not supported: {0}", text.Substring(timePart, pos + 1 - timePart));
+                        }
+                        if (pos < end && text[pos] == ':') {
+                            second = ExactNum.FromInteger(TwoDigits(text, ref pos, "sec"));
+                            if (pos < end && text[pos] == '.') {
+                                pos++;
+                                int start = pos;
+                                while (pos < end && IsAsciiDigit(text[pos])) {
+                                    pos++;
+                                }
+                                if (pos == start) {
+                                    int shown = Math.Min(end, pos + 1);
+                                    throw RubyExceptions.CreateArgumentError("subsecond expected after dot: {0}", text.Substring(timePart, shown - timePart));
+                                }
+                                fraction = text.Substring(start, pos - start);
+                            }
+                        } else {
+                            // MRI shows the time part up to and including the character that was
+                            // not the expected ':'
+                            throw RubyExceptions.CreateArgumentError("missing sec part: {0}", text.Substring(timePart, Math.Min(end, pos + 1) - timePart));
+                        }
+                    } else {
+                        throw RubyExceptions.CreateArgumentError("missing min part: {0}", text.Substring(timePart, Math.Min(end, pos + 1) - timePart));
+                    }
+                } else {
+                    // a date without a time of day is not a Time
+                    throw RubyExceptions.CreateArgumentError("no time information");
+                }
+            }
+
+            if (pos < end && IsAsciiSpace(text[pos])) {
+                while (pos < end && IsAsciiSpace(text[pos])) {
+                    pos++;
+                }
+                // whitespace has to introduce a zone; trailing whitespace alone is a parse error
+                if (pos == end) {
+                    throw RubyExceptions.CreateArgumentError("can't parse: {0}", context.Inspect(str).ToString());
+                }
+            }
+            if (pos < end) {
+                int start = pos;
+                while (pos < end && !IsAsciiSpace(text[pos])) {
+                    pos++;
+                }
+                zoneText = text.Substring(start, pos - start);
+                while (pos < end && IsAsciiSpace(text[pos])) {
+                    pos++;
+                }
+                if (pos < end) {
+                    throw RubyExceptions.CreateArgumentError("can't parse at: {0}", text.Substring(pos));
+                }
+            }
+        }
+
+        /// <summary>
+        /// MRI's two_digits: exactly two digits follow the separator at text[pos], and a third
+        /// digit is as wrong as a missing one.
+        /// </summary>
+        private static int TwoDigits(string/*!*/ text, ref int pos, string/*!*/ name) {
+            char separator = text[pos];
+            int start = pos + 1;
+            int len = text.Length - start;
+            if (len < 2 || !IsAsciiDigit(text[start]) || !IsAsciiDigit(text[start + 1]) || (len > 2 && IsAsciiDigit(text[start + 2]))) {
+                string message = "two digits " + name + " is expected";
+                if (separator == '-' || separator == ':') {
+                    message += " after '" + separator + "'";
+                }
+                int shown = Math.Min(len > 10 ? 10 : len, len) + 1;
+                throw RubyExceptions.CreateArgumentError(message + ": {0}", text.Substring(pos, Math.Min(shown, text.Length - pos)));
+            }
+            pos = start + 2;
+            return (text[start] - '0') * 10 + (text[start + 1] - '0');
         }
 
         private static int GetMonth(RubyContext/*!*/ context, object value) {
@@ -619,7 +758,7 @@ namespace IronRuby.Builtins {
                         }
                     }
                 }
-                return checked((int)MutableStringOps.ToInteger(str, 10));
+                return ToInt32(KernelOps.ToInteger((object)null, str, 10));
             }
 
             return ToIntComponent(context, value);
@@ -637,11 +776,13 @@ namespace IronRuby.Builtins {
 
             // MRI uses a component-specific message for values just outside the valid band
             // and the generic "argument out of range" for anything further out.
+            // (obj2ubits lets 0..15 through for the month, 0..31 for the day and the hour,
+            // and the range check that follows names the field.)
             if (month < 1 || month > 12) {
-                throw RubyExceptions.CreateArgumentError((month >= 13 && month <= 15) ? "mon out of range" : "argument out of range");
+                throw RubyExceptions.CreateArgumentError((month >= 0 && month <= 15) ? "mon out of range" : "argument out of range");
             }
             if (hour < 0 || hour > 24) {
-                throw RubyExceptions.CreateArgumentError((hour >= 25 && hour <= 27) ? "hour out of range" : "argument out of range");
+                throw RubyExceptions.CreateArgumentError((hour >= 25 && hour <= 31) ? "hour out of range" : "argument out of range");
             }
             if (minute < 0 || minute > 59) {
                 throw RubyExceptions.CreateArgumentError((minute >= 60 && minute <= 63) ? "min out of range" : "argument out of range");
@@ -656,7 +797,14 @@ namespace IronRuby.Builtins {
             // A day beyond the end of the month rolls into the next one (Feb 31 == Mar 3),
             // but a day outside 1..31 is an error.
             if (day < 1 || day > 31) {
-                throw RubyExceptions.CreateArgumentError("argument out of range");
+                throw RubyExceptions.CreateArgumentError(day == 0 ? "mday out of range" : "argument out of range");
+            }
+            // 24:00:00 is the end of the day; anything past it is not a time of that day.
+            if (hour == 24 && minute != 0) {
+                throw RubyExceptions.CreateArgumentError("min out of range");
+            }
+            if (hour == 24 && second.Sign != 0) {
+                throw RubyExceptions.CreateArgumentError("sec out of range");
             }
 
             long wallSeconds;
@@ -1118,7 +1266,7 @@ namespace IronRuby.Builtins {
             try {
                 return Shift(self, ToExact(context, seconds));
             } catch (OverflowException) {
-                throw RubyExceptions.CreateRangeError("time + {0} out of Time range", context.Inspect(seconds).ToString());
+                throw RubyExceptions.CreateRangeError(String.Format("time + {0} out of Time range", context.Inspect(seconds).ToString()));
             }
         }
 
@@ -1134,7 +1282,7 @@ namespace IronRuby.Builtins {
             try {
                 return Shift(self, -ToExact(context, other));
             } catch (OverflowException) {
-                throw RubyExceptions.CreateRangeError("time - {0} out of Time range", context.Inspect(other).ToString());
+                throw RubyExceptions.CreateRangeError(String.Format("time - {0} out of Time range", context.Inspect(other).ToString()));
             }
         }
 
@@ -1395,9 +1543,19 @@ namespace IronRuby.Builtins {
         }
 
         private static RubyTime/*!*/ RoundTo(RubyContext/*!*/ context, RubyTime/*!*/ self, object ndigits, int mode) {
-            int digits = (ndigits == Missing.Value || ndigits == null) ? 0 : ToIntComponent(context, ndigits);
-            if (digits < 0) {
+            int digits;
+            if (ndigits == Missing.Value) {
                 digits = 0;
+            } else if (ndigits == null) {
+                digits = 0;
+            } else if (ndigits is MutableString) {
+                // NUM2INT: a String is not converted here
+                throw RubyExceptions.CreateImplicitConversionError("String", "Integer");
+            } else {
+                digits = ToIntComponent(context, ndigits);
+            }
+            if (digits < 0) {
+                throw RubyExceptions.CreateArgumentError("negative ndigits given");
             }
 
             ExactNum scale = ExactNum.FromInteger(BigInteger.Pow(new BigInteger(10), digits));
@@ -1409,7 +1567,8 @@ namespace IronRuby.Builtins {
             } else if (mode > 0) {
                 rounded = scaled.Ceiling();
             } else {
-                rounded = scaled.Round();
+                // MRI rounds a half up (towards +Infinity): Time.at(-1.5).round is -1
+                rounded = (scaled + ExactNum.Make(BigInteger.One, new BigInteger(2))).Floor();
             }
 
             ExactNum result = ExactNum.Make(rounded, scale.Numerator);
@@ -1621,6 +1780,9 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ FormatTime(RubyContext/*!*/ context, RubyTime/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ format) {
 
+            if (!format.Encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateArgumentError("format should have ASCII compatible encoding");
+            }
             MutableString result = MutableString.CreateMutable(format.Encoding);
             Strftime.Format(context, result, self, format.ConvertToString(), 0);
             return result;

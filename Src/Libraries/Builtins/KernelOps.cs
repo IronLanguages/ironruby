@@ -192,7 +192,19 @@ namespace IronRuby.Builtins {
                     case '\r': text.Append("\\r"); break;
                     case '\f': text.Append("\\f"); break;
                     case '\v': text.Append("\\v"); break;
-                    default: text.Append(c); break;
+                    case '\a': text.Append("\\a"); break;
+                    case '\b': text.Append("\\b"); break;
+                    case (char)27: text.Append("\\e"); break;
+                    case '"': text.Append("\\\""); break;
+                    case '\\': text.Append("\\\\"); break;
+                    default:
+                        // the other control characters the way #inspect spells them
+                        if (c < 0x20 || c == 0x7f) {
+                            text.Append("\\u").Append(((int)c).ToString("X4", System.Globalization.CultureInfo.InvariantCulture));
+                        } else {
+                            text.Append(c);
+                        }
+                        break;
                 }
             }
             return RubyExceptions.CreateArgumentError("invalid value for Integer(): \"{0}\"", text.ToString());
@@ -317,50 +329,51 @@ namespace IronRuby.Builtins {
             return Protocols.ConvertToString(tosConversion, obj);
         }
 
-        // Kernel#Complex and Kernel#Rational below load complex18.rb/rational18.rb and re-dispatch,
-        // expecting the file to have replaced them. It does so for the instance method only, so a
-        // call on a receiver that still resolves to the stub (e.g. Kernel.Complex, the singleton)
-        // would come straight back here and recurse until the stack ran out. The guard turns that
-        // into an error rather than a crash.
-        [ThreadStatic]
-        private static bool _inNumericStub;
+        // Kernel#Complex and Kernel#Rational are written in Ruby (Src/StdLib/ironruby/ironruby/
+        // complex.rb and rational.rb, ports of MRI's complex.c and rational.c). This is how the C#
+        // library makes a Rational: Kernel.Rational(numerator, denominator).
+        internal static object/*!*/ ToRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toRational,
+            RubyScope/*!*/ scope, object numerator, object denominator) {
 
-        [RubyMethod("Complex", RubyMethodAttributes.PrivateInstance, Compatibility = RubyCompatibility.Ruby19)]
-        [RubyMethod("Complex", RubyMethodAttributes.PublicSingleton, Compatibility = RubyCompatibility.Ruby19)]
-        public static object ToComplex(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toComplex, 
-            RubyScope/*!*/ scope, object self, object real, [DefaultParameterValue(null)]object imaginary) {
-            
-            if (_inNumericStub) {
-                throw RubyExceptions.CreateNotImplementedError("Complex is not defined for this receiver");
-            }
-            // TODO: hack: redefines this method
-            scope.RubyContext.Loader.LoadFile(scope.GlobalScope.Scope, self, MutableString.CreateAscii("complex18.rb"), LoadFlags.Require);
-            var site = toComplex.GetCallSite("Complex", 2);
-            _inNumericStub = true;
-            try {
-                return site.Target(site, self, real, imaginary);
-            } finally {
-                _inNumericStub = false;
-            }
+            var site = toRational.GetCallSite("Rational", 2);
+            return site.Target(site, scope.RubyContext.KernelModule, numerator, denominator);
         }
 
-        [RubyMethod("Rational", RubyMethodAttributes.PrivateInstance, Compatibility = RubyCompatibility.Ruby19)]
-        [RubyMethod("Rational", RubyMethodAttributes.PublicSingleton, Compatibility = RubyCompatibility.Ruby19)]
-        public static object/*!*/ ToRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toRational, 
-            RubyScope/*!*/ scope, object self, object numerator, [DefaultParameterValue(null)]object denominator) {
+        // The Rational class of the context that last asked (one per process in practice).
+        private static RubyClass _rationalClass;
 
-            if (_inNumericStub) {
-                throw RubyExceptions.CreateNotImplementedError("Rational is not defined for this receiver");
+        private static RubyClass GetRationalClass(RubyContext/*!*/ context) {
+            RubyClass cls = _rationalClass;
+            if (cls != null && cls.Context == context) {
+                return cls;
             }
-            // TODO: hack: redefines this method
-            scope.RubyContext.Loader.LoadFile(scope.GlobalScope.Scope, self, MutableString.CreateAscii("rational18.rb"), LoadFlags.Require);
-            var site = toRational.GetCallSite("Rational", 2);
-            _inNumericStub = true;
-            try {
-                return site.Target(site, self, numerator, denominator);
-            } finally {
-                _inNumericStub = false;
+            object value;
+            cls = context.ObjectClass.TryGetConstant(null, "Rational", out value) ? value as RubyClass : null;
+            // rational.rb's Rational: a Ruby subclass of Numeric whose instances are plain Numerics
+            if (cls == null || cls.IsSingletonClass || cls.Name != "Rational" || cls.GetUnderlyingSystemType() != typeof(Numeric)) {
+                return null;
             }
+            _rationalClass = cls;
+            return cls;
+        }
+
+        /// <summary>
+        /// rational.rb's Rational.__new_internal__ (MRI's nurat_s_new_internal, which a C function like
+        /// Time#subsec calls without going through Kernel#Rational): a frozen Rational with the given parts,
+        /// which must already be canonical - in lowest terms, the denominator positive. Returns null when
+        /// the Rational class is not there to make one (rational.rb not loaded yet).
+        /// </summary>
+        internal static object CreateCanonicalRational(RubyContext/*!*/ context, BigInteger numerator, BigInteger denominator) {
+            Debug.Assert(denominator.Sign > 0 && BigInteger.GreatestCommonDivisor(numerator, denominator).IsOne);
+            RubyClass cls = GetRationalClass(context);
+            if (cls == null) {
+                return null;
+            }
+            var result = new Numeric(cls);
+            context.SetInstanceVariable(result, "@numerator", Protocols.Normalize(numerator));
+            context.SetInstanceVariable(result, "@denominator", Protocols.Normalize(denominator));
+            result.Freeze();
+            return result;
         }
 
         #endregion
@@ -711,6 +724,9 @@ namespace IronRuby.Builtins {
                 exception = MakeException(respondToStorage, storage0, storage1, args);
 
                 if (args.Length >= 3 && args[2] != null) {
+                    if (!(args[2] is MutableString || args[2] is RubyArray)) {
+                        throw RubyExceptions.CreateTypeError("backtrace must be Array of String");
+                    }
                     var site = setBackTraceStorage.GetCallSite("set_backtrace", 1);
                     site.Target(site, exception, args[2]);
                 }
@@ -1053,6 +1069,46 @@ namespace IronRuby.Builtins {
             var site = storage.GetCallSite("__ir_lazy_grep_impl__", new RubyCallSignature(4, RubyCallFlags.HasImplicitSelf));
             return site.Target(site, self, pattern, ScriptingRuntimeHelpers.BooleanToObject(invert),
                 new Binding(scope), (block != null) ? block.Proc : null);
+        }
+
+        /// <summary>
+        /// The prelude's "does obj answer this message" (the conversions in rational.rb and complex.rb ask it of
+        /// whatever they are handed - a BasicObject included, which has no #respond_to?): true if obj has the method
+        /// in any visibility, otherwise what its #respond_to? says if it has a public or protected one. An object
+        /// that can have no singleton class (an Integer, a Float, a Symbol, a frozen String) is asked #respond_to?.
+        /// The lookup is the one `class &lt;&lt; obj; self; end.method_defined?' made, but on the class obj has - its
+        /// singleton class only if it already has one: making one to ask through gave every value converted (each
+        /// Rational of every Time#subsec) a class of its own, which each call site it reached then had to bind afresh.
+        /// </summary>
+        [RubyMethod("__ir_responds_to__", RubyMethodAttributes.PrivateInstance)]
+        public static bool RespondsTo(ConversionStorage<string>/*!*/ stringCast, RespondToStorage/*!*/ respondToStorage,
+            object self, object obj, object methodName) {
+
+            var context = respondToStorage.Context;
+            var respondToSite = respondToStorage.GetCallSite();
+            if (!RubyUtils.CanDefineSingletonMethod(obj)) {
+                return Protocols.IsTrue(respondToSite.Target(respondToSite, obj, methodName));
+            }
+
+            // method_defined? || private_method_defined?, as Module#method_defined? answers them:
+            string name = Protocols.CastToSymbol(stringCast, methodName);
+            RubyClass cls = context.GetImmediateClassOf(obj);
+            if (GetDefinedVisibility(cls, name) != RubyMethodVisibility.None) {
+                return true;
+            }
+
+            var respondTo = GetDefinedVisibility(cls, "respond_to?");
+            return (respondTo == RubyMethodVisibility.Public || respondTo == RubyMethodVisibility.Protected) &&
+                Protocols.IsTrue(respondToSite.Target(respondToSite, obj, methodName));
+        }
+
+        private static RubyMethodVisibility GetDefinedVisibility(RubyClass/*!*/ cls, string/*!*/ name) {
+            var method = cls.GetMethodLookup(name);
+            if (!method.Found) {
+                return RubyMethodVisibility.None;
+            }
+            var libraryMethod = method.Info as RubyLibraryMethodInfo;
+            return (libraryMethod != null && libraryMethod.IsNotImplemented) ? RubyMethodVisibility.None : method.Visibility;
         }
 
         [RubyMethod("__ir_clone_with_freeze__", RubyMethodAttributes.PrivateInstance)]
@@ -1463,10 +1519,10 @@ namespace IronRuby.Builtins {
             RubyClass cls = context.GetImmediateClassOf(self);
 
             // A refinement active where #respond_to? was called counts, as it does for a call. Without
-            // one - nearly always - the answer comes from the class's lock-free method-lookup cache,
-            // and the site keeps it while the class's method version stays the same.
+            // one with the name - nearly always - the answer comes from the class's lock-free
+            // method-lookup cache, and the site keeps it while the class's method version stays the same.
             int version = -1;
-            if (scope.GetActiveRefinements().IsEmpty) {
+            if (!context.IsRefinedMethodName(methodName) || scope.GetActiveRefinements().IsEmpty) {
                 bool answer;
                 if (respondToMissingStorage.TryGetAnswer(cls, methodName, includePrivate, out answer)) {
                     return answer;
@@ -1760,7 +1816,7 @@ namespace IronRuby.Builtins {
             RubyClass cls = context.GetClassOf(self);
             Type type = (asType != null) ? Protocols.ToType(context, asType) : null;
             if (!cls.TryGetClrMember(name, type, out info)) {
-                throw RubyExceptions.CreateNameError("undefined CLR method `{0}' for class `{1}'", name, cls.Name);
+                throw RubyExceptions.CreateNameError("undefined CLR method '{0}' for class '{1}'", name, cls.Name);
             }
 
             return new RubyMethod(self, info, name);
@@ -1814,7 +1870,7 @@ namespace IronRuby.Builtins {
                 if (info.Visibility == RubyMethodVisibility.Public) {
                     return new RubyMethod(self, info, name);
                 }
-                throw RubyExceptions.CreateNameError("method `{0}' for class `{1}' is {2}",
+                throw RubyExceptions.CreateNameError("method '{0}' for class '{1}' is {2}",
                     name, context.GetClassDisplayName(self),
                     info.Visibility == RubyMethodVisibility.Private ? "private" : "protected");
             }
@@ -1978,7 +2034,7 @@ namespace IronRuby.Builtins {
 
         private static RubyArray/*!*/ GetMethods(RubyContext/*!*/ context, object self, bool inherited, RubyMethodAttributes attributes) {
             RubyClass immediateClass = context.GetImmediateClassOf(self);
-            return ModuleOps.GetMethods(immediateClass, inherited, attributes);
+            return ModuleOps.GetMethods(immediateClass, inherited, attributes, null, true);
         }
 
         #endregion
@@ -2323,12 +2379,13 @@ namespace IronRuby.Builtins {
             } else if (namespaceModule.NamespaceTracker == null) {
                 throw RubyExceptions.CreateNotClrNamespaceError(namespaceModule);
             } else if (context != namespaceModule.Context) {
-                throw RubyExceptions.CreateTypeError("Cannot use namespace `{0}' defined in a foreign runtime #{1}",
+                throw RubyExceptions.CreateTypeError("Cannot use namespace '{0}' defined in a foreign runtime #{1}",
                     namespaceModule.NamespaceTracker.Name, namespaceModule.Context.RuntimeId);
             } else {
                 ns = namespaceModule.NamespaceTracker.Name;
             }
 
+            context.ReportUsingClrExtensionsDeprecation(namespaceModule != null ? namespaceModule.Name : null);
             context.ActivateExtensions(ns);
         }
 
@@ -2580,6 +2637,11 @@ namespace IronRuby.Builtins {
             Protocols.Write(writeStorage, writeStorage.Context.StandardOutput, self);
         }
 
+        [RubyMethod("display")]
+        public static void Display(BinaryOpStorage/*!*/ writeStorage, object self, object port) {
+            Protocols.Write(writeStorage, port, self);
+        }
+
         [RubyMethod("warn", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("warn", RubyMethodAttributes.PublicSingleton)]
         public static void ReportWarning(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion,
@@ -2680,6 +2742,15 @@ namespace IronRuby.Builtins {
         //sub
         //sub!
 
+        // MRI: a missing format string is "too few arguments", not an arity error.
+        [RubyMethod("format", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("sprintf", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("sprintf", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString/*!*/ Sprintf(object self) {
+            throw RubyExceptions.CreateArgumentError("too few arguments");
+        }
+
         [RubyMethod("format", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("sprintf", RubyMethodAttributes.PrivateInstance)]
@@ -2687,6 +2758,9 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ Sprintf(StringFormatterSiteStorage/*!*/ storage,
             object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
 
+            if (!format.Encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", format.Encoding.Name);
+            }
             return new StringFormatter(storage, format.ConvertToString(), format.Encoding, args).Format();
         }
 

@@ -447,7 +447,19 @@ namespace IronRuby.Builtins {
             } else if (separator == null) {
                 // The whole of what is left, in the stream's own encoding rather than as bytes.
                 var result = MutableString.CreateBinary(encoding);
-                return AppendBytes(result, limit, preserveEndOfLines) == 0 ? null : result;
+                if (AppendBytes(result, limit, preserveEndOfLines) == 0) {
+                    return null;
+                }
+                if (limit != Int32.MaxValue) {
+                    // A byte limit is relaxed while the last character is incomplete, by 16 bytes
+                    // at most (extra_limit in io.c): gets(nil, 1) on "é" answers "é", not "\xC3".
+                    for (int extra = 16; extra > 0 && EndsWithIncompleteCharacter(encoding, result); extra--) {
+                        if (AppendBytes(result, 1, preserveEndOfLines) == 0) {
+                            break;
+                        }
+                    }
+                }
+                return result;
             } else if (separator.StartsWith('\n') && separator.GetLength() == 1) {
                 // The buffer-scanning reader has no way to stop part way through a line, so a
                 // read with a byte limit goes through the general one.

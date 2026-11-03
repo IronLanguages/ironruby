@@ -65,7 +65,7 @@ namespace IronRuby.Compiler.Ast {
             _target = target;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             var literal = _target as StringLiteral;
             if (literal != null && _methodName == "freeze" && (Arguments == null || Arguments.IsEmpty) && Block == null) {
                 return literal.TransformReadFrozen(gen);
@@ -175,12 +175,6 @@ namespace IronRuby.Compiler.Ast {
             var call = node as MethodCall;
             siteBuilder.IsVariableCall = call != null && call.IsVariableCall;
             var dynamicSite = siteBuilder.MakeCallAction(methodName, hasImplicitSelf);
-#if FEATURE_CALL_SITE_TRACER
-            if (gen.Context.CallSiteCreated != null) {
-                gen.Context.CallSiteCreated(node, dynamicSite);
-            }
-#endif
-
             MSA.Expression result = gen.DebugMark(dynamicSite, methodName);
 
             if (block != null) {

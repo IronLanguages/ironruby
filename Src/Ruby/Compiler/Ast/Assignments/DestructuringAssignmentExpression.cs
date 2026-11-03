@@ -37,7 +37,7 @@ namespace IronRuby.Compiler.Ast {
             : base(lhs, new Expression[] { value }, location) {
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return Left.TransformWrite(gen, null, Right[0].TransformRead(gen));
         }
     }

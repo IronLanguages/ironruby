@@ -52,8 +52,8 @@ namespace IronRuby.Runtime.Calls {
         // (typeof(action)) => binder:
         private readonly Dictionary<Type, RubyConversionAction>/*!*/ _conversionActions;
 
-        // (CompositeConversion) => binder:
-        private readonly Dictionary<CompositeConversion, CompositeConversionAction>/*!*/ _compositeConversionActions;
+        // (CompositeConversion) => binder; an array, read without a lock, as CompositeConversionAction.Make asks on every call:
+        private readonly CompositeConversionAction[]/*!*/ _compositeConversionActions;
 
         // (type) => binder:
         private readonly Dictionary<Type, GenericConversionAction>/*!*/ _genericConversionActions;
@@ -79,7 +79,7 @@ namespace IronRuby.Runtime.Calls {
             _callActions = new Dictionary<Key<string, RubyCallSignature>, RubyCallAction>();
             _superCallActions = new Dictionary<Key<int, RubyCallSignature>, SuperCallAction>();
             _conversionActions = new Dictionary<Type, RubyConversionAction>();
-            _compositeConversionActions = new Dictionary<CompositeConversion, CompositeConversionAction>();
+            _compositeConversionActions = new CompositeConversionAction[Enum.GetValues<CompositeConversion>().Length];
             _genericConversionActions = new Dictionary<Type, GenericConversionAction>();
         }
 
@@ -120,12 +120,15 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public CompositeConversionAction/*!*/ CompositeConversion(CompositeConversion conversion) {
-            var key = conversion;
+            CompositeConversionAction result = Volatile.Read(ref _compositeConversionActions[(int)conversion]);
+            if (result != null) {
+                return result;
+            }
 
             lock (_conversionActions) {
-                CompositeConversionAction result;
-                if (!_compositeConversionActions.TryGetValue(key, out result)) {
-                    _compositeConversionActions.Add(key, result = CompositeConversionAction.Create(_context, conversion));
+                result = _compositeConversionActions[(int)conversion];
+                if (result == null) {
+                    Volatile.Write(ref _compositeConversionActions[(int)conversion], result = CompositeConversionAction.Create(_context, conversion));
                 }
                 return result;
             }

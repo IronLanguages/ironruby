@@ -37,7 +37,7 @@ namespace IronRuby.Compiler.Ast {
             _expression = expression;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return _expression.TransformIsDefined(gen);
         }
 

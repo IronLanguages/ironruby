@@ -23,7 +23,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 # JIT, loader and R2R entry-point events: what dotnet-pgo needs to see every method startup runs
 PROVIDERS='Microsoft-Windows-DotNETRuntime:0x1F000080018:5'
-IR_CONFIG=R2R dotnet-trace collect --providers "$PROVIDERS" -o "$TMP/startup.nettrace" -- \
+IR_CONFIG=R2R IR_SERVER=0 dotnet-trace collect --providers "$PROVIDERS" -o "$TMP/startup.nettrace" -- \
   "$IR_ROOT/ir.sh" -e 'require "set"; require "json"; JSON.parse(JSON.generate({"a" => [1, 2.5, nil]})); Set[1, 2].to_a' > /dev/null
 if [ -n "$DOTNET_PGO" ]; then
   dotnet "$DOTNET_PGO" create-mibc -t "$TMP/startup.nettrace" -o "$IR_ROOT/Build/startup.mibc"

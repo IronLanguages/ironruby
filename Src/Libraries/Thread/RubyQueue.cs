@@ -28,8 +28,15 @@ namespace IronRuby.StandardLibrary.Threading {
     /// Thread::Queue - an unbounded blocking queue. Waits are Monitor waits, so Thread#kill and
     /// Thread#raise (which are delivered with Thread.Interrupt on .NET Core) unblock them.
     /// </summary>
-    [RubyClass("Queue")]
+    [RubyClass("Queue", DefineIn = typeof(ThreadOps))]
     public class RubyQueue {
+
+        /// <summary>MRI's #&lt;Thread::Queue:0x...&gt;, rather than the CLR type name.</summary>
+        [RubyMethod("inspect")]
+        [RubyMethod("to_s")]
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, RubyQueue/*!*/ self) {
+            return RubyUtils.ObjectToMutableString(context, self);
+        }
         protected readonly Queue<object>/*!*/ _queue;
         protected int _waiting;
         protected bool _closed;
@@ -158,6 +165,10 @@ namespace IronRuby.StandardLibrary.Threading {
         /// protocol, and words the failure as an explicit conversion ("can't convert X into Array").
         /// </summary>
         private static void Fill(ConversionStorage<IList>/*!*/ toA, RubyContext/*!*/ context, RubyQueue/*!*/ queue, object items) {
+            // Queue.new(nil) is an empty queue
+            if (items == null) {
+                return;
+            }
             IList list = items as IList;
             if (list == null) {
                 list = Protocols.TryConvertToArray(toA, items);
@@ -216,6 +227,14 @@ namespace IronRuby.StandardLibrary.Threading {
                 throw RubyExceptions.CreateArgumentError("can't set a timeout if non_block is enabled");
             }
             return Dequeue(context, self, options);
+        }
+
+        // pop takes the non-blocking flag and the timeout: keyword, nothing more
+        [RubyMethod("deq")]
+        [RubyMethod("pop")]
+        [RubyMethod("shift")]
+        public static object Dequeue(RubyQueue/*!*/ self, object nonBlocking, object other) {
+            throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 2, expected 0..1)");
         }
 
         internal static object GetTimeoutOption(RubyContext/*!*/ context, Hash/*!*/ options) {

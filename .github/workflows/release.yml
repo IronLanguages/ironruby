@@ -1,12 +1,17 @@
 name: Release
 
 # Binary builds: a self-contained IronRuby for each platform, made by
-# Util/package-release.sh, and the launch video, rendered from media/launch. Pushing a
-# tag v* publishes them as a GitHub release (a pre-release while the version has a
-# suffix such as -preview1), with Docs/releases/<tag>.md as the notes when there is one;
-# running the workflow by hand, or a pull request that changes the packaging or the
-# video, only keeps them as workflow artifacts. Run by hand with video_for set to a tag,
-# it renders only the video and replaces it, and its SHA256SUMS line, on that release.
+# Util/package-release.sh, and for Windows also an installer made from that archive by
+# Util/installer/build-installer.sh. Pushing a tag v* publishes them as a GitHub release (a
+# pre-release while the version has a suffix such as -preview1), with
+# Docs/releases/<tag>.md as the notes when there is one; running the workflow by hand, or
+# a pull request that changes the packaging, only keeps them as workflow artifacts.
+# Each published file gets a signed build provenance attestation (actions/attest) in the
+# job that built it; `gh attestation verify <file> --repo Largo/ironruby` checks it.
+# The launch video, rendered from media/launch, is only rendered when asked for by hand -
+# it takes about 7 minutes of every run otherwise: with render_video it is kept as an
+# artifact, and with video_for set to a tag it alone is rendered and replaces the video,
+# and its SHA256SUMS line, on that release (or adds them to one published without).
 on:
   push:
     tags: ['v*']
@@ -14,9 +19,14 @@ on:
     paths:
       - .github/workflows/release.yml
       - Util/package-release.sh
-      - media/launch/**
+      - Util/installer/**
   workflow_dispatch:
     inputs:
+      render_video:
+        description: Render the launch video as well, as a workflow artifact
+        type: boolean
+        required: false
+        default: false
       video_for:
         description: Render only the launch video and replace it on this release (a tag, such as v4.0.0)
         required: false
@@ -29,10 +39,13 @@ env:
   DOTNET_NOLOGO: 1
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
-  # Unlike CI, which follows prism's main branch, a release is built from the prism
-  # revision Src/Prism/Generated was generated from (Src/Prism/README.md), the one the
-  # vendored Ruby half of prism in Src/StdLib belongs to.
-  PRISM_REF: cd76b0d130a6f0311d168a69618197f15a912c69
+  # The prism revision Src/Prism/Generated was generated from (Src/Prism/README.md), the one
+  # the vendored Ruby half of prism in Src/StdLib belongs to; ci.yml builds from the same one.
+  PRISM_REF: 30a255539e81842b2b7f12b4fd3c62a7b4d64165
+  # The DLR revision Build/dlr-patches applies to; ci.yml builds from the same one, so a
+  # release can be rebuilt and an upstream change only arrives when this is moved on purpose.
+  # Move both together, after checking the patches still apply.
+  DLR_REF: 922753f8ccbf5186c15899116d5a407b6b1723fb
 
 jobs:
   package:
@@ -41,6 +54,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     # macOS is untested (README, Platforms): a failure there does not hold the release back.
     continue-on-error: ${{ matrix.experimental }}
+    # id-token, attestations and artifact-metadata: for the build provenance below.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
@@ -64,6 +83,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: IronLanguages/dlr
+          ref: ${{ env.DLR_REF }}
           path: dlr
 
       - uses: actions/checkout@v7
@@ -108,6 +128,16 @@ jobs:
           fi
           ls -l build
 
+      # Built as in ci.yml (Util/build-markly.sh), so the archive carries markly's cmark-gfm.
+      - name: Build libmarkly_cmark
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          bash Util/build-markly.sh
+          ls -l Src/Libraries/Markly/native/build
+
       # The committed loader must be the one this prism revision generates; a mismatch
       # would build fine and then misread the syntax tree.
       - name: Check the prism loader against the prism revision
@@ -115,6 +145,17 @@ jobs:
         run: |
           ruby generate.rb ../../../prism/config.yml "$RUNNER_TEMP/prism-gen"
           diff -r --strip-trailing-cr Generated "$RUNNER_TEMP/prism-gen"
+
+      # Built as in ci.yml: the rbs gem's parser behind rbs_extension, from the gem
+      # pinned by SHA-256 in Util/build-librbs.sh, shipped beside the assemblies.
+      - name: Build librbs
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          Util/build-librbs.sh
+          ls -l Src/Libraries/Rbs/native/build
 
       # package-release.sh rebuilds libe_sqlite3.so for the Linux archive (gcc, unzip) and
       # checks it with the system's libsqlite3 preloaded, the case SQLitePCL.raw#682 is about.
@@ -141,26 +182,83 @@ jobs:
         working-directory: dist
         run: cd ironruby-*-win-x64 && cmd //c ir.cmd Samples/Notepad/test_notepad.rb
 
+      # Inno Setup, for the installer: its release from GitHub, pinned by version and by the
+      # SHA-256 GitHub lists for that asset, installed for this job only.
+      - name: Inno Setup
+        if: runner.os == 'Windows'
+        env:
+          INNO_VERSION: 6.7.3
+          INNO_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
+        run: |
+          mkdir -p "$RUNNER_TEMP/innosetup-download"
+          setup="$RUNNER_TEMP/innosetup-download/innosetup-$INNO_VERSION.exe"
+          curl -fsSL -o "$setup" \
+            "https://github.com/jrsoftware/issrc/releases/download/is-${INNO_VERSION//./_}/innosetup-$INNO_VERSION.exe"
+          echo "$INNO_SHA256  $setup" | sha256sum -c
+          MSYS2_ARG_CONV_EXCL='*' "$setup" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CURRENTUSER \
+            "/DIR=$(cygpath -w "$RUNNER_TEMP/innosetup")"
+          test -f "$RUNNER_TEMP/innosetup/ISCC.exe"
+          echo "ISCC=$RUNNER_TEMP/innosetup/ISCC.exe" >> "$GITHUB_ENV"
+
+      # The installer carries the archive just made, unchanged.
+      - name: Installer, from the archive
+        if: runner.os == 'Windows'
+        working-directory: ironruby
+        run: Util/installer/build-installer.sh "$GITHUB_WORKSPACE"/dist/ironruby-*-win-x64.zip
+
+      # Into C:\IronRuby40-x64, for this user and then for all users: ironruby, irb and
+      # `igem install rack` from the PATH a new terminal gets, then the uninstaller, which
+      # must leave no file and the PATH as it was.
+      - name: Install, run and uninstall
+        if: runner.os == 'Windows'
+        timeout-minutes: 15
+        shell: pwsh
+        working-directory: dist
+        run: |
+          $test = "$env:GITHUB_WORKSPACE\ironruby\Util\installer\test-installer.ps1"
+          $setup = (Get-Item ironruby-*-win-x64-setup.exe).FullName
+          & $test $setup
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $test $setup -AllUsers
+
+      # Signed SLSA build provenance for the archive a tag publishes, with GitHub's own
+      # actions/attest, pinned to the commit of its v4.2.2 tag: `gh attestation verify
+      # <archive> --repo Largo/ironruby` shows that this workflow built it, from which
+      # commit and in which run. dist/ironruby-<version>-<rid>*.* is the archive, and on
+      # Windows the installer, -setup.exe; not the directory the archive was packed from.
+      - name: Attest build provenance
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/ironruby-*-${{ matrix.rid }}*.*
+
       - uses: actions/upload-artifact@v7
         with:
           name: ironruby-${{ matrix.rid }}
           path: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*-setup.exe
           if-no-files-found: error
 
   # media/launch is a HyperFrames composition (media/launch/README.md). A video that
   # does not render does not hold the archives back.
   video:
     name: launch video
+    if: github.event_name == 'workflow_dispatch' && (inputs.render_video || inputs.video_for != '')
     runs-on: ubuntu-latest
     continue-on-error: true
     # A render takes about 7 minutes; a failed one can leave hyperframes waiting.
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
 
@@ -187,6 +285,14 @@ jobs:
           $hf render --fps 60 --quality high --output "$GITHUB_WORKSPACE/dist/ironruby-4-launch.mp4"
           $hf snapshot --frames 12
 
+      # As the archives: the film that video_for puts on a release gets its provenance here,
+      # in the job that rendered it.
+      - name: Attest build provenance
+        if: inputs.video_for != ''
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/ironruby-4-launch.mp4
+
       - uses: actions/upload-artifact@v7
         with:
           name: ironruby-launch-video
@@ -203,17 +309,21 @@ jobs:
 
   release:
     name: GitHub release
-    if: github.ref_type == 'tag'
-    needs: [package, video]
+    # A pushed tag only: a run by hand keeps its archives as artifacts, even on a tag.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: package
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v7
         with:
           sparse-checkout: Docs/releases
 
-      # ironruby-* only: the archives and the video, not the review stills.
+      # ironruby-* only: the archives, not the review stills (the video is not rendered here).
       - uses: actions/download-artifact@v8
         with:
           path: dist
@@ -223,6 +333,12 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum * | tee SHA256SUMS
+
+      # The archives were attested where they were built; SHA256SUMS is made here.
+      - name: Attest SHA256SUMS
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/SHA256SUMS
 
       - name: Publish
         env:
@@ -247,13 +363,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: ironruby-launch-video
           path: dist
 
-      - name: Upload
+      - name: Checksums
         working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
@@ -264,4 +383,16 @@ jobs:
           { grep -v ' ironruby-4-launch.mp4$' SHA256SUMS; echo "$sum"; } > SHA256SUMS.new
           mv SHA256SUMS.new SHA256SUMS
           cat SHA256SUMS
-          gh release upload "$TAG" ironruby-4-launch.mp4 SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+
+      # The video was attested where it was rendered; this SHA256SUMS is made here.
+      - name: Attest SHA256SUMS
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/SHA256SUMS
+
+      - name: Upload
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.video_for }}
+        run: gh release upload "$TAG" ironruby-4-launch.mp4 SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"

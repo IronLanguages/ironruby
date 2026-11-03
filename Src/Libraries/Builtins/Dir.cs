@@ -442,7 +442,8 @@ namespace IronRuby.Builtins {
 
             string containingDir = platform.GetDirectoryName(strDir);
             if (!String.IsNullOrEmpty(containingDir) && !platform.DirectoryExists(containingDir)) {
-                throw RubyExceptions.CreateENOENT("No such file or directory - {0}", containingDir);
+                // mkdir(2) reports the path it was given, not the missing parent
+                throw RubyExceptions.CreateENOENT("No such file or directory - {0}", strDir);
             }
                 
             // The permission argument is not decoration: Dir.mkdir(path, 01755) has to
@@ -771,6 +772,10 @@ namespace IronRuby.Builtins {
                     return RubyExceptions.CreateEINVAL(path);
 
                 case DirectoryOperation.Open:
+                    // opendir(3) on a file is ENOTDIR, which a CLR DirectoryNotFoundException maps to
+                    if (File.Exists(path)) {
+                        return new DirectoryNotFoundException("Not a directory - " + path);
+                    }
                     return RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
 
                 case DirectoryOperation.Delete:

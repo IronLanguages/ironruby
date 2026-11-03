@@ -210,7 +210,7 @@ namespace IronRuby.Runtime.Calls {
         #region Dynamic Sites
 
         internal override MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version) {
-            return (target is IRubyObject) ? GetDispatcher(delegateType, signature, version) : null;
+            return (target is IRubyObject) ? GetDispatcher(delegateType, signature, version, null, false) : null;
         }
 
         /// <summary>
@@ -218,14 +218,26 @@ namespace IronRuby.Runtime.Calls {
         /// (see RubyCallAction.HasPlainClrTypeTest): the method is called the same way, the receiver test is the rule's.
         /// </summary>
         internal MemberDispatcher GetClrDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, RubyClass/*!*/ targetClass, int version) {
-            var dispatcher = GetDispatcher(delegateType, signature, version);
+            var dispatcher = GetDispatcher(delegateType, signature, version, null, false);
             if (dispatcher != null) {
                 dispatcher.SetClrReceiver(target, targetClass);
             }
             return dispatcher;
         }
 
-        private MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, int version) {
+        /// <summary>
+        /// The dispatcher of a call a refinement could change, which also tests that the method's refinement record holds
+        /// <paramref name="refinements"/> (see MethodDispatcher.CreateRefinedRubyObjectDispatcher).
+        /// </summary>
+        internal MemberDispatcher GetRefinedDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version,
+            RefinementActivation/*!*/ refinements, bool inBlock) {
+            Assert.NotNull(refinements);
+            return (target is IRubyObject) ? GetDispatcher(delegateType, signature, version, refinements, inBlock) : null;
+        }
+
+        private MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, int version,
+            RefinementActivation refinements, bool inBlock) {
+
             if (Parameters.Unsplat != null) {
                 return null;
             }
@@ -245,9 +257,9 @@ namespace IronRuby.Runtime.Calls {
             }
 
             var method = GetDelegate();
-            var dispatcher = MethodDispatcher.CreateRubyObjectDispatcher(
-                delegateType, method, parameterCount, signature.HasScope, signature.HasBlock, version
-            );
+            var dispatcher = (refinements != null) ?
+                MethodDispatcher.CreateRefinedRubyObjectDispatcher(delegateType, method, parameterCount, signature.HasBlock, version, refinements, inBlock) :
+                MethodDispatcher.CreateRubyObjectDispatcher(delegateType, method, parameterCount, signature.HasScope, signature.HasBlock, version);
             if (dispatcher != null && !_isModuleFunctionCopy) {
                 _body.RegisterDispatcher(dispatcher, method);
             }

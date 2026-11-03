@@ -62,27 +62,25 @@ namespace IronRuby.Runtime.Conversions {
             get { return _resultType; }
         }
 
-        // Make hands out the runtime's one action per conversion, which RubyMetaBinderFactory keeps. A new call site finds
-        // the rules its binder has bound for other sites; with an action of its own - Make used to create one per call -
-        // every site bound each rule anew (30 binds at `ir -e 1' for ToPathToStr alone, about a quarter of a millisecond
-        // each on the R2R host). The action handed out last is kept here, the way ProtocolConversionAction<TSelf>.Make
-        // keeps one, since library methods ask for it on every call. One slot per conversion (the values count up from 0).
-        private static readonly CompositeConversionAction[]/*!*/ _LastMade = new CompositeConversionAction[Enum.GetValues(typeof(CompositeConversion)).Length];
-
+        /// <summary>
+        /// The context's one binder for the conversion (<see cref="RubyMetaBinderFactory.CompositeConversion"/>), as every
+        /// other conversion has: its sites then share the rules it binds rather than each binding its own for the same
+        /// receiver class, and a storage's GetSite(Make(...)) allocates nothing once the site exists.
+        /// </summary>
         public static CompositeConversionAction/*!*/ Make(RubyContext/*!*/ context, CompositeConversion/*!*/ conversion) {
-            CompositeConversionAction last = _LastMade[(int)conversion];
-            if (last != null && ReferenceEquals(last.Context, context)) {
-                return last;
-            }
+            // A new call site then finds the rules its binder has bound for other sites; with an action of its own -
+            // Make used to create one per call - every site bound each rule anew (30 binds at `ir -e 1' for ToPathToStr
+            // alone, about a quarter of a millisecond each on the R2R host). A null context (MakeShared, shared
+            // components) gets the shared factory's one action.
             var factory = (context != null) ? context.MetaBinderFactory : RubyMetaBinderFactory.Shared;
-            return _LastMade[(int)conversion] = factory.CompositeConversion(conversion);
+            return factory.CompositeConversion(conversion);
         }
 
         /// <summary>
         /// A new action - for <see cref="RubyMetaBinderFactory"/>, which keeps one per runtime. Everyone else calls Make.
         /// A null <paramref name="context"/> makes the shared action (<see cref="MakeShared"/>), of shared components.
         /// </summary>
-        internal static CompositeConversionAction/*!*/ Create(RubyContext context, CompositeConversion/*!*/ conversion) {
+        internal static CompositeConversionAction/*!*/ Create(RubyContext context, CompositeConversion conversion) {
             switch (conversion) {
                 case CompositeConversion.ToFixnumToStr:
                     return new CompositeConversionAction(conversion,

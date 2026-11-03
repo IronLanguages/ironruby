@@ -22,10 +22,10 @@ module OpenSSL
     VERIFY_FAIL_IF_NO_PEER_CERT = 2
     VERIFY_CLIENT_ONCE = 4
 
-    # The settings an SSLSocket is made with.  Only #verify_mode is acted on
-    # (see openssl/ssl.rb): the TLS behind SSLSocket is .NET's SslStream, which
-    # takes its trust anchors, protocol versions and cipher list from the
-    # platform rather than from a context object.
+    # The settings an SSLSocket is made with.  #verify_mode, #ca_file, #ca_path,
+    # #cert_store and #verify_callback are acted on (see openssl/ssl.rb); the
+    # TLS behind SSLSocket is .NET's SslStream, which takes protocol versions
+    # and the cipher list from the platform rather than from a context object.
     class SSLContext
       SESSION_CACHE_OFF = 0x0000
       SESSION_CACHE_CLIENT = 0x0001
@@ -591,6 +591,35 @@ module OpenSSL
     class ExtensionError < OpenSSLError; end unless const_defined?(:ExtensionError, false)
     class StoreError < OpenSSLError; end unless const_defined?(:StoreError, false)
 
+    # OpenSSL's X509_V_* verification results (x509_vfy.h), which StoreContext#error,
+    # Store#error and SSLSocket#verify_result answer with.
+    {
+      OK: 0, ERR_UNSPECIFIED: 1, ERR_UNABLE_TO_GET_ISSUER_CERT: 2, ERR_UNABLE_TO_GET_CRL: 3,
+      ERR_UNABLE_TO_DECRYPT_CERT_SIGNATURE: 4, ERR_UNABLE_TO_DECRYPT_CRL_SIGNATURE: 5,
+      ERR_UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY: 6, ERR_CERT_SIGNATURE_FAILURE: 7,
+      ERR_CRL_SIGNATURE_FAILURE: 8, ERR_CERT_NOT_YET_VALID: 9, ERR_CERT_HAS_EXPIRED: 10,
+      ERR_CRL_NOT_YET_VALID: 11, ERR_CRL_HAS_EXPIRED: 12, ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD: 13,
+      ERR_ERROR_IN_CERT_NOT_AFTER_FIELD: 14, ERR_ERROR_IN_CRL_LAST_UPDATE_FIELD: 15,
+      ERR_ERROR_IN_CRL_NEXT_UPDATE_FIELD: 16, ERR_OUT_OF_MEM: 17, ERR_DEPTH_ZERO_SELF_SIGNED_CERT: 18,
+      ERR_SELF_SIGNED_CERT_IN_CHAIN: 19, ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY: 20,
+      ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE: 21, ERR_CERT_CHAIN_TOO_LONG: 22, ERR_CERT_REVOKED: 23,
+      ERR_INVALID_CA: 24, ERR_PATH_LENGTH_EXCEEDED: 25, ERR_INVALID_PURPOSE: 26,
+      ERR_CERT_UNTRUSTED: 27, ERR_CERT_REJECTED: 28, ERR_SUBJECT_ISSUER_MISMATCH: 29,
+      ERR_AKID_SKID_MISMATCH: 30, ERR_AKID_ISSUER_SERIAL_MISMATCH: 31, ERR_KEYUSAGE_NO_CERTSIGN: 32,
+      ERR_UNABLE_TO_GET_CRL_ISSUER: 33, ERR_UNHANDLED_CRITICAL_EXTENSION: 34,
+      ERR_KEYUSAGE_NO_CRL_SIGN: 35, ERR_UNHANDLED_CRITICAL_CRL_EXTENSION: 36, ERR_INVALID_NON_CA: 37,
+      ERR_PROXY_PATH_LENGTH_EXCEEDED: 38, ERR_KEYUSAGE_NO_DIGITAL_SIGNATURE: 39,
+      ERR_PROXY_CERTIFICATES_NOT_ALLOWED: 40, ERR_INVALID_EXTENSION: 41,
+      ERR_INVALID_POLICY_EXTENSION: 42, ERR_NO_EXPLICIT_POLICY: 43, ERR_DIFFERENT_CRL_SCOPE: 44,
+      ERR_UNSUPPORTED_EXTENSION_FEATURE: 45, ERR_UNNESTED_RESOURCE: 46, ERR_PERMITTED_VIOLATION: 47,
+      ERR_EXCLUDED_VIOLATION: 48, ERR_SUBTREE_MINMAX: 49, ERR_APPLICATION_VERIFICATION: 50,
+      ERR_UNSUPPORTED_CONSTRAINT_TYPE: 51, ERR_UNSUPPORTED_CONSTRAINT_SYNTAX: 52,
+      ERR_UNSUPPORTED_NAME_SYNTAX: 53, ERR_CRL_PATH_VALIDATION_ERROR: 54,
+      ERR_HOSTNAME_MISMATCH: 62, ERR_EMAIL_MISMATCH: 63, ERR_IP_ADDRESS_MISMATCH: 64,
+    }.each do |name, code|
+      const_set("V_#{name}", code) unless const_defined?("V_#{name}", false)
+    end
+
     # A certificate extension.  The value is kept as the OpenSSL configuration
     # string it was created from; the DER lives in the CLR extension object.
     class Extension
@@ -855,6 +884,7 @@ module OpenSSL
         @error = nil
         @error_string = nil
         @chain = nil
+        @default_paths = false
       end
 
       def add_cert(certificate)
@@ -877,7 +907,10 @@ module OpenSSL
         self
       end
 
+      # Store#verify still trusts only the certificates added; an SSLSocket whose
+      # context has this store trusts the system's certificates as well.
       def set_default_paths
+        @default_paths = true
         self
       end
 
@@ -907,32 +940,124 @@ module OpenSSL
           @error = 0
           @error_string = "ok"
         else
-          @error, @error_string = __first_error(builder)
+          @error, @error_string = IronRubyOpenSSL__.x509_error(builder.ChainStatus, true)
         end
         result
       end
 
-      private
+      # What SSLSocket builds its trust anchors from.
+      def __certificates # :nodoc:
+        @certificates.dup
+      end
 
-      # X509Chain reports a set of flags; MRI reports the X509_V_ERR_* code of the
-      # first problem OpenSSL hit.  Only the codes these flags correspond to are
-      # mapped, in roughly the order OpenSSL would notice them.
-      def __first_error(builder)
-        builder.ChainStatus.to_a.each do |status|
-          case status.Status.to_s
-          when "NotTimeValid", "CtlNotTimeValid"
-            return [10, "certificate has expired"]
-          when "NotSignatureValid"
-            return [7, "certificate signature failure"]
-          when "UntrustedRoot", "ExplicitDistrust"
-            return [19, "self signed certificate in certificate chain"]
-          when "InvalidBasicConstraints"
-            return [24, "invalid CA certificate"]
-          end
-        end
-        [20, "unable to get local issuer certificate"]
+      def __default_paths? # :nodoc:
+        @default_paths
       end
     end
+
+    # What a verify_callback is handed: the chain, the certificate being looked at,
+    # and the error it has, if any.  Only SSLSocket makes these here; MRI's
+    # StoreContext.new(store, cert, chain).verify is not implemented.
+    class StoreContext
+      attr_reader :chain, :current_cert, :error_depth
+      attr_accessor :error, :error_string
+
+      def self.__for_callback(chain, depth, error, error_string) # :nodoc:
+        context = allocate
+        context.instance_variable_set(:@chain, chain)
+        context.instance_variable_set(:@current_cert, chain[depth])
+        context.instance_variable_set(:@error_depth, depth)
+        context.error = error
+        context.error_string = error_string
+        context
+      end
+
+      def initialize(*)
+        raise NotImplementedError, "OpenSSL::X509::StoreContext.new is not implemented; use Store#verify"
+      end
+    end
+  end
+end
+
+module IronRubyOpenSSL__ # :nodoc: all
+  # X509Chain reports a set of flags; OpenSSL reports an X509_V_ERR_* code for each
+  # problem it hits.  +statuses+ is an X509ChainStatus[] (a chain's or one
+  # element's), and the result is every [code, message] the flags correspond to.
+  # +certificate+ (an OpenSSL::X509::Certificate), +depth+ and +chain_size+ say
+  # which certificate the flags are about, which some codes depend on: an untrusted
+  # self-signed certificate on its own is 18, inside a chain 19; a certificate
+  # outside its validity period is 9 before it and 10 after.
+  def self.x509_errors(statuses, certificate = nil, depth = nil, chain_size = nil)
+    x509 = ::OpenSSL::X509
+    errors = statuses.to_a.map do |status|
+      case status.Status.to_s
+      when "NoError", "RevocationStatusUnknown", "OfflineRevocation"
+        nil
+      when "NotTimeValid", "CtlNotTimeValid"
+        if certificate && certificate.not_before && certificate.not_before > ::Time.now
+          [x509::V_ERR_CERT_NOT_YET_VALID, "certificate is not yet valid"]
+        else
+          [x509::V_ERR_CERT_HAS_EXPIRED, "certificate has expired"]
+        end
+      when "NotSignatureValid", "CtlNotSignatureValid"
+        [x509::V_ERR_CERT_SIGNATURE_FAILURE, "certificate signature failure"]
+      when "UntrustedRoot"
+        if depth == 0 && chain_size == 1
+          [x509::V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT, "self signed certificate"]
+        else
+          [x509::V_ERR_SELF_SIGNED_CERT_IN_CHAIN, "self signed certificate in certificate chain"]
+        end
+      when "PartialChain"
+        [x509::V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY, "unable to get local issuer certificate"]
+      when "ExplicitDistrust"
+        [x509::V_ERR_CERT_REJECTED, "certificate rejected"]
+      when "Revoked"
+        [x509::V_ERR_CERT_REVOKED, "certificate revoked"]
+      when "InvalidBasicConstraints"
+        [x509::V_ERR_INVALID_CA, "invalid CA certificate"]
+      when "NotValidForUsage", "CtlNotValidForUsage"
+        # Linux's .NET flags every certificate of a chain whose leaf has the wrong
+        # purpose; OpenSSL reports the one that does not allow server authentication.
+        next nil if certificate && server_authentication?(certificate)
+        [x509::V_ERR_INVALID_PURPOSE, "unsupported certificate purpose"]
+      when "HasNotPermittedNameConstraint"
+        [x509::V_ERR_PERMITTED_VIOLATION, "permitted subtree violation"]
+      when "HasExcludedNameConstraint"
+        [x509::V_ERR_EXCLUDED_VIOLATION, "excluded subtree violation"]
+      when "InvalidExtension"
+        [x509::V_ERR_INVALID_EXTENSION, "invalid or inconsistent certificate extension"]
+      else
+        [x509::V_ERR_UNSPECIFIED, "unspecified certificate verification error"]
+      end
+    end
+    # In the order OpenSSL's verify_chain meets them: building the chain, then the
+    # extensions and purpose, then signatures and validity periods.  .NET's order is
+    # its own, and a verify_callback that rejects stops at the first.
+    errors.compact.uniq.sort_by { |code, _| X509_ERROR_ORDER.index(code) || X509_ERROR_ORDER.size }
+  end
+
+  X509_ERROR_ORDER = [2, 18, 19, 20, 21, 23, 28, 24, 26, 41, 47, 48, 7, 9, 10].freeze
+
+  SERVER_AUTHENTICATION = ["1.3.6.1.5.5.7.3.1", "2.5.29.37.0"].freeze # serverAuth, anyExtendedKeyUsage
+
+  # Whether the certificate's own extendedKeyUsage allows TLS server
+  # authentication; a certificate without one allows every purpose.
+  def self.server_authentication?(certificate)
+    clr = certificate.__clr
+    return true if clr.nil?
+    usage = clr.Extensions.to_a.find { |extension| extension.Oid.Value.to_s == "2.5.29.37" }
+    return true if usage.nil?
+    usage.EnhancedKeyUsages.to_a.any? { |oid| SERVER_AUTHENTICATION.include?(oid.Value.to_s) }
+  end
+
+  # The first of those, for Store#verify; with +failed+ the chain is known to be
+  # bad, so no flag still means "no trusted root".  A flag without an OpenSSL
+  # equivalent also counts as that, as Store#verify has always reported it.
+  def self.x509_error(statuses, failed = false)
+    errors = x509_errors(statuses)
+    error = errors.find { |code, _| code != ::OpenSSL::X509::V_ERR_UNSPECIFIED }
+    return error if error
+    failed || !errors.empty? ? [20, "unable to get local issuer certificate"] : [0, "ok"]
   end
 end
 

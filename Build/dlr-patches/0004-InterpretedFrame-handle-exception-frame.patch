@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000004 Mon Sep 17 00:00:00 2001
+From: Largo <andi@idogawa.com>
+Date: Sun, 26 Oct 2026 01:00:00 +0100
+Subject: Count Interpreter.HandleException as an interpreted frame
+
+The instructions of an exception handler run inside
+Interpreter.HandleException, not Run, so an exception thrown from a
+handler has a CLR stack trace that ends in HandleException. Stack-trace
+builders that match interpreted frames by Interpreter.Run never saw that
+frame: a `raise` inside a `rescue` clause lost every frame from the
+handler's own frame outwards, and at the top level the backtrace came
+out empty. GroupStackFrames already folds adjacent interpreter frames
+into one, so the Run frame that follows a HandleException frame of the
+same interpreted frame is not counted twice.
+
+---
+  src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+index 196c387..704d4c2 100644
+--- a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+@@ -120,7 +120,10 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+         public static bool IsInterpretedFrame(MethodBase method) {
+             ContractUtils.RequiresNotNull(method, nameof(method));
+-            return method.DeclaringType == typeof(Interpreter) && method.Name == "Run";
++            // The instructions of an exception handler run inside Interpreter.HandleException, so an
++            // exception thrown from a handler (a raise in a rescue clause) has a CLR trace that ends
++            // in that method rather than in Run; both stand for the interpreted frame.
++            return method.DeclaringType == typeof(Interpreter) && (method.Name == "Run" || method.Name == "HandleException");
+         }
+ 
+ #if FEATURE_STACK_TRACE

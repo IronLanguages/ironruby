@@ -1,5 +1,5 @@
 diff --git a/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs b/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs
-index df05e1e..f39ecda 100644
+index df05e1e..56f94c2 100644
 --- a/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs
 +++ b/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs
 @@ -91,7 +91,14 @@ namespace Microsoft.Scripting.Actions {
@@ -18,6 +18,31 @@ index df05e1e..f39ecda 100644
              // We should ignore nested types. They will be loaded when the containing type is loaded
              Debug.Assert(type is null || !type.IsNested());
              return type;
+@@ -315,7 +322,12 @@ namespace Microsoft.Scripting.Actions {
+ 
+         public IEnumerator<KeyValuePair<string, object>> GetEnumerator() {
+             foreach (var key in Keys) {
+-                yield return new KeyValuePair<string, object>(key, this[key]);
++                // Keys lists type names read from metadata (AssemblyTypeNames), and a listed type can fail to load
++                // (a forwarder to an assembly that is not there): it is not a member, as GetExportedTypes and
++                // GetForwardedTypes, which skipped it, had it.
++                if (TryGetValue(key, out object value)) {
++                    yield return new KeyValuePair<string, object>(key, value);
++                }
+             }
+         }
+ 
+@@ -323,7 +335,9 @@ namespace Microsoft.Scripting.Actions {
+ 
+         IEnumerator IEnumerable.GetEnumerator() {
+             foreach (var key in Keys) {
+-                yield return new KeyValuePair<string, object>(key, this[key]);
++                if (TryGetValue(key, out object value)) {
++                    yield return new KeyValuePair<string, object>(key, value);
++                }
+             }
+         }
+ 
 diff --git a/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs b/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs
 index e3f1d76..327fda6 100644
 --- a/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs
@@ -486,10 +511,10 @@ index 0000000..b53c31d
 +    }
 +}
 diff --git a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs b/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
-index 42f3361..792be96 100644
+index bc61e9b..ed0f201 100644
 --- a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
 +++ b/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
-@@ -225,9 +225,11 @@ namespace Microsoft.Scripting.Utils {
+@@ -232,9 +232,11 @@ namespace Microsoft.Scripting.Utils {
          public readonly DynamicMetaObjectBinder/*!*/ Binder;
          public int CompilationThreshold;
  
@@ -502,7 +527,7 @@ index 42f3361..792be96 100644
          }
  
          public abstract bool CheckCompiled();
-@@ -245,6 +247,12 @@ namespace Microsoft.Scripting.Utils {
+@@ -252,6 +254,12 @@ namespace Microsoft.Scripting.Utils {
          }
  
          public override bool CheckCompiled() {

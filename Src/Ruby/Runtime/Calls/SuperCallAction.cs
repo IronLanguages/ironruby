@@ -20,11 +20,14 @@ using Microsoft.Scripting.Ast;
 #endif
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 using System.Dynamic;
 
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Runtime;
+using Microsoft.Scripting.Actions.Calls;
 
 using IronRuby.Builtins;
 using IronRuby.Compiler;
@@ -157,6 +160,12 @@ namespace IronRuby.Runtime.Calls {
             }
 
             if (method != null) {
+                if (currentMethodName == Symbols.Initialize && method is RubyLibraryMethodInfo
+                    && (method.DeclaringModule.IsObjectClass || method.DeclaringModule.IsBasicObjectClass)
+                    && TryBuildClrConstructorCall(metaBuilder, args, target)) {
+                    metaBuilder.BuildControlFlow(args);
+                    return true;
+                }
                 method.BuildSuperCall(metaBuilder, args, currentMethodName, currentDeclaringModule);
             } else {
                 return RubyCallAction.BuildMethodMissingCall(metaBuilder, args, currentMethodName, methodMissing, RubyMethodVisibility.None, true, defaultFallback);
@@ -166,6 +175,100 @@ namespace IronRuby.Runtime.Calls {
         }
 
         #endregion
+
+        /// <summary>
+        /// super in initialize of a Ruby class derived from a CLR class, which would otherwise reach Object#initialize:
+        /// for such a class the CLR base class's constructor is what constructs the object, as a C# derived class's
+        /// constructor calls base(...). The constructor matching the arguments runs on self, which new has allocated.
+        /// </summary>
+        private static bool TryBuildClrConstructorCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, object target) {
+            Type clrBase = (target != null) ? RubyClass.GetClrBaseType(target.GetType()) : null;
+
+            // A Ruby builtin backed by a CLR type (Proc, Array, Hash) keeps Ruby's initialize chain:
+            if (clrBase == null || (args.RubyContext.GetModule(clrBase).Restrictions & ModuleRestrictions.NoNameMapping) != 0) {
+                return false;
+            }
+
+            bool privateBinding = args.RubyContext.DomainManager.Configuration.PrivateBinding;
+            var constructors = new List<OverloadInfo>();
+            foreach (var ctor in clrBase.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)) {
+                if (ctor.IsPublic || ctor.IsFamily || ctor.IsFamilyOrAssembly || privateBinding) {
+                    constructors.Add(new ReflectionOverloadInfo(ctor));
+                }
+            }
+            if (constructors.Count == 0) {
+                return false;
+            }
+
+            var instance = args.TargetExpression;
+            RubyMethodGroupBase.BuildCallNoFlow(metaBuilder, args, Symbols.Initialize, constructors, SelfCallConvention.NoSelf, true);
+            if (!metaBuilder.Error) {
+                bool rewritten = false;
+                var result = InvokeOnInstance(metaBuilder.Result, clrBase, instance, ref rewritten);
+                if (!rewritten) {
+                    throw new InvalidOperationException("unexpected shape of a constructor call");
+                }
+                metaBuilder.Result = result;
+            }
+            return true;
+        }
+
+        // Replaces new Base(args) in the bound call - which may be wrapped in conversions, or in the block that sets the
+        // members keywords name - with the constructor run on the existing instance.
+        private static Expression/*!*/ InvokeOnInstance(Expression/*!*/ expression, Type/*!*/ clrBase, Expression/*!*/ instance, ref bool rewritten) {
+            switch (expression.NodeType) {
+                case ExpressionType.New:
+                    var node = (NewExpression)expression;
+                    if (node.Constructor == null || node.Constructor.DeclaringType != clrBase) {
+                        return expression;
+                    }
+                    rewritten = true;
+                    var arguments = new Expression[node.Arguments.Count];
+                    for (int i = 0; i < arguments.Length; i++) {
+                        arguments[i] = AstUtils.Convert(node.Arguments[i], typeof(object));
+                    }
+                    return Ast.Convert(
+                        Ast.Call(RubyOps.InvokeClrConstructorMethod, AstUtils.Constant(node.Constructor, typeof(ConstructorInfo)),
+                            AstUtils.Convert(instance, typeof(object)), Ast.NewArrayInit(typeof(object), arguments)),
+                        node.Type
+                    );
+
+                case ExpressionType.Call:
+                    // a constructor not visible to emitted code (a protected one) is called through reflection:
+                    var call = (MethodCallExpression)expression;
+                    var constructor = (call.Method.DeclaringType == typeof(BinderOps) && call.Method.Name == nameof(BinderOps.InvokeConstructor)) ?
+                        call.Arguments[0] as ConstantExpression : null;
+                    if (constructor == null || !(constructor.Value is ConstructorInfo) || ((ConstructorInfo)constructor.Value).DeclaringType != clrBase) {
+                        return expression;
+                    }
+                    rewritten = true;
+                    return AstUtils.Convert(
+                        Ast.Call(RubyOps.InvokeClrConstructorMethod, AstUtils.Constant(constructor.Value, typeof(ConstructorInfo)),
+                            AstUtils.Convert(instance, typeof(object)), call.Arguments[1]),
+                        call.Type
+                    );
+
+                case ExpressionType.Convert:
+                case ExpressionType.ConvertChecked:
+                    var unary = (UnaryExpression)expression;
+                    return unary.Update(InvokeOnInstance(unary.Operand, clrBase, instance, ref rewritten));
+
+                case ExpressionType.Assign:
+                    var assign = (BinaryExpression)expression;
+                    return assign.Update(assign.Left, assign.Conversion, InvokeOnInstance(assign.Right, clrBase, instance, ref rewritten));
+
+                case ExpressionType.Block:
+                    var block = (BlockExpression)expression;
+                    var expressions = new Expression[block.Expressions.Count];
+                    for (int i = 0; i < expressions.Length; i++) {
+                        expressions[i] = InvokeOnInstance(block.Expressions[i], clrBase, instance, ref rewritten);
+                    }
+                    return block.Update(block.Variables, expressions);
+
+                default:
+                    return expression;
+            }
+        }
 
         public override Expression/*!*/ CreateExpression() {
             return Methods.GetMethod(GetType(), "MakeShared").OpCall(_signature.CreateExpression(), AstUtils.Constant(_lexicalScopeId));

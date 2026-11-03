@@ -6,7 +6,7 @@ namespace IronRuby.Prism {
     internal static class Program {
         private static int Main(string[] args) {
             if (args.Length == 2 && args[0] == "--run") {
-                // execute a Ruby file with prism as the front end (legacy parser bypassed)
+                // execute a Ruby file with prism as the front end
                 IronRuby.Runtime.RubyContext.AlternativeParser = PrismAstBridge.Parse;
                 var engine = IronRuby.Ruby.CreateEngine();
                 engine.CreateScriptSourceFromFile(System.IO.Path.GetFullPath(args[1])).Execute();

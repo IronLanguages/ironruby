@@ -209,6 +209,12 @@ def run(argv, opts, warm):
         os.close(opts['passfd'])
     if 'kill' in opts:
         # wait for "ready", then signal what the parent started
+        # bounded: a program that hangs or dies before printing "ready" must not stall the cases after it
+        ready, _, _ = select.select([p.stdout], [], [], 60)
+        if not ready:
+            p.kill()
+            p.wait()
+            return None, '', 'no "ready" within 60 s\n', 'timeout'
         line = p.stdout.readline()
         time.sleep(0.1)
         os.kill(p.pid, opts['kill'])
@@ -237,7 +243,8 @@ def run(argv, opts, warm):
         else:
             lines.append(l)
     if warm and mode == 'n/a':
-        mode = 'warm?'
+        # no client marker: the launcher did not reach ir-client, so nothing was tested warm
+        mode = 'unknown'
     if not warm:
         mode = 'cold'
     # the interleave case merges stderr into stdout: strip the client's lines there too
@@ -306,6 +313,9 @@ def pty_run(argv, warm, keys=b'', delay=1.5):
     p.wait(timeout=30)
     os.close(master)
     text = out.decode('utf-8', 'replace').replace('\r\n', '\n')
+    # `ir' alone at a terminal is irb, whose banner shows one of its tips at random
+    # (IRB::StartupMessage::TIPS): not a difference between two runs.
+    text = re.sub(r'(IRB v[^\n]*\n)([^\n]*?  )?[^\n]*', r'\1\2<tip>', text)
     mode = 'cold'
     kept = []
     for l in text.splitlines(True):

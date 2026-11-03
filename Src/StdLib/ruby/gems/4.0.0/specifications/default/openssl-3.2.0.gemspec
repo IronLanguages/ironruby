@@ -20,12 +20,9 @@ Gem::Specification.new do |s|
     "lib/openssl/asn1.rb".freeze,
     "lib/openssl/bn.rb".freeze,
     "lib/openssl/cipher.rb".freeze,
+    "lib/openssl/digest.rb".freeze,
     "lib/openssl/pkey.rb".freeze,
     "lib/openssl/ssl.rb".freeze,
-    "lib/openssl/buffering.rb".freeze,
-    "lib/openssl/digest.rb".freeze,
-    "lib/openssl/ssl-internal.rb".freeze,
-    "lib/openssl/x509-internal.rb".freeze,
     "lib/openssl/x509.rb".freeze,
   ]
 end

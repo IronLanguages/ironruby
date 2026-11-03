@@ -69,7 +69,7 @@ namespace IronRuby.Compiler.Ast {
             }
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             int intBegin, intEnd;
             if (IsIntegerRange(out intBegin, out intEnd)) {
                 // a Range is frozen, and MRI makes a literal one of integers a single object, which
@@ -140,7 +140,7 @@ namespace IronRuby.Compiler.Ast {
         ///     false
         ///   end  
         /// </code>
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             var begin = AstUtils.Box(_range.Begin.TransformRead(gen));
             var end = AstUtils.Box(_range.End.TransformRead(gen));
 

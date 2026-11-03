@@ -64,7 +64,7 @@ D.foo
 []
 C.foo
 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0]
-"
+", 2
             );
         }
 
@@ -152,7 +152,6 @@ C.foo
         /// rather than the hidden trailing hash the keywords arrived in, whose `{}' was one positional argument
         /// too many for a parent without keywords. The output is CRuby's.
         /// </summary>
-        [Options(Prism = true)]
         public void SuperParameterlessKeywordRest1() {
             TestOutput(@"
 class P
@@ -196,7 +195,6 @@ p E.new.message
         /// its own - and through #to_hash or not at all when the rest was reassigned to something else. The
         /// arguments are evaluated in source order. The output is CRuby's.
         /// </summary>
-        [Options(Prism = true)]
         public void SuperKeywordSplat1() {
             TestOutput(@"
 class P
@@ -248,7 +246,6 @@ nil
         /// eval'd one, and one after the body changed the rest each pass a copy, so whatever a parent keeps or changes -
         /// a positional Hash parameter, Array#push - is its own. The output is CRuby's.
         /// </summary>
-        [Options(Prism = true)]
         public void SuperKeywordRestPassOn1() {
             TestOutput(@"
 class P
@@ -303,7 +300,6 @@ false
         /// Hash still (TypeError otherwise, nil included); a lone **rest goes as `**rest` would, nil passing nothing and
         /// anything else through #to_hash. MRI's rules, and its output.
         /// </summary>
-        [Options(Prism = true)]
         public void SuperParameterlessKeywordRest2() {
             TestOutput(@"
 class O; def to_hash = {z: 9}; end
@@ -338,7 +334,6 @@ end
         /// a proc, a lambda, a define_method block and a signature with optional and rest positionals, and
         /// passing it on positionally passes a Hash, not keywords. The output is CRuby's.
         /// </summary>
-        [Options(Prism = true)]
         public void KeywordRestOmitted1() {
             TestOutput(@"
 def s(x)
@@ -387,7 +382,6 @@ false
         /// the **rest itself (it took the empty default over), and after a parameterless super passed the keywords on
         /// it is the **rest too, so both see what the body put in it. The output is CRuby's.
         /// </summary>
-        [Options(Prism = true)]
         public void SuperEvalKeywords1() {
             TestOutput(@"
 class P
@@ -550,7 +544,7 @@ end
 
 D.new.bar rescue p $!
 "), @"
-#<NoMethodError: super: no superclass method `bar'>
+#<NoMethodError: super: no superclass method 'bar' for an instance of D>
 ");
         }
 
@@ -962,7 +956,7 @@ eval('
 ", @"
 main
 main
-#<NoMethodError: undefined method `foo' for main>
+#<NoMethodError: undefined method 'foo' for main>
 ");
         }
     }

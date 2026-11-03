@@ -71,6 +71,15 @@ namespace IronRuby.Builtins {
         [DllImport("libc", EntryPoint = "posix_spawnattr_setpgroup")]
         private static extern int SysSpawnAttrSetPGroup(IntPtr attr, int pgroup);
 
+        [DllImport("libc", EntryPoint = "posix_spawnattr_setsigdefault")]
+        private static extern int SysSpawnAttrSetSigDefault(IntPtr attr, IntPtr sigset);
+
+        [DllImport("libc", EntryPoint = "sigemptyset")]
+        private static extern int SysSigEmptySet(IntPtr sigset);
+
+        [DllImport("libc", EntryPoint = "sigaddset")]
+        private static extern int SysSigAddSet(IntPtr sigset, int signal);
+
         [DllImport("libc", SetLastError = true, EntryPoint = "waitpid")]
         private static extern int SysWaitPid(int pid, out int status, int options);
 
@@ -111,6 +120,13 @@ namespace IronRuby.Builtins {
         private static extern int SysFileActionsAddChdir(IntPtr actions, IntPtr path);
 
         private const short POSIX_SPAWN_SETPGROUP = 0x02;
+        private const short POSIX_SPAWN_SETSIGDEF = 0x04;
+        private const int SIGPIPE = 13;
+        // glibc (2.26+) and musl spell it 0x80; macOS has it as 0x400, and there an open(2)
+        // does not hand a session leader its controlling terminal anyway (that takes
+        // TIOCSCTTY, which no file action can issue).
+        private static readonly short POSIX_SPAWN_SETSID =
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? (short)0x400 : (short)0x80;
         // The value differs by kernel: Linux's 0x80000 is not O_CLOEXEC on macOS, whose
         // pipe2 rejects it with EINVAL - which broke every pipe to a child there.
         private static readonly int O_CLOEXEC =
@@ -286,11 +302,26 @@ namespace IronRuby.Builtins {
                 return ScriptingRuntimeHelpers.Int32ToObject(
                     WindowsSpawn.Spawn(context, file, argv, envp, actions, pgroup));
             }
+            return ScriptingRuntimeHelpers.Int32ToObject(
+                Spawn(file, argv, envp, actions, pgroup, closeOthers, false));
+        }
+
+        /// <summary>
+        /// posix_spawn(3) with the file actions the prelude describes. With newSession the child
+        /// calls setsid(2) before any file action runs (POSIX_SPAWN_SETSID; glibc and musl both
+        /// do it in that order), so the first terminal it then opens without O_NOCTTY becomes
+        /// its controlling terminal - which is how the pty library gives a child its pty
+        /// without fork. Returns the pid or -errno. Unix only.
+        /// </summary>
+        internal static int Spawn(MutableString/*!*/ file, RubyArray/*!*/ argv, RubyArray envp, RubyArray actions,
+            object pgroup, bool closeOthers, bool newSession) {
 
             // posix_spawn_file_actions_t is 80 bytes and posix_spawnattr_t 336 on glibc; both
             // are opaque, so over-allocate rather than mirror a private layout.
             IntPtr fileActions = Marshal.AllocHGlobal(1024);
             IntPtr attributes = Marshal.AllocHGlobal(1024);
+            // sigset_t is 128 bytes on glibc and smaller elsewhere
+            IntPtr signals = Marshal.AllocHGlobal(256);
             var strings = new NativeStrings();
             NativeStrings argvVector = null;
             NativeStrings envpVector = null;
@@ -304,20 +335,32 @@ namespace IronRuby.Builtins {
 
                 int error = ApplyActions(fileActions, strings, actions);
                 if (error != 0) {
-                    return ScriptingRuntimeHelpers.Int32ToObject(error);
+                    return error;
                 }
 
                 if (closeOthers) {
                     error = AddCloseOthers(fileActions, actions);
                     if (error != 0) {
-                        return ScriptingRuntimeHelpers.Int32ToObject(error);
+                        return error;
                     }
                 }
 
+                // The .NET runtime ignores SIGPIPE, and an ignored signal stays ignored across
+                // exec - so every child used to start with SIGPIPE ignored, and `yes | head` in a
+                // child shell (or in a shell driven through PTY.spawn) wrote "Broken pipe" errors
+                // where it should have died quietly. MRI's children always get the default.
+                SysSigEmptySet(signals);
+                SysSigAddSet(signals, SIGPIPE);
+                SysSpawnAttrSetSigDefault(attributes, signals);
+                short flags = POSIX_SPAWN_SETSIGDEF;
                 if (pgroup != null) {
                     SysSpawnAttrSetPGroup(attributes, ToInt(pgroup));
-                    SysSpawnAttrSetFlags(attributes, POSIX_SPAWN_SETPGROUP);
+                    flags |= POSIX_SPAWN_SETPGROUP;
                 }
+                if (newSession) {
+                    flags |= POSIX_SPAWN_SETSID;
+                }
+                SysSpawnAttrSetFlags(attributes, flags);
 
                 argvVector = new NativeStrings(argv);
                 envpVector = (envp != null) ? new NativeStrings(envp) : CurrentEnvironment();
@@ -327,14 +370,15 @@ namespace IronRuby.Builtins {
                 error = SysPosixSpawn(out pid, path, fileActions, attributes, argvVector.Vector, envpVector.Vector);
 
                 if (error != 0) {
-                    return ScriptingRuntimeHelpers.Int32ToObject(-error);
+                    return -error;
                 }
-                return ScriptingRuntimeHelpers.Int32ToObject(pid);
+                return pid;
             } finally {
                 SysFileActionsDestroy(fileActions);
                 SysSpawnAttrDestroy(attributes);
                 Marshal.FreeHGlobal(fileActions);
                 Marshal.FreeHGlobal(attributes);
+                Marshal.FreeHGlobal(signals);
                 strings.Dispose();
                 if (argvVector != null) {
                     argvVector.Dispose();
@@ -603,7 +647,7 @@ namespace IronRuby.Builtins {
         /// unless 7 is the number the kernel knows. Falls back to the usual table index if
         /// something else already holds that number.
         /// </summary>
-        private static int Adopt(RubyContext/*!*/ context, int descriptor, Stream/*!*/ stream) {
+        internal static int Adopt(RubyContext/*!*/ context, int descriptor, Stream/*!*/ stream) {
             if (context.GetStream(descriptor) != null) {
                 return context.AllocateFileDescriptor(stream);
             }

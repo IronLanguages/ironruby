@@ -383,6 +383,16 @@ namespace IronRuby.Builtins {
             return Math.Pow(self, other);
         }
 
+        /// <summary>
+        /// A Bignum exponent: 0, 1 and -1 have an answer, anything else is too large to compute
+        /// (an ArgumentError, as in MRI 3.4 and later).  Without this overload the binder could
+        /// not choose between Bignum#** and the coercing fallback.
+        /// </summary>
+        [RubyMethod("**")]
+        public static object Power(RubyContext/*!*/ context, int self, [NotNull]BigInteger/*!*/ other) {
+            return Power(context, (BigInteger)self, other);
+        }
+
         #endregion
 
         #region +
@@ -474,7 +484,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
         public static double FDiv([NotNull]BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() / other;
+            return Protocols.ToDouble(self) / other;
         }
 
         /// <summary>
@@ -555,30 +565,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("magnitude")]
         public static object/*!*/ Abs(int self) {
             return self >= 0 ? self : self != Int32.MinValue ? -self : MinusMinValue();
-        }
-
-        #endregion
-
-        #region quo
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is Fixnum. 
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("quo")]
-        public static double Quotient(int self, int other) {
-            return (double)self / (double)other;
-        }
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is not Fixnum. 
-        /// </summary>
-        /// <remarks>
-        /// Self is first coerced by other and then the quo method is invoked on the coerced self.
-        /// </remarks>
-        [RubyMethod("quo")]
-        public static object Quotient(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, int self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "quo", self, other);
         }
 
         #endregion

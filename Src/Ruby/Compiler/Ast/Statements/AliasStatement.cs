@@ -61,7 +61,7 @@ namespace IronRuby.Compiler.Ast {
                 OpCall(gen.CurrentScopeVariable, _newName.Transform(gen), _oldName.Transform(gen));
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return Ast.Block(Transform(gen), AstUtils.Constant(null));
         }
     }

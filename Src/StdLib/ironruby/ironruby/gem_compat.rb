@@ -130,6 +130,82 @@ IronRuby::GemCompat.on_require("concurrent/collection/map/synchronized_map_backe
   end
 end
 
+# thread_safe 0.3.6 (2016; shipit-engine still pulls it in through virtus and
+# axiom-types) picks ThreadSafe::Cache's backend by RUBY_ENGINE: JRuby gets a
+# Java one, CRuby one that leans on the GVL, and every other engine
+# SynchronizedCacheBackend, which does `require 'mutex_m'`.  That is the right
+# backend here - IronRuby has no GVL - but mutex_m left the default gems in Ruby
+# 3.4, so inside a bundle that does not list it the require is a LoadError, and
+# `Bundler.require` aborts on the first gem that touches ThreadSafe::Cache.
+# CRuby never takes that path, so the bundle works there.
+#
+# IronRuby ships mutex_m as a bundled gem; put its lib directory at the end of
+# the load path once thread_safe starts loading, so that this one require finds
+# it.  A Gemfile that does list mutex_m still gets its own copy first.
+IronRuby::GemCompat.on_require("thread_safe/version") do
+  lib = Dir.glob(File.join(::Gem.default_dir, "gems", "mutex_m-*", "lib")).max
+  $LOAD_PATH << lib if lib && !$LOAD_PATH.include?(lib)
+end
+
+# ... and thread_safe.rb defines ThreadSafe::Array and ThreadSafe::Hash only
+# for JRuby (JRuby::Synchronized), CRuby (plain ::Array/::Hash, safe under the
+# GVL) and Rubinius (Monitor-wrapped subclasses), so on any other engine the
+# first `ThreadSafe::Array.new` is a NameError.  Rubinius's version is the one
+# that is right without a GVL; TruffleRuby carries the same code as
+# lib/patches/thread_safe.rb.  Like TruffleRuby's, it sets the monitor up in
+# initialize - Rubinius did it in a Ruby-level allocate, which IronRuby, like
+# CRuby, does not call for every new object - and each wrapper also creates it
+# on first use, for instances that never ran initialize (#dup, Marshal.load).
+IronRuby::GemCompat.on_require("thread_safe") do
+  next if ::ThreadSafe.const_defined?(:Array, false) && ::ThreadSafe.const_defined?(:Hash, false)
+  require "monitor"
+
+  [[:Hash, ::Hash], [:Array, ::Array]].each do |name, base|
+    next if ::ThreadSafe.const_defined?(name, false)
+    klass = ::ThreadSafe.const_set(name, ::Class.new(base))
+    klass.class_eval do
+      def initialize(*args, &block)
+        @_monitor = ::Monitor.new
+        super
+      end
+
+      private
+
+      def _mon
+        @_monitor ||= ::Monitor.new
+      end
+    end
+    base.instance_methods(false).each do |method|
+      klass.class_eval <<-RUBY, __FILE__, __LINE__ + 1
+        def #{method}(*args, &block)
+          _mon.synchronize { super }
+        end
+      RUBY
+    end
+  end
+end
+
+# bindex (skiptrace): it gives every exception the Bindings of the frames it
+# was raised through, from a C extension on CRuby and from VM internals on JRuby
+# and Rubinius; for any other engine it defines nothing, and Exception#bindings
+# is a NoMethodError.  web-console, in every `rails new` Gemfile, asks for it
+# while rendering the development error page - so on IronRuby each error page,
+# a plain 404 for a missing record included, became a 500.
+#
+# The bindings themselves need the runtime to capture them at raise time, which
+# IronRuby does not do yet.  Until it does, Exception#bindings answers what it
+# answers on those engines for an exception nobody captured bindings for, and
+# the error page renders; its console has no frame to evaluate in.
+IronRuby::GemCompat.on_require("bindex") do
+  unless ::Exception.method_defined?(:bindings)
+    ::Exception.class_eval do
+      def bindings
+        @bindings || []
+      end
+    end
+  end
+end
+
 # power_assert: Parser#valid_syntax? checks a line with
 # RubyVM::InstructionSequence.compile, and PowerAssert::Parser builds one at
 # load time, so on an engine without RubyVM the require dies with a NameError.
@@ -155,6 +231,21 @@ IronRuby::GemCompat.refuse("power_assert", "power_assert needs RubyVM::Instructi
 # be satisfied that way now says so during resolution, naming the version that
 # is here, instead of failing in a compiler.
 #
+# A Gemfile.lock is the other half.  It names an exact version - liquid's pins
+# bigdecimal 3.2.2, lobsters' bcrypt 3.1.20 and psych 5.2.6, ruby-lsp's prism
+# 1.7.0 - and Bundler looks that exact version up when it materializes the
+# lock, before any resolution.  The narrowed index has only IronRuby's version,
+# so the lookup missed and the bundle failed with "Could not find
+# bigdecimal-3.2.2 in locally installed gems" - after `bundle install` had
+# downloaded the C gem and declared success.  So an exact lookup of such a name
+# is answered with IronRuby's spec instead, the way a lock naming another
+# platform's variant of a gem is answered with this platform's.  The lockfile
+# itself is left as it is: the same checkout is often run by CRuby too, which
+# must go on getting the version it names.  That substitution is made only when
+# IronRuby's version satisfies what the Gemfile asks for - `gem "sqlite3",
+# "~> 1.4"` must not quietly be handed sqlite3 2.x's API - and otherwise the
+# lookup still misses and Bundler's own error names the locked version.
+#
 # This is a patch rather than an edit to the vendored copy because Bundler
 # re-executes itself into the version a Gemfile.lock's BUNDLED WITH names, and
 # that version is a gem, not the one in Src/StdLib - the patch has to reach it
@@ -170,9 +261,55 @@ IronRuby::GemCompat.on_require("bundler") do
           specs[spec.name] = { spec.full_name => spec }
           duplicates.delete(spec.name)
           instance_variable_get(:@cache).clear
+          (@ironruby_pinned_specs ||= {})[spec.name] = spec
           self
         end
       end
+
+      locked_pins = Module.new do
+        # An exact lookup (a locked spec, or [name, version]) of a name the
+        # index was narrowed to: IronRuby's spec when the exact one is absent.
+        def local_search(query)
+          results = super
+          return results unless results.empty? && @ironruby_pinned_specs
+
+          name =
+            case query
+            when Array then query.first
+            when String then nil
+            else query.respond_to?(:name) ? query.name : nil
+            end
+          spec = name && @ironruby_pinned_specs[name]
+          return results unless spec
+
+          unless ::Gem.ironruby_lock_substitutable?(spec)
+            # Nothing installable can satisfy it: the release the Gemfile
+            # wants is C source.  Say so now rather than let `bundle install`
+            # fetch it, report success, and fail at Bundler.setup.
+            version = query.is_a?(Array) ? query[1] : (query.version if query.respond_to?(:version))
+            raise ::Bundler::GemNotFound,
+                  "#{name} #{version} is locked, but IronRuby provides #{name} #{spec.version} itself " \
+                  "and the Gemfile's requirement excludes that version; #{name}'s other releases " \
+                  "are a C extension, which IronRuby cannot build"
+          end
+
+          [spec]
+        end
+      end
+      ::Bundler::Index.prepend(locked_pins)
+    end
+
+    # Whether IronRuby's +spec+ may stand in for whatever version a lockfile
+    # names: true unless the Gemfile's own requirement on that gem excludes it.
+    def (::Gem).ironruby_lock_substitutable?(spec)
+      definition = ::Bundler.instance_variable_get(:@definition)
+      return true unless definition
+
+      definition.dependencies.select {|d| d.name == spec.name }.all? do |dep|
+        dep.requirement.satisfied_by?(spec.version)
+      end
+    rescue StandardError
+      true
     end
 
     native_gems = Module.new do
@@ -236,5 +373,40 @@ IronRuby::GemCompat.on_require("bundler") do
       end
     end
     ::Bundler.singleton_class.prepend(rubypath_which)
+  end
+
+  # `gem "tzinfo-data", platforms: %i[windows jruby]`, which every `rails new`
+  # Gemfile has: Bundler keeps a platform-restricted gem only for the lockfile
+  # platforms whose *generic* platform the restriction names, and to it
+  # IronRuby's universal-dotnet is generic `ruby` - on Windows as everywhere.
+  # So tzinfo-data was never installed, and a Rails app on Windows, which has
+  # no zoneinfo, died in its first initializer with TZInfo::DataSourceNotFound.
+  #
+  # The .NET platform is the same on every OS, so for it the restriction is
+  # answered the way `current_platform?` answers it - by the Ruby running now.
+  if ::Bundler::Dependency.method_defined?(:gem_platforms) &&
+     !::Bundler::Dependency.method_defined?(:ironruby_dotnet_platforms)
+    dotnet_platforms = Module.new do
+      # The dotnet platforms, and - since Bundler filters what it installs and
+      # loads by the *generic* local platform, which for dotnet is `ruby` - that
+      # one too when it stands for the dotnet platform this process runs on.
+      def ironruby_dotnet_platforms(valid_platforms) # :nodoc:
+        dotnet = ->(p) { p.respond_to?(:os) && p.os == "dotnet" }
+        local_is_dotnet = dotnet.call(::Bundler.local_platform)
+        valid_platforms.select do |p|
+          dotnet.call(p) || (local_is_dotnet && p == ::Bundler.generic_local_platform)
+        end
+      end
+
+      # Same order as valid_platforms, which is what Bundler's comment promises.
+      def gem_platforms(valid_platforms)
+        found = super
+        return found if platforms.empty? || force_ruby_platform || !current_platform?
+        dotnet = ironruby_dotnet_platforms(valid_platforms)
+        return found if dotnet.empty?
+        valid_platforms.select { |p| found.include?(p) || dotnet.include?(p) }
+      end
+    end
+    ::Bundler::Dependency.prepend(dotnet_platforms)
   end
 end

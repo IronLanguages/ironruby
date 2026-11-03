@@ -989,7 +989,7 @@ namespace IronRuby.StandardLibrary.Oj {
         /// <summary>oj_dump_strict_val / oj_dump_null_val.</summary>
         internal static void DumpStrictVal(object obj, int depth, Out/*!*/ output, bool nullMode) {
             if (MaxDepth < depth) {
-                throw new NoMemoryError("Too deeply nested.\n");
+                throw new OutOfMemoryException("Too deeply nested.\n");
             }
             RType type = TypeOf(output.Context, obj);
             switch (type) {

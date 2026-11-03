@@ -266,7 +266,9 @@ namespace IronRuby.Builtins {
 
             RegexOptions options = RegexOptions.None;
             if ((flags & Constants.FNM_CASEFOLD) != 0) {
-                options |= RegexOptions.IgnoreCase;
+                // MRI folds case the same in every locale; culture-invariant also keeps the cache below, keyed by
+                // the pattern alone, from handing one culture's regex to another
+                options |= RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
             }
             Match match = GetFnMatchRegex(regexPattern, options).Match(path);
             return match != null && match.Success && (match.Length == path.Length);

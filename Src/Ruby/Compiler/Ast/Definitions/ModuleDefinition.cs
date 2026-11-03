@@ -92,7 +92,7 @@ namespace IronRuby.Compiler.Ast {
             return new ScopeBuilder(DefinedScope.AllocateClosureSlotsForLocals(0), null, DefinedScope);
         }
 
-        internal sealed override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal sealed override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             string debugString = (IsSingletonDeclaration) ? "SINGLETON" : ((this is ClassDefinition) ? "CLASS" : "MODULE") + " " + QualifiedName.Name;
 
             ScopeBuilder outerLocals = gen.CurrentScope;

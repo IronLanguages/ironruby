@@ -65,7 +65,7 @@ namespace IronRuby.Compiler.Ast {
             _kind = kind;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             switch (_kind) {
                 case StringKind.Mutable:
                     return TransformConcatentation(gen, _parts, StringFactory.Instance);

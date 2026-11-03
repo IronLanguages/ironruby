@@ -985,7 +985,9 @@ namespace IronRuby.Builtins {
             if (value is MutableString) {
                 throw RubyExceptions.CreateTypeError("can't convert String into Float");
             }
-            return Protocols.CastToFloat(floatConversion, value);
+            double result = Protocols.CastToFloat(floatConversion, value);
+            // the CLR's NaN has its sign bit set; MRI packs the positive quiet NaN
+            return Double.IsNaN(result) ? BitConverter.Int64BitsToDouble(0x7FF8000000000000L) : result;
         }
         private static void WriteInteger(ConversionStorage<IntegerValue>/*!*/ integerConversion,
             Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, int width, bool swap) {
@@ -1497,11 +1499,12 @@ namespace IronRuby.Builtins {
                         case 'P': {
                             // MRI writes the address of the string and remembers the string
                             // itself alongside the result, so that unpacking can find it again.
-                            // An address into a managed heap would mean nothing, so what goes
-                            // into the bytes is a one-based index into that list of strings.
-                            // The list travels as an instance variable, which is what makes it
-                            // survive #dup and not survive a round trip through a Symbol -
-                            // exactly the rule MRI's associated-object table follows.
+                            // The address is a real one, of a native block holding the string's
+                            // bytes (PackedPointers), so C can read and - through Fiddle - write
+                            // the string as it does in MRI. The list of strings travels as an
+                            // instance variable, which is what makes it survive #dup and not
+                            // survive a round trip through a Symbol - exactly the rule MRI's
+                            // associated-object table follows.
                             count = 1;
                             object pointerArg = GetPackArg(self, i);
                             long pointer = 0;
@@ -1512,7 +1515,7 @@ namespace IronRuby.Builtins {
                                         pointers = new RubyArray();
                                     }
                                     pointers.Add(target);
-                                    pointer = pointers.Count;
+                                    pointer = PackedPointers.AddressOf(target);
                                 }
                             }
                             WritePointer(stream, pointer);
@@ -1576,15 +1579,24 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
+            // As MRI's: one of the strings packed into this one, the one whose bytes are at that
+            // address now - a string that has outgrown its block since is at another.
             object stored;
             RubyArray pointers;
-            if (!context.TryGetInstanceVariable(self, PackedPointersVariable, out stored) ||
-                (pointers = stored as RubyArray) == null ||
-                pointer < 1 || pointer > pointers.Count) {
+            MutableString target = null;
+            if (context.TryGetInstanceVariable(self, PackedPointersVariable, out stored) && (pointers = stored as RubyArray) != null) {
+                foreach (object candidate in pointers) {
+                    var str = candidate as MutableString;
+                    if (str != null && PackedPointers.IsAddressOf(str, pointer)) {
+                        target = str;
+                        break;
+                    }
+                }
+            }
+            if (target == null) {
                 throw RubyExceptions.CreateArgumentError("no associated pointer");
             }
 
-            var target = (MutableString)pointers[(int)pointer - 1];
             if (directive.Directive == 'p') {
                 return target.Clone();
             }

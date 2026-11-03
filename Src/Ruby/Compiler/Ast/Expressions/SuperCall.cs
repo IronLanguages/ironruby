@@ -63,7 +63,7 @@ namespace IronRuby.Compiler.Ast {
             _argumentsAreImplicit = argumentsAreImplicit;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             // variable assigned to the transformed block in MakeCallWithBlockRetryable:
             MSA.Expression blockArgVariable = gen.CurrentScope.DefineHiddenVariable("#super-call-block", typeof(Proc));
 

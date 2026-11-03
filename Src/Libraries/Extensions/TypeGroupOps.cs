@@ -43,7 +43,7 @@ namespace IronRuby.Builtins {
             TypeTracker tracker = self.GetTypeForArity(typeArgs.Length);
 
             if (tracker == null) {
-                throw RubyExceptions.CreateArgumentError("Invalid number of type arguments for `{0}'", self.Name);
+                throw RubyExceptions.CreateArgumentError("Invalid number of type arguments for '{0}'", self.Name);
             }
 
             Type concreteType;
@@ -61,7 +61,7 @@ namespace IronRuby.Builtins {
         public static RubyModule/*!*/ Of(RubyContext/*!*/ context, TypeGroup/*!*/ self, int genericArity) {
             TypeTracker tracker = self.GetTypeForArity(genericArity);
             if (tracker == null) {
-                throw RubyExceptions.CreateArgumentError("Type group `{0}' does not contain a type of generic arity {1}", self.Name, genericArity);
+                throw RubyExceptions.CreateArgumentError("Type group '{0}' does not contain a type of generic arity {1}", self.Name, genericArity);
             }
 
             return context.GetModule(tracker.Type);
@@ -191,5 +191,47 @@ namespace IronRuby.Builtins {
         public static RubyMethod/*!*/ GetClrConstructor(RubyContext/*!*/ context, TypeGroup/*!*/ self) {
             return ClassOps.GetClrConstructor(GetNonGenericClass(context, self));
         }
+
+        #region Forwarding to the non-generic type
+
+        // A constant like System::Threading::Tasks::Task names a group (Task and Task<T>), so the static members
+        // of the non-generic type have to be reached through the group. Whatever the group itself does not
+        // define is passed on to that type, when it has a public method of that name.
+
+        private static readonly RubyCallSignature ForwardSignature =
+            new RubyCallSignature(0, RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock);
+
+        private static RubyModule TryGetForwardTarget(RubyContext/*!*/ context, TypeGroup/*!*/ self, string/*!*/ name) {
+            TypeTracker type = self.GetTypeForArity(0);
+            if (type == null) {
+                return null;
+            }
+
+            RubyModule module = context.GetModule(type.Type);
+            return context.ResolveMethod(module, name, new VisibilityContext(RubyMethodAttributes.Public)).Found ? module : null;
+        }
+
+        [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
+        [RubyStackTraceHidden]
+        public static object MethodMissing(RubyContext/*!*/ context, BlockParam block, TypeGroup/*!*/ self,
+            [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
+
+            string methodName = name.ToString();
+            RubyModule target = TryGetForwardTarget(context, self, methodName);
+            if (target == null) {
+                return BasicObjectOps.MethodMissing(context, self, name, args);
+            }
+
+            var site = context.GetOrCreateSendSite<Func<CallSite, object, Proc, RubyArray, object>>(methodName, ForwardSignature);
+            return site.Target(site, target, block != null ? block.Proc : null, RubyOps.MakeArrayN(args));
+        }
+
+        [RubyMethod("respond_to_missing?", RubyMethodAttributes.PrivateInstance)]
+        public static bool RespondToMissing(RubyContext/*!*/ context, TypeGroup/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ name, object includePrivate) {
+            return TryGetForwardTarget(context, self, name) != null;
+        }
+
+        #endregion
     }
 }

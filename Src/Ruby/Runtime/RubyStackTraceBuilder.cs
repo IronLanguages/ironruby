@@ -142,6 +142,12 @@ namespace IronRuby.Runtime {
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames, bool keepInternalFrames)
             : this(context) {
             _keepInternalFrames = keepInternalFrames;
+
+            // Kernel#caller and #caller_locations: -X:ExceptionDetail adds the CLR frames to exception
+            // backtraces, not here, where code reads the frames - require_relative takes its directory
+            // from the first one, and would get a .cs file of the runtime instead of the caller's.
+            _exceptionDetail = false;
+
             var trace = GetClrStackTrace(null, _needsClrFileInfo);
 
             _interpretedFrames = InterpretedFrame.CurrentFrame.Value != null ?
@@ -580,25 +586,28 @@ namespace IronRuby.Runtime {
             return name;
         }
 
-        private static readonly ConcurrentDictionary<Type, Type>/*!*/ _copyingClasses = new ConcurrentDictionary<Type, Type>();
+        // Per library assembly: copied-in module -> the class that copies it.
+        private static readonly ConcurrentDictionary<Assembly, Dictionary<Type, Type>>/*!*/ _copyingClasses =
+            new ConcurrentDictionary<Assembly, Dictionary<Type, Type>>();
 
         // The builtin class with a Ruby name of its own (Integer rather than System::Byte, say)
         // that copies the given module in, or null.
         private string GetCopyingClassName(Assembly/*!*/ assembly, Type/*!*/ included) {
             Type copying;
-            if (!_copyingClasses.TryGetValue(included, out copying)) {
-                copying = FindCopyingClass(assembly, included);
-                _copyingClasses.TryAdd(included, copying);
-            }
-            return copying != null ? GetLibraryModuleName(copying) : null;
+            return _copyingClasses.GetOrAdd(assembly, FindCopyingClasses).TryGetValue(included, out copying) ?
+                GetLibraryModuleName(copying) : null;
         }
 
-        private static Type FindCopyingClass(Assembly/*!*/ assembly, Type/*!*/ included) {
+        // One pass over the assembly's attributes answers every later lookup: it reads the attributes
+        // of every type in IronRuby.Libraries, and doing that once per copied module made each of the
+        // first few backtraces of a process cost ~15 ms.
+        private static Dictionary<Type, Type>/*!*/ FindCopyingClasses(Assembly/*!*/ assembly) {
+            var result = new Dictionary<Type, Type>();
             Type[] types;
             try {
                 types = assembly.GetTypes();
             } catch (ReflectionTypeLoadException) {
-                return null;
+                return result;
             }
             foreach (Type candidate in types) {
                 var attr = (RubyModuleAttribute)Attribute.GetCustomAttribute(candidate, typeof(RubyModuleAttribute), false);
@@ -606,12 +615,17 @@ namespace IronRuby.Runtime {
                     continue;
                 }
                 foreach (IncludesAttribute includes in candidate.GetCustomAttributes(typeof(IncludesAttribute), false)) {
-                    if (includes.Copy && Array.IndexOf(includes.Types, included) >= 0) {
-                        return candidate;
+                    if (includes.Copy) {
+                        foreach (Type included in includes.Types) {
+                            // the first copying class in type order, as the per-module scan found it
+                            if (!result.ContainsKey(included)) {
+                                result.Add(included, candidate);
+                            }
+                        }
                     }
                 }
             }
-            return null;
+            return result;
         }
 
         private static bool IsVisibleClrFrame(MethodBase/*!*/ method) {
@@ -693,7 +707,8 @@ namespace IronRuby.Runtime {
 #endif
         }
 #endif
-        private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb", "/ironruby/gem_compat.rb" };
+        private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb", "/ironruby/gem_compat.rb",
+            "/ironruby/ironruby/rational.rb", "/ironruby/ironruby/complex.rb" };
 
         /// <summary>
         /// The Ruby half of the core library. MRI 3.4+ reports a frame of a core method written in

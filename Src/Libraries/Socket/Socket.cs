@@ -47,6 +47,25 @@ namespace IronRuby.StandardLibrary.Sockets {
             return new RubySocket(self.Context, NewSocket(addressFamily, (SocketType)type, (ProtocolType)protocol));
         }
 
+        /// <summary>
+        /// Creates an uninitialized socket: what a Ruby subclass's .new allocates before it runs
+        /// that subclass's #initialize.
+        /// </summary>
+        public RubySocket(RubyContext/*!*/ context)
+            : base(context) {
+        }
+
+        // What `super(family, type, protocol)` reaches from a Ruby subclass's #initialize -
+        // cool.io's TCPConnectSocket < ::Socket is one. Not called by the factory above.
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static RubySocket/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
+            RubySocket/*!*/ self, [NotNull]object/*!*/ domain, [DefaultProtocol]int/*!*/ type, [DefaultProtocol, Optional]int protocol) {
+
+            AddressFamily addressFamily = ConvertToAddressFamily(stringCast, fixnumCast, domain);
+            self.Socket = NewSocket(addressFamily, (SocketType)type, (ProtocolType)protocol);
+            return self;
+        }
+
 #endregion
 
 #region Public Singleton Methods
@@ -735,19 +754,18 @@ namespace IronRuby.StandardLibrary.Sockets {
                 str = str.Remove(0, 1);
             }
 
-            Tokenizer tokenizer = new Tokenizer();
-            tokenizer.Initialize(new StringReader(str));
-            Tokens token = tokenizer.GetNextToken();
-            TokenValue value = tokenizer.TokenValue;
-            Tokens nextToken = tokenizer.GetNextToken();
-
-            // We are only interested in the whole string being a valid Integer
-            if (token == Tokens.Integer && nextToken == Tokens.Integer) {
-                return isNegative ? -value.Integer1 : value.Integer1;
-            } else {
-                throw RubyExceptions.CreateImplicitConversionError("String", "Integer");
+            // The whole string has to be one Ruby integer literal that fits a Fixnum.
+            if (IntegerLiteral.IsMatch(str)) {
+                IntegerValue value = Tokenizer.ParseInteger(str, 0);
+                if (value.IsFixnum) {
+                    return isNegative ? -value.Fixnum : value.Fixnum;
+                }
             }
+            throw RubyExceptions.CreateImplicitConversionError("String", "Integer");
         }
+
+        private static readonly System.Text.RegularExpressions.Regex IntegerLiteral = new System.Text.RegularExpressions.Regex(
+            @"\A(?:0[xX][0-9a-fA-F]+(?:_[0-9a-fA-F]+)*|0[bB][01]+(?:_[01]+)*|0[dD][0-9]+(?:_[0-9]+)*|0[oO]?[0-7]+(?:_[0-7]+)*|[1-9][0-9]*(?:_[0-9]+)*|0)\z");
 
 #endregion
     }

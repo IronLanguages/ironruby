@@ -4,47 +4,13 @@
 #   	by Keiju ISHITSUKA(keiju@ruby-lang.org)
 #
 
-require "ripper"
+require "prism"
 require "jruby" if RUBY_ENGINE == "jruby"
 require_relative "nesting_parser"
 
 module IRB
   # :stopdoc:
   class RubyLex
-    ASSIGNMENT_NODE_TYPES = [
-      # Local, instance, global, class, constant, instance, and index assignment:
-      #   "foo = bar",
-      #   "@foo = bar",
-      #   "$foo = bar",
-      #   "@@foo = bar",
-      #   "::Foo = bar",
-      #   "a::Foo = bar",
-      #   "Foo = bar"
-      #   "foo.bar = 1"
-      #   "foo[1] = bar"
-      :assign,
-
-      # Operation assignment:
-      #   "foo += bar"
-      #   "foo -= bar"
-      #   "foo ||= bar"
-      #   "foo &&= bar"
-      :opassign,
-
-      # Multiple assignment:
-      #   "foo, bar = 1, 2
-      :massign,
-    ]
-
-    ERROR_TOKENS = [
-      :on_parse_error,
-      :compile_error,
-      :on_assign_error,
-      :on_alias_error,
-      :on_class_name_error,
-      :on_param_error
-    ]
-
     LTYPE_TOKENS = %i[
       on_heredoc_beg on_tstring_beg
       on_regexp_beg on_symbeg on_backtick
@@ -79,239 +45,173 @@ module IRB
       end
     end
 
-    class << self
-      def compile_with_errors_suppressed(code, line_no: 1)
-        begin
-          result = yield code, line_no
-        rescue ArgumentError
-          # Ruby can issue an error for the code if there is an
-          # incomplete magic comment for encoding in it. Force an
-          # expression with a new line before the code in this
-          # case to prevent magic comment handling.  To make sure
-          # line numbers in the lexed code remain the same,
-          # decrease the line number by one.
-          code = ";\n#{code}"
-          line_no -= 1
-          result = yield code, line_no
-        end
-        result
-      end
-
-      def generate_local_variables_assign_code(local_variables)
-        # Some reserved words could be a local variable
-        # Example: def f(if: 1); binding.irb; end
-        # These reserved words should be removed from assignment code
-        local_variables -= RESERVED_WORDS
-        "#{local_variables.join('=')}=nil;" unless local_variables.empty?
-      end
-
-      # Some part of the code is not included in Ripper's token.
-      # Example: DATA part, token after heredoc_beg when heredoc has unclosed embexpr.
-      # With interpolated tokens, tokens.map(&:tok).join will be equal to code.
-      def interpolate_ripper_ignored_tokens(code, tokens)
-        line_positions = [0]
-        code.lines.each do |line|
-          line_positions << line_positions.last + line.bytesize
-        end
-        prev_byte_pos = 0
-        interpolated = []
-        prev_line = 1
-        tokens.each do |t|
-          line, col = t.pos
-          byte_pos = line_positions[line - 1] + col
-          if prev_byte_pos < byte_pos
-            tok = code.byteslice(prev_byte_pos...byte_pos)
-            pos = [prev_line, prev_byte_pos - line_positions[prev_line - 1]]
-            interpolated << Ripper::Lexer::Elem.new(pos, :on_ignored_by_ripper, tok, 0)
-            prev_line += tok.count("\n")
-          end
-          interpolated << t
-          prev_byte_pos = byte_pos + t.tok.bytesize
-          prev_line += t.tok.count("\n")
-        end
-        if prev_byte_pos < code.bytesize
-          tok = code.byteslice(prev_byte_pos..)
-          pos = [prev_line, prev_byte_pos - line_positions[prev_line - 1]]
-          interpolated << Ripper::Lexer::Elem.new(pos, :on_ignored_by_ripper, tok, 0)
-        end
-        interpolated
-      end
-
-      def ripper_lex_without_warning(code, local_variables: [])
-        verbose, $VERBOSE = $VERBOSE, nil
-        lvars_code = generate_local_variables_assign_code(local_variables)
-        original_code = code
-        if lvars_code
-          code = "#{lvars_code}\n#{code}"
-          line_no = 0
-        else
-          line_no = 1
-        end
-
-        compile_with_errors_suppressed(code, line_no: line_no) do |inner_code, line_no|
-          lexer = Ripper::Lexer.new(inner_code, '-', line_no)
-          tokens = []
-          lexer.scan.each do |t|
-            next if t.pos.first == 0
-            prev_tk = tokens.last
-            position_overlapped = prev_tk && t.pos[0] == prev_tk.pos[0] && t.pos[1] < prev_tk.pos[1] + prev_tk.tok.bytesize
-            if position_overlapped
-              tokens[-1] = t if ERROR_TOKENS.include?(prev_tk.event) && !ERROR_TOKENS.include?(t.event)
-            else
-              tokens << t
-            end
-          end
-          interpolate_ripper_ignored_tokens(original_code, tokens)
-        end
-      ensure
-        $VERBOSE = verbose
-      end
-    end
-
     def check_code_state(code, local_variables:)
-      tokens = self.class.ripper_lex_without_warning(code, local_variables: local_variables)
-      opens = NestingParser.open_tokens(tokens)
-      [tokens, opens, code_terminated?(code, tokens, opens, local_variables: local_variables)]
+      parse_lex_result = Prism.parse_lex(code, scopes: [local_variables])
+
+      opens = NestingParser.open_nestings(parse_lex_result)
+      lines = code.lines
+      tokens = parse_lex_result.value[1].map(&:first).sort_by {|t| t.location.start_offset }
+      continue = should_continue?(tokens, lines.last, lines.size)
+      [continue, opens, code_terminated?(code, continue, opens, local_variables: local_variables)]
     end
 
-    def code_terminated?(code, tokens, opens, local_variables:)
+    def code_terminated?(code, continue, opens, local_variables:)
       case check_code_syntax(code, local_variables: local_variables)
       when :unrecoverable_error
         true
       when :recoverable_error
         false
       when :other_error
-        opens.empty? && !should_continue?(tokens)
+        opens.empty? && !continue
       when :valid
-        !should_continue?(tokens)
+        !continue
       end
     end
 
     def assignment_expression?(code, local_variables:)
-      # Try to parse the code and check if the last of possibly multiple
-      # expressions is an assignment type.
-
-      # If the expression is invalid, Ripper.sexp should return nil which will
-      # result in false being returned. Any valid expression should return an
-      # s-expression where the second element of the top level array is an
-      # array of parsed expressions. The first element of each expression is the
-      # expression's type.
-      verbose, $VERBOSE = $VERBOSE, nil
-      code = "#{RubyLex.generate_local_variables_assign_code(local_variables) || 'nil;'}\n#{code}"
-      # Get the last node_type of the line. drop(1) is to ignore the local_variables_assign_code part.
-      node_type = Ripper.sexp(code)&.dig(1)&.drop(1)&.dig(-1, 0)
-      ASSIGNMENT_NODE_TYPES.include?(node_type)
-    ensure
-      $VERBOSE = verbose
+      # Parse the code and check if the last of possibly multiple
+      # expressions is an assignment node.
+      program_node = Prism.parse(code, scopes: [local_variables]).value
+      node = program_node.statements.body.last
+      case node
+      when nil
+        # Empty code, comment-only code or invalid code
+        false
+      when Prism::CallNode
+        # a.b = 1, a[b] = 1
+        # Prism::CallNode#equal_loc is only available in prism >= 1.7.0
+        if node.name == :[]=
+          # Distinguish between `a[k] = v` from `a.[]= k, v`, `a.[]=(k, v)`
+          node.opening == '['
+        else
+          node.name.end_with?('=')
+        end
+      when Prism::MatchWriteNode
+        # /(?<lvar>)/ =~ a, Class name is *WriteNode but not an assignment.
+        false
+      else
+        # a = 1, @a = 1, $a = 1, @@a = 1, A = 1, a += 1, a &&= 1, a.b += 1, and so on
+        node.class.name.match?(/WriteNode/)
+      end
     end
 
-    def should_continue?(tokens)
-      # Look at the last token and check if IRB need to continue reading next line.
-      # Example code that should continue: `a\` `a +` `a.`
-      # Trailing spaces, newline, comments are skipped
-      return true if tokens.last&.event == :on_sp && tokens.last.tok == "\\\n"
-
-      tokens.reverse_each do |token|
-        case token.event
-        when :on_sp, :on_nl, :on_ignored_nl, :on_comment, :on_embdoc_beg, :on_embdoc, :on_embdoc_end
-          # Skip
-        when :on_regexp_end, :on_heredoc_end, :on_semicolon
-          # State is EXPR_BEG but should not continue
-          return false
-        else
-          # Endless range should not continue
-          return false if token.event == :on_op && token.tok.match?(/\A\.\.\.?\z/)
-
-          # EXPR_DOT and most of the EXPR_BEG should continue
-          return token.state.anybits?(Ripper::EXPR_BEG | Ripper::EXPR_DOT)
+    def should_continue?(tokens, line, line_num)
+      # Check if the line ends with \\. Then IRB should continue reading next line.
+      # Space and backslash are not included in Prism token, so find trailing text after last non-newline token position.
+      trailing = line
+      tokens.reverse_each do |t|
+        break if t.location.start_line < line_num
+        if t.location.start_line == line_num &&
+            t.location.end_line == line_num &&
+            t.type != :IGNORED_NEWLINE &&
+            t.type != :NEWLINE &&
+            t.type != :EOF
+          trailing = line.byteslice(t.location.end_column..)
+          trailing ||= '' # in case end_line is wrong (e.g. `"\C-`)
+          break
         end
       end
-      false
+      return true if trailing.match?(/\A\s*\\\n?\z/)
+
+      # "1 + \n" and "foo.\n" should continue.
+      pos = tokens.size - 1
+      ignored_newline_found = false
+      while pos >= 0
+        case tokens[pos].type
+        when :EMBDOC_BEGIN, :EMBDOC_LINE, :EMBDOC_END, :COMMENT, :EOF
+          pos -= 1
+        when :IGNORED_NEWLINE
+          pos -= 1
+          ignored_newline_found = true
+        else
+          break
+        end
+      end
+
+      # If IGNORED_NEWLINE token is following non-newline non-semicolon token, it should continue.
+      # Special case: treat `1..` and `1...` as not continuing.
+      ignored_newline_found && pos >= 0 && !%i[DOT_DOT DOT_DOT_DOT NEWLINE SEMICOLON].include?(tokens[pos].type)
     end
 
     def check_code_syntax(code, local_variables:)
-      lvars_code = RubyLex.generate_local_variables_assign_code(local_variables)
-      code = "#{lvars_code}\n#{code}"
-
-      begin # check if parser error are available
-        verbose, $VERBOSE = $VERBOSE, nil
-        case RUBY_ENGINE
-        when 'ruby'
-          self.class.compile_with_errors_suppressed(code) do |inner_code, line_no|
-            RubyVM::InstructionSequence.compile(inner_code, nil, nil, line_no)
-          end
-        when 'jruby'
-          JRuby.compile_ir(code)
-        else
-          catch(:valid) do
-            eval("BEGIN { throw :valid, true }\n#{code}")
-            false
-          end
-        end
-      rescue EncodingError
-        # This is for a hash with invalid encoding symbol, {"\xAE": 1}
-        :unrecoverable_error
-      rescue SyntaxError => e
-        case e.message
-        when /unexpected keyword_end/
-          # "syntax error, unexpected keyword_end"
-          #
-          #   example:
-          #     if (
-          #     end
-          #
-          #   example:
-          #     end
-          return :unrecoverable_error
-        when /unexpected '\.'/
-          # "syntax error, unexpected '.'"
-          #
-          #   example:
-          #     .
-          return :unrecoverable_error
-        when /unexpected tREGEXP_BEG/
-          # "syntax error, unexpected tREGEXP_BEG, expecting keyword_do or '{' or '('"
-          #
-          #   example:
-          #     method / f /
-          return :unrecoverable_error
-        when /unterminated (?:string|regexp) meets end of file/
-          # "unterminated regexp meets end of file"
-          #
-          #   example:
-          #     /
-          #
-          # "unterminated string meets end of file"
-          #
-          #   example:
-          #     '
-          return :recoverable_error
-        when /unexpected end-of-input/
-          # "syntax error, unexpected end-of-input, expecting keyword_end"
-          #
-          #   example:
-          #     if true
-          #       hoge
-          #       if false
-          #         fuga
-          #       end
-          return :recoverable_error
-        else
-          return :other_error
-        end
-      ensure
-        $VERBOSE = verbose
+      result = Prism.lex(code, scopes: [local_variables])
+      if result.success?
+        :valid
+      elsif result.respond_to?(:continuable?)
+        result.continuable? ? :recoverable_error : :unrecoverable_error
+      else # For Prism <= 1.9.0. Drop this branch when IRB requires Prism >= 1.10.0.
+        check_syntax_error_heuristics(result)
       end
-      :valid
+    end
+
+    # Prism <= 1.9.0 does not have `ParseResult#continuable?` method.
+    # Fallback to legacy heuristics based on error messages and error locations.
+    def check_syntax_error_heuristics(prism_parse_result)
+
+      # Get the token excluding trailing comments and newlines
+      # to compare error location with the last or second-last meaningful token location
+      tokens = prism_parse_result.value.map(&:first)
+      until tokens.empty?
+        case tokens.last.type
+        when :COMMENT, :NEWLINE, :IGNORED_NEWLINE, :EMBDOC_BEGIN, :EMBDOC_LINE, :EMBDOC_END, :EOF
+          tokens.pop
+        else
+          break
+        end
+      end
+
+      unknown = false
+      prism_parse_result.errors.each do |error|
+        case error.message
+        when /unexpected character literal|incomplete expression at|unexpected .%.|too short escape sequence/i
+          # Ignore these errors. Likely to appear only at the end of code.
+          # `[a, b ?` unexpected character literal, incomplete expression at
+          # `p a, %`  unexpected '%'
+          # `/\u`     too short escape sequence
+        when /unexpected write target/i
+          # `a,b` recoverable by `=v`
+          # `a,b,` recoverable by `c=v`
+          tok = tokens.last
+          tok = tokens[-2] if tok&.type == :COMMA
+          return :unrecoverable_error if tok && error.location.end_offset < tok.location.end_offset
+        when /(invalid|unexpected) (?:break|next|redo)/i
+          # Hard to check correctly, so treat it as always recoverable.
+          # `(break;1)` recoverable by `.f while true`
+        when / meets end of file|unexpected end-of-input|unterminated |cannot parse|could not parse/i
+          # These are recoverable errors if there is no other unrecoverable error
+          # `/aaa`    unterminated regexp meets end of file
+          # `def f`   unexpected end-of-input
+          # `"#{`     unterminated string
+          # `:"aa`    cannot parse the string part
+          # `def f =` could not parse the endless method body
+        when /is not allowed|unexpected .+ ignoring it/i
+          # `@@` `$--` is not allowed
+          # `)`, `end` unexpected ')', ignoring it
+          return :unrecoverable_error
+        when /unexpected |invalid |dynamic constant assignment|can't set variable|can't change the value|is not valid to get|variable capture in alternative pattern/i
+          # Likely to be unrecoverable except when the error is at the last token location.
+          # Unexpected: `class a`, `tap(&`, `def f(a,`
+          # Invalid: `a ? b :`, `/\u{`, `"\M-`
+          # `a,B`        recoverable by `.c=v` dynamic constant assignment
+          # `a,$1`       recoverable by `.f=v` Can't set variable
+          # `a,self`     recoverable by `.f=v` Can't change the value of self
+          # `p foo?:`    recoverable by `v`    is not valid to get
+          # `x in 1|{x:` recoverable by `1}`   variable capture in alternative pattern
+          return :unrecoverable_error if tokens.last && error.location.end_offset <= tokens.last.location.start_offset
+        else
+          unknown = true
+        end
+      end
+      unknown ? :other_error : :recoverable_error
     end
 
     def calc_indent_level(opens)
       indent_level = 0
-      opens.each_with_index do |t, index|
-        case t.event
+      opens.each_with_index do |elem, index|
+        case elem.event
         when :on_heredoc_beg
           if opens[index + 1]&.event != :on_heredoc_beg
-            if t.tok.match?(/^<<[~-]/)
+            if elem.tok.match?(/^<<[~-]/)
               indent_level += 1
             else
               indent_level = 0
@@ -320,50 +220,50 @@ module IRB
         when :on_tstring_beg, :on_regexp_beg, :on_symbeg, :on_backtick
           # No indent: "", //, :"", ``
           # Indent: %(), %r(), %i(), %x()
-          indent_level += 1 if t.tok.start_with? '%'
+          indent_level += 1 if elem.tok.start_with? '%'
         when :on_embdoc_beg
           indent_level = 0
         else
-          indent_level += 1 unless t.tok == 'alias' || t.tok == 'undef'
+          indent_level += 1 unless elem.tok == 'alias' || elem.tok == 'undef'
         end
       end
       indent_level
     end
 
-    FREE_INDENT_TOKENS = %i[on_tstring_beg on_backtick on_regexp_beg on_symbeg]
+    FREE_INDENT_NESTINGS = %i[on_tstring_beg on_backtick on_regexp_beg on_symbeg]
 
-    def free_indent_token?(token)
-      FREE_INDENT_TOKENS.include?(token&.event)
+    def free_indent_nesting_element?(elem)
+      FREE_INDENT_NESTINGS.include?(elem&.event)
     end
 
     # Calculates the difference of pasted code's indent and indent calculated from tokens
     def indent_difference(lines, line_results, line_index)
       loop do
-        _tokens, prev_opens, _next_opens, min_depth = line_results[line_index]
-        open_token = prev_opens.last
-        if !open_token || (open_token.event != :on_heredoc_beg && !free_indent_token?(open_token))
+        prev_opens, _next_opens, min_depth = line_results[line_index]
+        open_elem = prev_opens.last
+        if !open_elem || (open_elem.event != :on_heredoc_beg && !free_indent_nesting_element?(open_elem))
           # If the leading whitespace is an indent, return the difference
           indent_level = calc_indent_level(prev_opens.take(min_depth))
           calculated_indent = 2 * indent_level
           actual_indent = lines[line_index][/^ */].size
           return actual_indent - calculated_indent
-        elsif open_token.event == :on_heredoc_beg && open_token.tok.match?(/^<<[^-~]/)
+        elsif open_elem.event == :on_heredoc_beg && open_elem.tok.match?(/^<<[^-~]/)
           return 0
         end
         # If the leading whitespace is not an indent but part of a multiline token
         # Calculate base_indent of the multiline token's beginning line
-        line_index = open_token.pos[0] - 1
+        line_index = open_elem.pos[0] - 1
       end
     end
 
-    def process_indent_level(tokens, lines, line_index, is_newline)
-      line_results = NestingParser.parse_by_line(tokens)
+    def process_indent_level(parse_lex_result, lines, line_index, is_newline)
+      line_results = NestingParser.parse_by_line(parse_lex_result)
       result = line_results[line_index]
       if result
-        _tokens, prev_opens, next_opens, min_depth = result
+        prev_opens, next_opens, min_depth = result
       else
         # When last line is empty
-        prev_opens = next_opens = line_results.last[2]
+        prev_opens = next_opens = line_results.last[1]
         min_depth = next_opens.size
       end
 
@@ -373,39 +273,39 @@ module IRB
 
       preserve_indent = lines[line_index - (is_newline ? 1 : 0)][/^ */].size
 
-      prev_open_token = prev_opens.last
-      next_open_token = next_opens.last
+      prev_open_elem = prev_opens.last
+      next_open_elem = next_opens.last
 
-      # Calculates base indent for pasted code on the line where prev_open_token is located
-      # irb(main):001:1*   if a # base_indent is 2, indent calculated from tokens is 0
-      # irb(main):002:1*         if b # base_indent is 6, indent calculated from tokens is 2
-      # irb(main):003:0>           c # base_indent is 6, indent calculated from tokens is 4
-      if prev_open_token
-        base_indent = [0, indent_difference(lines, line_results, prev_open_token.pos[0] - 1)].max
+      # Calculates base indent for pasted code on the line where prev_open_elem is located
+      # irb(main):001:1*   if a # base_indent is 2, indent calculated from nestings is 0
+      # irb(main):002:1*         if b # base_indent is 6, indent calculated from nestings is 2
+      # irb(main):003:0>           c # base_indent is 6, indent calculated from nestings is 4
+      if prev_open_elem
+        base_indent = [0, indent_difference(lines, line_results, prev_open_elem.pos[0] - 1)].max
       else
         base_indent = 0
       end
 
-      if free_indent_token?(prev_open_token)
-        if is_newline && prev_open_token.pos[0] == line_index
+      if free_indent_nesting_element?(prev_open_elem)
+        if is_newline && prev_open_elem.pos[0] == line_index
           # First newline inside free-indent token
           base_indent + indent
         else
           # Accept any number of indent inside free-indent token
           preserve_indent
         end
-      elsif prev_open_token&.event == :on_embdoc_beg || next_open_token&.event == :on_embdoc_beg
-        if prev_open_token&.event == next_open_token&.event
+      elsif prev_open_elem&.event == :on_embdoc_beg || next_open_elem&.event == :on_embdoc_beg
+        if prev_open_elem&.event == next_open_elem&.event
           # Accept any number of indent inside embdoc content
           preserve_indent
         else
           # =begin or =end
           0
         end
-      elsif prev_open_token&.event == :on_heredoc_beg
-        tok = prev_open_token.tok
+      elsif prev_open_elem&.event == :on_heredoc_beg
+        tok = prev_open_elem.tok
         if prev_opens.size <= next_opens.size
-          if is_newline && lines[line_index].empty? && line_results[line_index - 1][1].last != next_open_token
+          if is_newline && lines[line_index].empty? && line_results[line_index - 1][0].last != next_open_elem
             # First line in heredoc
             tok.match?(/^<<[-~]/) ? base_indent + indent : indent
           elsif tok.match?(/^<<~/)
@@ -425,15 +325,15 @@ module IRB
       end
     end
 
-    def ltype_from_open_tokens(opens)
-      start_token = opens.reverse_each.find do |tok|
-        LTYPE_TOKENS.include?(tok.event)
+    def ltype_from_open_nestings(opens)
+      start_nesting = opens.reverse_each.find do |elem|
+        LTYPE_TOKENS.include?(elem.event)
       end
-      return nil unless start_token
+      return nil unless start_nesting
 
-      case start_token&.event
+      case start_nesting&.event
       when :on_tstring_beg
-        case start_token&.tok
+        case start_nesting&.tok
         when ?"      then ?"
         when /^%.$/  then ?"
         when /^%Q.$/ then ?"
@@ -448,50 +348,51 @@ module IRB
       when :on_qsymbols_beg then ?]
       when :on_symbols_beg  then ?]
       when :on_heredoc_beg
-        start_token&.tok =~ /<<[-~]?(['"`])\w+\1/
+        start_nesting&.tok =~ /<<[-~]?(['"`])\w+\1/
         $1 || ?"
       else
         nil
       end
     end
 
+    # Check if <tt>code.lines[...-1]</tt> is terminated and can be evaluated immediately.
+    # Returns the last line string if terminated, otherwise false.
+    # Terminated means previous lines(<tt>code.lines[...-1]</tt>) is syntax valid and
+    # previous lines and the last line are syntactically separated.
+    # Terminated example
+    #   foo(
+    #   bar)
+    #   baz.
+    # Unterminated example: previous lines are syntax invalid
+    #   foo(
+    #   bar).
+    #   baz
+    # Unterminated example: previous lines are connected to the last line
+    #   foo(
+    #   bar)
+    #   .baz
     def check_termination_in_prev_line(code, local_variables:)
-      tokens = self.class.ripper_lex_without_warning(code, local_variables: local_variables)
-      past_first_newline = false
-      index = tokens.rindex do |t|
-        # traverse first token before last line
-        if past_first_newline
-          if t.tok.include?("\n")
-            true
-          end
-        elsif t.tok.include?("\n")
-          past_first_newline = true
-          false
-        else
-          false
-        end
+      lines = code.lines
+      return false if lines.size < 2
+
+      prev_line_result = Prism.parse(lines[...-1].join, scopes: [local_variables])
+      return false unless prev_line_result.success?
+
+      prev_nodes = prev_line_result.value.statements.body
+      whole_nodes = Prism.parse(code, scopes: [local_variables]).value.statements.body
+
+      return false if whole_nodes.size < prev_nodes.size
+      return false unless prev_nodes.zip(whole_nodes).all? do |a, b|
+        a.location == b.location
       end
 
-      if index
-        first_token = nil
-        last_line_tokens = tokens[(index + 1)..(tokens.size - 1)]
-        last_line_tokens.each do |t|
-          unless [:on_sp, :on_ignored_sp, :on_comment].include?(t.event)
-            first_token = t
-            break
-          end
-        end
+      # If the last line only contain comments, treat it as not connected to handle this case:
+      #   receiver
+      #   # comment
+      #   .method
+      return false if lines.last.match?(/\A\s*#/)
 
-        if first_token && first_token.state != Ripper::EXPR_DOT
-          tokens_without_last_line = tokens[0..index]
-          code_without_last_line = tokens_without_last_line.map(&:tok).join
-          opens_without_last_line = NestingParser.open_tokens(tokens_without_last_line)
-          if code_terminated?(code_without_last_line, tokens_without_last_line, opens_without_last_line, local_variables: local_variables)
-            return last_line_tokens.map(&:tok).join
-          end
-        end
-      end
-      false
+      lines.last
     end
   end
   # :startdoc:

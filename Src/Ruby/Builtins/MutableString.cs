@@ -2716,6 +2716,9 @@ namespace IronRuby.Builtins {
                 } else {
                     AppendBinaryCharRepresentation(result, currentChar, nextChar, escape, quote);
                 }
+            } else if (IsEscapedByte(currentChar)) {
+                // a byte that did not decode (see EscapingEncoding) is shown as the byte it is
+                AppendHexEscape(result, currentChar - EscapingEncoding.EscapeBase);
             } else if ((escape & Escape.NonAscii) != 0) {
                 if (nextChar != -1 && Char.IsSurrogatePair((char)currentChar, (char)nextChar)) {
                     currentChar = Tokenizer.ToCodePoint(currentChar, nextChar);
@@ -2744,6 +2747,11 @@ namespace IronRuby.Builtins {
                 result.Append((char)currentChar);
             }
             return inc;
+        }
+
+        /// <summary>A lone low surrogate in U+DC80..U+DCFF stands for one undecodable byte.</summary>
+        private static bool IsEscapedByte(int c) {
+            return c >= EscapingEncoding.EscapeBase + 0x80 && c <= EscapingEncoding.EscapeBase + 0xFF;
         }
 
         /// <summary>\uXXXX up to U+FFFF, \u{XXXXXX} above it - MRI writes both in upper case.</summary>

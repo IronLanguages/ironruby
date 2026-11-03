@@ -140,6 +140,10 @@ namespace IronRuby.Runtime {
                 case GlobalVariableId.Verbose:
                     return context.Verbose;
 
+                case GlobalVariableId.WarningLevel:
+                    // $-W: 0 for $VERBOSE nil, 1 for false, 2 for true
+                    return context.Verbose == null ? 0 : (RubyOps.IsTrue(context.Verbose) ? 2 : 1);
+
                 case GlobalVariableId.KCode:
                     context.ReportWarning("variable $KCODE is no longer effective");
                     return null;
@@ -264,6 +268,9 @@ namespace IronRuby.Runtime {
                     // nil means "no warnings at all"; anything else truthy is plain true
                     context.Verbose = (value == null) ? null : (object)RubyOps.IsTrue(value);
                     return;
+
+                case GlobalVariableId.WarningLevel:
+                    throw ReadOnlyError(name);
 
                 case GlobalVariableId.CommandLineProgramPath:
                     context.CommandLineProgramPath = context.CastToString(value);

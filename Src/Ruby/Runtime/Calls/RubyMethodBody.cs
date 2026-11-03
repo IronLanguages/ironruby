@@ -239,6 +239,17 @@ namespace IronRuby.Runtime.Calls {
         // refinements, which is right for a `def' that ran before any refinement existed.
         private bool _compiledWithoutDefinitionRefinements;
 
+        // A `def' of this body ran while nothing had been refined (so it recorded nothing): a
+        // compilation for its module made after something has been must still see no refinements.
+        private bool _definedWithoutRefinements;
+
+        /// <summary>
+        /// A `def' of this body ran before anything was refined: no refinement is active where it was written.
+        /// </summary>
+        internal void SetDefinedWithoutRefinements() {
+            _definedWithoutRefinements = true;
+        }
+
         /// <summary>
         /// Records the refinements active at a `def' of this body for <paramref name="declaringModule"/>.
         /// </summary>
@@ -258,7 +269,21 @@ namespace IronRuby.Runtime.Calls {
                     _interpretedDispatchers = null;
                     _compiledFrom = _compiledTo = null;
                 }
-                GetDefinitionRefinementsNoLock(declaringModule).Value = refinements;
+
+                StrongBox<RefinementActivation> record;
+                if (_definitionRefinements != null && _definitionRefinements.TryGetValue(declaringModule, out record)) {
+                    if (!ReferenceEquals(record.Value, refinements)) {
+                        // The `def' ran again where other refinements are active, and the compiled body is shared: the
+                        // calls of it still running answer the new record from now on, the way new calls do. A scope
+                        // that memoized the old answer recomputes it, as it does after a `using', so that it agrees
+                        // with the rules that read the record (RubyCallAction.Resolve).
+                        declaringModule.Context.RefinementVersion++;
+                    }
+                } else {
+                    // nothing has been compiled against a record that did not exist
+                    record = GetDefinitionRefinementsNoLock(declaringModule);
+                }
+                record.Value = refinements;
             }
         }
 
@@ -309,16 +334,46 @@ namespace IronRuby.Runtime.Calls {
                 var compiled = _precompiled(declaringScope, declaringModule);
                 // -X:JIT, as below: from the def's AST, which the library keeps the source of for the methods it may specialize
                 var jitContext = declaringScope.RubyContext;
-                if (_jitSource != null && jitContext.RubyOptions.Jit && !IronRuby.Runtime.Jit.JitRuntime.Disabled) {
+                if (_jitSource != null && jitContext.RubyOptions.Jit) {
                     var ast = Precompiled.PrecompiledCode.ParseJitSource(jitContext, _jitSource, _ast, _document != null ? _document.FileName : null);
                     if (ast != null) {
-                        compiled = IronRuby.Runtime.Jit.JitStub.Wrap(compiled, ast, jitContext, declaringModule, declaringScope);
+                        compiled = IronRuby.Runtime.Jit.JitStub.Wrap(compiled, ast, jitContext, declaringModule, declaringScope, null);
                     }
                 }
                 return compiled;
             }
 
             return CompileFromSyntaxTree(_ast, declaringScope, declaringModule);
+        }
+
+        /// <summary>
+        /// The definition-time refinement record a compilation of the body for <paramref name="declaringModule"/>
+        /// is made against; null when it is compiled as if nothing were refined.
+        /// </summary>
+        private StrongBox<RefinementActivation> GetDefinitionRefinements(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            // Only a method defined where something is `using'd pays for the definition-time refinement
+            // record (a scope field written on every call): no call in any other body can see a
+            // refinement, so it is compiled as if nothing were refined.  Should the same `def' run
+            // again where a refinement is active, SetDefinitionRefinements drops this compilation.
+            StrongBox<RefinementActivation> definitionRefinements = null;
+            if (declaringScope.RubyContext.HasRefinements) {
+                lock (this) {
+                    definitionRefinements = GetDefinitionRefinementsNoLock(declaringModule);
+                    // With nothing recorded the scopes follow the declaring scope - what an imported refinement
+                    // method's copy needs (RubyModule.ImportMethod) - but a `def' that ran before anything was
+                    // refined saw nothing, whatever that scope `using's afterwards.
+                    if (definitionRefinements.Value == null && _definedWithoutRefinements && !declaringModule.IsRefinement) {
+                        definitionRefinements.Value = RefinementActivation.Empty;
+                    }
+                    if (definitionRefinements.Value != null && definitionRefinements.Value.IsEmpty) {
+                        definitionRefinements = null;
+                        _compiledWithoutDefinitionRefinements = true;
+                    }
+                }
+            } else {
+                _compiledWithoutDefinitionRefinements = true;
+            }
+            return definitionRefinements;
         }
 
         private Delegate/*!*/ CompileFromSyntaxTree(MethodDeclaration/*!*/ ast, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
@@ -329,15 +384,7 @@ namespace IronRuby.Runtime.Calls {
                 gen.MethodCoverage = _coverage.FindMethod(this, declaringModule);
             }
 
-            // Only programs that refine anything pay for the definition-time refinement record.
-            StrongBox<RefinementActivation> definitionRefinements = null;
-            if (declaringScope.RubyContext.HasRefinements) {
-                lock (this) {
-                    definitionRefinements = GetDefinitionRefinementsNoLock(declaringModule);
-                }
-            } else {
-                _compiledWithoutDefinitionRefinements = true;
-            }
+            StrongBox<RefinementActivation> definitionRefinements = GetDefinitionRefinements(declaringScope, declaringModule);
 
             MSA.LambdaExpression lambda;
             bool timed = PhaseTimer.Enter(PhaseTimer.DefTransform);
@@ -354,7 +401,7 @@ namespace IronRuby.Runtime.Calls {
             // for Coverage keeps them: a typed body has no line counters.
             var context = declaringScope.RubyContext;
             if (context.RubyOptions.Jit && _coverage == null) {
-                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, ast, context, declaringModule, declaringScope);
+                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, ast, context, declaringModule, declaringScope, definitionRefinements);
             }
             return result;
         }

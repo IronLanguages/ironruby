@@ -1,6 +1,6 @@
 #!/bin/sh
 # IronRuby's ahead-of-time compiler, the analogue of JRuby's jrubyc.  The same
-# thing as `./ir.sh -S irubyc`, under the i-prefixed name IronRuby has used
+# thing as `./ironruby -S irubyc`, under the i-prefixed name IronRuby has used
 # since 1.x (see igem.sh for why the prefix is there).
 #
 #   ./irubyc.sh -t /tmp/out app.rb lib/
@@ -10,4 +10,4 @@
 # Ruby sources in the resulting assembly.  The Ruby itself is still compiled by
 # IronRuby at startup -- irubyc does not emit IL for it.  See --help.
 IR_ROOT="$(dirname "$(readlink -f "$0")")"
-exec "$IR_ROOT/ir.sh" -S irubyc "$@"
+exec "$IR_ROOT/ironruby" -S irubyc "$@"

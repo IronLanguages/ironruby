@@ -71,6 +71,15 @@ namespace IronRuby.Runtime.Calls {
             Expression instance = _fieldInfo.IsStatic ? null : Ast.Convert(args.TargetExpression, _fieldInfo.DeclaringType);
 
             if (_isSetter) {
+                if (instance != null && _fieldInfo.DeclaringType.IsValueType) {
+                    // Convert unboxes a struct into a temporary, so the store would change the copy and leave the
+                    // box Ruby holds untouched - silently, and only once the rule is compiled (the interpreter used
+                    // to update the box). Unbox addresses the value inside the box instead.
+                    instance = args.TargetExpression.Type.IsValueType
+                        ? args.TargetExpression
+                        : Ast.Unbox(AstUtils.Convert(args.TargetExpression, typeof(object)), _fieldInfo.DeclaringType);
+                }
+
                 var actualArgs = RubyOverloadResolver.NormalizeArguments(metaBuilder, args, 1, 1);
                 if (!metaBuilder.Error) {
                     metaBuilder.Result = Ast.Assign(

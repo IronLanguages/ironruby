@@ -704,3 +704,7 @@ class Ripper
 end
 
 require 'ripper/sexp_builder'
+# MRI's ripper.rb requires ripper/filter too; rdoc's Ruby parser subclasses Ripper::Filter.
+# An autoload, as filter.rb requires ripper/lexer, which here is this file: required from
+# here it would be a circular require.
+Ripper.autoload :Filter, 'ripper/filter'

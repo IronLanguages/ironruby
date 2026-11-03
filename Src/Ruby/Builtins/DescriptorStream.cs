@@ -90,6 +90,7 @@ namespace IronRuby.Builtins {
         private const short POLLERR = 0x008;
         private const short POLLHUP = 0x010;
         private const int EINTR = 4;
+        private const int EIO = 5;
         private const int EAGAIN = 11;   // == EWOULDBLOCK on Linux
         public const int EPIPE = 32;
         private const int EISDIR = 21;
@@ -103,6 +104,9 @@ namespace IronRuby.Builtins {
         private readonly bool _readable;
         private readonly bool _writable;
         private readonly bool _ownsDescriptor;
+
+        [DllImport("libc", EntryPoint = "isatty")]
+        private static extern int sys_isatty(int fd);
 
         public DescriptorStream(int descriptor, bool readable, bool writable, bool ownsDescriptor) {
             _descriptor = descriptor;
@@ -136,11 +140,44 @@ namespace IronRuby.Builtins {
             throw new NotSupportedException();
         }
 
+        // Not cached: IO#reopen dup2s another file onto the same descriptor, and a stale
+        // answer would send a reopened terminal's timed read into an endless poll.
+        private bool IsTerminal {
+            get { return sys_isatty(_descriptor) == 1; }
+        }
+
+        [DllImport("libc", EntryPoint = "tcgetattr")]
+        private static extern int sys_tcgetattr(int fd, byte[] termios);
+
+        /// <summary>
+        /// A terminal in non-canonical mode with VMIN 0 - IO#getch(min: 0, time: t), or
+        /// IO#raw(min: 0) - makes read(2) itself return empty-handed once VTIME runs out (at
+        /// once when it is 0), and that empty read is the answer: getch returns nil. poll(2)
+        /// knows nothing of VTIME, so waiting for it first would wait for ever.  Linux's
+        /// struct termios only (c_lflag at 12, c_cc at 17); elsewhere this answers false.
+        /// </summary>
+        private bool TimedTerminalRead() {
+            if (!IsTerminal || !RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) {
+                return false;
+            }
+            const int ICANON = 0x0002;
+            const int VMIN = 6;
+            byte[] termios = new byte[60];
+            if (sys_tcgetattr(_descriptor, termios) != 0) {
+                return false;
+            }
+            return (BitConverter.ToUInt32(termios, 12) & ICANON) == 0 && termios[17 + VMIN] == 0;
+        }
+
         public override void Flush() {
             // write(2) has already handed everything to the kernel, but stdio-style flush still
             // reports a reader that disappeared after the last buffered write. poll exposes that
             // state without writing an extra byte.
-            if (_writable && !_closed) {
+            //
+            // Not on a terminal: a pty master reports POLLHUP as soon as the child on the slave
+            // side has gone, which can be a moment after it read the very bytes just written
+            // (cat reading its ^D) - that is no failed write, and MRI raises nothing.
+            if (_writable && !_closed && !IsTerminal) {
                 var fds = new PollFd[1];
                 fds[0].fd = _descriptor;
                 fds[0].events = POLLOUT;
@@ -172,7 +209,7 @@ namespace IronRuby.Builtins {
                     }
                     throw new IOException("poll failed");
                 }
-                if (ready == 0) {
+                if (ready == 0 && !TimedTerminalRead()) {
                     WaitFor(POLLIN);
                     continue;
                 }
@@ -195,6 +232,10 @@ namespace IronRuby.Builtins {
                     if (error == EISDIR) {
                         // a directory opened by TryOpenDirectory
                         throw RubyExceptions.CreateEISDIR("read");
+                    }
+                    if (error == EIO) {
+                        // a pty master whose slave side is all closed - see InputOutputError
+                        throw new InputOutputError();
                     }
                     throw new IOException("read failed", error);
                 }
@@ -319,7 +360,10 @@ namespace IronRuby.Builtins {
                 if (error == EAGAIN) {
                     return -1;
                 }
-                throw new IOException("read failed");
+                if (error == EIO) {
+                    throw new InputOutputError();
+                }
+                throw new IOException("read failed", error);
             }
         }
 

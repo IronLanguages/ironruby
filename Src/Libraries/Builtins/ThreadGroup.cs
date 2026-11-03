@@ -54,6 +54,13 @@ namespace IronRuby.Builtins {
             return self._enclosed;
         }
 
+        // #<ThreadGroup:0x...>, not the CLR type name a CLR-backed object would otherwise show
+        [RubyMethod("inspect")]
+        [RubyMethod("to_s")]
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, [NotNull]ThreadGroup/*!*/ self) {
+            return RubyUtils.ObjectToMutableString(context, self);
+        }
+
         [RubyMethod("list")]
         public static RubyArray/*!*/ List([NotNull]ThreadGroup/*!*/ self) {
             ThreadOps.RubyThreadInfo[] threads = ThreadOps.RubyThreadInfo.Threads;

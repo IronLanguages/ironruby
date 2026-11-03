@@ -87,6 +87,7 @@ module IRB # :nodoc:
     @CONF[:IGNORE_SIGINT] = true
     @CONF[:IGNORE_EOF] = false
     @CONF[:USE_PAGER] = true
+    @CONF[:SHOW_BANNER] = true
     @CONF[:EXTRA_DOC_DIRS] = []
     @CONF[:ECHO] = nil
     @CONF[:ECHO_ON_ASSIGNMENT] = nil
@@ -345,6 +346,8 @@ module IRB # :nodoc:
         opt = $1 || argv.shift
         prompt_mode = opt.upcase.tr("-", "_").intern
         @CONF[:PROMPT_MODE] = prompt_mode
+      when "--nobanner"
+        @CONF[:SHOW_BANNER] = false
       when "--noprompt"
         @CONF[:PROMPT_MODE] = :NULL
       when "--script"

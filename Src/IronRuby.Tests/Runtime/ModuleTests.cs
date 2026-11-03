@@ -349,7 +349,6 @@ nil
         /// first keyword parameter ("syntax error, unexpected label") - the require failed that
         /// way before it could touch the frozen Object. CRuby 4.0.6 prints the same three lines.
         /// </summary>
-        [Options(Prism = true)]
         public void ModuleFreezing1() {
             if (_driver.PartialTrust) return;
 
@@ -736,6 +735,44 @@ puts 1.0.foo.inspect
 FrozenError
 can't modify frozen Float: 1.0
 nil
+");
+        }
+    
+        /// <summary>
+        /// instance_methods(false) lists what the module itself defines: not a prepended module's
+        /// methods, and for a singleton class not the methods of the class behind it.
+        /// </summary>
+        public void InstanceMethods_NotInherited1() {
+            TestOutput(@"
+module P; def pm; end; def cm; end; end
+class C; prepend P; def cm; end; def c2; end; end
+class D < C; def dm; end; end
+o = D.new
+def o.sing; end
+p C.instance_methods(false).sort, D.instance_methods(false), o.singleton_class.instance_methods(false)
+p C.singleton_class.instance_methods(false)
+class C; def self.cs; end; end
+p C.singleton_class.instance_methods(false), D.singleton_class.instance_methods(false)
+module M; def mm; end; private def mp; end; end
+o.extend(M)
+o.singleton_class.class_eval { private def spri; end; protected def spro; end }
+class D; private def dpri; end; protected def dpro; end; end
+p o.public_methods(false).sort, o.private_methods(false).sort, o.protected_methods(false).sort, o.methods(false).sort
+p D.new.public_methods(false), D.new.private_methods(false), D.new.methods(false)
+", @"
+[:c2, :cm]
+[:dm]
+[:sing]
+[]
+[:cs]
+[]
+[:dm, :mm, :sing]
+[:dpri, :mp, :spri]
+[:dpro, :spro]
+[:sing, :spro]
+[:dm]
+[:dpri]
+[]
 ");
         }
     }

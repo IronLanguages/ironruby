@@ -7,11 +7,6 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
-    <!-- present in the tree but never compiled by the legacy csproj -->
-    <Compile Remove="Runtime\Calls\MemberGroupBuilder.cs" />
-    <Compile Remove="Builtins\RubyErrno.cs" />
-  </ItemGroup>
-  <ItemGroup>
     <!-- net8.0 only: net10.0 takes System.Text.Encoding.CodePages from the shared framework,
          where a package reference is never used and only warns (NU1510). -->
     <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" Condition="'$(TargetFramework)' == 'net8.0'" />

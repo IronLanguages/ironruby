@@ -40,10 +40,33 @@ namespace IronRuby.Builtins {
         public bool ExcludeEnd { get { return _excludeEnd; } }
 
         protected Range(SerializationInfo info, StreamingContext context) {
-            _begin = info.GetValue("begin", typeof(object));
-            _end = info.GetValue("end", typeof(object));
-            _excludeEnd = info.GetBoolean("excl");
+            // A record Marshal read may lack any of the three (MRI's range_loader takes what
+            // is there): a missing end is an endless range, a missing excl is inclusive.
+            foreach (SerializationEntry entry in info) {
+                switch (entry.Name) {
+                    case "begin": _begin = entry.Value; break;
+                    case "end": _end = entry.Value; break;
+                    case "excl": _excludeEnd = entry.Value is bool && (bool)entry.Value; break;
+                }
+            }
             _initialized = true;
+            // every Range is frozen, a loaded one included
+            _flags |= FrozenFlag;
+        }
+
+        /// <summary>
+        /// Range#initialize_copy: only an instance that was never initialized (Range.allocate)
+        /// can take another range's data; every other Range is frozen.
+        /// </summary>
+        public void InitializeCopy(RubyContext/*!*/ context, Range/*!*/ other) {
+            if (_initialized) {
+                throw RubyExceptions.CreateObjectFrozenError(context, this);
+            }
+            _begin = other._begin;
+            _end = other._end;
+            _excludeEnd = other._excludeEnd;
+            _initialized = true;
+            // a copy is not frozen: (1..3).dup.frozen? is false in MRI
         }
 
         public void GetObjectData(SerializationInfo info, StreamingContext context) {
@@ -164,13 +187,17 @@ namespace IronRuby.Builtins {
         // MRI's inspect_range: an endless range drops its end and a beginless one drops
         // its begin, but (nil..nil) prints both so that it is not just "..".
         public MutableString/*!*/ Inspect(RubyContext/*!*/ context) {
-            var result = MutableString.CreateMutable(RubyEncoding.Binary);
-            if (_begin != null || _end == null) {
-                result.Append(context.Inspect(_begin));
+            // The result takes the encoding of the first endpoint's inspect, as MRI's does:
+            // US-ASCII for (1..3), UTF-8 for ("a".."c").
+            MutableString first = (_begin != null || _end == null) ? context.Inspect(_begin) : null;
+            MutableString last = (_begin == null || _end != null) ? context.Inspect(_end) : null;
+            var result = MutableString.CreateMutable((first ?? last).Encoding);
+            if (first != null) {
+                result.Append(first);
             }
             result.Append(Separator);
-            if (_begin == null || _end != null) {
-                result.Append(context.Inspect(_end));
+            if (last != null) {
+                result.Append(last);
             }
             return result;
         }

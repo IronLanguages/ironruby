@@ -244,9 +244,11 @@ namespace IronRuby.Compiler.Ast {
             ).Filter(filterVariable = Ast.Parameter(typeof(Exception), "#e"),
                 Methods.FilterBlockException.OpCall(filterScope, filterVariable)
             ).Finally(
-                traceReturn,
-                leaveNestedReturn,
-                Ast.Empty()
+                AstUtils.Try(traceReturn).Finally(
+                    leaveNestedReturn,
+                    Methods.ReleaseScopeFrame.OpCall(scopeVariable),
+                    Ast.Empty()
+                )
             );
 
             // A body that needs its scope but defines no closure over it can reuse the scope of the

@@ -22,6 +22,7 @@ namespace IronRuby.Compiler.Generation {
             add(typeof(global::IronRuby.Builtins.ExistError), typeof(IronRuby_Builtins_ExistError_Subclass));
             add(typeof(global::IronRuby.Builtins.FrozenError), typeof(IronRuby_Builtins_FrozenError_Subclass));
             add(typeof(global::IronRuby.Builtins.IndexError), typeof(IronRuby_Builtins_IndexError_Subclass));
+            add(typeof(global::IronRuby.Builtins.InputOutputError), typeof(IronRuby_Builtins_InputOutputError_Subclass));
             add(typeof(global::IronRuby.Builtins.InvalidByteSequenceError), typeof(IronRuby_Builtins_InvalidByteSequenceError_Subclass));
             add(typeof(global::IronRuby.Builtins.InvalidError), typeof(IronRuby_Builtins_InvalidError_Subclass));
             add(typeof(global::IronRuby.Builtins.LoadError), typeof(IronRuby_Builtins_LoadError_Subclass));
@@ -50,11 +51,13 @@ namespace IronRuby.Compiler.Generation {
             add(typeof(global::System.MemberAccessException), typeof(System_MemberAccessException_Subclass));
             add(typeof(global::System.MissingMethodException), typeof(System_MissingMethodException_Subclass));
             add(typeof(global::System.Net.Sockets.SocketException), typeof(System_Net_Sockets_SocketException_Subclass));
+            add(typeof(global::System.OutOfMemoryException), typeof(System_OutOfMemoryException_Subclass));
             add(typeof(global::System.Runtime.InteropServices.ExternalException), typeof(System_Runtime_InteropServices_ExternalException_Subclass));
             add(typeof(global::System.Security.Cryptography.CryptographicException), typeof(System_Security_Cryptography_CryptographicException_Subclass));
             add(typeof(global::System.Security.SecurityException), typeof(System_Security_SecurityException_Subclass));
             add(typeof(global::System.SystemException), typeof(System_SystemException_Subclass));
             add(typeof(global::System.Text.RegularExpressions.RegexMatchTimeoutException), typeof(System_Text_RegularExpressions_RegexMatchTimeoutException_Subclass));
+            add(typeof(global::System.Threading.Tasks.Task), typeof(System_Threading_Tasks_Task_Subclass));
             add(typeof(global::System.UnauthorizedAccessException), typeof(System_UnauthorizedAccessException_Subclass));
         }
     }
@@ -351,6 +354,43 @@ namespace IronRuby.Compiler.Generation {
 
         public IronRuby_Builtins_IndexError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
             : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
+        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_Builtins_InputOutputError_Subclass : global::IronRuby.Builtins.InputOutputError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_Builtins_InputOutputError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_InputOutputError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_InputOutputError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_InputOutputError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::IronRuby.Builtins.MutableString p0)
+            : base(p0) {
             _immediateClass = rubyClass;
         }
 
@@ -1308,6 +1348,38 @@ namespace IronRuby.Compiler.Generation {
         DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
     }
 
+    public sealed class System_OutOfMemoryException_Subclass : global::System.OutOfMemoryException, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public System_OutOfMemoryException_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public System_OutOfMemoryException_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public System_OutOfMemoryException_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
+        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
     public sealed class System_Runtime_InteropServices_ExternalException_Subclass : global::System.Runtime.InteropServices.ExternalException, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
         private RubyInstanceData _instanceData;
         private RubyClass/*!*/ _immediateClass;
@@ -1495,6 +1567,63 @@ namespace IronRuby.Compiler.Generation {
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class System_Threading_Tasks_Task_Subclass : global::System.Threading.Tasks.Task, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public System_Threading_Tasks_Task_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.Action p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public System_Threading_Tasks_Task_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.Action p0, global::System.Threading.CancellationToken p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public System_Threading_Tasks_Task_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.Action p0, global::System.Threading.Tasks.TaskCreationOptions p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public System_Threading_Tasks_Task_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.Action p0, global::System.Threading.CancellationToken p1, global::System.Threading.Tasks.TaskCreationOptions p2)
+            : base(p0, p1, p2) {
+            _immediateClass = rubyClass;
+        }
+
+        public System_Threading_Tasks_Task_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.Action<global::System.Object> p0, global::System.Object p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public System_Threading_Tasks_Task_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.Action<global::System.Object> p0, global::System.Object p1, global::System.Threading.CancellationToken p2)
+            : base(p0, p1, p2) {
+            _immediateClass = rubyClass;
+        }
+
+        public System_Threading_Tasks_Task_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.Action<global::System.Object> p0, global::System.Object p1, global::System.Threading.Tasks.TaskCreationOptions p2)
+            : base(p0, p1, p2) {
+            _immediateClass = rubyClass;
+        }
+
+        public System_Threading_Tasks_Task_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.Action<global::System.Object> p0, global::System.Object p1, global::System.Threading.CancellationToken p2, global::System.Threading.Tasks.TaskCreationOptions p3)
+            : base(p0, p1, p2, p3) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
+        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
         DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
     }
 

@@ -102,10 +102,11 @@ internal sealed class Host : RubyConsoleHost {
             }
             Console.WriteLine("IsDynamicCodeSupported: " + System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported);
         }
+        // Prism is the only parser; -X:UsePrism, which used to choose it, is accepted and ignored.
         if (Array.IndexOf(args, "-X:UsePrism") >= 0) {
             args = Array.FindAll(args, a => a != "-X:UsePrism");
-            RubyContext.AlternativeParser = IronRuby.Prism.PrismAstBridge.Parse;
         }
+        RubyContext.AlternativeParser = IronRuby.Prism.PrismAstBridge.Parse;
         return new Host().Run(args);
     }
 }

@@ -302,6 +302,11 @@ namespace IronRuby.StandardLibrary.Fiddle {
                 internal MutableString String;
                 internal int Count;
                 internal bool CopyBack;
+                /// <summary>
+                /// The block is a String's from pack("p") (PackedPointers), not the call's: it is
+                /// copied back but not freed, and held here so that it outlives the call.
+                /// </summary>
+                internal PackedPointers.Block Packed;
             }
 
             internal static long ToLong(object value) {
@@ -385,7 +390,21 @@ namespace IronRuby.StandardLibrary.Fiddle {
                 }
 
                 if (value is int || value is BigInteger || value is long) {
-                    return ToLong(value);
+                    long address = ToLong(value);
+                    // An address pack("p") wrote for a String: C gets the String's bytes as they
+                    // are now, and what it writes there goes back into the String, as through the
+                    // String's own buffer in CRuby - reline's Win32API passes its buffers so.
+                    PackedPointers.Block packed = PackedPointers.Find(address);
+                    if (packed != null) {
+                        temporaries.Add(new Temporary {
+                            Block = packed.Address,
+                            String = packed.String,
+                            Count = packed.Refresh(),
+                            CopyBack = !isConst && !packed.String.IsFrozen,
+                            Packed = packed
+                        });
+                    }
+                    return address;
                 }
 
                 var handle = value as Handle;
@@ -431,6 +450,13 @@ namespace IronRuby.StandardLibrary.Fiddle {
 
                 for (int i = 0; i < temporaries.Count; i++) {
                     Temporary t = temporaries[i];
+                    if (t.Packed != null) {
+                        // the String's own block: it stays, for the String and its address
+                        if (t.CopyBack) {
+                            t.Packed.CopyBack(t.Count);
+                        }
+                        continue;
+                    }
                     if (t.CopyBack && t.String != null && !t.String.IsFrozen) {
                         for (int j = 0; j < t.Count; j++) {
                             t.String.SetByte(j, Marshal.ReadByte(t.Block, j));

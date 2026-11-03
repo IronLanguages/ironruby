@@ -454,15 +454,24 @@ r + [c, c]
             Assert(ReferenceEquals(result[3], null));
         }
 
+        /// <summary>
+        /// The cached answer of defined? is a frozen string (MRI 3.0+), so a caller cannot change
+        /// what the next evaluation answers.
+        /// </summary>
         public void ConstantCaching_Unqualified_IsDefined1() {
             TestOutput(@"
 a = []
 2.times { a << defined?(Object) }
-a[0][0] = ?x
-puts a
+p a, a.map(&:frozen?)
+begin
+  a[0][0] = ?x
+rescue => e
+  p e.class
+end
 ", @"
-xonstant
-constant
+[""constant"", ""constant""]
+[true, true]
+FrozenError
 ");
         }
 
@@ -544,6 +553,10 @@ C::D
 ");
         }
 
+        /// <summary>
+        /// defined? of a constant path never calls const_missing, for a missing name in the middle of
+        /// the path either (MRI 1.9+): A::B::C is gone after the remove_const, and the path is undefined.
+        /// </summary>
         public void ConstantCaching_Qualified_IsDefined1() {
             TestOutput(@"
 module A
@@ -585,10 +598,8 @@ end
 ", @"
 
 
-missing: C
-constant
-missing: C
-constant
+
+
 constant
 constant
 ");

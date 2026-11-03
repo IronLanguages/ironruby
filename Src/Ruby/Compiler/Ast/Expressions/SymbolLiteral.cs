@@ -36,7 +36,7 @@ namespace IronRuby.Compiler.Ast {
             : base(value, encoding, location) {
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             Debug.Assert(Value is string);
             return Ast.Constant(gen.Context.CreateSymbol((string)Value, Encoding));
         }

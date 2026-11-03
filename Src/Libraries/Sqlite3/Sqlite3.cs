@@ -1239,5 +1239,95 @@ namespace IronRuby.StandardLibrary.Sqlite3 {
         }
 
         #endregion
+
+        #region Backup
+
+        /// <summary>
+        /// backup.c: SQLite's online backup API, one page batch per #step.  Rails apps copy an
+        /// on-disk database into an in-memory one this way (lobsters' ruby-bench benchmark does
+        /// it before the first request).  The Ruby objects keep both connections reachable while
+        /// a backup is open, which is what SQLite needs: the handles must outlive the backup.
+        /// </summary>
+        [RubyClass("Backup")]
+        public sealed class Backup : RubyObject {
+            private sqlite3_backup _backup;
+            private Database _destination, _source;
+
+            public Backup(RubyClass/*!*/ rubyClass) : base(rubyClass) {
+            }
+
+            protected override RubyObject/*!*/ CreateInstance() {
+                return new Backup(ImmediateClass.NominalClass);
+            }
+
+            private sqlite3_backup/*!*/ Handle {
+                get {
+                    if (_backup == null) {
+                        throw MakePlainError(ImmediateClass.Context, "cannot use a closed backup");
+                    }
+                    return _backup;
+                }
+            }
+
+            [RubyConstructor]
+            public static Backup/*!*/ Create(RubyClass/*!*/ self, [NotNull]Database/*!*/ destination,
+                [DefaultProtocol, NotNull]MutableString/*!*/ destinationName,
+                [NotNull]Database/*!*/ source, [DefaultProtocol, NotNull]MutableString/*!*/ sourceName) {
+                return Initialize(new Backup(self), destination, destinationName, source, sourceName);
+            }
+
+            [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+            public static Backup/*!*/ Initialize(Backup/*!*/ self, [NotNull]Database/*!*/ destination,
+                [DefaultProtocol, NotNull]MutableString/*!*/ destinationName,
+                [NotNull]Database/*!*/ source, [DefaultProtocol, NotNull]MutableString/*!*/ sourceName) {
+                EnsureInitialized();
+                if (source._closed) {
+                    throw RubyExceptions.CreateArgumentError("cannot backup from a closed database");
+                }
+                if (destination._closed) {
+                    throw RubyExceptions.CreateArgumentError("cannot backup to a closed database");
+                }
+
+                sqlite3_backup backup = raw.sqlite3_backup_init(destination._db, destinationName.ToString(), source._db, sourceName.ToString());
+                // SQLitePCL wraps a NULL sqlite3_backup* in an invalid handle rather than null.
+                if (backup == null || backup.IsInvalid) {
+                    int code = raw.sqlite3_errcode(destination._db);
+                    if (code != raw.SQLITE_OK) {
+                        throw destination.Error(code);
+                    }
+                    return self;
+                }
+                self._backup = backup;
+                self._destination = destination;
+                self._source = source;
+                return self;
+            }
+
+            /// <summary>The raw result code: SQLITE_OK while pages remain, SQLITE_DONE at the end.</summary>
+            [RubyMethod("step")]
+            public static int Step(Backup/*!*/ self, [DefaultProtocol]int pages) {
+                return raw.sqlite3_backup_step(self.Handle, pages);
+            }
+
+            [RubyMethod("finish")]
+            public static object Finish(Backup/*!*/ self) {
+                raw.sqlite3_backup_finish(self.Handle);
+                self._backup = null;
+                self._destination = self._source = null;
+                return null;
+            }
+
+            [RubyMethod("remaining")]
+            public static int Remaining(Backup/*!*/ self) {
+                return raw.sqlite3_backup_remaining(self.Handle);
+            }
+
+            [RubyMethod("pagecount")]
+            public static int PageCount(Backup/*!*/ self) {
+                return raw.sqlite3_backup_pagecount(self.Handle);
+            }
+        }
+
+        #endregion
     }
 }

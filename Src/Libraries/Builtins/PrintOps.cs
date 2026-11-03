@@ -42,11 +42,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("print")]
         public static void Print(BinaryOpStorage/*!*/ writeStorage, object self, params object[]/*!*/ args) {
             MutableString fieldSeparator = writeStorage.Context.ItemSeparator;
+            if (fieldSeparator != null && args.Length > 1) {
+                writeStorage.Context.ReportDeprecationWarning("$, is set to non-nil value");
+            }
             for (int i = 0; i < args.Length; i++) {
                 if (i > 0 && fieldSeparator != null) {
                     Protocols.Write(writeStorage, self, fieldSeparator);
                 }
-                Protocols.Write(writeStorage, self, args[i] ?? MutableString.CreateAscii("nil"));
+                // nil prints as an empty string, like every other argument's to_s
+                Protocols.Write(writeStorage, self, args[i] ?? MutableString.CreateEmpty());
             }
 
             MutableString recordSeparator = writeStorage.Context.OutputSeparator;
@@ -57,7 +61,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("print")]
         public static void Print(BinaryOpStorage/*!*/ writeStorage, object self, object value) {
-            Protocols.Write(writeStorage, self, value ?? MutableString.CreateAscii("nil"));
+            Protocols.Write(writeStorage, self, value ?? MutableString.CreateEmpty());
 
             MutableString delimiter = writeStorage.Context.OutputSeparator;
             if (delimiter != null) {
@@ -67,19 +71,20 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("putc")]
         public static MutableString/*!*/ Putc(BinaryOpStorage/*!*/ writeStorage, object self, [NotNull]MutableString/*!*/ val) {
-            if (val.IsEmpty) {
-                throw RubyExceptions.CreateTypeError("can't convert String into Integer");
+            // writes the first character of the string - the whole of it when multibyte;
+            // an empty string writes nothing
+            if (!val.IsEmpty) {
+                Protocols.Write(writeStorage, self, val.GetSlice(0, 1));
             }
-
-            // writes a single byte into the output stream:
-            var c = MutableString.CreateBinary(val.GetBinarySlice(0, 1));
-            Protocols.Write(writeStorage, self, c);
             return val;
         }
 
         // MRI hands back the argument it was given, not the Integer it made of it.
         [RubyMethod("putc")]
         public static object Putc(ConversionStorage<int>/*!*/ fixnumCast, BinaryOpStorage/*!*/ writeStorage, object self, object c) {
+            if (c == null) {
+                throw RubyExceptions.CreateImplicitConversionError("nil", "Integer");
+            }
             int value = Protocols.CastToFixnum(fixnumCast, c);
             MutableString str = MutableString.CreateBinary(1).Append(unchecked((byte)value));
             Protocols.Write(writeStorage, self, str);
@@ -154,11 +159,8 @@ namespace IronRuby.Builtins {
 
         internal static void ReportWarning(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion, object message) {
             if (writeStorage.Context.Verbose != null) {
-                var output = writeStorage.Context.StandardErrorOutput;
-                // MRI: unlike Kernel#puts this outputs \n even if the message ends with \n:
-                var site = writeStorage.GetCallSite("write", 1);
-                site.Target(site, output, PrintOps.ToPrintedString(tosConversion, message));
-                PrintOps.PutsEmptyLine(writeStorage, output);
+                // through the runtime's warning sink, so it carries "file:line: warning: " like rb_warn
+                writeStorage.Context.ReportWarning(PrintOps.ToPrintedString(tosConversion, message).ToString());
             }
         }
 

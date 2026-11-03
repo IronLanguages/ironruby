@@ -14,8 +14,30 @@ env:
   DOTNET_NOLOGO: 1
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  # The prism revision Src/Prism/Generated was generated from (Src/Prism/README.md), the one
+  # the vendored Ruby half of prism in Src/StdLib belongs to; release.yml builds from the same
+  # one. Move both together with Src/Prism/Generated when following prism.
+  PRISM_REF: 30a255539e81842b2b7f12b4fd3c62a7b4d64165
+  # The DLR revision Build/dlr-patches applies to; release.yml builds from the same one, so a
+  # release can be rebuilt and an upstream change only arrives when this is moved on purpose.
+  # Move both together, after checking the patches still apply.
+  DLR_REF: 922753f8ccbf5186c15899116d5a407b6b1723fb
+  # ruby/spec and mspec for the spec job, pinned so a result moves only with IronRuby's own
+  # changes, not with whatever lands upstream on the day.
+  SPEC_REF: dda28d049100033a8b7050eacbb35957a2eb0c00
+  MSPEC_REF: b79c65ed28b00f0869ad82b0e3dceef0d943cd58
 
 jobs:
+  # The repository holds no programs - no .exe, .dll, .so or other binary that runs - so all
+  # of it can be read; Util/check-no-executables.rb says why and how it tells them apart.
+  no-executables:
+    name: no programs in the repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check every tracked file
+        run: ruby Util/check-no-executables.rb
+
   build-and-test:
     name: ${{ matrix.os }} ${{ matrix.tfm }}
     runs-on: ${{ matrix.os }}
@@ -67,12 +89,17 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: IronLanguages/dlr
+          ref: ${{ env.DLR_REF }}
           path: dlr
 
+      # Pinned to the revision Src/Prism/Generated was generated from (Src/Prism/README.md), as
+      # release.yml pins it: a libprism from any other revision may serialize differently from
+      # what the C# loader and the vendored Prism::Serialize read.
       - name: Check out prism
         uses: actions/checkout@v7
         with:
           repository: ruby/prism
+          ref: ${{ env.PRISM_REF }}
           path: prism
 
       # IronRuby uses DLR APIs that are not upstream yet; the patches that add
@@ -141,6 +168,31 @@ jobs:
           fi
           ls -l build
 
+      # cmark-gfm for markly (Src/Libraries/Markly), compiled from the markly gem's own
+      # sources, pinned by SHA-256. On Windows the MSYS2 gcc that links libprism
+      # links it too.
+      - name: Build libmarkly_cmark
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          bash Util/build-markly.sh
+          ls -l Src/Libraries/Markly/native/build
+
+      # librbs: the rbs gem's parser behind rbs_extension (Src/Libraries/Rbs). The
+      # script downloads the gem pinned by SHA-256, checks the committed bridge
+      # against its config.yml, and compiles src/ with the shim - with the MSYS2
+      # gcc on Windows, as libprism is, which yields librbs.dll.
+      - name: Build librbs
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          Util/build-librbs.sh
+          ls -l Src/Libraries/Rbs/native/build
+
       - name: Generate the C# prism loader
         working-directory: ironruby/Src/Prism
         run: ruby generate.rb
@@ -172,12 +224,46 @@ jobs:
           require "csv"
           require "rake"
           puts "rexml #{REXML::VERSION}, csv #{CSV::VERSION}, rake #{Rake::VERSION}"
+
+          # markly's extension: C# over the native cmark-gfm built above.
+          require "markly/markly"
+          parser = Markly::Parser.new(0)
+          parser.enable(:strikethrough)
+          html = parser.parse("*md* ~~x~~")._render_html(0, [:strikethrough]).strip
+          puts "markly: #{html}"
+          raise "markly rendered #{html.inspect}" unless html == "<p><em>md</em> <del>x</del></p>"
+          RUBY
+          # ironruby is the launcher, as jruby is JRuby's; RbConfig.ruby has to be a file,
+          # since libraries spawn it, and ir is the short name, which has to keep working.
+          cat > names.rb <<'RUBY'
+          abort "ruby_install_name: #{RbConfig::CONFIG["ruby_install_name"]}" unless RbConfig::CONFIG["ruby_install_name"] == "ironruby"
+          abort "no #{RbConfig.ruby}" unless File.file?(RbConfig.ruby)
+          puts "#{RbConfig.ruby} exists"
+          RUBY
+          # ironrubyw.exe, as rubyw.exe: the same interpreter as a Windows GUI program (PE
+          # subsystem 2), so it gets no console window. It still writes to a pipe it is given.
+          # (A heredoc's end has to start its line, so this one is not inside the if.)
+          cat > subsystem.rb <<'RUBY'
+          data = File.binread(ARGV[0], 4096)
+          subsystem = data[data[0x3c, 4].unpack1("V") + 24 + 68, 2].unpack1("v")
+          abort "#{ARGV[0]}: subsystem #{subsystem}" unless subsystem == 2
           RUBY
           if [ "$RUNNER_OS" = Windows ]; then
-            cmd //c ir.cmd smoke.rb
-            cmd //c ir.cmd Util/windows-desktop-check.rb
+            cmd //c ironruby.cmd smoke.rb
+            cmd //c ironruby.cmd names.rb
+            cmd //c ir.cmd -e "puts RUBY_ENGINE"
+            # irb loads reline, which on Windows looks up Win32 functions through Fiddle by
+            # their names without the A suffix; 4.0.2 died there, at a pipe as at a console.
+            printf 'puts 6 * 7\n' | cmd //c iirb.cmd | grep -x 42
+            cmd //c ironruby.cmd Util/windows-desktop-check.rb
+            rubyw="Src/Console/bin/Debug/$TFM/ironrubyw.exe"
+            ruby subsystem.rb "$rubyw"
+            "$rubyw" -e 'require "set"; puts "ironrubyw: #{RUBY_ENGINE}"' | grep -x "ironrubyw: ironruby"
           else
-            ./ir.sh smoke.rb
+            ./ironruby smoke.rb
+            ./ironruby names.rb
+            ./ir.sh -e 'puts RUBY_ENGINE'
+            printf 'puts 6 * 7\n' | ./iirb.sh | grep -x 42
           fi
 
       # IO#write_nonblock on a socket claims only what the kernel took (#14). On Linux the
@@ -193,6 +279,24 @@ jobs:
           else
             ./ir.sh Util/socket-write-nonblock-check.rb
           fi
+
+      # Src/Samples/Linq/101samples.rb, the port of Microsoft's 101 LINQ Samples, has to print
+      # exactly what 101samples.expected beside it says. Nothing ran it before, and it stopped
+      # parsing without anyone noticing. Its stderr counts too, so a warning fails the step.
+      # A change to the samples on purpose regenerates the file with
+      # `./ir.sh Src/Samples/Linq/101samples.rb > Src/Samples/Linq/101samples.expected 2>&1`.
+      - name: LINQ samples
+        timeout-minutes: 2
+        working-directory: ironruby
+        run: |
+          status=0
+          if [ "$RUNNER_OS" = Windows ]; then
+            cmd //c ir.cmd Src/Samples/Linq/101samples.rb > linq.txt 2>&1 || status=$?
+          else
+            ./ir.sh Src/Samples/Linq/101samples.rb > linq.txt 2>&1 || status=$?
+          fi
+          tr -d '\r' < linq.txt | diff -u Src/Samples/Linq/101samples.expected -
+          exit $status
 
       # Samples/Notepad, a Windows Forms application, driven by its own test with nobody
       # at the keyboard. A dialog that never closes would wait forever, hence the limit.
@@ -313,8 +417,6 @@ jobs:
           SWEEP="Src/Prism/bin/Debug/$TFM/IronRuby.Prism$EXE"
           "$SWEEP" --sweep Src/StdLib/ruby/4.0 | tee sweep40.txt
           grep -q '0 failed' sweep40.txt
-          "$SWEEP" --sweep Src/StdLib/ruby/1.9.1 | tee sweep19.txt
-          grep -q '0 failed' sweep19.txt
           "$SWEEP" --sweep Src/StdLib/ruby/gems | tee sweepgems.txt
           grep -q '0 failed' sweepgems.txt
 
@@ -326,6 +428,13 @@ jobs:
           [ "$RUNNER_OS" = Windows ] && EXE=.exe
           cd "Src/IronRuby.Tests/bin/Debug/$TFM"
           "./IronRuby.Tests$EXE" > results.txt 2>&1 || true
+          # A run that died - an access violation in native code ends the process - leaves no
+          # "> FAILED" line to count; one that finished ends in PASSED or in its Repro line.
+          if ! grep -qE 'PASSED.?$|^Repro: ' results.txt; then
+            echo "::error::the test run did not finish"
+            tail -n 40 results.txt
+            exit 1
+          fi
           failures=$(grep -c '^> FAILED' results.txt || true)
           echo "failure lines: $failures (baseline $BASELINE)"
           echo "::group::failing tests"
@@ -365,18 +474,22 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: IronLanguages/dlr
+          ref: ${{ env.DLR_REF }}
           path: dlr
       - uses: actions/checkout@v7
         with:
           repository: ruby/prism
+          ref: ${{ env.PRISM_REF }}
           path: prism
       - uses: actions/checkout@v7
         with:
           repository: ruby/spec
+          ref: ${{ env.SPEC_REF }}
           path: ironruby/spec
       - uses: actions/checkout@v7
         with:
           repository: ruby/mspec
+          ref: ${{ env.MSPEC_REF }}
           path: ironruby/mspec
 
       - name: Patch the DLR

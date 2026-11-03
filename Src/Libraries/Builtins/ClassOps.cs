@@ -99,7 +99,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("attached_object")]
         public static object GetAttachedObject(RubyClass/*!*/ self) {
             if (!self.IsSingletonClass || self.IsDummySingletonClass) {
-                throw RubyExceptions.CreateTypeError("`{0}' is not a singleton class", self.GetNonNullName(self.Context));
+                throw RubyExceptions.CreateTypeError("'{0}' is not a singleton class", self.GetNonNullName(self.Context));
             }
             return self.SingletonClassOf;
         }

@@ -35,6 +35,9 @@ namespace IronRuby.Prism {
     /// Deserializer for prism's binary AST format (docs/serialization.md). The
     /// per-node loading switch lives in PrismLoader.Generated.cs, produced by
     /// generate.rb from prism's config.yml — the same scheme JRuby uses.
+    /// prism writes the tree in post-order, children before their parent, so
+    /// the loader builds it bottom-up on an explicit stack (LoadNodes) rather
+    /// than by recursion: no tree is too deep to load.
     /// </summary>
     public sealed partial class PrismLoader {
         private readonly byte[]/*!*/ _buffer;
@@ -42,9 +45,28 @@ namespace IronRuby.Prism {
         private uint _cpoolBase;
         private string[] _constants;
 
-        // Lazy method bodies: a DefNode's body is skimmed rather than built (prism prefixes each
-        // DefNode with its length for this) and loaded from the buffer when it is asked for.
+        // Lazy method bodies: a DefNode's body is skimmed rather than built (prism puts the byte
+        // lengths of a DefNode's children ahead of them for this) and loaded from the buffer when it
+        // is asked for.
         private readonly bool _lazyDefBodies;
+
+        // Nodes built and not yet popped by their parent's record (LoadNodes).
+        private PmNode[] _stack = new PmNode[64];
+        private int _stackSize;
+
+        // The DefNode bodies waiting to be skipped (LoadNodes): where each starts and how long it is.
+        // The innermost DefNode's body comes first in the buffer, and its marker last, so the next
+        // body to reach is always the top one.
+        private int[] _lazyStarts = new int[8];
+        private int[] _lazyLengths = new int[8];
+        private int _lazyCount;
+
+        // The Contents* bits of each subtree skimmed and not yet popped by its parent (SkimNodes).
+        private uint[] _skimStack = new uint[64];
+        private int _skimSize;
+
+        // An absent node? child on the skim stack.
+        private const uint SkimAbsent = 0x80000000u;
 
         // What the body being skimmed holds, as Contents* bits.
         private uint _contents;
@@ -86,9 +108,13 @@ namespace IronRuby.Prism {
                 int saved = _pos;
                 _pos = node.DeferredBodyOffset;
                 try {
-                    return LoadOptionalNode();
+                    return LoadNodes(node.DeferredBodyOffset + node.DeferredBodyLength);
                 } finally {
                     _pos = saved;
+                    // only a malformed buffer leaves anything behind; don't let it poison the next load
+                    _stackSize = 0;
+                    _lazyCount = 0;
+                    _skimSize = 0;
                 }
             }
         }
@@ -109,6 +135,7 @@ namespace IronRuby.Prism {
             var result = new PrismParseResult();
             result.EncodingName = LoadString();
             result.StartLine = LoadVarSInt();
+            _pos += 8; // checksum of the source (pm_parser_checksum), which nothing here needs
 
             uint newlineCount = LoadVarUInt();
             for (uint i = 0; i < newlineCount; i++) LoadVarUInt();
@@ -151,7 +178,8 @@ namespace IronRuby.Prism {
             uint cpoolSize = LoadVarUInt();
             _constants = new string[cpoolSize];
 
-            result.Root = LoadNode();
+            // The nodes run up to the constant pool, the root last.
+            result.Root = LoadNodes((int)_cpoolBase);
             return result;
         }
 
@@ -212,18 +240,48 @@ namespace IronRuby.Prism {
             return LoadLocation();
         }
 
-        private PmNode LoadOptionalNode() {
-            if (_buffer[_pos] == 0) {
-                _pos++;
-                return null;
-            }
-            return LoadNode();
+        // ---- the node stack (see LoadNodes) ----
+
+        private void Push(PmNode node) {
+            if (_stackSize == _stack.Length) Array.Resize(ref _stack, _stack.Length * 2);
+            _stack[_stackSize++] = node;
         }
 
-        private PmNode/*!*/[]/*!*/ LoadNodeList() {
-            var nodes = new PmNode[LoadVarUInt()];
-            for (int i = 0; i < nodes.Length; i++) nodes[i] = LoadNode();
+        private PmNode Pop() {
+            if (_stackSize == 0) throw new InvalidOperationException("Invalid prism serialization (node stack underflow)");
+            PmNode node = _stack[--_stackSize];
+            _stack[_stackSize] = null;
+            return node;
+        }
+
+        // The top count nodes, in the order they were pushed: a node[] field's elements.
+        private PmNode/*!*/[]/*!*/ PopList(int count) {
+            if (count > _stackSize) throw new InvalidOperationException("Invalid prism serialization (node stack underflow)");
+            var nodes = new PmNode[count];
+            _stackSize -= count;
+            Array.Copy(_stack, _stackSize, nodes, 0, count);
+            Array.Clear(_stack, _stackSize, count);
             return nodes;
+        }
+
+        private void PushLazy(int start, int length) {
+            if (_lazyCount == _lazyStarts.Length) {
+                Array.Resize(ref _lazyStarts, _lazyCount * 2);
+                Array.Resize(ref _lazyLengths, _lazyCount * 2);
+            }
+            _lazyStarts[_lazyCount] = start;
+            _lazyLengths[_lazyCount] = length;
+            _lazyCount++;
+        }
+
+        /// <summary>
+        /// Stands in on the node stack for a DefNode body that was skimmed rather than built, until
+        /// the DefNode's record takes it off.
+        /// </summary>
+        private sealed class DeferredBody : PmNode {
+            public int Offset;
+            public int BodyLength;
+            public uint Contents;
         }
 
         private string/*!*/ LoadConstant() {
@@ -253,19 +311,30 @@ namespace IronRuby.Prism {
             return result;
         }
 
-        // ---- skimming (see SkimNode) ----
+        // ---- skimming (see SkimNodes) ----
 
-        private void SkimOptionalNode() {
-            if (_buffer[_pos] == 0) {
-                _pos++;
-                return;
-            }
-            SkimNode();
+        private void PushSkim(uint contents) {
+            if (_skimSize == _skimStack.Length) Array.Resize(ref _skimStack, _skimStack.Length * 2);
+            _skimStack[_skimSize++] = contents;
         }
 
-        private void SkimNodeList() {
-            uint count = LoadVarUInt();
-            for (uint i = 0; i < count; i++) SkimNode();
+        private uint PeekSkim() {
+            if (_skimSize == 0) throw new InvalidOperationException("Invalid prism serialization (node stack underflow)");
+            return _skimStack[_skimSize - 1];
+        }
+
+        // What one child holds, absent or not.
+        private uint PopSkim() {
+            if (_skimSize == 0) throw new InvalidOperationException("Invalid prism serialization (node stack underflow)");
+            return _skimStack[--_skimSize] & ~SkimAbsent;
+        }
+
+        // What the top count children hold between them.
+        private uint PopSkim(int count) {
+            if (count > _skimSize) throw new InvalidOperationException("Invalid prism serialization (node stack underflow)");
+            uint contents = 0;
+            for (int i = 0; i < count; i++) contents |= _skimStack[--_skimSize];
+            return contents & ~SkimAbsent;
         }
 
         private void SkipString() {

@@ -140,16 +140,13 @@ module Prism
 
     # Upstream maps the file through pm_source_mapped_init, which raises
     # Errno::EISDIR for a directory and a SystemCallError otherwise; File.binread
-    # raises the same errors.  Like upstream's PrismSource.with_file, a Pathname
-    # (or anything else with to_path or to_str) is accepted and the String it
-    # stands for is what goes into options[:filepath].
+    # raises the same errors.  Like upstream's PrismSource.with_file, the path
+    # goes through File.path - which accepts a Pathname (or anything else with
+    # to_path or to_str) and rejects a path holding a NUL byte - and the String
+    # it stands for is what goes into options[:filepath].
     def read_file(filepath, options)
-      unless filepath.is_a?(String)
-        filepath = filepath.to_path if filepath.respond_to?(:to_path)
-        filepath = filepath.to_str if filepath.respond_to?(:to_str)
-      end
+      filepath = File.path(filepath)
       options[:filepath] = filepath
-      raise TypeError unless filepath.is_a?(String)
       File.binread(filepath)
     end
 
@@ -292,9 +289,9 @@ module Prism
       case version
       when "current"
         version_string_to_number(RUBY_VERSION) || raise(CurrentVersionError, RUBY_VERSION)
-      when "latest", nil
+      when "latest"
         0 # Handled in pm_parser_init
-      when "nearest"
+      when "nearest", nil
         dump = version_string_to_number(RUBY_VERSION)
         return dump if dump
 
@@ -448,6 +445,11 @@ module Prism
       # Mirrors the C extension's StringQuery::method_name? method.
       def method_name?(string)
         query("method_name", string)
+      end
+
+      # Mirrors the C extension's StringQuery::keyword? method.
+      def keyword?(string)
+        query("keyword", string)
       end
 
       private

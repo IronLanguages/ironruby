@@ -58,4 +58,11 @@ namespace IronRuby.Builtins {
     public static class FlagEnumeration {
         // stub
     }
+
+    /// <summary>
+    /// Represents a module mixed into every CLR class that no library defines (hash patterns over CLR members).
+    /// </summary>
+    public static class ClrPatternMatching {
+        // stub
+    }
 }

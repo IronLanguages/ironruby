@@ -76,6 +76,40 @@ namespace IronRuby.Runtime.Calls {
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
             return ArrayUtils.ConvertAll(MethodBases, (o) => o.ReflectionInfo);
         }
+
+        /// <summary>
+        /// A CLR method that is not overloaded has a parameter list to describe, with names - the names
+        /// keywords bind to, in IronRuby's snake_case form: [[:req, :name], [:opt, :greeting], [:rest, :args]].
+        /// Out parameters are results, not arguments, and are left out. An overloaded method keeps the
+        /// approximation derived from its arity.
+        /// </summary>
+        public override RubyArray/*!*/ GetRubyParameterArray() {
+            if (MethodBases.Length != 1 || DeclaringModule == null) {
+                return base.GetRubyParameterArray();
+            }
+
+            var context = DeclaringModule.Context;
+            var method = MethodBases[0];
+            var result = new RubyArray();
+            for (int i = RubyOverloadResolver.GetHiddenParameterCount(method, CallConvention); i < method.ParameterCount; i++) {
+                var parameter = method.Parameters[i];
+                if (parameter.IsOutParameter()) {
+                    continue;
+                }
+
+                string kind = method.IsParamArray(i) ? "rest" : parameter.IsMandatory() ? "req" : "opt";
+                string name = parameter.Name;
+                if (string.IsNullOrEmpty(name)) {
+                    result.Add(new RubyArray { context.CreateAsciiSymbol(kind) });
+                } else {
+                    result.Add(new RubyArray {
+                        context.CreateAsciiSymbol(kind),
+                        context.CreateSymbol(RubyUtils.TryMangleName(name) ?? name, RubyEncoding.UTF8)
+                    });
+                }
+            }
+            return result;
+        }
         
         #region Dynamic Call
 

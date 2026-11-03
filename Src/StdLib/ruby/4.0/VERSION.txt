@@ -12,9 +12,13 @@ shim elsewhere on the load path cannot shadow them):
                           inline, which is exactly equivalent
   uri/mailto.rb         - one non-recursive \g<hfield> reference expanded
                           inline, which is exactly equivalent
+  irb/startup_message.rb - the banner names the interpreter running,
+                          "IronRuby 4.0.2 (4.0.0)", not "Ruby 4.0.0"
 
 Added from the gems MRI 4.0 ships (lib/ copied verbatim):
-  irb.rb, irb/       - irb 1.16.0 (default gem), with its LICENSE.txt
+  irb.rb, irb/       - irb 1.18.0, with its LICENSE.txt.  MRI 4.0.9 ships
+                       1.16.0; 1.18.0 is the release from rubygems.org,
+                       for its startup banner
   reline.rb, reline/ - reline 0.6.3, irb's line editor, with COPYING, BSDL and
                        license_of_rb-readline
   rdoc.rb, rdoc/     - rdoc 7.0.4, which irb's `show_doc` and its completion

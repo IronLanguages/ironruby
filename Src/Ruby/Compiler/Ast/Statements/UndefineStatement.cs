@@ -50,7 +50,7 @@ namespace IronRuby.Compiler.Ast {
             return Ast.Block(result);
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return Ast.Block(Transform(gen), AstUtils.Constant(null));
         }
     }

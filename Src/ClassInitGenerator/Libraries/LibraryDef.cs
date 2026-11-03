@@ -43,6 +43,11 @@ internal class LibraryDef {
     // TODO: store defs into LibraryDef
     private IDictionary<Type, ModuleDef> _moduleDefs = new SortedDictionary<Type, ModuleDef>(new TypeComparer()); // sorted to improve diff quality
     private IDictionary<Type, ModuleDef> _traits = new Dictionary<Type, ModuleDef>();
+
+    // The top-level Ruby name another library of the assembly gives a CLR type it extends -
+    // [RubyClass("Thread", Extends = typeof(Thread))] in the builtins - so that a class this library
+    // defines in its own unnamed extension of the type is Thread::Mutex, not System::Threading::Thread::Mutex.
+    private readonly Dictionary<Type, string> _extendedTypeNames = new Dictionary<Type, string>();
     private Dictionary<Type, string> _moduleRefs = new Dictionary<Type, string>();
     private Dictionary<Type, string> _classRefs = new Dictionary<Type, string>();
 
@@ -310,6 +315,21 @@ internal class LibraryDef {
     public void ReflectTypes(Type[]/*!*/ allTypes) {
 
         foreach (Type trait in allTypes) {
+            if (trait.DeclaringType != null) {
+                continue;
+            }
+            try {
+                foreach (RubyModuleAttribute module in trait.GetCustomAttributes(typeof(RubyModuleAttribute), false)) {
+                    if (module.Extends != null && module.Name != null && module.DefineIn == null && !_extendedTypeNames.ContainsKey(module.Extends)) {
+                        _extendedTypeNames.Add(module.Extends, module.Name);
+                    }
+                }
+            } catch (Exception) {
+                // reported below, for the library the type belongs to
+            }
+        }
+
+        foreach (Type trait in allTypes) {
             if (trait.Namespace == null || !trait.Namespace.StartsWith(_namespace)) {
                 continue;
             }
@@ -478,6 +498,11 @@ internal class LibraryDef {
                 def.Id = "__Singleton_" + def.QualifiedName;
             } else {
                 def.Id = def.QualifiedName.Replace(':', '_');
+                // System::IComparable is the name of both IComparable and IComparable<T>: the generic arity keeps
+                // the initializer methods of the two apart
+                if (def.IsExtension && def.Extends.IsGenericTypeDefinition) {
+                    def.Id += "_" + def.Extends.GetGenericArguments().Length;
+                }
             }
         }
 
@@ -530,7 +555,9 @@ internal class LibraryDef {
     private void SetQualifiedName(ModuleDef/*!*/ def) {
         if (def.QualifiedName == null) {
             if (def.IsExtension) {
-                def.QualifiedName = RubyContext.GetQualifiedNameNoLock(def.Extends, null, true);
+                string name;
+                def.QualifiedName = _extendedTypeNames.TryGetValue(def.Extends, out name) ? name :
+                    RubyContext.GetQualifiedNameNoLock(def.Extends, null, true);
             } else if (def.DeclaringModule == null) {
                 def.QualifiedName = def.SimpleName;
             } else {
@@ -907,7 +934,7 @@ internal class LibraryDef {
         Array.Sort(worklist, delegate(ModuleDef x, ModuleDef y) {
             // if the dependency order is the same, fall back to the type name
             if (x.DependencyOrder == y.DependencyOrder) {
-                return x.QualifiedName.CompareTo(y.QualifiedName);
+                return CompareNames(x, y);
             }
             return x.DependencyOrder - y.DependencyOrder;
         });
@@ -1104,11 +1131,18 @@ internal class LibraryDef {
         }
     }
 
+    // Array.Sort is not stable, and a generic type definition has the Ruby name of its non-generic namesake
+    // (System::IComparable): the id breaks the tie so that the output does not depend on what else is defined.
+    private static int CompareNames(ModuleDef/*!*/ x, ModuleDef/*!*/ y) {
+        int result = x.QualifiedName.CompareTo(y.QualifiedName);
+        return (result != 0) ? result : String.CompareOrdinal(x.Id, y.Id);
+    }
+
     private void GenerateTraitInitializations(IDictionary<Type, ModuleDef>/*!*/ traitDefs) {
         // Sort the items before we generate them to improve diff quality
         ModuleDef[] worklist = new ModuleDef[traitDefs.Count];
         traitDefs.Values.CopyTo(worklist, 0);
-        Array.Sort(worklist, (x, y) => x.QualifiedName.CompareTo(y.QualifiedName));
+        Array.Sort(worklist, CompareNames);
 
         foreach (ModuleDef moduleDef in worklist) {
             GenerateTraitInitialization(moduleDef);

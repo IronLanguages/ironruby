@@ -723,7 +723,8 @@ namespace IronRuby.StandardLibrary.Date {
         #region comparison
 
         [RubyMethod("<=>")]
-        public static object Compare(RubyDate/*!*/ self, object other) {
+        public static object Compare(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage,
+            BinaryOpStorage/*!*/ quo, RubyDate/*!*/ self, object other) {
             var otherDate = other as RubyDate;
             if (otherDate != null) {
                 return ScriptingRuntimeHelpers.Int32ToObject(self.Ajd.CompareTo(otherDate.Ajd));
@@ -739,7 +740,16 @@ namespace IronRuby.StandardLibrary.Date {
                 }
                 return ScriptingRuntimeHelpers.Int32ToObject(self.Ajd.ToDouble().CompareTo(d));
             }
-            return null;
+            // cmp_gen: any other Numeric (a Rational, a BigDecimal) compares with the ajd.
+            RubyContext context = comparisonStorage.Context;
+            if (context.IsKindOf(other, context.GetClass(typeof(IronRuby.Builtins.Numeric)))) {
+                var site = comparisonStorage.GetCallSite("<=>");
+                return site.Target(site, MakeRational(quo, self.Ajd), other);
+            }
+            // ... and it ends in rb_num_coerce_cmp: anything else is asked to
+            // #coerce.  ActiveSupport::Duration answers that way, so `time_with_zone <= 1.hour`
+            // (through DateTime#<=>) compares instead of failing.
+            return Protocols.CoerceAndCompare(coercionStorage, comparisonStorage, self, other);
         }
 
         [RubyMethod("===")]

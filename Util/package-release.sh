@@ -7,8 +7,9 @@
 #
 # The archive keeps the source tree's layout - the launchers at the top, the build in
 # Src/Console/bin/Release/<tfm>, the standard library in Src/StdLib - so ir.sh/ir.cmd,
-# igem, irb and irubyc work from the unpacked directory exactly as they do in a
-# checkout (ir.sh picks the Release build when there is no Debug one).
+# igem, iirb and irubyc work from the unpacked directory exactly as they do in a
+# checkout (ir.sh picks the Release build when there is no Debug one). There is no irb
+# or gem launcher: on a PATH those names are CRuby's.
 #
 # The build is self-contained, so it runs on a machine with no .NET installed, and
 # ReadyToRun, so IronRuby's own assemblies start as native code (see publish-r2r.sh).
@@ -21,8 +22,9 @@
 # irubyc still needs the .NET SDK, as it does from a checkout.
 #
 # It needs what a normal build needs: ../dlr with Build/dlr-patches applied, and
-# ../prism/build holding the libprism for this platform. The RID must be this
-# machine's: the archive carries this machine's libprism.
+# ../prism/build holding the libprism for this platform, and the librbs that
+# Util/build-librbs.sh builds (without it `require "rbs"` raises LoadError). The RID
+# must be this machine's: the archive carries this machine's libprism and librbs.
 set -euo pipefail
 
 RID=${1:?usage: Util/package-release.sh RID [OUTDIR]}
@@ -32,6 +34,9 @@ OUT=$(mkdir -p "${2:-dist}" && cd "${2:-dist}" && pwd)
 VERSION=${IR_VERSION:-$(sed -n 's/.*DisplayVersion = "\(.*\)";.*/\1/p' "$IR_ROOT/Src/Ruby/CurrentVersion.cs")}
 NAME="ironruby-$VERSION-$RID"
 STAGE="$OUT/$NAME"
+
+# A release is CI's build: not one from a ../dlr that has fallen behind Build/dlr-patches.
+"$IR_ROOT/Util/check-dlr-patches.sh" "$IR_ROOT/../dlr/src/core"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/Src"
@@ -46,6 +51,8 @@ fi
 # take as compiled and ship without the composite image: so start and end with it empty.
 r2r_obj="$IR_ROOT/Src/Console/obj/Release/$IR_TFM/$RID/R2R"
 rm -rf "$r2r_obj"
+# also when the publish fails part way (set -e): stale composite stubs would disable R2R in the next publish
+trap 'rm -rf "$r2r_obj"' EXIT
 dotnet publish "$IR_ROOT/Src/Console/Ruby.Console.csproj" \
   -c Release -r "$RID" --self-contained true -f "$IR_TFM" \
   -p:IronRubyTargetFrameworks="$IR_TFM" -p:PublishReadyToRun=true \
@@ -55,8 +62,8 @@ rm -rf "$r2r_obj"
 rm -f "$STAGE/Src/Console/bin/Release/$IR_TFM"/*.pdb
 
 case "$RID" in
-  win-*) launchers=(ir.cmd irb.cmd igem.cmd iirb.cmd irubyc.cmd) ;;
-  *)     launchers=(ir.sh irb.sh igem.sh iirb.sh irubyc.sh) ;;
+  win-*) launchers=(ironruby.cmd ir.cmd igem.cmd iirb.cmd irubyc.cmd) ;;
+  *)     launchers=(ironruby ir.sh igem.sh iirb.sh irubyc.sh) ;;
 esac
 for f in "${launchers[@]}" README.md; do
   cp "$IR_ROOT/$f" "$STAGE/"
@@ -145,11 +152,24 @@ esac
 
 # A quick check that the unpacked tree starts, before it is archived - and on Windows
 # that Windows Forms and WPF load from it, which a missing framework reference breaks
-# without breaking anything else.
+# without breaking anything else. iirb has to start too: it loads reline, which on Windows
+# looks up Win32 functions through Fiddle, and 4.0.2's died there.
+# One command per line: set -e does not stop at a failure on the left of && - nor at a
+# case whose last && list failed that way - so a chain would let a broken tree through.
 case "$RID" in
-  win-*) (cd "$STAGE" && cmd //c ir.cmd -e 'puts RUBY_DESCRIPTION' &&
-          cmd //c ir.cmd "$(cygpath -w "$IR_ROOT/Util/windows-desktop-check.rb")") ;;
-  *)     "$STAGE/ir.sh" -e 'puts RUBY_DESCRIPTION' ;;
+  win-*)
+    test -f "$STAGE/Src/Console/bin/Release/$IR_TFM/ironrubyw.exe"
+    (cd "$STAGE"
+     cmd //c ironruby.cmd -e 'puts RUBY_DESCRIPTION'
+     cmd //c ir.cmd -e 'puts RUBY_ENGINE'
+     printf 'puts 6 * 7\n' | cmd //c iirb.cmd | grep -x 42
+     cmd //c ir.cmd "$(cygpath -w "$IR_ROOT/Util/windows-desktop-check.rb")")
+    ;;
+  *)
+    "$STAGE/ironruby" -e 'puts RUBY_DESCRIPTION'
+    "$STAGE/ir.sh" -e 'puts RUBY_ENGINE'
+    printf 'puts 6 * 7\n' | "$STAGE/iirb.sh" | grep -x 42
+    ;;
 esac
 
 # The startup library must be the one the archive runs: a library this build or this standard library

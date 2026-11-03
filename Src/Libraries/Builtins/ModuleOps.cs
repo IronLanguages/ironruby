@@ -232,6 +232,20 @@ namespace IronRuby.Builtins {
                     scope.RubyContext.GetClassDisplayName(module)
                 );
             }
+
+            // A CLR namespace brings in its extension methods where it is used, as C#'s `using System.Linq;'
+            // does, and a static class those it declares (C#'s `using static').
+            string ns;
+            Type staticClass;
+            if (RubyModule.IsClrExtensionSource(refiner, out ns, out staticClass)) {
+                if (refiner.Context != scope.RubyContext) {
+                    throw RubyExceptions.CreateTypeError("Cannot use '{0}' defined in a foreign runtime #{1}", refiner.Name, refiner.Context.RuntimeId);
+                }
+                scope.RubyContext.ActivateScopedExtensions(ns ?? staticClass.Namespace ?? String.Empty);
+                scope.ActivateRefinements(refiner, true);
+                return;
+            }
+
             if (refiner.IsClass) {
                 throw RubyExceptions.CreateTypeError("wrong argument type Class (expected Module)");
             }
@@ -665,7 +679,7 @@ namespace IronRuby.Builtins {
             // MRI: ignores ModuleFunction scope flag (doesn't create singleton methods):
 
             if (!Tokenizer.IsVariableName(name)) {
-                throw RubyExceptions.CreateNameError("invalid attribute name `{0}'", name);
+                throw RubyExceptions.CreateNameError("invalid attribute name '{0}'", name);
             }
 
             var varName = "@" + name;
@@ -678,7 +692,14 @@ namespace IronRuby.Builtins {
             // top-level `def` is, and taking them left reline's Reline::Core readers private
             // where MRI's are public.  MRI reads the visibility only off a class or module
             // body; anywhere else attr_reader defines public methods.
-            var visibility = attributesScope.IsEmpty ? RubyMethodVisibility.Public : attributesScope.Visibility;
+            //
+            // The same holds for a frame whose self is some other object: MRI's rb_attr takes the
+            // scope's visibility only when the caller's self is the module itself
+            // (rb_vm_cref_in_context). importmap-rails does
+            // `Rails::Application.send(:attr_accessor, :importmap)` at the top level of a file,
+            // where the default is private, and Rails then calls `app.importmap = ...`.
+            var visibility = (attributesScope.IsEmpty || !ReferenceEquals(attributesScope.SelfObject, self))
+                ? RubyMethodVisibility.Public : attributesScope.Visibility;
 
             if (definedNames != null) {
                 var context = scope.RubyContext;
@@ -843,8 +864,8 @@ namespace IronRuby.Builtins {
 
                 if (!self.RemoveMethod(methodName)) {
                     // MRI's wording for remove_method differs from undef_method's:
-                    //   "method `x' not defined in C"
-                    throw RubyExceptions.CreateNameError("method `{0}' not defined in {1}",
+                    //   "method 'x' not defined in C"
+                    throw RubyExceptions.CreateNameError("method '{0}' not defined in {1}",
                         methodName, RubyExceptions.GetModuleErrorName(self));
                 }
             }
@@ -1143,7 +1164,10 @@ namespace IronRuby.Builtins {
         public static object RemoveClassVariable(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName) {
             object value;
             if (!self.TryGetClassVariable(variableName, out value)) {
-                RubyUtils.CheckClassVariableName(variableName);
+                // MRI words a bad name differently here than class_variable_get and friends do
+                if (!Tokenizer.IsClassVariableName(variableName)) {
+                    throw RubyExceptions.CreateNameError("wrong class variable name {0}", variableName);
+                }
                 throw RubyExceptions.CreateNameError("class variable {0} not defined for {1}", variableName, self.Name);
             }
             self.RemoveClassVariable(variableName);
@@ -1251,7 +1275,7 @@ namespace IronRuby.Builtins {
 
                 owner = value as RubyModule;
                 if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
                 }
             }
 
@@ -1297,7 +1321,7 @@ namespace IronRuby.Builtins {
 
                 owner = value as RubyModule;
                 if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
                 }
             }
 
@@ -1322,7 +1346,9 @@ namespace IronRuby.Builtins {
 
             object value;
             if (!self.TryRemoveConstant(constantName, out value)) {
-                RubyUtils.CheckConstantName(constantName);
+                if (!Tokenizer.IsConstantName(constantName)) {
+                    throw RubyExceptions.CreateNameError("'{0}' is not allowed as a constant variable name", constantName);
+                }
                 throw RubyExceptions.CreateNameError("constant {0}::{1} not defined", self.Name, constantName);
             }
 
@@ -1400,7 +1426,10 @@ namespace IronRuby.Builtins {
 
             string[] parts = (symbol == null) ? str.Split(new[] { "::" }, StringSplitOptions.None) : new[] { str };
             foreach (string part in parts) {
-                RubyUtils.CheckConstantName(part);
+                if (!Tokenizer.IsConstantName(part)) {
+                    // MRI names the whole path: "wrong constant name Foo::".
+                    throw RubyExceptions.CreateNameError(String.Format("wrong constant name {0}", (isTopLevel ? "::" : "") + str));
+                }
             }
             return parts;
         }
@@ -1441,7 +1470,7 @@ namespace IronRuby.Builtins {
                 }
                 owner = value as RubyModule;
                 if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
                 }
                 inherit = true;
             }
@@ -1617,15 +1646,27 @@ namespace IronRuby.Builtins {
 
         internal static RubyArray/*!*/ GetMethods(RubyModule/*!*/ self, bool inherited, RubyMethodAttributes attributes,
             IEnumerable<string> foreignMembers) {
+            return GetMethods(self, inherited, attributes, foreignMembers, false);
+        }
+
+        // objectMethods: see RubyModule.ForEachMember
+        internal static RubyArray/*!*/ GetMethods(RubyModule/*!*/ self, bool inherited, RubyMethodAttributes attributes,
+            IEnumerable<string> foreignMembers, bool objectMethods) {
 
             var result = new RubyArray();
+            // A CLR member is listed under its mangled name, which a Ruby method further up the ancestors (Enumerable#count
+            // behind List#Count) can share. Calls go to the first one, so only that one is listed.
+            var listed = new HashSet<string>();
             using (self.Context.ClassHierarchyLocker()) {
-                self.ForEachMember(inherited, attributes, foreignMembers, (name, module, member) => {
+                self.ForEachMember(inherited, attributes, foreignMembers, objectMethods, (name, module, member) => {
                     if (member.IsInteropMember && (module.Restrictions & ModuleRestrictions.NoNameMapping) == 0 && RubyUtils.HasMangledName(name)) {
                         if (Tokenizer.IsMethodName(name) || Tokenizer.IsOperatorName(name)) {
-                            result.Add(new ClrName(name));
+                            var clrName = new ClrName(name);
+                            if (listed.Add(clrName.MangledName)) {
+                                result.Add(clrName);
+                            }
                         }
-                    } else {
+                    } else if (listed.Add(name)) {
                         result.Add(self.Context.StringifyIdentifier(name));
                     }
                 });
@@ -1635,7 +1676,7 @@ namespace IronRuby.Builtins {
             // is listed after the refinement's own methods.
             if (inherited && self.IsRefinement) {
                 var seen = new HashSet<object>(result);
-                foreach (object name in GetMethods(self.RefinedModule, true, attributes, foreignMembers)) {
+                foreach (object name in GetMethods(self.RefinedModule, true, attributes, foreignMembers, objectMethods)) {
                     if (seen.Add(name)) {
                         result.Add(name);
                     }
@@ -1726,8 +1767,14 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]string/*!*/ methodName) {
 
             RubyMemberInfo method = self.ResolveMethodWithRefinements(methodName, VisibilityContext.AllVisible, scope).Info;
-            if (method == null || method.Visibility != RubyMethodVisibility.Public) {
+            if (method == null) {
                 throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
+            }
+            if (method.Visibility != RubyMethodVisibility.Public) {
+                // the method is there, just not public - which is what MRI says
+                throw RubyExceptions.CreateNameError("method '{0}' for {1} '{2}' is {3}", methodName,
+                    self.IsClass ? "class" : "module", self.GetDisplayName(scope.RubyContext, false),
+                    method.Visibility == RubyMethodVisibility.Private ? "private" : "protected");
             }
 
             return GetInstanceMethod(scope, self, methodName);
@@ -1806,7 +1853,7 @@ namespace IronRuby.Builtins {
                 return self.TypeTracker != null ? self.Context.GetClass(self.TypeTracker.Type.MakeByRefType()) : null;
             } catch (Exception) {
                 throw RubyExceptions.CreateTypeError(
-                    "Cannot create by-ref type for `{0}'", self.Context.GetTypeName(self.TypeTracker.Type, true)
+                    "Cannot create by-ref type for '{0}'", self.Context.GetTypeName(self.TypeTracker.Type, true)
                 );
             }
         }
@@ -1828,7 +1875,7 @@ namespace IronRuby.Builtins {
                     arrayType = elementType.MakeArrayType();
                 } catch (Exception) {
                     throw RubyExceptions.CreateTypeError(
-                        "Cannot create array type for `{0}'", self.Context.GetTypeName(elementType, true)
+                        "Cannot create array type for '{0}'", self.Context.GetTypeName(elementType, true)
                     );
                 }
                 return self.Context.GetModule(arrayType);
@@ -1836,14 +1883,14 @@ namespace IronRuby.Builtins {
 
             if (!type.IsGenericTypeDefinition) {
                 if (provided > 0) {
-                    throw RubyExceptions.CreateArgumentError("`{0}' is not a generic type definition", self.Name);
+                    throw RubyExceptions.CreateArgumentError("'{0}' is not a generic type definition", self.Name);
                 }
                 return self;
             }
 
             int required = type.GetGenericArguments().Length;
             if (required != provided) {
-                throw RubyExceptions.CreateArgumentError("Type `{0}' requires {1} generic type arguments, {2} provided", self.Name, required, provided);
+                throw RubyExceptions.CreateArgumentError("Type '{0}' requires {1} generic type arguments, {2} provided", self.Name, required, provided);
             }
 
             Type concreteType = type.MakeGenericType(Protocols.ToTypes(self.Context, typeArgs));
@@ -1854,20 +1901,20 @@ namespace IronRuby.Builtins {
         [RubyMethod("[]")]
         public static RubyModule/*!*/ Of(RubyModule/*!*/ self, int genericArity) {
             if (self.TypeTracker == null) {
-                throw RubyExceptions.CreateArgumentError("`{0}' is not a type", self.Name);
+                throw RubyExceptions.CreateArgumentError("'{0}' is not a type", self.Name);
             }
 
             Type type = self.TypeTracker.Type;
 
             if (!type.IsGenericTypeDefinition) {
                 if (genericArity > 0) {
-                    throw RubyExceptions.CreateArgumentError("`{0}' is not a generic type definition", self.Name);
+                    throw RubyExceptions.CreateArgumentError("'{0}' is not a generic type definition", self.Name);
                 }
                 return self;
             }
             
             if (type.GetGenericArguments().Length != genericArity) {
-                throw RubyExceptions.CreateArgumentError("`{0}' does not have generic arity {1}", self.Name, genericArity);
+                throw RubyExceptions.CreateArgumentError("'{0}' does not have generic arity {1}", self.Name, genericArity);
             }
 
             return self;

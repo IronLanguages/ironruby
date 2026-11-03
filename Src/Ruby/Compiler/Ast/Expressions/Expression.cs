@@ -24,6 +24,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using Microsoft.Scripting;
 using IronRuby.Builtins;
+using IronRuby.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
@@ -63,7 +64,19 @@ namespace IronRuby.Compiler.Ast {
         /// <summary>
         /// Transform as expression (value is read).
         /// </summary>
-        internal abstract MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen);
+        internal MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+            // Every expression nested in another comes through here, and the nesting can be deeper than a
+            // thread's stack goes - a chain of calls (a.b.c...) has no depth limit at all (see StackGuard).
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => TransformReadCore(gen));
+            }
+            return TransformReadCore(gen);
+        }
+
+        /// <summary>
+        /// What <see cref="TransformRead"/> does for this kind of expression.
+        /// </summary>
+        internal abstract MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen);
 
         /// <summary>
         /// Transform as expression (value is read) and mark sequence point.
@@ -83,6 +96,10 @@ namespace IronRuby.Compiler.Ast {
         /// Transform as expression whose value is read as Boolean and mark a sequence point.
         /// </summary>
         internal MSA.Expression/*!*/ TransformCondition(AstGenerator/*!*/ gen, bool positive) {
+            // Conditions nest (a && (b && ...), nested patterns) through here rather than TransformRead.
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => TransformCondition(gen, positive));
+            }
             return gen.AddDebugInfo(TransformReadBoolean(gen, positive), Location);
         }	
 		

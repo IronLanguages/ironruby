@@ -85,7 +85,7 @@ namespace IronRuby.Compiler.Ast {
             }
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             string site = GetDebugSite(gen);
             switch (_mutability) {
                 case StringLiteralMutability.Frozen: return TransformFrozen(_value, _encoding, site);

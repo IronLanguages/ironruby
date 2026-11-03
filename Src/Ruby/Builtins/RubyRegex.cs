@@ -758,11 +758,7 @@ namespace IronRuby.Builtins {
 
 #if DEBUG
             if (RubyOptions.CompileRegexps) {
-#if SILVERLIGHT || WIN8 // RegexOptions.Compiled
-                throw new NotSupportedException("RegexOptions.Compiled is not supported on Silverlight");
-#else
                 result |= RegexOptions.Compiled;
-#endif
             }
 #endif
             if ((options & RubyRegexOptions.IgnoreCase) != 0) {
@@ -1584,6 +1580,10 @@ namespace IronRuby.Builtins {
 
                     case '\f':
                         escaped = 'f';
+                        return i;
+
+                    case '\v':
+                        escaped = 'v';
                         return i;
                 }
                 i++;

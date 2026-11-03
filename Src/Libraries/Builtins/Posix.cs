@@ -25,6 +25,29 @@ namespace IronRuby.Builtins {
             System.IO.Path.DirectorySeparatorChar == '/' &&
             !RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 
+        /// <summary>
+        /// flock(2) is the same call with the same operation bits on every Unix, so it is
+        /// offered on macOS too, where the rest of this class (statx, Linux errno numbers)
+        /// is not.  RubyGems takes a lock on every binstub it writes, so without this
+        /// `gem install` of anything with an executable failed on a Mac.
+        /// </summary>
+        internal static readonly bool IsFlockAvailable = System.IO.Path.DirectorySeparatorChar == '/';
+
+        /// <summary>
+        /// errno for "would block" on this platform: EAGAIN is 11 on Linux and 35 on macOS and
+        /// the other BSDs, whose errno numbering macOS inherited.  IsFlockAvailable lets every
+        /// Unix in, so a BSD has to get 35 too, or a contended LOCK_NB raises instead of
+        /// returning false and a blocking lock never retries.
+        /// </summary>
+        internal static readonly int EWouldBlock = IsBsdErrno() ? 35 : EWOULDBLOCK;
+
+        private static bool IsBsdErrno() {
+            return RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ||
+                RuntimeInformation.IsOSPlatform(OSPlatform.FreeBSD) ||
+                RuntimeInformation.IsOSPlatform(OSPlatform.Create("NETBSD")) ||
+                RuntimeInformation.IsOSPlatform(OSPlatform.Create("OPENBSD"));
+        }
+
         #region errno numbers
 
         internal const int EPERM = 1;

@@ -17,10 +17,10 @@ Gem::Specification.new do |s|
   s.metadata = { "ironruby_pinned".freeze => "true".freeze }
   s.files = [
     "lib/bigdecimal.rb".freeze,
-    "lib/bigdecimal/util.rb".freeze,
     "lib/bigdecimal/jacobian.rb".freeze,
     "lib/bigdecimal/ludcmp.rb".freeze,
     "lib/bigdecimal/math.rb".freeze,
     "lib/bigdecimal/newton.rb".freeze,
+    "lib/bigdecimal/util.rb".freeze,
   ]
 end

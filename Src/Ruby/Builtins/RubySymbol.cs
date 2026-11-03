@@ -34,6 +34,14 @@ namespace IronRuby.Builtins {
         // Symbol#name answers the same frozen String every time it is called, so it is made once.
         private MutableString _frozenName;
 
+        // Symbol#to_proc answers the same Proc each time, as MRI's does.
+        private Proc _methodInvoker;
+
+        public Proc MethodInvoker {
+            get { return _methodInvoker; }
+            set { _methodInvoker = value; }
+        }
+
         /// <summary>The String Symbol#name answers - one per symbol, frozen.</summary>
         public MutableString/*!*/ FrozenName {
             get { return _frozenName ?? (_frozenName = MutableString.Create(_string).Freeze()); }

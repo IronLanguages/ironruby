@@ -19,7 +19,6 @@ Gem::Specification.new do |s|
     "lib/psych.rb".freeze,
     "lib/psych/coder.rb".freeze,
     "lib/psych/core_ext.rb".freeze,
-    "lib/psych/deprecated.rb".freeze,
     "lib/psych/handler.rb".freeze,
     "lib/psych/json/tree_builder.rb".freeze,
     "lib/psych/nodes.rb".freeze,
