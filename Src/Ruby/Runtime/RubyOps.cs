@@ -1414,7 +1414,7 @@ namespace IronRuby.Runtime {
         /// while a constant site's cache is keyed only on the constant version. Such lookups are not
         /// cached. `class << self' in a class or module body, the common form, keeps the cache.
         /// </summary>
-        private static bool IsLexicallyInObjectSingleton(RubyScope/*!*/ scope) {
+        internal static bool IsLexicallyInObjectSingleton(RubyScope/*!*/ scope) {
             for (RubyScope s = scope; s != null; s = s.Parent) {
                 var cls = s.Module as RubyClass;
                 if (cls != null && cls.IsSingletonClass && !(cls.SingletonClassOf is RubyModule)) {

@@ -112,7 +112,7 @@ namespace IronRuby.Runtime.Jit {
         private string _bailReason;
 
         private JitBailout/*!*/ Bail(string/*!*/ reason) {
-            if (JitRuntime.Verbose && _bailReason == null) { _bailReason = reason; }
+            if ((JitRuntime.Verbose || Osr.OsrLoopSite.Verbose) && _bailReason == null) { _bailReason = reason; }
             return JitBailout.Instance;
         }
 
@@ -207,9 +207,37 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> _peekLocal;
         private List<LocalVariable> _peeked;
 
+        /// <summary>
+        /// Loop mode: what the entry JitLoopCompiler builds has to do besides loading the slots.
+        /// <see cref="Arrays"/>: the locals the loop indexes (EmitArrayRead, EmitArrayStore), each
+        /// loaded once into a RubyArray variable by an expression that is null when the local does not
+        /// hold a plain Array. <see cref="ReadsConstants"/>: the loop has constant values compiled in
+        /// (EmitConstant), good while the constant access version has not moved. <see cref="UndoLog"/>:
+        /// the log the loop's array stores keep, rolled back by its deopt handler; null if it stores none.
+        /// </summary>
+        internal sealed class LoopEntry {
+            internal readonly List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>>/*!*/ Arrays =
+                new List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>>();
+            internal bool ReadsConstants;
+            internal MSA.ParameterExpression UndoLog;
+        }
+
+        private readonly LoopEntry _entry;
+
+        // Loop mode: the value of an unqualified constant as its site would read it now, if that is an
+        // Integer or a Float the site could cache; null otherwise (and always, when there is no resolver).
+        private readonly Func<ConstantVariable, object> _constantValue;
+
+        // Loop mode: the indexed locals bound so far, by Key, with the RubyArray variable each is loaded
+        // into and the type its elements are read as (see ElementType).
+        private Dictionary<string, KeyValuePair<MSA.ParameterExpression, JT>> _arrays;
+
         private JitCompiler(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context, int scopeDepth,
             Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self, Func<string, JT> ivarProfile,
-            Func<string, string> attrProfile, Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal) {
+            Func<string, string> attrProfile, Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal,
+            Func<ConstantVariable, object> constantValue) {
+            _entry = new LoopEntry();
+            _constantValue = constantValue;
             _ast = null;
             _loop = loop;
             _context = context;
@@ -234,24 +262,28 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, out List<JitLoopSlot> slots, out bool canDeopt) {
-            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, null, null, RefinementActivation.Empty, out slots, out canDeopt);
+            LoopEntry entry;
+            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, null, null, null, RefinementActivation.Empty,
+                out slots, out canDeopt, out entry);
         }
 
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self,
             Func<string, JT> ivarProfile, Func<string, string> attrProfile,
-            Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal, RefinementActivation/*!*/ refinements,
-            out List<JitLoopSlot> slots, out bool canDeopt) {
+            Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal, Func<ConstantVariable, object> constantValue,
+            RefinementActivation/*!*/ refinements, out List<JitLoopSlot> slots, out bool canDeopt, out LoopEntry entry) {
 
             slots = null;
             canDeopt = false;
-            var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal);
+            entry = null;
+            var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal, constantValue);
             c._refinements = refinements;
             MSA.Expression body;
             try {
                 JT type;
                 body = c.EmitWhile(loop, out type);
             } catch (JitBailout) {
+                if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter: {0}", c._bailReason ?? "unsupported construct"); }
                 return null;
             }
             // A deopt restores the locals to what they were at the top of the iteration and
@@ -265,6 +297,7 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
             slots = c._slots;
+            entry = c._entry;
             // the back-edge safe point hands the loop back through the deopt
             // catch, so the catch is always needed - but it fires at the top of an iteration,
             // before anything observable, so it does not make an impure body unspecializable.
@@ -769,6 +802,7 @@ namespace IronRuby.Runtime.Jit {
                 // `!x' is a call of x's #! - which the program may have redefined.
                 JT operandType;
                 var operand = EmitCondition(not.Expression, out operandType);
+                if (operandType == JT.Obj) { throw Bail("! of an object"); }
                 RequireBuiltin(operandType, "!");
                 type = JT.Bool;
                 return Ast.Not(operand);
@@ -818,6 +852,9 @@ namespace IronRuby.Runtime.Jit {
             var arrayLiteral = node as ArrayConstructor;
             if (arrayLiteral != null) { return EmitArrayLiteral(arrayLiteral, out type); }
 
+            var constant = node as ConstantVariable;
+            if (constant != null) { return EmitConstant(constant, out type); }
+
             var body = node as Body;
             if (body != null) {
                 if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
@@ -847,6 +884,167 @@ namespace IronRuby.Runtime.Jit {
             }
             type = JT.Obj;
             return IronRuby.Compiler.Methods.MakeArrayOpCall(values);
+        }
+
+        // ---- arrays and constants in an outlined loop ------------------------------------
+        // A renderer's inner loop is `fb[o + x] = cmap[pixels[(ty * 64) + tx]]': without element
+        // access a loop like that is not specializable at all. An Array a loop indexes is a local the
+        // loop does not write, so it is the same object for the whole run: the entry loads it once,
+        // checks that it is a plain Array - whose #[] and #[]= the global method version then vouches
+        // for - and the body indexes it directly. Reads have no effect. Stores do, and an iteration
+        // has to stay restartable for a deopt: each store logs the element it overwrites, and the
+        // deopt handler puts the old values back before the generic loop re-runs the iteration.
+
+        private RubyClass _arrayClass;
+        private bool? _arrayGetBuiltin, _arraySetBuiltin;
+
+        /// <summary>
+        /// The RubyArray variable a local the loop indexes is loaded into, and the type its elements
+        /// are read as; null when the local is not one that holds a plain Array right now.
+        /// </summary>
+        private KeyValuePair<MSA.ParameterExpression, JT>? ArrayLocal(LocalVariable/*!*/ local) {
+            if (_loop == null || _peekLocal == null || _entry == null || !_refinements.IsEmpty) { return null; }
+            string key = Key(local);
+            KeyValuePair<MSA.ParameterExpression, JT> known;
+            if (_arrays != null && _arrays.TryGetValue(key, out known)) { return known; }
+
+            // a typed slot already: an Integer or a Float, whose #[] is something else
+            MSA.ParameterExpression p;
+            JT t;
+            if (TryLookup(key, out p, out t)) { return null; }
+
+            var peek = _peekLocal(local);
+            if (!peek.HasValue) { return null; }
+            var live = peek.Value.Value as RubyArray;
+            if (live == null || live.GetType() != typeof(RubyArray)) { return null; }
+            RubyClass cls = JitRuntime.ClassOf(_context, live);
+            if (cls.IsSingletonClass || (_arrayClass != null && cls != _arrayClass)) { return null; }
+            _arrayClass = cls;
+
+            var variable = Ast.Variable(typeof(RubyArray), "#array:" + local.Name);
+            _entry.Arrays.Add(new KeyValuePair<MSA.ParameterExpression, MSA.Expression>(variable,
+                Ast.Call(JitRuntime.M("OsrArray"), Ast.Convert(peek.Value.Key, typeof(object)), Ast.Constant(cls, typeof(RubyClass)))));
+            // read from its tuple slot, so the loop must not write it (checked by TryCompileLoop)
+            if (_peeked == null) { _peeked = new List<LocalVariable>(); }
+            _peeked.Add(local);
+
+            var result = new KeyValuePair<MSA.ParameterExpression, JT>(variable, ElementType(live));
+            if (_arrays == null) { _arrays = new Dictionary<string, KeyValuePair<MSA.ParameterExpression, JT>>(); }
+            _arrays.Add(key, result);
+            return result;
+        }
+
+        /// <summary>
+        /// What an Array's elements are, from a sample of them: Int or Dbl when every one sampled is
+        /// a Fixnum, or every one a Float - a read is then unboxed through a guard that deopts on
+        /// anything else - and Obj otherwise.
+        /// </summary>
+        private static JT ElementType(RubyArray/*!*/ array) {
+            const int Samples = 16;
+            int count = array.Count;
+            if (count == 0) { return JT.Obj; }
+            int step = Math.Max(1, count / Samples);
+            JT kind = JT.None;
+            for (int i = 0; i < count; i += step) {
+                object element = array[i];
+                JT k = (element is int) ? JT.Int : (element is double) ? JT.Dbl : JT.Obj;
+                if (k == JT.Obj || (kind != JT.None && kind != k)) { return JT.Obj; }
+                kind = k;
+            }
+            return kind;
+        }
+
+        private void RequireArrayMethod(bool store) {
+            bool? ok = store ? _arraySetBuiltin : _arrayGetBuiltin;
+            if (ok == null) {
+                ok = IsBuiltinMethod(_arrayClass, store ? "[]=" : "[]");
+                if (store) { _arraySetBuiltin = ok; } else { _arrayGetBuiltin = ok; }
+            }
+            if (!ok.Value) { throw Bail(store ? "Array#[]= is not the built-in one" : "Array#[] is not the built-in one"); }
+        }
+
+        /// <summary>An Array index: an Integer that fits in an Int32. Anything else deopts, or bails.</summary>
+        private MSA.Expression/*!*/ EmitIndex(RExpr/*!*/ node) {
+            JT t;
+            var e = Emit(node, out t);
+            e = NumericIVar(node, e, ref t);
+            switch (t) {
+                case JT.Int: return e;
+                case JT.Lng: return Coerce(e, JT.Lng, JT.Int);
+                case JT.Obj: _canDeopt = true; return Ast.Call(JitRuntime.M("GuardInt"), e);
+                default: throw Bail("index of type " + t);
+            }
+        }
+
+        /// <summary>`a[i]': the element, unboxed when <paramref name="typed"/> and the elements have one type.</summary>
+        private MSA.Expression/*!*/ EmitArrayRead(KeyValuePair<MSA.ParameterExpression, JT> array, RExpr/*!*/ index, bool typed, out JT type) {
+            RequireArrayMethod(false);
+            MSA.Expression read = Ast.Call(JitRuntime.M("ArrayGet"), array.Key, EmitIndex(index));
+            if (!typed || array.Value == JT.Obj) {
+                type = JT.Obj;
+                return read;
+            }
+            _canDeopt = true;
+            type = array.Value;
+            return Ast.Call(JitRuntime.M(array.Value == JT.Int ? "GuardInt" : "GuardDouble"), read);
+        }
+
+        /// <summary>`a[i] = v': an existing element overwritten, the old value logged (JitUndoLog).</summary>
+        private MSA.Expression/*!*/ EmitArrayStore(SimpleAssignmentExpression/*!*/ node, ArrayItemAccess/*!*/ item, out JT type) {
+            if (node.Operation != null || item.Block != null) { throw Bail("array element op-assignment"); }
+            var indexes = item.Arguments.Expressions;
+            var local = item.Array as LocalVariable;
+            if (local == null || indexes == null || indexes.Length != 1 || indexes[0] is SplattedArgument) {
+                throw Bail("array element store of this shape");
+            }
+            var array = ArrayLocal(local);
+            if (array == null) { throw Bail("element store into something not known to be an Array"); }
+            RequireArrayMethod(true);
+
+            // Ruby evaluates the index, then the value, then calls #[]=; so do the arguments here.
+            var index = EmitIndex(indexes[0]);
+            MSA.Expression value;
+            var source = node.Right as MethodCall;
+            KeyValuePair<MSA.ParameterExpression, JT>? from = null;
+            if (source != null && source.MethodName == "[]" && source.Block == null && source.Target is LocalVariable &&
+                source.Arguments != null && source.Arguments.Expressions.Length == 1 && !(source.Arguments.Expressions[0] is SplattedArgument)) {
+                from = ArrayLocal((LocalVariable)source.Target);
+            }
+            if (from != null) {
+                // `a[i] = b[j]': the element moves as the object it is, never unboxed and boxed again
+                JT ignored;
+                value = EmitArrayRead(from.Value, source.Arguments.Expressions[0], false, out ignored);
+            } else {
+                JT vt;
+                value = Emit(node.Right, out vt);
+                value = (vt == JT.Int)
+                    ? Ast.Call(typeof(Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers).GetMethod("Int32ToObject"), value)
+                    : Coerce(value, vt, JT.Obj);
+            }
+
+            if (_entry.UndoLog == null) { _entry.UndoLog = Ast.Variable(typeof(JitUndoLog), "#undo"); }
+            type = JT.Obj;
+            return Ast.Call(JitRuntime.M("ArraySet"), array.Value.Key, index, value, _entry.UndoLog);
+        }
+
+        /// <summary>
+        /// An unqualified constant read in an outlined loop whose value is an Integer or a Float: the
+        /// value, compiled in. The entry checks the constant access version, which any constant
+        /// assignment (and anything else that could change what the name resolves to) moves.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitConstant(ConstantVariable/*!*/ node, out JT type) {
+            object value = (_constantValue != null && _entry != null) ? _constantValue(node) : null;
+            if (value is int) {
+                _entry.ReadsConstants = true;
+                type = JT.Int;
+                return Ast.Constant((int)value, typeof(int));
+            }
+            if (value is double) {
+                _entry.ReadsConstants = true;
+                type = JT.Dbl;
+                return Ast.Constant((double)value, typeof(double));
+            }
+            throw Bail("constant " + node.Name);
         }
 
         private MSA.Expression/*!*/ EmitLiteral(Literal/*!*/ literal, out JT type) {
@@ -891,6 +1089,9 @@ namespace IronRuby.Runtime.Jit {
                 return Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(v, vt, JT.Obj), Ast.Constant(new InstanceVariableSite(ivarTarget.Name)));
             }
 
+            var item = node.Left as ArrayItemAccess;
+            if (item != null) { return EmitArrayStore(node, item, out type); }
+
             var target = node.Left as LocalVariable;
             if (target == null || (_loop == null && target.DefinitionLexicalDepth != _scopeDepth)) { throw JitBailout.Instance; }
             if (_inKeywordDefault) { throw Bail("keyword default assigns a local"); }
@@ -916,7 +1117,11 @@ namespace IronRuby.Runtime.Jit {
             }
 
             if (known) {
-                if (lt != rhsType) {
+                if (lt != rhsType && lt == JT.Obj && _loop != null && op == null) {
+                    // a boxed slot of an outlined loop holds whatever it is given
+                    rhs = Coerce(rhs, rhsType, JT.Obj);
+                    rhsType = JT.Obj;
+                } else if (lt != rhsType) {
                     // Int and Lng are two representations of one Ruby class, so a store across
                     // them is a widening or a narrowing, not a type change. Anything else would
                     // change the value's class, which one typed slot cannot express.
@@ -1011,8 +1216,12 @@ namespace IronRuby.Runtime.Jit {
         /// the body is what binds them; the DLR block it produces runs before the test.
         /// </summary>
         private MSA.Expression/*!*/ EmitSnapshot() {
-            if (_slots.Count == 0) { return AstUtils.Empty(); }
-            var copies = new List<MSA.Expression>(_slots.Count);
+            var copies = new List<MSA.Expression>(_slots.Count + 1);
+            if (_entry != null && _entry.UndoLog != null) {
+                // the stores of the iteration before this one are for good
+                copies.Add(Ast.Assign(Ast.Field(_entry.UndoLog, "Count"), Ast.Constant(0)));
+            }
+            if (copies.Count == 0 && _slots.Count == 0) { return AstUtils.Empty(); }
             foreach (var slot in _slots) {
                 copies.Add(Ast.Assign(slot.Snapshot, slot.Variable));
                 if (slot.Assigned != null) {
@@ -1171,6 +1380,9 @@ namespace IronRuby.Runtime.Jit {
                 case JT.Int:
                 case JT.Lng:
                 case JT.Dbl: return Ast.Block(e, Ast.Constant(true));
+                // nil and false are falsy and everything else truthy, with no method called to find out
+                // (`!x' calls x's #!, which an object may have redefined: NotExpression refuses an Obj.)
+                case JT.Obj: return Ast.Call(JitRuntime.M("IsTruthy"), e);
                 default: throw Bail("condition of type " + t);
             }
         }
@@ -1272,6 +1484,37 @@ namespace IronRuby.Runtime.Jit {
                         return Ast.Call(JitRuntime.M(guard), read);
                     }
                 }
+            }
+
+            // `a[i]', a a local holding an Array.
+            if (argc == 1 && node.MethodName == "[]" && node.Target is LocalVariable && !(args.Expressions[0] is SplattedArgument)) {
+                var array = ArrayLocal((LocalVariable)node.Target);
+                if (array != null) { return EmitArrayRead(array.Value, args.Expressions[0], true, out type); }
+            }
+
+            // `a.size' / `a.length', a a local holding an Array.
+            if (argc == 0 && (node.MethodName == "size" || node.MethodName == "length") && node.Target is LocalVariable) {
+                var array = ArrayLocal((LocalVariable)node.Target);
+                if (array != null) {
+                    if (!IsBuiltinMethod(_arrayClass, node.MethodName)) { throw Bail("Array#" + node.MethodName + " is not the built-in one"); }
+                    type = JT.Int;
+                    return Ast.Property(array.Value.Key, "Count");
+                }
+            }
+
+            // `f.to_i' of a Float, and `n.to_i' of an Integer, which is n.
+            if (argc == 0 && node.Target != null && node.MethodName == "to_i") {
+                JT tt;
+                var t = Emit(node.Target, out tt);
+                t = NumericIVar(node.Target, t, ref tt);
+                if (IsNumeric(tt)) {
+                    RequireBuiltin(tt, "to_i");
+                    if (tt != JT.Dbl) { type = tt; return t; }
+                    _canDeopt = true;
+                    type = JT.Lng;
+                    return Ast.Call(JitRuntime.M("FloatToLong"), t);
+                }
+                throw Bail("to_i on " + tt);
             }
 
             // Binary operators on Fixnum/Float.

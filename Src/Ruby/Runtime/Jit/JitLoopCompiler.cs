@@ -136,6 +136,18 @@ namespace IronRuby.Runtime.Jit {
 
                 JT type;
                 bool writeFirst = (hint == JT.Int || hint == JT.Lng || hint == JT.Dbl);
+                if (hint == JT.Obj) {
+                    // The loop met this local as the target of an assignment of an object it does not
+                    // operate on - an Array element of no one type, say. The slot carries the boxed
+                    // value as it is, so it needs no guard and no flag: whatever it holds on entry,
+                    // nil included, is a value of its type.
+                    return new JitLoopSlot {
+                        Type = JT.Obj,
+                        Variable = Ast.Parameter(typeof(object), local.Name),
+                        Snapshot = Ast.Parameter(typeof(object), local.Name + "#snap"),
+                        Accessor = accessor,
+                    };
+                }
                 if (writeFirst) {
                     // The loop met this local as the target of an assignment, so the type it
                     // will hold is the one being stored into it, whatever it holds right now.
@@ -187,10 +199,35 @@ namespace IronRuby.Runtime.Jit {
                 attrProfile = name => JitRuntime.SelfAttrSite.ReaderVariable(selfClass, name, false);
             }
 
+            // An unqualified constant the loop reads, resolved now as its site resolves it: the value when
+            // it is an Integer or a Float that the site would cache, else null. Compiled in, it is good
+            // while the constant access version is the one read before resolving anything. Looked up
+            // without the site's side effects: no autoload is started, no const_missing called and no
+            // deprecation reported - a constant that would need any of those is simply not compiled in.
+            int constantVersion = context.ConstantAccessVersion;
+            Func<ConstantVariable, object> constantValue = constant => {
+                if (constant.Qualifier != null || constant.IsGlobal || context.IsAutoloadInProgress ||
+                    RubyOps.IsLexicallyInObjectSingleton(scope)) {
+                    return null;
+                }
+                using (context.ClassHierarchyLocker()) {
+                    ConstantStorage storage;
+                    RubyModule owner;
+                    if (scope.TryResolveConstantNoLock(null, constant.Name, out storage, out owner) != null) { return null; }
+                    if (context.HasDeprecatedConstants && (owner == null || owner.GetDeprecatedConstantOwnerNoLock(constant.Name) != null)) {
+                        return null;
+                    }
+                    if (context.ConstantAccessVersion != constantVersion) { return null; }
+                    object value = storage.Value;
+                    return (value is int || value is double) ? value : null;
+                }
+            };
+
             List<JitLoopSlot> slots;
             bool canDeopt;
-            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, refinements,
-                out slots, out canDeopt);
+            JitCompiler.LoopEntry entry;
+            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, constantValue,
+                refinements, out slots, out canDeopt, out entry);
             if (body == null || slots.Count == 0) {
                 if (OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter gave up (body={0} slots={1})", body != null, slots == null ? -1 : slots.Count); }
                 return null;
@@ -244,12 +281,51 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Return(exit, Ast.Call(JitRuntime.M("OsrVersionStale")))
             ));
 
+            // Constant values compiled in: a constant assignment anywhere since makes the copy stale, and
+            // like a method table change it asks to be rebuilt rather than counting as a deopt.
+            if (entry.ReadsConstants) {
+                prologue.Add(Ast.IfThen(
+                    Ast.NotEqual(Ast.Field(Ast.Constant(context), "ConstantAccessVersion"), Ast.Constant(constantVersion)),
+                    Ast.Return(exit, Ast.Call(JitRuntime.M("OsrVersionStale")))
+                ));
+            }
+
+            // The Arrays the loop indexes, each loaded once: a local that does not hold a plain Array
+            // this time hands the loop back, for a copy built over what it holds now.
+            foreach (var array in entry.Arrays) {
+                locals.Add(array.Key);
+                prologue.Add(Ast.Assign(array.Key, array.Value));
+                prologue.Add(Ast.IfThen(
+                    Ast.Equal(array.Key, Ast.Constant(null, typeof(RubyArray))),
+                    Ast.Return(exit, Ast.Call(JitRuntime.M("OsrTypeGuardFailed"), Ast.Constant(array.Key.Name)))
+                ));
+            }
+
+            if (entry.UndoLog != null) {
+                locals.Add(entry.UndoLog);
+                prologue.Add(Ast.Assign(entry.UndoLog, Ast.Call(typeof(JitUndoLog).GetMethod("ForThread"))));
+            }
+
             var storeCurrent = new List<MSA.Expression>();
             var storeSnapshot = new List<MSA.Expression>();
+            if (entry.UndoLog != null) {
+                // the element stores of the interrupted iteration are undone before it is run again
+                storeSnapshot.Add(Ast.Call(entry.UndoLog, typeof(JitUndoLog).GetMethod("Rollback")));
+                storeCurrent.Add(Ast.Call(entry.UndoLog, typeof(JitUndoLog).GetMethod("Release")));
+            }
             foreach (var slot in slots) {
                 locals.Add(slot.Variable);
                 locals.Add(slot.Snapshot);
                 Type clr = slot.Variable.Type;
+
+                if (slot.Type == JT.Obj) {
+                    // boxed already, and anything at all is a value of its type
+                    prologue.Add(Ast.Assign(slot.Variable, slot.Accessor));
+                    prologue.Add(Ast.Assign(slot.Snapshot, slot.Variable));
+                    storeCurrent.Add(Ast.Assign(slot.Accessor, slot.Variable));
+                    storeSnapshot.Add(Ast.Assign(slot.Accessor, slot.Snapshot));
+                    continue;
+                }
 
                 // A long goes home through the representation funnel - a value that fits in an
                 // Int32 must arrive back in the tuple as one - and comes in from either an Int32
