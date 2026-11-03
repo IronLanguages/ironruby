@@ -528,6 +528,20 @@ namespace IronRuby.Runtime.Jit {
             }
             MSA.Expression number;
             JT numberType;
+            if (other == JT.Dbl && IsComparison(op)) {
+                // An Integer object compares with the Float exactly (EmitIntegerFloatCompare), so it
+                // is not made a double first: JitRuntime.CompareNumberDouble orders either kind.
+                if (leftObject) { RequireBuiltin(JT.Int, op); }
+                RequireBuiltin(JT.Dbl, op);
+                _canDeopt = true;
+                if (leftObject) {
+                    return OrderTest(op, Ast.Call(JitRuntime.M("CompareNumberDouble"), l, r), out type);
+                }
+                // the Float is evaluated first, as Ruby evaluates the receiver first
+                var receiver = Ast.Variable(typeof(double), "#float");
+                var test = OrderTest(Mirror(op), Ast.Call(JitRuntime.M("CompareNumberDouble"), r, receiver), out type);
+                return Ast.Block(typeof(bool), new[] { receiver }, Ast.Assign(receiver, l), test);
+            }
             if (other == JT.Dbl) {
                 // the receiver may be either: Integer#op(Float) and Float#op both have to be the library ones
                 if (leftObject) { RequireBuiltin(JT.Int, op); }

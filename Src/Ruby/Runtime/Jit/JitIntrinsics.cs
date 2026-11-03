@@ -580,6 +580,47 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
+        // ---- Integer against Float, exactly ------------------------------------------------
+
+        /// <summary>
+        /// The ordering of an Integer against a Float, as Integer#&lt;=&gt; works it out
+        /// (rb_integer_float_cmp): -1, 0 or 1, or 2 when y is NaN. A long within 2**53 converts to a
+        /// double exactly; past that the double's whole part is compared as a long, and its fraction
+        /// only breaks a tie (ClrInteger.CompareToFloat does the same for a Bignum).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int CompareLongDouble(long x, double y) {
+            if (x >= -(1L << 53) && x <= (1L << 53)) { return CompareDoubles(x, y); }
+            return CompareWideLongDouble(x, y);
+        }
+
+        /// <summary>CompareLongDouble for an x past 2**53 either way.</summary>
+        public static int CompareWideLongDouble(long x, double y) {
+            if (Double.IsNaN(y)) { return 2; }
+            if (y >= 9223372036854775808.0) { return -1; }     // 2**63 and up, Infinity included
+            if (y < -9223372036854775808.0) { return 1; }      // below -2**63, -Infinity included
+            double whole = Math.Floor(y);
+            long w = (long)whole;
+            if (x != w) { return (x < w) ? -1 : 1; }
+            return (y > whole) ? -1 : 0;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int CompareDoubles(double x, double y) {
+            return (x < y) ? -1 : (x > y) ? 1 : (x == y) ? 0 : 2;
+        }
+
+        /// <summary>
+        /// An element or object local next to a Float in a comparison (JitCompiler.EmitSpeculatedBinary):
+        /// a Float or an Integer, ordered against y as CompareLongDouble orders, or a deopt.
+        /// </summary>
+        public static int CompareNumberDouble(object value, double y) {
+            if (value is double) { return CompareDoubles((double)value, y); }
+            if (value is int) { return CompareDoubles((int)value, y); }
+            if (value is long) { return CompareLongDouble((long)value, y); }
+            throw Deopt();
+        }
+
         // ---- constants -------------------------------------------------------------------
 
         /// <summary>The guard of code that folded constants: nothing has changed any constant since.</summary>

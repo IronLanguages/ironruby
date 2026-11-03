@@ -3714,14 +3714,18 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "==", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Double, System.Double, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
+                new Func<System.Double, System.Int32, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
+                new Func<System.Double, System.Int64, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Double, System.Object, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal)
             );
             
             DefineLibraryMethod(module, "===", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Double, System.Double, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
+                new Func<System.Double, System.Int32, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
+                new Func<System.Double, System.Int64, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Double, System.Object, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal)
             );
             

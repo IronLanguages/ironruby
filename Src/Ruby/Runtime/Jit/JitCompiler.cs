@@ -1527,6 +1527,9 @@ namespace IronRuby.Runtime.Jit {
             RequireBuiltin(lt, op);
 
             if (operand == JT.Dbl) {
+                if (IsComparison(op) && (lt == JT.Lng || rt == JT.Lng)) {
+                    return EmitIntegerFloatCompare(op, l, lt, r, rt, out type);
+                }
                 l = Coerce(l, lt, JT.Dbl);
                 r = Coerce(r, rt, JT.Dbl);
                 switch (op) {
@@ -1585,6 +1588,95 @@ namespace IronRuby.Runtime.Jit {
                 case "==": return Ast.Equal(l, r);
                 case "!=": return Ast.NotEqual(l, r);
                 default: throw Bail("float operator " + op);
+            }
+        }
+
+        private static bool IsComparison(string/*!*/ op) {
+            switch (op) {
+                case "<": case ">": case "<=": case ">=": case "==": case "!=": return true;
+                default: return false;
+            }
+        }
+
+        /// <summary>`a op b' is `b Mirror(op) a'.</summary>
+        private static string/*!*/ Mirror(string/*!*/ op) {
+            switch (op) {
+                case "<": return ">";
+                case ">": return "<";
+                case "<=": return ">=";
+                case ">=": return "<=";
+                default: return op;
+            }
+        }
+
+        /// <summary>
+        /// `x op f' or `f op x', x an Integer carried as a long and f a Float. Integer#==, #&lt; and
+        /// the rest, and Float's with an Integer argument, compare the two exactly (MRI's
+        /// rb_integer_float_cmp and rb_integer_float_eq) - and a long past 2**53 does not convert to
+        /// a double exactly: `2**53 + 1 == 2.0**53' is false, though (double)(2**53 + 1) is 2.0**53.
+        /// A long that is a widened int, or a constant within 2**53, does convert exactly, and is
+        /// compared as a double. Any other is tested: within 2**53 it is compared as a double too,
+        /// and only past that through JitRuntime.CompareWideLongDouble - a range test, where
+        /// comparing as doubles was a conversion.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitIntegerFloatCompare(string/*!*/ op, MSA.Expression/*!*/ l, JT lt, MSA.Expression/*!*/ r, JT rt,
+            out JT type) {
+            bool integerLeft = (lt == JT.Lng);
+            MSA.Expression exact = ExactDouble(integerLeft ? l : r);
+            if (exact != null) {
+                return integerLeft
+                    ? EmitCompare(op, exact, Coerce(r, rt, JT.Dbl), out type)
+                    : EmitCompare(op, Coerce(l, lt, JT.Dbl), exact, out type);
+            }
+            var integer = Ast.Variable(typeof(long), "#integer");
+            var number = Ast.Variable(typeof(double), "#float");
+            var integerValue = Ast.Assign(integer, integerLeft ? l : r);
+            var floatValue = Ast.Assign(number, Coerce(integerLeft ? r : l, integerLeft ? rt : lt, JT.Dbl));
+            // -2**53 <= integer <= 2**53, as one unsigned comparison (the add wraps for a long near the top,
+            // which is out of range either way)
+            var inRange = Ast.LessThanOrEqual(
+                Ast.Convert(Ast.Add(integer, Ast.Constant(1L << 53)), typeof(ulong)),
+                Ast.Constant(1UL << 54));
+            var asDouble = Ast.Convert(integer, typeof(double));
+            var narrow = integerLeft ? EmitCompare(op, asDouble, number, out type) : EmitCompare(op, number, asDouble, out type);
+            var wide = OrderTest(integerLeft ? op : Mirror(op), Ast.Call(JitRuntime.M("CompareWideLongDouble"), integer, number), out type);
+            return Ast.Block(typeof(bool), new[] { integer, number },
+                integerLeft ? integerValue : floatValue,
+                integerLeft ? floatValue : integerValue,
+                Ast.Condition(inRange, narrow, wide)
+            );
+        }
+
+        /// <summary>A long expression as a double, if the conversion is known to be exact; else null.</summary>
+        private static MSA.Expression ExactDouble(MSA.Expression/*!*/ e) {
+            var narrowed = Narrowed(e);
+            if (narrowed != null) {
+                var c = narrowed as MSA.ConstantExpression;
+                return (c != null) ? (MSA.Expression)Ast.Constant((double)(int)c.Value, typeof(double)) : Ast.Convert(narrowed, typeof(double));
+            }
+            var constant = e as MSA.ConstantExpression;
+            if (constant != null && constant.Type == typeof(long)) {
+                long v = (long)constant.Value;
+                if (v >= -(1L << 53) && v <= (1L << 53)) { return Ast.Constant((double)v, typeof(double)); }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// `a op b' from the ordering of a against b (JitRuntime.CompareLongDouble and the like): -1, 0 or
+        /// 1, or 2 when the two are unordered (a NaN), which every relation but != is false for.
+        /// </summary>
+        private static MSA.Expression/*!*/ OrderTest(string/*!*/ op, MSA.Expression/*!*/ order, out JT type) {
+            type = JT.Bool;
+            switch (op) {
+                case "<": return Ast.Equal(order, Ast.Constant(-1));
+                case "<=": return Ast.LessThanOrEqual(order, Ast.Constant(0));
+                case ">": return Ast.Equal(order, Ast.Constant(1));
+                // 0 or 1: -1 and 2 both have a bit other than the lowest set
+                case ">=": return Ast.Equal(Ast.And(order, Ast.Constant(~1)), Ast.Constant(0));
+                case "==": return Ast.Equal(order, Ast.Constant(0));
+                case "!=": return Ast.NotEqual(order, Ast.Constant(0));
+                default: throw JitBailout.Instance;
             }
         }
     }
