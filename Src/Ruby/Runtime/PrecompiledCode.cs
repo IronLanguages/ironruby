@@ -359,6 +359,13 @@ namespace IronRuby.Runtime.Precompiled {
             }
         }
 
+        /// <summary>The file of a <see cref="PrecompiledFrames"/> frame, which only the startup library makes.</summary>
+        internal static void RebaseFrameFile(ref string file) {
+            if (file != null && _startupAssembly != null && !ReferenceEquals(_runtimeRoot, _compiledRoot)) {
+                file = file.Replace(_compiledRoot, _runtimeRoot);
+            }
+        }
+
         /// <summary>
         /// A hash of the file's bytes, as hex: what the startup library records for each file, so that
         /// a file edited since is parsed again rather than run from stale code.
@@ -648,5 +655,116 @@ namespace IronRuby.Runtime.Precompiled {
         }
 
         #endregion
+    }
+
+    /// <summary>
+    /// The frames of the startup library's methods and blocks that run a block (a yield, a block parameter) or a loop, for
+    /// another thread's backtrace (Thread#backtrace, #backtrace_locations). That is built from the interpreter's frame
+    /// chain, as .NET cannot walk another thread's stack, and precompiled code is compiled code from its first call:
+    /// without these, Kernel#loop, Set#each or Monitor#synchronize were missing from every thread dump, where they are
+    /// much of what a parked worker shows. Other methods are left out: they would pay for a frame at every call, and they
+    /// are rarely what a thread is parked or busy in below its own code. Without the library the same holds for the
+    /// methods the runtime compiles once they are hot.
+    ///
+    /// The saved code of such a method or block does (AotCompiler.ThreadFrameAdder):
+    ///   var frames = PrecompiledFrames.Current; int depth = frames.Enter(name, line);
+    ///   try { ... frames.SetLine(depth, line) at each statement ... } finally { frames.Leave(depth); }
+    /// where name is the frame's encoded name, the CLR method name the same thread's backtrace decodes. Each frame keeps
+    /// the interpreted frame it was entered from, which places it among the interpreted frames.
+    /// </summary>
+    public sealed class PrecompiledFrames {
+        [ThreadStatic]
+        private static PrecompiledFrames _current;
+
+        // the frames of each thread that has run any, for the other threads' backtraces
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Thread, PrecompiledFrames> _byThread = new();
+
+        private struct Entry {
+            public string Name;
+            public int Line;
+            public Microsoft.Scripting.Interpreter.InterpretedFrame Below;
+        }
+
+        private Entry[] _entries = new Entry[16];
+        private int _depth;
+
+        // this thread's slot of InterpretedFrame.CurrentFrame, which holds its current interpreted frame: a slot is its
+        // thread's for good, and reading it is a field load where the thread-local lookup takes two thread-static reads
+        private readonly Microsoft.Scripting.Utils.ThreadLocal<Microsoft.Scripting.Interpreter.InterpretedFrame>.StorageInfo/*!*/ _interpreted;
+
+        private PrecompiledFrames() {
+            _interpreted = Microsoft.Scripting.Interpreter.InterpretedFrame.CurrentFrame.GetStorageInfo();
+        }
+
+        public static PrecompiledFrames/*!*/ Current {
+            get { return _current ?? CreateCurrent(); }
+        }
+
+        private static PrecompiledFrames/*!*/ CreateCurrent() {
+            var result = new PrecompiledFrames();
+            _byThread.AddOrUpdate(Thread.CurrentThread, result);
+            return _current = result;
+        }
+
+        /// <summary>Enters a frame; returns what <see cref="SetLine"/> and <see cref="Leave"/> take.</summary>
+        public int Enter(string/*!*/ name, int line) {
+            int depth = _depth;
+            var entries = _entries;
+            if ((uint)depth >= (uint)entries.Length) {
+                entries = Grow();
+            }
+            ref Entry entry = ref entries[depth];
+            entry.Name = name;
+            entry.Line = line;
+            entry.Below = _interpreted.Value;
+            // written last: another thread reading the frames reads the depth first
+            _depth = depth + 1;
+            return depth;
+        }
+
+        public void SetLine(int depth, int line) {
+            _entries[depth].Line = line;
+        }
+
+        public void Leave(int depth) {
+            // the interpreted frame is not kept alive by a frame that is gone
+            _entries[depth].Below = null;
+            _depth = depth;
+        }
+
+        private Entry[]/*!*/ Grow() {
+            // filled before it is published: a reader sees the old array or the complete new one
+            var entries = new Entry[_entries.Length * 2];
+            Array.Copy(_entries, entries, _entries.Length);
+            return _entries = entries;
+        }
+
+        internal struct Frame {
+            public string Name;
+            public int Line;
+            public Microsoft.Scripting.Interpreter.InterpretedFrame Below;
+        }
+
+        /// <summary>
+        /// The frames <paramref name="thread"/> is in, innermost first; empty if none. The thread runs on while it is read,
+        /// so this is a snapshot that may be slightly off, as the interpreted frames read alongside are.
+        /// </summary>
+        internal static Frame[]/*!*/ Snapshot(Thread/*!*/ thread) {
+            PrecompiledFrames frames;
+            if (!_byThread.TryGetValue(thread, out frames)) {
+                return Array.Empty<Frame>();
+            }
+            int depth = frames._depth;
+            var entries = frames._entries;
+            depth = Math.Min(depth, entries.Length);
+            var result = new System.Collections.Generic.List<Frame>(depth);
+            for (int i = depth - 1; i >= 0; i--) {
+                var entry = entries[i];
+                if (entry.Name != null) {
+                    result.Add(new Frame { Name = entry.Name, Line = entry.Line, Below = entry.Below });
+                }
+            }
+            return result.ToArray();
+        }
     }
 }

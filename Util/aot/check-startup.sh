@@ -2,7 +2,8 @@
 # Checks that the startup library (IronRuby.Startup.dll, README.md part D) changes nothing a program sees:
 #
 #   1. Util/aot/startup-checks.rb prints the same with the library as without it (IR_STARTUP_DLL=none):
-#      coverage of files required after Coverage.start, frame labels, frozen literals, interpolation.
+#      coverage of files required after Coverage.start, frame labels, frozen literals, interpolation,
+#      and other threads' backtraces (Thread#backtrace) through precompiled iterators.
 #   2. In a copy of the tree elsewhere (as an unpacked release): the library is used there, and `load' of
 #      one of its files that was edited since runs the edit.
 #

@@ -140,36 +140,58 @@ namespace IronRuby.Runtime {
         /// StackTrace(Thread) and no Thread.Suspend - so this is what there is, and it costs nothing
         /// when nobody asks: the chain is already there for the owning thread's own backtraces.
         ///
+        /// The startup library's methods and blocks that run a block are compiled code, which the chain does not
+        /// have; they keep frames of their own (<see cref="Precompiled.PrecompiledFrames"/>), each with the interpreted
+        /// frame it was entered from, which puts it among the interpreted ones: above that frame, and below the
+        /// interpreted frames entered since.
+        ///
         /// The thread is running while we read, so the result is a snapshot rather than an instant.
         /// Frames are not recycled, so a frame that was left while we were walking still points at its
         /// old parent and the walk terminates; the depth cap is there for the case where it somehow
         /// does not.
         /// </summary>
-        internal RubyStackTraceBuilder(RubyContext/*!*/ context, InterpretedFrame frame)
+        internal RubyStackTraceBuilder(RubyContext/*!*/ context, InterpretedFrame frame, Precompiled.PrecompiledFrames.Frame[]/*!*/ precompiled)
             : this(context) {
 
-            for (int depth = 0; frame != null && depth < MaxThreadBacktraceDepth; depth++, frame = frame.Parent) {
-                string methodName = frame.Name;
-                if (methodName == InterpretedCallSiteName) {
-                    continue;
-                }
-
+            int next = 0;
+            for (int depth = 0; (frame != null || next < precompiled.Length) && depth < MaxThreadBacktraceDepth; depth++) {
+                string methodName;
                 string file;
                 int line;
-                var debugInfo = frame.GetDebugInfo(frame.InstructionIndex);
-                if (debugInfo != null) {
-                    file = debugInfo.FileName;
-                    line = debugInfo.StartLine;
-                } else {
-                    file = null;
-                    line = 0;
-                }
 
-                // Frames the interpreter runs on behalf of the DLR rather than of Ruby have no encoded
-                // Ruby name; they are not part of a Ruby backtrace and MRI has nothing to put in their
-                // place, so leave them out.
-                if (!TryParseRubyMethodName(ref methodName, ref file, ref line)) {
-                    continue;
+                // a precompiled frame entered from this interpreted frame is above it (from none: below all of them, or
+                // its interpreted frame was left while we read)
+                if (next < precompiled.Length && (frame == null || precompiled[next].Below == frame)) {
+                    var compiled = precompiled[next++];
+                    methodName = compiled.Name;
+                    file = null;
+                    line = compiled.Line;
+                    if (!TryParseRubyMethodName(ref methodName, ref file, ref line)) {
+                        continue;
+                    }
+                    Precompiled.PrecompiledCode.RebaseFrameFile(ref file);
+                } else {
+                    methodName = frame.Name;
+                    var debugInfo = frame.GetDebugInfo(frame.InstructionIndex);
+                    if (debugInfo != null) {
+                        file = debugInfo.FileName;
+                        line = debugInfo.StartLine;
+                    } else {
+                        file = null;
+                        line = 0;
+                    }
+                    frame = frame.Parent;
+
+                    if (methodName == InterpretedCallSiteName) {
+                        continue;
+                    }
+
+                    // Frames the interpreter runs on behalf of the DLR rather than of Ruby have no encoded
+                    // Ruby name; they are not part of a Ruby backtrace and MRI has nothing to put in their
+                    // place, so leave them out.
+                    if (!TryParseRubyMethodName(ref methodName, ref file, ref line)) {
+                        continue;
+                    }
                 }
 
                 if (IsInternalFile(file)) {

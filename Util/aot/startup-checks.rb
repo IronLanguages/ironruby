@@ -54,3 +54,25 @@ end
 f = Fiber.new { 1 }
 puts "Fiber#inspect: " + f.inspect.sub(/0x\h+/, "0x").sub(/ \S+:\d+/, " file:line")
 puts "interpolation: " + "#{[:a, 1].map(&:to_s).join}:#{1 + 1}-x".inspect
+
+# Another thread's backtrace shows the precompiled methods and blocks that run a block or a loop (PrecompiledFrames),
+# among its interpreted frames. (Consecutive repeats are folded: without the library Kernel#sleep, which ruby4.rb
+# wraps, is reported twice.)
+require "set"
+require "monitor"
+monitor = Monitor.new
+mixin = Object.new.extend(MonitorMixin)
+threads = {
+  "loop" => Thread.new { loop { sleep } },
+  "Set#each" => Thread.new { Set[1].each { sleep } },
+  "Monitor#synchronize" => Thread.new { monitor.synchronize { sleep } },
+  "MonitorMixin#mon_synchronize" => Thread.new { mixin.mon_synchronize { Set[1, 2].each { |x| loop { sleep } } } },
+  "then" => Thread.new { 1.then { sleep } },
+}
+sleep 0.05 until threads.values.all? { |t| t.status == "sleep" }
+threads.each do |name, t|
+  frames = t.backtrace.map { |f| f.sub(/^.*\//, "") }.chunk_while { |a, b| a == b }.map(&:first)
+  puts "Thread#backtrace (#{name}): " + frames.join(" | ")
+end
+puts "Thread#backtrace_locations: " + threads["Set#each"].backtrace_locations.map(&:label).chunk_while { |a, b| a == b }.map(&:first).join(" | ")
+threads.each_value(&:kill)

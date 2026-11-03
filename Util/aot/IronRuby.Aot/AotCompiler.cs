@@ -745,8 +745,12 @@ namespace IronRuby.Aot {
             var scopeParam = Expression.Parameter(typeof(RubyScope), "#declaringScope");
             var moduleParam = Expression.Parameter(typeof(RubyModule), "#declaringModule");
             var bodyLambda = ast.TransformBody(gen, scopeParam, moduleParam, label, null);
+            var rewritten = Rewrite(bodyLambda);
+            if (ThreadFrames) {
+                rewritten = new ThreadFrameAdder(this, ps.Block != null).Visit(rewritten);
+            }
             var factory = Expression.Lambda<Func<RubyScope, RubyModule, Delegate>>(
-                Expression.Convert(Rewrite(bodyLambda), typeof(Delegate)), "def " + label, new[] { scopeParam, moduleParam });
+                Expression.Convert(rewritten, typeof(Delegate)), "def " + label, new[] { scopeParam, moduleParam });
             Count("method bodies compiled ahead of time");
 
             var loc = ast.Location;
@@ -764,6 +768,103 @@ namespace IronRuby.Aot {
                 header, StringExpression(body.Document?.FileName),
                 ConstantField(AotHost.GetEncoding(body), typeof(RubyEncoding)), factory,
                 Expression.Constant(JitSource(body, ast), typeof(string)), Expression.Constant(label, typeof(string)));
+        }
+
+        /// <summary>
+        /// Another thread's backtrace is built from the interpreter's frame chain, which compiled code is not in: a method
+        /// or block that runs a block (a yield, or a block parameter of a method) or a loop keeps a frame of its own for it,
+        /// PrecompiledFrames, so that Kernel#loop, Set#each or Monitor#synchronize show in a thread dump as they do without
+        /// the library. These are the frames a parked or busy thread is likely to be in, below its own code (in the startup
+        /// files 363 of the 2,379 methods and 68 blocks); the other methods do not pay for a frame at every call.
+        /// IR_AOT_THREAD_FRAMES=0 turns this off.
+        /// </summary>
+        public bool ThreadFrames = Environment.GetEnvironmentVariable("IR_AOT_THREAD_FRAMES") != "0";
+
+        // wraps a def's body lambda (the first visited) and the blocks in it, those that run a block or a loop:
+        //   var #frames = PrecompiledFrames.Current; var #frameDepth = #frames.Enter(name, line);
+        //   try { body, with #frames.SetLine(#frameDepth, line) after each sequence point } finally { #frames.Leave(#frameDepth); }
+        private sealed class ThreadFrameAdder : ExpressionVisitor {
+            private readonly AotCompiler _c;
+            private bool _isMethod = true;
+            private readonly bool _hasBlockParameter;
+
+            public ThreadFrameAdder(AotCompiler c, bool hasBlockParameter) {
+                _c = c;
+                _hasBlockParameter = hasBlockParameter;
+            }
+
+            protected override Expression VisitLambda<T>(Expression<T> node) {
+                bool isMethod = _isMethod;
+                _isMethod = false;
+                var body = Visit(node.Body);
+                if (!IsMethodOrBlock(node) || !(isMethod && _hasBlockParameter || YieldFinder.Yields(node.Body) || LoopFinder.HasLoop(node))) {
+                    return body == node.Body ? node : Expression.Lambda<T>(body, node.Name, node.TailCall, node.Parameters);
+                }
+                // the encoded name: "\u2111\u211c:" + label + U+2236 + line + U+2236 + id + U+2236 + file
+                var parts = node.Name.Split('\u2236');
+                int line = parts.Length > 1 && int.TryParse(parts[1], out int l) ? l : 0;
+                var frames = Expression.Variable(typeof(PrecompiledFrames), "#frames");
+                var depth = Expression.Variable(typeof(int), "#frameDepth");
+                body = new LineSetter(frames, depth).Visit(body);
+                _c.Count(isMethod ? "methods that run a block or a loop, with a frame for other threads' backtraces"
+                    : "blocks that run a block or a loop, with a frame for other threads' backtraces");
+                return Expression.Lambda<T>(
+                    Expression.Block(node.ReturnType, new[] { frames, depth },
+                        Expression.Assign(frames, Expression.Property(null, typeof(PrecompiledFrames).GetProperty(nameof(PrecompiledFrames.Current)))),
+                        Expression.Assign(depth, Expression.Call(frames, typeof(PrecompiledFrames).GetMethod(nameof(PrecompiledFrames.Enter)),
+                            Expression.Constant(node.Name, typeof(string)), Expression.Constant(line))),
+                        Expression.TryFinally(ConvertTo(body, node.ReturnType),
+                            Expression.Call(frames, typeof(PrecompiledFrames).GetMethod(nameof(PrecompiledFrames.Leave)), depth))),
+                    node.Name, node.TailCall, node.Parameters);
+            }
+
+            protected override Expression VisitExtension(Expression node) => node.CanReduce ? Visit(node.Reduce()) : node;
+        }
+
+        // a yield anywhere in the lambda, its blocks included (a method whose block yields runs its block too)
+        private sealed class YieldFinder : ExpressionVisitor {
+            private bool _found;
+
+            public static bool Yields(Expression body) {
+                var finder = new YieldFinder();
+                finder.Visit(body);
+                return finder._found;
+            }
+
+            public override Expression Visit(Expression node) => _found ? node : base.Visit(node);
+
+            protected override Expression VisitMethodCall(MethodCallExpression node) {
+                if (node.Method.DeclaringType == typeof(RubyOps) &&
+                    (node.Method.Name == nameof(RubyOps.MethodYield) || node.Method.Name == nameof(RubyOps.BlockYield))) {
+                    _found = true;
+                    return node;
+                }
+                return base.VisitMethodCall(node);
+            }
+
+            protected override Expression VisitExtension(Expression node) => node.CanReduce ? Visit(node.Reduce()) : node;
+        }
+
+        // the frame's line kept at each statement of the lambda's own code (not of the lambdas nested in it)
+        private sealed class LineSetter : ExpressionVisitor {
+            private readonly ParameterExpression _frames, _depth;
+
+            public LineSetter(ParameterExpression frames, ParameterExpression depth) {
+                _frames = frames;
+                _depth = depth;
+            }
+
+            protected override Expression VisitDebugInfo(DebugInfoExpression node) {
+                if (node.IsClear || node.StartLine <= 0) {
+                    return node;
+                }
+                return Expression.Block(node,
+                    Expression.Call(_frames, typeof(PrecompiledFrames).GetMethod(nameof(PrecompiledFrames.SetLine)), _depth, Expression.Constant(node.StartLine)));
+            }
+
+            protected override Expression VisitLambda<T>(Expression<T> node) => node;
+
+            protected override Expression VisitExtension(Expression node) => node.CanReduce ? Visit(node.Reduce()) : node;
         }
 
         private string _sourcePath;
