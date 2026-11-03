@@ -6,10 +6,6 @@
     <!-- Src/Libraries/Zstd calls ZstdSharp's ZSTD_* functions, which take pointers. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
-  <ItemGroup>
-    <!-- present in the tree but never compiled by the legacy csproj -->
-    <Compile Remove="Extensions\ScopeOps.cs" />
-  </ItemGroup>
   <ItemGroup Condition="'$(BootstrapInitializers)' == 'true'">
     <!-- Bootstrap build for Src/ClassInitGenerator: the generated registrations
          are stale by definition while regenerating them, so leave them out. -->
