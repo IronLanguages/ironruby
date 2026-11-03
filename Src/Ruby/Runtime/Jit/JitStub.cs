@@ -86,13 +86,23 @@ namespace IronRuby.Runtime.Jit {
         private int _perCountMandatory = -1;
         private int _countsSeen;
 
-        // Parameters the body only ever stores into an instance variable: kept as the boxed
-        // objects they arrived as, whatever their type (JitScreen's otherUses).
+        // Parameters the body only ever stores into an instance variable or an element: kept as
+        // the boxed objects they arrived as, whatever their type (JitScreen's otherUses).
         private bool[] _storedOnly;
+
+        // The scope the method was defined in, which its constants resolve in (JitCompiler.EmitConstant).
+        // The compiled body is shared only by `def's of the same lexical module chain, which is all a
+        // constant lookup depends on (RubyMethodBody.GetDelegate). Null: the body folds no constants.
+        private RubyScope _declaringScope;
 
         // profiling feedback
         private int _calls;
         private readonly int[]/*!*/ _argKind;       // 0 = unseen, 1 = int, 2 = double, 3 = other/mixed, 4 = long
+        // The CLR type of each argument, and of self, while profiling: one type, JitCompiler.MixedTypes
+        // once two have differed, typeof(void) for nil. A hint the compiler keeps an Array or Hash
+        // intrinsic off a receiver with (JitCompiler.ObservedType); it is never relied on for a result.
+        private readonly Type[]/*!*/ _argClrType;
+        private Type _selfClrType;
         private RubyClass _receiverClass;
         private bool _polymorphicReceiver;
 
@@ -127,6 +137,7 @@ namespace IronRuby.Runtime.Jit {
             _positional = (keywords != null) ? arity - 1 : arity;
             _typedCount = (keywords != null) ? _positional + keywords.Count : arity;
             _argKind = new int[_typedCount];
+            _argClrType = new Type[_typedCount];
         }
 
         protected abstract void Install(Delegate/*!*/ entry);
@@ -156,6 +167,8 @@ namespace IronRuby.Runtime.Jit {
             // The least a deopt of the open window cost, throw to catch, in Stopwatch ticks; 0 if
             // none was timed (OnDeopt).
             internal long DeoptCost;
+            // The constant version the typed bodies were compiled under (JitCode.UsesConstants).
+            internal int ConstantVersion;
 
             internal Specialization(JitStub/*!*/ stub) {
                 Stub = stub;
@@ -193,6 +206,7 @@ namespace IronRuby.Runtime.Jit {
 
             RubyClass cls = JitRuntime.ClassOf(_context, self);
             if (_receiverClass == null) { _receiverClass = cls; } else if (_receiverClass != cls) { _polymorphicReceiver = true; }
+            ObserveType(ref _selfClrType, self);
 
             if (++_calls < Threshold) { return; }
             _calls = 0;
@@ -212,7 +226,13 @@ namespace IronRuby.Runtime.Jit {
             }
         }
 
+        private static void ObserveType(ref Type seen, object value) {
+            Type t = (value == null) ? typeof(void) : value.GetType();
+            if (seen == null) { seen = t; } else if (seen != t) { seen = JitCompiler.MixedTypes; }
+        }
+
         private void Observe(int i, object arg) {
+            ObserveType(ref _argClrType[i], arg);
             int k = (arg is int) ? 1 : (arg is double) ? 2 : (arg is long) ? 4 : 3;
             if (_argKind[i] == 0) {
                 _argKind[i] = k;
@@ -520,9 +540,10 @@ namespace IronRuby.Runtime.Jit {
             // large body compiled would be inside the snapshot, and the entry would go on running
             // the operator it replaced.
             int version = RubyModule.GlobalMethodVersion;
+            int constantVersion = _context.ConstantAccessVersion;
 
             long start = Stopwatch.GetTimestamp();
-            var code = JitCompiler.TryCompile(_ast, _context, types, _keywords);
+            var code = JitCompiler.TryCompile(_ast, _context, types, _keywords, -1, _declaringScope, Hints());
             if (code == null) { return false; }
 
             bool needsClassGuard = code.EmittedSelfCall;
@@ -545,6 +566,7 @@ namespace IronRuby.Runtime.Jit {
             }
 
             var spec = new Specialization(this);
+            spec.ConstantVersion = constantVersion;
             spec.Entry = BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec).Compile();
             if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
                 _keywords.Count <= JitKeywordCall.MaxKeywords) {
@@ -568,6 +590,10 @@ namespace IronRuby.Runtime.Jit {
                     _declaringModule.Name ?? "main", _ast.Name, _arity, code.ReturnType, needsClassGuard ? " (self-call)" : "");
             }
             return true;
+        }
+
+        private JitCompiler.ReceiverHints/*!*/ Hints() {
+            return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType };
         }
 
         private JT[]/*!*/ ProfiledTypes(int count) {
@@ -607,6 +633,7 @@ namespace IronRuby.Runtime.Jit {
         private bool TrySpecializePerCount() {
             // read before compiling, as in TrySpecialize
             int version = RubyModule.GlobalMethodVersion;
+            int constantVersion = _context.ConstantAccessVersion;
 
             long start = Stopwatch.GetTimestamp();
             int optionalCount = _positional - _perCountMandatory;
@@ -615,7 +642,7 @@ namespace IronRuby.Runtime.Jit {
             bool any = false, pinned = false;
             for (int k = 0; k <= optionalCount; k++) {
                 if ((_countsSeen & (1 << k)) == 0) { continue; }
-                var code = JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, k);
+                var code = JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, k, _declaringScope, Hints());
                 if (code == null) { continue; }
                 if (code.EmittedSelfCall) {
                     if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass)) { continue; }
@@ -641,6 +668,7 @@ namespace IronRuby.Runtime.Jit {
 
             // one Specialization for all the bodies: they retire, cool down and go stale together
             var spec = new Specialization(this);
+            spec.ConstantVersion = constantVersion;
             spec.Entry = BuildPerCountEntry(codes, callees, version, pinned ? _receiverClass : null, spec).Compile();
 
             lock (_sync) {
@@ -706,7 +734,7 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            MSA.Expression test = null;
+            MSA.Expression test = NotTracing();
             if (pinnedClass != null) {
                 test = And(test, Ast.ReferenceEqual(
                     Ast.Call(JitRuntime.M("ClassOf"), Ast.Constant(_context), self),
@@ -782,13 +810,14 @@ namespace IronRuby.Runtime.Jit {
                 var deopted = Ast.Constant(Deopted, typeof(object));
                 fast = Ast.Block(typeof(object), new[] { result },
                     CountEntry(spec),
-                    Ast.TryCatch(
+                    WithUndoLog(code, handler => Ast.TryCatch(
                         Ast.Assign(result, fast),
                         Ast.Catch(typeof(JitDeoptException), Ast.Block(
+                            handler,
                             Ast.Call(JitRuntime.M("EntryDeopted"), Ast.Constant(spec, typeof(object))),
                             Ast.Assign(result, deopted)
                         ))
-                    ),
+                    )),
                     Ast.Condition(Ast.ReferenceEqual(result, deopted), GenericCall(self, blk, args), result, typeof(object))
                 );
             }
@@ -805,7 +834,7 @@ namespace IronRuby.Runtime.Jit {
             // A stale version fails this guard on every later call; the stub takes the entry down
             // (JitStub.VersionChanged) and this one call runs the generic body.
             body = Ast.Condition(
-                Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version)),
+                VersionTest(version, spec, code.UsesConstants),
                 body,
                 Ast.Block(
                     Ast.Call(JitRuntime.M("EntryStale"), Ast.Constant(spec, typeof(object))),
@@ -842,7 +871,7 @@ namespace IronRuby.Runtime.Jit {
                 values[_positional + j] = slots[JitKeywordCall.MaxPositional + j];
             }
 
-            MSA.Expression test = Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version));
+            MSA.Expression test = Ast.AndAlso(VersionTest(version, spec, code.UsesConstants), NotTracing());
             // the separation check on the last positional, as in BuildEntry
             if (_positional > 0 && code.ParameterTypes[_positional - 1] == JT.Obj) {
                 test = And(test, Ast.Not(Ast.Call(typeof(RubyOps).GetMethod("IsKeywordArgumentsHash"), values[_positional - 1])));
@@ -882,10 +911,12 @@ namespace IronRuby.Runtime.Jit {
                     CountEntry(spec),
                     fast
                 );
-                fast = Ast.TryCatch(fast, Ast.Catch(typeof(JitDeoptException), Ast.Block(
+                var direct = fast;
+                fast = WithUndoLog(code, handler => Ast.TryCatch(direct, Ast.Catch(typeof(JitDeoptException), Ast.Block(
+                    handler,
                     Ast.Call(JitRuntime.M("EntryDeopted"), Ast.Constant(spec, typeof(object))),
                     noDirect
-                )));
+                ))));
             }
             var body = Ast.Condition(test, fast, noDirect, typeof(object));
 
@@ -919,8 +950,12 @@ namespace IronRuby.Runtime.Jit {
                     arm, body, typeof(object));
             }
 
+            bool usesConstants = false;
+            foreach (var code in codes) {
+                if (code != null && code.UsesConstants) { usesConstants = true; }
+            }
             body = Ast.Condition(
-                Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version)),
+                VersionTest(version, spec, usesConstants),
                 body,
                 Ast.Block(
                     Ast.Call(JitRuntime.M("EntryStale"), Ast.Constant(spec, typeof(object))),
@@ -940,7 +975,7 @@ namespace IronRuby.Runtime.Jit {
             MSA.ParameterExpression/*!*/ blk, MSA.ParameterExpression[]/*!*/ args, int count, RubyClass pinnedClass,
             Specialization/*!*/ spec) {
 
-            MSA.Expression test = null;
+            MSA.Expression test = NotTracing();
             if (pinnedClass != null && code.EmittedSelfCall) {
                 test = And(test, Ast.ReferenceEqual(
                     Ast.Call(JitRuntime.M("ClassOf"), Ast.Constant(_context), self),
@@ -982,17 +1017,66 @@ namespace IronRuby.Runtime.Jit {
                 var deopted = Ast.Constant(Deopted, typeof(object));
                 fast = Ast.Block(typeof(object), new[] { result },
                     CountEntry(spec),
-                    Ast.TryCatch(
+                    WithUndoLog(code, handler => Ast.TryCatch(
                         Ast.Assign(result, fast),
                         Ast.Catch(typeof(JitDeoptException), Ast.Block(
+                            handler,
                             Ast.Call(JitRuntime.M("EntryDeopted"), Ast.Constant(spec, typeof(object))),
                             Ast.Assign(result, deopted)
                         ))
-                    ),
+                    )),
                     Ast.Condition(Ast.ReferenceEqual(result, deopted), GenericCall(self, blk, args), result, typeof(object))
                 );
             }
             return (test != null) ? Ast.Condition(test, fast, GenericCall(self, blk, args), typeof(object)) : fast;
+        }
+
+        /// <summary>
+        /// The events a typed body (or an outlined loop) would not deliver: it has no :line, :call or
+        /// :return hooks, and the library methods it inlines no :c_call or :c_return ones (the block
+        /// events are in for safety; a typed body has no blocks). It raises, rescues, defines classes
+        /// and switches fibers only through the generic code, so a TracePoint on :raise, :rescue,
+        /// :class, :end, :thread_*, :fiber_switch or :script_compiled leaves it running.
+        /// </summary>
+        internal const int TypedBodyEvents = (int)(TraceEvents.Line | TraceEvents.Call | TraceEvents.Return |
+            TraceEvents.CCall | TraceEvents.CReturn | TraceEvents.BCall | TraceEvents.BReturn);
+
+        /// <summary>
+        /// No TracePoint is enabled for an event the typed body would not deliver (TypedBodyEvents), so
+        /// while one is the generic body runs instead. A TracePoint is enabled and disabled at any time,
+        /// which the method version does not follow, so this is tested on every entry - one static read.
+        /// </summary>
+        private static MSA.Expression/*!*/ NotTracing() {
+            return Ast.Equal(
+                Ast.And(Ast.Field(null, typeof(TracePoint).GetField("ActiveEvents")), Ast.Constant(TypedBodyEvents)),
+                Ast.Constant(0));
+        }
+
+        /// <summary>The entry guard: the method version, and the constant version if the body folded constants.</summary>
+        private MSA.Expression/*!*/ VersionTest(int version, Specialization/*!*/ spec, bool usesConstants) {
+            MSA.Expression test = Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version));
+            if (usesConstants) {
+                test = Ast.AndAlso(test, Ast.Call(JitRuntime.M("ConstantsOk"), Ast.Constant(_context), Ast.Constant(spec.ConstantVersion)));
+            }
+            return test;
+        }
+
+        /// <summary>
+        /// The typed body's call, made by <paramref name="call"/> around the statement its deopt handler
+        /// is to start with: for a body that writes Hash or Array elements (JitCode.UsesUndoLog), the
+        /// handler takes those writes back (JitUndoLog) before the generic body runs the call again, and
+        /// however the call ends, the writes it made and kept stand. Otherwise the handler does nothing.
+        /// </summary>
+        private static MSA.Expression/*!*/ WithUndoLog(JitCode/*!*/ code, Func<MSA.Expression, MSA.Expression>/*!*/ call) {
+            if (!code.UsesUndoLog) {
+                return call(Ast.Empty());
+            }
+            var mark = Ast.Variable(typeof(int), "#undo-mark");
+            var guarded = call(Ast.Call(JitRuntime.M("UndoRollback"), mark));
+            return Ast.Block(guarded.Type, new[] { mark },
+                Ast.Assign(mark, Ast.Call(JitRuntime.M("UndoMark"))),
+                Ast.TryFinally(guarded, Ast.Call(JitRuntime.M("UndoRelease"), mark))
+            );
         }
 
         private static MSA.Expression/*!*/ And(MSA.Expression left, MSA.Expression/*!*/ right) {
@@ -1015,6 +1099,11 @@ namespace IronRuby.Runtime.Jit {
         /// delegate unchanged when it is not.
         /// </summary>
         internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule) {
+            return Wrap(generic, ast, context, declaringModule, null);
+        }
+
+        internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule,
+            RubyScope declaringScope) {
             if (JitRuntime.Disabled) { return generic; }
             JitRuntime.HookStats();
 
@@ -1058,7 +1147,8 @@ namespace IronRuby.Runtime.Jit {
                     defaults = null;
                 }
             }
-            // Tracing and coverage need the real frame.
+            // Tracing and coverage need the real frame. (A TracePoint enabled at run time is the
+            // entry's NotTracing guard; a body that counts its lines is not handed here at all.)
             if (context.RubyOptions.EnableTracing || context.RubyOptions.Profile) { return generic; }
 
             // A body the compiler can never accept, whatever types it is called with, is not
@@ -1099,6 +1189,7 @@ namespace IronRuby.Runtime.Jit {
             stub._defaults = defaults;
             if (perCount) { stub._perCountMandatory = mandatoryCount; }
             stub._storedOnly = storedOnly;
+            stub._declaringScope = declaringScope;
             var light = generic.Target as Microsoft.Scripting.Interpreter.LightLambda;
             if (light != null) {
                 light.Compile += (sender, e) => stub._genericCompiled = true;

@@ -55,9 +55,13 @@ namespace IronRuby.Runtime.Jit {
         internal JT[]/*!*/ ParameterTypes;
         internal bool CanDeopt;
         internal bool EmittedSelfCall;
+        // The body folded constants (EmitConstant): the entry guards on the constant version as well.
+        internal bool UsesConstants;
+        // The body writes Hash elements (EmitIndexWrite): the entry brackets the call with the undo log.
+        internal bool UsesUndoLog;
     }
 
-    internal sealed class JitCompiler {
+    internal sealed partial class JitCompiler {
         internal const int MaxNodes = 2000;
 
         private readonly MethodDeclaration _ast;
@@ -122,9 +126,11 @@ namespace IronRuby.Runtime.Jit {
         // parameter, the entry having filled in the omitted ones' literal defaults.
         private readonly int _supplied = -1;
 
-        private JitCompiler(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords, int supplied) {
+        private JitCompiler(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords, int supplied,
+            RubyScope constantScope) {
             _ast = ast;
             _context = context;
+            _constantScope = constantScope;
             _paramTypes = paramTypes;
             _keywords = keywords;
             _supplied = (keywords == null) ? supplied : -1;
@@ -205,10 +211,12 @@ namespace IronRuby.Runtime.Jit {
 
         private JitCompiler(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context, int scopeDepth,
             Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self, Func<string, JT> ivarProfile,
-            Func<string, string> attrProfile, Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal) {
+            Func<string, string> attrProfile, Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal,
+            RubyScope constantScope) {
             _ast = null;
             _loop = loop;
             _context = context;
+            _constantScope = constantScope;
             _scopeDepth = scopeDepth;
             _bindSlot = bindSlot;
             _slots = new List<JitLoopSlot>();
@@ -230,22 +238,37 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, out List<JitLoopSlot> slots, out bool canDeopt) {
-            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, null, null, out slots, out canDeopt);
+            JitLoopFacts facts;
+            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, null, null, null, null, out slots, out canDeopt, out facts);
+        }
+
+        /// <summary>What JitLoopCompiler builds around an outlined loop besides its slots.</summary>
+        internal struct JitLoopFacts {
+            // the body folded constants: the entry guards on the constant version
+            internal bool UsesConstants;
+            // the body writes Hash elements: the iteration's writes go into the undo log, which the
+            // body commits at the top of each iteration (UndoLog) from the mark the entry sets (UndoMark)
+            internal MSA.ParameterExpression UndoLog;
+            internal MSA.ParameterExpression UndoMark;
         }
 
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self,
             Func<string, JT> ivarProfile, Func<string, string> attrProfile,
-            Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal, out List<JitLoopSlot> slots, out bool canDeopt) {
+            Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal, RubyScope constantScope, ReceiverHints hints,
+            out List<JitLoopSlot> slots, out bool canDeopt, out JitLoopFacts facts) {
 
             slots = null;
             canDeopt = false;
-            var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal);
+            facts = default(JitLoopFacts);
+            var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal, constantScope);
+            c._hints = hints;
             MSA.Expression body;
             try {
                 JT type;
                 body = c.EmitWhile(loop, out type);
             } catch (JitBailout) {
+                if (Osr.OsrLoopSite.Verbose && c._bailReason != null) { Console.Error.WriteLine("[osr]   bailed: {0}", c._bailReason); }
                 return null;
             }
             // A deopt restores the locals to what they were at the top of the iteration and
@@ -259,6 +282,9 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
             slots = c._slots;
+            facts.UsesConstants = c._usesConstants;
+            facts.UndoLog = c._undoLog;
+            facts.UndoMark = c._undoMark;
             // the back-edge safe point hands the loop back through the deopt
             // catch, so the catch is always needed - but it fires at the top of an iteration,
             // before anything observable, so it does not make an impure body unspecializable.
@@ -397,13 +423,23 @@ namespace IronRuby.Runtime.Jit {
         /// parameters, evaluating the other defaults itself; -1 for the body that takes them all.
         /// </summary>
         internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords, int supplied) {
+            return TryCompile(ast, context, paramTypes, keywords, supplied, null, null);
+        }
+
+        /// <summary>
+        /// <paramref name="constantScope"/>: the scope the method's constants resolve in (its declaring
+        /// scope); null if the body may not fold constants.
+        /// </summary>
+        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords, int supplied,
+            RubyScope constantScope, ReceiverHints hints) {
             // The self-recursive call needs the method's return type before the body has been
             // typed. Guess, compile, and re-run once if the guess was wrong.
             // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
             // how many there can be; a guess that does not settle is rejected.
             JT guess = JT.None;
             for (int round = 0; round < 5; round++) {
-                var c = new JitCompiler(ast, context, paramTypes, keywords, supplied);
+                var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
+                c._hints = hints;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
@@ -454,6 +490,12 @@ namespace IronRuby.Runtime.Jit {
                     parameters.Add(p);
                     functionScope.Remove(p);
                 }
+                if (c._undoLog != null) {
+                    // the element writes are logged where the entry's mark says (JitStub.WithUndoLog)
+                    c._safePointDeopts.Value = true;
+                    functionScope.Add(c._undoLog);
+                    body = Ast.Block(body.Type, Ast.Assign(c._undoLog, Ast.Property(null, typeof(JitUndoLog).GetProperty("Current"))), body);
+                }
                 if (functionScope.Count > 0) {
                     body = Ast.Block(functionScope, body);
                 }
@@ -464,6 +506,8 @@ namespace IronRuby.Runtime.Jit {
                     ParameterTypes = c._resolvedTypes,
                     CanDeopt = c._canDeopt || c._ivarWrite,
                     EmittedSelfCall = c._selfCall,
+                    UsesConstants = c._usesConstants,
+                    UsesUndoLog = c._hashWrite,
                 };
             }
             return null;
@@ -758,6 +802,8 @@ namespace IronRuby.Runtime.Jit {
                 // `!x' is a call of x's #! - which the program may have redefined.
                 JT operandType;
                 var operand = EmitCondition(not.Expression, out operandType);
+                // an object's class may have its own #!
+                if (operandType == JT.Obj) { throw Bail("! of an object"); }
                 RequireBuiltin(operandType, "!");
                 type = JT.Bool;
                 return Ast.Not(operand);
@@ -815,6 +861,16 @@ namespace IronRuby.Runtime.Jit {
                 return EmitStatements(body.Statements, out type);
             }
 
+            var constant = node as ConstantVariable;
+            if (constant != null) { return EmitConstant(constant, out type); }
+
+            var caseExpr = node as CaseExpression;
+            if (caseExpr != null) { return EmitCase(caseExpr, out type); }
+
+            // `(a; b)', and what `h[k] op= v' is lowered to when k is not a literal
+            var sequence = node as BlockExpression;
+            if (sequence != null) { return EmitStatements(sequence.Statements, out type); }
+
             throw Bail("node: " + node.GetType().Name);
         }
 
@@ -853,7 +909,8 @@ namespace IronRuby.Runtime.Jit {
             MSA.ParameterExpression p;
             if (!TryLookup(Key(local), out p, out type)) {
                 if (_loop != null) {
-                    BindLoopLocal(local, JT.None, out p, out type);
+                    // a local only stored is an object slot, holding the box it holds (IsStoredOnly)
+                    BindLoopLocal(local, IsStoredOnly(local) ? JT.Obj : JT.None, out p, out type);
                     return LoadLoopSlot(p);
                 }
                 // A local read before any assignment is nil in Ruby; not modelled.
@@ -865,6 +922,9 @@ namespace IronRuby.Runtime.Jit {
         private MSA.Expression/*!*/ EmitAssignment(SimpleAssignmentExpression/*!*/ node, out JT type) {
             string op = node.Operation;
             if (op == "&&" || op == "||") { throw JitBailout.Instance; }
+
+            var element = node.Left as ArrayItemAccess;
+            if (element != null) { return EmitIndexWrite(element, op, node.Right, out type); }
 
             var ivarTarget = node.Left as InstanceVariable;
             if (ivarTarget != null) {
@@ -890,21 +950,40 @@ namespace IronRuby.Runtime.Jit {
             MSA.ParameterExpression p;
             JT lt;
             bool known = TryLookup(Key(target), out p, out lt);
+            bool storedOnly = (op == null) && IsNumeric(rhsType) && IsStoredOnly(target);
             if (!known && _loop != null) {
                 // The slot exists in the tuple whether or not the loop has read it yet, and it
                 // is written back on the way out, so it has to be bound rather than declared.
-                known = BindLoopLocal(target, rhsType, out p, out lt);
+                // `x op= v' reads x first, so an object v says nothing about what x holds
+                known = BindLoopLocal(target, storedOnly ? JT.Obj : (op != null && rhsType == JT.Obj) ? JT.None : rhsType, out p, out lt);
+            }
+            if (!known && storedOnly) {
+                // read only to be stored: carried boxed, boxed once here (IsStoredOnly)
+                rhs = BoxForStore(rhs, rhsType);
+                rhsType = JT.Obj;
             }
 
             if (op != null) {
                 // `x op= v'  ->  `x = x op v'
                 if (!known) { throw JitBailout.Instance; }
                 rhs = NumericIVar(node.Right, rhs, ref rhsType);
-                if (!IsNumeric(lt) || !IsNumeric(rhsType)) { throw JitBailout.Instance; }
-                rhs = EmitBinary(op, (_loop != null) ? LoadLoopSlot(p) : p, lt, rhs, rhsType, out rhsType);
+                MSA.Expression current = (_loop != null) ? LoadLoopSlot(p) : p;
+                if (IsNumeric(lt) && IsNumeric(rhsType)) {
+                    rhs = EmitBinary(op, current, lt, rhs, rhsType, out rhsType);
+                } else if ((lt == JT.Obj && IsNumeric(rhsType)) || (IsNumeric(lt) && rhsType == JT.Obj)) {
+                    // `s += a[i]', `x += 1' with x an object local: the object is speculated to be a number
+                    rhs = EmitSpeculatedBinary(op, current, lt, target, rhs, rhsType, node.Right, out rhsType);
+                } else {
+                    throw JitBailout.Instance;
+                }
             }
 
             if (known) {
+                if (lt == JT.Obj && rhsType != JT.Obj) {
+                    // an object local holds any value, boxed
+                    rhs = BoxForStore(rhs, rhsType);
+                    rhsType = JT.Obj;
+                }
                 if (lt != rhsType) {
                     // Int and Lng are two representations of one Ruby class, so a store across
                     // them is a widening or a narrowing, not a type change. Anything else would
@@ -981,9 +1060,12 @@ namespace IronRuby.Runtime.Jit {
             // An inner loop of an outlined one deopts to the *outer* iteration's top, which
             // re-runs part of that iteration: only allowed for a pure body, as for any deopt.
             if (_loop != null && node != _loop) { _canDeopt = true; }
+            // In a method a safe point runs what is waiting (a trap handler, say) where it is, and the
+            // body goes on - unless the body writes elements (see MethodSafePoint), which it only
+            // knows once it has been emitted.
             MSA.Expression safePoint = (_loop != null)
                 ? Ast.Call(JitRuntime.M("OsrSafePoint"))
-                : Ast.Call(RubyUtils.SafePointMethod);
+                : Ast.Call(JitRuntime.M("MethodSafePoint"), Ast.Constant(_safePointDeopts));
 
             var iteration = (snapshot != null)
                 ? Ast.Block(snapshot, Ast.IfThen(Ast.Not(test), Ast.Break(exit)), safePoint, body)
@@ -999,9 +1081,17 @@ namespace IronRuby.Runtime.Jit {
         /// `snap_x = x' for every slot bound so far. Emitted lazily, after the body, because
         /// the body is what binds them; the DLR block it produces runs before the test.
         /// </summary>
+        // Set once a method body is known to write Hash or Array elements: its safe points then deopt
+        // rather than run Ruby code in the middle of writes a later deopt would take back.
+        private readonly StrongBox<bool>/*!*/ _safePointDeopts = new StrongBox<bool>();
+
         private MSA.Expression/*!*/ EmitSnapshot() {
-            if (_slots.Count == 0) { return AstUtils.Empty(); }
-            var copies = new List<MSA.Expression>(_slots.Count);
+            if (_slots.Count == 0 && _undoLog == null) { return AstUtils.Empty(); }
+            var copies = new List<MSA.Expression>(_slots.Count + 1);
+            if (_undoLog != null) {
+                // the Hash writes of the iterations before this one stand
+                copies.Add(Ast.Call(_undoLog, typeof(JitUndoLog).GetMethod("Commit"), _undoMark));
+            }
             foreach (var slot in _slots) {
                 copies.Add(Ast.Assign(slot.Snapshot, slot.Variable));
                 if (slot.Assigned != null) {
@@ -1160,6 +1250,8 @@ namespace IronRuby.Runtime.Jit {
                 case JT.Int:
                 case JT.Lng:
                 case JT.Dbl: return Ast.Block(e, Ast.Constant(true));
+                // anything but nil and false is true, and that is not a method call
+                case JT.Obj: return Ast.Call(IsTrueMethod, e);
                 default: throw Bail("condition of type " + t);
             }
         }
@@ -1180,6 +1272,7 @@ namespace IronRuby.Runtime.Jit {
                 case JT.Int:
                 case JT.Lng:
                 case JT.Dbl: truth = Ast.Constant(true); break;
+                case JT.Obj: truth = Ast.Call(IsTrueMethod, value); break;
                 default: throw Bail("&& / || operand of type " + lt);
             }
 
@@ -1261,8 +1354,13 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            // Binary operators on Fixnum/Float.
-            if (node.Target != null && argc == 1) {
+            // Hash#key? and #fetch, Array/Hash #size on an object (JitCompiler.Objects.cs).
+            if (node.Target != null && IsHashQuery(node.MethodName, argc)) {
+                return EmitHashQuery(node, out type);
+            }
+
+            // Binary operators on Fixnum/Float, and Array#[] / Hash#[] on an object.
+            if (node.Target != null && argc == 1 && !(args.Expressions[0] is SplattedArgument)) {
                 JT lt, rt;
                 var l = Emit(node.Target, out lt);
                 var r = Emit(args.Expressions[0], out rt);
@@ -1270,6 +1368,12 @@ namespace IronRuby.Runtime.Jit {
                 r = NumericIVar(args.Expressions[0], r, ref rt);
                 if (IsNumeric(lt) && IsNumeric(rt)) {
                     return EmitBinary(node.MethodName, l, lt, r, rt, out type);
+                }
+                if (node.MethodName == "[]") {
+                    return EmitIndexRead(node.Target, l, lt, r, rt, out type);
+                }
+                if ((lt == JT.Obj && IsNumeric(rt)) || (IsNumeric(lt) && rt == JT.Obj)) {
+                    return EmitSpeculatedBinary(node.MethodName, l, lt, node.Target, r, rt, args.Expressions[0], out type);
                 }
             }
 
@@ -1386,6 +1490,16 @@ namespace IronRuby.Runtime.Jit {
             return true;
         }
 
+        /// <summary>The library method, and public: what a call with an explicit receiver reaches.</summary>
+        private static bool IsPublicBuiltin(RubyClass/*!*/ cls, string/*!*/ name) {
+            return IsBuiltinMethod(cls, name) && IsPublic(cls, name);
+        }
+
+        private static bool IsPublic(RubyClass/*!*/ cls, string/*!*/ name) {
+            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible);
+            return resolved.Found && resolved.Info.Visibility == RubyMethodVisibility.Public;
+        }
+
         // RequireBuiltin's answers so far in this compile. IsBuiltinMethod resolves the method and
         // reads custom attributes, and a long arithmetic body asks the same few questions hundreds
         // of times (ruby-bench's 30k_variables: most of the time it took to specialize). A body
@@ -1413,9 +1527,11 @@ namespace IronRuby.Runtime.Jit {
             if (answer != null) {
                 ok = answer.Ok;
             } else {
+                // public as well: the operator is called with an explicit receiver, so a private
+                // one (`class Integer; private :+; end') raises NoMethodError
                 ok = (t == JT.Bool)
-                    ? IsBuiltinMethod(ClassOfType(t, true), op) && IsBuiltinMethod(ClassOfType(t, false), op)
-                    : IsBuiltinMethod(ClassOfType(t, false), op);
+                    ? IsPublicBuiltin(ClassOfType(t, true), op) && IsPublicBuiltin(ClassOfType(t, false), op)
+                    : IsPublicBuiltin(ClassOfType(t, false), op);
                 // BasicObject#!= answers by calling ==.
                 if (ok && op == "!=") { RequireBuiltin(t, "=="); }
                 _builtinAnswers = new BuiltinAnswer(t, op, ok, _builtinAnswers);
@@ -1430,6 +1546,9 @@ namespace IronRuby.Runtime.Jit {
             RequireBuiltin(lt, op);
 
             if (operand == JT.Dbl) {
+                if (IsComparison(op) && (lt == JT.Lng || rt == JT.Lng)) {
+                    return EmitIntegerFloatCompare(op, l, lt, r, rt, out type);
+                }
                 l = Coerce(l, lt, JT.Dbl);
                 r = Coerce(r, rt, JT.Dbl);
                 switch (op) {
@@ -1490,6 +1609,104 @@ namespace IronRuby.Runtime.Jit {
                 default: throw Bail("float operator " + op);
             }
         }
+
+        private static bool IsComparison(string/*!*/ op) {
+            switch (op) {
+                case "<": case ">": case "<=": case ">=": case "==": case "!=": return true;
+                default: return false;
+            }
+        }
+
+        /// <summary>`a op b' is `b Mirror(op) a'.</summary>
+        private static string/*!*/ Mirror(string/*!*/ op) {
+            switch (op) {
+                case "<": return ">";
+                case ">": return "<";
+                case "<=": return ">=";
+                case ">=": return "<=";
+                default: return op;
+            }
+        }
+
+        /// <summary>
+        /// `x op f' or `f op x', x an Integer carried as a long and f a Float. Integer#==, #&lt; and
+        /// the rest, and Float's with an Integer argument, compare the two exactly (MRI's
+        /// rb_integer_float_cmp and rb_integer_float_eq) - and a long past 2**53 does not convert to
+        /// a double exactly: `2**53 + 1 == 2.0**53' is false, though (double)(2**53 + 1) is 2.0**53.
+        /// A long that is a widened int, or a constant within 2**53, does convert exactly, and is
+        /// compared as a double. Any other is converted all the same: the nearest double to x orders
+        /// against f as x does unless the two are equal (f is a double, so it is at least the next
+        /// one up when it is above x's double, which x is short of). Only when they are equal does
+        /// JitRuntime.CompareWideLongDouble work out the exact order, which costs the common case
+        /// no more than a second test of the flags the first comparison set.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitIntegerFloatCompare(string/*!*/ op, MSA.Expression/*!*/ l, JT lt, MSA.Expression/*!*/ r, JT rt,
+            out JT type) {
+            bool integerLeft = (lt == JT.Lng);
+            MSA.Expression exact = ExactDouble(integerLeft ? l : r);
+            if (exact != null) {
+                return integerLeft
+                    ? EmitCompare(op, exact, Coerce(r, rt, JT.Dbl), out type)
+                    : EmitCompare(op, Coerce(l, lt, JT.Dbl), exact, out type);
+            }
+            var integer = Ast.Variable(typeof(long), "#integer");
+            var number = Ast.Variable(typeof(double), "#float");
+            var asDouble = Ast.Variable(typeof(double), "#integerAsDouble");
+            var integerValue = Ast.Assign(integer, integerLeft ? l : r);
+            var floatValue = Ast.Assign(number, Coerce(integerLeft ? r : l, integerLeft ? rt : lt, JT.Dbl));
+            // x's relation to f; on a tie x's double is f, so f is no NaN and the order is -1, 0 or 1
+            string relation = integerLeft ? op : Mirror(op);
+            MSA.Expression tie = Ast.Equal(asDouble, number);
+            MSA.Expression ordered = OrderTest(relation, Ast.Call(JitRuntime.M("CompareWideLongDouble"), integer, number), out type);
+            MSA.Expression test;
+            switch (relation) {
+                case "<": case "<=": test = Ast.OrElse(Ast.LessThan(asDouble, number), Ast.AndAlso(tie, ordered)); break;
+                case ">": case ">=": test = Ast.OrElse(Ast.GreaterThan(asDouble, number), Ast.AndAlso(tie, ordered)); break;
+                case "==": test = Ast.AndAlso(tie, ordered); break;
+                case "!=": test = Ast.OrElse(Ast.NotEqual(asDouble, number), ordered); break;
+                default: throw JitBailout.Instance;
+            }
+            type = JT.Bool;
+            return Ast.Block(typeof(bool), new[] { integer, number, asDouble },
+                integerLeft ? integerValue : floatValue,
+                integerLeft ? floatValue : integerValue,
+                Ast.Assign(asDouble, Ast.Convert(integer, typeof(double))),
+                test
+            );
+        }
+
+        /// <summary>A long expression as a double, if the conversion is known to be exact; else null.</summary>
+        private static MSA.Expression ExactDouble(MSA.Expression/*!*/ e) {
+            var narrowed = Narrowed(e);
+            if (narrowed != null) {
+                var c = narrowed as MSA.ConstantExpression;
+                return (c != null) ? (MSA.Expression)Ast.Constant((double)(int)c.Value, typeof(double)) : Ast.Convert(narrowed, typeof(double));
+            }
+            var constant = e as MSA.ConstantExpression;
+            if (constant != null && constant.Type == typeof(long)) {
+                long v = (long)constant.Value;
+                if (v >= -(1L << 53) && v <= (1L << 53)) { return Ast.Constant((double)v, typeof(double)); }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// `a op b' from the ordering of a against b (JitRuntime.CompareLongDouble and the like): -1, 0 or
+        /// 1, or 2 when the two are unordered (a NaN), which every relation but != is false for.
+        /// </summary>
+        private static MSA.Expression/*!*/ OrderTest(string/*!*/ op, MSA.Expression/*!*/ order, out JT type) {
+            type = JT.Bool;
+            switch (op) {
+                case "<": return Ast.Equal(order, Ast.Constant(-1));
+                case "<=": return Ast.LessThanOrEqual(order, Ast.Constant(0));
+                case ">": return Ast.Equal(order, Ast.Constant(1));
+                // 0 or 1: -1 and 2 both have a bit other than the lowest set
+                case ">=": return Ast.Equal(Ast.And(order, Ast.Constant(~1)), Ast.Constant(0));
+                case "==": return Ast.Equal(order, Ast.Constant(0));
+                case "!=": return Ast.NotEqual(order, Ast.Constant(0));
+                default: throw JitBailout.Instance;
+            }
+        }
     }
 
     /// <summary>
@@ -1530,9 +1747,9 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>The node kind that said no, for the histogram.</summary>
         private string _rejectedBy;
 
-        // Locals read anywhere other than straight into an instance variable (`@a = a'), or
-        // assigned. A parameter not in here is only ever stored, so it is best carried boxed:
-        // unboxing it on entry would only mean boxing it again for the store.
+        // Locals read anywhere other than straight into an instance variable (`@a = a') or an
+        // element (`a[i] = v'), or assigned. A parameter not in here is only ever stored, so it is
+        // best carried boxed: unboxing it on entry would only mean boxing it again for each store.
         private readonly HashSet<string>/*!*/ _otherUses = new HashSet<string>();
 
         private readonly JitKeywords _keywords;
@@ -1559,7 +1776,7 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>
         /// <paramref name="otherUses"/>: the locals the body reads other than as the value of an
-        /// instance variable assignment, or assigns.
+        /// instance variable or element assignment, or assigns.
         /// </summary>
         internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, JitKeywords keywords, out string rejectedBy, out HashSet<string> otherUses) {
             var s = new JitScreen(ast, keywords);
@@ -1623,14 +1840,10 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// Mirrors JitCompiler.EmitCondition, whose operand has to end up Bool or numeric. Only
-        /// the forms that are unconditionally JT.Obj can be ruled out here - `if @x', `while
-        /// self', `x ? a : b' on nil - and those are common enough to be worth ruling out.
+        /// Mirrors JitCompiler.EmitCondition, which takes an operand of any type: an object is tested
+        /// for Ruby truthiness, which is not a method call.
         /// </summary>
         private bool WalkCondition(RExpr/*!*/ node) {
-            if (node is InstanceVariable || node is SelfReference || node is SymbolLiteral) { return No(node); }
-            var literal = node as Literal;
-            if (literal != null && literal.Value == null) { return No(node); }
             return Walk(node);
         }
 
@@ -1643,7 +1856,20 @@ namespace IronRuby.Runtime.Jit {
             if (node is InstanceVariable || node is SelfReference || node is SymbolLiteral) { return No(node); }
             var literal = node as Literal;
             if (literal != null && !(literal.Value is int || literal.Value is long || literal.Value is double)) { return No(node); }
+            // a Hash query is a Bool, never a number (an element read is speculated to be one)
+            var call = node as MethodCall;
+            if (call != null && call.Target != null && IsBoolQueryName(call.MethodName)) { return No(node); }
             return Walk(node);
+        }
+
+        /// <summary>`a[i]', `h.fetch(k)': an object, whatever the types the profile sees.</summary>
+        private static bool IsElementRead(RExpr/*!*/ node) {
+            var call = node as MethodCall;
+            return call != null && call.Target != null && (call.MethodName == "[]" || call.MethodName == "fetch");
+        }
+
+        private static bool IsBoolQueryName(string/*!*/ name) {
+            return name == "key?" || name == "has_key?" || name == "empty?";
         }
 
         /// <summary>
@@ -1676,6 +1902,19 @@ namespace IronRuby.Runtime.Jit {
                 if (op == "&&" || op == "||") { return No(node); }
                 // `x op= v' becomes `x = x op v', so an operator EmitBinary does not know is out.
                 if (op != null && !IsBinaryOperator(op)) { return No(node); }
+
+                // `a[i] = v', `a[i] op= v' (JitCompiler.EmitIndexWrite)
+                var element = assign.Left as ArrayItemAccess;
+                if (element != null) {
+                    var indexArgs = element.Arguments.Expressions;
+                    if (element.Block != null || indexArgs.Length != 1 || indexArgs[0] is SplattedArgument) { return No(node); }
+                    if (!Walk(element.Array) || !Walk(indexArgs[0])) { return false; }
+                    if (op != null) { return WalkOperand(assign.Right); }
+                    // a local stored as the element is only stored, as it is into an instance variable
+                    var storedElement = assign.Right as LocalVariable;
+                    if (storedElement != null && storedElement.DefinitionLexicalDepth == _scopeDepth) { ++_nodes; return true; }
+                    return Walk(assign.Right);
+                }
 
                 var ivarTarget = assign.Left as InstanceVariable;
                 if (ivarTarget != null) {
@@ -1771,14 +2010,75 @@ namespace IronRuby.Runtime.Jit {
             var body = node as Body;
             if (body != null) { return WalkBody(body); }
 
+            var constant = node as ConstantVariable;
+            if (constant != null) { return WalkConstant(constant) || No(node); }
+
+            var caseExpr = node as CaseExpression;
+            if (caseExpr != null) { return WalkCase(caseExpr); }
+
+            var sequence = node as BlockExpression;
+            if (sequence != null) { return WalkStatements(sequence.Statements); }
+
             return No(node);
         }
 
-        /// <summary>Mirrors JitCompiler.EmitCall: a self-recursive call, or a binary operator.</summary>
+        /// <summary>Mirrors JitCompiler.ResolveConstant: `C', `::C', and `A::B' qualified by constants.</summary>
+        private static bool WalkConstant(ConstantVariable/*!*/ node) {
+            for (RExpr q = node.Qualifier; q != null; q = ((ConstantVariable)q).Qualifier) {
+                if (!(q is ConstantVariable)) { return false; }
+            }
+            return true;
+        }
+
+        /// <summary>Mirrors JitCompiler.EmitCase and EmitWhenTest.</summary>
+        private bool WalkCase(CaseExpression/*!*/ node) {
+            bool hasSubject = node.Value != null;
+            if (hasSubject && !Walk(node.Value)) { return false; }
+            foreach (var when in node.WhenClauses) {
+                if (when.Comparisons.Length == 0) { return No(when); }
+                foreach (var comparison in when.Comparisons) {
+                    if (++_nodes > 2 * JitCompiler.MaxNodes) { return No(node); }
+                    if (hasSubject ? !IsWhenTest(comparison) : !WalkCondition(comparison)) { return No(comparison); }
+                }
+                if (!WalkStatements(when.Statements)) { return false; }
+            }
+            return WalkStatements(node.ElseStatements);
+        }
+
+        /// <summary>The comparisons EmitWhenTest turns into tests.</summary>
+        private static bool IsWhenTest(RExpr/*!*/ node) {
+            var constant = node as ConstantVariable;
+            if (constant != null) { return WalkConstant(constant); }
+            var literal = node as Literal;
+            if (literal != null) { return literal.Value is int || literal.Value == null || literal.Value is bool; }
+            if (node is SymbolLiteral || node is StringLiteral) { return true; }
+            var range = node as RangeExpression;
+            if (range != null) { return IsRangeBound(range.Begin) && IsRangeBound(range.End); }
+            return false;
+        }
+
+        private static bool IsRangeBound(RExpr/*!*/ node) {
+            var literal = node as Literal;
+            if (literal != null) { return literal.Value is int; }
+            var constant = node as ConstantVariable;
+            return constant != null && WalkConstant(constant);
+        }
+
+        /// <summary>Mirrors JitCompiler.EmitCall: a self-recursive call, a binary operator, an element read or a Hash query.</summary>
         private bool WalkCall(MethodCall/*!*/ node) {
             if (node.Block != null) { return No(node); }
             var args = node.Arguments;
             int argc = (args == null) ? 0 : args.Expressions.Length;
+
+            if (node.Target != null && ((node.MethodName == "[]" && argc == 1) || JitCompiler.IsHashQuery(node.MethodName, argc))) {
+                if (!Walk(node.Target)) { return false; }
+                if (args != null) {
+                    foreach (var arg in args.Expressions) {
+                        if (arg is SplattedArgument || !Walk(arg)) { return No(node); }
+                    }
+                }
+                return true;
+            }
 
             if (node.Target == null) {
                 if (node.IsVariableCall || node.MethodName != _methodName || argc != _arity) { return No(node); }
@@ -1787,6 +2087,8 @@ namespace IronRuby.Runtime.Jit {
                 // EmitBinary's own operators survive there whatever the operand types are.
                 return No(node);
             } else {
+                // an object operand is speculated to be a number, but only next to one that is
+                if (IsElementRead(node.Target) && IsElementRead(args.Expressions[0])) { return No(node); }
                 return WalkOperand(node.Target) && WalkOperand(args.Expressions[0]);
             }
 
@@ -1799,7 +2101,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>The operators JitCompiler.EmitBinary and EmitCompare between them handle.</summary>
-        private static bool IsBinaryOperator(string/*!*/ op) {
+        internal static bool IsBinaryOperator(string/*!*/ op) {
             switch (op) {
                 case "+": case "-": case "*": case "/": case "%":
                 case "<": case ">": case "<=": case ">=": case "==": case "!=":

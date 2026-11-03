@@ -303,10 +303,11 @@ namespace IronRuby.Runtime.Calls {
 
             // -X:JIT: hand the generic body to the method JIT, which may put a profiling
             // trampoline of the same delegate type in front of it. Off by default, and this is
-            // the only place the rest of the runtime knows about it.
+            // the only place the rest of the runtime knows about it. A body that counts its lines
+            // for Coverage keeps them: a typed body has no line counters.
             var context = declaringScope.RubyContext;
-            if (context.RubyOptions.Jit) {
-                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, _ast, context, declaringModule);
+            if (context.RubyOptions.Jit && _coverage == null) {
+                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, _ast, context, declaringModule, declaringScope);
             }
             return result;
         }

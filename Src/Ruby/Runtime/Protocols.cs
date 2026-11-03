@@ -620,6 +620,14 @@ namespace IronRuby.Runtime {
                 }
             }
 
+            // rb_check_funcall finds there is no #coerce without calling anything. The call below would
+            // raise the NoMethodError the catch turns into the same answer: a CLR exception, about 15 us
+            // on every `1 <=> nil', `1 + nil', `"a" <=> 1', `(1..5) === "x"' (a case/when's range test).
+            if (HasNoCoerce(coercionStorage.Context, other)) {
+                pair = null;
+                return false;
+            }
+
             var coerce = coercionStorage.GetCallSite("coerce", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
 
             object coerced;
@@ -657,16 +665,29 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// True when <paramref name="e"/> is the NoMethodError produced by the #coerce dispatch
-        /// itself failing to find the method on <paramref name="other"/>, as opposed to a
-        /// NoMethodError raised from inside a #coerce that does exist.
+        /// <paramref name="obj"/> has no #coerce, private or public, and its method_missing is BasicObject's,
+        /// so that calling #coerce could only raise the NoMethodError IsUndefinedCoerce recognizes.
         /// </summary>
+        internal static bool HasNoCoerce(RubyContext/*!*/ context, object obj) {
+            var cls = context.GetImmediateClassOf(obj);
+            if (cls.ResolveMethod("coerce", VisibilityContext.AllVisible).Found) {
+                return false;
+            }
+            var missing = cls.ResolveMethod("method_missing", VisibilityContext.AllVisible);
+            return missing.Found && missing.Info.DeclaringModule == context.BasicObjectClass && missing.Info is RubyLibraryMethodInfo;
+        }
+
         private static bool HasUserDefinedRespondTo(RubyContext/*!*/ context, object obj) {
             var method = context.GetImmediateClassOf(obj).ResolveMethod("respond_to?", VisibilityContext.AllVisible);
             return method.Found &&
                 !(method.Info.DeclaringModule == context.KernelModule && method.Info is RubyLibraryMethodInfo);
         }
 
+        /// <summary>
+        /// True when <paramref name="e"/> is the NoMethodError produced by the #coerce dispatch
+        /// itself failing to find the method on <paramref name="other"/>, as opposed to a
+        /// NoMethodError raised from inside a #coerce that does exist.
+        /// </summary>
         private static bool IsUndefinedCoerce(RubyContext/*!*/ context, MissingMethodException/*!*/ e, object other) {
             var data = RubyExceptionData.TryGetInstance(e);
             if (data == null) {
