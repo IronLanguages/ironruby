@@ -27,7 +27,7 @@ using Microsoft.Scripting.Hosting.Shell;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Hosting {
-    public abstract class RubyConsoleHost : ConsoleHost {
+    public abstract partial class RubyConsoleHost : ConsoleHost {
         protected RubyConsoleHost() {
             SetHomeEnvironmentVariable();
             EnableVirtualTerminalProcessing();
@@ -52,7 +52,11 @@ namespace IronRuby.Hosting {
         protected override ConsoleOptions ParseOptions(string[] args, ScriptRuntimeSetup runtimeSetup, LanguageSetup languageSetup) {
             languageSetup.Options["ApplicationBase"] = AppDomain.CurrentDomain.BaseDirectory;
             runtimeSetup.HostType = typeof(RubyScriptHost);
-            return base.ParseOptions(args, runtimeSetup, languageSetup);
+            ConsoleOptions result = base.ParseOptions(args, runtimeSetup, languageSetup);
+            if (result != null && WarmStart.IsWorker) {
+                SnapshotWarmOptions(runtimeSetup, languageSetup, result);
+            }
+            return result;
         }
 
         /// <summary>

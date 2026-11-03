@@ -174,6 +174,14 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>Whether a handler for the signal is registered with the platform.</summary>
+        internal static bool IsRegistered(int signal) {
+            lock (_handlers) {
+                Handler handler;
+                return _handlers.TryGetValue(signal, out handler) && handler.Registration != null;
+            }
+        }
+
         internal static bool HasHandler(int signal) {
             lock (_handlers) {
                 return _handlers.ContainsKey(signal);

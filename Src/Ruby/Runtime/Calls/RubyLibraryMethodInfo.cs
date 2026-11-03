@@ -114,6 +114,22 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
+        // 0 = not computed yet, 1 = no, 2 = yes
+        private int _emptyUnary;
+
+        /// <summary>
+        /// True for a method that does nothing and takes exactly one argument: Module#method_added and the other
+        /// default hooks (see <see cref="RubyContext.IsDefaultHook"/>, which asks for every hook it would call).
+        /// </summary>
+        internal bool IsEmptyUnary {
+            get {
+                if (_emptyUnary == 0) {
+                    _emptyUnary = (IsEmpty && GetArity() == 1) ? 2 : 1;
+                }
+                return _emptyUnary == 2;
+            }
+        }
+
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
             return ArrayUtils.ConvertAll(MethodBases, (o) => o.ReflectionInfo);
         }
@@ -133,6 +149,13 @@ namespace IronRuby.Runtime.Calls {
 
             int arity;
             if (!IsEmpty || (arity = GetArity()) != 1) {
+                return null;
+            }
+
+            // The stub reports no :c_call, but CRuby reports these methods - Module#method_added and the other default
+            // hooks are C functions - so a rule bound while c_call is traced must not be the stub. Switching c_call
+            // tracing on or off rebinds every rule.
+            if (TracePoint.CCallTracing) {
                 return null;
             }
 

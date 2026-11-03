@@ -45,6 +45,9 @@ namespace IronRuby.Compiler.Ast {
             get { return _isKeywordArguments; }
         }
 
+        // The empty default of a method's or block's hidden keyword parameter (see OmittedKeywords).
+        private readonly bool _isOmittedKeywords;
+
         public HashConstructor(Maplet/*!*/[]/*!*/ maplets, SourceSpan location)
             : this(maplets, false, location) {
         }
@@ -56,9 +59,27 @@ namespace IronRuby.Compiler.Ast {
             _isKeywordArguments = isKeywordArguments;
         }
 
+        private HashConstructor(SourceSpan location)
+            : this(new Maplet[0], true, location) {
+            _isOmittedKeywords = true;
+        }
+
+        /// <summary>
+        /// The default of the hidden keyword parameter a method or block with keyword parameters is
+        /// lowered to: the call passed no keywords. An empty keyword hash that only that one call of
+        /// the method ever holds, which a **rest parameter may therefore take over instead of copying
+        /// (RubyOps.MakeOmittedKeywordArguments, RubyOps.MakeKeywordRest).
+        /// </summary>
+        internal static HashConstructor/*!*/ OmittedKeywords(SourceSpan location) {
+            return new HashConstructor(location);
+        }
+
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             if (_isKeywordArguments && _maplets.Length <= 3 && HasSymbolLiteralKeys()) {
                 return TransformKeywordArguments(gen);
+            }
+            if (!_isKeywordArguments && _maplets.Length > 0 && _maplets.Length <= 3 && HasSymbolLiteralKeys()) {
+                return TransformSymbolHash(gen);
             }
             var items = gen.TransformMapletsToExpressions(_maplets);
             return _isKeywordArguments ? gen.MakeKeywordArgumentsHashOpCall(items) : gen.MakeHashOpCall(items);
@@ -84,10 +105,28 @@ namespace IronRuby.Compiler.Ast {
             }
             switch (_maplets.Length) {
                 // the default of the hidden keyword parameter: no keywords passed
-                case 0: return Methods.MakeKeywordArgumentsHash0.OpCall(gen.CurrentScopeVariable);
+                case 0:
+                    return _isOmittedKeywords
+                        ? Methods.MakeOmittedKeywordArguments.OpCall(gen.CurrentScopeVariable)
+                        : Methods.MakeKeywordArgumentsHash0.OpCall(gen.CurrentScopeVariable);
                 case 1: return Methods.MakeKeywordArgumentsHash1.OpCall(args);
                 case 2: return Methods.MakeKeywordArgumentsHash2.OpCall(args);
                 default: return Methods.MakeKeywordArgumentsHash3.OpCall(args);
+            }
+        }
+
+        // `{a: x, b: y}`: a literal with Symbol literal keys, the same way (RubyOps.MakeSymbolHash2).
+        private MSA.Expression/*!*/ TransformSymbolHash(AstGenerator/*!*/ gen) {
+            var args = new ReadOnlyCollectionBuilder<MSA.Expression>(1 + 2 * _maplets.Length);
+            args.Add(gen.CurrentScopeVariable);
+            foreach (var maplet in _maplets) {
+                args.Add(AstUtils.Box(maplet.Key.TransformRead(gen)));
+                args.Add(AstUtils.Box(maplet.Value.TransformRead(gen)));
+            }
+            switch (_maplets.Length) {
+                case 1: return Methods.MakeSymbolHash1.OpCall(args);
+                case 2: return Methods.MakeSymbolHash2.OpCall(args);
+                default: return Methods.MakeSymbolHash3.OpCall(args);
             }
         }
     }

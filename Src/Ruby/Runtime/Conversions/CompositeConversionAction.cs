@@ -68,9 +68,18 @@ namespace IronRuby.Runtime.Conversions {
         /// receiver class, and a storage's GetSite(Make(...)) allocates nothing once the site exists.
         /// </summary>
         public static CompositeConversionAction/*!*/ Make(RubyContext/*!*/ context, CompositeConversion/*!*/ conversion) {
-            return context != null ? context.MetaBinderFactory.CompositeConversion(conversion) : Create(null, conversion);
+            // A new call site then finds the rules its binder has bound for other sites; with an action of its own -
+            // Make used to create one per call - every site bound each rule anew (30 binds at `ir -e 1' for ToPathToStr
+            // alone, about a quarter of a millisecond each on the R2R host). A null context (MakeShared, shared
+            // components) gets the shared factory's one action.
+            var factory = (context != null) ? context.MetaBinderFactory : RubyMetaBinderFactory.Shared;
+            return factory.CompositeConversion(conversion);
         }
 
+        /// <summary>
+        /// A new action - for <see cref="RubyMetaBinderFactory"/>, which keeps one per runtime. Everyone else calls Make.
+        /// A null <paramref name="context"/> makes the shared action (<see cref="MakeShared"/>), of shared components.
+        /// </summary>
         internal static CompositeConversionAction/*!*/ Create(RubyContext context, CompositeConversion conversion) {
             switch (conversion) {
                 case CompositeConversion.ToFixnumToStr:

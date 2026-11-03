@@ -266,10 +266,36 @@ namespace IronRuby.Builtins {
 
             RegexOptions options = RegexOptions.None;
             if ((flags & Constants.FNM_CASEFOLD) != 0) {
-                options |= RegexOptions.IgnoreCase;
+                // MRI folds case the same in every locale; culture-invariant also keeps the cache below, keyed by
+                // the pattern alone, from handing one culture's regex to another
+                options |= RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
             }
-            Match match = Regex.Match(path, regexPattern, options);
+            Match match = GetFnMatchRegex(regexPattern, options).Match(path);
             return match != null && match.Success && (match.Length == path.Length);
+        }
+
+        // The regexes of the last patterns matched. Not the static Regex.Match: its cache is keyed by a struct, and the
+        // ConcurrentDictionary code for that key is JIT-compiled the first time a process globs (rubygems does at startup).
+        private static readonly Dictionary<string, Regex>/*!*/ _fnMatchRegexes = new Dictionary<string, Regex>();
+        private static readonly Dictionary<string, Regex>/*!*/ _fnMatchRegexesIgnoreCase = new Dictionary<string, Regex>();
+        private const int FnMatchRegexCacheSize = 32;
+
+        private static Regex/*!*/ GetFnMatchRegex(string/*!*/ pattern, RegexOptions options) {
+            var cache = (options & RegexOptions.IgnoreCase) != 0 ? _fnMatchRegexesIgnoreCase : _fnMatchRegexes;
+            Regex regex;
+            lock (cache) {
+                if (cache.TryGetValue(pattern, out regex)) {
+                    return regex;
+                }
+            }
+            regex = new Regex(pattern, options);
+            lock (cache) {
+                if (cache.Count >= FnMatchRegexCacheSize) {
+                    cache.Clear();
+                }
+                cache[pattern] = regex;
+            }
+            return regex;
         }
 
         private class GlobUngrouper {

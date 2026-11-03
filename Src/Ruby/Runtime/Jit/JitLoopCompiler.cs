@@ -82,13 +82,20 @@ namespace IronRuby.Runtime.Jit {
             if (scope == null) { return null; }
             RefinementActivation refinements = scope.GetActiveRefinements();
 
+            // What the prologue's version guard compares against: read before the compiler
+            // resolves anything (see JitStub.TrySpecialize), so that a method table change racing
+            // with the compile leaves the copy stale rather than right for good.
+            int version = RubyModule.GlobalMethodVersion;
+
             var argsParameter = Ast.Parameter(typeof(object[]), "#args");
             var exit = Ast.Label(typeof(object), "#osr-jit-exit");
             var tuples = new Dictionary<int, MSA.ParameterExpression>();
             var tupleInit = new List<MSA.Expression>();
             var tupleGuards = new List<MSA.Expression>();
 
-            Func<LocalVariable, JT, JitLoopSlot> bind = (local, hint) => {
+            // A local's tuple slot: the expression that addresses it in the copy, and what it holds
+            // now. Null if the local's tuple was not passed.
+            Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peek = local => {
                 int depth = local.DefinitionLexicalDepth;
                 int argIndex;
                 if (!tupleArgIndex.TryGetValue(depth, out argIndex) || argIndex >= args.Length) {
@@ -108,18 +115,24 @@ namespace IronRuby.Runtime.Jit {
                         Ast.Convert(Ast.ArrayIndex(argsParameter, Ast.Constant(argIndex)), tupleType)));
                 }
 
-                object current;
-                MSA.Expression accessor;
                 try {
-                    accessor = ScopeBuilder.GetVariableAccessor(tuple, local.ClosureIndex);
+                    MSA.Expression accessor = ScopeBuilder.GetVariableAccessor(tuple, local.ClosureIndex);
                     // Read the live value down the very path the emitted code will use.
-                    current = tupleValue;
+                    object value = tupleValue;
                     foreach (var property in MutableTuple.GetAccessPath(tupleValue.GetType(), local.ClosureIndex)) {
-                        current = property.GetValue(current, null);
+                        value = property.GetValue(value, null);
                     }
+                    return new KeyValuePair<MSA.Expression, object>(accessor, value);
                 } catch (Exception) {
                     return null;
                 }
+            };
+
+            Func<LocalVariable, JT, JitLoopSlot> bind = (local, hint) => {
+                var peeked = peek(local);
+                if (!peeked.HasValue) { return null; }
+                object current = peeked.Value.Value;
+                MSA.Expression accessor = peeked.Value.Key;
 
                 JT type;
                 bool writeFirst = (hint == JT.Int || hint == JT.Lng || hint == JT.Dbl);
@@ -160,6 +173,7 @@ namespace IronRuby.Runtime.Jit {
             // a numeric use of the variable is specialized for (JitCompiler.NumericIVar).
             MSA.ParameterExpression self = null;
             Func<string, JT> ivarProfile = null;
+            Func<string, string> attrProfile = null;
             if (selfArgIndex >= 0 && selfArgIndex < args.Length) {
                 object liveSelf = args[selfArgIndex];
                 self = Ast.Parameter(typeof(object), "#self");
@@ -168,11 +182,15 @@ namespace IronRuby.Runtime.Jit {
                     if (!context.TryGetInstanceVariable(liveSelf, name, out value)) { return JT.Obj; }
                     return (value is int) ? JT.Int : (value is long) ? JT.Lng : (value is double) ? JT.Dbl : JT.Obj;
                 };
+                // and which of self's methods are attr_readers, and of what (JitCompiler.EmitCall)
+                RubyClass selfClass = JitRuntime.ClassOf(context, liveSelf);
+                attrProfile = name => JitRuntime.SelfAttrSite.ReaderVariable(selfClass, name, false);
             }
 
             List<JitLoopSlot> slots;
             bool canDeopt;
-            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, refinements, out slots, out canDeopt);
+            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, refinements,
+                out slots, out canDeopt);
             if (body == null || slots.Count == 0) {
                 if (OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter gave up (body={0} slots={1})", body != null, slots == null ? -1 : slots.Count); }
                 return null;
@@ -222,7 +240,7 @@ namespace IronRuby.Runtime.Jit {
             // fails it fails it on every later entry, so it asks to be rebuilt under the new
             // version rather than counting as one more deopt towards retiring the loop.
             prologue.Add(Ast.IfThen(
-                Ast.Not(Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(RubyModule.GlobalMethodVersion))),
+                Ast.Not(Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version))),
                 Ast.Return(exit, Ast.Call(JitRuntime.M("OsrVersionStale")))
             ));
 

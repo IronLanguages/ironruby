@@ -81,7 +81,9 @@ namespace IronRuby.Compiler.Ast {
             if (Enter(node)) {
                 node.Hash.Walk(this);
                 node.Splatted.Walk(this);
-                node.Converted.Walk(this);
+                if (node.Converted != null) {
+                    node.Converted.Walk(this);
+                }
             }
             Exit(node);
         }

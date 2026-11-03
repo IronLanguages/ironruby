@@ -358,6 +358,22 @@ namespace IronRuby.Runtime {
 
         // `it' and _1.._9 live in the block's variable table, but eval and Binding do not see them
         // as locals: `eval("it = 1")' makes a new variable rather than overwriting the parameter.
+        // A scope of more than MutableTuple.MaxSize locals keeps them in a tuple of tuples
+        // (ScopeBuilder.NewTuple), where slot i of the outer one is not local i.
+        private object GetLocalValue(int index) {
+            int size = _variableNames.Length;
+            return (size > MutableTuple.MaxSize) ? _locals.GetNestedValue(size, index) : _locals.GetValue(index);
+        }
+
+        private void SetLocalValue(int index, object value) {
+            int size = _variableNames.Length;
+            if (size > MutableTuple.MaxSize) {
+                _locals.SetNestedValue(size, index, value);
+            } else {
+                _locals.SetValue(index, value);
+            }
+        }
+
         private bool IsImplicitParameter(string/*!*/ name) {
             var names = OwnImplicitParameterNames;
             return names != null && Array.IndexOf(names, name) >= 0;
@@ -369,7 +385,7 @@ namespace IronRuby.Runtime {
 
             int index;
             if (StaticLocalMapping != null && StaticLocalMapping.TryGetValue(name, out index)) {
-                return _locals.GetValue(index);
+                return GetLocalValue(index);
             }
             return null;
         }
@@ -380,7 +396,7 @@ namespace IronRuby.Runtime {
             int index;
             if (StaticLocalMapping != null && StaticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
                 Debug.Assert(_locals != null);
-                value = _locals.GetValue(index);
+                value = GetLocalValue(index);
                 return true;
             }
 
@@ -400,7 +416,7 @@ namespace IronRuby.Runtime {
             int index;
             if (StaticLocalMapping != null && StaticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
                 Debug.Assert(_locals != null);
-                _locals.SetValue(index, value);
+                SetLocalValue(index, value);
                 return true;
             }
 
@@ -424,7 +440,7 @@ namespace IronRuby.Runtime {
             if (LocalsInitialized) {
                 for (int i = 0; i < _variableNames.Length; i++) {
                     Debug.Assert(_locals != null);
-                    yield return new KeyValuePair<string, object>(_variableNames[i], _locals.GetValue(i));
+                    yield return new KeyValuePair<string, object>(_variableNames[i], GetLocalValue(i));
                 }
             }
 
@@ -1605,7 +1621,14 @@ var closureScope = scope as RubyClosureScope;
                 context.ObjectClass.SetConstant("TOPLEVEL_BINDING", new Binding(scope) { SourcePath = "<main>", SourceLine = 0 });
                 if (context.RubyOptions.RequirePaths != null) {
                     bool first = true;
+                    // a warm-start worker loaded these into this very scope ahead of time
+                    int loaded = context.TakeWarmLoadedRequirePaths();
                     foreach (var path in context.RubyOptions.RequirePaths) {
+                        if (loaded > 0) {
+                            loaded--;
+                            first = false;
+                            continue;
+                        }
                         // the first is the core prelude (gem_prelude.rb or ruby4.rb)
                         if (first && (path == "gem_prelude.rb" || path == "ruby4.rb")) {
                             context.Loader.LoadCorePrelude(globalScope, rubyGlobalScope.MainObject, path);

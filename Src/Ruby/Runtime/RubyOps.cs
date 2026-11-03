@@ -1012,6 +1012,10 @@ namespace IronRuby.Runtime {
                     location.Start.Line, location.Start.Column - 1, location.End.Line, location.End.Column - 1);
             }
 
+            // Ruby 2.1+: def returns the method name as a symbol (enables `private def foo`). Interned before
+            // method_added, which interns the name as well: the hook then finds it in the identifier cache.
+            object result = scope.RubyContext.StringifyIdentifier(body.Name);
+
             method.DeclaringModule.MethodAdded(body.Name);
 
             if (moduleFunction) {
@@ -1019,8 +1023,7 @@ namespace IronRuby.Runtime {
                 method.DeclaringModule.GetOrCreateSingletonClass().MethodAdded(body.Name);
             }
 
-            // Ruby 2.1+: def returns the method name as a symbol (enables `private def foo`)
-            return scope.RubyContext.CreateSymbol(body.Name, RubyEncoding.UTF8);
+            return result;
         }
 
         // MRI's vm_init_redefined_flag: the core methods its instructions inline, by class.
@@ -1762,6 +1765,19 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// <see cref="MergeKeywordSplat"/> for a <paramref name="splatted"/> that has to be a Hash - nil
+        /// included, anything else raises TypeError - and a <paramref name="keywords"/> that is one: what
+        /// the parameterless super of `def m(k: 1, **rest)` does with rest (KeywordSplatMerge.HashOnly).
+        /// </summary>
+        [Emitted]
+        public static object/*!*/ MergeKeywordHash(RubyScope/*!*/ scope, object keywords, object splatted) {
+            if (!(splatted is Hash)) {
+                throw RubyExceptions.CreateUnexpectedTypeError(scope.RubyContext, splatted, "Hash");
+            }
+            return MergeKeywordSplat(scope, keywords, splatted);
+        }
+
+        /// <summary>
         /// `f(**h)` with h a Hash or nil: what <see cref="SplatKeywordHash"/> makes of it. Null for
         /// anything else, which the call site first converts with #to_hash (by way of Hash#merge).
         /// </summary>
@@ -1772,9 +1788,27 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static RubyArray/*!*/ SplatKeywordHash(RubyScope/*!*/ scope, object hash) {
+            var keywords = KeywordSplatArgument(scope, hash);
+            if (keywords == null) {
+                return new RubyArray(0);
+            }
+
+            var result = new RubyArray(1);
+            result.Add(keywords);
+            return result;
+        }
+
+        /// <summary>
+        /// `f(**h)` with h a Hash or nil, as the one argument it passes: null when it passes none at
+        /// all (nil, or an empty Hash), and a copy marked as keyword arguments otherwise. A call
+        /// site that tests for null and passes the hash plainly (SuperCall) avoids the one-or-zero
+        /// element array <see cref="SplatKeywordHash"/> makes and the splatted call it takes.
+        /// </summary>
+        [Emitted]
+        public static Hash KeywordSplatArgument(RubyScope/*!*/ scope, object hash) {
             // `f(**nil)` passes no keywords at all
             if (hash == null) {
-                return new RubyArray(0);
+                return null;
             }
 
             var dict = hash as IDictionary<object, object>;
@@ -1783,19 +1817,40 @@ namespace IronRuby.Runtime {
             }
 
             if (dict.Count == 0) {
-                return new RubyArray(0);
+                return null;
             }
 
             // MRI copies: the callee's **rest must not alias the hash the caller splatted
-            var copy = new Hash(scope.RubyContext.EqualityComparer, dict.Count);
-            foreach (var entry in dict) {
-                copy[entry.Key] = entry.Value;
+            var source = dict as Hash;
+            var copy = (source != null) ? source.TryCopyAsKeywordArguments(scope.RubyContext.EqualityComparer) : null;
+            if (copy == null) {
+                copy = new Hash(scope.RubyContext.EqualityComparer, dict.Count);
+                foreach (var entry in dict) {
+                    copy[entry.Key] = entry.Value;
+                }
+                copy.IsKeywordArguments = true;
             }
-            copy.IsKeywordArguments = true;
+            return copy;
+        }
 
-            var result = new RubyArray(1);
-            result.Add(copy);
-            return result;
+        /// <summary>
+        /// The `**rest' a parameterless `super' passes in `def m(a, **rest)' (see KeywordArgumentSplat.PassingOn):
+        /// <see cref="KeywordSplatArgument"/> of <paramref name="rest"/>, except that while rest still holds the
+        /// very entries the call passed - the usual case - the hash the call passed them in,
+        /// <paramref name="keywords"/>, is passed on instead of a copy. That hash is the call's own (see
+        /// <see cref="ClearKeywordArguments"/>), and the method has bound its parameters from it and stops
+        /// holding it as it passes it on, so the parent may keep it or change it. Not when it is rest itself -
+        /// the empty default rest took over (<see cref="MakeKeywordRest"/>), or a hash the method already
+        /// passed on.
+        /// </summary>
+        [Emitted]
+        public static Hash PassOnKeywordRest(RubyScope/*!*/ scope, object rest, object keywords) {
+            var given = keywords as Hash;
+            var hash = rest as Hash;
+            if (given != null && hash != null && given != hash && given.IsKeywordArguments && given.HasSameEntries(hash)) {
+                return (given.Count > 0) ? given : null;
+            }
+            return KeywordSplatArgument(scope, rest);
         }
 
         [Emitted]
@@ -1871,6 +1926,19 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// The default of a method's or block's hidden keyword parameter: the call passed no keywords.
+        /// Like <see cref="MakeKeywordArgumentsHash0"/>, and marked as a hash no one else holds
+        /// (Hash.IsOmittedKeywords), which a **rest parameter then takes over (<see cref="MakeKeywordRest"/>).
+        /// </summary>
+        [Emitted]
+        public static Hash/*!*/ MakeOmittedKeywordArguments(RubyScope/*!*/ scope) {
+            var result = MakeHash0(scope);
+            result.IsKeywordArguments = true;
+            result.IsOmittedKeywords = true;
+            return result;
+        }
+
         // `f(a: x)`, `f(a: x, b: y)` and `f(a: x, b: y, c: z)` with Symbol literals for keys, the
         // usual keyword call: no item array to allocate, and none of the conversions
         // SetHashElement applies to a String or nil key. A repeated key keeps the last value, as
@@ -1895,6 +1963,36 @@ namespace IronRuby.Runtime {
         public static Hash/*!*/ MakeKeywordArgumentsHash3(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2,
             object key3, object value3) {
             var result = Hash.CreateKeywordArguments(scope.RubyContext.EqualityComparer, 3);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
+            result.AppendUnlinked(key3, value3);
+            return result;
+        }
+
+        // `{a: x}`, `{a: x, b: y}` and `{a: x, b: y, c: z}`: a hash literal with Symbol literals for
+        // keys, built the way the keyword hashes above are - no item array, none of SetHashElement's
+        // String/nil key conversions (a Symbol needs none), and no bucket array until the hash is
+        // first probed.
+
+        [Emitted]
+        public static Hash/*!*/ MakeSymbolHash1(RubyScope/*!*/ scope, object key1, object value1) {
+            var result = Hash.CreateUnlinked(scope.RubyContext.EqualityComparer, 1);
+            result.AppendUnlinked(key1, value1);
+            return result;
+        }
+
+        [Emitted]
+        public static Hash/*!*/ MakeSymbolHash2(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2) {
+            var result = Hash.CreateUnlinked(scope.RubyContext.EqualityComparer, 2);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
+            return result;
+        }
+
+        [Emitted]
+        public static Hash/*!*/ MakeSymbolHash3(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2,
+            object key3, object value3) {
+            var result = Hash.CreateUnlinked(scope.RubyContext.EqualityComparer, 3);
             result.AppendUnlinked(key1, value1);
             result.AppendUnlinked(key2, value2);
             result.AppendUnlinked(key3, value3);
@@ -1961,7 +2059,9 @@ namespace IronRuby.Runtime {
             if (last >= 0 && IsKeywordArgumentsHash(list[last])) {
                 return (Hash)list.TakeLast();
             }
-            return MakeHash0(scope);
+            var omitted = MakeHash0(scope);
+            omitted.IsOmittedKeywords = true;
+            return omitted;
         }
 
         /// <summary>A block's single Array argument, which it auto-splats.</summary>
@@ -2022,11 +2122,19 @@ namespace IronRuby.Runtime {
 
         /// <summary>
         /// The **rest parameter: a new hash with whatever the call passed beyond the declared
-        /// <paramref name="names"/>. It is a copy, so the method may change it freely.
+        /// <paramref name="names"/>. It is a copy, so the method may change it freely. When the call
+        /// passed no keywords at all, the empty default the method made for itself is that new hash
+        /// already: nobody else holds it (Hash.IsOmittedKeywords), so it is taken over, not copied.
         /// </summary>
         [Emitted]
         public static Hash/*!*/ MakeKeywordRest(object keywords, RubySymbol/*!*/[]/*!*/ names) {
-            return ((Hash)keywords).CopyWithoutKeywords(names);
+            var hash = (Hash)keywords;
+            if (hash.IsOmittedKeywords && hash.Count == 0) {
+                hash.IsOmittedKeywords = false;
+                hash.IsKeywordArguments = false;
+                return hash;
+            }
+            return hash.CopyWithoutKeywords(names);
         }
 
         /// <summary>
@@ -2150,6 +2258,18 @@ namespace IronRuby.Runtime {
         public static RubyArray/*!*/ AddItem(RubyArray/*!*/ array, object item) {
             array.Add(item);
             return array;
+        }
+
+        /// <summary>
+        /// `[*list, item]` as a new array of the size it ends up: what `super(*rest, **kw)` passes
+        /// splatted when kw is not empty (SuperCall).
+        /// </summary>
+        [Emitted]
+        public static RubyArray/*!*/ SplatAppendItem(IList/*!*/ list, object item) {
+            var result = new RubyArray(list.Count + 1);
+            result.AddRange(list);
+            result.Add(item);
+            return result;
         }
 
         [Emitted]

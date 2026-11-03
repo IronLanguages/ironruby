@@ -524,6 +524,29 @@ namespace IronRuby.Runtime {
             get { return _options; }
         }
 
+        /// <summary>
+        /// How many times the interpreter runs a lambda, loop or call-site rule before it compiles it
+        /// to IL, in a thread-pool task: a full-optimization JIT of a DynamicMethod, about a millisecond
+        /// each. The code the core prelude runs while it loads (ruby4.rb, rbconfig, RubyGems) is mostly
+        /// one-shot, yet some 170 of its blocks and rules cross the default threshold of 32 and get
+        /// compiled: ~0.3 billion instructions on pool threads (12% of `ir -e 1`, a fifth of its CPU
+        /// time) that compete with the main thread for the CPU, to speed up code that never runs again.
+        /// So code compiled and sites bound while the prelude loads count to StartupCompilationThreshold
+        /// instead; everything after that, and any explicit -X:CompilationThreshold, is unaffected.
+        /// Prelude code that turns out hot in the program still gets compiled, after more runs.
+        /// </summary>
+        internal int CompilationThreshold {
+            get {
+                int threshold = _options.CompilationThreshold;
+                return threshold < 0 && _loader is not null && _loader.LoadingCorePrelude ? StartupCompilationThreshold : threshold;
+            }
+        }
+
+        // 200 keeps all but ~50 of the startup compiles away. Higher values (1000 removes them all) push
+        // compiles of rules the program later shares with the prelude - Float#* and friends, through the
+        // binders' rule caches - into the program's first few hundred milliseconds instead.
+        internal const int StartupCompilationThreshold = 200;
+
         internal RubyScope/*!*/ EmptyScope {
             get { return _emptyScope; }
         }
@@ -653,6 +676,7 @@ namespace IronRuby.Runtime {
             : base(manager) {
             ContractUtils.RequiresNotNull(manager, "manager");
             _options = new RubyOptions(options);
+            _constructionOptions = options;
             if (_options.ObjectSpace) {
                 ObjectSpaceObjects = new ObjectSpaceRegistry();
             }
@@ -3278,6 +3302,11 @@ namespace IronRuby.Runtime {
         /// Freezes the string the symbol holds on.
         /// </summary>
         public RubySymbol/*!*/ CreateSymbol(MutableString/*!*/ str, bool clone) {
+            bool created;
+            return CreateSymbol(str, clone, out created);
+        }
+
+        private RubySymbol/*!*/ CreateSymbol(MutableString/*!*/ str, bool clone, out bool created) {
             // A symbol whose name is ASCII-only is US-ASCII whatever the string it was interned
             // from was tagged with, so that "abc".b.to_sym.equal?(:abc) and the encoding does
             // not depend on which spelling happened to reach the symbol table first. An
@@ -3290,7 +3319,8 @@ namespace IronRuby.Runtime {
 
             RubySymbol result;
             lock (SymbolsLock) {
-                if (!_symbols.TryGetValue(str, out result)) {
+                created = !_symbols.TryGetValue(str, out result);
+                if (created) {
                     result = new RubySymbol((clone ? str.Clone() : str).Freeze(), _symbols.Count + RubySymbol.MinId, _runtimeId);
                     _symbols.Add(str, result);
                 }
@@ -4148,6 +4178,162 @@ namespace IronRuby.Runtime {
             return (RubyGlobalScope)globalScope.SetExtension(ContextId, result);
         }
 
+        #region Warm start (Hosting/WarmStart.cs)
+
+        /// <summary>
+        /// What Process.ppid reports instead of getppid(2), or 0. A warm-start worker runs the program
+        /// of a client process that the program's real parent started; its own parent is the broker.
+        /// </summary>
+        public static int ReportedParentProcessId { get; internal set; }
+
+        // The options dictionary the context was created with; a warm-start request swaps in a copy
+        // that differs only in what is per program (MainFile, Arguments, RequiredPaths).
+        private readonly IDictionary<string, object> _constructionOptions;
+
+        // The main script's global scope, created ahead of time with the core prelude (and the pool's
+        // -r libraries) already loaded into it, and how many of RequirePaths that covered.
+        private Scope _warmMainScope;
+        private int _warmLoadedRequirePaths;
+
+        /// <summary>
+        /// Does now what the main script would do first as it starts to run: creates its top-level
+        /// scope, which loads the core prelude - ruby4.rb, RubyGems - and the -r libraries.
+        /// </summary>
+        internal void PrepareWarmStart() {
+            var scope = new Scope();
+            RubyTopLevelScope.CreateTopLevelScope(scope, this, true);
+            _warmMainScope = scope;
+            _warmLoadedRequirePaths = (RubyOptions.RequirePaths != null) ? RubyOptions.RequirePaths.Count : 0;
+        }
+
+        /// <summary>
+        /// Language options that only shape how the main program is read and run - the -n -p -l -a
+        /// -0 -x -s -c loop and script switches, -w/-W0/-W1/-W2/-v verbosity, the backtrace limit - and
+        /// that a warm process can therefore take from the request (see ApplyProgramOptions). Any
+        /// other option has to be the pool's. Not on the list because loading the prelude depends on
+        /// them: -F (RubyGems splits strings, which warns once $; is set) and -i (argf.rb reads $-i
+        /// as it loads). Of the warning categories only the two that -w and -W<level> move may differ
+        /// (WarmStartWarningCategories): the prelude redefines methods, which -W:performance reports.
+        /// Util/warm/check.py compares each of them with a cold start.
+        /// </summary>
+        internal static readonly string[]/*!*/ WarmStartProgramOptions = new[] {
+            "LoopOverInput", "PrintEachLine", "AutoSplit", "ChopLines",
+            "NoInputRecordSeparator", "InputRecordSeparator",
+            "SkipToRubyShebang", "ScriptSwitches", "CheckSyntaxOnly",
+            "Verbosity", "WarningCategoryFlags", "BacktraceLimit",
+        };
+
+        internal static readonly string[]/*!*/ WarmStartWarningCategories = new[] {
+            "deprecated", "no-deprecated", "experimental", "no-experimental",
+        };
+
+        /// <summary>
+        /// Redoes what the constructor derived from WarmStartProgramOptions, where the request's
+        /// differ from the pool's. Loading the prelude does not depend on them: it neither reads nor
+        /// sets $/ or $\, and loads without a warning under -w.
+        /// </summary>
+        private void ApplyProgramOptions(RubyOptions/*!*/ pool) {
+            bool separatorChanged = _options.NoInputRecordSeparator != pool.NoInputRecordSeparator ||
+                _options.InputRecordSeparator != pool.InputRecordSeparator;
+            if (separatorChanged) {
+                _inputSeparator = _options.NoInputRecordSeparator ? null
+                    : CreateInputSeparator(_options.InputRecordSeparator ?? "\n").Freeze();
+            }
+            if (separatorChanged || _options.ChopLines != pool.ChopLines) {
+                _outputSeparator = _options.ChopLines ? _inputSeparator : null;
+            }
+            lock (GlobalVariablesLock) {
+                DefineGlobalVariableNoLock("-a", new ReadOnlyGlobalVariableInfo(_options.AutoSplit));
+                DefineGlobalVariableNoLock("-l", new ReadOnlyGlobalVariableInfo(_options.ChopLines));
+                DefineGlobalVariableNoLock("-p", new ReadOnlyGlobalVariableInfo(_options.PrintEachLine));
+            }
+            if (_options.Verbosity != pool.Verbosity) {
+                Verbose = (_options.Verbosity <= 0) ? null
+                    : (_options.Verbosity == 1) ? ScriptingRuntimeHelpers.False : ScriptingRuntimeHelpers.True;
+            }
+            if (!SameStrings(_options.WarningCategoryFlags, pool.WarningCategoryFlags)) {
+                InitializeWarningCategories();
+            }
+        }
+
+        private static bool SameStrings(IList<string>/*!*/ a, IList<string>/*!*/ b) {
+            if (a.Count != b.Count) {
+                return false;
+            }
+            for (int i = 0; i < a.Count; i++) {
+                if (a[i] != b[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        internal Scope TakeWarmMainScope() {
+            Scope scope = _warmMainScope;
+            _warmMainScope = null;
+            return scope;
+        }
+
+        /// <summary>The number of RequirePaths already loaded into the warm main scope (taken once).</summary>
+        internal int TakeWarmLoadedRequirePaths() {
+            int count = _warmLoadedRequirePaths;
+            _warmLoadedRequirePaths = 0;
+            return count;
+        }
+
+        /// <summary>
+        /// Makes this context the one a cold start of the request's command line would have created.
+        /// Everything else in the options has been checked to be the same as the pool's.
+        /// </summary>
+        internal void ApplyWarmStartRequest(string mainFile, ICollection<string>/*!*/ arguments, IList<string> requirePaths,
+            object searchPaths, IList<string> extraLoadPaths, IDictionary<string, object>/*!*/ programOptions) {
+            var options = new Dictionary<string, object>();
+            if (_constructionOptions != null) {
+                foreach (var entry in _constructionOptions) {
+                    options[entry.Key] = entry.Value;
+                }
+            }
+            options["MainFile"] = mainFile;
+            options["Arguments"] = new List<string>(arguments).ToArray();
+            options["RequiredPaths"] = requirePaths;
+            if (searchPaths != null) {
+                options["SearchPaths"] = searchPaths;
+            }
+            foreach (string name in WarmStartProgramOptions) {
+                object value;
+                if (programOptions.TryGetValue(name, out value)) {
+                    options[name] = value;
+                } else {
+                    options.Remove(name);
+                }
+            }
+            RubyOptions pool = _options;
+            _options = new RubyOptions(options);
+            ApplyProgramOptions(pool);
+
+            // -I directories go in front of $LOAD_PATH, in order, where Loader.MakeLoadPaths puts them.
+            if (extraLoadPaths != null) {
+                lock (_loader.LoadPaths) {
+                    for (int i = 0; i < extraLoadPaths.Count; i++) {
+                        _loader.LoadPaths.Insert(i, EncodePath(extraLoadPaths[i]));
+                    }
+                }
+            }
+
+            CommandLineProgramPath = (mainFile != null) ? EncodePath(mainFile) : null;
+            _inputProvider.ReplaceCommandLineArguments(_options.Arguments, _options.LocaleEncoding);
+
+            // The prelude keeps the $0 the program started with for Process.argv0; it was nil then.
+            object process;
+            if (ObjectClass.TryGetConstant(null, "Process", out process) && process is RubyModule processModule &&
+                processModule.TryRemoveConstant("ORIGINAL_ARGV0", out _)) {
+                processModule.SetConstant("ORIGINAL_ARGV0",
+                    (CommandLineProgramPath != null) ? (object)CommandLineProgramPath.Clone().Freeze() : null);
+            }
+        }
+
+        #endregion
+
         /// <summary>
         /// The main script did not parse. MRI reports that as it parses, before the at_exit handlers run.
         /// </summary>
@@ -4199,7 +4385,7 @@ namespace IronRuby.Runtime {
                     // up - an at_exit handler, say - is in place even when the script does not parse.
                     // Here they are loaded as the script starts running, so do it now instead.
                     if (RubyOptions.RequirePaths != null) {
-                        RubyTopLevelScope.CreateTopLevelScope(new Scope(), this, true);
+                        RubyTopLevelScope.CreateTopLevelScope(TakeWarmMainScope() ?? new Scope(), this, true);
                     }
                     throw;
                 }
@@ -4210,7 +4396,12 @@ namespace IronRuby.Runtime {
                     Console.Out.Flush();
                     return 0;
                 }
-                code.Run();
+                Scope warmScope = TakeWarmMainScope();
+                if (warmScope != null) {
+                    code.Run(warmScope);
+                } else {
+                    code.Run();
+                }
             } catch (SystemExit e) {
                 return e.Status;
             }
@@ -4746,9 +4937,10 @@ namespace IronRuby.Runtime {
                 // them, so they have to survive being read: they are decoded to the escapes
                 // RubyEncoding.EscapingEncoding turns back into the same bytes, which is what the
                 // parser is handed. Decoding them strictly threw a bare DecoderFallbackException.
-                var bytes = new MemoryStream();
-                stream.CopyTo(bytes);
-                var data = bytes.ToArray();
+                // the stream seeks (see GetSourceReader above), so the rest of it is read into an array of its size
+                // rather than grown in a MemoryStream and copied out
+                var data = new byte[checked((int)(stream.Length - stream.Position))];
+                stream.ReadExactly(data);
                 string text;
                 try {
                     text = encoding.GetString(data);
@@ -5006,6 +5198,59 @@ namespace IronRuby.Runtime {
             }
 
             return site.Target(site, target, EncodeIdentifier(memberName));
+        }
+
+        /// <summary>
+        /// Calls <paramref name="hook"/> - method_added, const_added and the like - on <paramref name="target"/>,
+        /// unless it would run the built-in method, which does nothing (see <see cref="IsDefaultHook"/>). The name is
+        /// interned either way, as the call would intern it.
+        /// </summary>
+        internal void CallHook(ref CallSite<Func<CallSite, object, object, object>> site, RubyClass.Hook hook,
+            object target, string/*!*/ memberName) {
+
+            if (!IsDefaultHook(target, hook)) {
+                Send(ref site, RubyClass.HookNames[(int)hook], target, memberName);
+            } else if (!_identifierSymbols.ContainsKey(memberName)) {
+                InternHookName(memberName);
+            }
+        }
+
+        /// <summary>
+        /// Interns the name a left-out hook call would have passed: the call would have interned it, and for a constant
+        /// nothing else may, while CRuby's Symbol.all_symbols lists every constant and method name. A name that had a symbol
+        /// already is filed in the identifier cache (<see cref="StringifyIdentifier"/>), so that from then on it costs
+        /// a lookup. A new one is not: every class and module name is one, and filing each costs more than it saves.
+        /// </summary>
+        private void InternHookName(string/*!*/ name) {
+            bool created;
+            RubySymbol symbol = CreateSymbol(MutableString.CreateMutable(name, GetIdentifierEncoding()), false, out created);
+            if (!created) {
+                _identifierSymbols.TryAdd(name, symbol);
+            }
+        }
+
+        /// <summary>
+        /// True if calling <paramref name="hook"/> on <paramref name="target"/> would run the built-in method
+        /// (Module#method_added, Module#const_added, Class#inherited, BasicObject#singleton_method_added, ...), which is
+        /// empty. The runtime then leaves the call out: it does nothing, and making it would bind a rule in the hook's call
+        /// site - one per new class or module, since each has a site of its own.
+        /// </summary>
+        /// <remarks>
+        /// The hook is resolved the way its call site resolves it - an implicit-self call, so every visibility, no
+        /// refinements - from the receiver's immediate class, through that class's lookup cache; the class keeps its answer
+        /// for as long as its method version stays the same (<see cref="RubyClass.IsDefaultHook"/>). A hook defined, aliased
+        /// or copied anywhere in the receiver's ancestry (its singleton class, a module extended, included or prepended,
+        /// a Module or Class subclass) is found instead of the built-in one, and an undefined hook is not found at all:
+        /// either way the call is made, and goes where it always went (to method_missing for an undefined one). An empty
+        /// library method of another arity (BasicObject#initialize copied under a hook's name) would raise, so it is called.
+        /// While :c_call is traced the call is made too: CRuby reports the default hook to a TracePoint, and the rule does.
+        /// </remarks>
+        internal bool IsDefaultHook(object target, RubyClass.Hook hook) {
+            if (TracePoint.CCallTracing) {
+                return false;
+            }
+
+            return GetImmediateClassOf(target).IsDefaultHook(hook);
         }
 
         /// <summary>

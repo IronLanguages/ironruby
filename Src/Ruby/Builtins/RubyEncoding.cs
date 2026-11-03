@@ -797,7 +797,7 @@ namespace IronRuby.Builtins {
         }
 
         private static ReadOnlyDictionary<string, string> CreateAliases() {
-            return new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase) {
+            return new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
                 { "646", "US-ASCII" }, 
                 { "ASCII", "US-ASCII" }, 
                 { "ANSI_X3.4-1968", "US-ASCII" }, 

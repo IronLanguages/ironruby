@@ -22,7 +22,12 @@
  * whatever ArgumentError there is to raise.
  *
  * A receiverless call may call a method of any visibility, so resolving the name on the
- * receiver's class with every visibility allowed is what the call site does too. A call
+ * receiver's class with every visibility allowed is what the call site does too. A call with
+ * an explicit receiver (other than `self') resolves the name with only public methods visible,
+ * and so goes direct only to a method that is public where the lookup finds it: `private :m'
+ * in a subclass, a singleton class or an including class leaves a forwarder there that hides
+ * the inherited public m, as it does from the ordinary call. A private or protected method
+ * makes the ordinary call, which raises or checks the caller as it always did. A call
  * a refinement could reach (RubyContext.IsRefinementSensitive) is never sent this way - only
  * its call site knows where it is made - and neither is anything once tracing is on.
  *
@@ -50,6 +55,26 @@ namespace IronRuby.Runtime.Jit {
         // stops looking: resolving a name is far dearer than the hash it would save.
         private const int MaxMisses = 8;
 
+        // A site with an explicit receiver whose callee has no direct entry for it to call - a
+        // library method, a Ruby method the JIT declined, one whose signature the call does not
+        // fit - goes quiet instead. Asking costs a call and the receiver's class - for an Integer,
+        // Float or String a table lookup - on top of the ordinary call it makes anyway, which made
+        // `2.5.round(half: :even)' 13-37% slower; so such a callee gets a few calls, and then the
+        // site makes the ordinary call behind two field tests (Off, QuietAt) until the method
+        // version changes. A redefinition can give the name a method the JIT takes, so the site
+        // then resolves it again and gives it the same few calls; MaxMisses bounds how often that
+        // can happen. A Ruby method the JIT is still profiling has no direct entry yet either, but
+        // it gets one after JitStub.Threshold calls (counted over every site), so the site waits
+        // longer for it.
+        //
+        // A receiverless site never goes quiet: its receiver is self, whose class is cheap to
+        // find, and the same site meets another class whenever an inherited method runs on an
+        // instance of another subclass - one whose method the JIT may well have taken. It keeps
+        // asking, as it did before receiver calls were sent this way, and only MaxMisses stops it.
+        private const int MaxDeadCalls = 4;
+        private const int MaxUndecidedCalls = 4 * JitStub.Threshold;
+        private const int NotQuiet = int.MinValue;
+
         /// <summary>"Not called here: make the call the ordinary way."</summary>
         public static readonly object NoDirect = new object();
 
@@ -57,6 +82,7 @@ namespace IronRuby.Runtime.Jit {
         private readonly string/*!*/ _name;
         private readonly int _positional;
         private readonly RubySymbol/*!*/[]/*!*/ _keys;      // in the order the call passes them
+        private readonly bool _publicOnly;                  // an explicit receiver: only a public method is called directly
 
         private sealed class State {
             internal RubyClass Class;
@@ -67,40 +93,76 @@ namespace IronRuby.Runtime.Jit {
 
         private volatile State _state;
         private int _misses;
-        private volatile bool _megamorphic;
+        private int _deadCalls;
+        private int _undecidedCalls;
 
-        private JitKeywordCall(RubyContext/*!*/ context, string/*!*/ name, int positional, RubySymbol/*!*/[]/*!*/ keys) {
+        /// <summary>
+        /// Set once the site has stopped looking for a direct entry for good (MaxMisses). The compiled
+        /// call of a receiver site tests it, and <see cref="QuietAt"/>, before it calls <see cref="Invoke"/>,
+        /// so from then on it costs those tests and nothing else; a receiverless one leaves the test to
+        /// Invoke. (A stale read only means one more call through Invoke, which tests Off again and
+        /// otherwise finds the same nothing to call.)
+        /// </summary>
+        public bool Off;
+
+        /// <summary>
+        /// The method version under which the site found nothing to call directly (MaxDeadCalls,
+        /// MaxUndecidedCalls), or NotQuiet: it stays out of <see cref="Invoke"/> while
+        /// RubyModule.GlobalMethodVersion is still that. Only a site with an explicit receiver
+        /// sets it, and only its compiled call tests it.
+        /// </summary>
+        public int QuietAt = NotQuiet;
+
+        private JitKeywordCall(RubyContext/*!*/ context, string/*!*/ name, int positional, RubySymbol/*!*/[]/*!*/ keys, bool publicOnly) {
             _context = context;
             _name = name;
             _positional = positional;
             _keys = keys;
+            _publicOnly = publicOnly;
         }
 
+        private static readonly VisibilityContext PublicOnly = new VisibilityContext(RubyMethodAttributes.Public);
+
         private static readonly MethodInfo/*!*/ InvokeMethod = typeof(JitKeywordCall).GetMethod("Invoke");
+        private static readonly PropertyInfo/*!*/ GlobalMethodVersionProperty = typeof(RubyModule).GetProperty("GlobalMethodVersion");
         private static readonly FieldInfo/*!*/ NoDirectField = typeof(JitKeywordCall).GetField("NoDirect");
+        private static readonly FieldInfo/*!*/ OffField = typeof(JitKeywordCall).GetField("Off");
+        private static readonly FieldInfo/*!*/ QuietAtField = typeof(JitKeywordCall).GetField("QuietAt");
 
         public static object Invoke(object/*!*/ site, object self, object p0, object p1, object k0, object k1, object k2) {
             return ((JitKeywordCall)site).Call(self, p0, p1, k0, k1, k2);
         }
 
         private object Call(object self, object p0, object p1, object k0, object k1, object k2) {
-            if (_megamorphic) { return NoDirect; }
+            if (Off) { return NoDirect; }
 
-            RubyClass cls = JitRuntime.ClassOf(_context, self);
+            // (QuietAt is the compiled call's to test: it does not call this while it is current.)
             int version = RubyModule.GlobalMethodVersion;
+            RubyClass cls = JitRuntime.ClassOf(_context, self);
             State state = _state;
             if (state == null || state.Class != cls || state.Version != version) {
                 if (++_misses > MaxMisses) {
-                    _megamorphic = true;
+                    Off = true;
                     return NoDirect;
                 }
                 _state = state = Resolve(cls, version);
+                // what the site is waiting for is this resolution's to give
+                _deadCalls = 0;
+                _undecidedCalls = 0;
             }
 
             JitStub stub = state.Stub;
-            if (stub == null) { return NoDirect; }
-            var direct = stub.Direct;
-            if (direct == null) { return NoDirect; }
+            var direct = (stub != null) ? stub.Direct : null;
+            if (direct == null) {
+                // An entry retired for deopting (or having its generic body timed) is put back once it
+                // has cooled down, and its direct entry with it: not a call to count towards quiet,
+                // which would last until the next method-table change, long after the entry is back.
+                if (stub != null && stub.IsCooling) { return NoDirect; }
+                // a stub the JIT gave up on never gets an entry; one it is still profiling may
+                return (stub == null || stub.GivenUp)
+                    ? Fruitless(ref _deadCalls, MaxDeadCalls, version)
+                    : Fruitless(ref _undecidedCalls, MaxUndecidedCalls, version);
+            }
 
             int[] slots = state.Slots;
             object d0 = null, d1 = null, d2 = null;
@@ -110,6 +172,11 @@ namespace IronRuby.Runtime.Jit {
                 case 1: d0 = Pick(stub, 0, slots[0], k0, k1, k2); break;
             }
             return direct(self, p0, p1, d0, d1, d2);
+        }
+
+        private object Fruitless(ref int count, int max, int version) {
+            if (_publicOnly && ++count >= max) { QuietAt = version; }
+            return NoDirect;
         }
 
         private static object Pick(JitStub/*!*/ stub, int declared, int slot, object k0, object k1, object k2) {
@@ -135,7 +202,10 @@ namespace IronRuby.Runtime.Jit {
                     }
                 }
 
-                var resolved = cls.ResolveMethod(_name, VisibilityContext.AllVisible);
+                // A forwarder that `private :m' or `protected :m' left in a subclass resolves to the
+                // inherited m, still public itself: the forwarder's own visibility is what hides it,
+                // and only a lookup that sees nothing but public methods asks about it.
+                var resolved = cls.ResolveMethod(_name, _publicOnly ? PublicOnly : VisibilityContext.AllVisible);
                 var info = resolved.Found ? resolved.Info as RubyMethodInfo : null;
                 if (info == null) { return state; }
 
@@ -168,11 +238,12 @@ namespace IronRuby.Runtime.Jit {
         // ---- compilation of the call ---------------------------------------------------------
 
         /// <summary>
-        /// The call `name(p0, p1, k: v, ...)' with the inline cache in front of it, or null when the
-        /// call does not have that shape.
+        /// The call `name(p0, p1, k: v, ...)' - or `receiver.name(...)', <paramref name="self"/> being the
+        /// receiver then and <paramref name="implicitSelf"/> false - with the inline cache in front of it,
+        /// or null when the call does not have that shape.
         /// </summary>
         internal static MSA.Expression TryTransform(AstGenerator/*!*/ gen, string/*!*/ methodName, MSA.Expression/*!*/ self,
-            Arguments arguments) {
+            Arguments arguments, bool implicitSelf) {
 
             var options = gen.Context.RubyOptions;
             if (!options.Jit || options.EnableTracing || options.Profile) { return null; }
@@ -199,7 +270,7 @@ namespace IronRuby.Runtime.Jit {
                 if (exprs[i] is SplattedArgument || exprs[i] is HashConstructor) { return null; }
             }
 
-            var site = new JitKeywordCall(gen.Context, methodName, positional, keys);
+            var site = new JitKeywordCall(gen.Context, methodName, positional, keys, !implicitSelf);
 
             // The arguments are evaluated once, in source order, into temporaries both paths share.
             var temps = new List<MSA.ParameterExpression>();
@@ -250,12 +321,26 @@ namespace IronRuby.Runtime.Jit {
                 siteBuilder.Add(p[i]);
             }
             siteBuilder.Add(makeHash);
-            var ordinary = siteBuilder.MakeCallAction(methodName, true);
+            var ordinary = siteBuilder.MakeCallAction(methodName, implicitSelf);
 
             var result = Ast.Variable(typeof(object), "#kwresult");
             temps.Add(result);
-            body.Add(Ast.Assign(result, Ast.Call(InvokeMethod,
-                Ast.Constant(site, typeof(object)), selfTemp, p[0], p[1], k[0], k[1], k[2])));
+            MSA.Expression invoke = Ast.Call(InvokeMethod, Ast.Constant(site, typeof(object)), selfTemp, p[0], p[1], k[0], k[1], k[2]);
+            if (!implicitSelf) {
+                // A receiver site that went quiet is not to cost a call (MaxDeadCalls). A receiverless
+                // one never goes quiet, and Invoke tests Off itself, so it pays nothing in front of it.
+                var siteConstant = Ast.Constant(site);
+                invoke = Ast.Condition(
+                    Ast.OrElse(
+                        Ast.Field(siteConstant, OffField),
+                        Ast.Equal(Ast.Field(siteConstant, QuietAtField), Ast.Property(null, GlobalMethodVersionProperty))
+                    ),
+                    Ast.Field(null, NoDirectField),
+                    invoke,
+                    typeof(object)
+                );
+            }
+            body.Add(Ast.Assign(result, invoke));
             body.Add(Ast.Condition(
                 Ast.ReferenceNotEqual(result, Ast.Field(null, NoDirectField)),
                 result,

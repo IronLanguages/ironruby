@@ -246,21 +246,29 @@ namespace IronRuby.Runtime {
         private readonly bool _throwOnError;
         private readonly string/*!*/ _name;
         private readonly char[] _table;
-        private readonly System.Collections.Generic.Dictionary<char, byte> _reverse;
+        // built on first use: every Encoding constant makes one of these, and few are ever used to encode
+        // (a Dictionary<char, byte> is also code ReadyToRun cannot precompile)
+        private System.Collections.Generic.Dictionary<char, byte> _reverse;
 
         internal SingleByteTableEncoding(int codepage, string/*!*/ name, char[] table, bool throwOnError)
             : base(codepage) {
             _name = name;
             _table = table;
             _throwOnError = throwOnError;
-            if (table != null) {
-                _reverse = new System.Collections.Generic.Dictionary<char, byte>();
-                for (int i = 0; i < table.Length; i++) {
-                    if (table[i] != '\uffff' && !_reverse.ContainsKey(table[i])) {
-                        _reverse.Add(table[i], (byte)(0x80 + i));
+        }
+
+        private System.Collections.Generic.Dictionary<char, byte>/*!*/ GetReverseTable() {
+            var reverse = _reverse;
+            if (reverse == null) {
+                reverse = new System.Collections.Generic.Dictionary<char, byte>();
+                for (int i = 0; i < _table.Length; i++) {
+                    if (_table[i] != '\uffff' && !reverse.ContainsKey(_table[i])) {
+                        reverse.Add(_table[i], (byte)(0x80 + i));
                     }
                 }
+                _reverse = reverse;
             }
+            return reverse;
         }
 
         public int FindInvalid(byte[]/*!*/ bytes, int index, int count) {
@@ -275,7 +283,7 @@ namespace IronRuby.Runtime {
                 return c <= 0xff ? c : -1;
             }
             byte b;
-            return _reverse.TryGetValue(c, out b) ? b : -1;
+            return GetReverseTable().TryGetValue(c, out b) ? b : -1;
         }
 
         private bool TryGetChar(byte b, out char c) {

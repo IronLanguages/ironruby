@@ -310,7 +310,19 @@ namespace IronRuby.Builtins {
 
         // { constant-name -> (source path, source line) }; lazily allocated, only holds constants
         // whose definition site is known (Module#const_source_location).
-        private Dictionary<string, KeyValuePair<string, int>> _constantLocations;
+        private Dictionary<string, ConstantLocation> _constantLocations;
+
+        // A class rather than a KeyValuePair<string, int>: a Dictionary whose values are a struct is
+        // System.Private.CoreLib code ReadyToRun cannot precompile, JIT-compiled at startup otherwise.
+        private sealed class ConstantLocation {
+            internal readonly string/*!*/ SourcePath;
+            internal readonly int SourceLine;
+
+            internal ConstantLocation(string/*!*/ sourcePath, int sourceLine) {
+                SourcePath = sourcePath;
+                SourceLine = sourceLine;
+            }
+        }
 
         // method table:
         private MemberTableState _methodsState = MemberTableState.Uninitialized;
@@ -395,7 +407,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         public void ConstantAdded(string/*!*/ name) {
             Assert.NotNull(name);
-            Context.Send(ref _constantAddedCallbackSite, Symbols.ConstantAdded, this, name);
+            Context.CallHook(ref _constantAddedCallbackSite, RubyClass.Hook.ConstantAdded, this, name);
         }
 
         // Ruby 1.8: called after method is added, except for alias_method which calls it before
@@ -404,21 +416,21 @@ namespace IronRuby.Builtins {
             Assert.NotNull(name);
             Debug.Assert(!IsSingletonClass);
 
-            Context.Send(ref _methodAddedCallbackSite, Symbols.MethodAdded, this, name);
+            Context.CallHook(ref _methodAddedCallbackSite, RubyClass.Hook.MethodAdded, this, name);
         }
 
         internal virtual void MethodRemoved(string/*!*/ name) {
             Assert.NotNull(name);
             Debug.Assert(!IsSingletonClass);
 
-            Context.Send(ref _methodRemovedCallbackSite, Symbols.MethodRemoved, this, name);
+            Context.CallHook(ref _methodRemovedCallbackSite, RubyClass.Hook.MethodRemoved, this, name);
         }
 
         internal virtual void MethodUndefined(string/*!*/ name) {
             Assert.NotNull(name);
             Debug.Assert(!IsSingletonClass);
 
-            Context.Send(ref _methodUndefinedCallbackSite, Symbols.MethodUndefined, this, name);
+            Context.CallHook(ref _methodUndefinedCallbackSite, RubyClass.Hook.MethodUndefined, this, name);
         }
 
         #endregion
@@ -846,7 +858,7 @@ namespace IronRuby.Builtins {
             _constantEncodings = (module._constantEncodings != null) ?
                 new Dictionary<string, RubyEncoding>(module._constantEncodings) : null;
             _constantLocations = (module._constantLocations != null) ?
-                new Dictionary<string, KeyValuePair<string, int>>(module._constantLocations) : null;
+                new Dictionary<string, ConstantLocation>(module._constantLocations) : null;
 
             // copy namespace members:
             if (module._namespaceTracker != null) {
@@ -1652,9 +1664,9 @@ namespace IronRuby.Builtins {
             }
 
             if (_constantLocations == null) {
-                _constantLocations = new Dictionary<string, KeyValuePair<string, int>>();
+                _constantLocations = new Dictionary<string, ConstantLocation>();
             }
-            _constantLocations[name] = new KeyValuePair<string, int>(sourcePath, sourceLine);
+            _constantLocations[name] = new ConstantLocation(sourcePath, sourceLine);
         }
 
         public bool TryGetConstantLocation(string/*!*/ name, out string sourcePath, out int sourceLine) {
@@ -1667,10 +1679,10 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            KeyValuePair<string, int> location;
+            ConstantLocation location;
             if (_constantLocations != null && _constantLocations.TryGetValue(name, out location)) {
-                sourcePath = location.Key;
-                sourceLine = location.Value;
+                sourcePath = location.SourcePath;
+                sourceLine = location.SourceLine;
                 return true;
             }
             sourcePath = null;
@@ -2586,7 +2598,6 @@ namespace IronRuby.Builtins {
             bool skipHidden = false;
             bool foundCallerSelf = false;
             MethodResolutionResult result;
-            List<RubyModule> refinementBuffer = (refinements != null && !refinements.IsEmpty) ? new List<RubyModule>() : null;
 
             // The CLR extension methods `using'd where the call is made, and whether the search passed a module they
             // extend before it found the method:
@@ -2594,27 +2605,16 @@ namespace IronRuby.Builtins {
                 refinements.Extensions : null;
             bool passedScopedExtensions = false;
 
-            if (ForEachAncestor((module) => {
-                if (refinementBuffer != null) {
-                    refinementBuffer.Clear();
-                    refinements.GetRefinementsOf(module, refinementBuffer);
-                    foreach (RubyModule refinement in refinementBuffer) {
-                        // a refinement is not in anyone's ancestors, so nothing else initializes it
-                        refinement.InitializeMethodsNoLock();
-                        owner = refinement;
-                        if (refinement.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
-                            return true;
-                        }
-                    }
-                }
-                owner = module;
-                foundCallerSelf |= module == visibility.Class;
-                if (module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
-                    return true;
-                }
-                passedScopedExtensions |= scopedExtensions != null && module.HasScopedExtensionMethodsNoLock(name, scopedExtensions);
-                return false;
-            })) {
+            // Without refinements, the walk without a closure: this is the lookup every call site's binding does,
+            // and the closure's captured locals were allocated on every call (which is also why the walk with
+            // refinements is a method of its own). Scoped CLR extensions come only with a `using', so only with
+            // refinements active.
+            bool found = (refinements != null && !refinements.IsEmpty) ?
+                FindMethodWithRefinementsNoLock(name, options, visibility, refinements, scopedExtensions, ref passedScopedExtensions,
+                    ref skipHidden, ref foundCallerSelf, out info, out owner) :
+                FindMethodInAncestorsNoLock(name, (options & MethodLookup.Virtual) != 0, visibility.Class, ref skipHidden, ref foundCallerSelf, out info, out owner);
+
+            if (found) {
                 if (info == null || info.IsUndefined) {
                     result = MethodResolutionResult.NotFound;
                 } else if (!IsMethodVisible(info, owner, visibility, foundCallerSelf)) {
@@ -2659,6 +2659,87 @@ namespace IronRuby.Builtins {
             }
 
             return result;
+        }
+
+        private bool FindMethodWithRefinementsNoLock(string/*!*/ name, MethodLookup options, VisibilityContext visibility,
+            RefinementActivation/*!*/ refinements, RefinementActivation.ClrExtensionScope scopedExtensions, ref bool passedScopedExtensionsRef,
+            ref bool skipHiddenRef, ref bool foundCallerSelfRef, out RubyMemberInfo infoOut, out RubyModule ownerOut) {
+
+            RubyMemberInfo info = null;
+            RubyModule owner = null;
+            bool skipHidden = skipHiddenRef;
+            bool foundCallerSelf = foundCallerSelfRef;
+            bool passedScopedExtensions = passedScopedExtensionsRef;
+            var refinementBuffer = new List<RubyModule>();
+
+            bool found = ForEachAncestor((module) => {
+                refinementBuffer.Clear();
+                refinements.GetRefinementsOf(module, refinementBuffer);
+                foreach (RubyModule refinement in refinementBuffer) {
+                    // a refinement is not in anyone's ancestors, so nothing else initializes it
+                    refinement.InitializeMethodsNoLock();
+                    owner = refinement;
+                    if (refinement.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
+                        return true;
+                    }
+                }
+                owner = module;
+                foundCallerSelf |= module == visibility.Class;
+                if (module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
+                    return true;
+                }
+                passedScopedExtensions |= scopedExtensions != null && module.HasScopedExtensionMethodsNoLock(name, scopedExtensions);
+                return false;
+            });
+
+            skipHiddenRef = skipHidden;
+            foundCallerSelfRef = foundCallerSelf;
+            passedScopedExtensionsRef = passedScopedExtensions;
+            infoOut = info;
+            ownerOut = owner;
+            return found;
+        }
+
+        /// <summary>
+        /// What ResolveMethodNoLock's ForEachAncestor walk does when no refinement is active: the ancestors in method
+        /// resolution order (see ForEachAncestor and RubyClass.ForEachAncestor) until one defines the method, noting
+        /// whether the caller's class was passed on the way.
+        /// </summary>
+        private bool FindMethodInAncestorsNoLock(string/*!*/ name, bool virtualLookup, RubyModule callerClass,
+            ref bool skipHidden, ref bool foundCallerSelf, out RubyMemberInfo info, out RubyModule owner) {
+
+            info = null;
+            owner = null;
+            if (IsClass) {
+                for (RubyClass c = (RubyClass)this; c != null; c = c.SuperClass) {
+                    if (c.FindMethodInDeclaredAncestorsNoLock(name, virtualLookup, callerClass, ref skipHidden, ref foundCallerSelf, ref info, ref owner)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            return FindMethodInDeclaredAncestorsNoLock(name, virtualLookup, callerClass, ref skipHidden, ref foundCallerSelf, ref info, ref owner);
+        }
+
+        private bool FindMethodInDeclaredAncestorsNoLock(string/*!*/ name, bool virtualLookup, RubyModule callerClass,
+            ref bool skipHidden, ref bool foundCallerSelf, ref RubyMemberInfo info, ref RubyModule owner) {
+
+            foreach (RubyModule p in _prepends) {
+                owner = p;
+                foundCallerSelf |= p == callerClass;
+                if (p.TryGetMethod(name, ref skipHidden, virtualLookup, out info)) return true;
+            }
+
+            owner = this;
+            foundCallerSelf |= this == callerClass;
+            if (TryGetMethod(name, ref skipHidden, virtualLookup, out info)) return true;
+
+            foreach (RubyModule m in _mixins) {
+                owner = m;
+                foundCallerSelf |= m == callerClass;
+                if (m.TryGetMethod(name, ref skipHidden, virtualLookup, out info)) return true;
+            }
+            return false;
         }
 
         // Extension methods have the places using_clr_extensions gives them, the CLR method groups of classes backed by a CLR
@@ -2833,12 +2914,17 @@ namespace IronRuby.Builtins {
                 if (foundCallerSelf) {
                     return true;
                 }
-                // walk ancestors from caller's self class (visibilityContext)
-                // until the method owner is found or this module is found (this module is a descendant of the owner):
-                return visibility.Class.ForEachAncestor((module) => module == owner || module == this);
+                return IsProtectedMethodVisible(owner, visibility.Class);
             } 
 
             return method.Visibility == RubyMethodVisibility.Public;
+        }
+
+        // A method of its own so that the closure's captured parameter is not allocated on every visibility check.
+        private bool IsProtectedMethodVisible(RubyModule/*!*/ owner, RubyModule/*!*/ callerClass) {
+            // walk ancestors from caller's self class (visibilityContext)
+            // until the method owner is found or this module is found (this module is a descendant of the owner):
+            return callerClass.ForEachAncestor((module) => module == owner || module == this);
         }
 
         // skip one method in the method resolution order (MRO)

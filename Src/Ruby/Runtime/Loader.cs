@@ -505,7 +505,11 @@ namespace IronRuby.Runtime {
             return true;
         }
 
-        private static Regex _AssemblyNameRegex = new Regex(@"
+        // Built on first use: every require asks TryParseAssemblyName, and almost no path has the '=' an
+        // assembly name needs, so most processes never need the Regex (4 ms of the Loader's cctor).
+        private static Regex _assemblyNameRegex;
+
+        private static Regex/*!*/ AssemblyNameRegex => _assemblyNameRegex ??= new Regex(@"
             \s*((?<type>[\w.+]+)\s*,)?\s* # type name
             (?<assembly>
               [^,=]+\s*                   # assembly name
@@ -519,8 +523,8 @@ namespace IronRuby.Runtime {
             // and an ordinary path has neither, so a quick look first: the unanchored regex
             // otherwise tries each position of the path, which made it a tenth of irb's startup.
             int comma = path.IndexOf(',');
-            Match match = (comma >= 0 && path.IndexOf('=', comma) >= 0) ? _AssemblyNameRegex.Match(path) : Match.Empty;
-            if (match.Success) {
+            Match match = (comma >= 0 && path.IndexOf('=', comma) >= 0) ? AssemblyNameRegex.Match(path) : null;
+            if (match != null && match.Success) {
                 Group typeGroup = match.Groups["type"];
                 Group assemblyGroup = match.Groups["assembly"];
                 Debug.Assert(assemblyGroup.Success);
@@ -1212,8 +1216,20 @@ namespace IronRuby.Runtime {
             }
 
             var sourceUnit = language.CreateFileUnit(path, RubyEncoding.Ascii.Encoding, SourceCodeKind.File);
+            List<string> log = SourceFileLog;
+            if (log != null) {
+                lock (log) {
+                    log.Add(fullPath);
+                }
+            }
             return new ResolvedFile(sourceUnit, fullPath, extensionAppended ? extension : null);
         }
+
+        /// <summary>
+        /// When set, every source file the loader resolves is added to it - the prelude's own files too,
+        /// which never show in $". A warm-start worker (Hosting/WarmStart.cs) watches them for changes.
+        /// </summary>
+        internal List<string> SourceFileLog { get; set; }
 
         private List<string>/*!*/ GetExtensionsOfExistingFiles(string/*!*/ path, IEnumerable<string>/*!*/ extensions) {
             // all extensions that could be appended to the path to get an existing file:
@@ -1420,16 +1436,31 @@ namespace IronRuby.Runtime {
             get { return _corePreludeThread == Thread.CurrentThread; }
         }
 
+        // Set while the core prelude (gem_prelude.rb and everything it requires, or ruby4.rb) loads,
+        // on whichever thread: RubyContext.CompilationThreshold reads it.
+        private volatile bool _loadingCorePrelude;
+
+        internal bool LoadingCorePrelude {
+            get { return _loadingCorePrelude; }
+        }
+
         /// <summary>
         /// Requires the core prelude - gem_prelude.rb, or ruby4.rb under --disable-gems - and then
         /// lists the features MRI has in $" from the start.
         /// </summary>
         internal void LoadCorePrelude(Scope/*!*/ globalScope, object self, string/*!*/ path) {
             _corePreludeLoaderThread = Thread.CurrentThread;
+            _loadingCorePrelude = true;
+            // The prelude's hot code is mostly not the program's: compiling it on another thread while the prelude
+            // loads only competes with the loading (the compilations of `ir -e 1' took ~180 ms of CPU). What is
+            // still hot once the program runs is compiled then (see BackgroundCompilation).
+            var holdCompilation = Microsoft.Scripting.Interpreter.BackgroundCompilation.HoldBack();
             try {
                 LoadFile(globalScope, self, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
             } finally {
+                _loadingCorePrelude = false;
                 _corePreludeLoaderThread = null;
+                holdCompilation.Dispose();
             }
             ProvideCoreFeatures();
         }

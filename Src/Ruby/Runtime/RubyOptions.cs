@@ -306,8 +306,10 @@ namespace IronRuby.Runtime {
             _profile = GetOption(options, "Profile", false);
             _noAssemblyResolveHook = GetOption(options, "NoAssemblyResolveHook", false);
             _objectSpace = GetOption(options, "ObjectSpace", false);
-            _jit = GetOption(options, "JIT", true);
-            _osr = GetOption(options, "OSR", true);
+            // Both specialize by compiling expression trees to IL; without dynamic code (NativeAOT)
+            // that would only hand them to System.Linq.Expressions' interpreter, so they default off.
+            _jit = GetOption(options, "JIT", System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported);
+            _osr = GetOption(options, "OSR", System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported);
             _requirePaths = GetStringCollectionOption(options, "RequiredPaths", ';', ',');
             _hasSearchPaths = GetOption<object>(options, "SearchPaths", null) != null;
             _standardLibraryPath = GetOption(options, "StandardLibrary", (string)null);

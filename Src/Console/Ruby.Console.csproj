@@ -73,4 +73,61 @@
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>
+  <!-- IronRubyStartupProfile=true (Util/package-release.sh) has crossgen2 compile with Build/startup.mibc, a profile of
+       the methods startup runs (Util/make-startup-mibc.sh). It pays off in a composite image of IronRuby and the
+       framework (PublishReadyToRunComposite, self-contained only), where the generic instantiations startup makes
+       over framework types become precompilable: `ir -e 1` then JITs ~140 methods instead of ~570 and runs 8% fewer
+       instructions than in the self-contained per-assembly R2R build. In the framework-dependent host it changes next
+       to nothing (1%), so the R2R host does not use it. -->
+  <ItemGroup Condition="'$(IronRubyStartupProfile)' == 'true' and Exists('$(MSBuildThisFileDirectory)..\..\Build\startup.mibc')">
+    <PublishReadyToRunPgoFiles Include="$(MSBuildThisFileDirectory)..\..\Build\startup.mibc" />
+  </ItemGroup>
+  <!-- NativeAOT (experimental): one native executable, no JIT, everything interpreted.
+         dotnet publish Src/Console/Ruby.Console.csproj -c Release -r linux-x64 -f net8.0 -p:IronRubyNativeAot=true \
+           -p:DlrSourceDir=... -o Src/Console/bin/NativeAOT/net8.0       # then IR_CONFIG=NativeAOT ./ir.sh
+       Not -p:PublishAot=true: a global property reaches the DLR projects too, and their net462 and
+       netstandard2.0 targets fail restore with NETSDK1207. Needs the DLR patch
+       Build/dlr-patches/aot/0001-interpreter-only-without-dynamic-code.patch.
+       Nothing here applies to a normal build or to the R2R host. -->
+  <PropertyGroup Condition="'$(IronRubyNativeAot)' == 'true'">
+    <PublishAot>true</PublishAot>
+    <!-- IronRuby.Prism is an Exe project (it has a test driver); only its library half is used -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+    <!-- IronRuby's library initializers, binders and ReflectionCache find members by name at run
+         time and nothing in IronRuby is annotated for trimming: keep IronRuby and the DLR whole. -->
+    <TrimMode>partial</TrimMode>
+    <!-- NativeAOT bakes feature switches in at compile time; the SDK default (false) for this one
+         wins over the RuntimeHostConfigurationOption item above. -->
+    <EnableUnsafeUTF7Encoding>true</EnableUnsafeUTF7Encoding>
+    <SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(IronRubyNativeAot)' == 'true'">
+    <TrimmerRootAssembly Include="IronRuby" />
+    <TrimmerRootAssembly Include="IronRuby.Libraries" />
+    <TrimmerRootAssembly Include="IronRuby.Libraries.Yaml" />
+    <TrimmerRootAssembly Include="IronRuby.Prism" />
+    <TrimmerRootAssembly Include="Microsoft.Scripting" />
+    <TrimmerRootAssembly Include="Microsoft.Dynamic" />
+    <!-- .NET types Ruby code reaches through CLR interop, by reflection at run time -->
+    <TrimmerRootDescriptor Include="NativeAot.roots.xml" />
+    <!-- Microsoft.Scripting references it (app.config support), but privately, so it never reaches
+         the host's output; ILC refuses to compile a rooted assembly whose references are missing -->
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0" />
+  </ItemGroup>
+  <!-- A Release build on Linux also produces the ReadyToRun host (Util/publish-r2r.sh), which ir.sh runs by default:
+       it starts about a third faster. The publish is a RuntimeIdentifier build of its own, so the target stays out of
+       it, and IronRubyNestedR2R stops a publish from running it again. A failed publish only warns: the IL build is
+       still good, and ir.sh does not pick a host older than the build. -->
+  <Target Name="IronRubyReadyToRunHost" AfterTargets="Build"
+          Condition="'$(Configuration)' == 'Release' and '$(TargetFramework)' != '' and '$(RuntimeIdentifier)' == '' and '$(IronRubyNestedR2R)' != 'true' and '$(IronRubyR2R)' != 'false' and $([MSBuild]::IsOSPlatform('Linux'))">
+    <!-- The host is published next to the old one and swapped in only once the publish succeeded: a publish that
+         fails halfway (it has hit an IOException race in Src/Prism/bin/.../linux-x64) would otherwise leave a host
+         with some assemblies new and some old. One retry, since that race does not repeat. -->
+    <PropertyGroup>
+      <_IrR2RDir>$(MSBuildProjectDirectory)/bin/R2R/$(TargetFramework)</_IrR2RDir>
+      <_IrR2RNew>$(_IrR2RDir).new</_IrR2RNew>
+      <_IrR2RPublish>&quot;$(DOTNET_HOST_PATH)&quot; publish &quot;$(MSBuildProjectFullPath)&quot; -c Release -r linux-x64 --self-contained false -f $(TargetFramework) -p:PublishReadyToRun=true -p:IronRubyNestedR2R=true -p:IronRubyTargetFrameworks=$(TargetFramework) -p:DlrSourceDir=&quot;$(DlrSourceDir)&quot; -o &quot;$(_IrR2RNew)&quot; -nologo</_IrR2RPublish>
+    </PropertyGroup>
+    <Exec ContinueOnError="WarnAndContinue" Command="rm -rf &quot;$(_IrR2RNew)&quot; &amp;&amp; ( $(_IrR2RPublish) || $(_IrR2RPublish) ) &amp;&amp; rm -rf &quot;$(_IrR2RDir)&quot; &amp;&amp; mv &quot;$(_IrR2RNew)&quot; &quot;$(_IrR2RDir)&quot;" />
+  </Target>
 </Project>

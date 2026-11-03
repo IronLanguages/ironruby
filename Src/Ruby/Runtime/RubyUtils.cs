@@ -52,7 +52,9 @@ namespace IronRuby.Runtime {
         // MRI seeds the hash of immediate values with a random per-process key (CVE-2011-4815), so
         // an attacker cannot precompute colliding keys. Integer and Float hashes are mixed with it;
         // String and Symbol hashes already come from .NET's randomized string hashing.
-        private static readonly uint _hashSeed = (uint)System.Security.Cryptography.RandomNumberGenerator.GetInt32(Int32.MinValue, Int32.MaxValue);
+        // Random.Shared is seeded from the OS (getrandom/arc4random), as that string hashing is; the
+        // cryptographic generator gave no stronger key for this and loading it (OpenSSL) cost ~8 ms of startup.
+        private static readonly uint _hashSeed = (uint)Random.Shared.Next(Int32.MinValue, Int32.MaxValue);
 
         private static int MixHash(uint h) {
             unchecked {

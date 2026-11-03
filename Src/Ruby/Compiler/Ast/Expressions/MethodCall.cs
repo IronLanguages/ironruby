@@ -96,9 +96,9 @@ namespace IronRuby.Compiler.Ast {
             Assert.NotNull(gen, transformedTarget);
             Assert.NotEmpty(methodName);
 
-            // -X:JIT: `m(x, k: v)' may go straight into m's specialized body (Runtime/Jit/JitKeywordCall.cs)
-            if (hasImplicitSelf && block == null && singleArgument == null && assignmentRhsArgument == null && node is MethodCall) {
-                var direct = IronRuby.Runtime.Jit.JitKeywordCall.TryTransform(gen, methodName, transformedTarget, arguments);
+            // -X:JIT: `m(x, k: v)' and `r.m(x, k: v)' may go straight into m's specialized body (Runtime/Jit/JitKeywordCall.cs)
+            if (block == null && singleArgument == null && assignmentRhsArgument == null && node is MethodCall) {
+                var direct = IronRuby.Runtime.Jit.JitKeywordCall.TryTransform(gen, methodName, transformedTarget, arguments, hasImplicitSelf);
                 if (direct != null) {
                     return direct;
                 }

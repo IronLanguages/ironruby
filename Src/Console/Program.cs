@@ -40,6 +40,18 @@ internal sealed class Host : RubyConsoleHost {
         }
     }
 
+    // NativeAOT: ScriptRuntimeSetup.ReadConfiguration() goes through System.Configuration, which is
+    // reflection all the way down and fails at startup there. ir has no app.config to read anyway,
+    // so without dynamic code the setup is built directly.
+    protected override ScriptRuntimeSetup CreateRuntimeSetup() {
+        if (System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported) {
+            return base.CreateRuntimeSetup();
+        }
+        var setup = new ScriptRuntimeSetup();
+        setup.LanguageSetups.Add(CreateLanguageSetup());
+        return setup;
+    }
+
     protected override IConsole CreateConsole(ScriptEngine engine, CommandLine commandLine, ConsoleOptions options) {
         IConsole console = base.CreateConsole(engine, commandLine, options);
 
@@ -82,12 +94,17 @@ internal sealed class Host : RubyConsoleHost {
     [STAThread]
     [RubyStackTraceHidden]
     static int Main(string[] args) {
+        // A process the warm-start broker started (Util/warm): see IronRuby.Hosting.WarmStart.
+        WarmStart.InitializeFromEnvironment();
+
         // -X:UsePrism chose prism over the legacy parser. Prism is the only parser now; the switch
         // is still accepted, and ignored, so that scripts and older launchers that pass it work.
         if (Array.IndexOf(args, "-X:UsePrism") >= 0) {
             args = Array.FindAll(args, a => a != "-X:UsePrism");
         }
         RubyContext.AlternativeParser = IronRuby.Prism.PrismAstBridge.Parse;
-        return new Host().Run(args);
+        int status = new Host().Run(args);
+        WarmStart.ReportExit(status);
+        return status;
     }
 }

@@ -8,7 +8,14 @@
 #
 #   RUBY_EXE=./ironruby ./ironruby -Imspec/lib mspec/bin/mspec-run spec/language
 #
-IR_ROOT="$(dirname "$(readlink -f "$0")")"
+# The directory ironruby is really in. `cd -P` in a subshell is a fork without an exec, a
+# millisecond and a half cheaper than dirname+readlink - which is a tenth of a warm start
+# (IR_SERVER below); a symlinked ironruby, or one found on PATH, still goes through readlink.
+IR_ROOT=
+case "$0" in
+  */*) [ -L "$0" ] || IR_ROOT="$(cd -P -- "${0%/*}" 2>/dev/null && pwd)" ;;
+esac
+[ -n "$IR_ROOT" ] || IR_ROOT="$(dirname "$(readlink -f "$0")")"
 
 # apphost needs DOTNET_ROOT when the SDK isn't on the default search path
 if [ -z "$DOTNET_ROOT" ] && [ -x /usr/local/dotnet/dotnet ]; then
@@ -27,14 +34,24 @@ S="$IR_ROOT/Src/StdLib"
 # marks the assemblies non-optimizable, so the JIT leaves the whole runtime unoptimized
 # too - and it passes the same specs and the same IronRuby.Tests.  Util/run-tests.sh and
 # regen-initializers.sh read IR_CONFIG as well, so one export covers a whole session.
-# Debug stays the default because every worktree and every agent script builds it.
-# A binary release (Util/package-release.sh) ships only the Release build: when
-# IR_CONFIG is not set and there is no Debug build, run that one.
+# Debug is what an unconfigured run uses, because every worktree and agent script builds it.
+# A binary release (Util/package-release.sh) ships only the Release build: when IR_CONFIG is
+# not set and there is no Debug build, run that one.
+# Once an R2R host has been published (Util/publish-r2r.sh) it is the default instead: startup
+# is about a third faster (`ir -e 1`: 1.30 s -> 0.80 s). It is skipped while a Debug or Release
+# build is newer than it, since that build has changes the host does not have.
 if [ -z "$IR_CONFIG" ]; then
   IR_CONFIG=Debug
   if [ ! -x "$IR_ROOT/Src/Console/bin/Debug/${IR_TFM:-net8.0}/ir" ] &&
      [ -x "$IR_ROOT/Src/Console/bin/Release/${IR_TFM:-net8.0}/ir" ]; then
     IR_CONFIG=Release
+  fi
+  R2R_DLL="$IR_ROOT/Src/Console/bin/R2R/${IR_TFM:-net8.0}/ir.dll"
+  if [ -x "$IR_ROOT/Src/Console/bin/R2R/${IR_TFM:-net8.0}/ir" ] &&
+     [ -z "$(find "$IR_ROOT/Src/Console/bin/Debug/${IR_TFM:-net8.0}/ir.dll" \
+                  "$IR_ROOT/Src/Console/bin/Release/${IR_TFM:-net8.0}/ir.dll" \
+                  -maxdepth 0 -newer "$R2R_DLL" 2>/dev/null)" ]; then
+    IR_CONFIG=R2R
   fi
 fi
 
@@ -74,5 +91,28 @@ fi
 RUBYPATH="$S/bin:$(dirname "$IR_BIN")${RUBYPATH:+:$RUBYPATH}"
 export RUBYPATH
 
-exec "$IR_BIN" \
-  "-X:StdLib=$S/ironruby:$S/ruby/4.0" "$@"
+STDLIB="-X:StdLib=$S/ironruby:$S/ruby/4.0"
+
+# Warm start (Util/warm/README.md): IR_SERVER=start keeps a pool of IronRuby processes with the
+# runtime and the prelude already loaded, and IR_SERVER=1 runs the program in one of them -
+# `ir -e 1` in ~0.015 s instead of ~0.9 s; IR_SERVER=auto also starts a pool when none is running.
+# Whenever the pool cannot serve a request (none running, none idle, startup inputs such as
+# RUBYOPT or -I that differ from the pool's) the client execs exactly the command below instead.
+case "$IR_SERVER" in
+  ""|0) ;;
+  start|stop|restart|status)
+    exec "$IR_ROOT/Util/warm/ir-server.sh" "$IR_SERVER" "$IR_BIN" "$STDLIB" ;;
+  auto)
+    # as 1, and when no pool is running, start one in the background for the invocations to come
+    [ -x "$IR_ROOT/Util/warm/bin/ir-client" ] || "$IR_ROOT/Util/warm/build.sh" >/dev/null 2>&1
+    if [ -x "$IR_ROOT/Util/warm/bin/ir-client" ]; then
+      exec "$IR_ROOT/Util/warm/bin/ir-client" --auto "$IR_ROOT/Util/warm/ir-server.sh" 1 \
+        "$IR_BIN" "$STDLIB" "$@"
+    fi ;;
+  *)
+    if [ -x "$IR_ROOT/Util/warm/bin/ir-client" ]; then
+      exec "$IR_ROOT/Util/warm/bin/ir-client" "$IR_BIN" "$STDLIB" "$@"
+    fi ;;
+esac
+
+exec "$IR_BIN" "$STDLIB" "$@"

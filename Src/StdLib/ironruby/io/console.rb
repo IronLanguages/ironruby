@@ -357,7 +357,14 @@ class IO
 
     def __open_console__
       return nil unless ::Termios.supported?
-      io = File.open('/dev/tty', 'r+')
+      io = begin
+        File.open('/dev/tty', 'r+')
+      rescue SystemCallError
+        # A warm-start worker (Util/warm) has no controlling terminal of its own; it is told
+        # the name of its client's.
+        raise unless @__warm_console__
+        File.open(@__warm_console__, 'r+')
+      end
       return io if ::Termios.tty?(io)
       io.close
       nil
