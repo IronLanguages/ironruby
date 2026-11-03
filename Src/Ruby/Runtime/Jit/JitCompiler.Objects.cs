@@ -731,8 +731,10 @@ namespace IronRuby.Runtime.Jit {
         /// the other methods listed): the flags the helpers take. Bails if for neither.
         /// </summary>
         private void RequireElementMethod(string/*!*/ name, string hashToo, out bool arrays, out bool hashes) {
-            arrays = IsPlainLibraryMethod(ArrayClass, name);
-            hashes = IsPlainLibraryMethod(HashClass, name) && (hashToo == null || IsPlainLibraryMethod(HashClass, hashToo)) && KeyLookupIsPlain();
+            // `name' is called with an explicit receiver, so it has to be public; `hashToo' is Hash#[]'s own call
+            arrays = IsPlainLibraryMethod(ArrayClass, name) && IsPublic(ArrayClass, name);
+            hashes = IsPlainLibraryMethod(HashClass, name) && IsPublic(HashClass, name)
+                && (hashToo == null || IsPlainLibraryMethod(HashClass, hashToo)) && KeyLookupIsPlain();
             if (!arrays && !hashes) { throw Bail(name + " is not the built-in one"); }
         }
 
@@ -828,8 +830,8 @@ namespace IronRuby.Runtime.Jit {
             if (name == "fetch") {
                 // Array#fetch (the library method) as well as Hash#fetch: `@list.fetch(i)' on a receiver
                 // the profile cannot see would otherwise deopt on every call
-                bool fetchArrays = IsPlainLibraryMethod(ArrayClass, "fetch");
-                bool fetchHashes = IsPreludeHashFetch() && KeyLookupIsPlain();
+                bool fetchArrays = IsPlainLibraryMethod(ArrayClass, "fetch") && IsPublic(ArrayClass, "fetch");
+                bool fetchHashes = IsPreludeHashFetch() && IsPublic(HashClass, "fetch") && KeyLookupIsPlain();
                 if (!fetchArrays && !fetchHashes) { throw Bail("fetch is neither Array's nor the prelude's"); }
                 RequireCollectionReceiver(node.Target, fetchArrays, fetchHashes, name);
                 type = JT.Obj;
@@ -846,7 +848,7 @@ namespace IronRuby.Runtime.Jit {
                 return Ast.Call(JitRuntime.M(intKey ? "FetchIntDefault" : "FetchObjDefault"), recv, fetchKey,
                     Coerce(defaultValue, defaultType, JT.Obj), Ast.Constant(fetchArrays), Ast.Constant(fetchHashes));
             }
-            if (!IsPlainLibraryMethod(HashClass, name) || !KeyLookupIsPlain()) {
+            if (!IsPlainLibraryMethod(HashClass, name) || !IsPublic(HashClass, name) || !KeyLookupIsPlain()) {
                 throw Bail(name + " is not the built-in one");
             }
             RequireCollectionReceiver(node.Target, false, true, name);

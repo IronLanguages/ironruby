@@ -1490,6 +1490,16 @@ namespace IronRuby.Runtime.Jit {
             return true;
         }
 
+        /// <summary>The library method, and public: what a call with an explicit receiver reaches.</summary>
+        private static bool IsPublicBuiltin(RubyClass/*!*/ cls, string/*!*/ name) {
+            return IsBuiltinMethod(cls, name) && IsPublic(cls, name);
+        }
+
+        private static bool IsPublic(RubyClass/*!*/ cls, string/*!*/ name) {
+            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible);
+            return resolved.Found && resolved.Info.Visibility == RubyMethodVisibility.Public;
+        }
+
         // RequireBuiltin's answers so far in this compile. IsBuiltinMethod resolves the method and
         // reads custom attributes, and a long arithmetic body asks the same few questions hundreds
         // of times (ruby-bench's 30k_variables: most of the time it took to specialize). A body
@@ -1517,9 +1527,11 @@ namespace IronRuby.Runtime.Jit {
             if (answer != null) {
                 ok = answer.Ok;
             } else {
+                // public as well: the operator is called with an explicit receiver, so a private
+                // one (`class Integer; private :+; end') raises NoMethodError
                 ok = (t == JT.Bool)
-                    ? IsBuiltinMethod(ClassOfType(t, true), op) && IsBuiltinMethod(ClassOfType(t, false), op)
-                    : IsBuiltinMethod(ClassOfType(t, false), op);
+                    ? IsPublicBuiltin(ClassOfType(t, true), op) && IsPublicBuiltin(ClassOfType(t, false), op)
+                    : IsPublicBuiltin(ClassOfType(t, false), op);
                 // BasicObject#!= answers by calling ==.
                 if (ok && op == "!=") { RequireBuiltin(t, "=="); }
                 _builtinAnswers = new BuiltinAnswer(t, op, ok, _builtinAnswers);
