@@ -180,10 +180,9 @@ namespace IronRuby.Runtime {
         }
 
         internal static void Fill<T>(T[]/*!*/ array, int index, T item, int repeatCount) {
-            // TODO: can be optimized for big repeatCount:
-            for (int i = index; i < index + repeatCount; i++) {
-                array[i] = item;
-            }
+            // a block fill (vectorized where it can be; an element store at a time for an array
+            // whose runtime type is not exactly T[])
+            Array.Fill(array, item, index, repeatCount);
         }
 
         private static void Fill(byte[]/*!*/ src, int srcStart, byte[]/*!*/ dst, int dstStart, int count, int repeatCount) {

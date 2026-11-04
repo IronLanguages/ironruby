@@ -1863,6 +1863,20 @@ namespace IronRuby.Runtime {
             return new RubyArray(new object[] { item1, item2, null, null }, 0, 2);
         }
 
+        /// <summary>
+        /// `[item1, item2].min' / `.max' answered without the array (<see cref="ArrayExtremeSite"/>);
+        /// <see cref="IsArrayExtremeNotHandled"/> of the result says the call is to be made as written.
+        /// </summary>
+        [Emitted]
+        public static object ArrayLiteralExtreme(RubyScope/*!*/ scope, object item1, object item2, ArrayExtremeSite/*!*/ site) {
+            return site.Invoke(scope, item1, item2);
+        }
+
+        [Emitted]
+        public static bool IsArrayExtremeNotHandled(object result) {
+            return ReferenceEquals(result, ArrayExtremeSite.NotHandled);
+        }
+
         [Emitted]
         public static RubyArray/*!*/ MakeArray3(object item1, object item2, object item3) {
             return new RubyArray(new object[] { item1, item2, item3, null }, 0, 3);

@@ -811,6 +811,14 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ComparisonStorage, System.Object, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.Comparable.Between)
             );
             
+            DefineLibraryMethod(module, "clamp", 0x51, 
+                0x80000000U, 0x00000000U, 0x00000004U, 0x00000000U, 
+                new Func<System.Object, System.Object[], System.Object>(IronRuby.Builtins.Comparable.Clamp), 
+                new Func<IronRuby.Runtime.ComparisonStorage, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.Comparable.Clamp), 
+                new Func<IronRuby.Runtime.ComparisonStorage, System.Object, IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.Comparable.Clamp), 
+                new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.Comparable.Clamp)
+            );
+            
         }
         
         private static void LoadDir_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {

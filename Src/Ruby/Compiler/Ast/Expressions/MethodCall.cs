@@ -71,6 +71,14 @@ namespace IronRuby.Compiler.Ast {
                 return literal.TransformReadFrozen(gen);
             }
 
+            var array = _target as ArrayConstructor;
+            if (array != null && (_methodName == "min" || _methodName == "max") && (Arguments == null || Arguments.IsEmpty) && Block == null) {
+                int splattedCount;
+                if (array.Arguments.Expressions.Length == 2 && array.Arguments.IndexOfSplatted(out splattedCount) < 0) {
+                    return TransformArrayLiteralExtreme(gen, array.Arguments.Expressions[0], array.Arguments.Expressions[1]);
+                }
+            }
+
             MSA.Expression transformedTarget;
             bool hasImplicitSelf;
             if (_target != null) {
@@ -82,6 +90,26 @@ namespace IronRuby.Compiler.Ast {
                 hasImplicitSelf = true;
             }
             return TransformRead(this, gen, hasImplicitSelf, _methodName, transformedTarget, Arguments, Block, null, null);
+        }
+
+        // `[a, b].min' and `[a, b].max', the commonest way Ruby spells the smaller (larger) of two
+        // values: answered without building the array while Array#min (#max) is the library's own
+        // method (ArrayExtremeSite), made as written otherwise. The elements are evaluated first
+        // either way, as the array literal would.
+        private MSA.Expression/*!*/ TransformArrayLiteralExtreme(AstGenerator/*!*/ gen, Expression/*!*/ first, Expression/*!*/ second) {
+            var item1 = gen.CurrentScope.DefineHiddenVariable("#item1", typeof(object));
+            var item2 = gen.CurrentScope.DefineHiddenVariable("#item2", typeof(object));
+            var result = gen.CurrentScope.DefineHiddenVariable("#extreme", typeof(object));
+
+            var call = TransformRead(this, gen, false, _methodName, Methods.MakeArray2.OpCall(item1, item2), null, null, null, null);
+            var site = new ArrayExtremeSite(_methodName == "max");
+
+            return Ast.Block(
+                Ast.Assign(item1, AstUtils.Box(first.TransformRead(gen))),
+                Ast.Assign(item2, AstUtils.Box(second.TransformRead(gen))),
+                Ast.Assign(result, Methods.ArrayLiteralExtreme.OpCall(gen.CurrentScopeVariable, item1, item2, AstUtils.Constant(site))),
+                Ast.Condition(Methods.IsArrayExtremeNotHandled.OpCall(result), AstUtils.Box(call), result, typeof(object))
+            );
         }
 
         // arguments: complex arguments (expressions, maplets, splat, block) 

@@ -355,10 +355,7 @@ namespace IronRuby.Builtins {
             Mutate();
             if (value != null) {
                 int start = ResizeForAppend(count, false);
-                int end = start + count;
-                for (int i = start; i < end; i++) {
-                    _content[i] = value;
-                }
+                Utils.Fill(_content, start, value, count);
             } else {
                 ResizeForAppend(count, true);
             }
@@ -755,6 +752,17 @@ namespace IronRuby.Builtins {
                 }
                 _content[_start + index] = value;
             }
+        }
+
+        /// <summary>
+        /// Overwrites count elements from index on with value: the elements must exist.
+        /// </summary>
+        public void Fill(object value, int index, int count) {
+            Mutate();
+            if (index < 0 || count < 0 || index > _count - count) {
+                throw new ArgumentOutOfRangeException("index");
+            }
+            Utils.Fill(_content, _start + index, value, count);
         }
 
         public void Reverse() {
