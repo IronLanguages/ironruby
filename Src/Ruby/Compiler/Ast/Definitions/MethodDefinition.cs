@@ -383,9 +383,11 @@ namespace IronRuby.Compiler.Ast {
 
         /// <summary>
         /// A method whose body can never need its scope at runtime - yield and return over self, its parameters,
-        /// its locals and literals: `def each_pair; yield @a; end' does not qualify (an instance variable takes
-        /// the scope), `def tap1; yield self; self; end' does. Every call site takes the scope, and so do
-        /// constants, instance and global variables and string interpolation, so this is the call-free body.
+        /// its locals, instance variables, constants and literals: `def tap1; yield self; self; end',
+        /// `def initialize(a, b); @a = a; @b = b; end', `def limit = MAX'. Every call site takes the scope, and so do
+        /// global variables and string interpolation, so this is the call-free body. Instance variables and constants
+        /// take a scope as well, but only for its runtime and its lexical chain, which the declaring scope has too
+        /// (LightFrameRewriter.ScopeOperandIndex).
         /// The transformed body is still checked (LightFrameRewriter); this is the cheap filter.
         /// </summary>
         private bool IsLightFrameCandidate() {
@@ -417,12 +419,17 @@ namespace IronRuby.Compiler.Ast {
         }
 
         private static bool IsScopeFree(Expression/*!*/ node) {
-            if (node is LocalVariable || node is Literal || node is SelfReference) {
+            if (node is LocalVariable || node is Literal || node is SelfReference || node is InstanceVariable) {
                 return true;
+            }
+            var constant = node as ConstantVariable;
+            if (constant != null) {
+                return IsCachedConstant(constant);
             }
             var assignment = node as SimpleAssignmentExpression;
             if (assignment != null) {
-                return assignment.Operation == null && assignment.Left is LocalVariable && IsScopeFree(assignment.Right);
+                return assignment.Operation == null && (assignment.Left is LocalVariable || assignment.Left is InstanceVariable) &&
+                    IsScopeFree(assignment.Right);
             }
             var yieldCall = node as YieldCall;
             if (yieldCall != null) {
@@ -443,6 +450,12 @@ namespace IronRuby.Compiler.Ast {
                 return AreScopeFree(jump.Arguments);
             }
             return false;
+        }
+
+        // A, ::A, A::B::C - the reads ConstantVariable.MakeCachedRead makes - not {expr}::A
+        private static bool IsCachedConstant(ConstantVariable/*!*/ constant) {
+            var qualifier = constant.Qualifier;
+            return qualifier == null || (qualifier is ConstantVariable && IsCachedConstant((ConstantVariable)qualifier));
         }
 
         private static bool AreScopeFree(Arguments arguments) {
@@ -488,7 +501,7 @@ namespace IronRuby.Compiler.Ast {
             light.MakeScopeIfTraced = () => make(Methods.CreateMethodScopeIfTraced);
             light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, light.MakeScope()));
 
-            var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc);
+            var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope);
             var rewritten = rewriter.Visit(statements);
             if (LightFramesVerbose) {
                 Console.Error.WriteLine("[light] {0} {1} ({2}:{3})", rewriter.NeedsScope ? "needs scope:" : "light:", _name, gen.SourcePath, Location.Start.Line);
@@ -509,14 +522,37 @@ namespace IronRuby.Compiler.Ast {
             private readonly MSA.ParameterExpression/*!*/ _scope;
             private readonly MSA.Expression/*!*/ _lazyScope;
             private readonly MSA.Expression/*!*/ _rfc;
+            private readonly MSA.Expression/*!*/ _declaringScope;
             private int _inTraceHook;
 
             internal bool NeedsScope;
 
-            internal LightFrameRewriter(MSA.ParameterExpression/*!*/ scope, MSA.Expression/*!*/ lazyScope, MSA.Expression/*!*/ rfc) {
+            internal LightFrameRewriter(MSA.ParameterExpression/*!*/ scope, MSA.Expression/*!*/ lazyScope, MSA.Expression/*!*/ rfc,
+                MSA.Expression/*!*/ declaringScope) {
                 _scope = scope;
                 _lazyScope = lazyScope;
                 _rfc = rfc;
+                _declaringScope = declaringScope;
+            }
+
+            /// <summary>
+            /// The operand of a helper that takes the scope only for what a method scope shares with the scope the method
+            /// was defined in, so the declaring scope can be passed instead: the runtime (instance variables), and the
+            /// lexical chain a constant is looked up in - a method scope has no module of its own, so the lookup of one
+            /// starts at its parent, which is the declaring scope. -1 for any other helper.
+            /// </summary>
+            private static int ScopeOperandIndex(MethodInfo/*!*/ method) {
+                if (method == Methods.GetInstanceVariable || method == Methods.IsDefinedInstanceVariable ||
+                    method == Methods.GetUnqualifiedConstant || method == Methods.GetQualifiedConstant ||
+                    method == Methods.GetMissingConstant || method == Methods.GetGlobalMissingConstant ||
+                    method == Methods.IsDefinedUnqualifiedConstant || method == Methods.IsDefinedGlobalConstant ||
+                    method == Methods.IsDefinedQualifiedConstant) {
+                    return 0;
+                }
+                if (method == Methods.SetInstanceVariable) {
+                    return 2;
+                }
+                return -1;
             }
 
             protected override MSA.Expression/*!*/ VisitParameter(MSA.ParameterExpression/*!*/ node) {
@@ -533,6 +569,15 @@ namespace IronRuby.Compiler.Ast {
                 if (node.Method == Methods.MethodYield && node.Arguments.Count == 3 && node.Arguments[0] == _scope) {
                     // the raw scope variable, which is null unless a hook made the scope
                     return Methods.LightMethodYield.OpCall(_rfc, _scope, Visit(node.Arguments[1]), Visit(node.Arguments[2]));
+                }
+                int index = ScopeOperandIndex(node.Method);
+                if (index >= 0 && index < node.Arguments.Count && node.Arguments[index] == _scope &&
+                    node.Method.GetParameters()[index].ParameterType == typeof(RubyScope) && node.Object == null) {
+                    var arguments = new MSA.Expression[node.Arguments.Count];
+                    for (int i = 0; i < arguments.Length; i++) {
+                        arguments[i] = (i == index) ? _declaringScope : Visit(node.Arguments[i]);
+                    }
+                    return Ast.Call(node.Method, arguments);
                 }
                 return base.VisitMethodCall(node);
             }

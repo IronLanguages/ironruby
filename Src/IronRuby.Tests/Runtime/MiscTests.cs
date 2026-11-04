@@ -2691,5 +2691,100 @@ enable inside block: [:y1]
 tracepoint call/return: [[:call, :y1, nil], [:return, :y1, 14], [:call, :tap1, nil], [:return, :tap1, Foo]]
 ");
         }
+
+        /// <summary>
+        /// A light frame (see Method_LightFrame1) also takes instance variable reads and writes and constant reads, whose
+        /// helpers are handed the declaring scope instead of a method scope: the runtime is the same, and a method scope
+        /// has no module, so a constant lookup from it starts at the declaring scope anyway. Constructors and accessors,
+        /// frozen receivers, class-level and BasicObject instance variables, lexical, ::top-level and A::B constants,
+        /// const_missing, a redefined constant and autoload behave as they do with a scope.
+        /// </summary>
+        public void Method_LightFrame2() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+X = :top
+module Outer
+  X = :outer
+  LIMIT = 10
+  class Pt
+    def initialize(x, y); @x = x; @y = y; end
+    def x = @x
+    def x=(v); @x = v; end
+    def pair = [@x, @y]          # array literal: not light (fine either way)
+    def unset = @nope
+    def limit = LIMIT
+    def lex = X
+    def top = ::X
+    def qual = Outer::LIMIT
+    def missing = NOPE_CONST
+    def chain = Outer::Pt
+    def ytwo = yield(@x, @y)
+  end
+  class << self
+    def sing_x = X
+  end
+end
+class Outer::Pt
+  def lex2 = X        # lexical scope here is top-level (class Outer::Pt), so X is :top
+end
+p1 = Outer::Pt.new(1, 2)
+show(""ctor"") { [p1.x, p1.pair] }
+show(""setter"") { p1.x = 5; p1.x }
+show(""unset ivar"") { p1.unset }
+show(""frozen setter"") { q = Outer::Pt.new(1, 2).freeze; begin; q.x = 3; rescue FrozenError => e; [e.class, e.receiver.equal?(q)]; end }
+show(""constants"") { [p1.limit, p1.lex, p1.top, p1.qual, p1.chain, p1.lex2, Outer.sing_x] }
+show(""const_missing"") { p1.missing }
+show(""const_missing hook"") { class Outer::Pt; def self.const_missing(n) = ""cm:#{n}""; end; p1.missing }
+show(""redefined const"") { Outer.send(:remove_const, :LIMIT); Outer.const_set(:LIMIT, 20); p1.limit }
+show(""ytwo"") { p1.ytwo { |a, b| a + b } }
+class Cls
+  @count = 7
+  def self.count = @count
+  def self.count=(v); @count = v; end
+end
+show(""class ivar"") { Cls.count = Cls.count + 1; Cls.count }
+class BO < BasicObject
+  def initialize(v); @v = v; end
+  def v = @v
+end
+show(""basicobject"") { BO.new(3).v }
+m = Module.new do
+  def self.k = X
+end
+show(""module new"") { m.k }
+S1 = Struct.new(:a) do
+  def twice_a = @twice
+end
+show(""struct ivar"") { S1.new(1).twice_a }
+o = Object.new
+def o.sing = @s
+o.instance_variable_set(:@s, 9)
+show(""singleton ivar"") { o.sing }
+show(""ivars on frozen string"") { s = +""abc""; def s.iv = @iv; s.iv }
+show(""ivar on integer receiver via instance_exec"") { 5.instance_exec { @z } }
+show(""autoload const"") { module AL; autoload :Thing, ""/nonexistent/thing""; def self.get = Thing; end; AL.get }
+show(""tracepoint ctor"") { ev = []; tp = TracePoint.new(:call, :return) { |t| ev << [t.event, t.method_id] if t.defined_class == Outer::Pt }; tp.enable { Outer::Pt.new(1, 2).x }; ev }
+", @"
+ctor: [1, [1, 2]]
+setter: 5
+unset ivar: nil
+frozen setter: [FrozenError, true]
+constants: [10, :outer, :top, 10, Outer::Pt, :top, :outer]
+const_missing: ""NameError: uninitialized constant Outer::Pt::NOPE_CONST""
+const_missing hook: ""cm:NOPE_CONST""
+redefined const: 20
+ytwo: 7
+class ivar: 8
+basicobject: 3
+module new: :top
+struct ivar: nil
+singleton ivar: 9
+ivars on frozen string: nil
+ivar on integer receiver via instance_exec: nil
+autoload const: ""LoadError: cannot load such file -- /nonexistent/thing""
+tracepoint ctor: [[:call, :initialize], [:return, :initialize], [:call, :x], [:return, :x]]
+");
+        }
     }
 }
