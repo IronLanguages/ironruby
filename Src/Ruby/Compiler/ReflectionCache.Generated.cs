@@ -42,6 +42,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _AliasMethod;
         public static MethodInfo/*!*/ AllocateStructInstance { get { return _AllocateStructInstance ?? (_AllocateStructInstance = CallInstruction.CacheFunc<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyStruct>(RubyOps.AllocateStructInstance)); } }
         private static MethodInfo _AllocateStructInstance;
+        public static MethodInfo/*!*/ ArrayLiteralExtreme { get { return _ArrayLiteralExtreme ?? (_ArrayLiteralExtreme = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.Object, IronRuby.Runtime.Calls.ArrayExtremeSite, System.Object>(RubyOps.ArrayLiteralExtreme)); } }
+        private static MethodInfo _ArrayLiteralExtreme;
         public static MethodInfo/*!*/ AutoSplatArgument { get { return _AutoSplatArgument ?? (_AutoSplatArgument = CallInstruction.CacheFunc<System.Object, IronRuby.Builtins.RubyArray>(RubyOps.AutoSplatArgument)); } }
         private static MethodInfo _AutoSplatArgument;
         public static MethodInfo/*!*/ BlockBreak { get { return _BlockBreak ?? (_BlockBreak = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, System.Object, System.Object>(RubyOps.BlockBreak)); } }
@@ -374,6 +376,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _IRubyObjectState_set_IsUntrusted;
         public static MethodInfo/*!*/ IsAdoptedClrRuleValid { get { return _IsAdoptedClrRuleValid ?? (_IsAdoptedClrRuleValid = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyClass, System.Int32, System.Boolean>(RubyOps.IsAdoptedClrRuleValid)); } }
         private static MethodInfo _IsAdoptedClrRuleValid;
+        public static MethodInfo/*!*/ IsArrayExtremeNotHandled { get { return _IsArrayExtremeNotHandled ?? (_IsArrayExtremeNotHandled = CallInstruction.CacheFunc<System.Object, System.Boolean>(RubyOps.IsArrayExtremeNotHandled)); } }
+        private static MethodInfo _IsArrayExtremeNotHandled;
         public static MethodInfo/*!*/ IsAutoSplatArgument { get { return _IsAutoSplatArgument ?? (_IsAutoSplatArgument = CallInstruction.CacheFunc<System.Object, System.Boolean>(RubyOps.IsAutoSplatArgument)); } }
         private static MethodInfo _IsAutoSplatArgument;
         public static MethodInfo/*!*/ IsClrNonSingletonRuleValid { get { return _IsClrNonSingletonRuleValid ?? (_IsClrNonSingletonRuleValid = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Runtime.Calls.VersionHandle, System.Int32, System.Boolean>(RubyOps.IsClrNonSingletonRuleValid)); } }
