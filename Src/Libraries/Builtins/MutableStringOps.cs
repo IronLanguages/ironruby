@@ -3686,7 +3686,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("scan")]
         public static RubyArray/*!*/ Scan(RubyScope/*!*/ scope, MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ regex) {
-            IList<MatchData> matches = regex.Matches(self, false);
+            // $~ is left at the last match, which has to keep the subject as it was
+            IList<MatchData> matches = regex.Matches(self);
 
             var matchScope = scope.GetInnerMostClosureScope();
             

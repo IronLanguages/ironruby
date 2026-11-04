@@ -1259,7 +1259,7 @@ namespace IronRuby.Builtins {
             var result = new MatchData[matches.Count];
             if (result.Length > 0 && inputMayMutate) {
                 // clone and freeze the string once so that it can be shared by all the MatchData objects
-                input = input.Clone().Freeze();
+                input = input.CreateFrozenSnapshot();
             }
 
             for (int i = 0; i < result.Length; i++) {

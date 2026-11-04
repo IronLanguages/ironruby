@@ -351,6 +351,27 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// A frozen plain String with this one's content, encoding, taint and character flags,
+        /// for a MatchData to keep: a later change to this string must not show through it.
+        /// A char-based string keeps an immutable .NET string of its characters for the regex
+        /// to run on (ConvertToString), and the copy wraps that very string rather than copying
+        /// the characters a second time - matching a long subject used to spend most of its time
+        /// copying it. Other content is cloned as before: a clone of a StringContent shares its
+        /// string anyway, and binary content has no such string to share.
+        /// </summary>
+        public MutableString/*!*/ CreateFrozenSnapshot() {
+            if (!(_content is CharArrayContent)) {
+                return new MutableString(this).Freeze();
+            }
+            var result = new MutableString(new StringContent(_content.ConvertToString(), null), _encoding);
+            result.IsTainted = IsTainted;
+            result.IsUntrusted = IsUntrusted;
+            const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
+            result._flags = (result._flags & ~CharacterFlags) | (_flags & CharacterFlags);
+            return result.Freeze();
+        }
+
+        /// <summary>
         /// Creates an empty copy of this instance, taint and instance variables. 
         /// </summary>
         public MutableString/*!*/ Duplicate(RubyContext/*!*/ context, bool copySingletonMembers, MutableString/*!*/ result) {
