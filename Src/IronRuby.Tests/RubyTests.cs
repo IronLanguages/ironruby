@@ -854,6 +854,8 @@ namespace IronRuby.Tests {
                 Dir_NotADirectory1,
                 File_StatPredicatesToIo1,
                 File_StatPredicatesToIo2,
+                IO_SysOpenArguments1,
+                IO_SysOpenPermission1,
                 Range_IntegerFastPaths1,
                 Hash_SelfKey1,
                 Thread_JoinSelf1,

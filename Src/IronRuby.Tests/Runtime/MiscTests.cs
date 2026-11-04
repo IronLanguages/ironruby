@@ -2673,6 +2673,85 @@ deleted but open: [true, true, 3]
         }
 
         /// <summary>
+        /// IO.sysopen takes its mode as open(2) flags when it has #to_int (File::RDONLY used to be a TypeError,
+        /// "no implicit conversion of Integer into String") and as a mode string otherwise, and its permission
+        /// by #to_int: a String or a Hash there is a TypeError, where it used to be ignored.
+        /// </summary>
+        public void IO_SysOpenArguments1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message.sub(/ @ \w+/, '').sub(/ - .*/, '')}""; end; puts ""#{l}: #{v.inspect}""; end
+dir = Dir.mktmpdir
+f = File.join(dir, ""file"")
+File.write(f, ""abc"")
+tp = Object.new; tp.define_singleton_method(:to_path) { f }
+rd = ->(fd) { io = IO.for_fd(fd); s = io.read; io.close; s }
+show(""string mode"") { rd.(IO.sysopen(f, ""r"")) }
+show(""no mode"") { rd.(IO.sysopen(tp)) }
+show(""nil mode, nil perm"") { rd.(IO.sysopen(f, nil, nil)) }
+show(""integer mode"") { rd.(IO.sysopen(f, File::RDONLY)) }
+show(""to_int mode"") { o = Object.new; def o.to_int; File::RDONLY; end; rd.(IO.sysopen(f, o)) }
+show(""to_str mode"") { o = Object.new; def o.to_str; ""r""; end; rd.(IO.sysopen(f, o)) }
+show(""to_int perm"") { o = Object.new; def o.to_int; 0644; end; rd.(IO.sysopen(f, ""r"", o)) }
+show(""symbol mode"") { IO.sysopen(f, :r) }
+show(""string perm"") { IO.sysopen(f, ""r"", ""x"") }
+show(""hash perm"") { IO.sysopen(f, ""r"", {}) }
+show(""bad mode"") { IO.sysopen(f, ""zz"") }
+File.delete(f)
+Dir.rmdir(dir)
+", @"
+string mode: ""abc""
+no mode: ""abc""
+nil mode, nil perm: ""abc""
+integer mode: ""abc""
+to_int mode: ""abc""
+to_str mode: ""abc""
+to_int perm: ""abc""
+symbol mode: ""TypeError: no implicit conversion of Symbol into String""
+string perm: ""TypeError: no implicit conversion of String into Integer""
+hash perm: ""TypeError: no implicit conversion of Hash into Integer""
+bad mode: ""ArgumentError: invalid access mode zz""
+");
+        }
+
+        /// <summary>
+        /// IO.sysopen's permission reaches a file the call creates, less the umask, as open(2)'s does; it
+        /// used to be dropped, so the file came out 0644. POSIX only: off it the permission is not applied.
+        /// </summary>
+        public void IO_SysOpenPermission1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message.sub(/ @ \w+/, '').sub(/ - .*/, '')}""; end; puts ""#{l}: #{v.inspect}""; end
+dir = Dir.mktmpdir
+f = File.join(dir, ""file"")
+File.write(f, ""abc"")
+tp = Object.new; tp.define_singleton_method(:to_path) { f }
+File.umask(022)
+g = File.join(dir, ""created"")
+show(""perm on create"") { IO.for_fd(IO.sysopen(g, ""w"", 0600)).close; File.stat(g).mode & 0777 }
+h = File.join(dir, ""flags"")
+show(""flags create"") { IO.for_fd(IO.sysopen(h, File::WRONLY | File::CREAT | File::EXCL, 0640)).close; File.stat(h).mode & 0777 }
+show(""flags excl again"") { IO.sysopen(h, File::WRONLY | File::CREAT | File::EXCL) }
+show(""perm on existing"") { IO.for_fd(IO.sysopen(g, ""w"", 0666)).close; File.stat(g).mode & 0777 }
+show(""missing dir"") { IO.sysopen(File.join(dir, ""missing"", ""x""), ""w"") }
+File.delete(f)
+[g, h].each { |x| File.delete(x) }
+Dir.rmdir(dir)
+", @"
+perm on create: 384
+flags create: 416
+flags excl again: ""Errno::EEXIST: File exists""
+perm on existing: 384
+missing dir: ""Errno::ENOENT: No such file or directory""
+");
+        }
+
+        /// <summary>
         /// Range#first(n) and #last(n) of an Integer range are counted rather than walked - #last(n)
         /// built the whole range first, so (1..10**9).last(3) ran out of memory - and #last takes
         /// that path for a subclass whatever its #each, as MRI's rb_int_range_last does. Also the

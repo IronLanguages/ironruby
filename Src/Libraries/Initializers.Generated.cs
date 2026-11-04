@@ -3693,7 +3693,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "sysopen", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, System.Int32>(IronRuby.Builtins.RubyIOOps.SysOpen)
+                new Func<IronRuby.Runtime.ConversionStorage<System.Nullable<System.Int32>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, System.Int32>(IronRuby.Builtins.RubyIOOps.SysOpen)
             );
             
         }

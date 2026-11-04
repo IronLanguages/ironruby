@@ -138,7 +138,7 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        private static void Reinitialize(RubyFile/*!*/ file, MutableString/*!*/ path, IOInfo info, int permission) {
+        internal static void Reinitialize(RubyFile/*!*/ file, MutableString/*!*/ path, IOInfo info, int permission) {
             var strPath = file.Context.DecodePath(path);
 
             // open(2) only honours the permission argument when it actually creates the
