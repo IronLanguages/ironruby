@@ -2489,5 +2489,104 @@ finish override: ""F""
 base64: ""ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=""
 ");
         }
+
+        /// <summary>
+        /// Range#first(n) and #last(n) of an Integer range are counted rather than walked - #last(n)
+        /// built the whole range first, so (1..10**9).last(3) ran out of memory - and #last takes
+        /// that path for a subclass whatever its #each, as MRI's rb_int_range_last does. Also the
+        /// Integer fast paths of Range#include?, Range#step and Integer#step.
+        /// </summary>
+        public void Range_IntegerFastPaths1() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+[[1..10, 3], [1..10, 0], [1..10, 20], [1...10, 3], [5..1, 2], [1..1, 5], [1.., 3], [-3..-1, 2], [2**64..2**64 + 5, 2], [1..10, -1], [1.0..3.0, 2], [""a""..""e"", 2], [1..3.5, 2], [(..5), 2]].each do |r, n|
+  show(""first #{r.inspect} #{n.inspect}"") { r.first(n) }
+  show(""last #{r.inspect} #{n.inspect}"") { r.last(n) }
+end
+c = Class.new(Range) { def each; yield :x; end }
+show(""sub first"") { c.new(1, 10).first(2) }
+show(""sub last"") { c.new(1, 10).last(2) }
+show(""big last"") { (1..10**9).last(3) }
+[[1..10, 5], [1..10, 10], [1...10, 10], [1..10, 0], [1..10, 5.5], [1..10, 2**70], [5..1, 3], [1.., 10**20], [(..5), 3], [""a""..""z"", ""cc""], [1..10, ""a""]].each { |r, v| show(""include #{r.inspect} #{v.inspect}"") { [r.include?(v), r.member?(v), r === v] } }
+show(""step"") { a = []; 1.step(10, 3) { |i| a << i }; a }
+show(""step neg"") { a = []; 10.step(1, -4) { |i| a << i }; a }
+show(""step 1"") { a = []; 1.step(3) { |i| a << i }; a }
+show(""step none"") { a = []; 5.step(1) { |i| a << i }; a }
+show(""step 0"") { 1.step(3, 0) { } }
+show(""step float"") { a = []; 1.step(2, 0.5) { |i| a << i }; a }
+show(""step flimit"") { a = []; 1.step(2.5) { |i| a << i }; a }
+show(""step kw"") { a = []; 1.step(by: 2, to: 6) { |i| a << i }; a }
+show(""step ret"") { x = 1.step(3) { }; x }
+show(""step break"") { 1.step(10) { |i| break i * 100 if i == 3 } }
+show(""step enum"") { 1.step(10, 3).to_a }
+show(""step big"") { a = []; (2**64).step(2**64 + 4, 2) { |i| a << i }; a }
+show(""rstep"") { a = []; (1..10).step(3) { |i| a << i }; a }
+show(""rstep excl"") { a = []; (1...10).step(3) { |i| a << i }; a }
+show(""rstep endless"") { a = []; (1..).step(5) { |i| a << i; break if a.size == 3 }; a }
+show(""rstep ret"") { r = (1..3); r.step(1) { }.equal?(r) }
+show(""rstep float"") { a = []; (1.0..2.0).step(0.5) { |i| a << i }; a }
+", @"
+first 1..10 3: [1, 2, 3]
+last 1..10 3: [8, 9, 10]
+first 1..10 0: []
+last 1..10 0: []
+first 1..10 20: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+last 1..10 20: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+first 1...10 3: [1, 2, 3]
+last 1...10 3: [7, 8, 9]
+first 5..1 2: []
+last 5..1 2: []
+first 1..1 5: [1]
+last 1..1 5: [1]
+first 1.. 3: [1, 2, 3]
+last 1.. 3: ""RangeError: cannot get the last element of endless range""
+first -3..-1 2: [-3, -2]
+last -3..-1 2: [-2, -1]
+first 18446744073709551616..18446744073709551621 2: [18446744073709551616, 18446744073709551617]
+last 18446744073709551616..18446744073709551621 2: [18446744073709551620, 18446744073709551621]
+first 1..10 -1: ""ArgumentError: negative array size (or size too big)""
+last 1..10 -1: ""ArgumentError: negative array size""
+first 1.0..3.0 2: ""TypeError: can't iterate from Float""
+last 1.0..3.0 2: ""TypeError: can't iterate from Float""
+first ""a""..""e"" 2: [""a"", ""b""]
+last ""a""..""e"" 2: [""d"", ""e""]
+first 1..3.5 2: [1, 2]
+last 1..3.5 2: [2, 3]
+first ..5 2: ""RangeError: cannot get the first element of beginless range""
+last ..5 2: ""TypeError: can't iterate from NilClass""
+sub first: [:x]
+sub last: [9, 10]
+big last: [999999998, 999999999, 1000000000]
+include 1..10 5: [true, true, true]
+include 1..10 10: [true, true, true]
+include 1...10 10: [false, false, false]
+include 1..10 0: [false, false, false]
+include 1..10 5.5: [true, true, true]
+include 1..10 1180591620717411303424: [false, false, false]
+include 5..1 3: [false, false, false]
+include 1.. 100000000000000000000: [true, true, true]
+include ..5 3: [true, true, true]
+include ""a""..""z"" ""cc"": [false, false, true]
+include 1..10 ""a"": [false, false, false]
+step: [1, 4, 7, 10]
+step neg: [10, 6, 2]
+step 1: [1, 2, 3]
+step none: []
+step 0: ""ArgumentError: step can't be 0""
+step float: [1.0, 1.5, 2.0]
+step flimit: [1.0, 2.0]
+step kw: [1, 3, 5]
+step ret: 1
+step break: 300
+step enum: [1, 4, 7, 10]
+step big: [18446744073709551616, 18446744073709551618, 18446744073709551620]
+rstep: [1, 4, 7, 10]
+rstep excl: [1, 4, 7]
+rstep endless: [1, 6, 11]
+rstep ret: true
+rstep float: [1.0, 1.5, 2.0]
+");
+        }
     }
 }

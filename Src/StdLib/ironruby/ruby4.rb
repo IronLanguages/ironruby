@@ -925,6 +925,18 @@ class Range
       raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
       n = __to_count__(args[0])
       raise ArgumentError, "negative array size (or size too big)" if n < 0
+      b = self.begin
+      e = self.end
+      # An Integer range is counted rather than walked: the first n of b..e are b..b+n-1,
+      # cut off at the end (an endless range has none).
+      if ::Integer === b && (e.nil? || ::Integer === e) && instance_of?(::Range)
+        last_value = b + n - 1
+        unless e.nil?
+          top = exclude_end? ? e - 1 : e
+          last_value = top if top < last_value
+        end
+        return __int_run__(b, last_value)
+      end
       result = []
       return result if n == 0
       each do |item|
@@ -942,8 +954,33 @@ class Range
       raise RangeError, "cannot get the last element of endless range" if self.end.nil?
       n = __to_count__(args[0])
       raise ArgumentError, "negative array size" if n < 0
+      b = self.begin
+      e = self.end
+      # MRI's rb_int_range_last: the last n of an Integer range, without building all of it
+      # first (to_a.last(n) made (1..10**6).last(3) a million-element Array). MRI takes this
+      # path for a subclass too, whatever its #each.
+      if ::Integer === b && ::Integer === e
+        top = exclude_end? ? e - 1 : e
+        first_value = top - n + 1
+        first_value = b if first_value < b
+        return __int_run__(first_value, top)
+      end
       to_a.last(n)
     end
+
+    # [from, from + 1, ..., to]: a loop for a few, a Range#to_a (C#) for many
+    def __int_run__(from, to)
+      return [] if to < from
+      return (from..to).to_a if to - from >= 32
+      result = []
+      i = from
+      while i <= to
+        result << i
+        i += 1
+      end
+      result
+    end
+    private :__int_run__
 
     # #first and #last take a count, not an arbitrary object: anything that is
     # not an Integer has to offer #to_int and have it answer one.
@@ -4314,6 +4351,27 @@ class Numeric
   private :__step_scan_args__
 
   def step(*args, **kw, &block)
+    # Integer#step(limit[, step]) { } with Integers, the common case: the loop directly,
+    # without scanning the arguments or going through ArithmeticSequence.
+    if block && kw.empty? && ::Integer === self && (args.size == 1 || args.size == 2) && ::Integer === args[0]
+      unit = args.size == 2 ? args[1] : 1
+      if ::Integer === unit && unit != 0
+        i = self
+        limit = args[0]
+        if unit > 0
+          while i <= limit
+            yield i
+            i += unit
+          end
+        else
+          while i >= limit
+            yield i
+            i += unit
+          end
+        end
+        return self
+      end
+    end
     unless block
       to, unit = __step_extract_args__(args, kw)
       unit = 1 if unit.nil?
@@ -7255,17 +7313,18 @@ class Enumerator
       inf = true if unit == 0
 
       if from.is_a?(::Integer) && unit.is_a?(::Integer) && (to.nil? || to.is_a?(::Integer))
+        # yield rather than block.call: a Proc call per value was most of the loop's cost
         i = from
         if inf
-          loop { block.call(i); i += unit }
+          loop { yield i; i += unit }
         elsif desc
           while excl ? i > to : i >= to
-            block.call(i)
+            yield i
             i += unit
           end
         else
           while excl ? i < to : i <= to
-            block.call(i)
+            yield i
             i += unit
           end
         end
@@ -12494,6 +12553,10 @@ class Range
   def include?(value)
     b = self.begin
     e = self.end
+    # Integers all round: the comparison #cover? would make, without the class tests below.
+    if ::Integer === value && ::Integer === b && ::Integer === e
+      return value >= b && (exclude_end? ? value < e : value <= e)
+    end
     # Only the endpoints decide (MRI's range_include_internal): a range of numbers or
     # times compares, and a Range asked about is just a value that does not compare.
     if __linear__(b) || __linear__(e) || __integerish__(b) || __integerish__(e)
@@ -12728,6 +12791,28 @@ class Range
     n = args[0]
     b = self.begin
     e = self.end
+    # (a..b).step(n) { } over Integers with a positive Integer step, the common case: the loop
+    # directly, as ArithmeticSequence.__step_each__ would run it.
+    if block && ::Integer === b && (e.nil? || ::Integer === e)
+      unit = args.empty? ? 1 : n
+      if ::Integer === unit && unit > 0
+        i = b
+        if e.nil?
+          loop { yield i; i += unit }
+        elsif exclude_end?
+          while i < e
+            yield i
+            i += unit
+          end
+        else
+          while i <= e
+            yield i
+            i += unit
+          end
+        end
+        return self
+      end
+    end
     # Ruby 3.4: a step that is not a number is not converted up front; iterating adds it
     # with #+ (so an object answering #coerce works), and without a block the Enumerator is
     # built regardless.
