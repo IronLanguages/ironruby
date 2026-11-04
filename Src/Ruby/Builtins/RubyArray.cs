@@ -355,10 +355,7 @@ namespace IronRuby.Builtins {
             Mutate();
             if (value != null) {
                 int start = ResizeForAppend(count, false);
-                int end = start + count;
-                for (int i = start; i < end; i++) {
-                    _content[i] = value;
-                }
+                Utils.Fill(_content, start, value, count);
             } else {
                 ResizeForAppend(count, true);
             }
