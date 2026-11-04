@@ -100,17 +100,59 @@ A finding you have not checked is a question, not a finding.
 2. **Check the cited API at the pinned revision.** The DLR is `../dlr` at `DLR_REF` in
    `.github/workflows/ci.yml`; prism is `PRISM_REF`. Do not reason from memory about
    overloads or signatures.
-3. **Reproduce when it is cheap.** Build (`dotnet build Src/Console/Ruby.Console.csproj -c
-   Release`), write a few lines of Ruby, and run them with `IR_CONFIG=Release ./ir.sh x.rb`
-   and with `ruby x.rb`. A difference from CRuby is the bug report. For terminal behaviour,
-   drive the program through a pty (Python's `pty.fork`). For races, a stress loop that
-   reproduces settles it; one that does not reproduce settles nothing.
+3. **Reproduce when it is cheap.**
+   - Build with `dotnet build Src/Console/Ruby.Console.csproj -c Release
+     -p:IronRubyTargetFrameworks=net8.0`. A `[RubyMethod]` change first needs
+     `./regen-initializers.sh`. A file under `Src/StdLib` needs no build.
+   - Write a few lines of Ruby and run them with `IR_CONFIG=Release ./ir.sh x.rb` and
+     `ruby x.rb`. A difference from CRuby is the bug report. The reference is CRuby 4.0; if the
+     `ruby` at hand is older, say which version you compared against.
+   - For terminal behaviour, drive the program through a pty. See the snippet below.
+   - For races, a stress loop that reproduces the bug settles it; one that does not reproduce
+     it settles nothing.
+   - Code over a native library has to be built before it can run. Markly needs
+     `Util/build-markly.sh` plus `gem install markly -v 0.15.2`; rbs needs
+     `Util/build-librbs.sh`. If you cannot build it, mark the finding "reasoned only".
 4. **Check the relevant ruby/spec:**
-   `RUBY_EXE=$PWD/ir.sh ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/core/<class>`
-   against both the base and the head. A failure list that changed is a finding. A failure
-   that is already on the base is not this change's.
-5. **Weigh the fix against the risk.** A rare race that crashes the process is worth a lock.
+   `RUBY_EXE=$PWD/ir.sh IR_CONFIG=Release ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/core/<class>`
+   (a directory: spec files are per method and not every method has one). Run it against
+   both the base build and the head build, and diff the lists of failing examples. A failure
+   list that changed is a finding. A failure that is already on the base is not this change's.
+5. **Hold each commit to its message.** A commit that claims to fix something and fixes only
+   part of it gets a Note naming the part it misses, even when that part was already broken
+   on the base.
+6. **Weigh the fix against the risk.** A rare race that crashes the process is worth a lock.
    A theoretical gap that no caller reaches is worth a sentence.
+
+A pty driver for terminal behaviour (`python3 -I drive.py ./ir.sh` or `... ruby`):
+
+```python
+import os, pty, sys, time, select
+script = 'require "io/console"; p STDIN.getch(min: 0, time: 1)'   # the program under test
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], [sys.argv[1], "-e", script])
+# os.write(fd, b"x") here types input
+out, end = b"", time.time() + 10
+while time.time() < end:
+    if select.select([fd], [], [], 0.2)[0]:
+        try:
+            data = os.read(fd, 4096)
+        except OSError:
+            break
+        if not data:
+            break
+        out += data
+print(out.decode(errors="replace"))
+try:
+    os.kill(pid, 9)
+except ProcessLookupError:
+    pass
+os.waitpid(pid, 0)
+```
+
+`./ir.sh` runs `ir` as a child process. To measure the CPU of the program itself, read
+`/proc/<pid>/task/<pid>/children` for the child's pid.
 
 ## 4. Report
 
