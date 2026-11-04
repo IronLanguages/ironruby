@@ -1330,11 +1330,11 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("const_set")]
-        public static object SetConstantValue(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName, object value) {
+        public static object SetConstantValue(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName, object value) {
             RubyUtils.CheckConstantName(constantName);
             string sourcePath;
             int sourceLine;
-            RubyUtils.TryGetCallerSourceLocation(self.Context, out sourcePath, out sourceLine);
+            RubyUtils.TryGetCallerSourceLocation(scope, out sourcePath, out sourceLine);
             RubyUtils.SetConstant(self, constantName, value, sourcePath, sourceLine);
             return value;
         }
@@ -1533,7 +1533,7 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("autoload")]
-        public static void SetAutoloadedConstant(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self,
+        public static void SetAutoloadedConstant(ConversionStorage<MutableString>/*!*/ toPath, RubyScope/*!*/ scope, RubyModule/*!*/ self,
             [DefaultProtocol, NotNull]string/*!*/ constantName, object pathArg) {
 
             RubyUtils.CheckConstantName(constantName);
@@ -1546,7 +1546,7 @@ namespace IronRuby.Builtins {
 
             string sourcePath;
             int sourceLine;
-            if (RubyUtils.TryGetCallerSourceLocation(self.Context, out sourcePath, out sourceLine)) {
+            if (RubyUtils.TryGetCallerSourceLocation(scope, out sourcePath, out sourceLine)) {
                 self.SetConstantLocation(constantName, sourcePath, sourceLine);
             }
 

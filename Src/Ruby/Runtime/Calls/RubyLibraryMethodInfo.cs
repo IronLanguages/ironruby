@@ -25,6 +25,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Dynamic;
+using System.Threading;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Actions.Calls;
@@ -168,6 +169,68 @@ namespace IronRuby.Runtime.Calls {
             // nop
             return null;
         }
+
+        #region Calls without rules (LibraryDispatcher)
+
+        // Per overload: null until made, NoCallPlan if a call of the overload can't be made without a rule.
+        private static readonly object NoCallPlan = new object();
+        private object[] _callPlanStates;
+
+        // The overload the resolver picked for calls of the method of several overloads, by the types they were made with.
+        private Dictionary<LibraryResolutionKey, int> _resolvedOverloads;
+
+        internal LibraryCallPlan GetCallPlan(int index) {
+            var states = _callPlanStates;
+            if (states == null) {
+                Interlocked.CompareExchange(ref _callPlanStates, new object[MethodBases.Length], null);
+                states = _callPlanStates;
+            }
+
+            var state = states[index];
+            if (state == null) {
+                state = (object)LibraryCallPlan.TryCreate(Context, MethodBases[index]) ?? NoCallPlan;
+                Interlocked.CompareExchange(ref states[index], state, null);
+                state = states[index];
+            }
+            return state as LibraryCallPlan;
+        }
+
+        // null until made; NoSelector if the overloads' parameters can't be told
+        private object _overloadSelector;
+        private static readonly object NoSelector = new object();
+
+        internal LibraryOverloadSelector GetOverloadSelector() {
+            var selector = _overloadSelector;
+            if (selector == null) {
+                Interlocked.CompareExchange(ref _overloadSelector, (object)LibraryOverloadSelector.TryCreate(MethodBases, CallConvention) ?? NoSelector, null);
+                selector = _overloadSelector;
+            }
+            return selector as LibraryOverloadSelector;
+        }
+
+        internal int GetResolvedOverload(RubyCallAction/*!*/ binder, object target, Type/*!*/[]/*!*/ argTypes, bool hasBlock, bool blockGiven,
+            object[]/*!*/ args) {
+
+            var key = new LibraryResolutionKey(target != null ? target.GetType() : null, argTypes, hasBlock, blockGiven);
+            int index;
+            lock (this) {
+                if (_resolvedOverloads != null && _resolvedOverloads.TryGetValue(key, out index)) {
+                    return index;
+                }
+            }
+
+            index = LibraryDispatcher.Resolve(binder, this, args);
+
+            lock (this) {
+                if (_resolvedOverloads == null) {
+                    _resolvedOverloads = new Dictionary<LibraryResolutionKey, int>();
+                }
+                _resolvedOverloads[key] = index;
+            }
+            return index;
+        }
+
+        #endregion
 
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             BuildCallNoFlow(metaBuilder, args, name, MethodBases, CallConvention, ImplicitProtocolConversions);

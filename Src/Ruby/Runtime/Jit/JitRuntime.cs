@@ -30,80 +30,9 @@ namespace IronRuby.Runtime.Jit {
     }
 
     /// <summary>
-    /// The array element stores an outlined loop has made since the top of its current iteration,
-    /// with the values they replaced. A deopt hands the loop back at the top of that iteration and
-    /// the generic loop runs it again, so the stores must not be seen: the deopt handler puts the
-    /// old values back, newest first, before the locals are restored (JitLoopCompiler). With that,
-    /// an iteration that stores into an Array is as restartable as one that only reads.
-    /// </summary>
-    public sealed class JitUndoLog {
-        private RubyArray[]/*!*/ _arrays = new RubyArray[4];
-        private int[]/*!*/ _indices = new int[4];
-        private object[]/*!*/ _values = new object[4];
-
-        /// <summary>Entries in use; set to 0 at the top of each iteration.</summary>
-        public int Count;
-
-        [ThreadStatic]
-        private static JitUndoLog _current;
-
-        /// <summary>
-        /// This thread's log, empty. One per thread is enough: a specialized loop makes no calls, so
-        /// no other one can start on this thread while it runs - and a loop entered once per call of
-        /// a small method should not allocate a log every time.
-        /// </summary>
-        public static JitUndoLog/*!*/ ForThread() {
-            var log = _current ?? (_current = new JitUndoLog());
-            log.Count = 0;
-            return log;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void Record(RubyArray/*!*/ array, int index, object oldValue) {
-            int n = Count;
-            if (n == _arrays.Length) { Grow(); }
-            _arrays[n] = array;
-            _indices[n] = index;
-            _values[n] = oldValue;
-            Count = n + 1;
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private void Grow() {
-            int size = _arrays.Length * 2;
-            Array.Resize(ref _arrays, size);
-            Array.Resize(ref _indices, size);
-            Array.Resize(ref _values, size);
-        }
-
-        public void Rollback() {
-            for (int k = Count - 1; k >= 0; k--) {
-                // the loop only stored into elements that existed, and nothing else ran meanwhile
-                RubyArray array = _arrays[k];
-                int index = _indices[k];
-                if (index < array.Count && !array.IsFrozen) {
-                    array[index] = _values[k];
-                }
-            }
-            Release();
-        }
-
-        /// <summary>
-        /// Lets go of the arrays and values still referenced - which the top of an iteration only
-        /// forgets by resetting Count - when the loop leaves, so that a thread's log does not keep an
-        /// array alive. The log is small: the stores of one iteration.
-        /// </summary>
-        public void Release() {
-            Array.Clear(_arrays, 0, _arrays.Length);
-            Array.Clear(_values, 0, _values.Length);
-            Count = 0;
-        }
-    }
-
-    /// <summary>
     /// Runtime helpers called from JIT-compiled code.
     /// </summary>
-    public static class JitRuntime {
+    public static partial class JitRuntime {
         /// <summary>IR_JIT_VERBOSE=1 traces what gets specialized and what is rejected.</summary>
         internal static readonly bool Verbose = Environment.GetEnvironmentVariable("IR_JIT_VERBOSE") == "1";
 
@@ -326,6 +255,25 @@ namespace IronRuby.Runtime.Jit {
             if (RubyUtils.IsSafePointRequested) {
                 throw SafePointDeopt();
             }
+        }
+
+        /// <summary>
+        /// A loop's safe point in a specialized method. What is waiting runs here, and the body goes on -
+        /// unless <paramref name="deopt"/> says the body writes Hash or Array elements: a trap handler
+        /// run in the middle of those could change an element a later deopt takes back to what it was
+        /// before the handler ran. Such a body deopts instead (it is one that may: JitCompiler takes no
+        /// impure body that can deopt), and the generic body runs what is waiting at its first safe point.
+        /// </summary>
+        public static void MethodSafePoint(StrongBox<bool>/*!*/ deopt) {
+            if (RubyUtils.IsSafePointRequested) {
+                MethodSafePointSlow(deopt);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void MethodSafePointSlow(StrongBox<bool>/*!*/ deopt) {
+            if (deopt.Value) { throw SafePointDeopt(); }
+            RubyUtils.SafePoint();
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -603,46 +551,7 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
-        // ---- arrays and Float#to_i in outlined loops (JitCompiler.EmitArrayRead/EmitArrayStore) ----
-
-        /// <summary>
-        /// The entry load of a local an outlined loop indexes: the array itself while the local holds
-        /// a plain Array - not a subclass, not one with a singleton class, whose #[] and #[]= could be
-        /// another method - and null otherwise, which hands the loop back. The loop never writes the
-        /// local, so this is the only time it has to be checked.
-        /// </summary>
-        public static RubyArray OsrArray(object value, RubyClass/*!*/ arrayClass) {
-            var array = value as RubyArray;
-            if (array == null || array.GetType() != typeof(RubyArray) || arrayClass.Context.GetImmediateClassOf(array) != arrayClass) {
-                return null;
-            }
-            return array;
-        }
-
-        /// <summary>Array#[](Integer): an element, counted from the end when negative; nil past either end.</summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static object ArrayGet(RubyArray/*!*/ array, int index) {
-            int count = array.Count;
-            if ((uint)index < (uint)count) { return array[index]; }
-            index += count;
-            return ((uint)index < (uint)count) ? array[index] : null;
-        }
-
-        /// <summary>
-        /// Array#[]=(Integer, value) on an existing element, with what it held logged so that a deopt
-        /// later in the same iteration can put it back (JitUndoLog). Anything else - a frozen array, an
-        /// index that would grow the array or raise - deopts before the store, and the generic loop does
-        /// whatever Ruby does.
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static object ArraySet(RubyArray/*!*/ array, int index, object value, JitUndoLog/*!*/ log) {
-            int count = array.Count;
-            if (index < 0) { index += count; }
-            if ((uint)index >= (uint)count || array.IsFrozen) { throw Deopt(); }
-            log.Record(array, index, array[index]);
-            array[index] = value;
-            return value;
-        }
+        // ---- Float#to_i (JitCompiler.EmitCall) -------------------------------------------
 
         /// <summary>
         /// Float#to_i of a Float whose Integer fits in an Int64; a NaN, an infinity (FloatDomainError)
@@ -653,12 +562,6 @@ namespace IronRuby.Runtime.Jit {
             // -2^63 <= value < 2^63, and false for NaN
             if (value >= -9223372036854775808.0 && value < 9223372036854775808.0) { return (long)value; }
             throw Deopt();
-        }
-
-        /// <summary>Ruby truthiness of a boxed value: everything but nil and false.</summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool IsTruthy(object value) {
-            return value != null && !(value is bool && !(bool)value);
         }
 
         // ---- reflection handles the compiler emits ---------------------------------------

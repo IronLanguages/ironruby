@@ -106,6 +106,10 @@ namespace IronRuby.Runtime.Calls {
             get { return _delegate.GetMethodInfo(); }
         }
 
+        internal Delegate/*!*/ Delegate {
+            get { return _delegate; }
+        }
+
         public override Type ReturnType {
             get { return _delegate.GetMethodInfo().ReturnType; }
         }

@@ -72,6 +72,7 @@ namespace IronRuby.Builtins {
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnexpectedTypeError), typeof(IronRuby_StandardLibrary_MessagePack_MessagePackOps_UnexpectedTypeError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnknownExtTypeError), typeof(IronRuby_StandardLibrary_MessagePack_MessagePackOps_UnknownExtTypeError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackError), typeof(IronRuby_StandardLibrary_MessagePack_MessagePackOps_UnpackError_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Monitors.RubyMonitor), typeof(IronRuby_StandardLibrary_Monitors_RubyMonitor_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.MarkUnsetError), typeof(IronRuby_StandardLibrary_Nio4r_NioModule_ByteBuffer_MarkUnsetError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.OverflowError), typeof(IronRuby_StandardLibrary_Nio4r_NioModule_ByteBuffer_OverflowError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.UnderflowError), typeof(IronRuby_StandardLibrary_Nio4r_NioModule_ByteBuffer_UnderflowError_Subclass));
@@ -1861,6 +1862,28 @@ namespace IronRuby.Builtins {
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_StandardLibrary_Monitors_RubyMonitor_Subclass : global::IronRuby.StandardLibrary.Monitors.RubyMonitor, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_StandardLibrary_Monitors_RubyMonitor_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base() {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
+        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
         DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
     }
 

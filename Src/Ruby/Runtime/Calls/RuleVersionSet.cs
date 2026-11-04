@@ -133,15 +133,24 @@ namespace IronRuby.Runtime.Calls {
         private static FieldInfo _LastVersionField;
 
         /// <summary>
-        /// #{versionExpression} == #{set}.LastVersion || (#{versionExpression}) in #{set}
+        /// #{versionExpression} == #{boundVersion} || #{versionExpression} == #{set}.LastVersion || (#{versionExpression}) in #{set}
+        ///
+        /// <paramref name="boundVersion"/> is the version the rule is being built for, which the set already holds. The site that
+        /// asked for the rule is the one most likely to run it hot, and for it the test is then what an unshared rule's is: a
+        /// compare with a constant, not a load of the set from the rule's closure. Without it a hot loop whose sites got shared
+        /// rules ran 5-10% slower than one whose sites got rules of their own (the precompiled startup library makes the former
+        /// common: its compiled sites register the typed delegate shapes before startup's last method definitions bump the classes).
         /// </summary>
-        internal Expression/*!*/ MakeTest(Expression/*!*/ versionExpression) {
+        internal Expression/*!*/ MakeTest(Expression/*!*/ versionExpression, int boundVersion) {
             var method = _IsValidMethod ?? (_IsValidMethod = CallInstruction.CacheFunc<RuleVersionSet, int, bool>(IsValid));
             var lastVersion = _LastVersionField ?? (_LastVersionField = typeof(RuleVersionSet).GetField("LastVersion"));
             var set = AstUtils.Constant(this);
             return Expression.OrElse(
-                Expression.Equal(versionExpression, Expression.Field(set, lastVersion)),
-                Expression.Call(method, set, versionExpression)
+                Expression.Equal(versionExpression, AstUtils.Constant(boundVersion)),
+                Expression.OrElse(
+                    Expression.Equal(versionExpression, Expression.Field(set, lastVersion)),
+                    Expression.Call(method, set, versionExpression)
+                )
             );
         }
     }

@@ -63,7 +63,7 @@ namespace IronRuby.Runtime {
             : this(context) {
             // Compiled trace: contains frames starting with the throw site up to the first filter/catch that the exception was caught by:
             StackTrace throwSiteTrace = GetClrStackTrace(exception, _needsClrFileInfo);
-            _interpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
+            _interpretedFrames = GetInterpretedFrames(exception);
             AddExceptionBacktrace(throwSiteTrace, catchSiteTrace, isCatchSiteInterpreted);
         }
 
@@ -79,8 +79,8 @@ namespace IronRuby.Runtime {
             // Compiled trace: contains frames above and including the first Ruby filter/catch site that the exception was caught by:
             if (catchSiteTrace != null) {
                 // Interpreted: skip one interpreter Run method frame - is was already matched with the last processed interpreted frame:
-                // Compiled: skip one frame - the catch-site frame is already included
-                AddBacktrace(catchSiteTrace.GetFrames(), isCatchSiteInterpreted ? 0 : 1, isCatchSiteInterpreted);
+                // Compiled: skip the catch-site frame - the throw-site trace ends with it
+                AddBacktrace(catchSiteTrace.GetFrames(), 0, isCatchSiteInterpreted, !isCatchSiteInterpreted);
             }
         }
 
@@ -107,7 +107,7 @@ namespace IronRuby.Runtime {
                 // the exception's own trace grows as it is rethrown, and a raise of it starts it over:
                 ThrowSiteTrace = GetClrStackTrace(exception, NeedsClrFileInfo(context));
                 // the interpreter's frames are saved on the exception once, and raise clears them:
-                InterpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
+                InterpretedFrames = GetInterpretedFrames(exception);
                 CatchSiteTrace = catchSiteTrace;
                 IsCatchSiteInterpreted = isCatchSiteInterpreted;
             }
@@ -115,6 +115,24 @@ namespace IronRuby.Runtime {
             internal RubyArray/*!*/ Build() {
                 return new RubyStackTraceBuilder(this).RubyTrace;
             }
+        }
+
+        /// <summary>
+        /// The interpreted frames of the exception's trace: those the interpreter saved on it when it left an interpreted frame
+        /// (Interpreter.HandleException) - or, if it has left none yet, the thread's interpreted frames, every one of them still on
+        /// the stack. The trace is taken where the first Ruby frame sees the exception go by (RubyExceptionData.CaptureExceptionTrace):
+        /// an exception filter, which compiled code runs while the stack is searched for a handler, before any frame has been left.
+        /// An exception that a compiled rule or library method throws into a compiled Ruby method is seen by that method's filter
+        /// before any interpreted frame - its callers' - has saved anything; without them every interpreted frame in the trace, and
+        /// the library frames reported with an interpreted frame's line, went missing (the backtrace ended at the compiled frames).
+        /// </summary>
+        private static IList<InterpretedFrameInfo> GetInterpretedFrames(Exception/*!*/ exception) {
+            var saved = InterpretedFrame.GetExceptionStackTrace(exception);
+            if (saved != null) {
+                return saved;
+            }
+            var current = InterpretedFrame.CurrentFrame.Value;
+            return (current != null) ? new List<InterpretedFrameInfo>(current.GetStackTraceDebugInfo()) : null;
         }
 
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames)
@@ -146,36 +164,58 @@ namespace IronRuby.Runtime {
         /// StackTrace(Thread) and no Thread.Suspend - so this is what there is, and it costs nothing
         /// when nobody asks: the chain is already there for the owning thread's own backtraces.
         ///
+        /// The startup library's methods and blocks that run a block are compiled code, which the chain does not
+        /// have; they keep frames of their own (<see cref="Precompiled.PrecompiledFrames"/>), each with the interpreted
+        /// frame it was entered from, which puts it among the interpreted ones: above that frame, and below the
+        /// interpreted frames entered since.
+        ///
         /// The thread is running while we read, so the result is a snapshot rather than an instant.
         /// Frames are not recycled, so a frame that was left while we were walking still points at its
         /// old parent and the walk terminates; the depth cap is there for the case where it somehow
         /// does not.
         /// </summary>
-        internal RubyStackTraceBuilder(RubyContext/*!*/ context, InterpretedFrame frame)
+        internal RubyStackTraceBuilder(RubyContext/*!*/ context, InterpretedFrame frame, Precompiled.PrecompiledFrames.Frame[]/*!*/ precompiled)
             : this(context) {
 
-            for (int depth = 0; frame != null && depth < MaxThreadBacktraceDepth; depth++, frame = frame.Parent) {
-                string methodName = frame.Name;
-                if (methodName == InterpretedCallSiteName) {
-                    continue;
-                }
-
+            int next = 0;
+            for (int depth = 0; (frame != null || next < precompiled.Length) && depth < MaxThreadBacktraceDepth; depth++) {
+                string methodName;
                 string file;
                 int line;
-                var debugInfo = frame.GetDebugInfo(frame.InstructionIndex);
-                if (debugInfo != null) {
-                    file = debugInfo.FileName;
-                    line = debugInfo.StartLine;
-                } else {
-                    file = null;
-                    line = 0;
-                }
 
-                // Frames the interpreter runs on behalf of the DLR rather than of Ruby have no encoded
-                // Ruby name; they are not part of a Ruby backtrace and MRI has nothing to put in their
-                // place, so leave them out.
-                if (!TryParseRubyMethodName(ref methodName, ref file, ref line)) {
-                    continue;
+                // a precompiled frame entered from this interpreted frame is above it (from none: below all of them, or
+                // its interpreted frame was left while we read)
+                if (next < precompiled.Length && (frame == null || precompiled[next].Below == frame)) {
+                    var compiled = precompiled[next++];
+                    methodName = compiled.Name;
+                    file = null;
+                    line = compiled.Line;
+                    if (!TryParseRubyMethodName(ref methodName, ref file, ref line)) {
+                        continue;
+                    }
+                    Precompiled.PrecompiledCode.RebaseFrameFile(ref file);
+                } else {
+                    methodName = frame.Name;
+                    var debugInfo = frame.GetDebugInfo(frame.InstructionIndex);
+                    if (debugInfo != null) {
+                        file = debugInfo.FileName;
+                        line = debugInfo.StartLine;
+                    } else {
+                        file = null;
+                        line = 0;
+                    }
+                    frame = frame.Parent;
+
+                    if (methodName == InterpretedCallSiteName) {
+                        continue;
+                    }
+
+                    // Frames the interpreter runs on behalf of the DLR rather than of Ruby have no encoded
+                    // Ruby name; they are not part of a Ruby backtrace and MRI has nothing to put in their
+                    // place, so leave them out.
+                    if (!TryParseRubyMethodName(ref methodName, ref file, ref line)) {
+                        continue;
+                    }
                 }
 
                 if (IsInternalFile(file)) {
@@ -317,6 +357,15 @@ namespace IronRuby.Runtime {
         internal const string InterpretedCallSiteName = "CallSite.Target";
 
         private void AddBacktrace(IEnumerable<StackFrame> stackTrace, int skipFrames, bool skipInterpreterRunMethod) {
+            AddBacktrace(stackTrace, skipFrames, skipInterpreterRunMethod, false);
+        }
+
+        // skipCompiledCatchSite: the first compiled Ruby frame is the catch site, which the throw-site trace has already gone
+        // through. It is skipped as a frame, whether or not it was reported: skipping the first frame reported instead lost
+        // the frame above a catch site that is not reported, such as a block of the Ruby half of the core library (the
+        // `require' of gem_compat.rb catching a LoadError dropped the frame of the code calling require, once that block was
+        // compiled - from the start with the precompiled startup library).
+        private void AddBacktrace(IEnumerable<StackFrame> stackTrace, int skipFrames, bool skipInterpreterRunMethod, bool skipCompiledCatchSite) {
             if (stackTrace != null) {
                 foreach (var frame in InterpretedFrame.GroupStackFrames(stackTrace)) {
                     string methodName, file;
@@ -348,6 +397,9 @@ namespace IronRuby.Runtime {
                             // ignore ruby interpreted call sites
                             continue;
                         }
+                    } else if (skipCompiledCatchSite && IsRubyMethodFrame(frame)) {
+                        skipCompiledCatchSite = false;
+                        continue;
                     } else if (TryGetStackFrameInfo(frame, out methodName, out file, out line)) {
                         // special case: the frame will be added with the next frame's source info:
                         if (line == NextFrameLine) {
@@ -391,6 +443,11 @@ namespace IronRuby.Runtime {
             }
         }
 
+        private static bool IsRubyMethodFrame(StackFrame/*!*/ frame) {
+            MethodBase method = frame.GetMethod();
+            return method != null && method.Name.StartsWith(RubyMethodPrefix, StringComparison.Ordinal);
+        }
+
         private static bool IsInternalMethodFrame(string methodName) {
             return !String.IsNullOrEmpty(methodName) && !methodName.StartsWith("block ", StringComparison.Ordinal) && methodName[0] != '<';
         }
@@ -415,6 +472,7 @@ namespace IronRuby.Runtime {
             var sourceLine = line = frame.GetFileLineNumber();
 
             if (TryParseRubyMethodName(ref methodName, ref fileName, ref line)) {
+                Precompiled.PrecompiledCode.RebaseFrameFile(method, ref fileName);
                 if (sourceLine == 0) {
                     RubyMethodDebugInfo debugInfo;
                     if (RubyMethodDebugInfo.TryGet(method, out debugInfo)) {
@@ -600,6 +658,16 @@ namespace IronRuby.Runtime {
                 // which otherwise adds a bogus "\tfrom :0:in 'StartCallback'" line to every
                 // Thread#backtrace and to the report_on_exception output.
                 if (type == typeof(Thread)) {
+                    return false;
+                }
+
+                // A rethrow through ExceptionDispatchInfo keeps the frames the exception came through and
+                // adds those it is rethrown from, the first of them ExceptionDispatchInfo.Throw itself: a
+                // bookkeeping frame, never a Ruby one. The DLR's interpreter rethrows an exception that a
+                // frame has no handler for this way, once the finally blocks on its way have run (upstream
+                // IronLanguages/dlr #371), which put ":0:in 'Throw'" on top of every backtrace of an exception
+                // leaving an interpreted frame. Ruby code calling ExceptionDispatchInfo.Throw gets the same.
+                if (type == typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo)) {
                     return false;
                 }
 

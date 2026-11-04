@@ -24,6 +24,9 @@ namespace IronRuby.Aot {
             // SavePath marks the AstGenerator as "saving to disk": it turns off OSR outlining and
             // coverage, both of which bake runtime objects into the tree.
             ruby.Options["SavePath"] = Path.GetTempPath();
+            // -X:JIT bakes inline caches holding the runtime into calls (JitKeywordCall); the
+            // saved code goes without them
+            ruby.Options["JIT"] = false;
             setup.LanguageSetups.Add(ruby);
             var runtime = IronRuby.Ruby.CreateRuntime(setup);
             engine = IronRuby.Ruby.GetEngine(runtime);

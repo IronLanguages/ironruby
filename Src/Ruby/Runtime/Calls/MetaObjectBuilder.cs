@@ -300,7 +300,8 @@ namespace IronRuby.Runtime.Calls {
                     if (versionSet != null && versionSet.TryAdd(targetClass.Version.Method)) {
                         // (#{type})target.ImmediateClass.Version.Method in #{versionSet}
                         AddCondition(versionSet.MakeTest(
-                            Ast.Field(Ast.Field(Ast.Call(Ast.Convert(targetParameter, type), classGetter), Fields.RubyModule_Version), Fields.VersionHandle_Method)
+                            Ast.Field(Ast.Field(Ast.Call(Ast.Convert(targetParameter, type), classGetter), Fields.RubyModule_Version), Fields.VersionHandle_Method),
+                            targetClass.Version.Method
                         ));
                         return;
                     }
@@ -415,7 +416,7 @@ namespace IronRuby.Runtime.Calls {
         private void AddVersionTest(RubyClass/*!*/ cls, RuleVersionSet versionSet) {
             if (versionSet != null && versionSet.TryAdd(cls.Version.Method)) {
                 // #{cls.Version}.Method in #{versionSet}
-                AddCondition(versionSet.MakeTest(Ast.Field(AstUtils.Constant(cls.Version), Fields.VersionHandle_Method)));
+                AddCondition(versionSet.MakeTest(Ast.Field(AstUtils.Constant(cls.Version), Fields.VersionHandle_Method), cls.Version.Method));
             } else {
                 AddVersionTest(cls);
             }

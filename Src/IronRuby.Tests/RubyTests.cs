@@ -115,6 +115,10 @@ namespace IronRuby.Tests {
                 MethodCallCaching_MethodMissing3,
                 MethodCallCaching_MethodMissing4,
                 MethodCallCaching_MethodMissing5,
+                LibraryDispatcherBudget1,
+                LibraryDispatcherBudget2,
+                LibraryMethodNilBlock1,
+                CoerceRespondTo1,
 
                 NumericLiterals1,
                 NumericOps1,
@@ -368,6 +372,9 @@ namespace IronRuby.Tests {
                 Scenario_RubyHashes4,
                 Scenario_RubyHashes5,
                 HashIteration_Mutation1,
+                HashIteration_JitStore1,
+                HashIdentity_JitFixnumKey1,
+                HashFetch_Jit1,
                 Hash_KeysValues1,
                 Scenario_RubyArgSplatting1,
                 Scenario_RubyArgSplatting2,
@@ -932,6 +939,7 @@ namespace IronRuby.Tests {
                 Backtrace5,
                 Backtrace6,
                 Backtrace7,
+                Backtrace8,
 
                 Dlr_RubySnippet,
                 Dlr_ClrSubtype,

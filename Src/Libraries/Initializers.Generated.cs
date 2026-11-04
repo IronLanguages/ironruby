@@ -3777,14 +3777,18 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "==", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Double, System.Double, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
+                new Func<System.Double, System.Int32, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
+                new Func<System.Double, System.Int64, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Double, System.Object, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal)
             );
             
             DefineLibraryMethod(module, "===", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Double, System.Double, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
+                new Func<System.Double, System.Int32, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
+                new Func<System.Double, System.Int64, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Double, System.Object, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal)
             );
             
@@ -6246,8 +6250,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "autoload", 0x51, 
-                0x00020004U, 
-                new Action<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.SetAutoloadedConstant)
+                0x00040008U, 
+                new Action<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.SetAutoloadedConstant)
             );
             
             DefineLibraryMethod(module, "autoload?", 0x51, 
@@ -6309,8 +6313,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "const_set", 0x51, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.RubyModule, System.String, System.Object, System.Object>(IronRuby.Builtins.ModuleOps.SetConstantValue)
+                0x00020004U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, System.Object, System.Object>(IronRuby.Builtins.ModuleOps.SetConstantValue)
             );
             
             DefineLibraryMethod(module, "const_source_location", 0x51, 

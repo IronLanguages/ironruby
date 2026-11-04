@@ -185,5 +185,72 @@ can't add a new key into hash during iteration
 0
 ");
         }
+
+        /// <summary>
+        /// A JIT-specialized `h[k] = v' of a new key while h is being iterated deopts, and the generic code raises
+        /// the RuntimeError a new key during iteration is (JitRuntime.HashStoreInt/HashStoreObj).
+        /// </summary>
+        public void HashIteration_JitStore1() {
+            TestOutput(@"
+def jit_store_int(h, k) = (h[k] = 1)
+def jit_store_obj(h, k) = (h[k] = 1)
+h = {}
+200.times { |i| jit_store_int(h, i); jit_store_obj(h, ""k#{i % 7}"") }
+g = {1 => 1}
+[[:jit_store_int, 99], [:jit_store_obj, 'new']].each do |m, k|
+  begin
+    g.each { |_, _| send(m, g, k) }
+    p :no_error
+  rescue RuntimeError => e
+    puts e.message
+  end
+  g.each { |_, _| send(m, g, 1) }
+  p g.to_a
+end
+", @"
+can't add a new key into hash during iteration
+[[1, 1]]
+can't add a new key into hash during iteration
+[[1, 1]]
+");
+        }
+
+        /// <summary>
+        /// A compare_by_identity hash finds an Integer key the JIT looks up unboxed with the hash code the
+        /// comparer gives the boxed one - which for -2**31 is not the value itself.
+        /// </summary>
+        public void HashIdentity_JitFixnumKey1() {
+            TestOutput(@"
+def jit_get(h, k) = h[k]
+def jit_key(h, k) = h.key?(k)
+ih = {}.compare_by_identity
+ih[-2**31] = :min
+ih[2**31 - 1] = :max
+ih[5] = :five
+200.times { jit_get(ih, 5); jit_key(ih, 5) }
+p [jit_get(ih, -2**31), jit_get(ih, 2**31 - 1), jit_get(ih, 5), jit_key(ih, -2**31), jit_get(ih, 6)]
+", @"
+[:min, :max, :five, true, nil]
+");
+        }
+
+        /// <summary>
+        /// Hash#fetch is the library method on master (no longer the prelude's): the JIT still specializes a
+        /// method that calls it, and a miss still deopts to the generic call, which raises the KeyError.
+        /// </summary>
+        public void HashFetch_Jit1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+def jit_fetch1(h, k) = h.fetch(k)
+def jit_fetch2(h, k) = h.fetch(k, :d)
+h = {1 => :one, :a => :sym, 'b' => :str}
+200.times { |i| jit_fetch1(h, 1); jit_fetch2(h, i) }
+p [jit_fetch1(h, :a), jit_fetch1(h, 'b'), jit_fetch2(h, 2), jit_fetch2(h, :a)]
+", @"
+[:sym, :str, :d, :sym]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 2, System.String.Format("methods specialized: {0} (expected 2)", specializedHere));
+        }
     }
 }

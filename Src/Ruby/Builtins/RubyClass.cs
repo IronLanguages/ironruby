@@ -1671,6 +1671,65 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// The construction BuildObjectConstructionNoFlow builds for a call of Class#new with <paramref name="count"/> arguments and
+        /// no block, in the cases it is the allocation of a RubyObject and maybe a call of a Ruby initializer of that arity and
+        /// nothing else; null otherwise.
+        /// </summary>
+        internal ObjectConstruction TryGetObjectConstruction(int count) {
+            if (IsSingletonClass || _isUninitializedAllocation || _structInfo != null || !(_isRubyClass || IsObjectClass) || IsException() ||
+                _factories.Length != 0) {
+                return null;
+            }
+
+            Type type = GetUnderlyingSystemType();
+            if (type != typeof(object) && type != typeof(RubyObject)) {
+                return null;
+            }
+
+            int version;
+            RubyMemberInfo initializer;
+            using (Context.ClassHierarchyLocker()) {
+                version = Version.Method;
+                initializer = ResolveMethodForSiteNoLock(Symbols.Initialize, VisibilityContext.AllVisible).Info;
+            }
+
+            if (initializer == null) {
+                return null;
+            }
+
+            // Object#initialize and BasicObject#initialize: no arguments - construct (a RubyObject constructor, the same allocation)
+            if (initializer is RubyLibraryMethodInfo) {
+                return (count == 0 && (initializer.DeclaringModule.IsObjectClass || initializer.DeclaringModule.IsBasicObjectClass)) ?
+                    new ObjectConstruction(this, version, (Delegate)null, 0) : null;
+            }
+
+            // a Ruby initializer: allocate and call it (BuildOverriddenInitializerCall), unless it is empty
+            var method = initializer as RubyMethodInfo;
+            if (method == null || method.GetType() != typeof(RubyMethodInfo) || method.DefinitionName != Symbols.Initialize) {
+                return null;
+            }
+
+            // an empty one is not called at all, whatever the arguments: left to the rule
+            if (method.IsEmpty) {
+                return null;
+            }
+
+            // one of optional parameters or a rest parameter is called as the rule calls it (RubyMethodInfo.BuildCallNoFlow):
+            var parameters = method.Parameters;
+            if (parameters.Unsplat != null || parameters.Optional.Length > 0) {
+                var call = RubyMethodCallPlan.TryCreate(method, count, Symbols.Initialize);
+                return (call != null) ? new ObjectConstruction(this, version, call, count) : null;
+            }
+
+            if (parameters.Mandatory.Length != count) {
+                return null;
+            }
+
+            var body = method.GetDelegate();
+            return (body.GetType() == MemberDispatcher.GetRubyMethodDelegateType(count)) ? new ObjectConstruction(this, version, body, count) : null;
+        }
+
         public void BuildObjectConstructionNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ methodName) {
             if (IsSingletonClass) {
                 metaBuilder.SetError(Methods.MakeVirtualClassInstantiatedError.OpCall());

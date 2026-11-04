@@ -471,7 +471,13 @@ namespace IronRuby.Builtins {
             }
 
             if (defaultValue == Missing.Value) {
-                throw CreateKeyError(context, newStorage, self, key);
+                var error = CreateKeyError(context, newStorage, self, key);
+                // MRI's rb_key_err_raise raises it through rb_exc_raise, which a TracePoint on :raise sees
+                // (as it saw the prelude's Hash#fetch raise it)
+                if ((TracePoint.ActiveEvents & (int)TraceEvents.Raise) != 0) {
+                    TracePoint.OnException(TraceEvents.Raise, null, context, error);
+                }
+                throw error;
             }
 
             return defaultValue;

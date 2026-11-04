@@ -29,6 +29,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
 using IronRuby.Runtime.Jit;
 
@@ -119,7 +120,8 @@ namespace IronRuby.Runtime.Osr {
         internal Dictionary<int, int> TupleArgIndex;
         // Where in the argument array the loop's self is; -1 if it is not passed.
         internal int SelfArgIndex = -1;
-        // Where in the argument array the loop's scope is (its refinements); -1 if it is not passed.
+        // Where in the argument array the loop's RubyScope is: its constants resolve in it, and its
+        // refinements resolve the copy's operators; -1 if it is not passed.
         internal int ScopeArgIndex = -1;
 
         private readonly object/*!*/ _lock = new object();
@@ -142,6 +144,11 @@ namespace IronRuby.Runtime.Osr {
         /// </summary>
         public object Run(object[]/*!*/ tuples) {
             Entered++;
+            if ((TracePoint.ActiveEvents & JitStub.TypedBodyEvents) != 0) {
+                // a TracePoint wants the loop's :line (or :c_call...) events, which only the generic loop has
+                ReArmCountdown();
+                return Retry;
+            }
             var typed = _typed;
             if (typed == null && !_tried) {
                 typed = Compile(tuples);

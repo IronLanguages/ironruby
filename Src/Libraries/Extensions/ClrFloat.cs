@@ -856,6 +856,31 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Returns <code>true</code> only if <i>other</i> has the same value as <i>self</i>, where other is Fixnum.
+        /// </summary>
+        [RubyMethod("==")]
+        [RubyMethod("===")]
+        public static bool Equal(double self, int other) {
+            return self == (double)other;
+        }
+
+        /// <summary>
+        /// Returns <code>true</code> only if <i>other</i>, an Integer carried as an Int64, has exactly the value of
+        /// <i>self</i> (rb_integer_float_eq). Without this overload the binder converted the long to a double,
+        /// which past 2**53 rounds: <code>2.0**53 == 2**53 + 1</code> was true, though <code>2**53 + 1 == 2.0**53</code>
+        /// is false.
+        /// </summary>
+        [RubyMethod("==")]
+        [RubyMethod("===")]
+        public static bool Equal(double self, long other) {
+            if (other >= -(1L << 53) && other <= (1L << 53)) {
+                return self == (double)other;
+            }
+            int? c = ClrInteger.CompareToFloat(other, self);
+            return c.HasValue && c.Value == 0;
+        }
+
+        /// <summary>
         /// Returns <code>true</code> only if <i>other</i> has the same value as <i>self</i>, where other is not a Float
         /// </summary>
         /// <returns>True or False</returns>

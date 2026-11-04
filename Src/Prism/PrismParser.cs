@@ -69,9 +69,21 @@ namespace IronRuby.Prism {
             bool encodingLocked, bool lazyDefBodies) {
 
             byte[] sourceBytes = sourceEncoding.GetBytes(source);
-            PrismParseResult result = PrismLoader.LoadParse(
-                ParseSerializedBytes(sourceBytes, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, encodingName,
-                    commandLine, mainScript, encodingLocked)), lazyDefBodies);
+            bool timed = IronRuby.Runtime.PhaseTimer.Enter(IronRuby.Runtime.PhaseTimer.PrismNative);
+            byte[] serialized;
+            try {
+                serialized = ParseSerializedBytes(sourceBytes, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, encodingName,
+                    commandLine, mainScript, encodingLocked));
+            } finally {
+                IronRuby.Runtime.PhaseTimer.Exit(timed);
+            }
+            timed = IronRuby.Runtime.PhaseTimer.Enter(IronRuby.Runtime.PhaseTimer.PrismLoad);
+            PrismParseResult result;
+            try {
+                result = PrismLoader.LoadParse(serialized, lazyDefBodies);
+            } finally {
+                IronRuby.Runtime.PhaseTimer.Exit(timed);
+            }
             result.DataOffset = ComputeDataOffset(result.DataLocation, sourceBytes);
             return result;
         }

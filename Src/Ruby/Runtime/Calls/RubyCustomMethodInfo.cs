@@ -45,6 +45,16 @@ namespace IronRuby.Runtime.Calls {
             _ruleGenerator(metaBuilder, args, name);
         }
 
+        // Class#new:
+        internal bool IsInstanceConstructor {
+            get { return _ruleGenerator.Method == ((RuleGenerator)RuleGenerators.InstanceConstructor).Method; }
+        }
+
+        // Method#call, #[] and #===:
+        internal bool IsMethodCall {
+            get { return _ruleGenerator.Method == ((RuleGenerator)RuleGenerators.MethodCall).Method; }
+        }
+
         /// <summary>
         /// Like a library method registered under several names, one rule generator registered
         /// under several - Method#call, #[] and #=== - gets an info each, and Ruby considers the

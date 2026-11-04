@@ -3,6 +3,8 @@
     <TargetFrameworks>$(IronRubyTargetFrameworks)</TargetFrameworks>
     <AssemblyName>IronRuby</AssemblyName>
     <RootNamespace>IronRuby</RootNamespace>
+    <!-- LibraryFunctionCall calls library methods through function pointers -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <!-- net8.0 only: net10.0 takes System.Text.Encoding.CodePages from the shared framework,

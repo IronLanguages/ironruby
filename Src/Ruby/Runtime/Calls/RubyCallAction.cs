@@ -107,13 +107,25 @@ namespace IronRuby.Runtime.Calls {
 
         #region Precompiled Rules
 
+        /// <summary>
+        /// The dispatchers this binder made that have spent their budget: the calls they would take are hot (see LibraryDispatcher.IsHot).
+        /// </summary>
+        internal LibraryDispatcher[] SpentDispatchers;
+
+        internal override int GetRuleCompilationThreshold(object[]/*!*/ args, RubyContext/*!*/ context) {
+            int targetIndex = Signature.HasScope ? 1 : 0;
+            return (Context != null && targetIndex < args.Length) ?
+                LibraryDispatcher.GetRuleCompilationThreshold(this, args[targetIndex], context) : context.CompilationThreshold;
+        }
+
         protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
             // IsVariableCall only decides which error a call that finds no method raises; a dispatcher
             // is only made for a method that was found, and hands every other case back to the
             // binder. Leaving it out of the mask sent every bare `foo` to a rule of its own.
             if (Context == null ||
                 Signature.ResolveOnly ||
-                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall)) != 0) {
+                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSplattedArgument)) != 0 ||
+                Signature.HasSplattedArgument && Signature.HasRhsArgument) {
                 return null;
             }
 
@@ -142,10 +154,13 @@ namespace IronRuby.Runtime.Calls {
 
             int version;
             MethodResolutionResult method;
+            ClrReceiverTest clrTest;
             RefinementActivation refinements = null;
             RecordScope recordScope = RecordScope.None;
             RubyClass targetClass = Context.GetImmediateClassOf(target);
             using (targetClass.Context.ClassHierarchyLocker()) {
+                // initialization changes the version (see MetaObjectBuilder.AddTargetTypeTest):
+                targetClass.InitializeMethodsNoLock();
                 // A call a refinement could reach is resolved under the caller's refinements, and its dispatcher
                 // has to test them as the rule would. It can where the rule reads them from a method's record (see
                 // MakeRefinementGuard); any other call of the kind is left to rule building. Refining the name
@@ -163,21 +178,29 @@ namespace IronRuby.Runtime.Calls {
                     version = targetClass.Version.Method;
                     method = targetClass.ResolveMethodForSiteNoLock(_methodName, GetVisibilityContext(Signature, scope));
                 }
+                clrTest = (target != null && !(target is IRubyObject)) ? GetClrReceiverTest(targetClass, _methodName) : ClrReceiverTest.None;
             }
 
             if (!method.Found || method.Info.IsProtected && !Signature.HasImplicitSelf) {
                 return null;
             }
 
+            // The first calls go through a LibraryDispatcher, rather than a rule, until the call is hot:
+            bool mayDispatch = LibraryDispatcher.MayDispatch(this, target);
+
             // the rule has to check for an ignored block (see BuildCall)
             if (Signature.HasSourceBlock && RequiresUnusedBlockCheck(method.Info)) {
                 return null;
             }
 
-            // a call through an alias has to tell the method its name (see RubyMethodInfo.BuildCallNoFlow)
+            // a call through an alias has to tell the method its name (see RubyMethodInfo.BuildCallNoFlow): the precompiled dispatchers
+            // of Ruby methods don't, a RubyMethodCallPlan does
             var rubyMethod = method.Info as RubyMethodInfo;
             if (rubyMethod != null && rubyMethod.DefinitionName != _methodName) {
-                return null;
+                if (!mayDispatch || refinements != null || passesKeywords && !rubyMethod.TakesOrRefusesKeywords) {
+                    return null;
+                }
+                return LibraryDispatcher.TryCreateRubyCall(this, delegateType, Signature, rubyMethod, targetClass, target, clrTest, version, args, null, _methodName);
             }
 
             // a method that takes or refuses keywords reads the hash as it is - nothing to unmark
@@ -186,18 +209,86 @@ namespace IronRuby.Runtime.Calls {
             }
 
             MemberDispatcher dispatcher;
-            if (refinements == null) {
-                dispatcher = method.Info.GetDispatcher(delegateType, Signature, target, version);
-            } else if (rubyMethod != null) {
-                dispatcher = rubyMethod.GetRefinedDispatcher(delegateType, Signature, target, version, refinements, recordScope == RecordScope.Block);
+            if (refinements != null) {
+                // A call a refinement could reach: a dispatcher that tests the refinements as the rule would, or the rule.
+                // (The dispatchers of first calls below test no refinements.)
+                dispatcher = (rubyMethod != null && !Signature.HasSplattedArgument) ?
+                    rubyMethod.GetRefinedDispatcher(delegateType, Signature, target, version, refinements, recordScope == RecordScope.Block) :
+                    null;
+                if (dispatcher == null) {
+                    return null;
+                }
             } else {
-                dispatcher = null;
-            }
+                // A splatted call: of a Ruby or a library method, through the call its rule makes of the list's items (see TryCreateRubyCall,
+                // LibraryDispatcher.TryCreate). The other dispatchers take the site's arguments as they are.
+                if (Signature.HasSplattedArgument) {
+                    if (!mayDispatch) {
+                        return null;
+                    }
+                    if (rubyMethod != null) {
+                        return LibraryDispatcher.TryCreateRubyCall(this, delegateType, Signature, rubyMethod, targetClass, target, clrTest, version, args);
+                    }
+                    var splattedMethodCall = method.Info as RubyCustomMethodInfo;
+                    if (splattedMethodCall != null && target is RubyMethod && splattedMethodCall.IsMethodCall) {
+                        return LibraryDispatcher.TryCreateMethodObjectCall(this, delegateType, Signature, (RubyMethod)target, targetClass, clrTest, version, args);
+                    }
+                    var splattedLibraryMethod = method.Info as RubyLibraryMethodInfo;
+                    return (splattedLibraryMethod != null && !TracePoint.CCallTracing && !DispatchIntrinsics.IsSend(splattedLibraryMethod)) ?
+                        LibraryDispatcher.TryCreate(this, delegateType, Signature, splattedLibraryMethod, targetClass, target, clrTest, version, args) :
+                        null;
+                }
 
+                dispatcher = method.Info.GetDispatcher(delegateType, Signature, target, version);
+
+                // a Ruby method of a builtin class (much of the core library is written in Ruby), called on nil, true, false or a CLR object:
+                if (dispatcher == null && rubyMethod != null && !(target is IRubyObject) &&
+                    (target == null || target is bool || clrTest == ClrReceiverTest.Plain && !targetClass.IsSingletonClass) &&
+                    !IsForeignObject(target)) {
+                    dispatcher = rubyMethod.GetClrDispatcher(delegateType, Signature, target, targetClass, version);
+                }
+            }
             if (dispatcher != null) {
                 object result = dispatcher.CreateDelegate(MethodDispatcher.UntypedFuncs.Contains(delegateType));
                 RubyBinder.DumpPrecompiledRule(this, dispatcher);
                 return result;
+            }
+
+            if (!mayDispatch) {
+                return null;
+            }
+
+            // The first calls of a Ruby method that those dispatchers do not call (one with optional parameters or a rest parameter,
+            // say) go without a rule too, as library methods' do (below).
+            if (rubyMethod != null) {
+                return LibraryDispatcher.TryCreateRubyCall(this, delegateType, Signature, rubyMethod, targetClass, target, clrTest, version, args);
+            }
+
+            // and so do those of a method define_method made of a block
+            if (method.Info is RubyLambdaMethodInfo) {
+                return LibraryDispatcher.TryCreateRubyCall(this, delegateType, Signature, method.Info, targetClass, target, clrTest, version, args);
+            }
+
+            // The first calls of a library method from a site go without a rule. A rule built for a call is used for one
+            // call more often than not - most of the prelude runs once - and building it costs more than many such calls.
+            // Calls while c_call is traced get rules (the rule reports the call). Kernel#send of a symbol makes the call it makes
+            // (whose rule is that call, see DispatchIntrinsics.TryBuildSend) through a site of its own. The same goes for Class#new
+            // of a plain Ruby class.
+            var custom = method.Info as RubyCustomMethodInfo;
+            if (custom != null && target is RubyMethod && !passesKeywords && custom.IsMethodCall) {
+                return LibraryDispatcher.TryCreateMethodObjectCall(this, delegateType, Signature, (RubyMethod)target, targetClass, clrTest, version, args);
+            }
+
+            if (custom != null && custom.IsInstanceConstructor && target is RubyClass && !passesKeywords) {
+                return LibraryDispatcher.TryCreateConstruction(this, delegateType, Signature, (RubyClass)target, targetClass, version, args);
+            }
+
+            var libraryMethod = method.Info as RubyLibraryMethodInfo;
+            if (libraryMethod != null && !TracePoint.CCallTracing && DispatchIntrinsics.IsSend(libraryMethod) && !passesKeywords) {
+                return LibraryDispatcher.TryCreateSend(this, delegateType, Signature, targetClass, target, clrTest, version, args);
+            }
+
+            if (libraryMethod != null && !TracePoint.CCallTracing && !DispatchIntrinsics.IsSend(libraryMethod)) {
+                return LibraryDispatcher.TryCreate(this, delegateType, Signature, libraryMethod, targetClass, target, clrTest, version, args);
             }
 
             return null;
@@ -345,8 +436,46 @@ namespace IronRuby.Runtime.Calls {
             return (T)sharedRule;
         }
 
+        // RubyMetaBinder.IsForeignMetaObject of the target: a dynamic object of another language is bound by its own meta-object
+        internal static bool IsForeignObject(object target) {
+            return target is IDynamicMetaObjectProvider && !(target is IRubyDynamicMetaObjectProvider) ||
+                target != null && TypeUtils.IsComObjectType(target.GetType());
+        }
+
+        /// <summary>
+        /// The test of a CLR object receiver (not nil, true or false) that MetaObjectBuilder.AddTargetTypeTest makes in a rule calling
+        /// the method of that name.
+        /// </summary>
+        internal enum ClrReceiverTest {
+            // another test (an adopted object)
+            None,
+
+            // its exact type and the version of its class - its singleton class if it has one (and no other object of the type has a
+            // singleton method of that name or of method_missing): nothing else (HasPlainClrTypeTest, but for the singleton)
+            Plain,
+
+            // its exact type, and that it has no singleton class (nor a Ruby class) and its class's version (IsClrNonSingletonRuleValid):
+            // some object of its type has a singleton method of that name, or of method_missing, or a Ruby class
+            NonSingleton,
+
+            // its exact type, and that it has a singleton class of the version (IsClrSingletonRuleValid)
+            Singleton,
+        }
+
+        internal static ClrReceiverTest GetClrReceiverTest(RubyClass/*!*/ targetClass, string/*!*/ methodName) {
+            if (targetClass.GetNonSingletonClass().IsRubyClass) {
+                return ClrReceiverTest.None;
+            }
+            var nominalClass = targetClass.NominalClass;
+            var singletonMethods = nominalClass.ClrSingletonMethods;
+            bool singletonCheck = nominalClass.HasAdoptedInstances ||
+                singletonMethods != null && (singletonMethods.ContainsKey(methodName) || singletonMethods.ContainsKey(Symbols.MethodMissing));
+
+            return !singletonCheck ? ClrReceiverTest.Plain : targetClass.IsSingletonClass ? ClrReceiverTest.Singleton : ClrReceiverTest.NonSingleton;
+        }
+
         // MetaObjectBuilder.AddTargetTypeTest tests a CLR object's type and its class version - and nothing else - in this case:
-        private static bool HasPlainClrTypeTest(RubyClass/*!*/ targetClass, string/*!*/ methodName) {
+        internal static bool HasPlainClrTypeTest(RubyClass/*!*/ targetClass, string/*!*/ methodName) {
             if (targetClass.IsSingletonClass || targetClass.GetNonSingletonClass().IsRubyClass) {
                 return false;
             }

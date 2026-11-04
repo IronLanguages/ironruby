@@ -334,3 +334,43 @@ t('threads storing at once') do
     }
   }.map(&:value)
 end
+
+# ---------------------------------------------------------------- 9. method JIT: Array parameters loaded once
+# A method the JIT specializes loads an Array parameter it indexes once, at the top, and deopts
+# there when the parameter is not a plain Array (JitCompiler.ArrayParameter). Short loops, so the
+# method turns hot (40 calls) before any loop does.
+
+def mj_copy(dst, src)
+  i = 0
+  s = 0
+  while i < 8
+    dst[i] = src[i] + 1
+    s += dst[i]
+    i += 1
+  end
+  s
+end
+def mj_run(dst, src) = (0...300).sum { mj_copy(dst, src) }
+t('method: Array parameters') { mj_run(Array.new(8, 0), (1..8).to_a) }
+t('method: then a frozen one') { mj_run(Array.new(8, 0).freeze, (1..8).to_a) }
+class MjArray < Array; def [](i) = 100; end
+t('method: then a subclass') { mj_run(Array.new(8, 0), MjArray.new((1..8).to_a)) }
+mj_s = (1..8).to_a
+def mj_s.[](i) = -1
+t('method: then one with a singleton #[]') { mj_run(Array.new(8, 0), mj_s) }
+t('method: plain again') { mj_run(Array.new(8, 0), (1..8).to_a) }
+t('method: a Hash where the Array was') { mj_run(Array.new(8, 0), (0..7).to_h { |k| [k, k * 2] }) }
+t('method: an element of another type') { mj_run(Array.new(8, 0), [1, 2, 3, 4.5, 5, 6, 7, 8]) }
+t('method: a short one') { mj_run(Array.new(8, 0), [1, 2, 3]) }
+
+def mj_rebind(a, b)
+  s = 0
+  i = 0
+  while i < 6
+    s += a[i]
+    a = b if i == 2
+    i += 1
+  end
+  s
+end
+t('method: the parameter reassigned') { (0...300).sum { mj_rebind([1, 2, 3, 4, 5, 6], [10, 20, 30, 40, 50, 60]) } }

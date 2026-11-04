@@ -14,7 +14,10 @@
  * ***************************************************************************/
 
 using System;
+using System.Runtime.CompilerServices;
+using IronRuby.Builtins;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -426,6 +429,146 @@ module Kernel
 end
 
 obj.f");
+        }
+
+        // a site of the binder, called on the target; whether it went through a LibraryDispatcher (rather than a rule)
+        private bool CallsThroughDispatcher(CallSite<Func<CallSite, object, object>>/*!*/ site, object target, string/*!*/ expected) {
+            object result = site.Target(site, target);
+            Assert(result.ToString() == expected);
+            return site.Target.Target is LibraryDispatcher;
+        }
+
+        /// <summary>
+        /// The first calls of a library method go through a LibraryDispatcher, which the binder caches for its other sites: its budget
+        /// is the dispatcher's, spent by every site that shares it. Once it is spent, the next call it would have taken - from any
+        /// site - gets the rule, which the binder caches for the other sites in turn. (Each site that shared a spent dispatcher used to
+        /// get a dispatcher of its own, shared and spent in turn by the next sites, for as long as they were called.)
+        /// </summary>
+        public void LibraryDispatcherBudget1() {
+            int saved = LibraryDispatcher.BudgetOverride;
+            LibraryDispatcher.BudgetOverride = 3;
+            try {
+                var binder = new RubyCallAction(Context, "swapcase", RubyCallSignature.Simple(0));
+                var sites = new CallSite<Func<CallSite, object, object>>[6];
+                for (int i = 0; i < sites.Length; i++) {
+                    sites[i] = CallSite<Func<CallSite, object, object>>.Create(binder);
+                }
+                var str = MutableString.CreateAscii("aB");
+                var sym = Context.CreateAsciiSymbol("aB");
+
+                // the dispatcher made for site 0, found by sites 1 and 2 in the binder's cache:
+                for (int i = 0; i < 3; i++) {
+                    Assert(CallsThroughDispatcher(sites[i], str, "Ab"));
+                }
+                Assert(LibraryDispatcher.IsHot(binder, str));
+                Assert(!LibraryDispatcher.IsHot(binder, sym));
+
+                // spent: the rule, for the site that made it too
+                Assert(!CallsThroughDispatcher(sites[3], str, "Ab"));
+                Assert(!CallsThroughDispatcher(sites[4], str, "Ab"));
+                Assert(!CallsThroughDispatcher(sites[0], str, "Ab"));
+                Assert(!CallsThroughDispatcher(sites[2], str, "Ab"));
+
+                // receivers of another class: a dispatcher of their own
+                Assert(CallsThroughDispatcher(sites[5], sym, "Ab"));
+                Assert(CallsThroughDispatcher(sites[3], sym, "Ab"));
+            } finally {
+                LibraryDispatcher.BudgetOverride = saved;
+            }
+        }
+
+        /// <summary>
+        /// A site that sees receivers of two classes in turn spends the dispatcher of each - not a fresh dispatcher each time its call
+        /// of one class follows a call of the other - and then calls rules.
+        /// </summary>
+        public void LibraryDispatcherBudget2() {
+            int saved = LibraryDispatcher.BudgetOverride;
+            LibraryDispatcher.BudgetOverride = 3;
+            try {
+                var binder = new RubyCallAction(Context, "swapcase", RubyCallSignature.Simple(0));
+                var site = CallSite<Func<CallSite, object, object>>.Create(binder);
+                var str = MutableString.CreateAscii("aB");
+                var sym = Context.CreateAsciiSymbol("aB");
+
+                for (int i = 0; i < 3; i++) {
+                    Assert(CallsThroughDispatcher(site, str, "Ab"));
+                    Assert(CallsThroughDispatcher(site, sym, "Ab"));
+                }
+                for (int i = 0; i < 20; i++) {
+                    Assert(!CallsThroughDispatcher(site, str, "Ab"));
+                    Assert(!CallsThroughDispatcher(site, sym, "Ab"));
+                }
+            } finally {
+                LibraryDispatcher.BudgetOverride = saved;
+            }
+        }
+
+        /// <summary>
+        /// A nil block chooses an overload of a library method that takes no block, where a block chooses one that does: the rule
+        /// bound for a nil block holds for nil blocks only. (It took later calls with a block too, and ignored the block.)
+        /// </summary>
+        public void LibraryMethodNilBlock1() {
+            int saved = LibraryDispatcher.BudgetOverride;
+            LibraryDispatcher.BudgetOverride = 0;
+            try {
+                TestOutput(@"
+f = ->(a, b) { a.sort_by(&b) }
+g = ->(a, b) { a.map(&b) }
+2.times do
+  p f.([2, 1], nil).class, g.([1], nil).class
+  b = proc { |v| -v }
+  p f.([1, 2], b), g.([1], b)
+end
+", @"
+Enumerator
+Enumerator
+[2, 1]
+[-1]
+Enumerator
+Enumerator
+[2, 1]
+[-1]
+");
+            } finally {
+                LibraryDispatcher.BudgetOverride = saved;
+            }
+        }
+
+        /// <summary>
+        /// The #coerce protocol asks an operand's own respond_to? first (rb_check_funcall). The coercion storage holds one site,
+        /// named by its first use: once a call of the site had made it the #coerce site, a later operand's respond_to? went
+        /// through it as coerce(:coerce) - a NoMethodError for an operand without #coerce, the wrong argument for one with it.
+        /// A rule's storages served the operands of one class; a dispatcher's serve every call of its site.
+        /// </summary>
+        public void CoerceRespondTo1() {
+            const string script = @"
+class C; end
+class Symbol; def coerce(o); $k += 1; [o, 1]; end; end
+def cmp(v); 1 <=> v; end
+$k = 0
+p cmp(C.new), cmp(:s)
+class C; def respond_to?(n, priv = false); $c += 1 if n == :coerce; super; end; end
+$c = 0
+p cmp(C.new), cmp(:s), $c, $k
+";
+            const string expected = @"
+nil
+0
+nil
+0
+1
+2
+";
+            TestOutput(script, expected);
+
+            // rules only: the same site serves the second cmp(C.new) through the rule of the first
+            int saved = LibraryDispatcher.BudgetOverride;
+            LibraryDispatcher.BudgetOverride = 0;
+            try {
+                TestOutput(script, expected);
+            } finally {
+                LibraryDispatcher.BudgetOverride = saved;
+            }
         }
 
         /// <summary>

@@ -70,6 +70,23 @@ for f in "${launchers[@]}" README.md; do
 done
 cp -R "$IR_ROOT/Src/StdLib" "$STAGE/Src/"
 rm -f "$STAGE/Src/StdLib/StdLib.rbproj"
+
+# The startup library (Util/aot/build-startup.sh, IronRuby.Startup.dll): the Ruby code every start runs -
+# the prelude, rubygems and the rest - compiled ahead of time against exactly this build and the archive's
+# own copy of the standard library (`ir -e 1` ~17% faster). Building it needs the .NET 10 SDK and runtime,
+# running it does not; without them, or if it fails, the release goes without it, which costs only the
+# speedup. IR_STARTUP_LIBRARY=0 leaves it out.
+bin="$STAGE/Src/Console/bin/Release/$IR_TFM"
+if [ "${IR_STARTUP_LIBRARY:-1}" != 0 ]; then
+  status=0
+  sh "$IR_ROOT/Util/aot/build-startup.sh" --host "$bin" --tfm "$IR_TFM" --rid "$RID" --root "$STAGE" \
+    ${DLR_SOURCE_DIR:+--dlr "$DLR_SOURCE_DIR"} || status=$?
+  case $status in
+    0) ;;
+    3) echo "package-release.sh: no startup library (building it needs the .NET 10 SDK and runtime)" ;;
+    *) echo "package-release.sh: the startup library failed to build (exit $status); the release goes without it" >&2 ;;
+  esac
+fi
 cp -R "$IR_ROOT/Src/Public" "$STAGE/License"
 # Samples/Notepad is a Windows Forms application, so only the Windows archive has it.
 case "$RID" in
@@ -154,6 +171,22 @@ case "$RID" in
     printf 'puts 6 * 7\n' | "$STAGE/iirb.sh" | grep -x 42
     ;;
 esac
+
+# The startup library must be the one the archive runs: a library this build or this standard library
+# does not match is ignored at run time (only the speedup lost), so ship none rather than a dead one.
+if [ -f "$bin/IronRuby.Startup.dll" ]; then
+  case "$RID" in
+    win-*) trace=$(cd "$STAGE" && IR_STARTUP_DLL_TRACE=1 cmd //c ir.cmd -e 1 2>&1) ;;
+    *)     trace=$(IR_STARTUP_DLL_TRACE=1 "$STAGE/ir.sh" -e 1 2>&1) ;;
+  esac
+  if echo "$trace" | grep -q "IronRuby.Startup: loaded" && ! echo "$trace" | grep -q "not used"; then
+    echo "package-release.sh: the startup library is used ($(echo "$trace" | grep -c 'IronRuby.Startup: parsing') files parsed at startup)"
+  else
+    echo "package-release.sh: the startup library is not used by the archive, leaving it out:" >&2
+    echo "$trace" | grep "IronRuby.Startup" | head -5 >&2
+    rm -f "$bin"/IronRuby.Startup*.dll
+  fi
+fi
 
 cd "$OUT"
 case "$RID" in

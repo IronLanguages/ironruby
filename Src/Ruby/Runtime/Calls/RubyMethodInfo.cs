@@ -210,7 +210,19 @@ namespace IronRuby.Runtime.Calls {
         #region Dynamic Sites
 
         internal override MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version) {
-            return GetDispatcher(delegateType, signature, target, version, null, false);
+            return (target is IRubyObject) ? GetDispatcher(delegateType, signature, version, null, false) : null;
+        }
+
+        /// <summary>
+        /// A dispatcher for a receiver that is nil, true, false or a CLR object whose rule tests its type and class version only
+        /// (see RubyCallAction.HasPlainClrTypeTest): the method is called the same way, the receiver test is the rule's.
+        /// </summary>
+        internal MemberDispatcher GetClrDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, RubyClass/*!*/ targetClass, int version) {
+            var dispatcher = GetDispatcher(delegateType, signature, version, null, false);
+            if (dispatcher != null) {
+                dispatcher.SetClrReceiver(target, targetClass);
+            }
+            return dispatcher;
         }
 
         /// <summary>
@@ -220,10 +232,10 @@ namespace IronRuby.Runtime.Calls {
         internal MemberDispatcher GetRefinedDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version,
             RefinementActivation/*!*/ refinements, bool inBlock) {
             Assert.NotNull(refinements);
-            return GetDispatcher(delegateType, signature, target, version, refinements, inBlock);
+            return (target is IRubyObject) ? GetDispatcher(delegateType, signature, version, refinements, inBlock) : null;
         }
 
-        private MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version,
+        private MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, int version,
             RefinementActivation refinements, bool inBlock) {
 
             if (Parameters.Unsplat != null) {
@@ -242,10 +254,6 @@ namespace IronRuby.Runtime.Calls {
                     return null;
                 }
                 parameterCount += Parameters.Optional.Length;
-            }
-
-            if (!(target is IRubyObject)) {
-                return null;
             }
 
             var method = GetDelegate();

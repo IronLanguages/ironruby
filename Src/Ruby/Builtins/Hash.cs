@@ -167,7 +167,15 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
+            /// <summary>The hash code of an Int32 key, which has to be that of any other representation of the same Fixnum.</summary>
+            internal static int FixnumHashCode(int value) {
+                return ((System.Numerics.BigInteger)value).GetHashCode();
+            }
+
             int IEqualityComparer<object>.GetHashCode(object obj) {
+                if (obj is int) {
+                    return FixnumHashCode((int)obj);
+                }
                 System.Numerics.BigInteger value;
                 if (TryGetImmediateInteger(obj, out value)) {
                     return value.GetHashCode();

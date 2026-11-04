@@ -1,5 +1,5 @@
 // Ported from the Microsoft Reference Source (System.Core, MIT License); see ../../README.md.
-using System; using System.Collections.Generic; using System.Collections.ObjectModel; using System.Diagnostics; using System.Linq.Expressions; using System.Reflection; using System.Reflection.Emit; using System.Runtime.CompilerServices; using Closure = IronRuby.Aot.Runtime.Closure; using RuntimeOps = IronRuby.Aot.Runtime.RuntimeOps;
+using System; using System.Collections.Generic; using System.Collections.ObjectModel; using System.Diagnostics; using System.Linq.Expressions; using System.Reflection; using System.Reflection.Emit; using System.Runtime.CompilerServices; using Closure = IronRuby.Runtime.Precompiled.Closure; using RuntimeOps = IronRuby.Runtime.Precompiled.RuntimeOps;
 /* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
