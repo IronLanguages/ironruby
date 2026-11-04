@@ -1105,7 +1105,11 @@ namespace IronRuby.Prism {
         }
 
         private Expression/*!*/ BigIntegerLiteral(BigInteger value, SourceSpan span) {
+            // An Integer is an Int32 if it fits in one, otherwise an Int64 if it fits in one (see
+            // Protocols.Normalize): a BigInteger literal in the Int64 range would not be eql? to the
+            // same value computed at run time, nor find it as a Hash key.
             if (value >= int.MinValue && value <= int.MaxValue) return Literal.Integer((int)value, span);
+            if (value >= long.MinValue && value <= long.MaxValue) return Literal.Long((long)value, span);
             return Literal.BigInteger(value, span);
         }
 

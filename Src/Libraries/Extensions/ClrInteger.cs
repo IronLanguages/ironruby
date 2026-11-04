@@ -80,7 +80,7 @@ namespace IronRuby.Builtins {
                 
             // If 'self' has more than '31 - other' significant digits it will overflow:
             if (shift >= 31 || (self & ~((1 << (31 - shift)) - 1)) != 0) {
-                return Protocols.Normalize(((BigInteger)self) << shift);
+                return LeftShiftWide(self, shift);
             }
 
             return self << shift;

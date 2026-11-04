@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -700,7 +700,7 @@ namespace IronRuby.Builtins {
                 return value;
             }
 
-            BigInteger big = (value is int) ? new BigInteger((int)value) : (BigInteger)value;
+            BigInteger big = ToBigInteger(value);
             switch (direction) {
                 case RoundDirection.Flooring: return NumericRounding.FloorInteger(big, nd);
                 case RoundDirection.Ceiling: return NumericRounding.CeilInteger(big, nd);
@@ -709,8 +709,17 @@ namespace IronRuby.Builtins {
         }
 
         private static BigInteger ToBigInteger(double integralValue) {
-            object value = CastToInteger(integralValue);
-            return (value is int) ? new BigInteger((int)value) : (BigInteger)value;
+            return ToBigInteger(CastToInteger(integralValue));
+        }
+
+        private static BigInteger ToBigInteger(object/*!*/ integer) {
+            if (integer is int i) {
+                return new BigInteger(i);
+            }
+            if (integer is long l) {
+                return new BigInteger(l);
+            }
+            return (BigInteger)integer;
         }
 
         #endregion
@@ -1241,21 +1250,28 @@ namespace IronRuby.Builtins {
         // I did think about whether to put this into Protocols but really it is only checking the FloatDomainErrors
         // Also, it is only used in FloatOps.Floor and FloatOps.Ceil.
         // These get invoked from Protocols.ConvertToInteger anyway so it would all get a bit circular.
+        // value is integral (the result of Floor, Ceiling, Truncate or rounding), or NaN/Infinity.
+        // The range checks replace Convert.ToInt32 and its OverflowException, which made every
+        // conversion of a Float outside the Int32 range cost a thrown exception. The result is
+        // normalized like any other Integer: a value in the Int64 range is a long, not a BigInteger.
         private static object CastToInteger(double value) {
-            try {
-                if (Double.IsPositiveInfinity(value)) {
-                    throw new FloatDomainError("Infinity");
-                }
-                if (Double.IsNegativeInfinity(value)) {
-                    throw new FloatDomainError("-Infinity");
-                }
-                if (Double.IsNaN(value)) {
-                    throw new FloatDomainError("NaN");
-                }
-                return System.Convert.ToInt32(value);
-            } catch (OverflowException) {
-                return new BigInteger(value);
+            if (value >= Int32.MinValue && value <= Int32.MaxValue) {
+                return ScriptingRuntimeHelpers.Int32ToObject((int)value);
             }
+            if (Double.IsPositiveInfinity(value)) {
+                throw new FloatDomainError("Infinity");
+            }
+            if (Double.IsNegativeInfinity(value)) {
+                throw new FloatDomainError("-Infinity");
+            }
+            if (Double.IsNaN(value)) {
+                throw new FloatDomainError("NaN");
+            }
+            // -2**63 is a double exactly; 2**63 is the first double above Int64.MaxValue.
+            if (value >= -9223372036854775808.0 && value < 9223372036854775808.0) {
+                return (long)value;
+            }
+            return new BigInteger(value);
         }
 
         public static Exception CreateFloatDomainError(string message) {
