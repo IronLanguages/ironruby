@@ -810,13 +810,6 @@ namespace IronRuby.Runtime {
             get { return _binder; }
         }
 
-        /// <summary>
-        /// Clears thread static variables.
-        /// </summary>
-        internal static void ClearThreadStatics() {
-            _currentException = null;
-        }
-
         private void InitializeGlobalVariables() {
             // special variables:
             Runtime.GlobalVariables.DefineVariablesNoLock(this);
@@ -1248,12 +1241,6 @@ namespace IronRuby.Runtime {
             Assert.NotNull(type, module);
             _moduleCache[type] = module;
             _classReadCache.TryRemove(type, out _);
-        }
-
-        internal void AddNamespaceToCacheNoLock(NamespaceTracker/*!*/ namespaceTracker, RubyModule/*!*/ module) {
-            Assert.NotNull(namespaceTracker, module);
-
-            _namespaceCache.Add(namespaceTracker, module);
         }
 
         internal RubyModule/*!*/ GetOrCreateModule(NamespaceTracker/*!*/ tracker) {
@@ -3279,14 +3266,43 @@ namespace IronRuby.Runtime {
         }
 
         public RubySymbol/*!*/ CreateAsciiSymbol(string/*!*/ str) {
-            // TODO: do not allocate the MutableString if not needed?
-            return CreateSymbol(MutableString.CreateAscii(str), false);
+            Debug.Assert(str.IsAscii());
+            RubySymbol result;
+            if (_clrStringSymbols.TryGetValue(str, out result)) {
+                return result;
+            }
+            bool created;
+            result = CreateSymbol(MutableString.CreateAscii(str), false, out created);
+            if (!created) {
+                _clrStringSymbols.TryAdd(str, result);
+            }
+            return result;
         }
 
         public RubySymbol/*!*/ CreateSymbol(string/*!*/ str, RubyEncoding/*!*/ encoding) {
-            // TODO: do not allocate the MutableString if not needed?
-            return CreateSymbol(MutableString.CreateMutable(str, encoding), false);
+            // Only a UTF-8 name, or an ASCII one in an encoding that spells ASCII as ASCII, is
+            // remembered by its CLR string: for those the symbol depends on the string alone (an
+            // ASCII-only name is a US-ASCII symbol whatever it is tagged with, see below).
+            bool cacheable = encoding == RubyEncoding.UTF8 || (encoding.IsAsciiIdentity && str.IsAscii());
+            RubySymbol result;
+            if (cacheable && _clrStringSymbols.TryGetValue(str, out result)) {
+                return result;
+            }
+            bool created;
+            result = CreateSymbol(MutableString.CreateMutable(str, encoding), false, out created);
+            if (cacheable && !created) {
+                _clrStringSymbols.TryAdd(str, result);
+            }
+            return result;
         }
+
+        // Interning a CLR string goes through a new MutableString (two, for an ASCII name in another
+        // encoding), its hash and the symbol table's lock. A symbol never changes and is never
+        // collected, so a CLR string asked for again is remembered here, and costs a lock-free
+        // lookup from then on. One asked for once is not: start-up interns thousands of names (every
+        // method a library defines), and filing each would cost more than it saves.
+        private readonly ConcurrentDictionary<string, RubySymbol>/*!*/ _clrStringSymbols =
+            new ConcurrentDictionary<string, RubySymbol>(StringComparer.Ordinal);
 
         public RubySymbol/*!*/ CreateSymbol(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding) {
             var mstr = MutableString.CreateBinary(bytes, encoding);
@@ -3401,19 +3417,9 @@ namespace IronRuby.Runtime {
         /// Returns an identifier encoded as MutableStrings (Ruby 1.8) or Symbols (Ruby 1.9).
         /// </summary>
         public object/*!*/ StringifyIdentifier(string/*!*/ identifier) {
-            // Interning goes through a MutableString and the symbol table's lock; an identifier's symbol
-            // never changes and symbols are never collected, so remember it by the CLR string.
-            RubySymbol result;
-            if (!_identifierSymbols.TryGetValue(identifier, out result)) {
-                result = CreateSymbol(identifier, RubyEncoding.UTF8);
-                _identifierSymbols.TryAdd(identifier, result);
-            }
-            return result;
+            return CreateSymbol(identifier, RubyEncoding.UTF8);
         }
 
-        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, RubySymbol>/*!*/ _identifierSymbols =
-            new System.Collections.Concurrent.ConcurrentDictionary<string, RubySymbol>(StringComparer.Ordinal);
-        
         /// <summary>
         /// Returns an array of identifiers encoded as MutableStrings (Ruby 1.8) or Symbols (Ruby 1.9).
         /// </summary>
@@ -5212,7 +5218,7 @@ namespace IronRuby.Runtime {
 
             if (!IsDefaultHook(target, hook)) {
                 Send(ref site, RubyClass.HookNames[(int)hook], target, memberName);
-            } else if (!_identifierSymbols.ContainsKey(memberName)) {
+            } else if (!_clrStringSymbols.ContainsKey(memberName)) {
                 InternHookName(memberName);
             }
         }
@@ -5220,14 +5226,14 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Interns the name a left-out hook call would have passed: the call would have interned it, and for a constant
         /// nothing else may, while CRuby's Symbol.all_symbols lists every constant and method name. A name that had a symbol
-        /// already is filed in the identifier cache (<see cref="StringifyIdentifier"/>), so that from then on it costs
+        /// already is filed in the CLR string cache (<see cref="CreateSymbol(string, RubyEncoding)"/>), so that from then on it costs
         /// a lookup. A new one is not: every class and module name is one, and filing each costs more than it saves.
         /// </summary>
         private void InternHookName(string/*!*/ name) {
             bool created;
             RubySymbol symbol = CreateSymbol(MutableString.CreateMutable(name, GetIdentifierEncoding()), false, out created);
             if (!created) {
-                _identifierSymbols.TryAdd(name, symbol);
+                _clrStringSymbols.TryAdd(name, symbol);
             }
         }
 

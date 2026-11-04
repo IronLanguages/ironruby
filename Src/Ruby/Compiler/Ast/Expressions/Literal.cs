@@ -42,6 +42,10 @@ namespace IronRuby.Compiler.Ast {
             return new Literal(ScriptingRuntimeHelpers.Int32ToObject(value), location);
         }
 
+        public static Literal/*!*/ Long(long value, SourceSpan location) {
+            return new Literal(value, location);
+        }
+
         public static Literal/*!*/ Double(double value, SourceSpan location) {
             return new Literal(value, location);
         }

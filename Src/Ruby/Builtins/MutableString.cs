@@ -2179,9 +2179,38 @@ namespace IronRuby.Builtins {
             ContractUtils.RequiresNotNull(value, "value");
             MutateAppend(value, repeatCount > 0);
 
-            // TODO: we can do better here (double the amount of copied bytes/chars in each iteration)
             var other = value._content;
             EnsureCapacity(other.Count * repeatCount);
+
+            if (repeatCount > 1 && _content.IsEmpty && !ReferenceEquals(value, this)) {
+                // One copy is appended and then what is there is doubled: a short string repeated
+                // many times ("-" * 80) made as many appends, each one through the double dispatch
+                // between the contents and a capacity check, to copy a byte or two.
+                _content.Append(other, 0, other.Count);
+                repeatCount--;
+
+                // the appended copy is in this string's representation, which may differ from value's:
+                int unit = _content.Count;
+                long total = (long)unit * (repeatCount + 1);
+                if (total <= Int32.MaxValue) {
+                    int done = unit;
+                    while (done < total) {
+                        int count = (int)Math.Min(done, total - done);
+                        _content.Append(_content, 0, count);
+                        done += count;
+                    }
+                    return this;
+                }
+            }
+
+            if (repeatCount > 2 && !ReferenceEquals(value, this)) {
+                // The copies are put together on their own and then appended in one go - doubling
+                // them in place would have to know where they start in this string's representation.
+                var copies = CreateMutable(value._encoding).AppendMultiple(value, repeatCount);
+                _content.Append(copies._content, 0, copies._content.Count);
+                return this;
+            }
+
             while (repeatCount-- > 0) {
                 _content.Append(other, 0, other.Count);
             }

@@ -193,12 +193,13 @@ namespace IronRuby.Builtins {
 
         private static object ReadBer(MutableString/*!*/ data, ref int index) {
             int i = index;
-            try {
-                // skip initial zeroes:
-                while (data.GetByte(i) == 0x80) { i++; }
-                index = i;
-                while ((data.GetByte(i) & 0x80) != 0) { i++; }
-            } catch (IndexOutOfRangeException) {
+            int length = data.GetByteCount();
+            // skip initial zeroes:
+            while (i < length && data.GetByte(i) == 0x80) { i++; }
+            index = i;
+            while (i < length && (data.GetByte(i) & 0x80) != 0) { i++; }
+            if (i >= length) {
+                // the data ended before the last byte of the number (or before any number)
                 index = i;
                 return null;
             }
@@ -932,52 +933,6 @@ namespace IronRuby.Builtins {
                 } else {
                     stream.Write(bytes, 0, bytes.Length);
                 }
-            }
-        }
-
-        private static void WriteUInt64(ConversionStorage<IntegerValue>/*!*/ integerConversion,
-            Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
-
-            for (int j = 0; j < count; j++) {
-                object value = GetPackArg(self, i + j);
-                if (value == null) {
-                    throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
-                }
-
-                IntegerValue integer = Protocols.CastToInteger(integerConversion, value);
-                ulong u;
-                if (integer.IsFixnum) {
-                    Write(stream, unchecked((ulong)integer.Fixnum), swap);
-                } else if (integer.Bignum.Abs().AsUInt64(out u)) {
-                    if (integer.Bignum.Sign < 0) {
-                        u = unchecked(~u + 1);
-                    }
-                    Write(stream, u, swap);
-                } else {
-                    throw RubyExceptions.CreateRangeError("bignum out of range (-2**64, 2**64)");
-                }
-            }
-        }
-
-        private static void WriteUInt32(ConversionStorage<IntegerValue>/*!*/ integerConversion,
-            Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
-            for (int j = 0; j < count; j++) {
-                long value = Protocols.CastToInt64Unchecked(integerConversion, GetPackArg(self, i + j));
-                if (value <= -0x100000000L || value >= 0x100000000L) {
-                    throw RubyExceptions.CreateRangeError("bignum out of range (-2**32, 2**32)");
-                }
-                Write(stream, unchecked((uint)value), swap);
-            }
-        }
-
-        private static void WriteUInt16(ConversionStorage<IntegerValue>/*!*/ integerConversion,
-            Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
-            for (int j = 0; j < count; j++) {
-                long value = Protocols.CastToInt64Unchecked(integerConversion, GetPackArg(self, i + j));
-                if (value <= -0x100000000L || value >= 0x100000000L) {
-                    throw RubyExceptions.CreateRangeError("bignum out of range (-2**32, 2**32)");
-                }
-                Write(stream, unchecked((ushort)value), swap);
             }
         }
 

@@ -352,11 +352,6 @@ namespace IronRuby.Runtime {
             }
         }
 
-        internal bool IsInstanceVariableDefined(string/*!*/ name) {
-            object value;
-            return TryGetInstanceVariable(name, out value);
-        }
-
         internal string/*!*/[]/*!*/ GetInstanceVariableNames() {
             InstanceVariableShape shape;
             var s = GetStable(out shape);

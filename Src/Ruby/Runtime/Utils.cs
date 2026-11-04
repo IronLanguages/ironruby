@@ -652,19 +652,6 @@ namespace IronRuby.Runtime {
             return defaultResult;
         }
 
-        internal static bool SubstringEquals(string/*!*/ name, int start, int count, string/*!*/ other) {
-            if (count != other.Length) {
-                return false;
-            }
-
-            for (int i = 0; i < count; i++) {
-                if (name[start + i] != other[i]) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
         internal static bool ValueEquals<T>(T[] array, int arrayCount, T[] other, int otherCount) {
             Debug.Assert(arrayCount <= array.Length);
             Debug.Assert(otherCount <= other.Length);
@@ -752,13 +739,6 @@ namespace IronRuby.Runtime {
             }
 
             return result;
-        }
-
-        internal static void CopyTupleFields(MutableTuple/*!*/ src, MutableTuple/*!*/ dst) {
-            Debug.Assert(src.Capacity == dst.Capacity);
-            for (int i = 0; i < src.Capacity; i++) {
-                dst.SetValue(i, src.GetValue(i));
-            }
         }
 
 #if FEATURE_ENCODING

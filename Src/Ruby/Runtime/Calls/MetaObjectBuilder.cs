@@ -255,6 +255,26 @@ namespace IronRuby.Runtime.Calls {
             AddTargetTypeTest(target, targetClass, targetParameter, metaContext, resolvedNames, null);
         }
 
+        // The public ImmediateClass getter a rule can call on a Ruby object of the type directly, or null if
+        // the type is not visible or has none. Both a property of the type alone, but a reflection lookup and
+        // Type.IsVisible (which walks generic arguments and declaring types) at every binding of a call
+        // site on a Ruby object - every new class misses its call sites' rules. A weak table, so that a
+        // collectible type goes with its assembly.
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, StrongBox<MethodInfo>>/*!*/ _directClassGetters =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<Type, StrongBox<MethodInfo>>();
+
+        private static MethodInfo GetDirectClassGetter(Type/*!*/ type) {
+            StrongBox<MethodInfo> entry;
+            if (!_directClassGetters.TryGetValue(type, out entry)) {
+                MethodInfo getter = type.GetMethod(Methods.IRubyObject_get_ImmediateClass.Name, BindingFlags.Public | BindingFlags.Instance);
+                entry = new StrongBox<MethodInfo>(
+                    (type.IsVisible && getter != null && getter.ReturnType == typeof(RubyClass)) ? getter : null
+                );
+                _directClassGetters.AddOrUpdate(type, entry);
+            }
+            return entry.Value;
+        }
+
         /// <summary>
         /// If <paramref name="versionSet"/> is given and the target is a Ruby object the rule tests the class version against the set
         /// (and the current version is added to it) instead of against a constant: see <see cref="RuleVersionSet"/>.
@@ -275,8 +295,8 @@ namespace IronRuby.Runtime.Calls {
                 AddTypeRestriction(type, targetParameter);
             
                 // Ruby objects (get the method directly to prevent interface dispatch):
-                MethodInfo classGetter = type.GetMethod(Methods.IRubyObject_get_ImmediateClass.Name, BindingFlags.Public | BindingFlags.Instance);
-                if (type.IsVisible && classGetter != null && classGetter.ReturnType == typeof(RubyClass)) {
+                MethodInfo classGetter = GetDirectClassGetter(type);
+                if (classGetter != null) {
                     if (versionSet != null && versionSet.TryAdd(targetClass.Version.Method)) {
                         // (#{type})target.ImmediateClass.Version.Method in #{versionSet}
                         AddCondition(versionSet.MakeTest(

@@ -1495,16 +1495,6 @@ namespace IronRuby.Builtins {
             return !field.IsInitOnly && !field.IsLiteral;
         }
 
-        private int GetVisibleMethodCount(IEnumerable<OverloadInfo/*!*/>/*!*/ members, bool specialNameOnly) {
-            int count = 0;
-            foreach (OverloadInfo method in members) {
-                if (IsVisible(method.Attributes, method.DeclaringType, specialNameOnly)) {
-                    count++;
-                }
-            }
-            return count;
-        }
-
         private RubyOverloadGroupInfo/*!*/ MakeGroup(ICollection<ClrOverloadInfo>/*!*/ allMethods) {
             var overloads = new OverloadInfo[allMethods.Count];
             var overloadOwners = new RubyOverloadGroupInfo[overloads.Length];

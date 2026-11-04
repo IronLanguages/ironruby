@@ -704,10 +704,45 @@ namespace IronRuby.Runtime.Calls {
             return Converter.CanConvertFrom(null, fromParameter.Type, toParameter.Type, toParameter.ProhibitNull, NarrowingLevel.None, false, false).IsConvertible;
         }
 
+        #region Parameter attributes
+
+        // A parameter's custom attributes never change, but every IsDefined is a walk of its metadata
+        // that allocates, and overload resolution asks for the same few at each binding of a call site
+        // - several times per candidate. So each parameter is read once. A weak table, so that the
+        // parameters of a collectible or dynamic method go with it.
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ParameterInfo, object>/*!*/ _parameterFlags =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<ParameterInfo, object>();
+
+        private const int DefaultProtocolFlag = 1;
+        private const int ParamArrayFlag = 2;
+        private static readonly object[]/*!*/ _boxedParameterFlags = { 0, 1, 2, 3 };
+
+        private static int GetParameterFlags(ParameterInfo/*!*/ info) {
+            object flags;
+            if (!_parameterFlags.TryGetValue(info, out flags)) {
+                flags = _boxedParameterFlags[
+                    (info.IsDefined(typeof(DefaultProtocolAttribute), false) ? DefaultProtocolFlag : 0) |
+                    (info.IsDefined(typeof(ParamArrayAttribute), false) ? ParamArrayFlag : 0)
+                ];
+                _parameterFlags.AddOrUpdate(info, flags);
+            }
+            return (int)flags;
+        }
+
+        internal static bool HasDefaultProtocol(ParameterInfo/*!*/ info) {
+            return (GetParameterFlags(info) & DefaultProtocolFlag) != 0;
+        }
+
+        internal static bool IsParamArray(ParameterInfo/*!*/ info) {
+            return (GetParameterFlags(info) & ParamArrayFlag) != 0;
+        }
+
+        #endregion
+
         private bool HasExplicitProtocolConversion(ParameterWrapper/*!*/ parameter) {
             return
                 parameter.ParameterInfo != null &&
-                parameter.ParameterInfo.IsDefined(typeof(DefaultProtocolAttribute), false) &&
+                HasDefaultProtocol(parameter.ParameterInfo) &&
                 !parameter.IsParamsArray; // default protocol doesn't apply on param-array/dict itself, only on the expanded parameters
         }
 
@@ -1031,7 +1066,7 @@ namespace IronRuby.Runtime.Calls {
 
             expanded = usesDefaults = false;
             for (int i = 0; i < declared.Length; i++) {
-                if (declared[i].IsDefined(typeof(ParamArrayAttribute), false)) {
+                if (IsParamArray(declared[i])) {
                     expanded = !candidate.HasParamsArray;
                 } else if (!passed[i]) {
                     if (!declared[i].IsOptional) {
@@ -1065,7 +1100,7 @@ namespace IronRuby.Runtime.Calls {
 
             // an item of an expanded params array, compared by the item type:
             if (declaredType.IsArray && parameter.Type == info.ParameterType.GetElementType() &&
-                info.IsDefined(typeof(ParamArrayAttribute), false)) {
+                IsParamArray(info)) {
                 declaredType = declaredType.GetElementType();
                 return true;
             }
@@ -1122,7 +1157,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             // protocol conversions:
-            if (info != null && info.IsDefined(typeof(DefaultProtocolAttribute), false)) {
+            if (info != null && HasDefaultProtocol(info)) {
                 var action = RubyConversionAction.TryGetDefaultConversionAction(Context, toType);
                 if (action != null) {
                     // TODO: inline implicit conversions:

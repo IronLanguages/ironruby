@@ -156,6 +156,8 @@ namespace IronRuby.Tests {
                 File_AppendBytes1,
                 File_WriteBytes1,
                 File_ReadLine1,
+                File_ReadLineSeparator1,
+                File_AppendBytesToEnd1,
                 Dir2,
                 
                 Regex1,
@@ -356,6 +358,10 @@ namespace IronRuby.Tests {
                 Scenario_RubyArrays4,
                 Scenario_RubyArrays5,
                 Scenario_RubyArrays6,
+                Array_DeleteInPlace1,
+                Array_CompactUniqInPlace1,
+                Array_SliceHugeLength1,
+                Array_SplatBlockYield1,
                 IListOps_EnumerateRecursively1,
 
                 Scenario_RubyHashes1A,
@@ -369,6 +375,7 @@ namespace IronRuby.Tests {
                 HashIteration_JitStore1,
                 HashIdentity_JitFixnumKey1,
                 HashFetch_Jit1,
+                Hash_KeysValues1,
                 Scenario_RubyArgSplatting1,
                 Scenario_RubyArgSplatting2,
                 Scenario_RubyArgSplatting3,
@@ -956,6 +963,10 @@ namespace IronRuby.Tests {
                 ClrBigIntegerV4,
                 BigInteger1,
                 GcdLcm1,
+                Integer_Normalization1,
+                Integer_ToStringRadix1,
+                Pack_BerTruncated1,
+                Integer_Int64Shifts1,
             };
         }
     }

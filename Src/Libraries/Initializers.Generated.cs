@@ -4059,12 +4059,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "<<", 0x51, 
-                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U}, 
+                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift), 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, IronRuby.Runtime.IntegerValue, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift), 
-                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift)
+                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift), 
+                new Func<System.Int64, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift)
             );
             
             DefineLibraryMethod(module, "<=", 0x51, 
@@ -4141,12 +4142,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, ">>", 0x51, 
-                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U}, 
+                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.RightShift), 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.RightShift), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, IronRuby.Runtime.IntegerValue, System.Object>(IronRuby.Builtins.ClrInteger.RightShift), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.RightShift), 
-                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.RightShift)
+                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.RightShift), 
+                new Func<System.Int64, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.RightShift)
             );
             
             DefineLibraryMethod(module, "|", 0x51, 
@@ -4160,9 +4162,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "~", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Invert), 
-                new Func<System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.OnesComplement)
+                new Func<System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.OnesComplement), 
+                new Func<System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.OnesComplement)
             );
             
             DefineLibraryMethod(module, "abs", 0x51, 

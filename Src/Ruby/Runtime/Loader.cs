@@ -296,23 +296,6 @@ namespace IronRuby.Runtime {
             return null;
         }
 
-        private void AddAbsoluteLibraryPaths(RubyArray/*!*/ result, string applicationBaseDir, ICollection<string>/*!*/ paths) {
-            foreach (var path in paths) {
-                string fullPath;
-                if (applicationBaseDir != null) {
-                    try {
-                        fullPath = Platform.IsAbsolutePath(path) ? path : Platform.GetFullPath(Path.Combine(applicationBaseDir, path));
-                    } catch (Exception) {
-                        // error will be reported on first require:
-                        fullPath = path;
-                    }
-                } else {
-                    fullPath = path;
-                }
-                result.Add(_context.EncodePath(fullPath.Replace('\\', '/')));
-            }
-        }
-
 #if FEATURE_FILESYSTEM
         private Dictionary<string, CompiledFile>/*!*/ LoadCompiledCode() {
             Debug.Assert(_context.RubyOptions.LoadFromDisk);
@@ -1287,16 +1270,6 @@ namespace IronRuby.Runtime {
 
             lock (_loadPaths) {
                 _loadPaths.Clear();
-                foreach (string path in paths) {
-                    _loadPaths.Add(_context.EncodePath(path));
-                }
-            }
-        }
-
-        internal void AddLoadPaths(IEnumerable<string/*!*/>/*!*/ paths) {
-            Assert.NotNullItems(paths);
-
-            lock (_loadPaths) {
                 foreach (string path in paths) {
                     _loadPaths.Add(_context.EncodePath(path));
                 }

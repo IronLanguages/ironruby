@@ -2324,26 +2324,6 @@ namespace IronRuby.Builtins {
             }
         }
 
-        // TODO: constraints
-        private static bool IsPartiallyInstantiated(Type/*!*/ type) {
-            if (type.IsGenericParameter) {
-                return false;
-            }
-
-            if (type.IsArray) {
-                return !type.GetElementType().IsGenericParameter;
-            }
-
-            foreach (var arg in type.GetGenericArguments()) {
-                if (!arg.IsGenericParameter) {
-                    Debug.Assert(arg.DeclaringMethod != null);
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
         internal virtual void PrepareExtensionMethodsUpdate(List<ExtensionMethodInfo>/*!*/ extensions) {
             if (_dependentClasses != null) {
                 foreach (var cls in _dependentClasses) {
@@ -3825,13 +3805,6 @@ namespace IronRuby.Builtins {
                 }
             }
             return index;
-        }
-
-        /// <summary>
-        /// Returns true if given module is an ancestor of the superclass of this class (provided that this is a class).
-        /// </summary>
-        internal virtual bool IsSuperClassAncestor(RubyModule/*!*/ module) {
-            return false;
         }
 
         protected virtual bool CanIncludeClrInterface {

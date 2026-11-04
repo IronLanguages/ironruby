@@ -1193,31 +1193,6 @@ namespace IronRuby.StandardLibrary.Sockets {
             }
         }
         
-        /// <summary>
-        /// Converts an Integer to a Fixnum.
-        /// Don't call any conversion methods--just handles Fixnum and Bignum
-        /// </summary>
-        /// <param name="value"></param>
-        /// <returns>true if value is an Integer, false otherwise</returns>
-        /// <exception cref="ArgumentOutOfRangeException">Throws a RangeError if value is a
-        /// BigInteger but can't be converted to a Fixnum</exception>
-        internal static bool IntegerAsFixnum(object value, out int result) {
-            if (value is int) {
-                result = (int)value;
-                return true;
-            }
-
-            if (value is BigInteger bignum) {
-                if (!bignum.AsInt32(out result)) {
-                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
-                }
-                return true;
-            }
-
-            result = 0;
-            return false;
-        }
-
         internal static int ConvertToPortNum(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast, object port) {
             // conversion protocol: if it's a Fixnum, return it
             // otherwise, convert to string & then convert the result to a Fixnum

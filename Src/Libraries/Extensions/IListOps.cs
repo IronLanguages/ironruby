@@ -70,8 +70,10 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
-            if (count != 0) {
-                count = start + count > listCount ? listCount - start : count;
+            // count > listCount - start rather than start + count > listCount, which overflowed for
+            // a huge count and so kept it: [1, 2, 3][1, 2**31 - 1] answered [] instead of [2, 3].
+            if (count > listCount - start) {
+                count = listCount - start;
             }
 
             return true;
@@ -146,6 +148,13 @@ namespace IronRuby.Builtins {
         }
 
         private static IList/*!*/ GetResultRange(UnaryOpStorage/*!*/ allocateStorage, IList/*!*/ list, int index, int count) {
+            // A RubyArray's result is a plain Array (CreateResultArray), filled with one block copy
+            // instead of an Add - and an interface call - per element.
+            var array = list as RubyArray;
+            if (array != null) {
+                return new RubyArray(array, index, count);
+            }
+
             IList result = CreateResultArray(allocateStorage, list);
             int stop = index + count;
             for (int i = index; i < stop; i++) {
@@ -961,17 +970,24 @@ namespace IronRuby.Builtins {
         public static IList CompactInPlace(IList/*!*/ self) {
             RequireNotFrozen(self);
 
-            bool changed = false;
-            int i = 0;
-            while (i < self.Count) {
-                if (self[i] == null) {
-                    changed = true;
-                    self.RemoveAt(i);
-                } else {
-                    i++;
+            // One pass that moves the non-nil elements down, then the tail is cut off: removing
+            // each nil on its own shifted the rest of the array every time.
+            int count = self.Count;
+            int kept = 0;
+            for (int i = 0; i < count; i++) {
+                object item = self[i];
+                if (item != null) {
+                    if (i != kept) {
+                        self[kept] = item;
+                    }
+                    kept++;
                 }
             }
-            return changed ? self : null;
+            if (kept == count) {
+                return null;
+            }
+            RemoveRange(self, kept, count - kept);
+            return self;
         }
 
         #endregion
@@ -979,34 +995,62 @@ namespace IronRuby.Builtins {
         #region delete, delete_at, reject, reject!
 
         public static bool Remove(BinaryOpStorage/*!*/ equals, IList/*!*/ self, object item) {
-            int i = 0;
-            bool removed = false;
-            while (i < self.Count) {
-                if (Protocols.IsEqual(equals, self[i], item)) {
-                    self.RemoveAt(i);
-                    removed = true;
-                } else {
-                    i++;
+            object deleted;
+            return Remove(equals, self, item, out deleted);
+        }
+
+        /// <summary>
+        /// MRI's rb_ary_delete: one pass that moves the elements it keeps down over the ones that
+        /// are == to <paramref name="item"/> and then cuts the tail off, so deleting many elements
+        /// is linear (removing them one at a time shifted the rest of the array for each).
+        /// <paramref name="deleted"/> is the last element that matched - what Array#delete
+        /// answers, which need not be <paramref name="item"/> itself ([1, 1.0].delete(1) is 1.0).
+        /// The length is read afresh on every step and the elements are compared in order as
+        /// MRI does, so an #== that changes the array sees what it would see there.
+        /// </summary>
+        private static bool Remove(BinaryOpStorage/*!*/ equals, IList/*!*/ self, object item, out object deleted) {
+            var site = equals.GetCallSite("==");
+            deleted = item;
+            int kept = 0;
+            for (int i = 0; i < self.Count; i++) {
+                object element = self[i];
+                if (Protocols.IsEqual(site, element, item)) {
+                    deleted = element;
+                    continue;
                 }
+                if (i != kept) {
+                    self[kept] = element;
+                }
+                kept++;
             }
-            return removed;
+
+            int count = self.Count;
+            if (count == kept) {
+                return false;
+            }
+            if (count > kept) {
+                RemoveRange(self, kept, count - kept);
+            }
+            return true;
         }
 
         [RubyMethod("delete")]
         public static object Delete(BinaryOpStorage/*!*/ equals, IList/*!*/ self, object item) {
-            return Remove(equals, self, item) ? item : null;
+            object deleted;
+            return Remove(equals, self, item, out deleted) ? deleted : null;
         }
 
         [RubyMethod("delete")]
         public static object Delete(BinaryOpStorage/*!*/ equals, BlockParam block, IList/*!*/ self, object item) {
-            bool removed = Remove(equals, self, item);
+            object deleted;
+            bool removed = Remove(equals, self, item, out deleted);
 
             if (!removed && block != null) {
                 object result;
-                block.Yield(out result);
+                block.Yield(item, out result);
                 return result;
             }
-            return removed ? item : null;
+            return removed ? deleted : null;
         }
 
         [RubyMethod("delete_at")]
@@ -2184,7 +2228,9 @@ namespace IronRuby.Builtins {
                 // before the array answers nil rather than raising RangeError.
                 return null;
             }
-            return CutOut(allocateStorage, self, start, count);
+            // A range that ends before it begins (3..1) is an empty stretch, not a negative
+            // length: MRI's rb_range_beg_len clamps it to 0, so the answer is [] rather than nil.
+            return CutOut(allocateStorage, self, start, Math.Max(count, 0));
         }
 
         [RubyMethod("slice!")]
@@ -2214,7 +2260,8 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
-            if (start + length > self.Count) {
+            // not start + length > Count, which overflows for a huge length
+            if (length > self.Count - start) {
                 length = self.Count - start;
             }
 
@@ -2388,23 +2435,35 @@ namespace IronRuby.Builtins {
         public static IList UniqueSelf(UnaryOpStorage/*!*/ hashStorage, BinaryOpStorage/*!*/ eqlStorage, IList/*!*/ self) {
             var seen = new Dictionary<object, bool>(new EqualityComparer(hashStorage, eqlStorage));
             bool nilSeen = false;
-            bool modified = false;
-            int i = 0;
-            while (i < self.Count) {
+            // The first occurrences are moved down over the duplicates and the tail is cut off at
+            // the end: removing each duplicate on its own shifted the rest of the array every time.
+            int kept = 0;
+            for (int i = 0; i < self.Count; i++) {
                 object key = self[i];
-                if (key != null && !seen.ContainsKey(key)) {
-                    seen.Add(key, true);
-                    i++;
-                } else if (key == null && !nilSeen) {
-                    nilSeen = true;
-                    i++;
+                bool first;
+                if (key != null) {
+                    first = !seen.ContainsKey(key);
+                    if (first) {
+                        seen.Add(key, true);
+                    }
                 } else {
-                    self.RemoveAt(i);
-                    modified = true;
+                    first = !nilSeen;
+                    nilSeen = true;
+                }
+                if (first) {
+                    if (i != kept) {
+                        self[kept] = key;
+                    }
+                    kept++;
                 }
             }
 
-            return modified ? self : null;
+            int count = self.Count;
+            if (count <= kept) {
+                return null;
+            }
+            RemoveRange(self, kept, count - kept);
+            return self;
         }
 
         #endregion
