@@ -811,7 +811,7 @@ namespace IronRuby.Runtime.Jit {
                 // through the representation funnel, so a result that fits in an Int32 is one.
                 fast = Ast.Call(JitRuntime.M("NarrowLong"), fast);
             } else if (fast.Type != typeof(object)) {
-                fast = Ast.Convert(fast, typeof(object));
+                fast = JitRuntime.BoxResult(fast);
             }
 
             if (code.CanDeopt) {
@@ -916,7 +916,7 @@ namespace IronRuby.Runtime.Jit {
             if (code.ReturnType == JT.Lng) {
                 fast = Ast.Call(JitRuntime.M("NarrowLong"), fast);
             } else if (fast.Type != typeof(object)) {
-                fast = Ast.Convert(fast, typeof(object));
+                fast = JitRuntime.BoxResult(fast);
             }
             var noDirect = Ast.Field(null, typeof(JitKeywordCall).GetField("NoDirect"));
             if (code.CanDeopt) {
@@ -1020,7 +1020,7 @@ namespace IronRuby.Runtime.Jit {
             if (code.ReturnType == JT.Lng) {
                 fast = Ast.Call(JitRuntime.M("NarrowLong"), fast);
             } else if (fast.Type != typeof(object)) {
-                fast = Ast.Convert(fast, typeof(object));
+                fast = JitRuntime.BoxResult(fast);
             }
 
             if (code.CanDeopt) {

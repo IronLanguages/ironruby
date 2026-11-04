@@ -39,6 +39,12 @@ class Generator
     "," + Array.new(@n) { |i| "arg#{i}" }.join(", ") 
   end
 
+  # the arguments as the method delegate takes them: an Int32 boxed through the DLR's cache of small
+  # integers rather than into a new object on every call (see MemberDispatcher.Box)
+  def BoxedArguments
+    "," + Array.new(@n) { |i| "Box(arg#{i})" }.join(", ")
+  end
+
   def ParameterExpressions
     Array.new(@n) { |i| %{Expression.Parameter(typeof(T#{i}), "$arg#{i}")} }.join(", ")
   end

@@ -37,6 +37,38 @@ namespace IronRuby.Runtime.Calls {
     using Ast = Expression;
 
     public abstract partial class MemberDispatcher {
+        private static readonly object[]/*!*/ _boxedSmallInts = CreateBoxedSmallInts();
+
+        private static object[]/*!*/ CreateBoxedSmallInts() {
+            var result = new object[128 + 1024];
+            for (int i = 0; i < result.Length; i++) {
+                result[i] = Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers.Int32ToObject(i - 128);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// An argument as the method delegate takes it, an object. A precompiled dispatcher's site is
+        /// typed by what it was first called with, so a literal 1 arrives as an Int32, and handing it on
+        /// boxed it into a new object on every call - a sixth of the cost of calling a one-argument Ruby
+        /// method. An Integer in -128..1023 comes from a cache of boxed ones instead (filled from the DLR's,
+        /// so they are the same objects the rest of the runtime hands out), and a Boolean is one of the
+        /// two shared ones. The type tests are constants per instantiation, so for any other T this is
+        /// the plain conversion.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static object Box<T>(T value) {
+            if (typeof(T) == typeof(int)) {
+                int i = Unsafe.As<T, int>(ref value);
+                object[] cache = _boxedSmallInts;
+                return ((uint)(i + 128) < (uint)cache.Length) ? cache[i + 128] : (object)i;
+            }
+            if (typeof(T) == typeof(bool)) {
+                return Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers.BooleanToObject(Unsafe.As<T, bool>(ref value));
+            }
+            return value;
+        }
+
         internal int Version;
 
         // A receiver that is not a Ruby object: nil (DynamicNull), true/false or a CLR object - its exact type, the version of its

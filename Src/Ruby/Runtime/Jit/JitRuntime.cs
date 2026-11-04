@@ -14,6 +14,9 @@ using IronRuby.Builtins;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Runtime.Jit {
+    using MSA = System.Linq.Expressions;
+    using Ast = System.Linq.Expressions.Expression;
+
     /// <summary>
     /// Thrown by specialized code when an assumption it was compiled under no longer holds
     /// (Fixnum arithmetic overflowing into Bignum, a division by zero that has to raise).
@@ -177,6 +180,21 @@ namespace IronRuby.Runtime.Jit {
             long m = a % b;
             if (m != 0 && ((m < 0) != (b < 0))) { m += b; }
             return m;
+        }
+
+        /// <summary>
+        /// A typed body's value as the object its entry returns: an Int32 or a Boolean comes out of
+        /// the shared boxes (the DLR's cache of small Integers, the two Booleans) rather than a new
+        /// box per call, the way every other place in the runtime makes one.
+        /// </summary>
+        internal static MSA.Expression/*!*/ BoxResult(MSA.Expression/*!*/ value) {
+            if (value.Type == typeof(int)) {
+                return Ast.Call(typeof(ScriptingRuntimeHelpers).GetMethod("Int32ToObject", new[] { typeof(int) }), value);
+            }
+            if (value.Type == typeof(bool)) {
+                return Ast.Call(typeof(ScriptingRuntimeHelpers).GetMethod("BooleanToObject", new[] { typeof(bool) }), value);
+            }
+            return Ast.Convert(value, typeof(object));
         }
 
         /// <summary>
