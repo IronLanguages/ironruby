@@ -1192,29 +1192,6 @@ namespace IronRuby.Runtime {
 
         #region Arrays, Hashes
 
-        // MRI checks for a subtype of RubyArray of subtypes of MutableString.
-        internal static RubyArray AsArrayOfStrings(object value) {
-            // a single String is a one-line backtrace
-            var single = value as MutableString;
-            if (single != null) {
-                var wrapped = new RubyArray(1);
-                wrapped.Add(single);
-                return wrapped;
-            }
-
-            RubyArray array = value as RubyArray;
-            if (array != null) {
-                foreach (object obj in array) {
-                    MutableString str = obj as MutableString;
-                    if (str == null) {
-                        return null;
-                    }
-                }
-                return array;
-            }
-            return null;
-        }
-
         public static object SetHashElement(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ obj, object key, object value) {
             MutableString str = key as MutableString;
             Hash hash = obj as Hash;

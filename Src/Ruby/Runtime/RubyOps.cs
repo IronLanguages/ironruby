@@ -2601,40 +2601,6 @@ namespace IronRuby.Runtime {
         }
 
         // TODO:
-        internal static bool ScopeContainsMember(Scope scope, string name) {
-            object storage = (object)scope.Storage;
-
-            var scopeStorage = storage as ScopeStorage;
-            if (scopeStorage != null) {
-                return scopeStorage.HasValue(name, false);
-            }
-
-            var stringDict = storage as StringDictionaryExpando;
-            if (stringDict != null) {
-                return stringDict.Dictionary.ContainsKey(name);
-            }
-
-            throw new NotImplementedException();
-        }
-
-        // TODO:
-        internal static bool ScopeDeleteMember(Scope scope, string name) {
-            object storage = (object)scope.Storage;
-
-            var scopeStorage = storage as ScopeStorage;
-            if (scopeStorage != null) {
-                return scopeStorage.DeleteValue(name, false);
-            }
-
-            var stringDict = storage as StringDictionaryExpando;
-            if (stringDict != null) {
-                return stringDict.Dictionary.Remove(name);
-            }
-
-            throw new NotImplementedException();
-        }
-
-        // TODO:
         internal static IList<KeyValuePair<string, object>> ScopeGetItems(Scope scope) {
             object storage = (object)scope.Storage;
 
@@ -4565,32 +4531,6 @@ namespace IronRuby.Runtime {
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static Type/*!*/ MakeObjectTupleType128() {
             return typeof(MutableTuple<object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object>);
-        }
-
-        internal static MutableTuple/*!*/ CreateObjectTuple(int fieldCount) {
-            Debug.Assert(fieldCount <= MutableTuple.MaxSize);
-            if (fieldCount <= 1) {
-                return new MutableTuple<object>();
-            } else if (fieldCount <= 2) {
-                return new MutableTuple<object, object>();
-            } else if (fieldCount <= 4) {
-                return new MutableTuple<object, object, object, object>();
-            } else if (fieldCount <= 8) {
-                return new MutableTuple<object, object, object, object, object, object, object, object>();
-            } else if (fieldCount <= 16) {
-                return new MutableTuple<object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object>();
-            } else if (fieldCount <= 32) {
-                return new MutableTuple<object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object>();
-            } else if (fieldCount <= 64) {
-                return new MutableTuple<object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object>();
-            } else {
-                return CreateObjectTuple128();
-            }
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static MutableTuple/*!*/ CreateObjectTuple128() {
-            return new MutableTuple<object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object>();
         }
 
         #endregion

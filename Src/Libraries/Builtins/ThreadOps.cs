@@ -135,10 +135,6 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
-            internal static void RegisterThread(Thread t) {
-                FromThread(t);
-            }
-
             /// <summary>Registers the calling thread; cheap once it is.</summary>
             internal static void RegisterCurrentThread() {
                 if (_current == null) {

@@ -195,16 +195,6 @@ namespace IronRuby.Runtime.Calls {
 
         #region Dynamic Sites
 
-        private static Type/*!*/ GetAssociatedSystemType(RubyModule/*!*/ module) {
-            if (module.IsClass) {
-                Type type = ((RubyClass)module).GetUnderlyingSystemType();
-                if (type != null) {
-                    return type;
-                }
-            }
-            return typeof(SuperCallAction);
-        }
-
         internal override void BuildSuperCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name, RubyModule/*!*/ declaringModule) {
             Assert.NotNull(declaringModule, metaBuilder, args);
             var visibleOverloads = GetVisibleOverloads(args, MethodBases, true);
