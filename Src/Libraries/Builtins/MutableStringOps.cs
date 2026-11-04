@@ -4957,7 +4957,7 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]MutableString/*!*/ format,
             [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-            var result = RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options));
+            var result = RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options), true);
             return result.Count > 0 ? result[0] : null;
         }
 
