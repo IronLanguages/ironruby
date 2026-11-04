@@ -1412,9 +1412,9 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            // `a[i]', `a.size', `a.length' in an outlined loop, a a local holding a plain Array the loop
-            // does not write: loaded once by the entry (JitCompiler.ArrayLocal).
-            if (node.Target is LocalVariable && _loop != null) {
+            // `a[i]', `a.size', `a.length', a a local holding a plain Array that the loop (or a parameter
+            // that the method) does not write: loaded once by the entry (JitCompiler.ArrayLocal).
+            if (node.Target is LocalVariable) {
                 var loaded = ArrayLocalRead(node);
                 if (loaded != null) { return EmitArrayRead(loaded.Value, args.Expressions[0], true, out type); }
                 if (argc == 0 && (node.MethodName == "size" || node.MethodName == "length") && ArrayMethodIsPlain(false) &&
