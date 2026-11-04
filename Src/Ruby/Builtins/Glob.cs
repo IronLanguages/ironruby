@@ -234,68 +234,131 @@ namespace IronRuby.Builtins {
         }
 
         public static bool FnMatch(string/*!*/ pattern, string/*!*/ path, int flags) {
-            if (pattern.Length == 0) {
-                return path.Length == 0;
-            }
-
-            if ((flags & Constants.FNM_EXTGLOB) != 0 && pattern.IndexOf('{') >= 0) {
-                // FNM_EXTGLOB turns brace expansion on for fnmatch?; the pattern matches when
-                // any one alternative does.
-                foreach (string group in UngroupGlobs(pattern, (flags & Constants.FNM_NOESCAPE) != 0)) {
-                    if (FnMatch(group, path, flags & ~Constants.FNM_EXTGLOB)) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-
-            bool pathName = ((flags & Constants.FNM_PATHNAME) != 0);
-            bool noEscape = ((flags & Constants.FNM_NOESCAPE) != 0);
-            bool noLeadingDot = pathName && (flags & Constants.FNM_DOTMATCH) == 0;
-            string regexPattern = PatternToRegex(pattern, pathName, noEscape, noLeadingDot);
-            if (regexPattern.Length == 0) {
-                return false;
-            }
-
-            if (!pathName && ((flags & Constants.FNM_DOTMATCH) == 0) && path.Length > 0 && path[0] == '.') {
-                // Starting dot requires an explicit dot in the pattern
-                if (regexPattern.Length < 4 || regexPattern[2] != '[' || regexPattern[3] != '.') {
-                    return false;
-                }
-            }
-
-            RegexOptions options = RegexOptions.None;
-            if ((flags & Constants.FNM_CASEFOLD) != 0) {
-                // MRI folds case the same in every locale; culture-invariant also keeps the cache below, keyed by
-                // the pattern alone, from handing one culture's regex to another
-                options |= RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
-            }
-            Match match = GetFnMatchRegex(regexPattern, options).Match(path);
-            return match != null && match.Success && (match.Length == path.Length);
+            return GetFnMatcher(pattern, flags).IsMatch(path);
         }
 
-        // The regexes of the last patterns matched. Not the static Regex.Match: its cache is keyed by a struct, and the
-        // ConcurrentDictionary code for that key is JIT-compiled the first time a process globs (rubygems does at startup).
-        private static readonly Dictionary<string, Regex>/*!*/ _fnMatchRegexes = new Dictionary<string, Regex>();
-        private static readonly Dictionary<string, Regex>/*!*/ _fnMatchRegexesIgnoreCase = new Dictionary<string, Regex>();
-        private const int FnMatchRegexCacheSize = 32;
+        /// <summary>
+        /// A pattern of File.fnmatch? / Dir.glob translated once for a given set of flags, so that
+        /// matching it against many names - every entry of a directory being globbed, or the same
+        /// pattern asked about again and again - does not translate it (and look its regex up)
+        /// for every name.
+        /// </summary>
+        private sealed class FnMatcher {
+            internal readonly string/*!*/ Pattern;
+            internal readonly int Flags;
 
-        private static Regex/*!*/ GetFnMatchRegex(string/*!*/ pattern, RegexOptions options) {
-            var cache = (options & RegexOptions.IgnoreCase) != 0 ? _fnMatchRegexesIgnoreCase : _fnMatchRegexes;
-            Regex regex;
-            lock (cache) {
-                if (cache.TryGetValue(pattern, out regex)) {
-                    return regex;
+            // Another matcher for the same pattern under different flags (the cache chains them).
+            internal FnMatcher Next;
+
+            // Brace alternatives under FNM_EXTGLOB: the pattern matches when any one does.
+            private readonly FnMatcher[] _alternatives;
+
+            // Null when nothing but the empty path (empty pattern) or nothing at all can match.
+            // The regex is only built when a name gets as far as needing it, as before (a name
+            // with a leading dot the pattern rejects never did).
+            private readonly string _regexPattern;
+            private readonly RegexOptions _regexOptions;
+            private Regex _regex;
+            private readonly bool _matchesOnlyEmpty;
+
+            // Without FNM_PATHNAME and FNM_DOTMATCH a leading dot in the path has to be matched
+            // by an explicit dot in the pattern.
+            private readonly bool _rejectsLeadingDot;
+
+            internal FnMatcher(string/*!*/ pattern, int flags) {
+                Pattern = pattern;
+                Flags = flags;
+
+                if (pattern.Length == 0) {
+                    _matchesOnlyEmpty = true;
+                    return;
+                }
+
+                if ((flags & Constants.FNM_EXTGLOB) != 0 && pattern.IndexOf('{') >= 0) {
+                    string[] groups = UngroupGlobs(pattern, (flags & Constants.FNM_NOESCAPE) != 0);
+                    _alternatives = new FnMatcher[groups.Length];
+                    for (int i = 0; i < groups.Length; i++) {
+                        _alternatives[i] = new FnMatcher(groups[i], flags & ~Constants.FNM_EXTGLOB);
+                    }
+                    return;
+                }
+
+                bool pathName = ((flags & Constants.FNM_PATHNAME) != 0);
+                bool noEscape = ((flags & Constants.FNM_NOESCAPE) != 0);
+                bool noLeadingDot = pathName && (flags & Constants.FNM_DOTMATCH) == 0;
+                string regexPattern = PatternToRegex(pattern, pathName, noEscape, noLeadingDot);
+                if (regexPattern.Length == 0) {
+                    return;
+                }
+
+                if (!pathName && ((flags & Constants.FNM_DOTMATCH) == 0)) {
+                    // Starting dot requires an explicit dot in the pattern
+                    _rejectsLeadingDot = regexPattern.Length < 4 || regexPattern[2] != '[' || regexPattern[3] != '.';
+                }
+
+                RegexOptions options = RegexOptions.None;
+                if ((flags & Constants.FNM_CASEFOLD) != 0) {
+                    // MRI folds case the same in every locale
+                    options |= RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+                }
+                _regexPattern = regexPattern;
+                _regexOptions = options;
+            }
+
+            internal bool IsMatch(string/*!*/ path) {
+                if (_alternatives != null) {
+                    foreach (FnMatcher alternative in _alternatives) {
+                        if (alternative.IsMatch(path)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                if (_regexPattern == null) {
+                    return _matchesOnlyEmpty && path.Length == 0;
+                }
+
+                if (_rejectsLeadingDot && path.Length > 0 && path[0] == '.') {
+                    return false;
+                }
+
+                // a race only builds the same regex twice
+                Regex regex = _regex ?? (_regex = new Regex(_regexPattern, _regexOptions));
+                Match match = regex.Match(path);
+                return match.Success && (match.Length == path.Length);
+            }
+        }
+
+        // The matchers of the last patterns matched, by pattern; the ones for the same pattern
+        // under other flags hang off FnMatcher.Next. Not the static Regex.Match cache: its key is
+        // a struct, and the ConcurrentDictionary code for that key is JIT-compiled the first time
+        // a process globs (rubygems does at startup).
+        private static readonly Dictionary<string, FnMatcher>/*!*/ _fnMatchers = new Dictionary<string, FnMatcher>();
+        private const int FnMatcherCacheSize = 32;
+
+        private static FnMatcher/*!*/ GetFnMatcher(string/*!*/ pattern, int flags) {
+            FnMatcher first;
+            lock (_fnMatchers) {
+                if (_fnMatchers.TryGetValue(pattern, out first)) {
+                    for (FnMatcher m = first; m != null; m = m.Next) {
+                        if (m.Flags == flags) {
+                            return m;
+                        }
+                    }
                 }
             }
-            regex = new Regex(pattern, options);
-            lock (cache) {
-                if (cache.Count >= FnMatchRegexCacheSize) {
-                    cache.Clear();
+
+            var matcher = new FnMatcher(pattern, flags);
+            lock (_fnMatchers) {
+                if (_fnMatchers.Count >= FnMatcherCacheSize) {
+                    _fnMatchers.Clear();
                 }
-                cache[pattern] = regex;
+                FnMatcher existing;
+                matcher.Next = _fnMatchers.TryGetValue(pattern, out existing) ? existing : null;
+                _fnMatchers[pattern] = matcher;
             }
-            return regex;
+            return matcher;
         }
 
         private class GlobUngrouper {
@@ -745,9 +808,10 @@ namespace IronRuby.Builtins {
                     entries = sorted;
                 }
 
+                FnMatcher segmentMatcher = GetFnMatcher(dirSegment, _flags);
                 foreach (string file in entries) {
                     string objectName = Path.GetFileName(file);
-                    if (FnMatch(dirSegment, objectName, _flags)) {
+                    if (segmentMatcher.IsMatch(objectName)) {
                         var canon = RubyUtils.CanonicalizePath(file);
                         if (doubleStar && IsSymbolicLinkToDirectory(canon)) {
                             // A recursive "**" neither reports a symlinked directory nor walks
@@ -767,7 +831,7 @@ namespace IronRuby.Builtins {
                     ((_flags & Constants.FNM_DOTMATCH) != 0 || (dirSegment[0] == '.' && !isPreviousDoubleStar))) {
                     // "." is a legitimate glob result but ".." is not: Dir[".*"] is
                     // [".", ".dotfile", ...] with no "..".
-                    if (FnMatch(dirSegment, ".", _flags)) {
+                    if (segmentMatcher.IsMatch(".")) {
                         string directory = Combine(baseDirectory, ".");
                         if (isLastPathSegment && _dirOnly) {
                             directory += '/';
