@@ -173,7 +173,7 @@ namespace IronRuby.Builtins {
             }
 
             public override bool ContainsInvalidCharacters() {
-                return Utils.ContainsInvalidCharacters(_data.ToCharArray(), 0, _data.Length, _owner._encoding.StrictEncoding);
+                return Utils.ContainsInvalidCharacters(_data.AsSpan(), _owner._encoding.StrictEncoding);
             }
 
             #endregion

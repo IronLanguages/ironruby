@@ -1071,7 +1071,14 @@ class Array
   # Array has its own #sum in MRI rather than inheriting Enumerable's, and code in the
   # wild checks which one it gets. The body is Enumerable's. (#max and #min are Array's
   # own in C#, see IListOps: Enumerable's go through #each and a Proc per element.)
-  def sum(*args, &block) = super
+  # An Array of Integers and Floats is summed in C# (ArrayOps.NumericSum), the same way.
+  def sum(*args, &block)
+    if block.nil? && args.size <= 1
+      result = __numeric_sum__(args.empty? ? 0 : args[0])
+      return result unless result.nil?
+    end
+    super
+  end
 
   def intersect?(other)
     !(self & other).empty?
@@ -11978,14 +11985,8 @@ class Hash
     nil
   end
 
-  # #slice must not go through an overridden #[].
-  def slice(*wanted)
-    snapshot = __result_hash__
-    each { |k, v| snapshot[k] = v }
-    result = __result_hash__
-    wanted.each { |k| result[k] = snapshot[k] if snapshot.key?(k) }
-    result
-  end
+  # #slice and #except are HashOps' (C#): they read the table itself, so an overridden #[]
+  # takes no part, without first copying the whole hash.
 
   # Hash#eql? (and the value comparison Hash#== performs) - compares sizes,
   # then looks each key up with eql?/hash semantics and compares values with
@@ -12936,10 +12937,15 @@ class Range
     [min, max]
   end
 
-  # Enumerable#count would walk an endless range forever.
+  # Enumerable#count would walk an endless range forever. An Integer range is counted
+  # without walking it at all, from #size, as CRuby's range_count does.
   def count(*args, &block)
     return super if block || !args.empty?
     return Float::INFINITY if self.begin.nil? || self.end.nil?
+    if self.begin.is_a?(Integer)
+      n = size
+      return n unless n.nil?
+    end
     super
   end
 

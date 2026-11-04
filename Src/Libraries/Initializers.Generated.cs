@@ -536,6 +536,11 @@ namespace IronRuby.Builtins {
         
         private static void LoadArray_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             LoadSystem__Collections__IList_Instance(module);
+            DefineLibraryMethod(module, "__numeric_sum__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Collections.IList, System.Object, System.Object>(IronRuby.Builtins.ArrayOps.NumericSum)
+            );
+            
             DefineLibraryMethod(module, "initialize", 0x52, 
                 new[] { 0x00000000U, 0x00000008U, 0x00000000U, 0x00000000U, 0x00020000U, 0x00000004U}, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ArrayOps.Reinitialize), 
@@ -2978,6 +2983,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Object, System.Object>(IronRuby.Builtins.HashOps.SetDefaultValue)
             );
             
+            DefineLibraryMethod(module, "except", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.Hash, System.Object[], IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Except)
+            );
+            
             DefineLibraryMethod(module, "hash", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Builtins.Hash, System.Int32>(IronRuby.Builtins.HashOps.GetHashCode)
@@ -2996,6 +3006,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, IronRuby.Builtins.Hash, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.InitializeCopy)
             );
             
+            DefineLibraryMethod(module, "key", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Builtins.Hash, System.Object, System.Object>(IronRuby.Builtins.HashOps.GetKey)
+            );
+            
             DefineLibraryMethod(module, "replace", 0x51, 
                 0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Replace)
@@ -3004,6 +3019,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "shift", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.Hash, System.Object, System.Object>>, IronRuby.Builtins.Hash, System.Object>(IronRuby.Builtins.HashOps.Shift)
+            );
+            
+            DefineLibraryMethod(module, "slice", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Object[], IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Slice)
             );
             
         }
@@ -9497,8 +9517,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "shift", 0x51, 
-                0x00000000U, 
-                new Func<System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.Shift)
+                0x00000000U, 0x00000000U, 
+                new Func<System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.Shift), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, System.Collections.IList, System.Object, System.Object>(IronRuby.Builtins.IListOps.Shift)
             );
             
             DefineLibraryMethod(module, "shuffle", 0x51, 

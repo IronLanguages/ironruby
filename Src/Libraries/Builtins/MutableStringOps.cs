@@ -3378,32 +3378,71 @@ namespace IronRuby.Builtins {
 
             // The bytes match, but MRI also insists that they end on a character boundary:
             // "\xC3\xA9" does not start with "\xC3" even though its first byte is one.
-            return EndsOnCharacterBoundary(self, prefix);
+            return EndsOnCharacterBoundary(self, prefix, true);
         }
 
         /// <summary>
         /// True when <paramref name="byteOffset"/> is the start of a character of
-        /// <paramref name="self"/> (or its very end).
+        /// <paramref name="self"/> (or its very end). <paramref name="rightBoundary"/> asks it the way
+        /// #start_with? does - is the offset the end of the character before it - rather than the way
+        /// #end_with? does; the two differ on bytes that are invalid in the encoding.
         /// </summary>
-        private static bool EndsOnCharacterBoundary(MutableString/*!*/ self, int byteOffset) {
+        private static bool EndsOnCharacterBoundary(MutableString/*!*/ self, int byteOffset, bool rightBoundary) {
             if (byteOffset == 0) {
                 return true;
             }
 
-            // UTF-8 is walked on its bytes, and only as far as the offset: enumerating the characters
-            // switches the whole string to characters (and #start_with? just read it as bytes).
-            if (self.Encoding == RubyEncoding.UTF8) {
-                int n = Math.Min(self.GetByteCount(), byteOffset + 4);
-                byte[] head = self.GetBinarySlice(0, n);
-                int offset = 0;
-                while (offset < byteOffset) {
-                    System.Text.Rune rune;
-                    int consumed;
-                    var status = System.Text.Rune.DecodeFromUtf8(new ReadOnlySpan<byte>(head, offset, n - offset), out rune, out consumed);
-                    // each byte of an invalid sequence is a character of its own:
-                    offset += (status == System.Buffers.OperationStatus.Done) ? consumed : 1;
+            // Every byte of a single byte encoding is a character of its own, so every offset
+            // is a boundary. Walking the characters below would allocate once per character.
+            RubyEncoding encoding = self.Encoding;
+            if (encoding.CodePage == RubyEncoding.CodePageBinary || encoding.CodePage == RubyEncoding.CodePageAscii ||
+                encoding.CodePage == 28591 || encoding.IsSingleByteCharacterSet) {
+                return true;
+            }
+
+            // UTF-8 is read on its bytes, and only around the offset: enumerating the characters
+            // switches the whole string to characters (and walking it from the start made
+            // #end_with? linear in its length). The two tests are CRuby's, which differ:
+            if (encoding == RubyEncoding.UTF8) {
+                int length = self.GetByteCount();
+                if (byteOffset >= length || !IsUtf8ContinuationByte(self.GetByte(byteOffset))) {
+                    return true;
                 }
-                return offset == byteOffset;
+                if (!rightBoundary) {
+                    // #end_with? (at_char_boundary): the suffix has to start on a lead byte.
+                    return false;
+                }
+
+                // #start_with? (at_char_right_boundary): back up to the lead byte of the character
+                // the offset is inside of, and step over that character, as Onigmo's
+                // right_adjust_char_head does - a sequence the string ends in the middle of counts
+                // with the length its lead byte announces, and an invalid byte as one byte. A lead
+                // byte more than 4 bytes back cannot reach the offset at all.
+                int lead = byteOffset - 1;
+                while (lead > 0 && IsUtf8ContinuationByte(self.GetByte(lead))) {
+                    if (byteOffset - lead >= 4) {
+                        return false;
+                    }
+                    lead--;
+                }
+
+                int n = Math.Min(length - lead, 4);
+                byte[] head = self.GetBinarySlice(lead, n);
+                System.Text.Rune rune;
+                int consumed;
+                int characterLength;
+                switch (System.Text.Rune.DecodeFromUtf8(head, out rune, out consumed)) {
+                    case System.Buffers.OperationStatus.Done:
+                        characterLength = consumed;
+                        break;
+                    case System.Buffers.OperationStatus.NeedMoreData:
+                        characterLength = head[0] >= 0xF0 ? 4 : head[0] >= 0xE0 ? 3 : 2;
+                        break;
+                    default:
+                        characterLength = 1;
+                        break;
+                }
+                return lead + characterLength == byteOffset;
             }
 
             int at = 0;
@@ -3415,6 +3454,10 @@ namespace IronRuby.Builtins {
                 }
             }
             return at == byteOffset;
+        }
+
+        private static bool IsUtf8ContinuationByte(byte b) {
+            return (b & 0xC0) == 0x80;
         }
 
         [RubyMethod("end_with?")]
@@ -3446,7 +3489,7 @@ namespace IronRuby.Builtins {
 
             // ... and the suffix has to begin on a character boundary: "\xC3\xA9" does not end
             // with "\xA9".
-            return EndsOnCharacterBoundary(self, self.GetByteCount() - suffix);
+            return EndsOnCharacterBoundary(self, self.GetByteCount() - suffix, false);
         }
 
         #endregion
@@ -4937,38 +4980,27 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("sum")]
         public static object GetChecksum(MutableString/*!*/ self, [DefaultProtocol, DefaultParameterValue(16)]int bitCount) {
+            // The plain total of the bytes cannot overflow 64 bits (that would take 2^56 bytes),
+            // and adding modulo 2^64 then masking gives the same low bits as masking each step,
+            // so one pass with no overflow checks covers every bit count.
+            // The bytes are read a chunk at a time: one GetByte call per byte cost more than the sum.
+            const int ChunkSize = 8192;
             int length = self.GetByteCount();
+            ulong sum = 0;
+            for (int start = 0; start < length; start += ChunkSize) {
+                byte[] chunk = self.GetBinarySlice(start, Math.Min(ChunkSize, length - start));
+                for (int i = 0; i < chunk.Length; i++) {
+                    sum += chunk[i];
+                }
+            }
+
             // An n of zero or less asks for no mask at all rather than for a mask of no bits, so
             // "xyz".sum(0) is the plain total of the bytes.
-            uint mask = (bitCount <= 0 || bitCount > 31) ? 0xffffffff : (1U << bitCount) - 1;
-            uint sum = 0;
-            for (int i = 0; i < length; i++) {
-                byte b = self.GetByte(i);
-                try {
-                    checked { sum = (sum + b) & mask; }
-                } catch (OverflowException) {
-                    return GetBigChecksum(self, i, sum, bitCount);
-                }
+            if (bitCount > 0 && bitCount < 64) {
+                sum &= (1UL << bitCount) - 1;
             }
 
-            return (sum > Int32.MaxValue) ? (BigInteger)sum : (object)(int)sum;
-        }
-
-        private static BigInteger GetBigChecksum(MutableString/*!*/ self, int start, BigInteger/*!*/ sum, int bitCount) {
-            int length = self.GetByteCount();
-            if (bitCount <= 0) {
-                for (int i = start; i < length; i++) {
-                    sum += self.GetByte(i);
-                }
-                return sum;
-            }
-
-            BigInteger mask = (((BigInteger)1) << bitCount) - 1;
-
-            for (int i = start; i < length; i++) {
-                sum = (sum + self.GetByte(i)) & mask;
-            }
-            return sum;
+            return (sum > Int32.MaxValue) ? (object)(BigInteger)sum : (object)(int)sum;
         }
 
         #endregion

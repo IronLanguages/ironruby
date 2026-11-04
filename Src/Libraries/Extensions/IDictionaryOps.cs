@@ -290,36 +290,18 @@ namespace IronRuby.Builtins {
             if (self.Count > 0) {
                 bool yieldPair = IsPairYieldOptimizable(block);
 
-                // A Ruby Hash: keys and values come out of one pass over its entries, and each value
-                // is used as is while the block leaves the hash alone; once it mutates it, the rest is
-                // looked up as below. That is the same answer without hashing every key a second
-                // time - which, for a key of a Ruby class, was a #hash and an #eql? call per entry.
-                // Adding a key is what MRI forbids while a hash is being iterated, and the Hash
-                // itself raises for that between BeginIteration and EndIteration.
+                // A Ruby Hash is walked in place, entry by entry (see Hash.TryGetNextEntry): a value
+                // the block replaces is seen replaced, a key it deletes is skipped, and adding a key
+                // raises between BeginIteration and EndIteration, as in MRI. Copying the entries up
+                // front instead made every iteration O(n) before its first yield, so {...}.first(1)
+                // or an #each the block breaks out of early paid for the whole hash.
                 var hash = self as Hash;
                 if (hash != null) {
-                    int count = hash.Count;
-                    object[] hashKeys = new object[count];
-                    object[] hashValues = new object[count];
-                    hash.CopyKeysAndValues(hashKeys, hashValues);
-                    int stamp = hash.MutationStamp;
                     hash.BeginIteration();
                     try {
-                        for (int i = 0; i < count; i++) {
-                            object key = hashKeys[i];
-                            object value;
-                            if (hash.MutationStamp == stamp) {
-                                value = hashValues[i];
-                            } else if (!hash.TryGetValue(key, out value)) {
-                                if (hash.Count < count) {
-                                    // deleted by the block before its turn came: MRI skips it
-                                    continue;
-                                }
-                                // a key whose hash has drifted since it was stored, a Hash that is
-                                // its own key being the usual case: MRI walks the table and still
-                                // visits it
-                                value = hashValues[i];
-                            }
+                        int index = 0;
+                        object key, value;
+                        while (hash.TryGetNextEntry(ref index, out key, out value)) {
                             object result;
                             if (yieldPair
                                 ? block.Yield(CustomStringDictionary.ObjToNull(key), value, out result)
@@ -377,27 +359,35 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_key")]
         public static object EachKey(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
-                // See Each: a copy of the entries, deleted ones skipped, no new ones allowed.
-                var pairs = CopyKeyValuePairs(self);
-
+                // See Each: a Hash is walked in place, deleted entries skipped, no new ones allowed.
                 Hash hash = self as Hash;
                 if (hash != null) {
                     hash.BeginIteration();
-                }
-                try {
-                    for (int i = 0; i < pairs.Length; i++) {
-                        object value;
-                        if (!TryGetCurrentValue(self, pairs, i, out value)) {
-                            continue;
+                    try {
+                        int index = 0;
+                        object key, value;
+                        while (hash.TryGetNextEntry(ref index, out key, out value)) {
+                            object result;
+                            if (block.Yield(CustomStringDictionary.ObjToNull(key), out result)) {
+                                return result;
+                            }
                         }
-                        object result;
-                        if (block.Yield(CustomStringDictionary.ObjToNull(pairs[i].Key), out result)) {
-                            return result;
-                        }
-                    }
-                } finally {
-                    if (hash != null) {
+                    } finally {
                         hash.EndIteration();
+                    }
+                    return self;
+                }
+
+                // Any other IDictionary: a copy of the entries, the deleted ones skipped.
+                var pairs = CopyKeyValuePairs(self);
+                for (int i = 0; i < pairs.Length; i++) {
+                    object value;
+                    if (!TryGetCurrentValue(self, pairs, i, out value)) {
+                        continue;
+                    }
+                    object result;
+                    if (block.Yield(CustomStringDictionary.ObjToNull(pairs[i].Key), out result)) {
+                        return result;
                     }
                 }
             }
@@ -413,27 +403,35 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_value")]
         public static object EachValue(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
-                // See Each: a copy of the entries, deleted ones skipped, no new ones allowed.
-                var pairs = CopyKeyValuePairs(self);
-
+                // See Each: a Hash is walked in place, deleted entries skipped, no new ones allowed.
                 Hash hash = self as Hash;
                 if (hash != null) {
                     hash.BeginIteration();
-                }
-                try {
-                    for (int i = 0; i < pairs.Length; i++) {
-                        object value;
-                        if (!TryGetCurrentValue(self, pairs, i, out value)) {
-                            continue;
+                    try {
+                        int index = 0;
+                        object key, value;
+                        while (hash.TryGetNextEntry(ref index, out key, out value)) {
+                            object result;
+                            if (block.Yield(value, out result)) {
+                                return result;
+                            }
                         }
-                        object result;
-                        if (block.Yield(value, out result)) {
-                            return result;
-                        }
-                    }
-                } finally {
-                    if (hash != null) {
+                    } finally {
                         hash.EndIteration();
+                    }
+                    return self;
+                }
+
+                // Any other IDictionary: a copy of the entries, the deleted ones skipped.
+                var pairs = CopyKeyValuePairs(self);
+                for (int i = 0; i < pairs.Length; i++) {
+                    object value;
+                    if (!TryGetCurrentValue(self, pairs, i, out value)) {
+                        continue;
+                    }
+                    object result;
+                    if (block.Yield(value, out result)) {
+                        return result;
                     }
                 }
             }

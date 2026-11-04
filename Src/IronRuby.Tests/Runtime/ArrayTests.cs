@@ -264,5 +264,55 @@ p o.to_a, o.each_slice(2).to_a
 
             Assert(result.Length == 1 && (int)result[0] == 123);
         }
+
+        /// <summary>
+        /// Array#sum of Integers and Floats (ArrayOps.NumericSum), Array#min/max of Fixnums while
+        /// Integer#&lt;=&gt; is the built-in one, Array#shift(n) and Range#count of an Integer range: the
+        /// same answers as the general paths, a redefined Integer#&lt;=&gt; is still called, and a frozen
+        /// array raises FrozenError before the count is converted.
+        /// </summary>
+        public void Array_NumericSumMinShift1() {
+            TestOutput(@"
+require 'ruby4'
+p [[1, 2, 3].sum, [].sum, [].sum(0.0), [2**62, 2**62, 2**62].sum, [2**64, 1, -(2**64)].sum]
+p [([0.1] * 10).sum, [1, 0.1, 2, 0.2, 3**40].sum, [1, 2].sum(0.5), [1, 0.1, 0.2].sum(0.5), [1, 2].sum(2**70)]
+p [[1.0, Float::INFINITY, 2].sum, [Float::INFINITY, -Float::INFINITY].sum.nan?, [1.0, Float::NAN].sum.nan?, [-Float::INFINITY, 1.0].sum]
+p [[1, 2r, 0.5].sum, [""a"", ""b""].sum(""""), [1, 2].sum { |x| x * 2 }, [3, 1, 2].min, [3, 1, 2**70, 2].max, [3, 1.5, 2].min, [-3, -1, -2].max]
+p(([3, nil].min rescue $!.class))
+class Integer
+  alias __test_cmp <=>
+  def <=>(o) = -__test_cmp(o)
+end
+p [3, 1, 2].min, [3, 1, 2].max
+class Integer
+  alias <=> __test_cmp
+  remove_method :__test_cmp
+end
+p [3, 1, 2].min
+a = [1, 2, 3, 4]
+p a.shift(2), a, a.shift(0), a.shift(5), a.shift(1), a.shift
+p(([1].freeze.shift(nil) rescue $!.class), ([1].shift(-1) rescue $!.class), ([1].shift(nil) rescue $!.class))
+p [(1..10).count, (1...10).count, (5..1).count, (1..).count, (""a""..""c"").count, (1..10).count(3), (1..3.5).count]
+", @"
+[6, 0, 0.0, 13835058055282163712, 1]
+[1.0, 1.2157665459056929e+19, 3.5, 1.8, 1180591620717411303427]
+[Infinity, true, true, -Infinity]
+[3.5, ""ab"", 6, 1, 1180591620717411303424, 1.5, -1]
+ArgumentError
+3
+1
+1
+[1, 2]
+[]
+[]
+[3, 4]
+[]
+nil
+FrozenError
+ArgumentError
+TypeError
+[10, 9, 0, Infinity, 3, 1, 3]
+");
+        }
     }
 }
