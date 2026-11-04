@@ -1047,7 +1047,7 @@ class Integer
       return (other < 0 ? ::Float::INFINITY : 0.0) if self == 0
       return 1.0 if self == 1
       if self < 0 && ::Float.__ir_fractional__(other)
-        return ::Complex.__polar_pi__((-to_f) ** other, other)
+        return ::Complex.__polar_pi__((-to_f).__send__(:__ir_float_pow__, other), other)
       end
       __ir_pow__(other)
     else
@@ -1060,10 +1060,15 @@ class Float
   # Float#** is C# (ClrFloat.Power): a Float or Integer power of a Float is Math.Pow there.
   # These are the two cases it hands back.
 
+  # The C# Float#**, under a name a wrapper of Float#** does not replace: the magnitude
+  # below is computed by it, so a wrapper runs once per call, as in MRI.
+  alias_method :__ir_float_pow__, :**
+  private :__ir_float_pow__
+
   # rb_float_pow: a negative base to a power that is not whole leaves the real line.
   # (-self) is positive, so its ** stays in C#.
   def __ir_pow_complex__(other)
-    ::Complex.__polar_pi__((-self) ** other, other)
+    ::Complex.__polar_pi__((-self).__send__(:__ir_float_pow__, other), other)
   end
   private :__ir_pow_complex__
 
