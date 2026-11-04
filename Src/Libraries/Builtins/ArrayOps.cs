@@ -399,14 +399,7 @@ namespace IronRuby.Builtins {
                 if (!HasBuiltinComparison(stringClass)) {
                     return false;
                 }
-                if (allAscii) {
-                    // Two ASCII strings compare by their bytes whatever their encodings (String#<=>,
-                    // MutableString.CompareTo), and their bytes are their UTF-16 code units: an ordinal
-                    // compare of the CLR strings - vectorized, no encoding checks per pair - is that compare.
-                    var asciiKeys = new AsciiStringKey[count];
-                    for (int i = 0; i < count; i++) {
-                        asciiKeys[i] = new AsciiStringKey(((MutableString)self[i]).ToString());
-                    }
+                if (allAscii && TryMakeAsciiKeys(self, out AsciiStringKey[] asciiKeys)) {
                     SortByKeys(self, asciiKeys);
                 } else {
                     SortByKeys(self, keys);
@@ -451,6 +444,35 @@ namespace IronRuby.Builtins {
 
         // A struct, so that the generic sort below is compiled for it and calls MutableString.CompareTo
         // directly; over the class itself it would share one body and dispatch every comparison.
+        // The most characters the keys below copy, all elements together: past it the copy is not
+        // worth what it saves, and the general comparison (which copies nothing) is used.
+        private const long MaxAsciiKeyChars = 16 * 1024 * 1024;
+
+        /// <summary>
+        /// Two ASCII strings compare by their bytes whatever their encodings (String#<=>,
+        /// MutableString.CompareTo), and their bytes are their UTF-16 code units: an ordinal compare
+        /// of the CLR strings - vectorized, no encoding checks per pair - is that compare. Each
+        /// element is copied, an element the array holds many times once per occurrence, so the copies
+        /// are capped in total (MaxAsciiKeyChars): 1000 references to one 1 MB string sort the general way.
+        /// </summary>
+        private static bool TryMakeAsciiKeys(RubyArray/*!*/ self, out AsciiStringKey[] keys) {
+            int count = self.Count;
+            long total = 0;
+            for (int i = 0; i < count; i++) {
+                total += ((MutableString)self[i]).GetLength(); // chars or bytes: the same for ASCII
+                if (total > MaxAsciiKeyChars) {
+                    keys = null;
+                    return false;
+                }
+            }
+
+            keys = new AsciiStringKey[count];
+            for (int i = 0; i < count; i++) {
+                keys[i] = new AsciiStringKey(((MutableString)self[i]).ToString());
+            }
+            return true;
+        }
+
         private struct AsciiStringKey : IComparable<AsciiStringKey> {
             private readonly string/*!*/ _value;
             public AsciiStringKey(string/*!*/ value) { _value = value; }
