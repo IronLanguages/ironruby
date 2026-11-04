@@ -3758,13 +3758,8 @@ class String
       end
     end
 
-    binary = dup
-    binary.force_encoding(::Encoding::BINARY) if binary.respond_to?(:force_encoding)
-    piece = str.dup
-    piece.force_encoding(::Encoding::BINARY) if piece.respond_to?(:force_encoding)
-    result = binary[0, index] + piece + binary[(index + length)..-1].to_s
-    result.force_encoding(target_encoding) if result.respond_to?(:force_encoding)
-    replace(result)
+    # in place, in C# (MutableStringOps.ByteSpliceInPlace)
+    __ir_bytesplice__(index, length, str, target_encoding)
   end unless method_defined?(:bytesplice)
 
   # MRI refuses a byte offset that falls inside a character.

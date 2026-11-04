@@ -4944,6 +4944,29 @@ namespace IronRuby.Builtins {
 
         #region unpack
 
+        /// <summary>
+        /// The splice String#bytesplice (ruby4.rb) ends with, once it has checked its arguments, the
+        /// character boundaries and the encodings: the bytes [index, index + length) replaced by
+        /// <paramref name="piece"/>'s, in place, and the result tagged with <paramref name="encoding"/>.
+        /// It used to rebuild the string from a dup, two slices and two concatenations, five copies of
+        /// the whole receiver per call, which made an encoder splicing length prefixes into a growing
+        /// buffer quadratic.
+        /// </summary>
+        [RubyMethod("__ir_bytesplice__", RubyMethodAttributes.PrivateInstance)]
+        public static MutableString/*!*/ ByteSpliceInPlace(MutableString/*!*/ self, int index, int length,
+            [NotNull]MutableString/*!*/ piece, [NotNull]RubyEncoding/*!*/ encoding) {
+
+            // refused whatever is replaced, an empty range too, as rb_str_modify does
+            self.RequireNotFrozen();
+            // a copy first: the piece may be self
+            byte[] bytes = piece.ToByteArray();
+            self.SwitchToBytes();
+            self.Remove(index, length);
+            self.Insert(index, bytes);
+            self.ForceEncoding(encoding);
+            return self;
+        }
+
         [RubyMethod("unpack")]
         public static RubyArray/*!*/ Unpack(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, MutableString/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ format,
