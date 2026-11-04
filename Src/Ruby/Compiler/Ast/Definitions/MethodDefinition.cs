@@ -21,6 +21,7 @@ using MSA = Microsoft.Scripting.Ast;
 
 using System;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
@@ -172,7 +173,7 @@ namespace IronRuby.Compiler.Ast {
         internal MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule,
             StrongBox<RefinementActivation> definitionRefinements) {
             return TransformBody(gen, ExactConstant(declaringScope, typeof(RubyScope)), ExactConstant(declaringModule, typeof(RubyModule)),
-                QualifyFrameLabel(_name, declaringModule), definitionRefinements);
+                QualifyFrameLabel(_name, declaringModule), definitionRefinements, true);
         }
 
         /// <summary>
@@ -193,6 +194,15 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, MSA.Expression/*!*/ declaringScope, MSA.Expression/*!*/ declaringModule,
             string/*!*/ frameLabel, StrongBox<RefinementActivation> definitionRefinements) {
+            return TransformBody(gen, declaringScope, declaringModule, frameLabel, definitionRefinements, false);
+        }
+
+        /// <summary>
+        /// <paramref name="allowLightFrame"/>: whether the body may be a light frame (see TransformLightFrame),
+        /// whose scope description is an object constant - so not where the body is compiled ahead of time.
+        /// </summary>
+        private MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, MSA.Expression/*!*/ declaringScope, MSA.Expression/*!*/ declaringModule,
+            string/*!*/ frameLabel, StrongBox<RefinementActivation> definitionRefinements, bool allowLightFrame) {
             string encodedName = RubyStackTraceBuilder.EncodeMethodName(frameLabel, gen.SourcePath, Location, gen.DebugMode);
 
             // a body built on demand adds its locals to the scope: build it before they are allocated
@@ -274,18 +284,31 @@ namespace IronRuby.Compiler.Ast {
                 countCall = AstUtils.Empty();
             }
 
+            MSA.Expression optionalsInitialization = _parameters.TransformOptionalsInitialization(gen);
+            MSA.Expression statements = methodBody.TransformResult(gen, ResultOperation.Return);
+
+            // A body that never needs its scope makes none (see TransformLightFrame).
+            LightFrame light = null;
+            if (allowLightFrame && LightFramesEnabled && definitionRefinements == null && gen.Profiler == null && !gen.TraceEnabled &&
+                !gen.CompilerOptions.IsEval && !scope.HasClosures && IsLightFrameCandidate()) {
+                light = TransformLightFrame(gen, scope, scopeVariable, selfParameter, blockParameter, declaringScope, declaringModule,
+                    visiblePrameterCountAndSignatureFlags, ref statements);
+            }
+
             MSA.Expression body = AstUtils.Try(
                 countCall,
                 recordRefinements,
                 profileStart,
-                _parameters.TransformOptionalsInitialization(gen),
+                optionalsInitialization,
                 traceCall,
-                methodBody.TransformResult(gen, ResultOperation.Return)
-            ).Filter(unwinder = Ast.Parameter(typeof(Exception), "#u"), Methods.IsMethodUnwinderTargetFrame.OpCall(scopeVariable, unwinder),
+                statements
+            ).Filter(unwinder = Ast.Parameter(typeof(Exception), "#u"),
+                // a light frame makes a scope for the filter only when an exception passes, as a block's does:
+                Methods.IsMethodUnwinderTargetFrame.OpCall((light != null) ? Ast.Coalesce(scopeVariable, light.MakeScope()) : (MSA.Expression)scopeVariable, unwinder),
                 Ast.Return(gen.ReturnLabel, Methods.GetMethodUnwinderReturnValue.OpCall(unwinder))
             ).Finally(  
                 // leave frame:
-                Methods.LeaveMethodFrame.OpCall(scopeVariable),
+                (light != null) ? Methods.LeaveLightMethodFrame.OpCall(light.Rfc, scopeVariable) : Methods.LeaveMethodFrame.OpCall(scopeVariable),
                 Ast.Empty(),
                 profileEnd,
                 traceReturn
@@ -294,7 +317,7 @@ namespace IronRuby.Compiler.Ast {
             // TracePoint :return: falling off the end reports the line of `end'; an explicit
             // `return' reports its own line and jumps past this hook (see ReturnStatement).
             if (gen.Traceable) {
-                body = new TraceReturnExpression(scopeVariable, gen.AddReturnTarget(body), TraceEvents.Return, gen.SourcePath, Location.End.Line);
+                body = new TraceReturnExpression((light != null) ? light.LazyScope : scopeVariable, gen.AddReturnTarget(body), TraceEvents.Return, gen.SourcePath, Location.End.Line);
                 if (gen.CurrentMethod.ExplicitReturnLabel != null) {
                     body = Ast.Label(gen.CurrentMethod.ExplicitReturnLabel, body);
                 }
@@ -304,7 +327,7 @@ namespace IronRuby.Compiler.Ast {
 
             body = scope.CreateScope(
                 scopeVariable,
-                Methods.CreateMethodScope.OpCall(new AstExpressions {
+                (light != null) ? light.Enter(scope) : Methods.CreateMethodScope.OpCall(new AstExpressions {
                     scope.MakeLocalsStorage(),
                     scope.GetVariableNamesExpression(),
                     Ast.Constant(visiblePrameterCountAndSignatureFlags),
@@ -321,6 +344,229 @@ namespace IronRuby.Compiler.Ast {
 
             return CreateLambda(encodedName, parameters, body);
         }
+
+        #region Light frames
+
+        /// <summary>
+        /// IR_LIGHT_FRAMES=0 turns light frames off, to compare against or to rule them out; IR_LIGHT_FRAMES=verbose
+        /// names on stderr each method compiled as one, and each candidate whose transformed body needed its scope.
+        /// </summary>
+        internal static readonly bool LightFramesEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") != "0";
+        private static readonly bool LightFramesVerbose = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
+
+        /// <summary>
+        /// The pieces of a method body that runs without a RubyMethodScope (see TransformLightFrame).
+        /// </summary>
+        private sealed class LightFrame {
+            internal MSA.ParameterExpression/*!*/ Rfc;
+            internal MSA.ParameterExpression/*!*/ Callee;
+            internal MSA.Expression/*!*/ LazyScope;
+            internal Func<MSA.Expression>/*!*/ MakeScope;
+            internal Func<MSA.Expression>/*!*/ MakeScopeIfTraced;
+            internal MSA.Expression/*!*/ Name;
+
+            /// <summary>
+            /// Replaces CreateMethodScope: the locals, the safe point and the call's flow-control frame, the alias
+            /// the method was called by, and a scope only if a TracePoint listens for calls.
+            /// </summary>
+            internal MSA.Expression/*!*/ Enter(ScopeBuilder/*!*/ scope) {
+                return Ast.Block(
+                    scope.MakeLocalsStorage(),
+                    Ast.Assign(Rfc, Methods.EnterLightMethod.OpCall(_blockParameter)),
+                    Ast.Assign(Callee, Methods.TakePendingCallee.OpCall(Name)),
+                    MakeScopeIfTraced()
+                );
+            }
+
+            internal MSA.Expression _blockParameter;
+        }
+
+        /// <summary>
+        /// A method whose body can never need its scope at runtime - yield and return over self, its parameters,
+        /// its locals and literals: `def each_pair; yield @a; end' does not qualify (an instance variable takes
+        /// the scope), `def tap1; yield self; self; end' does. Every call site takes the scope, and so do
+        /// constants, instance and global variables and string interpolation, so this is the call-free body.
+        /// The transformed body is still checked (LightFrameRewriter); this is the cheap filter.
+        /// </summary>
+        private bool IsLightFrameCandidate() {
+            if (_parameters.Optional.Length > 0 || _parameters.Unsplat != null || _parameters.SuperSplat != null ||
+                _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length) {
+                return false;
+            }
+            var signature = _parameters.Signature;
+            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
+                return false;
+            }
+            foreach (var parameter in _parameters.Mandatory) {
+                if (!(parameter is LocalVariable)) {
+                    return false;
+                }
+            }
+            var body = Body;
+            if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
+                return false;
+            }
+            if (body.Statements != null) {
+                foreach (var statement in body.Statements) {
+                    if (!IsScopeFree(statement)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        private static bool IsScopeFree(Expression/*!*/ node) {
+            if (node is LocalVariable || node is Literal || node is SelfReference) {
+                return true;
+            }
+            var assignment = node as SimpleAssignmentExpression;
+            if (assignment != null) {
+                return assignment.Operation == null && assignment.Left is LocalVariable && IsScopeFree(assignment.Right);
+            }
+            var yieldCall = node as YieldCall;
+            if (yieldCall != null) {
+                return yieldCall.Block == null && AreScopeFree(yieldCall.Arguments);
+            }
+            // `(yield self; self)', the body of an endless def written with several statements
+            var block = node as BlockExpression;
+            if (block != null) {
+                foreach (var statement in block.Statements) {
+                    if (!IsScopeFree(statement)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            var jump = node as ReturnStatement;
+            if (jump != null) {
+                return AreScopeFree(jump.Arguments);
+            }
+            return false;
+        }
+
+        private static bool AreScopeFree(Arguments arguments) {
+            if (arguments != null) {
+                foreach (var argument in arguments.Expressions) {
+                    if (!IsScopeFree(argument)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Makes the body run without a RubyMethodScope, if the transformed statements use theirs only where a light
+        /// frame can stand in for it: the post-yield test (LightMethodYield, against the call's flow-control frame) and
+        /// the TracePoint hooks, which only evaluate their scope while a TracePoint listens and get it made on demand.
+        /// The call's flow-control frame is what a library method with a block has (RubyOps.CreateRfcForMethod): the
+        /// literal block itself, so a break from it still ends this call. Returns null, leaving the statements as they
+        /// were, for a body that needs its scope after all.
+        /// </summary>
+        private LightFrame TransformLightFrame(AstGenerator/*!*/ gen, ScopeBuilder/*!*/ scope, MSA.ParameterExpression/*!*/ scopeVariable,
+            MSA.Expression/*!*/ selfParameter, MSA.Expression/*!*/ blockParameter, MSA.Expression/*!*/ declaringScope,
+            MSA.Expression/*!*/ declaringModule, int visibleParameterCountAndSignatureFlags, ref MSA.Expression/*!*/ statements) {
+
+            var names = scope.GetVariableNamesExpression() as MSA.ConstantExpression;
+            if (names == null) {
+                return null;
+            }
+
+            var light = new LightFrame();
+            light.Rfc = scope.DefineHiddenVariable("#rfc", typeof(RuntimeFlowControl));
+            light.Callee = scope.DefineHiddenVariable("#callee", typeof(string));
+            light.Name = AstUtils.Constant(_name);
+            light._blockParameter = blockParameter;
+
+            var shape = Ast.Constant(new MethodFrameShape((string[])names.Value, visibleParameterCountAndSignatureFlags, _name));
+            Func<MethodInfo, MSA.Expression> make = method => method.OpCall(new AstExpressions {
+                shape, declaringScope, declaringModule, scope.LocalsTupleVariable, selfParameter, blockParameter,
+                EnterInterpretedFrameExpression.Instance, light.Rfc, light.Callee
+            });
+            light.MakeScope = () => make(Methods.CreateMethodScopeLazy);
+            light.MakeScopeIfTraced = () => make(Methods.CreateMethodScopeIfTraced);
+            light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, light.MakeScope()));
+
+            var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc);
+            var rewritten = rewriter.Visit(statements);
+            if (LightFramesVerbose) {
+                Console.Error.WriteLine("[light] {0} {1} ({2}:{3})", rewriter.NeedsScope ? "needs scope:" : "light:", _name, gen.SourcePath, Location.Start.Line);
+            }
+            if (rewriter.NeedsScope) {
+                return null;
+            }
+            statements = rewritten;
+            return light;
+        }
+
+        /// <summary>
+        /// Points a scope-free method body at its light frame: MethodYield to LightMethodYield, the TracePoint hooks
+        /// at the scope made on demand. Any other use of the scope, or a node it cannot look into, means the body needs
+        /// its scope after all.
+        /// </summary>
+        private sealed class LightFrameRewriter : MSA.ExpressionVisitor {
+            private readonly MSA.ParameterExpression/*!*/ _scope;
+            private readonly MSA.Expression/*!*/ _lazyScope;
+            private readonly MSA.Expression/*!*/ _rfc;
+            private int _inTraceHook;
+
+            internal bool NeedsScope;
+
+            internal LightFrameRewriter(MSA.ParameterExpression/*!*/ scope, MSA.Expression/*!*/ lazyScope, MSA.Expression/*!*/ rfc) {
+                _scope = scope;
+                _lazyScope = lazyScope;
+                _rfc = rfc;
+            }
+
+            protected override MSA.Expression/*!*/ VisitParameter(MSA.ParameterExpression/*!*/ node) {
+                if (node == _scope) {
+                    if (_inTraceHook > 0) {
+                        return _lazyScope;
+                    }
+                    NeedsScope = true;
+                }
+                return node;
+            }
+
+            protected override MSA.Expression/*!*/ VisitMethodCall(MSA.MethodCallExpression/*!*/ node) {
+                if (node.Method == Methods.MethodYield && node.Arguments.Count == 3 && node.Arguments[0] == _scope) {
+                    // the raw scope variable, which is null unless a hook made the scope
+                    return Methods.LightMethodYield.OpCall(_rfc, _scope, Visit(node.Arguments[1]), Visit(node.Arguments[2]));
+                }
+                return base.VisitMethodCall(node);
+            }
+
+            protected override MSA.Expression/*!*/ VisitExtension(MSA.Expression/*!*/ node) {
+                if (node is TraceLineExpression) {
+                    _inTraceHook++;
+                    try {
+                        return base.VisitExtension(node);
+                    } finally {
+                        _inTraceHook--;
+                    }
+                }
+                var traceReturn = node as TraceReturnExpression;
+                if (traceReturn != null) {
+                    // only the scope operand is the hook's; the value is the method's own code
+                    _inTraceHook++;
+                    MSA.Expression hookScope;
+                    try {
+                        hookScope = Visit(traceReturn.Scope);
+                    } finally {
+                        _inTraceHook--;
+                    }
+                    return traceReturn.Update(hookScope, Visit(traceReturn.Value));
+                }
+                if (node is EnterInterpretedFrameExpression) {
+                    return node;
+                }
+                NeedsScope = true;
+                return node;
+            }
+        }
+
+        #endregion
 
         private static MSA.LambdaExpression/*!*/ CreateLambda(string/*!*/ name, AstParameters/*!*/ parameters, MSA.Expression/*!*/ body) {
             var result = MethodDispatcher.CreateRubyMethodLambda(body, name, parameters);

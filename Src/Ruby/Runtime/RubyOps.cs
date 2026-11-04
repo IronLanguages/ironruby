@@ -206,6 +206,100 @@ namespace IronRuby.Runtime {
             return scope;
         }
 
+        #region Light method frames
+
+        // A method whose body never needs its scope - yield and return over self, its parameters, its
+        // locals and literals (MethodDefinition.TransformLightBody) - makes none on a call. Its flow-control
+        // frame is the literal block it was called with, converted as a library method's is
+        // (CreateRfcForMethod), or the shared inactive frame; the scope is made only when something asks
+        // for one: a TracePoint hook, or the exception filter. That is the 160-byte RubyMethodScope every
+        // other call of a Ruby method allocates.
+
+        /// <summary>
+        /// The entry of a light-frame method: the safe point CreateMethodScope makes, then the call's
+        /// flow-control frame.
+        /// </summary>
+        [Emitted]
+        public static RuntimeFlowControl/*!*/ EnterLightMethod(Proc blockParameter) {
+            RubyUtils.SafePoint();
+            return CreateRfcForMethod(blockParameter);
+        }
+
+        /// <summary>
+        /// The name the method was called by when that was an alias (CreateMethodScope keeps it in the
+        /// scope; a light frame keeps it for the scope it may make). Taken either way, as CreateMethodScope does.
+        /// </summary>
+        [Emitted]
+        public static string TakePendingCallee(string/*!*/ definitionName) {
+            if (_aliasCallSeen) {
+                string callee = _pendingCallee;
+                if (callee != null) {
+                    _pendingCallee = null;
+                    if (_pendingCalleeDefinition == definitionName) {
+                        return callee;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The scope of a light-frame method made at its entry because a TracePoint listens for calls, which
+        /// it is then reported to; null otherwise.
+        /// </summary>
+        [Emitted]
+        public static RubyMethodScope CreateMethodScopeIfTraced(MethodFrameShape/*!*/ shape, RubyScope/*!*/ parentScope,
+            RubyModule/*!*/ declaringModule, MutableTuple locals, object selfObject, Proc blockParameter,
+            InterpretedFrame interpretedFrame, RuntimeFlowControl/*!*/ rfc, string calleeName) {
+
+            if ((TracePoint.ActiveEvents & (int)(TraceEvents.Call | TraceEvents.CCall)) != 0) {
+                var scope = CreateMethodScopeLazy(shape, parentScope, declaringModule, locals, selfObject, blockParameter,
+                    interpretedFrame, rfc, calleeName);
+                TracePoint.OnMethodCall(scope);
+                return scope;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The scope of a light-frame method, made when something asks for it (see the RubyMethodScope constructor).
+        /// </summary>
+        [Emitted]
+        public static RubyMethodScope/*!*/ CreateMethodScopeLazy(MethodFrameShape/*!*/ shape, RubyScope/*!*/ parentScope,
+            RubyModule/*!*/ declaringModule, MutableTuple locals, object selfObject, Proc blockParameter,
+            InterpretedFrame interpretedFrame, RuntimeFlowControl/*!*/ rfc, string calleeName) {
+
+            return new RubyMethodScope(shape, parentScope, declaringModule, locals, selfObject, blockParameter,
+                interpretedFrame, rfc, calleeName);
+        }
+
+        /// <summary>
+        /// MethodYield of a light-frame method: the frame is the scope's if one was made, the call's otherwise.
+        /// </summary>
+        [Emitted]
+        public static bool LightMethodYield(RuntimeFlowControl/*!*/ rfc, RubyScope scope, BlockParam/*!*/ yieldedBlockFlowControl, object returnValue) {
+            if (yieldedBlockFlowControl.ReturnReason == BlockReturnReason.Undefined) {
+                return false;
+            }
+            return MethodYieldRfc((scope != null) ? scope.FlowControlScope : rfc, yieldedBlockFlowControl, returnValue);
+        }
+
+        /// <summary>
+        /// LeaveMethodFrame of a light-frame method: the call's frame, and the scope if one was made.
+        /// </summary>
+        [Emitted]
+        public static void LeaveLightMethodFrame(RuntimeFlowControl/*!*/ rfc, RubyScope scope) {
+            LeaveMethodFrame(rfc);
+            if (scope != null) {
+                if (scope.IsActiveMethod) {
+                    scope.LeaveMethod();
+                }
+                ReleaseScopeFrame(scope);
+            }
+        }
+
+        #endregion
+
         // The name an aliased method was called by, handed from the call site to the scope the
         // method body creates first thing (MRI keeps it in the frame for __callee__).
         [ThreadStatic]
