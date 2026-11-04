@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
@@ -58,6 +59,19 @@ namespace IronRuby.Builtins {
 
             public RespondToStorage/*!*/ RespondTo {
                 get { return _respondTo ?? (_respondTo = new RespondToStorage(Context)); }
+            }
+
+            // respond_to?(name, true) and respond_to_missing?(name, true), called the way MRI's
+            // rb_obj_respond_to does: as if from the object itself, so a private one is called too
+            private CallSite<Func<CallSite, object, object, object, object>> _respondToIncludeAll;
+            private CallSite<Func<CallSite, object, object, object, object>> _respondToMissing;
+
+            public CallSite<Func<CallSite, object, object, object, object>>/*!*/ RespondToIncludeAll {
+                get { return RubyUtils.GetCallSite(ref _respondToIncludeAll, Context, "respond_to?", RubyCallSignature.WithImplicitSelf(2)); }
+            }
+
+            public CallSite<Func<CallSite, object, object, object, object>>/*!*/ RespondToMissing {
+                get { return RubyUtils.GetCallSite(ref _respondToMissing, Context, "respond_to_missing?", RubyCallSignature.WithImplicitSelf(2)); }
             }
         }
 
@@ -252,7 +266,7 @@ namespace IronRuby.Builtins {
                 } else if (value < 0 && value > -124) {
                     _writer.Write((sbyte)(value - 5));
                 } else {
-                    byte[] _buffer = new byte[5];
+                    Span<byte> _buffer = stackalloc byte[5];
                     _buffer[1] = (byte)(value & 0xff);
                     _buffer[2] = (byte)((value >> 8) & 0xff);
                     _buffer[3] = (byte)((value >> 16) & 0xff);
@@ -273,7 +287,7 @@ namespace IronRuby.Builtins {
                     }
                     _buffer[0] = unchecked((byte)lenbyte);
 
-                    _writer.Write(_buffer, 0, len + 1);
+                    _writer.Write(_buffer.Slice(0, len + 1));
                 }
             }
 
@@ -288,9 +302,8 @@ namespace IronRuby.Builtins {
             }
 
 
-            private void WriteSubclassData(object/*!*/ obj, Type type) {
+            private void WriteSubclassData(object/*!*/ obj, RubyClass/*!*/ theClass, Type type) {
                 RubyClass libClass = _context.GetClass(type);
-                RubyClass theClass = _context.GetClassOf(obj);
 
                 if (libClass != theClass && !(obj is RubyStruct)) {
                     _writer.Write((byte)'C');
@@ -315,14 +328,14 @@ namespace IronRuby.Builtins {
                 _writer.Write(data);
             }
 
-            private void WriteString(MutableString/*!*/ value) {
-                WriteSubclassData(value, typeof(MutableString));
+            private void WriteString(MutableString/*!*/ value, RubyClass/*!*/ theClass) {
+                WriteSubclassData(value, theClass, typeof(MutableString));
                 _writer.Write((byte)'"');
                 WriteStringValue(value);
             }
 
-            private void WriteRegex(RubyRegex/*!*/ value) {
-                WriteSubclassData(value, typeof(RubyRegex));
+            private void WriteRegex(RubyRegex/*!*/ value, RubyClass/*!*/ theClass) {
+                WriteSubclassData(value, theClass, typeof(RubyRegex));
                 _writer.Write((byte)'/');
                 WriteStringValue(value.Pattern);
                 // MRI only stores the three matching flags plus its "encoding is fixed" bit, which
@@ -339,8 +352,8 @@ namespace IronRuby.Builtins {
                 _writer.Write((byte)flags);
             }
 
-            private void WriteArray(RubyArray/*!*/ value) {
-                WriteSubclassData(value, typeof(RubyArray));
+            private void WriteArray(RubyArray/*!*/ value, RubyClass/*!*/ theClass) {
+                WriteSubclassData(value, theClass, typeof(RubyArray));
                 _writer.Write((byte)'[');
                 WriteInt32(value.Count);
                 foreach (object obj in value) {
@@ -348,12 +361,12 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            private void WriteHash(Hash/*!*/ value) {
+            private void WriteHash(Hash/*!*/ value, RubyClass/*!*/ theClass) {
                 if (value.DefaultProc != null) {
                     throw RubyExceptions.CreateTypeError("can't dump hash with default proc");
                 }
 
-                WriteSubclassData(value, typeof(Hash));
+                WriteSubclassData(value, theClass, typeof(Hash));
                 if (value.ComparesByIdentity) {
                     // MRI wraps a compare_by_identity hash in a "user class" record naming Hash,
                     // which is how the flag survives a round trip.
@@ -412,15 +425,18 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
+            private static readonly byte[]/*!*/ _encodingShortIVarNameBytes = Encoding.ASCII.GetBytes(EncodingShortIVarName);
+            private static readonly byte[]/*!*/ _encodingIVarNameBytes = Encoding.ASCII.GetBytes(EncodingIVarName);
+
             private void WriteEncodingIVar(RubyEncoding/*!*/ encoding) {
                 if (encoding == RubyEncoding.UTF8) {
-                    WriteSymbol(EncodingShortIVarName, RubyEncoding.Binary);
+                    WriteSymbol(EncodingShortIVarName, _encodingShortIVarNameBytes, RubyEncoding.Binary);
                     WriteAnObject(true);
                 } else if (encoding == RubyEncoding.Ascii) {
-                    WriteSymbol(EncodingShortIVarName, RubyEncoding.Binary);
+                    WriteSymbol(EncodingShortIVarName, _encodingShortIVarNameBytes, RubyEncoding.Binary);
                     WriteAnObject(false);
                 } else {
-                    WriteSymbol(EncodingIVarName, RubyEncoding.Binary);
+                    WriteSymbol(EncodingIVarName, _encodingIVarNameBytes, RubyEncoding.Binary);
                     WriteAnObject(MutableString.CreateBinary(Encoding.UTF8.GetBytes(encoding.Name)));
                 }
             }
@@ -629,10 +645,9 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            private void WriteStruct(RubyStruct/*!*/ obj) {
-                WriteSubclassData(obj, typeof(RubyStruct));
+            private void WriteStruct(RubyStruct/*!*/ obj, RubyClass/*!*/ theClass) {
+                WriteSubclassData(obj, theClass, typeof(RubyStruct));
                 _writer.Write((byte)'S');
-                RubyClass theClass = _context.GetClassOf(obj);
                 TestForAnonymous(theClass);
                 WriteModuleName(theClass);
                 var names = obj.GetNames();
@@ -683,8 +698,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            private void CheckSingleton(object/*!*/ obj) {
-                RubyClass immediate = _context.GetImmediateClassOf(obj);
+            private void CheckSingleton(RubyClass/*!*/ immediate) {
                 if (immediate.IsSingletonClass && !immediate.IsDummySingletonClass) {
                     bool hasState = false;
                     using (_context.ClassHierarchyLocker()) {
@@ -699,8 +713,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            private void WriteExtendedModules(object/*!*/ obj) {
-                RubyClass theClass = _context.GetImmediateClassOf(obj);
+            private void WriteExtendedModules(RubyClass/*!*/ theClass) {
                 if (theClass.IsSingletonClass) {
                     foreach (var mixin in theClass.GetMixins()) {
                         _writer.Write((byte)'e');
@@ -714,6 +727,58 @@ namespace IronRuby.Builtins {
                         WriteModuleName(mixin);
                     }
                 }
+            }
+
+            /// <summary>
+            /// MRI's rb_obj_respond_to(obj, name, TRUE), for a name the all-visible lookup on <paramref name="immediate"/>
+            /// found no method of. A #respond_to? of the program's own is asked - with include_all true unless it takes
+            /// a single argument; otherwise (Kernel's, or none at all on a BasicObject) only a #respond_to_missing?
+            /// of the program's own can still say yes, and Kernel's answers false without being called. That is
+            /// nearly always the case, and then nothing is dispatched at all.
+            /// </summary>
+            private bool ObjRespondTo(RubyClass/*!*/ immediate, object obj, string/*!*/ name, ref bool ranUserCode) {
+                var respondTo = immediate.GetMethodLookup("respond_to?");
+                if (!respondTo.Found || IsKernelMethod(respondTo.Info, _kernelRespondTo, ref _defaultRespondTo)) {
+                    var missing = immediate.GetMethodLookup("respond_to_missing?");
+                    if (!missing.Found || IsKernelMethod(missing.Info, _kernelRespondToMissing, ref _defaultRespondToMissing)) {
+                        return false;
+                    }
+                    ranUserCode = true;
+                    var missingSite = _sites.RespondToMissing;
+                    return Protocols.IsTrue(missingSite.Target(missingSite, obj, _context.EncodeIdentifier(name), ScriptingRuntimeHelpers.True));
+                }
+
+                ranUserCode = true;
+                if (respondTo.Info.GetArity() == 1) {
+                    return Protocols.RespondTo(_sites.RespondTo, obj, name);
+                }
+                var site = _sites.RespondToIncludeAll;
+                return Protocols.IsTrue(site.Target(site, obj, _context.EncodeIdentifier(name), ScriptingRuntimeHelpers.True));
+            }
+
+            private static readonly MethodInfo/*!*/ _kernelRespondTo = typeof(KernelOps).GetMethod("RespondTo");
+            private static readonly MethodInfo/*!*/ _kernelRespondToMissing = typeof(KernelOps).GetMethod("RespondToMissing");
+
+            // The last method infos found to be the Kernel methods themselves (or aliases of them).
+            private static RubyMemberInfo _defaultRespondTo, _defaultRespondToMissing;
+
+            private static bool IsKernelMethod(RubyMemberInfo method, MethodInfo/*!*/ kernelMethod, ref RubyMemberInfo lastFound) {
+                if (method == null) {
+                    return false;
+                }
+                if (ReferenceEquals(method, lastFound)) {
+                    return true;
+                }
+                var libraryMethod = method as RubyLibraryMethodInfo;
+                if (libraryMethod == null) {
+                    return false;
+                }
+                var members = libraryMethod.GetMembers();
+                if (members.Length == 1 && members[0] == kernelMethod) {
+                    lastFound = method;
+                    return true;
+                }
+                return false;
             }
 
             private void WriteAnObject(object obj) {
@@ -753,10 +818,20 @@ namespace IronRuby.Builtins {
                         CheckDumpable(obj);
 
                         // TODO: visibility?
-                        bool implementsDump = _context.ResolveMethod(obj, "_dump", VisibilityContext.AllVisible).Found
-                            || Protocols.RespondTo(_sites.RespondTo, obj, "_dump");
-                        bool implementsMarshalDump = _context.ResolveMethod(obj, "marshal_dump", VisibilityContext.AllVisible).Found
-                            || Protocols.RespondTo(_sites.RespondTo, obj, "marshal_dump");
+                        RubyClass immediate = _context.GetImmediateClassOf(obj);
+                        // MRI asks for marshal_dump first, and for _dump only when there is none.
+                        bool ranUserCode = false;
+                        bool implementsMarshalDump = immediate.ResolveMethod("marshal_dump", VisibilityContext.AllVisible).Found
+                            || ObjRespondTo(immediate, obj, "marshal_dump", ref ranUserCode);
+                        bool implementsDump = false;
+                        if (!implementsMarshalDump) {
+                            if (ranUserCode) {
+                                // a respond_to? may have given the object a singleton class
+                                immediate = _context.GetImmediateClassOf(obj);
+                            }
+                            implementsDump = immediate.ResolveMethod("_dump", VisibilityContext.AllVisible).Found
+                                || ObjRespondTo(immediate, obj, "_dump", ref ranUserCode);
+                        }
 
                         if (implementsMarshalDump) {
                             _objects[obj] = _objects.Count;
@@ -769,15 +844,26 @@ namespace IronRuby.Builtins {
                             objectRef = _objects.Count;
                             _objects[obj] = objectRef;
 
+                            if (ranUserCode) {
+                                // a respond_to? may have given the object a singleton class
+                                immediate = _context.GetImmediateClassOf(obj);
+                            }
+                            RubyClass theClass = immediate.GetNonSingletonClass();
+
                             if (!(obj is RubyModule)) {
-                                CheckSingleton(obj);
+                                CheckSingleton(immediate);
                             }
 
                             RubyEncoding encoding = GetMarshalEncoding(obj);
                             string[] instanceNames = _context.GetInstanceVariableNames(obj);
 
-                            RubyArray dataMembers;
-                            bool isData = TryGetDataMembers(obj, out dataMembers);
+                            // Data instances are plain objects: none of the built-in representations
+                            // below can be one, so they skip the Data class lookup.
+                            RubyArray dataMembers = null;
+                            bool isData = !(obj is double || obj is float || obj is BigInteger || obj is MutableString ||
+                                  obj is RubyArray || obj is Hash || obj is RubyRegex || obj is RubyModule ||
+                                  obj is RubyStruct || obj is Range || obj is Exception)
+                                && TryGetDataMembers(obj, out dataMembers);
                             if (isData) {
                                 // The members are the instance variables, and the 'S' record is
                                 // already carrying them.
@@ -799,7 +885,7 @@ namespace IronRuby.Builtins {
                             }
 
                             if (!(obj is RubyModule)) {
-                                WriteExtendedModules(obj);
+                                WriteExtendedModules(immediate);
                             }
 
                             if (obj is double) {
@@ -809,13 +895,13 @@ namespace IronRuby.Builtins {
                             } else if (obj is BigInteger) {
                                 WriteBignum((BigInteger)obj);
                             } else if (obj is MutableString) {
-                                WriteString((MutableString)obj);
+                                WriteString((MutableString)obj, theClass);
                             } else if (obj is RubyArray) {
-                                WriteArray((RubyArray)obj);
+                                WriteArray((RubyArray)obj, theClass);
                             } else if (obj is Hash) {
-                                WriteHash((Hash)obj);
+                                WriteHash((Hash)obj, theClass);
                             } else if (obj is RubyRegex) {
-                                WriteRegex((RubyRegex)obj);
+                                WriteRegex((RubyRegex)obj, theClass);
                             } else if (obj is RubyClass) {
                                 WriteClass((RubyClass)obj);
                             } else if (obj is RubyModule) {
@@ -823,13 +909,13 @@ namespace IronRuby.Builtins {
                             } else if (isData) {
                                 WriteData(obj, dataMembers);
                             } else if (obj is RubyStruct) {
-                                WriteStruct((RubyStruct)obj);
+                                WriteStruct((RubyStruct)obj, theClass);
                             } else if (obj is Range) {
                                 WriteRange((Range)obj, instanceNames);
                             } else if (obj is Exception) {
                                 WriteException((Exception)obj, instanceNames);
                             } else {
-                                RequireDumpableAsObject(_context.GetClassOf(obj));
+                                RequireDumpableAsObject(theClass);
                                 WriteObject(obj);
                                 WriteIVars(obj, instanceNames, encoding);
                             }
@@ -1861,7 +1947,9 @@ namespace IronRuby.Builtins {
             BinaryWriter writer = new BinaryWriter(buffer);
             MarshalWriter dumper = new MarshalWriter(sites, writer, self.Context, limit);
             dumper.Dump(obj);
-            return MutableString.CreateBinary(buffer.ToArray());
+            // one copy, straight out of the stream's buffer, rather than ToArray's and then CreateBinary's
+            int length = (int)buffer.Length;
+            return MutableString.CreateBinary(length).Append(buffer.GetBuffer(), 0, length);
         }
 
         // TODO: Use DefaultValue attribute when it works with the binder

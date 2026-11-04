@@ -561,9 +561,11 @@ namespace IronRuby.Builtins {
             int length = _content.Length;
             
             int newLength = 2 * newCount - 1;
-            if (newLength <= length / 2) {
-                // resize:
-                object[] newContent = new object[Math.Max(Utils.MinListSize, newLength)];
+            int newSize = Math.Max(Utils.MinListSize, newLength);
+            if (newLength <= length / 2 && newSize < length) {
+                // resize - only when that shrinks the storage: a small array emptied by pop or shift
+                // would otherwise be reallocated at the same minimal size on every removal:
+                object[] newContent = new object[newSize];
                 Array.Copy(_content, _start, newContent, 0, index);
                 Array.Copy(_content, _start + index + size, newContent, index, newCount - index);
                 _content = newContent;
