@@ -1609,8 +1609,14 @@ namespace IronRuby.Builtins {
         /// <summary>Appends the padding, repeated and then cut short, until count characters are added.</summary>
         private static void AppendPadding(MutableString/*!*/ result, MutableString/*!*/ padding, int count) {
             int paddingLength = GetCharacterLength(padding);
-            for (int i = 0; i < count / paddingLength; i++) {
+            int repeat = count / paddingLength;
+            if (repeat > 0) {
+                // The first copy is appended on its own: appending to an empty string takes on the
+                // padding's encoding, and the second append is what checks the two are compatible.
                 result.Append(padding);
+                if (repeat > 1) {
+                    result.AppendMultiple(padding, repeat - 1);
+                }
             }
 
             int remainder = count % paddingLength;
