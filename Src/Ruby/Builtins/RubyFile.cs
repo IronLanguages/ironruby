@@ -141,6 +141,14 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            var fileStream = stream as FileStream;
+            if (fileStream != null) {
+                Stream terminal = DescriptorStream.TryWrapTerminal(fileStream);
+                if (terminal != null) {
+                    return terminal;
+                }
+            }
+
             // O_TRUNC does nothing to what cannot be truncated, a FIFO for one
             if ((mode & IOMode.Truncate) != 0 && stream.CanSeek) {
                 try {

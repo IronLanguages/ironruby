@@ -115,6 +115,44 @@ namespace IronRuby.Builtins {
             _ownsDescriptor = ownsDescriptor;
         }
 
+        // The stream that owns the descriptor, when it is not this one: disposed with it.
+        private Stream _owner;
+
+        /// <summary>
+        /// A terminal opened as a file (File.open("/dev/tty")) on Unix, read and written through its
+        /// descriptor as MRI does: a FileStream's reads park the thread in read(2), where VTIME-timed
+        /// reads, Thread#raise and a close from another thread cannot get at it. The FileStream keeps
+        /// the handle and is disposed with this stream. Null for anything that is not a terminal.
+        /// </summary>
+        public static Stream TryWrapTerminal(FileStream/*!*/ file) {
+            if (System.IO.Path.DirectorySeparatorChar != '/' || file.CanSeek) {
+                return null;
+            }
+            int descriptor;
+            try {
+                descriptor = (int)file.SafeFileHandle.DangerousGetHandle();
+            } catch (Exception) {
+                return null;
+            }
+            if (sys_isatty(descriptor) != 1) {
+                return null;
+            }
+            return new DescriptorStream(descriptor, file.CanRead, file.CanWrite, false) { _owner = file };
+        }
+
+        /// <summary>
+        /// The descriptor stream <paramref name="stream"/> reads and writes through: itself, or the one
+        /// behind standard input's console stream on a Unix terminal. Null if there is none.
+        /// </summary>
+        public static DescriptorStream Of(Stream stream) {
+            var descriptor = stream as DescriptorStream;
+            if (descriptor != null) {
+                return descriptor;
+            }
+            var console = stream as ConsoleStream;
+            return (console != null) ? console.RawInput : null;
+        }
+
         public int Descriptor {
             get { return _descriptor; }
         }
@@ -447,6 +485,12 @@ namespace IronRuby.Builtins {
             if (_ownsDescriptor && descriptor >= 0) {
                 _descriptor = -1;
                 sys_close(descriptor);
+            }
+            var owner = _owner;
+            if (owner != null) {
+                _owner = null;
+                _descriptor = -1;
+                owner.Dispose();
             }
             base.Dispose(disposing);
         }
