@@ -342,8 +342,19 @@ namespace IronRuby.Runtime {
             return BlockJumped(blockResult = RubyOps.Yield1(arg1, null, Self, this));
         }
 
+        // An int argument - the counter of times, upto, step, each_index, a Fixnum range - goes
+        // through the DLR's cache of boxed small integers rather than a fresh box per iteration:
+        // (0...320).each { |x| } would otherwise allocate 320 boxes each time it runs.
+        public bool Yield(int arg1, out object blockResult) {
+            return BlockJumped(blockResult = RubyOps.Yield1(ScriptingRuntimeHelpers.Int32ToObject(arg1), null, Self, this));
+        }
+
         public bool Yield(object arg1, object arg2, out object blockResult) {
             return BlockJumped(blockResult = RubyOps.Yield2(arg1, arg2, null, Self, this));
+        }
+
+        public bool Yield(object arg1, int arg2, out object blockResult) {
+            return BlockJumped(blockResult = RubyOps.Yield2(arg1, ScriptingRuntimeHelpers.Int32ToObject(arg2), null, Self, this));
         }
 
         public bool Yield(object arg1, object arg2, object arg3, out object blockResult) {
