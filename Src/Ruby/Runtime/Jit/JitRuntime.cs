@@ -183,13 +183,6 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// The one representation rule, as the specialized code sees it: a value that fits in an
-        /// Int32 IS an Int32, boxed from the small-integer cache. Every long that leaves the
-        /// specialized region - a return value, a store back into a locals tuple, an ivar write -
-        /// goes through here, which is what keeps #hash, #eql?, #equal? and Hash keys right for a
-        /// value the JIT produced. Mirrors ClrInteger.Narrow, which lives in the other assembly.
-        /// </summary>
-        /// <summary>
         /// A typed body's value as the object its entry returns: an Int32 or a Boolean comes out of
         /// the shared boxes (the DLR's cache of small Integers, the two Booleans) rather than a new
         /// box per call, the way every other place in the runtime makes one.
@@ -204,6 +197,13 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Convert(value, typeof(object));
         }
 
+        /// <summary>
+        /// The one representation rule, as the specialized code sees it: a value that fits in an
+        /// Int32 IS an Int32, boxed from the small-integer cache. Every long that leaves the
+        /// specialized region - a return value, a store back into a locals tuple, an ivar write -
+        /// goes through here, which is what keeps #hash, #eql?, #equal? and Hash keys right for a
+        /// value the JIT produced. Mirrors ClrInteger.Narrow, which lives in the other assembly.
+        /// </summary>
         public static object/*!*/ NarrowLong(long v) {
             return (v >= Int32.MinValue && v <= Int32.MaxValue)
                 ? ScriptingRuntimeHelpers.Int32ToObject((Int32)v) : (object)v;

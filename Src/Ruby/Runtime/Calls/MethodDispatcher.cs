@@ -37,14 +37,6 @@ namespace IronRuby.Runtime.Calls {
     using Ast = Expression;
 
     public abstract partial class MemberDispatcher {
-        /// <summary>
-        /// An argument as the method delegate takes it, an object. A precompiled dispatcher's site is
-        /// typed by what it was first called with, so a literal 1 arrives as an Int32, and handing it on
-        /// boxed it into a new object on every call - a sixth of the cost of calling a one-argument Ruby
-        /// method. A small Integer comes from the DLR's cache of boxed ones instead, as everywhere else
-        /// in the runtime, and a Boolean is one of the two shared ones. The type tests are constants per
-        /// instantiation, so for any other T this is the plain conversion.
-        /// </summary>
         private static readonly object[]/*!*/ _boxedSmallInts = CreateBoxedSmallInts();
 
         private static object[]/*!*/ CreateBoxedSmallInts() {
@@ -55,6 +47,15 @@ namespace IronRuby.Runtime.Calls {
             return result;
         }
 
+        /// <summary>
+        /// An argument as the method delegate takes it, an object. A precompiled dispatcher's site is
+        /// typed by what it was first called with, so a literal 1 arrives as an Int32, and handing it on
+        /// boxed it into a new object on every call - a sixth of the cost of calling a one-argument Ruby
+        /// method. An Integer in -128..1023 comes from a cache of boxed ones instead (filled from the DLR's,
+        /// so they are the same objects the rest of the runtime hands out), and a Boolean is one of the
+        /// two shared ones. The type tests are constants per instantiation, so for any other T this is
+        /// the plain conversion.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static object Box<T>(T value) {
             if (typeof(T) == typeof(int)) {
