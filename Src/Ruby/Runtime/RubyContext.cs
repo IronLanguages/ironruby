@@ -2590,8 +2590,7 @@ namespace IronRuby.Runtime {
 
         internal bool TryGetClrTypeInstanceData(object/*!*/ obj, out RubyInstanceData result) {
             var owner = obj as IRubyInstanceDataOwner;
-            if (owner != null) {
-                result = owner.TryGetInstanceData();
+            if (owner != null && owner.TryGetInstanceData(this, out result)) {
                 return result != null;
             }
             // lock-free: ConditionalWeakTable reads take no lock
@@ -2661,8 +2660,8 @@ namespace IronRuby.Runtime {
             }
 
             var owner = obj as IRubyInstanceDataOwner;
-            if (owner != null) {
-                return owner.GetInstanceData();
+            if (owner != null && (result = owner.GetInstanceData(this)) != null) {
+                return result;
             }
 
             if (_referenceTypeInstanceData.TryGetValue(obj, out result)) {

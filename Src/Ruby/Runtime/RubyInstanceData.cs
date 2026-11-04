@@ -146,12 +146,9 @@ namespace IronRuby.Runtime {
             _objectId = id;
         }
 
-        /// <summary>
-        /// The data in <paramref name="field"/>, made and stored there on first use, for an
-        /// <see cref="IRubyInstanceDataOwner"/>: of two threads making it at once, one's is kept.
-        /// </summary>
-        public static RubyInstanceData/*!*/ GetOrCreate(ref RubyInstanceData field) {
-            return field ?? Interlocked.CompareExchange(ref field, new RubyInstanceData(), null) ?? field;
+        /// <summary>Fresh data, for an <see cref="IRubyInstanceDataOwner"/> (OwnedInstanceData).</summary>
+        internal static RubyInstanceData/*!*/ Create() {
+            return new RubyInstanceData();
         }
 
         internal RubyInstanceData() {

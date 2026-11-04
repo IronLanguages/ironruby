@@ -39,18 +39,22 @@ namespace IronRuby.Builtins {
     public class Enumerator : IRubyInstanceDataOwner {
         // Its external iteration (#next, #peek, #rewind in ruby4.rb) keeps its state in instance
         // variables, so they live here rather than in the runtime's table of instance data.
-        private RubyInstanceData _instanceData;
+        private OwnedInstanceData _instanceData;
 
         // An instance of a Ruby subclass (Enumerator::Lazy, or a user's) is an IRubyObject with instance
         // data of its own, which every other path reads: that is the one to hand out then.
-        RubyInstanceData IRubyInstanceDataOwner.TryGetInstanceData() {
+        bool IRubyInstanceDataOwner.TryGetInstanceData(RubyContext/*!*/ context, out RubyInstanceData data) {
             var rubyObject = this as IRubyObject;
-            return (rubyObject != null) ? rubyObject.TryGetInstanceData() : _instanceData;
+            if (rubyObject != null) {
+                data = rubyObject.TryGetInstanceData();
+                return true;
+            }
+            return _instanceData.TryGet(context, out data);
         }
 
-        RubyInstanceData IRubyInstanceDataOwner.GetInstanceData() {
+        RubyInstanceData IRubyInstanceDataOwner.GetInstanceData(RubyContext/*!*/ context) {
             var rubyObject = this as IRubyObject;
-            return (rubyObject != null) ? rubyObject.GetInstanceData() : RubyInstanceData.GetOrCreate(ref _instanceData);
+            return (rubyObject != null) ? rubyObject.GetInstanceData() : _instanceData.GetOrCreate(context);
         }
 
         internal sealed class Wrapper : IEnumerator {
