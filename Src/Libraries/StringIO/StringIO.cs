@@ -783,15 +783,100 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         #region getc, getbyte (1.9), ungetc, ungetbyte (1.9), readchar, readbyte (1.9)
 
+        /// <summary>
+        /// One character in the stream's encoding, as many bytes as that encoding needs, as MRI's
+        /// strio_getc measures it (rb_enc_mbclen): the shortest run of bytes that is a valid
+        /// character, and when no run of up to four bytes is one, a single code unit - one byte, or
+        /// two in UTF-16 and four in UTF-32 - rather than everything up to the next valid character.
+        /// The result keeps the bytes the stream had.
+        /// </summary>
         [RubyMethod("getc")]
         public static object GetByte(StringIO/*!*/ self) {
             var content = self.GetReadableContent();
+            int position = self._position;
+            int length = content.GetByteCount();
 
-            if (self._position >= content.GetByteCount()) {
+            if (position >= length) {
                 return null;
             }
 
-            return ScriptingRuntimeHelpers.Int32ToObject(content.GetByte(self._position++));
+            RubyEncoding encoding = self._externalEncoding ?? content.Encoding;
+            byte first = content.GetByte(position);
+            int count;
+
+            if ((first < 0x80 && encoding.IsAsciiIdentity) || encoding == RubyEncoding.Binary) {
+                // an ASCII byte is a character of its own in any ASCII-compatible encoding, and
+                // every byte is one in BINARY
+                count = 1;
+            } else if (encoding == RubyEncoding.UTF8) {
+                count = GetUtf8CharacterLength(content, position, length);
+            } else {
+                count = GetCharacterLength(content, position, length, encoding);
+            }
+
+            self._position = position + count;
+            return MutableString.CreateBinary(content.GetBinarySlice(position, count), encoding);
+        }
+
+        /// <summary>
+        /// The length of the well-formed UTF-8 sequence at <paramref name="position"/> (Unicode's
+        /// table 3-7, which is what MRI's UTF-8 accepts: no overlong forms, no surrogates, nothing
+        /// past U+10FFFF), or 1 when the bytes there are not one.
+        /// </summary>
+        private static int GetUtf8CharacterLength(MutableString/*!*/ content, int position, int length) {
+            byte first = content.GetByte(position);
+            int count;
+            byte low = 0x80, high = 0xBF;
+            if (first < 0x80) {
+                return 1;
+            } else if (first >= 0xC2 && first <= 0xDF) {
+                count = 2;
+            } else if (first >= 0xE0 && first <= 0xEF) {
+                count = 3;
+                if (first == 0xE0) {
+                    low = 0xA0;
+                } else if (first == 0xED) {
+                    high = 0x9F;
+                }
+            } else if (first >= 0xF0 && first <= 0xF4) {
+                count = 4;
+                if (first == 0xF0) {
+                    low = 0x90;
+                } else if (first == 0xF4) {
+                    high = 0x8F;
+                }
+            } else {
+                return 1;
+            }
+
+            if (position + count > length) {
+                return 1;
+            }
+            byte second = content.GetByte(position + 1);
+            if (second < low || second > high) {
+                return 1;
+            }
+            for (int i = 2; i < count; i++) {
+                byte next = content.GetByte(position + i);
+                if (next < 0x80 || next > 0xBF) {
+                    return 1;
+                }
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// The same measure for any other encoding, by asking which prefix of the bytes at
+        /// <paramref name="position"/> the encoding calls valid - what String#valid_encoding? asks.
+        /// </summary>
+        private static int GetCharacterLength(MutableString/*!*/ content, int position, int length, RubyEncoding/*!*/ encoding) {
+            int available = Math.Min(length - position, 4);
+            for (int count = 1; count <= available; count++) {
+                if (!MutableString.CreateBinary(content.GetBinarySlice(position, count), encoding).ContainsInvalidCharacters()) {
+                    return count;
+                }
+            }
+            return Math.Min(encoding.MinBytesPerChar, available);
         }
 
         [RubyMethod("ungetc")]
