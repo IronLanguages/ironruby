@@ -386,17 +386,31 @@ namespace IronRuby.Builtins {
             if (first != null && first.GetType() == typeof(MutableString)) {
                 var stringClass = context.GetClass(typeof(MutableString));
                 var keys = new StringKey[count];
+                bool allAscii = true;
                 for (int i = 0; i < count; i++) {
                     object item = self[i];
                     if (item == null || item.GetType() != typeof(MutableString) || context.GetImmediateClassOf(item) != stringClass) {
                         return false;
                     }
-                    keys[i] = new StringKey((MutableString)item);
+                    var str = (MutableString)item;
+                    keys[i] = new StringKey(str);
+                    allAscii = allAscii && str.IsAscii();
                 }
                 if (!HasBuiltinComparison(stringClass)) {
                     return false;
                 }
-                SortByKeys(self, keys);
+                if (allAscii) {
+                    // Two ASCII strings compare by their bytes whatever their encodings (String#<=>,
+                    // MutableString.CompareTo), and their bytes are their UTF-16 code units: an ordinal
+                    // compare of the CLR strings - vectorized, no encoding checks per pair - is that compare.
+                    var asciiKeys = new AsciiStringKey[count];
+                    for (int i = 0; i < count; i++) {
+                        asciiKeys[i] = new AsciiStringKey(((MutableString)self[i]).ToString());
+                    }
+                    SortByKeys(self, asciiKeys);
+                } else {
+                    SortByKeys(self, keys);
+                }
                 return true;
             }
 
@@ -437,6 +451,12 @@ namespace IronRuby.Builtins {
 
         // A struct, so that the generic sort below is compiled for it and calls MutableString.CompareTo
         // directly; over the class itself it would share one body and dispatch every comparison.
+        private struct AsciiStringKey : IComparable<AsciiStringKey> {
+            private readonly string/*!*/ _value;
+            public AsciiStringKey(string/*!*/ value) { _value = value; }
+            public int CompareTo(AsciiStringKey other) { return String.CompareOrdinal(_value, other._value); }
+        }
+
         private struct StringKey : IComparable<StringKey> {
             private readonly MutableString/*!*/ _value;
             public StringKey(MutableString/*!*/ value) { _value = value; }
