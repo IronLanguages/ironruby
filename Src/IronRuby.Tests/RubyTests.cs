@@ -852,6 +852,7 @@ namespace IronRuby.Tests {
                 Digest_NonStringResult1,
                 Main_Initialize1,
                 Dir_NotADirectory1,
+                Dir_NotADirectorySymlinks1,
                 File_StatPredicatesToIo1,
                 File_StatPredicatesToIo2,
                 IO_SysOpenArguments1,

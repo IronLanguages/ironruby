@@ -2583,6 +2583,63 @@ rmdir missing: Errno::ENOENT
         }
 
         /// <summary>
+        /// Dir_NotADirectory1 through symbolic links: a dangling link is a missing directory (ENOENT), not
+        /// a file, and Dir.rmdir of a link - even one to a directory - is ENOTDIR and leaves the link alone,
+        /// where it used to delete it. POSIX only: making a symbolic link on Windows needs a privilege.
+        /// </summary>
+        public void Dir_NotADirectorySymlinks1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+def show(l); v = begin; yield; :ok; rescue SystemCallError => e; e.class; end; puts ""#{l}: #{v.inspect}""; end
+dir = Dir.mktmpdir
+broken = File.join(dir, ""broken""); File.symlink(File.join(dir, ""nothing""), broken)
+file = File.join(dir, ""file""); File.write(file, """"); tofile = File.join(dir, ""tofile""); File.symlink(file, tofile)
+sub = File.join(dir, ""sub""); Dir.mkdir(sub); todir = File.join(dir, ""todir""); File.symlink(sub, todir)
+begin
+  show(""chdir broken"") { Dir.chdir(broken) { } }
+  show(""chdir broken/x"") { Dir.chdir(File.join(broken, ""x"")) { } }
+  show(""chdir tofile"") { Dir.chdir(tofile) { } }
+  show(""chdir todir"") { Dir.chdir(todir) { } }
+  show(""entries broken"") { Dir.entries(broken) }
+  show(""entries tofile"") { Dir.entries(tofile) }
+  show(""entries todir"") { Dir.entries(todir) }
+  show(""mkdir broken/x"") { Dir.mkdir(File.join(broken, ""x"")) }
+  show(""mkdir tofile/x"") { Dir.mkdir(File.join(tofile, ""x"")) }
+  show(""mkdir todir/x"") { Dir.mkdir(File.join(todir, ""x"")); Dir.rmdir(File.join(sub, ""x"")) }
+  show(""rmdir broken"") { Dir.rmdir(broken) }
+  show(""rmdir broken/x"") { Dir.rmdir(File.join(broken, ""x"")) }
+  show(""rmdir tofile"") { Dir.rmdir(tofile) }
+  show(""rmdir todir"") { Dir.rmdir(todir) }
+  show(""link still there"") { File.lstat(todir).symlink? or raise Errno::ENOENT }
+ensure
+  [broken, tofile, todir, file].each { |x| File.unlink(x) rescue nil }
+  Dir.rmdir(sub)
+  Dir.rmdir(dir)
+end
+", @"
+chdir broken: Errno::ENOENT
+chdir broken/x: Errno::ENOENT
+chdir tofile: Errno::ENOTDIR
+chdir todir: :ok
+entries broken: Errno::ENOENT
+entries tofile: Errno::ENOTDIR
+entries todir: :ok
+mkdir broken/x: Errno::ENOENT
+mkdir tofile/x: Errno::ENOTDIR
+mkdir todir/x: :ok
+rmdir broken: Errno::ENOTDIR
+rmdir broken/x: Errno::ENOENT
+rmdir tofile: Errno::ENOTDIR
+rmdir todir: Errno::ENOTDIR
+link still there: :ok
+");
+        }
+
+        /// <summary>
         /// The File and FileTest predicates MRI answers with rb_stat (exist?, file?, size, zero?, the times,
         /// identical?, ...) take an IO, or anything whose #to_io gives one, and fstat it; they raised TypeError
         /// for a #to_io object. The access(2) ones (readable?, writable?, executable?) and symlink? still take
