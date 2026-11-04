@@ -156,6 +156,74 @@ hello
             Assert(s == null && expected == null || s.ToString() == expected);
         }
 
+        [Options(NoRuntime = true)]
+        public void File_ReadLineSeparator1() {
+            // A separator is found wherever it ends first, also where a partial match of it starts
+            // over: "aab" ends with "ab". Each case is: content, separator, limit (-1 for none), lines.
+            var cases = new[] {
+                new[] { "aabxxaab", "ab", "-1", "aab", "xxaab" },
+                new[] { "xxaaab yy", "aab", "-1", "xxaaab", " yy" },
+                new[] { "abababc", "ababc", "-1", "abababc" },
+                new[] { "abaabab", "abab", "-1", "abaabab" },
+                new[] { "1--2---3----", "--", "-1", "1--", "2--", "-3--", "--" },
+                new[] { "no separator", "xy", "-1", "no separator" },
+                new[] { "x\r\ny\r\n\r\nz", "\r\n", "-1", "x\r\n", "y\r\n", "\r\n", "z" },
+                new[] { "aabxxaab", "ab", "2", "aa", "bx", "xa", "ab" },
+                new[] { "aabxxaab", "ab", "3", "aab", "xxa", "ab" },
+                new[] { "aabxxaab", "aab", "100", "aab", "xxaab" },
+                new[] { "", "ab", "-1" },
+            };
+
+            foreach (var c in cases) {
+                foreach (int bufferSize in new[] { 1, 2, 3, 4, 5, 7, 100 }) {
+                    foreach (bool seekable in new[] { false, true }) {
+                        var stream = seekable ? new MemoryStream(B(c[0])) : new TestStream(false, B(c[0]));
+                        var io = new RubyBufferedStream(stream, false, bufferSize);
+                        var separator = MutableString.CreateBinary(B(c[1]));
+                        int limit = Int32.Parse(c[2]);
+                        for (int i = 3; i <= c.Length; i++) {
+                            var line = io.ReadLine(separator, RubyEncoding.Binary, true, limit < 0 ? Int32.MaxValue : limit);
+                            Assert(i == c.Length ? line == null : line != null && line.ToString() == c[i]);
+                        }
+                    }
+                }
+            }
+
+            // a limit that splits a character is stretched to its end:
+            var utf8 = new RubyBufferedStream(new MemoryStream(Encoding.UTF8.GetBytes("hé€llo")), false, 2);
+            var nl = MutableString.CreateBinary(B("ll"));
+            Assert(utf8.ReadLine(nl, RubyEncoding.UTF8, true, 2).ToByteArray().ValueEquals(Encoding.UTF8.GetBytes("hé")));
+            Assert(utf8.ReadLine(nl, RubyEncoding.UTF8, true, 1).ToByteArray().ValueEquals(Encoding.UTF8.GetBytes("€")));
+            Assert(utf8.ReadLine(nl, RubyEncoding.UTF8, true, 100).ToString() == "ll");
+            Assert(utf8.ReadLine(nl, RubyEncoding.UTF8, true, 100).ToString() == "o");
+            Assert(utf8.ReadLine(nl, RubyEncoding.UTF8, true, 100) == null);
+        }
+
+        [Options(NoRuntime = true)]
+        public void File_AppendBytesToEnd1() {
+            // Reading to the end of a stream that knows its length, and of one that doesn't, after
+            // part of it has been buffered.
+            var data = new byte[10000];
+            for (int i = 0; i < data.Length; i++) {
+                data[i] = (byte)(i * 7);
+            }
+
+            foreach (bool seekable in new[] { false, true }) {
+                var stream = seekable ? new MemoryStream(data) : new TestStream(false, data);
+                var io = new RubyBufferedStream(stream, false, 16);
+                Assert(io.PeekByte() == data[0]);
+
+                var buffer = MutableString.CreateBinary(B("x"));
+                Assert(io.AppendBytes(buffer, Int32.MaxValue, true) == data.Length);
+                byte[] result = buffer.ToByteArray();
+                Assert(result.Length == data.Length + 1 && result[0] == (byte)'x');
+                Assert(new ReadOnlySpan<byte>(result, 1, data.Length).SequenceEqual(data));
+
+                buffer = MutableString.CreateBinary();
+                Assert(io.AppendBytes(buffer, Int32.MaxValue, true) == 0);
+            }
+        }
+
         public class Pal1 : PlatformAdaptationLayer {
             // case sensitive
             public readonly Dictionary<string, bool> Entries = new Dictionary<string, bool>();
