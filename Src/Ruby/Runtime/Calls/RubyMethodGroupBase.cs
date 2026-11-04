@@ -111,7 +111,20 @@ namespace IronRuby.Runtime.Calls {
         internal abstract SelfCallConvention CallConvention { get; }
         internal abstract bool ImplicitProtocolConversions { get; }
 
+        // The overloads never change once the group has them, so neither does the arity; working it
+        // out reads every overload's parameters and their attributes. Int32.MinValue is "not yet":
+        // no arity is that small.
+        private int _arity = Int32.MinValue;
+
         public override int GetArity() {
+            int arity = _arity;
+            if (arity == Int32.MinValue) {
+                _arity = arity = ComputeArity();
+            }
+            return arity;
+        }
+
+        private int ComputeArity() {
             int minParameters = Int32.MaxValue;
             int maxParameters = 0;
             bool hasOptional = false;

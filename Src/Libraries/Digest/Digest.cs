@@ -46,47 +46,64 @@ namespace IronRuby.StandardLibrary.Digest {
         [RubyClass("MD5")]
         public class MD5 : Base {
             public MD5()
-                : base(System.Security.Cryptography.MD5.Create(), 64) {
+                : base(System.Security.Cryptography.MD5.HashData, 16, 64) {
             }
         }
 
         [RubyClass("SHA1")]
         public class SHA1 : Base {
             public SHA1()
-                : base(System.Security.Cryptography.SHA1.Create(), 64) {
+                : base(System.Security.Cryptography.SHA1.HashData, 20, 64) {
             }
         }
 
         [RubyClass("SHA256")]
         public class SHA256 : Base {
             public SHA256()
-                : base(System.Security.Cryptography.SHA256.Create(), 64) {
+                : base(System.Security.Cryptography.SHA256.HashData, 32, 64) {
             }
         }
 
         [RubyClass("SHA384")]
         public class SHA384 : Base {
             public SHA384()
-                : base(System.Security.Cryptography.SHA384.Create(), 128) {
+                : base(System.Security.Cryptography.SHA384.HashData, 48, 128) {
             }
         }
 
         [RubyClass("SHA512")]
         public class SHA512 : Base {
             public SHA512()
-                : base(System.Security.Cryptography.SHA512.Create(), 128) {
+                : base(System.Security.Cryptography.SHA512.HashData, 64, 128) {
             }
         }
 
         [RubyClass("Base")]
         public class Base : Class {
-            private readonly HashAlgorithm/*!*/ _algorithm;
+            // The whole input is kept and hashed in one go by #finish, so the built-in digests
+            // need no HashAlgorithm of their own: the static one-shot HashData does the work.
+            // Creating a HashAlgorithm opens a native digest context (and a finalizable handle)
+            // for every Digest object - most of the cost of Digest::SHA256.hexdigest(str) - and
+            // ComputeHash reinitializes it afterwards. A subclass that brings an algorithm of its
+            // own still uses it.
+            private readonly HashAlgorithm _algorithm;
+            private readonly Func<byte[], byte[]> _hashData;
+            private readonly int _digestLength;
             private readonly int _blockLength;
             private MutableString/*!*/ _buffer;
 
             protected Base(HashAlgorithm/*!*/ algorithm, int blockLength) {
                 Assert.NotNull(algorithm);
                 _algorithm = algorithm;
+                _digestLength = algorithm.HashSize / 8;
+                _blockLength = blockLength;
+                _buffer = MutableString.CreateBinary();
+            }
+
+            private protected Base(Func<byte[], byte[]>/*!*/ hashData, int digestLength, int blockLength) {
+                Assert.NotNull(hashData);
+                _hashData = hashData;
+                _digestLength = digestLength;
                 _blockLength = blockLength;
                 _buffer = MutableString.CreateBinary();
             }
@@ -103,7 +120,7 @@ namespace IronRuby.StandardLibrary.Digest {
 
             [RubyMethod("digest_length")]
             public static int DigestLength(Base/*!*/ self) {
-                return self._algorithm.HashSize / 8;
+                return self._digestLength;
             }
 
             [RubyMethod("<<")]
@@ -128,14 +145,16 @@ namespace IronRuby.StandardLibrary.Digest {
             [RubyMethod("finish", RubyMethodAttributes.PrivateInstance)]
             public static MutableString/*!*/ Finish(RubyContext/*!*/ context, Base/*!*/ self) {
                 byte[] input = self._buffer.ConvertToBytes();
-                byte[] hash = self._algorithm.ComputeHash(input);
+                byte[] hash = (self._hashData != null) ? self._hashData(input) : self._algorithm.ComputeHash(input);
                 return MutableString.CreateBinary(hash);
             }
 
             [RubyMethod("reset")]
             public static Base/*!*/ Reset(RubyContext/*!*/ context, Base/*!*/ self) {
                 self._buffer = MutableString.CreateBinary();
-                self._algorithm.Initialize();
+                if (self._algorithm != null) {
+                    self._algorithm.Initialize();
+                }
                 return self;
             }
         }
@@ -183,8 +202,13 @@ namespace IronRuby.StandardLibrary.Digest {
             #region Helpers
 
             internal static MutableString/*!*/ Bytes2Hex(byte[]/*!*/ bytes) {
-                // TODO (opt): see also OpenSSL
-                return MutableString.CreateAscii(System.BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant());
+                const string digits = "0123456789abcdef";
+                var chars = new char[bytes.Length * 2];
+                for (int i = 0; i < bytes.Length; i++) {
+                    chars[2 * i] = digits[bytes[i] >> 4];
+                    chars[2 * i + 1] = digits[bytes[i] & 0xf];
+                }
+                return MutableString.CreateAscii(new String(chars));
             }
 
             internal static MutableString/*!*/ HexEncode(MutableString/*!*/ str) {
