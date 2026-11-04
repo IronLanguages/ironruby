@@ -63,7 +63,6 @@ out << <<~CS
 
   using System;
   using Microsoft.Scripting.Runtime;
-  using Microsoft.Scripting.Utils;
 
   namespace IronRuby.Runtime.Calls {
       internal sealed unsafe partial class LibraryFunctionCall {
@@ -79,14 +78,18 @@ out << <<~CS.gsub(/^(?=.)/, '        ')
         }
     }
 
-    private static object Call(int shape, IntPtr f, object[]/*!*/ a) {
-        switch (shape) {
+    // The call of each shape is a method of its own, which Invoke calls through this table. One method with a case for each
+    // shape was a frame of hundreds of temporaries (29 KB of Tier0 code) that every garbage collection scanned, twice, while
+    // it was on the stack - as it is under a script's main loop when the script runs the loop in a block it calls once.
+    private static readonly delegate*<IntPtr, object[], object>[]/*!*/ _calls = {
 CS
-all.each_with_index { |s, i| out << "                case #{i}: #{call(s)}\n" }
+all.each_with_index { |s, i| out << "            &C#{i},\n" }
+out << <<~CS.gsub(/^(?=.)/, '        ')
+    };
+
+CS
+all.each_with_index { |s, i| out << "        private static object C#{i}(IntPtr f, object[]/*!*/ a) { #{call(s)} }\n" }
 out << <<~CS
-                  default: throw Assert.Unreachable;
-              }
-          }
       }
   }
 CS

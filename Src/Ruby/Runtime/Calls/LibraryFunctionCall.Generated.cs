@@ -17,7 +17,6 @@
 
 using System;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime.Calls {
     internal sealed unsafe partial class LibraryFunctionCall {
@@ -190,170 +189,331 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
-        private static object Call(int shape, IntPtr f, object[]/*!*/ a) {
-            switch (shape) {
-                case 0: return ((delegate*<object>)f)();
-                case 1: return ((delegate*<object, object>)f)(a[0]);
-                case 2: return ((delegate*<object, object, object>)f)(a[0], a[1]);
-                case 3: return ((delegate*<object, object, object, object>)f)(a[0], a[1], a[2]);
-                case 4: return ((delegate*<object, object, object, object, object>)f)(a[0], a[1], a[2], a[3]);
-                case 5: return ((delegate*<object, object, object, object, object, object>)f)(a[0], a[1], a[2], a[3], a[4]);
-                case 6: return ((delegate*<object, object, object, object, object, object, object>)f)(a[0], a[1], a[2], a[3], a[4], a[5]);
-                case 7: return ((delegate*<object, object, object, object, object, object, object, object>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
-                case 8: return ((delegate*<object, object, object, object, object, object, object, object, object>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
-                case 9: return ((delegate*<object, object, object, object, object, object, object, object, object, object>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
-                case 10: return ((delegate*<int, object>)f)((int)a[0]);
-                case 11: return ((delegate*<int, object, object>)f)((int)a[0], a[1]);
-                case 12: return ((delegate*<object, int, object>)f)(a[0], (int)a[1]);
-                case 13: return ((delegate*<int, object, object, object>)f)((int)a[0], a[1], a[2]);
-                case 14: return ((delegate*<object, int, object, object>)f)(a[0], (int)a[1], a[2]);
-                case 15: return ((delegate*<object, object, int, object>)f)(a[0], a[1], (int)a[2]);
-                case 16: return ((delegate*<int, object, object, object, object>)f)((int)a[0], a[1], a[2], a[3]);
-                case 17: return ((delegate*<object, int, object, object, object>)f)(a[0], (int)a[1], a[2], a[3]);
-                case 18: return ((delegate*<object, object, int, object, object>)f)(a[0], a[1], (int)a[2], a[3]);
-                case 19: return ((delegate*<object, object, object, int, object>)f)(a[0], a[1], a[2], (int)a[3]);
-                case 20: return ((delegate*<bool, object>)f)((bool)a[0]);
-                case 21: return ((delegate*<object, bool, object>)f)(a[0], (bool)a[1]);
-                case 22: return ((delegate*<object, object, bool, object>)f)(a[0], a[1], (bool)a[2]);
-                case 23: return ((delegate*<object, object, object, bool, object>)f)(a[0], a[1], a[2], (bool)a[3]);
-                case 24: return ((delegate*<object, object, object, object, bool, object>)f)(a[0], a[1], a[2], a[3], (bool)a[4]);
-                case 25: return ((delegate*<double, object>)f)((double)a[0]);
-                case 26: return ((delegate*<double, object, object>)f)((double)a[0], a[1]);
-                case 27: return ((delegate*<object, double, object>)f)(a[0], (double)a[1]);
-                case 28: return ((delegate*<int, int, object>)f)((int)a[0], (int)a[1]);
-                case 29: return ((delegate*<double, double, object>)f)((double)a[0], (double)a[1]);
-                case 30: return ((delegate*<int, double, object>)f)((int)a[0], (double)a[1]);
-                case 31: return ((delegate*<double, int, object>)f)((double)a[0], (int)a[1]);
-                case 32: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int>)f)());
-                case 33: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, int>)f)(a[0]));
-                case 34: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, int>)f)(a[0], a[1]));
-                case 35: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, int>)f)(a[0], a[1], a[2]));
-                case 36: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, int>)f)(a[0], a[1], a[2], a[3]));
-                case 37: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, object, int>)f)(a[0], a[1], a[2], a[3], a[4]));
-                case 38: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, object, object, int>)f)(a[0], a[1], a[2], a[3], a[4], a[5]));
-                case 39: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, object, object, object, int>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]));
-                case 40: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, object, object, object, object, int>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]));
-                case 41: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, object, object, object, object, object, int>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]));
-                case 42: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, int>)f)((int)a[0]));
-                case 43: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, object, int>)f)((int)a[0], a[1]));
-                case 44: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, int, int>)f)(a[0], (int)a[1]));
-                case 45: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, object, object, int>)f)((int)a[0], a[1], a[2]));
-                case 46: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, int, object, int>)f)(a[0], (int)a[1], a[2]));
-                case 47: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, int, int>)f)(a[0], a[1], (int)a[2]));
-                case 48: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, object, object, object, int>)f)((int)a[0], a[1], a[2], a[3]));
-                case 49: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, int, object, object, int>)f)(a[0], (int)a[1], a[2], a[3]));
-                case 50: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, int, object, int>)f)(a[0], a[1], (int)a[2], a[3]));
-                case 51: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, int, int>)f)(a[0], a[1], a[2], (int)a[3]));
-                case 52: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<bool, int>)f)((bool)a[0]));
-                case 53: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, bool, int>)f)(a[0], (bool)a[1]));
-                case 54: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, bool, int>)f)(a[0], a[1], (bool)a[2]));
-                case 55: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, bool, int>)f)(a[0], a[1], a[2], (bool)a[3]));
-                case 56: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, bool, int>)f)(a[0], a[1], a[2], a[3], (bool)a[4]));
-                case 57: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<double, int>)f)((double)a[0]));
-                case 58: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<double, object, int>)f)((double)a[0], a[1]));
-                case 59: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, double, int>)f)(a[0], (double)a[1]));
-                case 60: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, int, int>)f)((int)a[0], (int)a[1]));
-                case 61: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<double, double, int>)f)((double)a[0], (double)a[1]));
-                case 62: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, double, int>)f)((int)a[0], (double)a[1]));
-                case 63: return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<double, int, int>)f)((double)a[0], (int)a[1]));
-                case 64: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<bool>)f)());
-                case 65: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, bool>)f)(a[0]));
-                case 66: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, bool>)f)(a[0], a[1]));
-                case 67: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, bool>)f)(a[0], a[1], a[2]));
-                case 68: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3]));
-                case 69: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3], a[4]));
-                case 70: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3], a[4], a[5]));
-                case 71: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]));
-                case 72: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]));
-                case 73: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, object, object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]));
-                case 74: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, bool>)f)((int)a[0]));
-                case 75: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, object, bool>)f)((int)a[0], a[1]));
-                case 76: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, int, bool>)f)(a[0], (int)a[1]));
-                case 77: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, object, object, bool>)f)((int)a[0], a[1], a[2]));
-                case 78: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, int, object, bool>)f)(a[0], (int)a[1], a[2]));
-                case 79: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, int, bool>)f)(a[0], a[1], (int)a[2]));
-                case 80: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, object, object, object, bool>)f)((int)a[0], a[1], a[2], a[3]));
-                case 81: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, int, object, object, bool>)f)(a[0], (int)a[1], a[2], a[3]));
-                case 82: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, int, object, bool>)f)(a[0], a[1], (int)a[2], a[3]));
-                case 83: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, int, bool>)f)(a[0], a[1], a[2], (int)a[3]));
-                case 84: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<bool, bool>)f)((bool)a[0]));
-                case 85: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, bool, bool>)f)(a[0], (bool)a[1]));
-                case 86: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, bool, bool>)f)(a[0], a[1], (bool)a[2]));
-                case 87: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, bool, bool>)f)(a[0], a[1], a[2], (bool)a[3]));
-                case 88: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, bool, bool>)f)(a[0], a[1], a[2], a[3], (bool)a[4]));
-                case 89: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<double, bool>)f)((double)a[0]));
-                case 90: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<double, object, bool>)f)((double)a[0], a[1]));
-                case 91: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, double, bool>)f)(a[0], (double)a[1]));
-                case 92: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, int, bool>)f)((int)a[0], (int)a[1]));
-                case 93: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<double, double, bool>)f)((double)a[0], (double)a[1]));
-                case 94: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, double, bool>)f)((int)a[0], (double)a[1]));
-                case 95: return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<double, int, bool>)f)((double)a[0], (int)a[1]));
-                case 96: return ((delegate*<double>)f)();
-                case 97: return ((delegate*<object, double>)f)(a[0]);
-                case 98: return ((delegate*<object, object, double>)f)(a[0], a[1]);
-                case 99: return ((delegate*<object, object, object, double>)f)(a[0], a[1], a[2]);
-                case 100: return ((delegate*<object, object, object, object, double>)f)(a[0], a[1], a[2], a[3]);
-                case 101: return ((delegate*<object, object, object, object, object, double>)f)(a[0], a[1], a[2], a[3], a[4]);
-                case 102: return ((delegate*<object, object, object, object, object, object, double>)f)(a[0], a[1], a[2], a[3], a[4], a[5]);
-                case 103: return ((delegate*<object, object, object, object, object, object, object, double>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
-                case 104: return ((delegate*<object, object, object, object, object, object, object, object, double>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
-                case 105: return ((delegate*<object, object, object, object, object, object, object, object, object, double>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
-                case 106: return ((delegate*<int, double>)f)((int)a[0]);
-                case 107: return ((delegate*<int, object, double>)f)((int)a[0], a[1]);
-                case 108: return ((delegate*<object, int, double>)f)(a[0], (int)a[1]);
-                case 109: return ((delegate*<int, object, object, double>)f)((int)a[0], a[1], a[2]);
-                case 110: return ((delegate*<object, int, object, double>)f)(a[0], (int)a[1], a[2]);
-                case 111: return ((delegate*<object, object, int, double>)f)(a[0], a[1], (int)a[2]);
-                case 112: return ((delegate*<int, object, object, object, double>)f)((int)a[0], a[1], a[2], a[3]);
-                case 113: return ((delegate*<object, int, object, object, double>)f)(a[0], (int)a[1], a[2], a[3]);
-                case 114: return ((delegate*<object, object, int, object, double>)f)(a[0], a[1], (int)a[2], a[3]);
-                case 115: return ((delegate*<object, object, object, int, double>)f)(a[0], a[1], a[2], (int)a[3]);
-                case 116: return ((delegate*<bool, double>)f)((bool)a[0]);
-                case 117: return ((delegate*<object, bool, double>)f)(a[0], (bool)a[1]);
-                case 118: return ((delegate*<object, object, bool, double>)f)(a[0], a[1], (bool)a[2]);
-                case 119: return ((delegate*<object, object, object, bool, double>)f)(a[0], a[1], a[2], (bool)a[3]);
-                case 120: return ((delegate*<object, object, object, object, bool, double>)f)(a[0], a[1], a[2], a[3], (bool)a[4]);
-                case 121: return ((delegate*<double, double>)f)((double)a[0]);
-                case 122: return ((delegate*<double, object, double>)f)((double)a[0], a[1]);
-                case 123: return ((delegate*<object, double, double>)f)(a[0], (double)a[1]);
-                case 124: return ((delegate*<int, int, double>)f)((int)a[0], (int)a[1]);
-                case 125: return ((delegate*<double, double, double>)f)((double)a[0], (double)a[1]);
-                case 126: return ((delegate*<int, double, double>)f)((int)a[0], (double)a[1]);
-                case 127: return ((delegate*<double, int, double>)f)((double)a[0], (int)a[1]);
-                case 128: ((delegate*<void>)f)(); return null;
-                case 129: ((delegate*<object, void>)f)(a[0]); return null;
-                case 130: ((delegate*<object, object, void>)f)(a[0], a[1]); return null;
-                case 131: ((delegate*<object, object, object, void>)f)(a[0], a[1], a[2]); return null;
-                case 132: ((delegate*<object, object, object, object, void>)f)(a[0], a[1], a[2], a[3]); return null;
-                case 133: ((delegate*<object, object, object, object, object, void>)f)(a[0], a[1], a[2], a[3], a[4]); return null;
-                case 134: ((delegate*<object, object, object, object, object, object, void>)f)(a[0], a[1], a[2], a[3], a[4], a[5]); return null;
-                case 135: ((delegate*<object, object, object, object, object, object, object, void>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); return null;
-                case 136: ((delegate*<object, object, object, object, object, object, object, object, void>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); return null;
-                case 137: ((delegate*<object, object, object, object, object, object, object, object, object, void>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]); return null;
-                case 138: ((delegate*<int, void>)f)((int)a[0]); return null;
-                case 139: ((delegate*<int, object, void>)f)((int)a[0], a[1]); return null;
-                case 140: ((delegate*<object, int, void>)f)(a[0], (int)a[1]); return null;
-                case 141: ((delegate*<int, object, object, void>)f)((int)a[0], a[1], a[2]); return null;
-                case 142: ((delegate*<object, int, object, void>)f)(a[0], (int)a[1], a[2]); return null;
-                case 143: ((delegate*<object, object, int, void>)f)(a[0], a[1], (int)a[2]); return null;
-                case 144: ((delegate*<int, object, object, object, void>)f)((int)a[0], a[1], a[2], a[3]); return null;
-                case 145: ((delegate*<object, int, object, object, void>)f)(a[0], (int)a[1], a[2], a[3]); return null;
-                case 146: ((delegate*<object, object, int, object, void>)f)(a[0], a[1], (int)a[2], a[3]); return null;
-                case 147: ((delegate*<object, object, object, int, void>)f)(a[0], a[1], a[2], (int)a[3]); return null;
-                case 148: ((delegate*<bool, void>)f)((bool)a[0]); return null;
-                case 149: ((delegate*<object, bool, void>)f)(a[0], (bool)a[1]); return null;
-                case 150: ((delegate*<object, object, bool, void>)f)(a[0], a[1], (bool)a[2]); return null;
-                case 151: ((delegate*<object, object, object, bool, void>)f)(a[0], a[1], a[2], (bool)a[3]); return null;
-                case 152: ((delegate*<object, object, object, object, bool, void>)f)(a[0], a[1], a[2], a[3], (bool)a[4]); return null;
-                case 153: ((delegate*<double, void>)f)((double)a[0]); return null;
-                case 154: ((delegate*<double, object, void>)f)((double)a[0], a[1]); return null;
-                case 155: ((delegate*<object, double, void>)f)(a[0], (double)a[1]); return null;
-                case 156: ((delegate*<int, int, void>)f)((int)a[0], (int)a[1]); return null;
-                case 157: ((delegate*<double, double, void>)f)((double)a[0], (double)a[1]); return null;
-                case 158: ((delegate*<int, double, void>)f)((int)a[0], (double)a[1]); return null;
-                case 159: ((delegate*<double, int, void>)f)((double)a[0], (int)a[1]); return null;
-                default: throw Assert.Unreachable;
-            }
-        }
+        // The call of each shape is a method of its own, which Invoke calls through this table. One method with a case for each
+        // shape was a frame of hundreds of temporaries (29 KB of Tier0 code) that every garbage collection scanned, twice, while
+        // it was on the stack - as it is under a script's main loop when the script runs the loop in a block it calls once.
+        private static readonly delegate*<IntPtr, object[], object>[]/*!*/ _calls = {
+            &C0,
+            &C1,
+            &C2,
+            &C3,
+            &C4,
+            &C5,
+            &C6,
+            &C7,
+            &C8,
+            &C9,
+            &C10,
+            &C11,
+            &C12,
+            &C13,
+            &C14,
+            &C15,
+            &C16,
+            &C17,
+            &C18,
+            &C19,
+            &C20,
+            &C21,
+            &C22,
+            &C23,
+            &C24,
+            &C25,
+            &C26,
+            &C27,
+            &C28,
+            &C29,
+            &C30,
+            &C31,
+            &C32,
+            &C33,
+            &C34,
+            &C35,
+            &C36,
+            &C37,
+            &C38,
+            &C39,
+            &C40,
+            &C41,
+            &C42,
+            &C43,
+            &C44,
+            &C45,
+            &C46,
+            &C47,
+            &C48,
+            &C49,
+            &C50,
+            &C51,
+            &C52,
+            &C53,
+            &C54,
+            &C55,
+            &C56,
+            &C57,
+            &C58,
+            &C59,
+            &C60,
+            &C61,
+            &C62,
+            &C63,
+            &C64,
+            &C65,
+            &C66,
+            &C67,
+            &C68,
+            &C69,
+            &C70,
+            &C71,
+            &C72,
+            &C73,
+            &C74,
+            &C75,
+            &C76,
+            &C77,
+            &C78,
+            &C79,
+            &C80,
+            &C81,
+            &C82,
+            &C83,
+            &C84,
+            &C85,
+            &C86,
+            &C87,
+            &C88,
+            &C89,
+            &C90,
+            &C91,
+            &C92,
+            &C93,
+            &C94,
+            &C95,
+            &C96,
+            &C97,
+            &C98,
+            &C99,
+            &C100,
+            &C101,
+            &C102,
+            &C103,
+            &C104,
+            &C105,
+            &C106,
+            &C107,
+            &C108,
+            &C109,
+            &C110,
+            &C111,
+            &C112,
+            &C113,
+            &C114,
+            &C115,
+            &C116,
+            &C117,
+            &C118,
+            &C119,
+            &C120,
+            &C121,
+            &C122,
+            &C123,
+            &C124,
+            &C125,
+            &C126,
+            &C127,
+            &C128,
+            &C129,
+            &C130,
+            &C131,
+            &C132,
+            &C133,
+            &C134,
+            &C135,
+            &C136,
+            &C137,
+            &C138,
+            &C139,
+            &C140,
+            &C141,
+            &C142,
+            &C143,
+            &C144,
+            &C145,
+            &C146,
+            &C147,
+            &C148,
+            &C149,
+            &C150,
+            &C151,
+            &C152,
+            &C153,
+            &C154,
+            &C155,
+            &C156,
+            &C157,
+            &C158,
+            &C159,
+        };
+
+        private static object C0(IntPtr f, object[]/*!*/ a) { return ((delegate*<object>)f)(); }
+        private static object C1(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object>)f)(a[0]); }
+        private static object C2(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object>)f)(a[0], a[1]); }
+        private static object C3(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object>)f)(a[0], a[1], a[2]); }
+        private static object C4(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, object>)f)(a[0], a[1], a[2], a[3]); }
+        private static object C5(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, object, object>)f)(a[0], a[1], a[2], a[3], a[4]); }
+        private static object C6(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, object, object, object>)f)(a[0], a[1], a[2], a[3], a[4], a[5]); }
+        private static object C7(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, object, object, object, object>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); }
+        private static object C8(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, object, object, object, object, object>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); }
+        private static object C9(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, object, object, object, object, object, object>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]); }
+        private static object C10(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, object>)f)((int)a[0]); }
+        private static object C11(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, object, object>)f)((int)a[0], a[1]); }
+        private static object C12(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, int, object>)f)(a[0], (int)a[1]); }
+        private static object C13(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, object, object, object>)f)((int)a[0], a[1], a[2]); }
+        private static object C14(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, int, object, object>)f)(a[0], (int)a[1], a[2]); }
+        private static object C15(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, int, object>)f)(a[0], a[1], (int)a[2]); }
+        private static object C16(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, object, object, object, object>)f)((int)a[0], a[1], a[2], a[3]); }
+        private static object C17(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, int, object, object, object>)f)(a[0], (int)a[1], a[2], a[3]); }
+        private static object C18(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, int, object, object>)f)(a[0], a[1], (int)a[2], a[3]); }
+        private static object C19(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, int, object>)f)(a[0], a[1], a[2], (int)a[3]); }
+        private static object C20(IntPtr f, object[]/*!*/ a) { return ((delegate*<bool, object>)f)((bool)a[0]); }
+        private static object C21(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, bool, object>)f)(a[0], (bool)a[1]); }
+        private static object C22(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, bool, object>)f)(a[0], a[1], (bool)a[2]); }
+        private static object C23(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, bool, object>)f)(a[0], a[1], a[2], (bool)a[3]); }
+        private static object C24(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, bool, object>)f)(a[0], a[1], a[2], a[3], (bool)a[4]); }
+        private static object C25(IntPtr f, object[]/*!*/ a) { return ((delegate*<double, object>)f)((double)a[0]); }
+        private static object C26(IntPtr f, object[]/*!*/ a) { return ((delegate*<double, object, object>)f)((double)a[0], a[1]); }
+        private static object C27(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, double, object>)f)(a[0], (double)a[1]); }
+        private static object C28(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, int, object>)f)((int)a[0], (int)a[1]); }
+        private static object C29(IntPtr f, object[]/*!*/ a) { return ((delegate*<double, double, object>)f)((double)a[0], (double)a[1]); }
+        private static object C30(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, double, object>)f)((int)a[0], (double)a[1]); }
+        private static object C31(IntPtr f, object[]/*!*/ a) { return ((delegate*<double, int, object>)f)((double)a[0], (int)a[1]); }
+        private static object C32(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int>)f)()); }
+        private static object C33(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, int>)f)(a[0])); }
+        private static object C34(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, int>)f)(a[0], a[1])); }
+        private static object C35(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, int>)f)(a[0], a[1], a[2])); }
+        private static object C36(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, int>)f)(a[0], a[1], a[2], a[3])); }
+        private static object C37(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, object, int>)f)(a[0], a[1], a[2], a[3], a[4])); }
+        private static object C38(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, object, object, int>)f)(a[0], a[1], a[2], a[3], a[4], a[5])); }
+        private static object C39(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, object, object, object, int>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6])); }
+        private static object C40(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, object, object, object, object, int>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7])); }
+        private static object C41(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, object, object, object, object, object, int>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8])); }
+        private static object C42(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, int>)f)((int)a[0])); }
+        private static object C43(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, object, int>)f)((int)a[0], a[1])); }
+        private static object C44(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, int, int>)f)(a[0], (int)a[1])); }
+        private static object C45(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, object, object, int>)f)((int)a[0], a[1], a[2])); }
+        private static object C46(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, int, object, int>)f)(a[0], (int)a[1], a[2])); }
+        private static object C47(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, int, int>)f)(a[0], a[1], (int)a[2])); }
+        private static object C48(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, object, object, object, int>)f)((int)a[0], a[1], a[2], a[3])); }
+        private static object C49(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, int, object, object, int>)f)(a[0], (int)a[1], a[2], a[3])); }
+        private static object C50(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, int, object, int>)f)(a[0], a[1], (int)a[2], a[3])); }
+        private static object C51(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, int, int>)f)(a[0], a[1], a[2], (int)a[3])); }
+        private static object C52(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<bool, int>)f)((bool)a[0])); }
+        private static object C53(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, bool, int>)f)(a[0], (bool)a[1])); }
+        private static object C54(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, bool, int>)f)(a[0], a[1], (bool)a[2])); }
+        private static object C55(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, bool, int>)f)(a[0], a[1], a[2], (bool)a[3])); }
+        private static object C56(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, object, object, object, bool, int>)f)(a[0], a[1], a[2], a[3], (bool)a[4])); }
+        private static object C57(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<double, int>)f)((double)a[0])); }
+        private static object C58(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<double, object, int>)f)((double)a[0], a[1])); }
+        private static object C59(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<object, double, int>)f)(a[0], (double)a[1])); }
+        private static object C60(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, int, int>)f)((int)a[0], (int)a[1])); }
+        private static object C61(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<double, double, int>)f)((double)a[0], (double)a[1])); }
+        private static object C62(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<int, double, int>)f)((int)a[0], (double)a[1])); }
+        private static object C63(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.Int32ToObject(((delegate*<double, int, int>)f)((double)a[0], (int)a[1])); }
+        private static object C64(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<bool>)f)()); }
+        private static object C65(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, bool>)f)(a[0])); }
+        private static object C66(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, bool>)f)(a[0], a[1])); }
+        private static object C67(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, bool>)f)(a[0], a[1], a[2])); }
+        private static object C68(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3])); }
+        private static object C69(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3], a[4])); }
+        private static object C70(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3], a[4], a[5])); }
+        private static object C71(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6])); }
+        private static object C72(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7])); }
+        private static object C73(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, object, object, object, object, object, bool>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8])); }
+        private static object C74(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, bool>)f)((int)a[0])); }
+        private static object C75(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, object, bool>)f)((int)a[0], a[1])); }
+        private static object C76(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, int, bool>)f)(a[0], (int)a[1])); }
+        private static object C77(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, object, object, bool>)f)((int)a[0], a[1], a[2])); }
+        private static object C78(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, int, object, bool>)f)(a[0], (int)a[1], a[2])); }
+        private static object C79(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, int, bool>)f)(a[0], a[1], (int)a[2])); }
+        private static object C80(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, object, object, object, bool>)f)((int)a[0], a[1], a[2], a[3])); }
+        private static object C81(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, int, object, object, bool>)f)(a[0], (int)a[1], a[2], a[3])); }
+        private static object C82(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, int, object, bool>)f)(a[0], a[1], (int)a[2], a[3])); }
+        private static object C83(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, int, bool>)f)(a[0], a[1], a[2], (int)a[3])); }
+        private static object C84(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<bool, bool>)f)((bool)a[0])); }
+        private static object C85(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, bool, bool>)f)(a[0], (bool)a[1])); }
+        private static object C86(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, bool, bool>)f)(a[0], a[1], (bool)a[2])); }
+        private static object C87(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, bool, bool>)f)(a[0], a[1], a[2], (bool)a[3])); }
+        private static object C88(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, object, object, object, bool, bool>)f)(a[0], a[1], a[2], a[3], (bool)a[4])); }
+        private static object C89(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<double, bool>)f)((double)a[0])); }
+        private static object C90(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<double, object, bool>)f)((double)a[0], a[1])); }
+        private static object C91(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<object, double, bool>)f)(a[0], (double)a[1])); }
+        private static object C92(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, int, bool>)f)((int)a[0], (int)a[1])); }
+        private static object C93(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<double, double, bool>)f)((double)a[0], (double)a[1])); }
+        private static object C94(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<int, double, bool>)f)((int)a[0], (double)a[1])); }
+        private static object C95(IntPtr f, object[]/*!*/ a) { return ScriptingRuntimeHelpers.BooleanToObject(((delegate*<double, int, bool>)f)((double)a[0], (int)a[1])); }
+        private static object C96(IntPtr f, object[]/*!*/ a) { return ((delegate*<double>)f)(); }
+        private static object C97(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, double>)f)(a[0]); }
+        private static object C98(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, double>)f)(a[0], a[1]); }
+        private static object C99(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, double>)f)(a[0], a[1], a[2]); }
+        private static object C100(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, double>)f)(a[0], a[1], a[2], a[3]); }
+        private static object C101(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, object, double>)f)(a[0], a[1], a[2], a[3], a[4]); }
+        private static object C102(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, object, object, double>)f)(a[0], a[1], a[2], a[3], a[4], a[5]); }
+        private static object C103(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, object, object, object, double>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); }
+        private static object C104(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, object, object, object, object, double>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); }
+        private static object C105(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, object, object, object, object, object, double>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]); }
+        private static object C106(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, double>)f)((int)a[0]); }
+        private static object C107(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, object, double>)f)((int)a[0], a[1]); }
+        private static object C108(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, int, double>)f)(a[0], (int)a[1]); }
+        private static object C109(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, object, object, double>)f)((int)a[0], a[1], a[2]); }
+        private static object C110(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, int, object, double>)f)(a[0], (int)a[1], a[2]); }
+        private static object C111(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, int, double>)f)(a[0], a[1], (int)a[2]); }
+        private static object C112(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, object, object, object, double>)f)((int)a[0], a[1], a[2], a[3]); }
+        private static object C113(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, int, object, object, double>)f)(a[0], (int)a[1], a[2], a[3]); }
+        private static object C114(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, int, object, double>)f)(a[0], a[1], (int)a[2], a[3]); }
+        private static object C115(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, int, double>)f)(a[0], a[1], a[2], (int)a[3]); }
+        private static object C116(IntPtr f, object[]/*!*/ a) { return ((delegate*<bool, double>)f)((bool)a[0]); }
+        private static object C117(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, bool, double>)f)(a[0], (bool)a[1]); }
+        private static object C118(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, bool, double>)f)(a[0], a[1], (bool)a[2]); }
+        private static object C119(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, bool, double>)f)(a[0], a[1], a[2], (bool)a[3]); }
+        private static object C120(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, object, object, object, bool, double>)f)(a[0], a[1], a[2], a[3], (bool)a[4]); }
+        private static object C121(IntPtr f, object[]/*!*/ a) { return ((delegate*<double, double>)f)((double)a[0]); }
+        private static object C122(IntPtr f, object[]/*!*/ a) { return ((delegate*<double, object, double>)f)((double)a[0], a[1]); }
+        private static object C123(IntPtr f, object[]/*!*/ a) { return ((delegate*<object, double, double>)f)(a[0], (double)a[1]); }
+        private static object C124(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, int, double>)f)((int)a[0], (int)a[1]); }
+        private static object C125(IntPtr f, object[]/*!*/ a) { return ((delegate*<double, double, double>)f)((double)a[0], (double)a[1]); }
+        private static object C126(IntPtr f, object[]/*!*/ a) { return ((delegate*<int, double, double>)f)((int)a[0], (double)a[1]); }
+        private static object C127(IntPtr f, object[]/*!*/ a) { return ((delegate*<double, int, double>)f)((double)a[0], (int)a[1]); }
+        private static object C128(IntPtr f, object[]/*!*/ a) { ((delegate*<void>)f)(); return null; }
+        private static object C129(IntPtr f, object[]/*!*/ a) { ((delegate*<object, void>)f)(a[0]); return null; }
+        private static object C130(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, void>)f)(a[0], a[1]); return null; }
+        private static object C131(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, object, void>)f)(a[0], a[1], a[2]); return null; }
+        private static object C132(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, object, object, void>)f)(a[0], a[1], a[2], a[3]); return null; }
+        private static object C133(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, object, object, object, void>)f)(a[0], a[1], a[2], a[3], a[4]); return null; }
+        private static object C134(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, object, object, object, object, void>)f)(a[0], a[1], a[2], a[3], a[4], a[5]); return null; }
+        private static object C135(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, object, object, object, object, object, void>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); return null; }
+        private static object C136(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, object, object, object, object, object, object, void>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); return null; }
+        private static object C137(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, object, object, object, object, object, object, object, void>)f)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]); return null; }
+        private static object C138(IntPtr f, object[]/*!*/ a) { ((delegate*<int, void>)f)((int)a[0]); return null; }
+        private static object C139(IntPtr f, object[]/*!*/ a) { ((delegate*<int, object, void>)f)((int)a[0], a[1]); return null; }
+        private static object C140(IntPtr f, object[]/*!*/ a) { ((delegate*<object, int, void>)f)(a[0], (int)a[1]); return null; }
+        private static object C141(IntPtr f, object[]/*!*/ a) { ((delegate*<int, object, object, void>)f)((int)a[0], a[1], a[2]); return null; }
+        private static object C142(IntPtr f, object[]/*!*/ a) { ((delegate*<object, int, object, void>)f)(a[0], (int)a[1], a[2]); return null; }
+        private static object C143(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, int, void>)f)(a[0], a[1], (int)a[2]); return null; }
+        private static object C144(IntPtr f, object[]/*!*/ a) { ((delegate*<int, object, object, object, void>)f)((int)a[0], a[1], a[2], a[3]); return null; }
+        private static object C145(IntPtr f, object[]/*!*/ a) { ((delegate*<object, int, object, object, void>)f)(a[0], (int)a[1], a[2], a[3]); return null; }
+        private static object C146(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, int, object, void>)f)(a[0], a[1], (int)a[2], a[3]); return null; }
+        private static object C147(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, object, int, void>)f)(a[0], a[1], a[2], (int)a[3]); return null; }
+        private static object C148(IntPtr f, object[]/*!*/ a) { ((delegate*<bool, void>)f)((bool)a[0]); return null; }
+        private static object C149(IntPtr f, object[]/*!*/ a) { ((delegate*<object, bool, void>)f)(a[0], (bool)a[1]); return null; }
+        private static object C150(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, bool, void>)f)(a[0], a[1], (bool)a[2]); return null; }
+        private static object C151(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, object, bool, void>)f)(a[0], a[1], a[2], (bool)a[3]); return null; }
+        private static object C152(IntPtr f, object[]/*!*/ a) { ((delegate*<object, object, object, object, bool, void>)f)(a[0], a[1], a[2], a[3], (bool)a[4]); return null; }
+        private static object C153(IntPtr f, object[]/*!*/ a) { ((delegate*<double, void>)f)((double)a[0]); return null; }
+        private static object C154(IntPtr f, object[]/*!*/ a) { ((delegate*<double, object, void>)f)((double)a[0], a[1]); return null; }
+        private static object C155(IntPtr f, object[]/*!*/ a) { ((delegate*<object, double, void>)f)(a[0], (double)a[1]); return null; }
+        private static object C156(IntPtr f, object[]/*!*/ a) { ((delegate*<int, int, void>)f)((int)a[0], (int)a[1]); return null; }
+        private static object C157(IntPtr f, object[]/*!*/ a) { ((delegate*<double, double, void>)f)((double)a[0], (double)a[1]); return null; }
+        private static object C158(IntPtr f, object[]/*!*/ a) { ((delegate*<int, double, void>)f)((int)a[0], (double)a[1]); return null; }
+        private static object C159(IntPtr f, object[]/*!*/ a) { ((delegate*<double, int, void>)f)((double)a[0], (int)a[1]); return null; }
     }
 }

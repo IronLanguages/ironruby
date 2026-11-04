@@ -115,7 +115,7 @@ namespace IronRuby.Runtime.Calls {
                     }
                 }
             }
-            return Call(_shape, _function, args);
+            return _calls[_shape](_function, args);
         }
     }
 }
