@@ -146,6 +146,11 @@ namespace IronRuby.Runtime {
             _objectId = id;
         }
 
+        /// <summary>Fresh data, for an <see cref="IRubyInstanceDataOwner"/> (OwnedInstanceData).</summary>
+        internal static RubyInstanceData/*!*/ Create() {
+            return new RubyInstanceData();
+        }
+
         internal RubyInstanceData() {
         }
 
@@ -608,6 +613,14 @@ namespace IronRuby.Runtime {
         /// </summary>
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         internal bool TrySetCached(InstanceVariableSite.Entry/*!*/ entry, object value, RubyObject/*!*/ owner) {
+            return TrySetCached(entry, value, owner.ImmediateClass);
+        }
+
+        /// <param name="ownerClass">
+        /// The owner's immediate class, whose instances' usual number of variables sizes the table
+        /// made for the first one; null to go by the site's alone.
+        /// </param>
+        internal bool TrySetCached(InstanceVariableSite.Entry/*!*/ entry, object value, RubyClass ownerClass) {
             object[] s = _ivars;
             object shape = ShapeOf(s);
             if (shape != entry.Shape) {
@@ -635,7 +648,7 @@ namespace IronRuby.Runtime {
             if (s.Length == 1) {
                 // the object's first variable
                 // the class may have learnt since the site was filled that its instances get more
-                var first = new object[Math.Max(entry.Capacity, owner.ImmediateClass.InstanceVariableCapacity) + 1];
+                var first = new object[Math.Max(entry.Capacity, ownerClass != null ? ownerClass.InstanceVariableCapacity : 0) + 1];
                 first[0] = entry.Next;
                 first[1] = value;
                 return Interlocked.CompareExchange(ref _ivars, first, s) == s;

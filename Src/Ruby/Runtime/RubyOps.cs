@@ -4288,7 +4288,11 @@ namespace IronRuby.Runtime {
         }
 
         private static object GetInstanceVariableSlow(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
-            RubyInstanceData data = context.TryGetInstanceData(self);
+            var owner = self as IRubyInstanceDataOwner;
+            RubyInstanceData data;
+            if (owner == null || !owner.TryGetInstanceData(context, out data)) {
+                data = context.TryGetInstanceData(self);
+            }
             if (data == null) {
                 return null;
             }
@@ -4318,9 +4322,22 @@ namespace IronRuby.Runtime {
                 if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
                     return value;
                 }
+            } else if (TrySetOwnedInstanceVariable(scope.RubyContext, self, value, site)) {
+                return value;
             }
             scope.RubyContext.SetInstanceVariable(self, value, site);
             return value;
+        }
+
+        // The cached store of a CLR object that keeps its own instance data (IRubyInstanceDataOwner);
+        // the slow path - the frozen error among the rest - is the caller's when this says no.
+        private static bool TrySetOwnedInstanceVariable(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {
+            var owner = self as IRubyInstanceDataOwner;
+            if (owner == null) {
+                return false;
+            }
+            var data = owner.GetInstanceData(context);
+            return data != null && !data._frozen && data.TrySetCached(site.Cache, value, data.ImmediateClass);
         }
 
         public static object WriteInstanceVariable(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {
@@ -4330,6 +4347,8 @@ namespace IronRuby.Runtime {
                 if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
                     return value;
                 }
+            } else if (TrySetOwnedInstanceVariable(context, self, value, site)) {
+                return value;
             }
             context.SetInstanceVariable(self, value, site);
             return value;

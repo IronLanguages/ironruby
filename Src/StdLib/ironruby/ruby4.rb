@@ -5813,6 +5813,7 @@ class Enumerator
     end
     __enum_initialize_copy__(other)
     @__fiber__ = nil
+    @__iter_cursor__ = nil
     @__iter_done__ = false
     @__iter_result__ = nil
     @__iter_started__ = false
@@ -5825,8 +5826,11 @@ class Enumerator
   private :initialize_copy
 
   def __iter_in_progress__
+    return false if @__iter_done__ || !(@__iter_started__ || @__peeked__)
+    # an Array walked by a cursor (__iter_advance__) is under way just as a fiber is
+    return true if @__iter_cursor__
     fiber = @__fiber__
-    !fiber.nil? && fiber.alive? && !@__iter_done__ && (@__iter_started__ || @__peeked__)
+    !fiber.nil? && fiber.alive?
   end
   private :__iter_in_progress__
 
