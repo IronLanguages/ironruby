@@ -1898,6 +1898,12 @@ begin; Marshal.load(""\x04\x08u:\x0bString\x06a""); rescue TypeError => e; puts 
 begin; Marshal.load(""\x04\x08c\x0fComparable""); rescue ArgumentError => e; puts e.message; end
 p [0.0 / 0].pack('e').bytes, [1].pack('C', buffer: nil).bytes
 begin; [1].pack('C', bogus: 1); rescue ArgumentError => e; puts e.message; end
+class RtmLog; def respond_to_missing?(n, p); ($rtm ||= []) << [n, p]; false; end; end
+Marshal.dump(RtmLog.new); p $rtm
+class RtLog; def respond_to?(n, *a); ($rt ||= []) << [n, a]; super; end; end
+Marshal.dump(RtLog.new); p $rt
+class Bo < BasicObject; def initialize; @a = 1; end; end
+p Marshal.dump(Bo.new).bytes
 ", @"
 true
 [4, 8, 99, 6, 83]
@@ -1919,6 +1925,9 @@ Comparable does not refer to class
 [0, 0, 192, 127]
 [1]
 unknown keyword: :bogus
+[[:marshal_dump, true], [:_dump, true]]
+[[:marshal_dump, [true]], [:_dump, [true]]]
+[4, 8, 111, 58, 7, 66, 111, 6, 58, 7, 64, 97, 105, 6]
 ");
         }
 
