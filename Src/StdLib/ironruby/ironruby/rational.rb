@@ -321,7 +321,9 @@ class Rational < Numeric
     elsif ::Integer === other
       ::Kernel.raise(::ArgumentError, "exponent is too large")
     elsif ::Float === other || ::Rational === other
-      to_f ** other
+      # the C# Float#** (see Float#__ir_float_pow__): MRI's rb_rational_pow calls rb_float_pow
+      # directly, so a wrapper of Float#** is not run for a Rational base
+      to_f.__send__(:__ir_float_pow__, other)
     else
       __ir_num_coerce_bin__(other, :**)
     end
