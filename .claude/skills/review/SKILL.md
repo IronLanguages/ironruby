@@ -38,6 +38,12 @@ as if one thread ran at a time, races.
   still waits on it? (#65 Fiber)
 - `[ThreadStatic]` and static caches: bounded? Do they keep a `RubyContext` alive? (#95)
 
+**One process, several runtimes.** A host can run several `RubyContext`s (ScriptRuntimes,
+`IronRuby.create_engine`) and hand objects between them. State that used to live in a
+per-context table and now lives on the object itself, or in a static field, leaks from one
+runtime to the other: instance variables, singleton classes, caches, symbols. Rank that a
+**Should fix**, not a Note, even when no test does it today. It is how embedders use the DLR. (#98)
+
 **Blocking and interruptibility.** A thread parked in a P/Invoke cannot be raised into,
 killed or closed underneath. Does a new wait use poll slices with
 `RubyUtils.CheckAsyncException`, as `DescriptorStream.WaitFor` does? Does a retry loop on
