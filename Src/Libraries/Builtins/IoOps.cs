@@ -1654,7 +1654,7 @@ namespace IronRuby.Builtins {
 
             // MRI's syswrite is one write(2), so a pipe that only had room for part of the string
             // reports what it took rather than waiting for the rest to fit.
-            var pipe = self.GetStream().BaseStream as DescriptorStream;
+            var pipe = DescriptorStream.Of(self.GetStream().BaseStream);
             int count = val.GetByteCount();
             if (pipe != null && count > 0) {
                 int written;
@@ -1934,7 +1934,7 @@ namespace IronRuby.Builtins {
                 return (queued == 0 && buffered == 0) ? null : buffer;
             }
 
-            var pipe = stream.BaseStream as DescriptorStream;
+            var pipe = DescriptorStream.Of(stream.BaseStream);
             if (pipe == null) {
                 // No non-blocking read primitive for this stream - a socket, or something with no
                 // descriptor at all.  With bytes already in hand, poll(2) decides whether to ask

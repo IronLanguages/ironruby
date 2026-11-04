@@ -527,8 +527,15 @@ namespace IronRuby.StandardLibrary.Markly {
                 throw RubyExceptions.CreateAllocatorUndefinedError(ImmediateClass.NominalClass);
             }
 
-            private Node WrapRelative(IntPtr node) {
-                return node == IntPtr.Zero ? null : Tree.Wrap(node);
+            // The neighbour is read, and wrapped in the tree that owns self, under Tree.Lock - as Insert,
+            // Replace and Delete read self.Tree. Outside it another thread could move self to another
+            // tree in between, and the wrapper would keep the old tree alive instead of the one that
+            // owns the node: once that one is collected, its finalizer frees the node under the wrapper.
+            private Node WrapRelative(Func<IntPtr, IntPtr>/*!*/ navigate) {
+                lock (Tree.Lock) {
+                    IntPtr node = navigate(Pointer);
+                    return node == IntPtr.Zero ? null : Tree.Wrap(node);
+                }
             }
 
             private static Node/*!*/ CheckNode(RubyContext/*!*/ context, object value) {
@@ -596,42 +603,42 @@ namespace IronRuby.StandardLibrary.Markly {
 
             [RubyMethod("first_child")]
             public static Node FirstChild(Node/*!*/ self) {
-                var result = self.WrapRelative(CmarkNative.cmark_node_first_child(self.Pointer));
+                var result = self.WrapRelative(CmarkNative.cmark_node_first_child);
                 GC.KeepAlive(self);
                 return result;
             }
 
             [RubyMethod("last_child")]
             public static Node LastChild(Node/*!*/ self) {
-                var result = self.WrapRelative(CmarkNative.cmark_node_last_child(self.Pointer));
+                var result = self.WrapRelative(CmarkNative.cmark_node_last_child);
                 GC.KeepAlive(self);
                 return result;
             }
 
             [RubyMethod("next")]
             public static Node Next(Node/*!*/ self) {
-                var result = self.WrapRelative(CmarkNative.cmark_node_next(self.Pointer));
+                var result = self.WrapRelative(CmarkNative.cmark_node_next);
                 GC.KeepAlive(self);
                 return result;
             }
 
             [RubyMethod("previous")]
             public static Node Previous(Node/*!*/ self) {
-                var result = self.WrapRelative(CmarkNative.cmark_node_previous(self.Pointer));
+                var result = self.WrapRelative(CmarkNative.cmark_node_previous);
                 GC.KeepAlive(self);
                 return result;
             }
 
             [RubyMethod("parent")]
             public static Node Parent(Node/*!*/ self) {
-                var result = self.WrapRelative(CmarkNative.cmark_node_parent(self.Pointer));
+                var result = self.WrapRelative(CmarkNative.cmark_node_parent);
                 GC.KeepAlive(self);
                 return result;
             }
 
             [RubyMethod("parent_footnote_def")]
             public static Node ParentFootnoteDef(Node/*!*/ self) {
-                var result = self.WrapRelative(CmarkNative.cmark_node_parent_footnote_def(self.Pointer));
+                var result = self.WrapRelative(CmarkNative.cmark_node_parent_footnote_def);
                 GC.KeepAlive(self);
                 return result;
             }

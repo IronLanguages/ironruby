@@ -1624,7 +1624,12 @@ namespace IronRuby.Runtime {
             lock (ExtensionsLock) {
                 _hasScopedExtensions = true;
                 if (_scopedExtensionNamespaces.Add(@namespace)) {
-                    _loadedExtensions.TryGetValue(@namespace, out extensions);
+                    // a copy: the list is enumerated outside the lock, while a concurrent LoadExtensions may append
+                    // to it (and then adds what it appended itself, since the namespace is scoped by then)
+                    List<ExtensionMethodInfo> loaded;
+                    if (_loadedExtensions.TryGetValue(@namespace, out loaded)) {
+                        extensions = new List<ExtensionMethodInfo>(loaded);
+                    }
                 }
             }
 

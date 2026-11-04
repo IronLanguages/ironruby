@@ -62,8 +62,31 @@ namespace IronRuby.Builtins {
                     break;
 
                 case ConsoleStreamType.Input:
-                    throw new NotSupportedException();
+                    // nothing to flush on the way in; IO#sysread flushes whatever stream it reads
+                    break;
             }
+        }
+
+        /// <summary>The descriptor stream standard input is read through on a Unix terminal, or null.</summary>
+        internal DescriptorStream RawInput {
+            get { return (_consoleType == ConsoleStreamType.Input) ? GetUnbufferedInput() as DescriptorStream : null; }
+        }
+
+        /// <summary>
+        /// STDIN.close: a reader parked in the terminal's descriptor stream is woken and raises IOError,
+        /// as it does in MRI, and the next standard input stream gets a descriptor stream of its own.
+        /// The descriptor itself stays open, as it did before.
+        /// </summary>
+        protected override void Dispose(bool disposing) {
+            if (disposing && _consoleType == ConsoleStreamType.Input) {
+                var raw = _rawInput;
+                if (raw != null) {
+                    _rawInput = null;
+                    _rawInputChecked = false;
+                    raw.Dispose();
+                }
+            }
+            base.Dispose(disposing);
         }
 
         public override long Length {
