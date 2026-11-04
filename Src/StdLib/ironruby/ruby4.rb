@@ -1490,48 +1490,7 @@ module Comparable
     end
   end
 
-  # Comparable#clamp (2.4; range form 2.4, beginless/endless 2.7).
-  def clamp(*args)
-    case args.size
-    when 1
-      range = args[0]
-      # anything with #begin, #end and #exclude_end? passes for a Range (MRI: rb_range_values)
-      unless range.is_a?(Range) ||
-             (range.respond_to?(:begin) && range.respond_to?(:end) && range.respond_to?(:exclude_end?))
-        raise TypeError, "wrong argument type #{range.nil? ? 'nil' : range.class} (expected Range)"
-      end
-      min, max = range.begin, range.end
-      if range.exclude_end? && !max.nil?
-        raise ArgumentError, "cannot clamp with an exclusive range"
-      end
-    when 2
-      min, max = args
-    else
-      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)"
-    end
-
-    unless min.nil? || max.nil?
-      c = (min <=> max)
-      if c.nil?
-        # rb_cmpint: the operands are the bounds, not self
-        raise ArgumentError, "comparison of #{min.class} with #{::Comparable.__cmp_operand__(max)} failed"
-      elsif c > 0
-        raise ArgumentError, "min argument must be less than or equal to max argument"
-      end
-    end
-
-    unless min.nil?
-      c = (self <=> min)
-      raise ArgumentError, "comparison of #{self.class} with #{::Comparable.__cmp_operand__(min)} failed" if c.nil?
-      return min if c < 0
-    end
-    unless max.nil?
-      c = (self <=> max)
-      raise ArgumentError, "comparison of #{self.class} with #{::Comparable.__cmp_operand__(max)} failed" if c.nil?
-      return max if c > 0
-    end
-    self
-  end unless method_defined?(:clamp)
+  # Comparable#clamp is C# (Src/Libraries/Builtins/Comparable.cs).
 end
 
 module Math
