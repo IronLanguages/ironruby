@@ -193,12 +193,13 @@ namespace IronRuby.Builtins {
 
         private static object ReadBer(MutableString/*!*/ data, ref int index) {
             int i = index;
-            try {
-                // skip initial zeroes:
-                while (data.GetByte(i) == 0x80) { i++; }
-                index = i;
-                while ((data.GetByte(i) & 0x80) != 0) { i++; }
-            } catch (IndexOutOfRangeException) {
+            int length = data.GetByteCount();
+            // skip initial zeroes:
+            while (i < length && data.GetByte(i) == 0x80) { i++; }
+            index = i;
+            while (i < length && (data.GetByte(i) & 0x80) != 0) { i++; }
+            if (i >= length) {
+                // the data ended before the last byte of the number (or before any number)
                 index = i;
                 return null;
             }

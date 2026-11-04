@@ -948,6 +948,10 @@ namespace IronRuby.Tests {
                 ClrBigIntegerV4,
                 BigInteger1,
                 GcdLcm1,
+                Integer_Normalization1,
+                Integer_ToStringRadix1,
+                Pack_BerTruncated1,
+                Integer_Int64Shifts1,
             };
         }
     }

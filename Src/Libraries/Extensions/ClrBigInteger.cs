@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -1078,8 +1078,109 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
             }
 
-            // TODO: Can we do the ToLower in BigInteger?
-            return MutableString.CreateAscii(self.ToString(radix).ToLowerInvariant());
+            return MutableString.CreateAscii(ToRadixString(self, radix));
+        }
+
+        private const string RadixDigits = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+        /// <summary>
+        /// The digits of <paramref name="value"/> in base <paramref name="radix"/> (2 through 36), lower case,
+        /// with a leading '-' when it is negative.
+        /// </summary>
+        /// <remarks>
+        /// MathUtils.ToString(BigInteger, int) divides the whole number by the radix once per digit, so a
+        /// Fixnum costs a BigInteger division for each digit and a Bignum of n words O(n) of them per digit.
+        /// Here a value in the Int64 range is converted with machine arithmetic, a power-of-two radix reads
+        /// the bits directly, and any other radix divides by the largest power of the radix that fits in
+        /// a long, which yields that many digits per division.
+        /// </remarks>
+        internal static string/*!*/ ToRadixString(BigInteger value, int radix) {
+            Debug.Assert(radix >= 2 && radix <= 36);
+
+            if (radix == 10) {
+                return value.ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (value >= Int64.MinValue && value <= Int64.MaxValue) {
+                return ToRadixString((long)value, radix);
+            }
+
+            bool negative = value.Sign < 0;
+            BigInteger magnitude = BigInteger.Abs(value);
+
+            if ((radix & (radix - 1)) == 0) {
+                int bitsPerDigit = System.Numerics.BitOperations.TrailingZeroCount(radix);
+                byte[] bytes = magnitude.ToByteArray(isUnsigned: true, isBigEndian: false);
+                long bitLength = (long)magnitude.GetBitLength();
+                int digitCount = (int)((bitLength + bitsPerDigit - 1) / bitsPerDigit);
+                char[] chars = new char[digitCount + (negative ? 1 : 0)];
+                int mask = radix - 1;
+                int pos = chars.Length;
+                for (int d = 0; d < digitCount; d++) {
+                    long bit = (long)d * bitsPerDigit;
+                    int byteIndex = (int)(bit >> 3);
+                    int window = bytes[byteIndex];
+                    if (byteIndex + 1 < bytes.Length) {
+                        window |= bytes[byteIndex + 1] << 8;
+                    }
+                    chars[--pos] = RadixDigits[(window >> (int)(bit & 7)) & mask];
+                }
+                if (negative) {
+                    chars[0] = '-';
+                }
+                return new string(chars);
+            }
+
+            // the largest power of the radix that fits in a long, and its number of digits:
+            long chunk = radix;
+            int chunkDigits = 1;
+            while (chunk <= Int64.MaxValue / radix) {
+                chunk *= radix;
+                chunkDigits++;
+            }
+
+            BigInteger divisor = chunk;
+            var chunks = new System.Collections.Generic.List<long>();
+            while (magnitude > Int64.MaxValue) {
+                magnitude = BigInteger.DivRem(magnitude, divisor, out BigInteger remainder);
+                chunks.Add((long)remainder);
+            }
+
+            // the most significant part without leading zeros, then the chunks with them:
+            var result = new System.Text.StringBuilder(chunkDigits * (chunks.Count + 1) + 1);
+            if (negative) {
+                result.Append('-');
+            }
+            result.Append(ToRadixString((long)magnitude, radix));
+            Span<char> buffer = stackalloc char[64];
+            for (int c = chunks.Count - 1; c >= 0; c--) {
+                long part = chunks[c];
+                for (int d = chunkDigits - 1; d >= 0; d--) {
+                    buffer[d] = RadixDigits[(int)(part % radix)];
+                    part /= radix;
+                }
+                result.Append(buffer.Slice(0, chunkDigits));
+            }
+            return result.ToString();
+        }
+
+        private static string/*!*/ ToRadixString(long value, int radix) {
+            if (value == 0) {
+                return "0";
+            }
+            // the magnitude as an unsigned number, which Int64.MinValue also has:
+            ulong magnitude = (value < 0) ? (ulong)(-(value + 1)) + 1 : (ulong)value;
+            Span<char> buffer = stackalloc char[65];
+            int pos = buffer.Length;
+            ulong r = (ulong)radix;
+            while (magnitude != 0) {
+                buffer[--pos] = RadixDigits[(int)(magnitude % r)];
+                magnitude /= r;
+            }
+            if (value < 0) {
+                buffer[--pos] = '-';
+            }
+            return new string(buffer.Slice(pos));
         }
 
         #endregion

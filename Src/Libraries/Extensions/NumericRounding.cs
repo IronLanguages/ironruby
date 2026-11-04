@@ -113,12 +113,10 @@ namespace IronRuby.Builtins {
             return value.Fixnum;
         }
 
+        // Int32, else Int64, else BigInteger, as every Integer result must be (a BigInteger in the
+        // Int64 range is not eql? to the same value as a long and misses it as a Hash key).
         internal static object/*!*/ Normalize(BigInteger value) {
-            int result;
-            if (value.AsInt32(out result)) {
-                return ScriptingRuntimeHelpers.Int32ToObject(result);
-            }
-            return value;
+            return Protocols.Normalize(value);
         }
 
         #endregion

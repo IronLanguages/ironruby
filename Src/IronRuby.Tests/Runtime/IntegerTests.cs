@@ -42,6 +42,114 @@ namespace IronRuby.Tests {
             Assert(bi.GetBitCount() == 1);
         }
 
+        /// <summary>
+        /// An Integer in the Int64 range is a long whichever way it was made. Integer literals and
+        /// Float#to_i / floor / ceil / round / truncate (and rounding to a negative number of digits)
+        /// used to leave a BigInteger there, which is not found as a Hash key holding the same value
+        /// computed by arithmetic: {3 * 1_000_000_000 => 1}[3_000_000_000] was nil.
+        /// </summary>
+        public void Integer_Normalization1() {
+            TestOutput(@"
+k = 3 * 1_000_000_000
+p({k => 1}[3_000_000_000], {3_000_000_000 => 1}[k], {-k => 1}[-3_000_000_000], 0xB2D05E00.eql?(k))
+p [3e9.to_i, 3e9.floor, 3e9.ceil, 3e9.round, 3e9.truncate, (3e9 + 0.5).floor].map { |x| {k => 1}[x] }
+p [3e9.round(-1), 3e9.floor(-1), 3e9.ceil(-1), 3e9.truncate(-1), 3_000_000_004.round(-1)].map { |x| x.eql?(k) }
+p 1e15.floor, -1e15.ceil, (2.0**62).to_i, (2.0**63).to_i, (-2.0**63).to_i, 2147483648.0.to_i, -2147483649.0.to_i
+", @"
+1
+1
+1
+true
+[1, 1, 1, 1, 1, 1]
+[true, true, true, true, true]
+1000000000000000
+-1000000000000000
+4611686018427387904
+9223372036854775808
+-9223372036854775808
+2147483648
+-2147483649
+");
+        }
+
+        /// <summary>
+        /// Integer#to_s(radix) for Int32, Int64 and Bignum values, power-of-two and other radices.
+        /// </summary>
+        public void Integer_ToStringRadix1() {
+            TestOutput(@"
+p 255.to_s(2), 255.to_s(16), -255.to_s(36), 0.to_s(7), (2**31).to_s(3), (-2**63).to_s(2), (2**63-1).to_s(36)
+p (2**64).to_s(16), (-(2**100 + 12345)).to_s(2), (3**50).to_s(7), (-(10**30)).to_s(36), (2**70 - 1).to_s(8), (2**200).to_s(32)
+p (2**1000 + 1).to_s(5) == (2**1000 + 1).to_s(5).to_i(5).to_s(5), (2**1000 + 1).to_s(5).to_i(5) == 2**1000 + 1
+", @"
+""11111111""
+""ff""
+""-73""
+""0""
+""12112122212110202102""
+""-1000000000000000000000000000000000000000000000000000000000000000""
+""1y2p0ij32e8e7""
+""10000000000000000""
+""-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000011000000111001""
+""13632140121616200362302616562""
+""-2oy99wnkl1c76diocq9s""
+""177777777777777777777777""
+""10000000000000000000000000000000000000000""
+true
+true
+");
+        }
+
+        /// <summary>
+        /// String#unpack('w'): a BER-compressed integer cut off by the end of the data is not read.
+        /// </summary>
+        public void Pack_BerTruncated1() {
+            TestOutput(@"
+p ""\x81"".force_encoding(""BINARY"").unpack(""w*""), ""\x80\x80"".force_encoding(""BINARY"").unpack(""w""), ""\x01\x81"".force_encoding(""BINARY"").unpack(""w*""), ""\x01\x81"".force_encoding(""BINARY"").unpack(""w2C""), """".unpack(""w"")
+p ""\x05\x80\x80\x81\x01"".force_encoding(""BINARY"").unpack(""w*""), [1, 2**64, 300].pack(""w*"").unpack(""w*"")
+", @"
+[]
+[]
+[1]
+[1, nil]
+[]
+[5, 129]
+[1, 18446744073709551616, 300]
+");
+        }
+
+        /// <summary>
+        /// <<, >> and ~ on an Int64 receiver, and Int32 shifts that overflow into the Int64 range.
+        /// </summary>
+        public void Integer_Int64Shifts1() {
+            TestOutput(@"
+l = 2**40 + 3
+p l << 3, l >> 3, -l >> 3, ~l, ~-l, l << 23, l << 24, -l << 23, -l << 24, l >> 64, -l >> 100, l << -3, -l << -64
+p 1 << 40, -1 << 62, -1 << 63, 1 << 63, 3 << 61, 3 << 62, (1 << 40).eql?(2**40), {2**40 => 1}[1 << 40]
+", @"
+8796093022232
+137438953472
+-137438953473
+-1099511627780
+1099511627778
+9223372036879941632
+18446744073759883264
+-9223372036879941632
+-18446744073759883264
+0
+-1
+137438953472
+-1
+1099511627776
+-4611686018427387904
+-9223372036854775808
+9223372036854775808
+6917529027641081856
+13835058055282163712
+true
+1
+");
+        }
+
         private BigInteger ParseBigInt(string str) {
             int i = 0;
             return Tokenizer.ParseInteger(str, 0, ref i).Bignum;
