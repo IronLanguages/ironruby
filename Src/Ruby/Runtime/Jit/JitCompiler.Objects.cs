@@ -893,6 +893,10 @@ namespace IronRuby.Runtime.Jit {
             var args = element.Arguments.Expressions;
             if (element.Block != null || args.Length != 1 || args[0] is SplattedArgument) { throw Bail("[]= with " + args.Length + " arguments"); }
             if (op != null && !JitScreen.IsBinaryOperator(op)) { throw Bail("[] " + op + "="); }
+            if (ArrayMethodIsPlain(true) && (op == null || ArrayMethodIsPlain(false))) {
+                var array = ArrayLocal(element.Array);
+                if (array != null) { return EmitArrayLocalWrite(array.Value, args[0], op, right, out type); }
+            }
             JT recvType, indexType;
             var recv = Emit(element.Array, out recvType);
             if (recvType != JT.Obj) { throw Bail("[]= on a " + recvType); }
@@ -957,6 +961,266 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Assign(indexTemp, index),
                 Ast.Assign(valueTemp, value),
                 store,
+                valueTemp
+            );
+        }
+
+        // ---- Arrays an outlined loop loads once ----------------------------------------------
+        // A renderer's inner loop - `fb[o + x] = cmap[pixels[(ty * 64) + tx]]' - indexes Arrays held in
+        // locals the loop never writes, so each is the same object for the whole run. The entry loads
+        // such a local once and checks that it holds a plain Array (JitRuntime.OsrArray): its exact
+        // CLR type, with Array itself as its class - neither a subclass nor a singleton class of its
+        // own. The global method version vouches for Array#[] and #[]= from there, and the body reads
+        // and writes the array directly, the elements unboxed to the type a sample of them has through
+        // a guard. Only the Array the entry loaded is checked, so a singleton #[] on some other Array
+        // does not keep this one generic. Stores log what they replace in the shared JitUndoLog, as
+        // EmitIndexWrite's do. Anything else - a local the loop writes, one holding something else -
+        // goes through the intrinsics above.
+
+        // the locals loaded once, by Key: the RubyArray variable and the type its elements are read as
+        private Dictionary<string, KeyValuePair<MSA.ParameterExpression, JT>> _arrayLocals;
+        // what the entry loads into those variables (JitLoopFacts.Arrays)
+        private List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>> _arrayLoads;
+        // the locals themselves, which the loop then must not write (checked by TryCompileLoop)
+        private List<LocalVariable> _arrayPeeked;
+        // the second attempt at a loop that writes a local the first one loaded once
+        private bool _noArrayLocals;
+        private bool? _arrayGetPlain, _arraySetPlain;
+
+        /// <summary>Array#[] (or #[]=) is the public library method, which a load-once Array answers by.</summary>
+        private bool ArrayMethodIsPlain(bool store) {
+            if ((_loop != null && _peekLocal == null) || _noArrayLocals || !_refinements.IsEmpty) { return false; }
+            bool? ok = store ? _arraySetPlain : _arrayGetPlain;
+            if (ok == null) {
+                string name = store ? "[]=" : "[]";
+                ok = IsBuiltinMethod(ArrayClass, name) && IsPublic(ArrayClass, name);
+                if (store) { _arraySetPlain = ok; } else { _arrayGetPlain = ok; }
+            }
+            return ok.Value;
+        }
+
+        /// <summary>
+        /// The RubyArray variable the local <paramref name="receiver"/> is loaded into, and the type its
+        /// elements are read as; null when it is not a local holding a plain Array right now.
+        /// </summary>
+        private KeyValuePair<MSA.ParameterExpression, JT>? ArrayLocal(RExpr/*!*/ receiver) {
+            var local = receiver as LocalVariable;
+            if (local == null || _noArrayLocals || !_refinements.IsEmpty) { return null; }
+            string key = Key(local);
+            KeyValuePair<MSA.ParameterExpression, JT> known;
+            if (_arrayLocals != null && _arrayLocals.TryGetValue(key, out known)) { return known; }
+            if (_loop == null) { return ArrayParameter(local); }
+            if (_peekLocal == null) { return null; }
+
+            // bound to a slot already: the loop may write it
+            MSA.ParameterExpression p;
+            JT t;
+            if (TryLookup(key, out p, out t)) { return null; }
+
+            var peek = _peekLocal(local);
+            if (!peek.HasValue) { return null; }
+            var live = peek.Value.Value as RubyArray;
+            RubyClass arrayClass = ArrayClass;
+            if (live == null || live.GetType() != typeof(RubyArray) || _context.GetImmediateClassOf(live) != arrayClass) { return null; }
+
+            var variable = Ast.Variable(typeof(RubyArray), "#array:" + local.Name);
+            if (_arrayLocals == null) {
+                _arrayLocals = new Dictionary<string, KeyValuePair<MSA.ParameterExpression, JT>>();
+                _arrayLoads = new List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>>();
+                _arrayPeeked = new List<LocalVariable>();
+            }
+            _arrayLoads.Add(new KeyValuePair<MSA.ParameterExpression, MSA.Expression>(variable,
+                Ast.Call(JitRuntime.M("OsrArray"), Ast.Convert(peek.Value.Key, typeof(object)), Ast.Constant(arrayClass, typeof(RubyClass)))));
+            _arrayPeeked.Add(local);
+            var result = new KeyValuePair<MSA.ParameterExpression, JT>(variable, ElementType(live));
+            _arrayLocals.Add(key, result);
+            return result;
+        }
+
+        // Method mode: the parameters loaded once, which the body then must not assign (checked by TryCompile).
+        private List<MSA.ParameterExpression> _arrayParameters;
+
+        /// <summary>
+        /// Method mode: a parameter the profile has only seen hold an Array (JitStub's hints) is loaded
+        /// the same way, once, at the top of the body; one that does not hold a plain Array this call
+        /// deopts there, before the body has done anything. There is no element type to sample, so its
+        /// elements are read as objects.
+        /// </summary>
+        private KeyValuePair<MSA.ParameterExpression, JT>? ArrayParameter(LocalVariable/*!*/ local) {
+            if (_hints == null || _hints.Parameters == null || local.DefinitionLexicalDepth != _scopeDepth) { return null; }
+            int i = Array.IndexOf(_paramNames, local.Name);
+            if (i < 0 || i >= _hints.Parameters.Length || _hints.Parameters[i] != typeof(RubyArray)) { return null; }
+            MSA.ParameterExpression p;
+            JT t;
+            if (!TryLookup(local.Name, out p, out t) || p != _paramExprs[i] || p.Type != typeof(object)) { return null; }
+
+            var variable = Ast.Variable(typeof(RubyArray), "#array:" + local.Name);
+            if (_arrayLocals == null) {
+                _arrayLocals = new Dictionary<string, KeyValuePair<MSA.ParameterExpression, JT>>();
+                _arrayLoads = new List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>>();
+                _arrayParameters = new List<MSA.ParameterExpression>();
+            }
+            _arrayLoads.Add(new KeyValuePair<MSA.ParameterExpression, MSA.Expression>(variable,
+                Ast.Call(JitRuntime.M("MethodArray"), p, Ast.Constant(ArrayClass, typeof(RubyClass)))));
+            _arrayParameters.Add(p);
+            _canDeopt = true;
+            var result = new KeyValuePair<MSA.ParameterExpression, JT>(variable, JT.Obj);
+            _arrayLocals.Add(local.Name, result);
+            return result;
+        }
+
+        /// <summary>Whether <paramref name="body"/> assigns one of <paramref name="parameters"/>.</summary>
+        private static bool Assigns(MSA.Expression/*!*/ body, List<MSA.ParameterExpression>/*!*/ parameters) {
+            var finder = new AssignmentFinder(parameters);
+            finder.Visit(body);
+            return finder.Found;
+        }
+
+        private sealed class AssignmentFinder : MSA.ExpressionVisitor {
+            private readonly List<MSA.ParameterExpression>/*!*/ _parameters;
+            internal bool Found;
+
+            internal AssignmentFinder(List<MSA.ParameterExpression>/*!*/ parameters) {
+                _parameters = parameters;
+            }
+
+            protected override MSA.Expression VisitBinary(MSA.BinaryExpression/*!*/ node) {
+                var target = node.Left as MSA.ParameterExpression;
+                if (node.NodeType == MSA.ExpressionType.Assign && target != null && _parameters.Contains(target)) { Found = true; }
+                return base.VisitBinary(node);
+            }
+
+            protected override MSA.Expression VisitUnary(MSA.UnaryExpression/*!*/ node) {
+                var target = node.Operand as MSA.ParameterExpression;
+                if (target != null && _parameters.Contains(target)) {
+                    switch (node.NodeType) {
+                        case MSA.ExpressionType.PreIncrementAssign:
+                        case MSA.ExpressionType.PreDecrementAssign:
+                        case MSA.ExpressionType.PostIncrementAssign:
+                        case MSA.ExpressionType.PostDecrementAssign:
+                            Found = true;
+                            break;
+                    }
+                }
+                return base.VisitUnary(node);
+            }
+
+            protected override MSA.Expression VisitExtension(MSA.Expression/*!*/ node) {
+                // a node of the DLR's own reduces to the standard ones
+                return node.CanReduce ? Visit(node.Reduce()) : node;
+            }
+        }
+
+        /// <summary>
+        /// What an Array's elements are, from a sample of them: Int or Dbl when every one sampled is
+        /// a Fixnum, or every one a Float - a typed read is then unboxed through a guard that deopts on
+        /// anything else - and Obj otherwise.
+        /// </summary>
+        private static JT ElementType(RubyArray/*!*/ array) {
+            const int Samples = 16;
+            int count = array.Count;
+            if (count == 0) { return JT.Obj; }
+            int step = Math.Max(1, count / Samples);
+            JT kind = JT.None;
+            for (int i = 0; i < count; i += step) {
+                object element = array[i];
+                JT k = (element is int) ? JT.Int : (element is double) ? JT.Dbl : JT.Obj;
+                if (k == JT.Obj || (kind != JT.None && kind != k)) { return JT.Obj; }
+                kind = k;
+            }
+            return kind;
+        }
+
+        /// <summary>An index into a load-once Array: an Integer that fits in an Int32. Anything else deopts, or bails.</summary>
+        private MSA.Expression/*!*/ EmitArrayIndex(RExpr/*!*/ node) {
+            JT t;
+            var e = Emit(node, out t);
+            e = NumericIVar(node, e, ref t);
+            switch (t) {
+                case JT.Int: return e;
+                case JT.Lng: return Coerce(e, JT.Lng, JT.Int);
+                case JT.Obj: _canDeopt = true; return Ast.Call(JitRuntime.M("GuardInt"), e);
+                default: throw Bail("Array index of type " + t);
+            }
+        }
+
+        /// <summary>`a[i]' of a load-once Array: the element, unboxed when <paramref name="typed"/> and the elements have one type.</summary>
+        private MSA.Expression/*!*/ EmitArrayRead(KeyValuePair<MSA.ParameterExpression, JT> array, RExpr/*!*/ index, bool typed, out JT type) {
+            MSA.Expression read = Ast.Call(JitRuntime.M("ArrayGet"), array.Key, EmitArrayIndex(index));
+            if (!typed || array.Value == JT.Obj) {
+                type = JT.Obj;
+                return read;
+            }
+            _canDeopt = true;
+            type = array.Value;
+            return Ast.Call(JitRuntime.M(array.Value == JT.Int ? "GuardInt" : "GuardDouble"), read);
+        }
+
+        /// <summary>`a[i]' where a is a load-once Array and Array#[] the library method; null otherwise.</summary>
+        private KeyValuePair<MSA.ParameterExpression, JT>? ArrayLocalRead(RExpr/*!*/ node) {
+            var call = node as MethodCall;
+            if (call == null || call.MethodName != "[]" || call.Block != null || call.Arguments == null ||
+                call.Arguments.Expressions.Length != 1 || call.Arguments.Expressions[0] is SplattedArgument ||
+                !(call.Target is LocalVariable) || !ArrayMethodIsPlain(false)) {
+                return null;
+            }
+            return ArrayLocal(call.Target);
+        }
+
+        /// <summary>
+        /// `a[i] = v', `a[i] op= v' on a load-once Array: EmitIndexWrite's store, of the array itself.
+        /// `a[i] = b[j]' moves the element as the object it is, never unboxed and boxed again.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitArrayLocalWrite(KeyValuePair<MSA.ParameterExpression, JT> array, RExpr/*!*/ indexNode, string op,
+            RExpr/*!*/ right, out JT type) {
+            var indexTemp = Ast.Variable(typeof(int), "#index");
+            var index = EmitArrayIndex(indexNode);
+            JT valueType;
+            MSA.Expression value;
+            if (op == null) {
+                var from = ArrayLocalRead(right);
+                if (from != null) {
+                    value = EmitArrayRead(from.Value, ((MethodCall)right).Arguments.Expressions[0], false, out valueType);
+                } else {
+                    value = Emit(right, out valueType);
+                }
+            } else {
+                MSA.Expression current = Ast.Call(JitRuntime.M("ArrayGet"), array.Key, indexTemp);
+                JT rhsType;
+                var rhs = Emit(right, out rhsType);
+                JT currentType;
+                if (array.Value == JT.Int && IsInteger(rhsType)) {
+                    current = Ast.Call(JitRuntime.M("GuardInt"), current);
+                    currentType = JT.Int;
+                } else if (array.Value == JT.Dbl && rhsType == JT.Dbl) {
+                    current = Ast.Call(JitRuntime.M("GuardDouble"), current);
+                    currentType = JT.Dbl;
+                } else if (rhsType == JT.Dbl) {
+                    // Integer op Float and Float op Float are both Float op Float
+                    RequireBuiltin(JT.Int, op);
+                    current = Ast.Call(JitRuntime.M("SpeculateDouble"), current);
+                    currentType = JT.Dbl;
+                } else if (IsInteger(rhsType)) {
+                    current = Ast.Call(JitRuntime.M("SpeculateLong"), current);
+                    currentType = JT.Lng;
+                } else {
+                    throw Bail("[] " + op + "= of a " + rhsType);
+                }
+                value = EmitBinary(op, current, currentType, rhs, rhsType, out valueType);
+            }
+            if (valueType == JT.Never || valueType == JT.None) { throw Bail("[]= of a value that jumps away"); }
+            var valueTemp = Ast.Variable(ClrType(valueType), "#value");
+            _canDeopt = true;
+            _hashWrite = true;
+            if (_undoLog == null) {
+                _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
+                _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+            }
+            type = valueType;
+            return Ast.Block(ClrType(valueType), new[] { indexTemp, valueTemp },
+                Ast.Assign(indexTemp, index),
+                Ast.Assign(valueTemp, value),
+                Ast.Call(JitRuntime.M("ArrayStore"), array.Key, indexTemp, BoxForStore(valueTemp, valueType), _undoLog),
                 valueTemp
             );
         }

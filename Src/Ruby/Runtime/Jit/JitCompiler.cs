@@ -255,6 +255,9 @@ namespace IronRuby.Runtime.Jit {
             // body commits at the top of each iteration (UndoLog) from the mark the entry sets (UndoMark)
             internal MSA.ParameterExpression UndoLog;
             internal MSA.ParameterExpression UndoMark;
+            // the Arrays the body indexes directly (ArrayLocal), each a variable the entry loads by the
+            // expression paired with it - null when the local does not hold a plain Array; or null
+            internal List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>> Arrays;
         }
 
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
@@ -266,16 +269,31 @@ namespace IronRuby.Runtime.Jit {
             slots = null;
             canDeopt = false;
             facts = default(JitLoopFacts);
-            var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal, constantScope);
-            c._hints = hints;
-            c._refinements = refinements;
+            JitCompiler c;
             MSA.Expression body;
-            try {
-                JT type;
-                body = c.EmitWhile(loop, out type);
-            } catch (JitBailout) {
-                if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter: {0}", c._bailReason ?? "unsupported construct"); }
-                return null;
+            for (bool arrayLocals = true; ; arrayLocals = false) {
+                c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal, constantScope);
+                c._hints = hints;
+                c._refinements = refinements;
+                c._noArrayLocals = !arrayLocals;
+                try {
+                    JT type;
+                    body = c.EmitWhile(loop, out type);
+                } catch (JitBailout) {
+                    if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter: {0}", c._bailReason ?? "unsupported construct"); }
+                    return null;
+                }
+                // An Array loaded once on entry (ArrayLocal) is read from its tuple slot, so the loop must
+                // not also bind it to a slot, which it may write: if it does, the Arrays go through the
+                // intrinsics instead.
+                bool conflict = false;
+                if (c._arrayPeeked != null) {
+                    foreach (var local in c._arrayPeeked) {
+                        if (c._vars[0].ContainsKey(c.Key(local))) { conflict = true; break; }
+                    }
+                }
+                if (!conflict) { break; }
+                if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter: an indexed local is also a slot; again without load-once Arrays"); }
             }
             // A deopt restores the locals to what they were at the top of the iteration and
             // hands the loop back, so the iteration is re-run: it must not have been observable.
@@ -291,6 +309,7 @@ namespace IronRuby.Runtime.Jit {
             facts.UsesConstants = c._usesConstants;
             facts.UndoLog = c._undoLog;
             facts.UndoMark = c._undoMark;
+            facts.Arrays = c._arrayLoads;
             // the back-edge safe point hands the loop back through the deopt
             // catch, so the catch is always needed - but it fires at the top of an iteration,
             // before anything observable, so it does not make an impure body unspecializable.
@@ -445,10 +464,12 @@ namespace IronRuby.Runtime.Jit {
             // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
             // how many there can be; a guess that does not settle is rejected.
             JT guess = JT.None;
+            bool arrayParameters = true;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
                 c._hints = hints;
                 c._refinements = refinements;
+                c._noArrayLocals = !arrayParameters;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
@@ -467,6 +488,14 @@ namespace IronRuby.Runtime.Jit {
                             c._bailReason ?? "unsupported construct");
                     }
                     return null;
+                }
+
+                // An Array parameter loaded once (ArrayParameter) is one the body does not assign, and
+                // the load deopts, which only a pure body may: if not, compile it without.
+                if (c._arrayParameters != null && ((c._canDeopt && !c._pure) || Assigns(body, c._arrayParameters))) {
+                    arrayParameters = false;
+                    round--;
+                    continue;
                 }
 
                 // The method's value is the value it falls off with, unified with every value an
@@ -504,6 +533,16 @@ namespace IronRuby.Runtime.Jit {
                     c._safePointDeopts.Value = true;
                     functionScope.Add(c._undoLog);
                     body = Ast.Block(body.Type, Ast.Assign(c._undoLog, Ast.Property(null, typeof(JitUndoLog).GetProperty("Current"))), body);
+                }
+                if (c._arrayLoads != null) {
+                    // the Array parameters, loaded once
+                    var loads = new List<MSA.Expression>();
+                    foreach (var load in c._arrayLoads) {
+                        functionScope.Add(load.Key);
+                        loads.Add(Ast.Assign(load.Key, load.Value));
+                    }
+                    loads.Add(body);
+                    body = Ast.Block(body.Type, loads);
                 }
                 if (functionScope.Count > 0) {
                     body = Ast.Block(functionScope, body);
@@ -919,6 +958,12 @@ namespace IronRuby.Runtime.Jit {
             if (_loop == null && local.DefinitionLexicalDepth != _scopeDepth) { throw JitBailout.Instance; }
             MSA.ParameterExpression p;
             if (!TryLookup(Key(local), out p, out type)) {
+                KeyValuePair<MSA.ParameterExpression, JT> loaded;
+                if (_arrayLocals != null && _arrayLocals.TryGetValue(Key(local), out loaded)) {
+                    // an Array the entry loaded once (ArrayLocal), which the loop does not write
+                    type = JT.Obj;
+                    return Ast.Convert(loaded.Key, typeof(object));
+                }
                 if (_loop != null) {
                     // a local only stored is an object slot, holding the box it holds (IsStoredOnly)
                     BindLoopLocal(local, IsStoredOnly(local) ? JT.Obj : JT.None, out p, out type);
@@ -1363,6 +1408,21 @@ namespace IronRuby.Runtime.Jit {
                         if (guard == null) { type = JT.Obj; return read; }
                         type = (value is int) ? JT.Int : (value is long) ? JT.Lng : JT.Dbl;
                         return Ast.Call(JitRuntime.M(guard), read);
+                    }
+                }
+            }
+
+            // `a[i]', `a.size', `a.length' in an outlined loop, a a local holding a plain Array the loop
+            // does not write: loaded once by the entry (JitCompiler.ArrayLocal).
+            if (node.Target is LocalVariable && _loop != null) {
+                var loaded = ArrayLocalRead(node);
+                if (loaded != null) { return EmitArrayRead(loaded.Value, args.Expressions[0], true, out type); }
+                if (argc == 0 && (node.MethodName == "size" || node.MethodName == "length") && ArrayMethodIsPlain(false) &&
+                    IsPublicBuiltin(ArrayClass, node.MethodName)) {
+                    loaded = ArrayLocal(node.Target);
+                    if (loaded != null) {
+                        type = JT.Int;
+                        return Ast.Property(loaded.Value.Key, "Count");
                     }
                 }
             }

@@ -267,6 +267,18 @@ namespace IronRuby.Runtime.Jit {
                     Ast.Return(exit, Ast.Call(JitRuntime.M("OsrVersionStale")))
                 ));
             }
+            // The Arrays the body indexes directly, each loaded once: a local that does not hold a plain
+            // Array this time hands the loop back, for a copy built over what it holds now.
+            if (facts.Arrays != null) {
+                foreach (var array in facts.Arrays) {
+                    locals.Add(array.Key);
+                    prologue.Add(Ast.Assign(array.Key, array.Value));
+                    prologue.Add(Ast.IfThen(
+                        Ast.Equal(array.Key, Ast.Constant(null, typeof(RubyArray))),
+                        Ast.Return(exit, Ast.Call(JitRuntime.M("OsrTypeGuardFailed"), Ast.Constant(array.Key.Name)))
+                    ));
+                }
+            }
             if (facts.UndoLog != null) {
                 // the element writes the current iteration makes, for a deopt to take back
                 prologue.Add(Ast.Assign(facts.UndoLog, Ast.Property(null, typeof(JitUndoLog).GetProperty("Current"))));

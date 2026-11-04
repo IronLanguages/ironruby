@@ -464,6 +464,45 @@ namespace IronRuby.Runtime.Jit {
             return SizeOf(recv, arrays, hashes) == 0;
         }
 
+        // ---- Arrays an outlined loop loads once (JitCompiler.ArrayLocal) ----------------------
+
+        /// <summary>
+        /// The entry load of a local an outlined loop indexes: the array itself while the local holds
+        /// a plain Array - its exact CLR type, and Array itself its class: not a subclass, not one with
+        /// a singleton class, whose #[] and #[]= could be other methods - and null otherwise, which
+        /// hands the loop back. The loop never writes the local, so this is the only check it needs.
+        /// </summary>
+        public static RubyArray OsrArray(object value, RubyClass/*!*/ arrayClass) {
+            var array = value as RubyArray;
+            if (array == null || array.GetType() != typeof(RubyArray) || arrayClass.Context.GetImmediateClassOf(array) != arrayClass) {
+                return null;
+            }
+            return array;
+        }
+
+        /// <summary>OsrArray for a method's parameter (JitCompiler.ArrayParameter): what is not a plain Array deopts.</summary>
+        public static RubyArray/*!*/ MethodArray(object value, RubyClass/*!*/ arrayClass) {
+            return OsrArray(value, arrayClass) ?? throw Deopt();
+        }
+
+        /// <summary>Array#[](Integer) of an Array OsrArray loaded: counted from the end when negative, nil past either end.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static object ArrayGet(RubyArray/*!*/ array, int index) {
+            return array.JitElementOrNil(index);
+        }
+
+        /// <summary>
+        /// Array#[]=(Integer, value) on an existing element of an Array OsrArray loaded, the old value
+        /// logged; a frozen array, or an index that would grow the array or raise, deopts before the store.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void ArrayStore(RubyArray/*!*/ array, int index, object value, JitUndoLog/*!*/ log) {
+            int position;
+            object old;
+            if (log.IsFull || !array.JitReplaceElement(index, value, out position, out old)) { throw Deopt(); }
+            log.Replaced(array, position, old);
+        }
+
         // ---- Array#[]=, Hash#[]= -------------------------------------------------------------
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
