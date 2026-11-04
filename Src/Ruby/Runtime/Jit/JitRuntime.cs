@@ -14,6 +14,9 @@ using IronRuby.Builtins;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Runtime.Jit {
+    using MSA = System.Linq.Expressions;
+    using Ast = System.Linq.Expressions.Expression;
+
     /// <summary>
     /// Thrown by specialized code when an assumption it was compiled under no longer holds
     /// (Fixnum arithmetic overflowing into Bignum, a division by zero that has to raise).
@@ -186,6 +189,21 @@ namespace IronRuby.Runtime.Jit {
         /// goes through here, which is what keeps #hash, #eql?, #equal? and Hash keys right for a
         /// value the JIT produced. Mirrors ClrInteger.Narrow, which lives in the other assembly.
         /// </summary>
+        /// <summary>
+        /// A typed body's value as the object its entry returns: an Int32 or a Boolean comes out of
+        /// the shared boxes (the DLR's cache of small Integers, the two Booleans) rather than a new
+        /// box per call, the way every other place in the runtime makes one.
+        /// </summary>
+        internal static MSA.Expression/*!*/ BoxResult(MSA.Expression/*!*/ value) {
+            if (value.Type == typeof(int)) {
+                return Ast.Call(typeof(ScriptingRuntimeHelpers).GetMethod("Int32ToObject", new[] { typeof(int) }), value);
+            }
+            if (value.Type == typeof(bool)) {
+                return Ast.Call(typeof(ScriptingRuntimeHelpers).GetMethod("BooleanToObject", new[] { typeof(bool) }), value);
+            }
+            return Ast.Convert(value, typeof(object));
+        }
+
         public static object/*!*/ NarrowLong(long v) {
             return (v >= Int32.MinValue && v <= Int32.MaxValue)
                 ? ScriptingRuntimeHelpers.Int32ToObject((Int32)v) : (object)v;
