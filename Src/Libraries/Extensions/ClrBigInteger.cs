@@ -1067,6 +1067,23 @@ namespace IronRuby.Builtins {
             return MutableString.CreateAscii(self.ToString());
         }
 
+        // A Fixnum: without these, an Int32 self bound to the BigInteger overloads above and was
+        // widened to a BigInteger to be formatted - most of the cost of "#{i}" and i.to_s.
+        [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
+        public static MutableString/*!*/ ToString(int self) {
+            return MutableString.CreateAscii(self.ToString(CultureInfo.InvariantCulture));
+        }
+
+        [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
+        public static MutableString/*!*/ ToString(int self, int radix) {
+            if (radix < 2 || radix > 36) {
+                throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
+            }
+            return MutableString.CreateAscii(radix == 10 ? self.ToString(CultureInfo.InvariantCulture) : ToRadixString((long)self, radix));
+        }
+
         /// <summary>
         /// Returns a string containing the representation of self base radix (2 through 36).
         /// </summary>

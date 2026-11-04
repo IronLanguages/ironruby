@@ -4285,8 +4285,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "inspect", 0x51, 
-                0x00000000U, 0x00000000U, 0x00000000U, 
+                new[] { 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ClrInteger.ToString), 
+                new Func<System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ClrInteger.ToString), 
+                new Func<System.Int32, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ClrInteger.ToString), 
                 new Func<System.Numerics.BigInteger, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ClrInteger.ToString), 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.ClrInteger.ToString)
             );
@@ -4327,8 +4329,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "to_s", 0x51, 
-                0x00000000U, 0x00000000U, 0x00000000U, 
+                new[] { 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ClrInteger.ToString), 
+                new Func<System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ClrInteger.ToString), 
+                new Func<System.Int32, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ClrInteger.ToString), 
                 new Func<System.Numerics.BigInteger, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ClrInteger.ToString), 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.ClrInteger.ToString)
             );
