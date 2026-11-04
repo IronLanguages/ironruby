@@ -156,17 +156,22 @@ namespace IronRuby.Builtins {
         /// knows nothing of VTIME, so waiting for it first would wait for ever.  Linux's
         /// struct termios only (c_lflag at 12, c_cc at 17); elsewhere this answers false.
         /// </summary>
-        private bool TimedTerminalRead() {
+        /// <returns>VTIME in milliseconds for such a read, -1 for any other.</returns>
+        private int TimedTerminalReadTimeout() {
             if (!IsTerminal || !RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) {
-                return false;
+                return -1;
             }
             const int ICANON = 0x0002;
+            const int VTIME = 5;
             const int VMIN = 6;
             byte[] termios = new byte[60];
             if (sys_tcgetattr(_descriptor, termios) != 0) {
-                return false;
+                return -1;
             }
-            return (BitConverter.ToUInt32(termios, 12) & ICANON) == 0 && termios[17 + VMIN] == 0;
+            if ((BitConverter.ToUInt32(termios, 12) & ICANON) != 0 || termios[17 + VMIN] != 0) {
+                return -1;
+            }
+            return termios[17 + VTIME] * 100;
         }
 
         public override void Flush() {
@@ -209,9 +214,19 @@ namespace IronRuby.Builtins {
                     }
                     throw new IOException("poll failed");
                 }
-                if (ready == 0 && !TimedTerminalRead()) {
-                    WaitFor(POLLIN);
-                    continue;
+                if (ready == 0) {
+                    int timeout = TimedTerminalReadTimeout();
+                    if (timeout < 0) {
+                        WaitFor(POLLIN);
+                        continue;
+                    }
+                    // VMIN 0: the read that VTIME would end. It is waited out here, in slices like
+                    // WaitFor's, rather than inside read(2): a thread parked there for up to VTIME
+                    // (25.5 s) could not be raised into, killed or closed underneath, and on a
+                    // descriptor #read_nonblock left non-blocking read(2) does not wait at all.
+                    if (!WaitFor(POLLIN, timeout)) {
+                        return 0;
+                    }
                 }
 
                 // The close may have come in while this thread was in poll; the descriptor is
@@ -292,21 +307,39 @@ namespace IronRuby.Builtins {
         /// and Thread#raise are noticed within one slice.
         /// </summary>
         private void WaitFor(short events) {
+            WaitFor(events, -1);
+        }
+
+        /// <summary>
+        /// <see cref="WaitFor(short)"/> for at most <paramref name="timeoutMilliseconds"/> (-1: no limit).
+        /// False when the time ran out first.
+        /// </summary>
+        private bool WaitFor(short events, int timeoutMilliseconds) {
+            long deadline = (timeoutMilliseconds >= 0) ? Environment.TickCount64 + timeoutMilliseconds : Int64.MaxValue;
             bool wasBlocked = RubyUtils.EnterNativeWait();
             try {
                 while (!_closed) {
+                    long remaining = deadline - Environment.TickCount64;
+                    if (remaining <= 0 && timeoutMilliseconds >= 0) {
+                        // one last look: a timeout of 0 still answers what is there now
+                        var last = new PollFd[1];
+                        last[0].fd = _descriptor;
+                        last[0].events = events;
+                        return sys_poll(last, 1, 0) > 0;
+                    }
                     var fds = new PollFd[1];
                     fds[0].fd = _descriptor;
                     fds[0].events = events;
-                    int ready = sys_poll(fds, 1, WaitSliceMilliseconds);
+                    int ready = sys_poll(fds, 1, (int)Math.Min(WaitSliceMilliseconds, Math.Max(remaining, 0)));
                     if (ready > 0) {
-                        return;
+                        return true;
                     }
                     if (ready < 0 && Marshal.GetLastWin32Error() != EINTR) {
                         throw new IOException("poll failed");
                     }
                     RubyUtils.CheckAsyncException();
                 }
+                return true;
             } finally {
                 RubyUtils.ExitNativeWait(wasBlocked);
             }
