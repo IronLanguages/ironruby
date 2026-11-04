@@ -6,8 +6,6 @@
 ../../Src/StdLib/ironruby/rbconfig.rb
 ../../Src/StdLib/ironruby/ruby4.rb
 ../../Src/StdLib/ironruby/thread.rb
-../../Src/StdLib/ruby/1.9.1/complex18.rb
-../../Src/StdLib/ruby/1.9.1/rational18.rb
 ../../Src/StdLib/ruby/4.0/gem_prelude.rb
 ../../Src/StdLib/ruby/4.0/rubygems/basic_specification.rb
 ../../Src/StdLib/ruby/4.0/rubygems/core_ext/kernel_gem.rb

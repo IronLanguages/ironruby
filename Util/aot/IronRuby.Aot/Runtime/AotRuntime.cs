@@ -75,7 +75,8 @@ namespace IronRuby.Aot.Runtime {
                 if (parser != null) {
                     return (SourceUnitTree)parser.GetMethod("Parse").Invoke(null, new object[] { unit, options, sink });
                 }
-                return new IronRuby.Compiler.Parser().Parse(unit, options, sink);
+                // the prism front end is the only parser there is
+                throw new InvalidOperationException("IronRuby.Prism is not loaded: cannot parse " + (unit.Path ?? "<string>"));
             };
 
             var setup = new ScriptRuntimeSetup();
