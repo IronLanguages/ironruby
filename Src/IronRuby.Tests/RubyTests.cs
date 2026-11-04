@@ -852,6 +852,8 @@ namespace IronRuby.Tests {
                 Digest_NonStringResult1,
                 Main_Initialize1,
                 Dir_NotADirectory1,
+                File_StatPredicatesToIo1,
+                File_StatPredicatesToIo2,
                 Range_IntegerFastPaths1,
                 Hash_SelfKey1,
                 Thread_JoinSelf1,

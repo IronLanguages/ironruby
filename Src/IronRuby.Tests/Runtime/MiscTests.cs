@@ -2583,6 +2583,96 @@ rmdir missing: Errno::ENOENT
         }
 
         /// <summary>
+        /// The File and FileTest predicates MRI answers with rb_stat (exist?, file?, size, zero?, the times,
+        /// identical?, ...) take an IO, or anything whose #to_io gives one, and fstat it; they raised TypeError
+        /// for a #to_io object. The access(2) ones (readable?, writable?, executable?) and symlink? still take
+        /// only a path, as in MRI. A #to_io that gives nil means "use the path"; one that gives anything else
+        /// is a TypeError.
+        /// </summary>
+        public void File_StatPredicatesToIo1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+f = File.join(dir, ""file"")
+File.write(f, ""abc"")
+io = File.open(f)
+ti = Object.new; ti.define_singleton_method(:to_io) { io }
+%i[blockdev? chardev? directory? exist? file? pipe? size size? socket? zero? empty?].each do |m|
+  puts ""#{m}: #{[io, ti].map { |a| File.send(m, a) rescue $!.class }.inspect}""
+end
+puts ""FileTest.exist?: #{FileTest.exist?(ti).inspect}""
+puts ""times: #{%i[atime mtime ctime].map { |m| File.send(m, ti).class }.inspect}""
+puts ""identical?: #{[File.identical?(ti, f), File.identical?(io, ti)].inspect}""
+puts ""path only: #{%i[readable? writable? executable? symlink?].map { |m| File.send(m, ti) rescue $!.class }.inspect}""
+x = Object.new; def x.to_io; 5; end
+puts ""to_io gives Integer: #{(File.exist?(x) rescue ""#{$!.class}: #{$!.message}"")}""
+x = Object.new; def x.to_io; nil; end; def x.to_path; ""/nonexistent""; end
+puts ""to_io gives nil: #{File.exist?(x).inspect}""
+io.close
+puts ""closed: #{(File.exist?(io) rescue ""#{$!.class}: #{$!.message}"")}""
+File.delete(f)
+Dir.rmdir(dir)
+", @"
+blockdev?: [false, false]
+chardev?: [false, false]
+directory?: [false, false]
+exist?: [true, true]
+file?: [true, true]
+pipe?: [false, false]
+size: [3, 3]
+size?: [3, 3]
+socket?: [false, false]
+zero?: [false, false]
+empty?: [false, false]
+FileTest.exist?: true
+times: [Time, Time, Time]
+identical?: [true, true]
+path only: [TypeError, TypeError, TypeError, TypeError]
+to_io gives Integer: TypeError: can't convert Object to IO (Object#to_io gives Integer)
+to_io gives nil: false
+closed: IOError: closed stream
+");
+        }
+
+        /// <summary>
+        /// File_StatPredicatesToIo1 for the streams only fstat can answer for: a pipe, and a file that was
+        /// deleted while open. Windows has no fstat, and there IronRuby answers from the path a File was opened
+        /// with - a pipe has none, and an open file cannot be deleted - so this one is POSIX only.
+        /// </summary>
+        public void File_StatPredicatesToIo2() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+f = File.join(dir, ""file"")
+File.write(f, ""abc"")
+r, w = IO.pipe
+tr = Object.new; tr.define_singleton_method(:to_io) { r }
+%i[exist? file? pipe? size size? zero?].each do |m|
+  puts ""#{m}: #{[r, tr].map { |a| File.send(m, a) rescue $!.class }.inspect}""
+end
+puts ""identical?: #{[File.identical?(r, tr), File.identical?(r, f)].inspect}""
+g = File.open(f); File.delete(f)
+puts ""deleted but open: #{[File.exist?(g), File.file?(g), File.size(g)].inspect}""
+g.close; r.close; w.close
+Dir.rmdir(dir)
+", @"
+exist?: [true, true]
+file?: [false, false]
+pipe?: [true, true]
+size: [0, 0]
+size?: [nil, nil]
+zero?: [true, true]
+identical?: [true, false]
+deleted but open: [true, true, 3]
+");
+        }
+
+        /// <summary>
         /// Range#first(n) and #last(n) of an Integer range are counted rather than walked - #last(n)
         /// built the whole range first, so (1..10**9).last(3) ran out of memory - and #last takes
         /// that path for a subclass whatever its #each, as MRI's rb_int_range_last does. Also the
