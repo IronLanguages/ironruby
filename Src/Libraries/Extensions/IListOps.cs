@@ -2727,10 +2727,11 @@ namespace IronRuby.Builtins {
             return IsBuiltinMethod(context.IntegerClass, "<=>");
         }
 
-        // keyed by a ValueTuple, whose hash is its fields': KeyValuePair has no GetHashCode of its
-        // own, and ValueType's reflects over the fields on every lookup
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<(RubyClass, string), int>/*!*/ _builtinMethods =
-            new System.Collections.Concurrent.ConcurrentDictionary<(RubyClass, string), int>();
+        // Per class, held weakly: a class (and the runtime it belongs to) is not kept alive by
+        // having been asked about. The inner dictionary maps a method name to the method version
+        // at which it was last found to be the built-in one.
+        private static readonly ConditionalWeakTable<RubyClass, System.Collections.Concurrent.ConcurrentDictionary<string, int>>/*!*/ _builtinMethods =
+            new ConditionalWeakTable<RubyClass, System.Collections.Concurrent.ConcurrentDictionary<string, int>>();
 
         /// <summary>
         /// True while <paramref name="cls"/>'s <paramref name="name"/> is the library's own method,
@@ -2742,9 +2743,9 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static bool IsBuiltinMethod(RubyClass/*!*/ cls, string/*!*/ name) {
             int version = RubyModule.GlobalMethodVersion;
-            var key = (cls, name);
+            var checkedNames = _builtinMethods.GetValue(cls, _ => new System.Collections.Concurrent.ConcurrentDictionary<string, int>());
             int checkedAt;
-            if (_builtinMethods.TryGetValue(key, out checkedAt) && checkedAt == version) {
+            if (checkedNames.TryGetValue(name, out checkedAt) && checkedAt == version) {
                 return true;
             }
 
@@ -2765,7 +2766,7 @@ namespace IronRuby.Builtins {
                     return false;
                 }
             }
-            _builtinMethods[key] = version;
+            checkedNames[name] = version;
             return true;
         }
 

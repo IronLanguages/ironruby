@@ -5078,6 +5078,9 @@ namespace IronRuby.Runtime {
         // them: the switch, the alias table and .NET's own lookup were most of the cost of
         // Encoding.find and String#encode. Only names that resolved are kept, so the set stays
         // as small as the names a program actually uses.
+        private const int MaxCachedEncodingNames = 256;
+        private const int MaxCachedEncodingNameLength = 64;
+
         private readonly ConcurrentDictionary<string, RubyEncoding>/*!*/ _encodingsByName =
             new ConcurrentDictionary<string, RubyEncoding>(StringComparer.OrdinalIgnoreCase);
 
@@ -5088,7 +5091,10 @@ namespace IronRuby.Runtime {
                 return result;
             }
             result = RubyEncoding.GetRubyEncoding(GetEncodingByRubyName(name));
-            if (!IsMutableEncodingName(name)) {
+            // Bounded, since names can come from input and many spellings resolve to the same
+            // encoding ("CP65001", "CP065001", ...): past the limits a name is resolved every time.
+            if (!IsMutableEncodingName(name) && name.Length <= MaxCachedEncodingNameLength &&
+                _encodingsByName.Count < MaxCachedEncodingNames) {
                 _encodingsByName[name] = result;
             }
             return result;
