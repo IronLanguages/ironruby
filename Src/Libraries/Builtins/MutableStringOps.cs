@@ -4974,7 +4974,11 @@ namespace IronRuby.Builtins {
             }
 
             int offset = 0;
-            foreach (var entry in options) {
+            object value;
+            // `offset: i' alone, the call every unpack1-at-a-position makes: a lookup, not an enumerator
+            if (options.Count == 1 && options.TryGetValue(context.CreateAsciiSymbol("offset"), out value)) {
+                offset = Protocols.CastToFixnum(fixnumCast, value);
+            } else foreach (var entry in options) {
                 var key = entry.Key as RubySymbol;
                 if (key == null || key.ToString() != "offset") {
                     throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(entry.Key));
