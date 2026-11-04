@@ -284,7 +284,7 @@ namespace IronRuby.Builtins {
         #region chmod, chown, lchmod, lchown, umask
 
         [RubyMethod("chmod")]
-        public static int Chmod(RubyFile/*!*/ self, [DefaultProtocol]int permission) {
+        public static object Chmod(RubyFile/*!*/ self, [DefaultProtocol]int permission) {
             self.RequireInitialized();
             if (Posix.IsAvailable) {
                 int fd = GetNativeFileDescriptor(self);
@@ -297,7 +297,9 @@ namespace IronRuby.Builtins {
                 }
             }
             if (self.Path == null) {
-                throw new NotSupportedException("TODO: cannot chmod for files without path");
+                // Without fchmod there is nothing to change a pathless File through; MRI's
+                // rb_file_chmod answers nil then, rather than raising.
+                return null;
             }
             Chmod(self.Path, permission);
             return 0;

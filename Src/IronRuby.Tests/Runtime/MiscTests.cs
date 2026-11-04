@@ -2491,6 +2491,98 @@ base64: ""ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=""
         }
 
         /// <summary>
+        /// Digest::Instance#digest, #digest! and Digest::Class.digest hand back whatever #finish answers,
+        /// as MRI does; the hexdigest forms run it through to_str, so a non-String is a TypeError rather
+        /// than the InvalidCastException a cast to MutableString used to throw.
+        /// </summary>
+        public void Digest_NonStringResult1() {
+            TestOutput(@"
+require 'ruby4'
+require 'digest'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+c = Class.new(Digest::Class) { def update(s); self; end; def finish; :sym; end; def reset; self; end }
+show(""digest"") { [c.new.digest, c.new.digest(""x""), c.new.digest!, c.digest(""x"")] }
+show(""hexdigest"") { c.new.hexdigest }
+show(""hexdigest(str)"") { c.new.hexdigest(""x"") }
+show(""hexdigest!"") { c.new.hexdigest! }
+show(""Class.hexdigest"") { c.hexdigest(""x"") }
+n = Class.new(c) { def finish; nil; end }
+show(""nil finish"") { [n.new.digest, n.hexdigest(""x"")] }
+s = Class.new(c) { def finish; o = Object.new; def o.to_str; ""\x01\xFF"".b; end; o; end }
+show(""to_str finish"") { [s.new.hexdigest, s.hexdigest(""x""), s.new.hexdigest!] }
+", @"
+digest: [:sym, :sym, :sym, :sym]
+hexdigest: ""TypeError: no implicit conversion of Symbol into String""
+hexdigest(str): ""TypeError: no implicit conversion of Symbol into String""
+hexdigest!: ""TypeError: no implicit conversion of Symbol into String""
+Class.hexdigest: ""TypeError: no implicit conversion of Symbol into String""
+nil finish: ""TypeError: no implicit conversion of nil into String""
+to_str finish: [""01ff"", ""01ff"", ""01ff""]
+");
+        }
+
+        /// <summary>
+        /// main has no #initialize of its own - it is BasicObject's - so send(:initialize) answers nil
+        /// where a stub used to throw NotImplementedException.
+        /// </summary>
+        public void Main_Initialize1() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+show(""initialize"") { send(:initialize) }
+show(""initialize(1)"") { send(:initialize, 1) }
+", @"
+initialize: nil
+initialize(1): ""ArgumentError: wrong number of arguments (given 1, expected 0)""
+");
+        }
+
+        /// <summary>
+        /// Dir.chdir, Dir.entries, Dir.mkdir and Dir.rmdir on a path that is, or runs through, a regular file
+        /// raise Errno::ENOTDIR as MRI's do; chdir said ENOENT and the "file/sub" forms said ENOENT too.
+        /// </summary>
+        public void Dir_NotADirectory1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+def show(l); v = begin; yield; rescue SystemCallError => e; e.class; end; puts ""#{l}: #{v.inspect}""; end
+dir = Dir.mktmpdir
+file = File.join(dir, ""file"")
+File.write(file, """")
+begin
+  show(""chdir file"") { Dir.chdir(file) }
+  show(""chdir file/sub"") { Dir.chdir(File.join(file, ""sub"")) }
+  show(""chdir missing"") { Dir.chdir(File.join(dir, ""missing"")) }
+  show(""entries file"") { Dir.entries(file) }
+  show(""entries file/sub"") { Dir.entries(File.join(file, ""sub"")) }
+  show(""children missing"") { Dir.children(File.join(dir, ""missing"")) }
+  show(""mkdir file"") { Dir.mkdir(file) }
+  show(""mkdir file/sub"") { Dir.mkdir(File.join(file, ""sub"")) }
+  show(""mkdir missing/sub"") { Dir.mkdir(File.join(dir, ""missing"", ""sub"")) }
+  show(""rmdir file"") { Dir.rmdir(file) }
+  show(""rmdir file/sub"") { Dir.rmdir(File.join(file, ""sub"")) }
+  show(""rmdir missing"") { Dir.rmdir(File.join(dir, ""missing"")) }
+ensure
+  File.delete(file)
+  Dir.rmdir(dir)
+end
+", @"
+chdir file: Errno::ENOTDIR
+chdir file/sub: Errno::ENOTDIR
+chdir missing: Errno::ENOENT
+entries file: Errno::ENOTDIR
+entries file/sub: Errno::ENOTDIR
+children missing: Errno::ENOENT
+mkdir file: Errno::EEXIST
+mkdir file/sub: Errno::ENOTDIR
+mkdir missing/sub: Errno::ENOENT
+rmdir file: Errno::ENOTDIR
+rmdir file/sub: Errno::ENOTDIR
+rmdir missing: Errno::ENOENT
+");
+        }
+
+        /// <summary>
         /// Range#first(n) and #last(n) of an Integer range are counted rather than walked - #last(n)
         /// built the whole range first, so (1..10**9).last(3) ran out of memory - and #last takes
         /// that path for a subclass whatever its #each, as MRI's rb_int_range_last does. Also the
