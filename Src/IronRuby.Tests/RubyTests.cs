@@ -149,6 +149,7 @@ namespace IronRuby.Tests {
                 Strings8,
                 Strings9,
                 String_CharacterBoundaries1,
+                String_CountDeleteSqueeze1,
                 ToSConversion1,
                 ToSConversion2,
                 Symbols1,
@@ -364,6 +365,7 @@ namespace IronRuby.Tests {
                 Array_SliceHugeLength1,
                 Array_SplatBlockYield1,
                 Array_NumericSumMinShift1,
+                Enumerable_TallyGroupBy1,
                 IListOps_EnumerateRecursively1,
 
                 Scenario_RubyHashes1A,
@@ -844,6 +846,7 @@ namespace IronRuby.Tests {
                 Io_Messages1,
                 Encoding_Misc1,
                 Marshal_Misc1,
+                Marshal_LoadFloat1,
                 Hash_SelfKey1,
                 Thread_JoinSelf1,
                 Reflection_Misc1,

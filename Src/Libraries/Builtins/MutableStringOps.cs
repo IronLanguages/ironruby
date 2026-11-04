@@ -418,7 +418,44 @@ namespace IronRuby.Builtins {
                 _negated = negated;
             }
 
+            // Which of the ASCII characters the selector picks, bit c of _ascii0 (c < 64) or of
+            // _ascii1 (64 <= c < 128), negation applied: the common case answers with a shift.
+            private ulong _ascii0, _ascii1;
+
+            internal ulong Ascii0 { get { return _ascii0; } }
+            internal ulong Ascii1 { get { return _ascii1; } }
+
+            private void ComputeAsciiMask() {
+                ulong m0 = 0, m1 = 0;
+                foreach (int c in _singles) {
+                    SetAsciiBit(ref m0, ref m1, c);
+                }
+                for (int i = 0; i < _rangeBounds.Count; i += 2) {
+                    int last = Math.Min(_rangeBounds[i + 1], 127);
+                    for (int c = Math.Max(_rangeBounds[i], 0); c <= last; c++) {
+                        SetAsciiBit(ref m0, ref m1, c);
+                    }
+                }
+                _ascii0 = _negated ? ~m0 : m0;
+                _ascii1 = _negated ? ~m1 : m1;
+            }
+
+            private static void SetAsciiBit(ref ulong m0, ref ulong m1, int c) {
+                if ((uint)c < 64) {
+                    m0 |= 1UL << c;
+                } else if ((uint)c < 128) {
+                    m1 |= 1UL << (c - 64);
+                }
+            }
+
             public bool Contains(int c) {
+                if ((uint)c < 128) {
+                    return ((c < 64 ? _ascii0 >> c : _ascii1 >> (c - 64)) & 1) != 0;
+                }
+                return ContainsSlow(c);
+            }
+
+            private bool ContainsSlow(int c) {
                 bool hit = _singles.Contains(c);
                 if (!hit) {
                     for (int i = 0; i < _rangeBounds.Count; i += 2) {
@@ -480,6 +517,7 @@ namespace IronRuby.Builtins {
                     }
                 }
 
+                result.ComputeAsciiMask();
                 return result;
             }
         }
@@ -488,11 +526,24 @@ namespace IronRuby.Builtins {
         public sealed class CharacterSelectorSet {
             private readonly CharacterSelector[]/*!*/ _selectors;
 
+            // the intersection of the selectors' ASCII masks, see CharacterSelector
+            private readonly ulong _ascii0, _ascii1;
+
             private CharacterSelectorSet(CharacterSelector[]/*!*/ selectors) {
                 _selectors = selectors;
+                ulong m0 = UInt64.MaxValue, m1 = UInt64.MaxValue;
+                foreach (var selector in selectors) {
+                    m0 &= selector.Ascii0;
+                    m1 &= selector.Ascii1;
+                }
+                _ascii0 = m0;
+                _ascii1 = m1;
             }
 
             public bool Contains(int c) {
+                if ((uint)c < 128) {
+                    return ((c < 64 ? _ascii0 >> c : _ascii1 >> (c - 64)) & 1) != 0;
+                }
                 for (int i = 0; i < _selectors.Length; i++) {
                     if (!_selectors[i].Contains(c)) {
                         return false;
@@ -3510,11 +3561,15 @@ namespace IronRuby.Builtins {
                 }
                 return result;
             }
-            for (int i = 0; i < self.Length; i++) {
-                if (!map.Contains(self.GetChar(i))) {
-                    result.Append(self.GetChar(i));
+            // the characters read once, and kept in runs rather than appended one at a time
+            string chars = self.ToString();
+            var kept = new System.Text.StringBuilder(chars.Length);
+            for (int i = 0; i < chars.Length; i++) {
+                if (!map.Contains(chars[i])) {
+                    kept.Append(chars[i]);
                 }
             }
+            result.Append(kept.ToString());
             return result;
         }
 
@@ -3583,8 +3638,10 @@ namespace IronRuby.Builtins {
                 }
                 return ScriptingRuntimeHelpers.Int32ToObject(count);
             }
-            for (int i = 0; i < self.Length; i++) {
-                if (map.Contains(self.GetChar(i))) {
+            // the characters read once, rather than one GetChar call each
+            string chars = self.ToString();
+            for (int i = 0; i < chars.Length; i++) {
+                if (map.Contains(chars[i])) {
                     count++;
                 }
             }

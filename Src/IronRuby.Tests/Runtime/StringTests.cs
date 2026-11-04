@@ -386,5 +386,33 @@ p [""abc"".sum, ""abc"".sum(0), ""abc"".sum(1), (""\xFF"" * 1000).b.sum(8), (""\
 [294, 294, 0, 24, 5100000, 53728, 120, 0]
 ");
         }
+
+        /// <summary>
+        /// #count, #delete and #squeeze answer an ASCII character from a bitmask CharacterSelector
+        /// computes when it is parsed, negation and intersection included; anything else goes
+        /// through the selector's sets and ranges as before.
+        /// </summary>
+        public void String_CountDeleteSqueeze1() {
+            TestOutput(@"
+require 'ruby4'
+s = ""hello world""
+p [s.count(""lo""), s.count(""a-y""), s.count(""^l""), s.count(""lo"", ""o""), s.count(""^""), s.count(""\\^""), ""a^b"".count(""^""), ""x-y"".count(""x-""), s.count(""a-z"", ""^aeiou""), s.count(""^a-z"")]
+e = ""héllo wörld""
+p [e.count(""é-ö""), e.count(""^l""), e.delete(""é"").size, e.delete(""^é"").bytes, e.squeeze.size, ""a\u{1F600}\u{1F600}b"".count(""\u{1F600}""), ""a\u{1F600}\u{1F600}b"".squeeze.size]
+p [s.delete(""l""), s.delete(""a-z""), s.delete(""^l""), s.delete(""lo"", ""o""), ""aaabbb  ccc"".squeeze, ""aaabbb"".squeeze(""a""), ""aa"".squeeze!(""b"")]
+x = +""abc""
+p [x.delete!(""x""), x.delete!(""b""), x]
+y = ""\xFF\xFF\x80"".b
+p [y.count(""\xFF"".b), y.delete(""\x80"".b).bytes, y.squeeze.bytes]
+p((""abc"".count(""c-a"") rescue $!.message))
+", @"
+[5, 10, 8, 2, 0, 0, 1, 2, 7, 1]
+[2, 8, 10, [195, 169], 10, 2, 3]
+[""heo word"", "" "", ""lll"", ""hell wrld"", ""ab c"", ""abbb"", nil]
+[nil, ""ac"", ""ac""]
+[2, [255, 255], [255, 128]]
+""invalid range \""c-a\"" in string transliteration""
+");
+        }
     }
 }

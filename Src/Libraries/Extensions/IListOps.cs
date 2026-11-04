@@ -2874,7 +2874,12 @@ namespace IronRuby.Builtins {
             int count = itemList.Count;
             object[] items = itemList.ToArray();
             object[] keys = keyList.ToArray();
-            MergeSortByKey(keys, items, new object[count], new object[count], 0, count, comparisonStorage);
+            // Keys that are all Fixnums, compared by the built-in Integer#<=>, are compared directly.
+            bool fixnumKeys = count > 1 && IsBuiltinIntegerComparison(comparisonStorage.Context);
+            for (int i = 0; fixnumKeys && i < count; i++) {
+                fixnumKeys = keys[i] is int;
+            }
+            MergeSortByKey(keys, items, new object[count], new object[count], 0, count, comparisonStorage, fixnumKeys);
 
             var result = new RubyArray(count);
             for (int i = 0; i < count; i++) {
@@ -2889,20 +2894,20 @@ namespace IronRuby.Builtins {
         /// what its #min_by(n)/#max_by(n) rely on.
         /// </summary>
         private static void MergeSortByKey(object[]/*!*/ keys, object[]/*!*/ items, object[]/*!*/ keyBuffer, object[]/*!*/ itemBuffer,
-            int start, int length, ComparisonStorage/*!*/ comparisonStorage) {
+            int start, int length, ComparisonStorage/*!*/ comparisonStorage, bool fixnumKeys = false) {
 
             if (length < 2) {
                 return;
             }
 
             int half = length / 2;
-            MergeSortByKey(keys, items, keyBuffer, itemBuffer, start, half, comparisonStorage);
-            MergeSortByKey(keys, items, keyBuffer, itemBuffer, start + half, length - half, comparisonStorage);
+            MergeSortByKey(keys, items, keyBuffer, itemBuffer, start, half, comparisonStorage, fixnumKeys);
+            MergeSortByKey(keys, items, keyBuffer, itemBuffer, start + half, length - half, comparisonStorage, fixnumKeys);
 
             int left = start, right = start + half, target = start;
             int leftEnd = start + half, rightEnd = start + length;
             while (left < leftEnd && right < rightEnd) {
-                if (Protocols.Compare(comparisonStorage, keys[right], keys[left]) < 0) {
+                if (fixnumKeys ? (int)keys[right] < (int)keys[left] : Protocols.Compare(comparisonStorage, keys[right], keys[left]) < 0) {
                     keyBuffer[target] = keys[right];
                     itemBuffer[target++] = items[right++];
                 } else {

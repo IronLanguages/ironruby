@@ -2281,5 +2281,41 @@ false
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
             }
         }
+
+        /// <summary>
+        /// Marshal.load reads a Float's text with a hand-written strtod prefix scan instead of a Regex:
+        /// leading white space is skipped, and a '.' is part of the number only when a digit
+        /// follows, as in MRI's ruby_strtod ("1.e5" is 1.0).
+        /// </summary>
+        public void Marshal_LoadFloat1() {
+            TestOutput(@"
+require 'ruby4'
+vals = [0.0, -0.0, 1.5, -2.25, 1e20, 1e-20, 1.0 / 3, Float::INFINITY, -Float::INFINITY, 2.0**70, Float::MAX, 5e-324, 0.1]
+r = Marshal.load(Marshal.dump(vals))
+p r.zip(vals).all? { |a, b| a.eql?(b) }, r.map { |f| f.to_s }, Marshal.load(Marshal.dump(Float::NAN)).nan?
+[""1.5"", ""+.5"", ""."", ""-"", ""1.e5"", ""1e"", ""1e+"", ""1e+3x"", ""abc"", ""  1"", ""\t-2"", ""-.e3"", ""007"", ""1_000"", "".5e-2""].each do |str|
+  p [str, Marshal.load(""\x04\bf"".b + (str.bytesize + 5).chr + str)]
+end
+", @"
+true
+[""0.0"", ""-0.0"", ""1.5"", ""-2.25"", ""1.0e+20"", ""1.0e-20"", ""0.3333333333333333"", ""Infinity"", ""-Infinity"", ""1.1805916207174113e+21"", ""1.7976931348623157e+308"", ""5.0e-324"", ""0.1""]
+true
+[""1.5"", 1.5]
+[""+.5"", 0.5]
+[""."", 0.0]
+[""-"", 0.0]
+[""1.e5"", 1.0]
+[""1e"", 1.0]
+[""1e+"", 1.0]
+[""1e+3x"", 1000.0]
+[""abc"", 0.0]
+[""  1"", 1.0]
+[""\t-2"", -2.0]
+[""-.e3"", 0.0]
+[""007"", 7.0]
+[""1_000"", 1.0]
+["".5e-2"", 0.005]
+");
+        }
     }
 }

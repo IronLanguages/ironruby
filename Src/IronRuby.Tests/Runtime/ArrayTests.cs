@@ -314,5 +314,64 @@ TypeError
 [10, 9, 0, Infinity, 3, 1, 3]
 ");
         }
+
+        /// <summary>
+        /// Enumerable#tally and #group_by over an Array whose #each is the built-in one run in C#
+        /// (Enumerable.ListTally, ListGroupBy); a subclass or singleton #each, or another Enumerable,
+        /// still goes through #each. #tally stores the element itself as the key, as MRI's tally_up
+        /// does (a String is not copied and frozen), #group_by stores a frozen copy, as MRI does, and
+        /// Array#sort_by of Fixnum keys compares them directly.
+        /// </summary>
+        public void Enumerable_TallyGroupBy1() {
+            TestOutput(@"
+require 'ruby4'
+a = [3, 1, 2, 3, nil, ""a"", ""a"", :s, 1.0, 1, [1], [1]]
+p a.tally.to_a, [].tally.to_a
+s = +""x""
+t = [s, s.dup].tally
+p [t.keys[0].equal?(s), t.keys[0].frozen?, t.values]
+h = {}
+[s].tally(h)
+p [h.keys[0].equal?(s), ([1].tally({1 => ""a""}) rescue $!.class), ([1].tally({}.freeze) rescue $!.class)]
+p a.group_by { |x| x.class.name }.to_a
+g = [1, 2].group_by { s }
+p [g.keys[0].frozen?, g.keys[0].equal?(s), [1, 2, 3].group_by { |x| x.odd? ? nil : x }.to_a]
+p [1, 2, 3].group_by { |x| break x * 10 if x == 2; x }
+b = [1, 2, 3]
+p b.group_by { |x| b << 4 if x == 1 && b.size == 3; x }.keys
+b = [1, 2, 3]
+p b.group_by { |x| b.pop; x }.keys
+c = Class.new(Array) { def each; yield 9; yield 8; end }
+p c.new([1, 2]).group_by { |x| x }.keys, c.new([1]).tally.to_a
+d = [1, 2]
+def d.each; yield 7; end
+p d.group_by { |x| x }.keys, d.tally.to_a
+o = Object.new
+o.extend(Enumerable)
+def o.each; yield 1, 2; yield 3; end
+p o.group_by { |x| x }.keys, o.tally.to_a
+p [5, 3, 9, 1].sort_by { |x| -x }, (1..12).to_a.sort_by { |x| x % 3 }, [2**70, 1, -5].sort_by { |x| x }, [3, 1.5, 2].sort_by { |x| x }
+", @"
+[[3, 2], [1, 2], [2, 1], [nil, 1], [""a"", 2], [:s, 1], [1.0, 1], [[1], 2]]
+[]
+[true, false, [2]]
+[true, TypeError, FrozenError]
+[[""Integer"", [3, 1, 2, 3, 1]], [""NilClass"", [nil]], [""String"", [""a"", ""a""]], [""Symbol"", [:s]], [""Float"", [1.0]], [""Array"", [[1], [1]]]]
+[true, false, [[nil, [1, 3]], [2, [2]]]]
+20
+[1, 2, 3, 4]
+[1, 2]
+[9, 8]
+[[9, 1], [8, 1]]
+[7]
+[[7, 1]]
+[[1, 2], 3]
+[[[1, 2], 1], [3, 1]]
+[9, 5, 3, 1]
+[3, 6, 9, 12, 1, 4, 7, 10, 2, 5, 8, 11]
+[-5, 1, 1180591620717411303424]
+[1.5, 2, 3]
+");
+        }
     }
 }

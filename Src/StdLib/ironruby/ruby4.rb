@@ -216,8 +216,9 @@ module Enumerable
   # means the frozen check happens before the first element is looked at.
   def tally(counts = nil)
     if counts.nil?
+      return __list_tally__ if __plain_list__?
       result = {}
-      each { |*values| item = __enum_item__(values); result[item] = (result[item] || 0) + 1 }
+      each { |*values| item = __enum_item__(values); __tally_store__(result, item, (result[item] || 0) + 1) }
       return result
     end
 
@@ -232,7 +233,8 @@ module Enumerable
       unless n.is_a?(Integer)
         raise TypeError, "wrong argument type #{n.class} (expected Integer)"
       end
-      hash[item] = n + 1
+      # stored as it is, as MRI's tally_up does: a String is not copied and frozen
+      __tally_store__(hash, item, n + 1)
     end
     hash
   end unless method_defined?(:tally)
@@ -437,8 +439,10 @@ module Enumerable
     end
   end
 
-  def group_by
-    return to_enum(:group_by) unless block_given?
+  def group_by(&block)
+    return to_enum(:group_by) unless block
+    # an Array is grouped in C#, see Enumerable.ListGroupBy
+    return __list_group_by__(&block) if __plain_list__?
     result = {}
     each { |*values| item = __enum_item__(values); (result[yield(item)] ||= []) << item }
     result

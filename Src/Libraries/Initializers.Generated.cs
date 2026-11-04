@@ -1309,6 +1309,26 @@ namespace IronRuby.Builtins {
         #endif
         
         private static void LoadEnumerable_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__list_group_by__", 0x52, 
+                0x00000006U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.Enumerable.ListGroupBy)
+            );
+            
+            DefineLibraryMethod(module, "__list_tally__", 0x52, 
+                0x00000002U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Collections.IList, IronRuby.Builtins.Hash>(IronRuby.Builtins.Enumerable.ListTally)
+            );
+            
+            DefineLibraryMethod(module, "__plain_list__?", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Boolean>(IronRuby.Builtins.Enumerable.IsPlainList)
+            );
+            
+            DefineLibraryMethod(module, "__tally_store__", 0x52, 
+                0x00000002U, 
+                new Func<System.Object, IronRuby.Builtins.Hash, System.Object, System.Object, System.Object>(IronRuby.Builtins.Enumerable.TallyStore)
+            );
+            
             DefineLibraryMethod(module, "all?", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.Enumerable.TrueForAll)
