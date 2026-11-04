@@ -117,10 +117,6 @@ namespace IronRuby.Builtins {
 
         #region Constants
 
-        private static readonly MutableString _positiveInfinityString = MutableString.CreateAscii("inf").Freeze();
-        private static readonly MutableString _negativeInfinityString = MutableString.CreateAscii("-inf").Freeze();
-        private static readonly MutableString _nanString = MutableString.CreateAscii("nan").Freeze();
-
         // The two "pseudo instance variables" MRI uses to carry an object's encoding through the
         // marshal stream. ":E" is a shorthand for the two encodings that appear everywhere
         // (true => UTF-8, false => US-ASCII); everything else is spelled out by name under
@@ -1171,30 +1167,78 @@ namespace IronRuby.Builtins {
             }
 
             private double ReadFloat() {
-                MutableString value = ReadString();
-                if (value.Equals(_positiveInfinityString)) {
+                byte[] data = ReadBytes(ReadInt32());
+                if (IsAscii(data, "inf")) {
                     return Double.PositiveInfinity;
                 }
-                if (value.Equals(_negativeInfinityString)) {
+                if (IsAscii(data, "-inf")) {
                     return Double.NegativeInfinity;
                 }
-                if (value.Equals(_nanString)) {
+                if (IsAscii(data, "nan")) {
                     return Double.NaN;
                 }
 
-                // MRI may append the binary mantissa after a NUL; the decimal prefix is authoritative.
-                int pos = value.IndexOf((byte)0);
-                if (pos >= 0) {
-                    value.Remove(pos, value.Length - pos);
+                // strtod: the longest numeric prefix counts - [+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)? -
+                // and no number at all is 0.0. MRI may append the binary mantissa after a NUL, and
+                // the scan stops there too: the decimal prefix is authoritative. Scanned by hand
+                // rather than with a Regex, which was most of the cost of loading a Float.
+                // As in MRI's ruby_strtod, leading white space is skipped and a '.' is part of the
+                // number only when a digit follows it ("1.e5" is 1.0).
+                int n = data.Length;
+                int i = 0;
+                while (i < n && (data[i] == ' ' || (data[i] >= '\t' && data[i] <= '\r'))) {
+                    i++;
                 }
-                // strtod: the longest numeric prefix counts, and no number at all is 0.0
-                var match = System.Text.RegularExpressions.Regex.Match(value.ToString(),
-                    @"\A[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?");
+                int numberStart = i;
+                if (i < n && (data[i] == '+' || data[i] == '-')) {
+                    i++;
+                }
+                int intDigits = SkipDigits(data, ref i);
+                int fracDigits = 0;
+                if (i + 1 < n && data[i] == '.' && data[i + 1] >= '0' && data[i + 1] <= '9') {
+                    i++;
+                    fracDigits = SkipDigits(data, ref i);
+                }
+                if (intDigits == 0 && fracDigits == 0) {
+                    return 0.0;
+                }
+                if (i < n && (data[i] == 'e' || data[i] == 'E')) {
+                    int e = i++;
+                    if (i < n && (data[i] == '+' || data[i] == '-')) {
+                        i++;
+                    }
+                    if (SkipDigits(data, ref i) == 0) {
+                        i = e;
+                    }
+                }
+
+                int length = i - numberStart;
+                Span<char> chars = length <= 128 ? stackalloc char[length] : new char[length];
+                for (int j = 0; j < length; j++) {
+                    chars[j] = (char)data[numberStart + j];
+                }
                 double result;
-                if (match.Success && Double.TryParse(match.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
-                    return result;
+                return Double.TryParse(chars, NumberStyles.Float, CultureInfo.InvariantCulture, out result) ? result : 0.0;
+            }
+
+            private static int SkipDigits(byte[]/*!*/ data, ref int i) {
+                int start = i;
+                while (i < data.Length && data[i] >= '0' && data[i] <= '9') {
+                    i++;
                 }
-                return 0.0;
+                return i - start;
+            }
+
+            private static bool IsAscii(byte[]/*!*/ data, string/*!*/ text) {
+                if (data.Length != text.Length) {
+                    return false;
+                }
+                for (int i = 0; i < data.Length; i++) {
+                    if (data[i] != text[i]) {
+                        return false;
+                    }
+                }
+                return true;
             }
 
             private MutableString/*!*/ ReadString() {

@@ -2281,5 +2281,213 @@ false
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
             }
         }
+
+        /// <summary>
+        /// Marshal.load reads a Float's text with a hand-written strtod prefix scan instead of a Regex:
+        /// leading white space is skipped, and a '.' is part of the number only when a digit
+        /// follows, as in MRI's ruby_strtod ("1.e5" is 1.0).
+        /// </summary>
+        public void Marshal_LoadFloat1() {
+            TestOutput(@"
+require 'ruby4'
+vals = [0.0, -0.0, 1.5, -2.25, 1e20, 1e-20, 1.0 / 3, Float::INFINITY, -Float::INFINITY, 2.0**70, Float::MAX, 5e-324, 0.1]
+r = Marshal.load(Marshal.dump(vals))
+p r.zip(vals).all? { |a, b| a.eql?(b) }, r.map { |f| f.to_s }, Marshal.load(Marshal.dump(Float::NAN)).nan?
+[""1.5"", ""+.5"", ""."", ""-"", ""1.e5"", ""1e"", ""1e+"", ""1e+3x"", ""abc"", ""  1"", ""\t-2"", ""-.e3"", ""007"", ""1_000"", "".5e-2""].each do |str|
+  p [str, Marshal.load(""\x04\bf"".b + (str.bytesize + 5).chr + str)]
+end
+", @"
+true
+[""0.0"", ""-0.0"", ""1.5"", ""-2.25"", ""1.0e+20"", ""1.0e-20"", ""0.3333333333333333"", ""Infinity"", ""-Infinity"", ""1.1805916207174113e+21"", ""1.7976931348623157e+308"", ""5.0e-324"", ""0.1""]
+true
+[""1.5"", 1.5]
+[""+.5"", 0.5]
+[""."", 0.0]
+[""-"", 0.0]
+[""1.e5"", 1.0]
+[""1e"", 1.0]
+[""1e+"", 1.0]
+[""1e+3x"", 1000.0]
+[""abc"", 0.0]
+[""  1"", 1.0]
+[""\t-2"", -2.0]
+[""-.e3"", 0.0]
+[""007"", 7.0]
+[""1_000"", 1.0]
+["".5e-2"", 0.005]
+");
+        }
+
+        /// <summary>
+        /// Integer.sqrt, #pow, #digits and #fdiv are C# (Integer.cs, ClrInteger.cs) rather than the
+        /// prelude's Ruby: the same answers, with MRI's checks in MRI's order - #pow(b, 1) is 0, a
+        /// non-Integer exponent is "unless a 1st argument is integer", #digits refuses a negative
+        /// receiver before it converts the radix. Fixnum ** Fixnum is computed in a long while it
+        /// fits, and #pow does not call a redefined **, as in MRI. Also Range#size, Integer#[],
+        /// Kernel#Integer and #Float on their fast paths.
+        /// </summary>
+        public void Integer_SqrtPowDigits1() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+o = Object.new; def o.to_int = 17
+[0, 1, 3, 4, 24, 25, 2**31 - 1, 2**52 - 1, 2**52, 2**62 - 1, 2**62, 10**40 - 1, 10**40, (2**64 + 1)**2 - 1, -1, -(2**70), 16.99, nil, ""4""].each { |n| show(""sqrt #{n.inspect}"") { Integer.sqrt(n) } }
+show(""sqrt to_int"") { Integer.sqrt(o) }
+show(""sqrt sweep"") { (0..3000).all? { |i| r = Integer.sqrt(i); r * r <= i && (r + 1)**2 > i } }
+[[3, 1000, 97], [-3, 3, 7], [3, 3, -7], [-3, 3, -7], [5, 0, 1], [5, 0, -1], [2**70, 2**70, 10**9 + 7], [12, 3, 2**80], [3, -1, 7], [3, 2, 0], [3, 2, 2.0], [3, 2.0, 7], [3, nil, 7]].each { |a, b, m| show(""pow #{[a, b, m].inspect}"") { a.pow(b, m) } }
+[[2, 10], [2, -1], [2, 0.5], [3, 39], [3, 41], [-2, 63], [-2, 64], [46341, 2], [0, -1]].each { |a, b| show(""pow1 #{[a, b].inspect}"") { a.pow(b) } }
+[[0], [5], [123456789], [2**70], [-1], [255, 16], [255, 256], [10, 10**20], [3**50, 2**64], [1, 0], [1, 1], [1, -2], [1, 2.9], [1, nil], [-1, nil], [0, 2**64]].each { |a, *b| show(""digits #{[a, *b].inspect}"") { a.digits(*b) } }
+[[10, 3], [10, 3.0], [1, 0], [-1, 0], [0, 0], [2**70, 3], [2**1100, 2**1000], [10, Rational(1, 3)], [2**53 + 1, 1]].each { |a, b| show(""fdiv #{[a, b].inspect}"") { a.fdiv(b) } }
+[[1, 1000, false], [1, 1000, true], [5, 1, false], [5, 5, true], [-(2**70), 2**70, false]].each { |a, b, x| show(""size #{[a, b, x].inspect}"") { Range.new(a, b, x).size } }
+show(""size float"") { (1..3.5).size }
+[[12345, 3], [-1, 100], [5, -1], [2**70, 70], [5, 2**70], [-5, 2**70], [12345, 3.9], [12345, nil], [5, 0..2], [5, 1, 2]].each { |a, *b| show(""bit #{[a, *b].inspect}"") { a[*b] } }
+[15, 2**70, 1.9, ""15"", nil, Float::NAN].each { |v| show(""Integer(#{v.inspect})"") { Integer(v) } }
+[15, 2**70, 1.5, Float::NAN, ""1.5"", nil].each { |v| show(""Float(#{v.inspect})"") { Float(v) } }
+show(""Integer base"") { Integer(15, 8) }
+show(""redefined **"") { class Integer; alias __t_pow **; def **(x) = 42; end; r = 3.pow(2); class Integer; alias ** __t_pow; remove_method :__t_pow; end; [r, 3.pow(2)] }
+", @"
+sqrt 0: 0
+sqrt 1: 1
+sqrt 3: 1
+sqrt 4: 2
+sqrt 24: 4
+sqrt 25: 5
+sqrt 2147483647: 46340
+sqrt 4503599627370495: 67108863
+sqrt 4503599627370496: 67108864
+sqrt 4611686018427387903: 2147483647
+sqrt 4611686018427387904: 2147483648
+sqrt 9999999999999999999999999999999999999999: 99999999999999999999
+sqrt 10000000000000000000000000000000000000000: 100000000000000000000
+sqrt 340282366920938463500268095579187314688: 18446744073709551616
+sqrt -1: ""Math::DomainError: Numerical argument is out of domain - \""isqrt\""""
+sqrt -1180591620717411303424: ""Math::DomainError: Numerical argument is out of domain - \""isqrt\""""
+sqrt 16.99: 4
+sqrt nil: ""TypeError: no implicit conversion of nil into Integer""
+sqrt ""4"": ""TypeError: no implicit conversion of String into Integer""
+sqrt to_int: 4
+sqrt sweep: true
+pow [3, 1000, 97]: 36
+pow [-3, 3, 7]: 1
+pow [3, 3, -7]: -1
+pow [-3, 3, -7]: -6
+pow [5, 0, 1]: 0
+pow [5, 0, -1]: 0
+pow [1180591620717411303424, 1180591620717411303424, 1000000007]: 295837643
+pow [12, 3, 1208925819614629174706176]: 1728
+pow [3, -1, 7]: ""RangeError: Integer#pow() 1st argument cannot be negative when 2nd argument specified""
+pow [3, 2, 0]: ""ZeroDivisionError: divided by 0""
+pow [3, 2, 2.0]: ""TypeError: Integer#pow() 2nd argument not allowed unless all arguments are integers""
+pow [3, 2.0, 7]: ""TypeError: Integer#pow() 2nd argument not allowed unless a 1st argument is integer""
+pow [3, nil, 7]: ""TypeError: Integer#pow() 2nd argument not allowed unless a 1st argument is integer""
+pow1 [2, 10]: 1024
+pow1 [2, -1]: (1/2)
+pow1 [2, 0.5]: 1.4142135623730951
+pow1 [3, 39]: 4052555153018976267
+pow1 [3, 41]: 36472996377170786403
+pow1 [-2, 63]: -9223372036854775808
+pow1 [-2, 64]: 18446744073709551616
+pow1 [46341, 2]: 2147488281
+pow1 [0, -1]: ""ZeroDivisionError: divided by 0""
+digits [0]: [0]
+digits [5]: [5]
+digits [123456789]: [9, 8, 7, 6, 5, 4, 3, 2, 1]
+digits [1180591620717411303424]: [4, 2, 4, 3, 0, 3, 1, 1, 4, 7, 1, 7, 0, 2, 6, 1, 9, 5, 0, 8, 1, 1]
+digits [-1]: ""Math::DomainError: out of domain""
+digits [255, 16]: [15, 15]
+digits [255, 256]: [255]
+digits [10, 100000000000000000000]: [10]
+digits [717897987691852588770249, 18446744073709551616]: [6048575297968530377, 38917]
+digits [1, 0]: ""ArgumentError: invalid radix 0""
+digits [1, 1]: ""ArgumentError: invalid radix 1""
+digits [1, -2]: ""ArgumentError: negative radix""
+digits [1, 2.9]: [1]
+digits [1, nil]: ""TypeError: no implicit conversion of nil into Integer""
+digits [-1, nil]: ""Math::DomainError: out of domain""
+digits [0, 18446744073709551616]: [0]
+fdiv [10, 3]: 3.3333333333333335
+fdiv [10, 3.0]: 3.3333333333333335
+fdiv [1, 0]: Infinity
+fdiv [-1, 0]: -Infinity
+fdiv [0, 0]: NaN
+fdiv [1180591620717411303424, 3]: 3.935305402391371e+20
+fdiv [13582985290493858492773514283592667786034938469317445497485196697278130927542418487205392083207560592298578262953847383475038725543234929971155548342800628721885763499406390331782864144164680730766837160526223176512798435772129956553355286032203080380775759732320198985094884004069116123084147875437183658467465148948790552744165376, 10715086071862673209484250490600018105614048117055336074437503883703510511249361224931983788156958581275946729175531468251871452856923140435984577574698574803934567774824230985421074605062371141877954182153046474983581941267398767559165543946077062914571196477686542167660429831652624386837205668069376]: 1.2676506002282294e+30
+fdiv [10, (1/3)]: 30.0
+fdiv [9007199254740993, 1]: 9.007199254740992e+15
+size [1, 1000, false]: 1000
+size [1, 1000, true]: 999
+size [5, 1, false]: 0
+size [5, 5, true]: 0
+size [-1180591620717411303424, 1180591620717411303424, false]: 2361183241434822606849
+size float: 3
+bit [12345, 3]: 1
+bit [-1, 100]: 1
+bit [5, -1]: 0
+bit [1180591620717411303424, 70]: 1
+bit [5, 1180591620717411303424]: 0
+bit [-5, 1180591620717411303424]: 1
+bit [12345, 3.9]: 1
+bit [12345, nil]: ""TypeError: no implicit conversion of nil into Integer""
+bit [5, 0..2]: 5
+bit [5, 1, 2]: 2
+Integer(15): 15
+Integer(1180591620717411303424): 1180591620717411303424
+Integer(1.9): 1
+Integer(""15""): 15
+Integer(nil): ""TypeError: can't convert nil into Integer""
+Integer(NaN): ""FloatDomainError: NaN""
+Float(15): 15.0
+Float(1180591620717411303424): 1.1805916207174113e+21
+Float(1.5): 1.5
+Float(NaN): NaN
+Float(""1.5""): 1.5
+Float(nil): ""TypeError: can't convert nil into Float""
+Integer base: ""ArgumentError: base specified for non string value""
+redefined **: [9, 9]
+");
+        }
+
+        /// <summary>
+        /// Digest::Base streams input past 64 KB into an IncrementalHash: #update no longer keeps all
+        /// of it, a no-argument #digest reads the current hash without copying the object, #dup and
+        /// #clone carry the state across, and chunks in different encodings can be mixed (they were
+        /// an Encoding::CompatibilityError). #update(nil) is a TypeError, as in MRI.
+        /// </summary>
+        public void Digest_Incremental1() {
+            TestOutput(@"
+require 'ruby4'
+require 'digest'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+show(""one"") { [Digest::SHA256.hexdigest(""abc""), Digest::MD5.hexdigest(""abc""), Digest::SHA1.hexdigest(""abc""), Digest::SHA384.hexdigest(""abc"")[0, 16], Digest::SHA512.hexdigest("""")[0, 16]] }
+show(""stream"") { d = Digest::SHA256.new; 300.times { |i| d << ""x"" * i }; [d.hexdigest, Digest::SHA256.hexdigest((0...300).map { |i| ""x"" * i }.join)] }
+show(""digest each"") { d = Digest::MD5.new; (1..5).map { |i| d.update(""ab"" * 20000); d.hexdigest == Digest::MD5.hexdigest(""ab"" * 20000 * i) } }
+show(""dup"") { d = Digest::SHA256.new; d << ""a"" * 70_000; e = d.dup; e << ""b""; d << ""c""; [d.hexdigest == Digest::SHA256.hexdigest(""a"" * 70_000 + ""c""), e.hexdigest == Digest::SHA256.hexdigest(""a"" * 70_000 + ""b"")] }
+show(""clone small"") { d = Digest::SHA256.new; d << ""a""; e = d.clone; e << ""b""; [d.hexdigest[0, 8], e.hexdigest[0, 8]] }
+show(""digest!"") { d = Digest::SHA256.new; d << ""a"" * 70_000; x = d.hexdigest!; [x == Digest::SHA256.hexdigest(""a"" * 70_000), d.hexdigest == Digest::SHA256.hexdigest("""")] }
+show(""digest(str)"") { d = Digest::SHA256.new; d << ""q"" * 70_000; [d.hexdigest(""abc"")[0, 8], d.hexdigest[0, 8]] }
+show(""reset"") { d = Digest::MD5.new; d << ""x"" * 70_000; d.reset; d << ""abc""; d.hexdigest }
+show(""update nil"") { Digest::MD5.new.update(nil) }
+show(""update int"") { Digest::MD5.new.update(1) }
+show(""mixed encodings"") { d = Digest::SHA256.new; d << ""é""; d << ""\xFF"".b; d.hexdigest[0, 8] }
+show(""sha2"") { d = Digest::SHA2.new(512); d << ""x"" * 70_000; e = d.dup; e << ""y""; [d.hexdigest[0, 16], e.hexdigest[0, 16]] }
+show(""finish override"") { c = Class.new(Digest::SHA256) { def finish; ""F"" + super; end }; d = c.new; d << ""a""; d.digest[0, 1] }
+show(""base64"") { Digest::SHA256.base64digest(""abc"") }
+", @"
+one: [""ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"", ""900150983cd24fb0d6963f7d28e17f72"", ""a9993e364706816aba3e25717850c26c9cd0d89d"", ""cb00753f45a35e8b"", ""cf83e1357eefb8bd""]
+stream: [""5732865d0cf87f5bd597718d7860a430edb1d0ed95a3a34880a44b932659fc4e"", ""5732865d0cf87f5bd597718d7860a430edb1d0ed95a3a34880a44b932659fc4e""]
+digest each: [true, true, true, true, true]
+dup: [true, true]
+clone small: [""ca978112"", ""fb8e20fc""]
+digest!: [true, true]
+digest(str): [""ba7816bf"", ""e3b0c442""]
+reset: ""900150983cd24fb0d6963f7d28e17f72""
+update nil: ""TypeError: no implicit conversion of nil into String""
+update int: ""TypeError: no implicit conversion of Integer into String""
+mixed encodings: ""e6c36aed""
+sha2: [""2e61d78ffedeca82"", ""2c11a4729a94b9e6""]
+finish override: ""F""
+base64: ""ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=""
+");
+        }
     }
 }

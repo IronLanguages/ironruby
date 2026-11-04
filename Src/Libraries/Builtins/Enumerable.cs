@@ -32,6 +32,85 @@ namespace IronRuby.Builtins {
 
     [RubyModule("Enumerable")]
     public static class Enumerable {
+        #region Array fast paths for the prelude's methods
+
+        /// <summary>
+        /// True for an Array whose #each is the built-in Array#each, which yields each element
+        /// once, in order, re-reading the length as it goes. The prelude's Enumerable methods then
+        /// get the same answer from a loop over the list as from calling #each with a
+        /// |*values| block, so they hand the work to the C# methods below.
+        /// </summary>
+        [RubyMethod("__plain_list__?", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsPlainList(RubyContext/*!*/ context, object self) {
+            if (!(self is RubyArray)) {
+                return false;
+            }
+            RubyClass arrayClass = context.GetClass(typeof(RubyArray));
+            if (!IListOps.IsBuiltinMethod(arrayClass, "each")) {
+                return false;
+            }
+            RubyClass cls = context.GetImmediateClassOf(self);
+            if (ReferenceEquals(cls, arrayClass)) {
+                return true;
+            }
+            var own = cls.ResolveMethod("each", VisibilityContext.AllVisible);
+            var builtin = arrayClass.ResolveMethod("each", VisibilityContext.AllVisible);
+            return own.Found && builtin.Found && ReferenceEquals(own.Info, builtin.Info);
+        }
+
+        // Enumerable#group_by over a plain list (see IsPlainList): the prelude's loop with the
+        // result Hash filled in directly, as MRI's group_by_i does.
+        [RubyMethod("__list_group_by__", RubyMethodAttributes.PrivateInstance)]
+        public static object ListGroupBy(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, [NotNull]IList/*!*/ self) {
+            var result = new Hash(context);
+            for (int i = 0; i < self.Count; i++) {
+                object item = self[i];
+                object key;
+                if (block.Yield(item, out key)) {
+                    return key;
+                }
+                object group;
+                if (result.TryGetValue(CustomStringDictionary.NullToObj(key), out group)) {
+                    ((RubyArray)group).Add(item);
+                } else {
+                    RubyUtils.SetHashElement(context, result, key, new RubyArray { item });
+                }
+            }
+            return result;
+        }
+
+        // Enumerable#tally (with no Hash to add to) over a plain list: the counts are kept in the
+        // result Hash as MRI's tally_up keeps them, without a dynamic Integer#+ per element.
+        [RubyMethod("__list_tally__", RubyMethodAttributes.PrivateInstance)]
+        public static Hash/*!*/ ListTally(RubyContext/*!*/ context, [NotNull]IList/*!*/ self) {
+            var result = new Hash(context);
+            for (int i = 0; i < self.Count; i++) {
+                object item = self[i];
+                object storedKey = CustomStringDictionary.NullToObj(item);
+                object count;
+                if (result.TryGetValue(storedKey, out count)) {
+                    // a count cannot outgrow the list, so it stays a Fixnum
+                    result[storedKey] = ScriptingRuntimeHelpers.Int32ToObject((int)count + 1);
+                } else {
+                    // MRI's tally_up stores the element itself: a String key is not copied and
+                    // frozen the way Hash#[]= would
+                    result[storedKey] = ScriptingRuntimeHelpers.Int32ToObject(1);
+                }
+            }
+            return result;
+        }
+
+        // The prelude's #tally stores a count with this rather than with Hash#[]=, which would
+        // store a copy of a String key, frozen: MRI's tally_up stores the element itself.
+        [RubyMethod("__tally_store__", RubyMethodAttributes.PrivateInstance)]
+        public static object TallyStore(object self, [NotNull]Hash/*!*/ hash, object key, object count) {
+            hash.RequireNotFrozen();
+            hash[CustomStringDictionary.NullToObj(key)] = count;
+            return count;
+        }
+
+        #endregion
+
         internal static object Each(CallSiteStorage<EachSite>/*!*/ each, object self, Proc/*!*/ block) {
             var site = each.GetCallSite("each", new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
             return site.Target(site, self, block);

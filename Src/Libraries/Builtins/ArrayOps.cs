@@ -569,5 +569,134 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
+
+        #region sum
+
+        /// <summary>
+        /// Array#sum (no block) of an Array of Integers and Floats, starting from an Integer or Float,
+        /// as the prelude's Enumerable#sum computes it - the plain fold until the first Float, then
+        /// Kahan-Babuska compensated summation - in one pass over the storage instead of a block call
+        /// per element. Answers nil, having changed nothing, when an element or the initial value is
+        /// anything else, or when Integer#+ or Float#+ is not the built-in one: the prelude then
+        /// does the whole sum.
+        /// </summary>
+        [RubyMethod("__numeric_sum__", RubyMethodAttributes.PrivateInstance)]
+        public static object NumericSum(RubyContext/*!*/ context, IList/*!*/ self, object init) {
+            if (!IsNumericSummand(init)) {
+                return null;
+            }
+            if (!IListOps.IsBuiltinMethod(context.IntegerClass, "+") || !IListOps.IsBuiltinMethod(context.GetClass(typeof(double)), "+")) {
+                return null;
+            }
+
+            int count = self.Count;
+            int i = 0;
+            double sum;
+
+            if (!(init is double)) {
+                // The Integer fold, in a long for as long as it fits: boxing every partial sum was
+                // most of the cost.
+                long total = (init is int) ? (int)init : (init is long) ? (long)init : 0;
+                BigInteger bigTotal = (init is BigInteger) ? (BigInteger)init : BigInteger.Zero;
+                bool big = init is BigInteger;
+                for (; i < count; i++) {
+                    object x = self[i];
+                    if (x is int || x is long) {
+                        long value = (x is int) ? (int)x : (long)x;
+                        if (big) {
+                            bigTotal += value;
+                        } else {
+                            long r = unchecked(total + value);
+                            if (((total ^ r) & (value ^ r)) < 0) {
+                                bigTotal = (BigInteger)total + value;
+                                big = true;
+                            } else {
+                                total = r;
+                            }
+                        }
+                    } else if (x is BigInteger) {
+                        if (!big) {
+                            bigTotal = total;
+                            big = true;
+                        }
+                        bigTotal += (BigInteger)x;
+                    } else if (x is double) {
+                        break;
+                    } else {
+                        return null;
+                    }
+                }
+                object acc = big ? Protocols.Normalize(bigTotal) : Protocols.Normalize(total);
+                if (i == count) {
+                    return acc;
+                }
+                // a Float: compensated summation from here on
+                sum = SummandToDouble(acc);
+            } else {
+                // A Float to start with: Float + Integer is the plain fold until the first Float.
+                sum = (double)init;
+                for (; i < count; i++) {
+                    object x = self[i];
+                    if (x is double) {
+                        break;
+                    } else if (!IsNumericSummand(x)) {
+                        return null;
+                    }
+                    sum += SummandToDouble(x);
+                }
+                if (i == count) {
+                    return sum;
+                }
+            }
+
+            double compensation = 0.0;
+            for (; i < count; i++) {
+                object x = self[i];
+                if (!IsNumericSummand(x)) {
+                    return null;
+                }
+
+                double value = SummandToDouble(x);
+                // Nothing infinite can be compensated (see Enumerable#sum in the prelude): a NaN
+                // stays, an infinity swallows the sum unless the sum is the other infinity, and a
+                // finite number adds nothing to an infinite sum.
+                if (Double.IsNaN(sum)) {
+                    continue;
+                } else if (Double.IsNaN(value)) {
+                    sum = value;
+                    compensation = 0.0;
+                    continue;
+                } else if (Double.IsInfinity(value)) {
+                    sum = (Double.IsInfinity(sum) && Math.Sign(sum) == -Math.Sign(value)) ? Double.NaN : value;
+                    compensation = 0.0;
+                    continue;
+                } else if (Double.IsInfinity(sum)) {
+                    continue;
+                }
+
+                double t = sum + value;
+                compensation += Math.Abs(sum) >= Math.Abs(value) ? (sum - t) + value : (value - t) + sum;
+                sum = t;
+            }
+            return sum + compensation;
+        }
+
+        private static bool IsNumericSummand(object x) {
+            return x is int || x is double || x is BigInteger || x is long;
+        }
+
+        private static double SummandToDouble(object x) {
+            if (x is int) {
+                return (int)x;
+            } else if (x is double) {
+                return (double)x;
+            } else if (x is long) {
+                return Protocols.ToDouble(new BigInteger((long)x));
+            } else {
+                return Protocols.ToDouble((BigInteger)x);
+            }
+        }
+
+        #endregion
     }
 }

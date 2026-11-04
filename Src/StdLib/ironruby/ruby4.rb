@@ -216,8 +216,9 @@ module Enumerable
   # means the frozen check happens before the first element is looked at.
   def tally(counts = nil)
     if counts.nil?
+      return __list_tally__ if __plain_list__?
       result = {}
-      each { |*values| item = __enum_item__(values); result[item] = (result[item] || 0) + 1 }
+      each { |*values| item = __enum_item__(values); __tally_store__(result, item, (result[item] || 0) + 1) }
       return result
     end
 
@@ -232,7 +233,8 @@ module Enumerable
       unless n.is_a?(Integer)
         raise TypeError, "wrong argument type #{n.class} (expected Integer)"
       end
-      hash[item] = n + 1
+      # stored as it is, as MRI's tally_up does: a String is not copied and frozen
+      __tally_store__(hash, item, n + 1)
     end
     hash
   end unless method_defined?(:tally)
@@ -437,8 +439,10 @@ module Enumerable
     end
   end
 
-  def group_by
-    return to_enum(:group_by) unless block_given?
+  def group_by(&block)
+    return to_enum(:group_by) unless block
+    # an Array is grouped in C#, see Enumerable.ListGroupBy
+    return __list_group_by__(&block) if __plain_list__?
     result = {}
     each { |*values| item = __enum_item__(values); (result[yield(item)] ||= []) << item }
     result
@@ -842,6 +846,11 @@ class Range
     from = self.begin
     to = self.end
     if from.is_a?(::Integer)
+      if ::Integer === to
+        # the common case, counted directly
+        n = to - from + (exclude_end? ? 0 : 1)
+        return n < 0 ? 0 : n
+      end
       if to.is_a?(::Numeric)
         return ::Enumerator::ArithmeticSequence.__interval_step_size__(from, to, 1, exclude_end?)
       end
@@ -1071,7 +1080,14 @@ class Array
   # Array has its own #sum in MRI rather than inheriting Enumerable's, and code in the
   # wild checks which one it gets. The body is Enumerable's. (#max and #min are Array's
   # own in C#, see IListOps: Enumerable's go through #each and a Proc per element.)
-  def sum(*args, &block) = super
+  # An Array of Integers and Floats is summed in C# (ArrayOps.NumericSum), the same way.
+  def sum(*args, &block)
+    if block.nil? && args.size <= 1
+      result = __numeric_sum__(args.empty? ? 0 : args[0])
+      return result unless result.nil?
+    end
+    super
+  end
 
   def intersect?(other)
     !(self & other).empty?
@@ -3086,6 +3102,8 @@ module Kernel
       if base.nil? && true.equal?(exception) && !arg.nil? && arg.is_a?(::String)
         return __ir_Integer__(arg)
       end
+      # and an Integer is answered as it is, as the block below would
+      return arg if base.nil? && ::Integer === arg && true.equal?(exception)
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
         # a base goes with a String, and that is checked before anything else - Integer(nil, 8)
@@ -3154,6 +3172,12 @@ module Kernel
       # A String with failures raised goes to the C# parser below in any case; see Integer.
       if true.equal?(exception) && !arg.nil? && ::String === arg
         return __ir_Float__(arg)
+      end
+      # A Float is its own answer and an Integer is the C# conversion, as below, without the
+      # block, its rescue frame or the class tests.
+      if true.equal?(exception)
+        return arg if ::Float === arg
+        return __ir_Float__(arg) if ::Integer === arg
       end
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
@@ -7008,6 +7032,8 @@ end
     private :__bits_from__
 
     def [](index, length = nil)
+      # the common case, an Integer bit position, needs none of the conversions below
+      return __ir_bit__(index) if length.nil? && ::Integer === index
       unless index.is_a?(::Range)
         # through __bit_position__ so that a Float, or an object with #to_int, reaches the
         # built-in as the Integer it stands for
@@ -11937,14 +11963,8 @@ class Hash
     nil
   end
 
-  # #slice must not go through an overridden #[].
-  def slice(*wanted)
-    snapshot = __result_hash__
-    each { |k, v| snapshot[k] = v }
-    result = __result_hash__
-    wanted.each { |k| result[k] = snapshot[k] if snapshot.key?(k) }
-    result
-  end
+  # #slice and #except are HashOps' (C#): they read the table itself, so an overridden #[]
+  # takes no part, without first copying the whole hash.
 
   # Hash#eql? (and the value comparison Hash#== performs) - compares sizes,
   # then looks each key up with eql?/hash semantics and compares values with
@@ -12895,10 +12915,15 @@ class Range
     [min, max]
   end
 
-  # Enumerable#count would walk an endless range forever.
+  # Enumerable#count would walk an endless range forever. An Integer range is counted
+  # without walking it at all, from #size, as CRuby's range_count does.
   def count(*args, &block)
     return super if block || !args.empty?
     return Float::INFINITY if self.begin.nil? || self.end.nil?
+    if self.begin.is_a?(Integer)
+      n = size
+      return n unless n.nil?
+    end
     super
   end
 

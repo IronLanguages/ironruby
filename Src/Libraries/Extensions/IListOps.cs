@@ -2203,6 +2203,29 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        // shift(n): the first n elements, as an Array. The count is converted after the frozen
+        // check, as in MRI (rb_ary_shift_m), so a frozen array raises FrozenError whatever it is
+        // given; the prelude's Ruby wrapper this replaces cost a splat and several calls per shift.
+        [RubyMethod("shift")]
+        public static object Shift(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, object count) {
+            RequireNotFrozen(self);
+            int n = Protocols.CastToFixnum(fixnumCast, count);
+            if (n < 0) {
+                throw RubyExceptions.CreateArgumentError("negative array size");
+            }
+
+            if (n > self.Count) {
+                n = self.Count;
+            }
+            if (n == 0) {
+                return new RubyArray();
+            }
+
+            var result = new RubyArray(self, 0, n);
+            IListOps.RemoveRange(self, 0, n);
+            return result;
+        }
+
         [RubyMethod("unshift")]
         public static IList/*!*/ Unshift(IList/*!*/ self, object/*!*/ arg) {
             self.Insert(0, arg);
@@ -2721,6 +2744,53 @@ namespace IronRuby.Builtins {
             return GetExtremes(fixnumCast, comparisonStorage, comparer, self, count, +1);
         }
 
+        private static bool IsBuiltinIntegerComparison(RubyContext/*!*/ context) {
+            return IsBuiltinMethod(context.IntegerClass, "<=>");
+        }
+
+        // Per class, held weakly: a class (and the runtime it belongs to) is not kept alive by
+        // having been asked about. The inner dictionary maps a method name to the method version
+        // at which it was last found to be the built-in one.
+        private static readonly ConditionalWeakTable<RubyClass, System.Collections.Concurrent.ConcurrentDictionary<string, int>>/*!*/ _builtinMethods =
+            new ConditionalWeakTable<RubyClass, System.Collections.Concurrent.ConcurrentDictionary<string, int>>();
+
+        /// <summary>
+        /// True while <paramref name="cls"/>'s <paramref name="name"/> is the library's own method,
+        /// declared on the class itself under that name: nothing has redefined, aliased over or
+        /// overridden it from Ruby. A builtin that takes a shortcut past the method call (as MRI's
+        /// own do, behind rb_method_basic_definition_p) asks this first. The answer only changes
+        /// when some method somewhere does, see <see cref="RubyModule.GlobalMethodVersion"/>, so it
+        /// is cached against that.
+        /// </summary>
+        internal static bool IsBuiltinMethod(RubyClass/*!*/ cls, string/*!*/ name) {
+            int version = RubyModule.GlobalMethodVersion;
+            var checkedNames = _builtinMethods.GetValue(cls, _ => new System.Collections.Concurrent.ConcurrentDictionary<string, int>());
+            int checkedAt;
+            if (checkedNames.TryGetValue(name, out checkedAt) && checkedAt == version) {
+                return true;
+            }
+
+            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible);
+            var info = resolved.Found ? resolved.Info as RubyLibraryMethodInfo : null;
+            if (info == null || !ReferenceEquals(info.DeclaringModule, cls)) {
+                return false;
+            }
+            foreach (var member in info.GetMembers()) {
+                bool named = false;
+                foreach (RubyMethodAttribute a in member.GetCustomAttributes(typeof(RubyMethodAttribute), false)) {
+                    if (a.Name == name) {
+                        named = true;
+                        break;
+                    }
+                }
+                if (!named) {
+                    return false;
+                }
+            }
+            checkedNames[name] = version;
+            return true;
+        }
+
         private static object GetExtreme(ComparisonStorage/*!*/ comparisonStorage, BlockParam comparer, IList/*!*/ self,
             int comparisonValue) {
 
@@ -2729,7 +2799,26 @@ namespace IronRuby.Builtins {
             }
 
             object result = self[0];
-            for (int i = 1; i < self.Count; i++) {
+            int start = 1;
+            if (comparer == null && result is int && self.Count > 1 && IsBuiltinIntegerComparison(comparisonStorage.Context)) {
+                // An Array of Integers that fit in a Fixnum, compared by the built-in Integer#<=>:
+                // the dynamic call per element was nearly all of the cost. The first element that
+                // is anything else hands the rest over to the general loop below.
+                int extreme = (int)result;
+                for (; start < self.Count; start++) {
+                    object item = self[start];
+                    if (!(item is int)) {
+                        break;
+                    }
+                    int value = (int)item;
+                    if (comparisonValue < 0 ? value < extreme : value > extreme) {
+                        extreme = value;
+                        result = item;
+                    }
+                }
+            }
+
+            for (int i = start; i < self.Count; i++) {
                 object item = self[i];
                 int compareResult;
                 if (comparer != null) {
@@ -2809,7 +2898,12 @@ namespace IronRuby.Builtins {
             int count = itemList.Count;
             object[] items = itemList.ToArray();
             object[] keys = keyList.ToArray();
-            MergeSortByKey(keys, items, new object[count], new object[count], 0, count, comparisonStorage);
+            // Keys that are all Fixnums, compared by the built-in Integer#<=>, are compared directly.
+            bool fixnumKeys = count > 1 && IsBuiltinIntegerComparison(comparisonStorage.Context);
+            for (int i = 0; fixnumKeys && i < count; i++) {
+                fixnumKeys = keys[i] is int;
+            }
+            MergeSortByKey(keys, items, new object[count], new object[count], 0, count, comparisonStorage, fixnumKeys);
 
             var result = new RubyArray(count);
             for (int i = 0; i < count; i++) {
@@ -2824,20 +2918,20 @@ namespace IronRuby.Builtins {
         /// what its #min_by(n)/#max_by(n) rely on.
         /// </summary>
         private static void MergeSortByKey(object[]/*!*/ keys, object[]/*!*/ items, object[]/*!*/ keyBuffer, object[]/*!*/ itemBuffer,
-            int start, int length, ComparisonStorage/*!*/ comparisonStorage) {
+            int start, int length, ComparisonStorage/*!*/ comparisonStorage, bool fixnumKeys = false) {
 
             if (length < 2) {
                 return;
             }
 
             int half = length / 2;
-            MergeSortByKey(keys, items, keyBuffer, itemBuffer, start, half, comparisonStorage);
-            MergeSortByKey(keys, items, keyBuffer, itemBuffer, start + half, length - half, comparisonStorage);
+            MergeSortByKey(keys, items, keyBuffer, itemBuffer, start, half, comparisonStorage, fixnumKeys);
+            MergeSortByKey(keys, items, keyBuffer, itemBuffer, start + half, length - half, comparisonStorage, fixnumKeys);
 
             int left = start, right = start + half, target = start;
             int leftEnd = start + half, rightEnd = start + length;
             while (left < leftEnd && right < rightEnd) {
-                if (Protocols.Compare(comparisonStorage, keys[right], keys[left]) < 0) {
+                if (fixnumKeys ? (int)keys[right] < (int)keys[left] : Protocols.Compare(comparisonStorage, keys[right], keys[left]) < 0) {
                     keyBuffer[target] = keys[right];
                     itemBuffer[target++] = items[right++];
                 } else {

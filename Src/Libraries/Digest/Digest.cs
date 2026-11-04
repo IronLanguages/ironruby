@@ -46,66 +46,80 @@ namespace IronRuby.StandardLibrary.Digest {
         [RubyClass("MD5")]
         public class MD5 : Base {
             public MD5()
-                : base(System.Security.Cryptography.MD5.HashData, 16, 64) {
+                : base(HashAlgorithmName.MD5, System.Security.Cryptography.MD5.HashData, 16, 64) {
             }
         }
 
         [RubyClass("SHA1")]
         public class SHA1 : Base {
             public SHA1()
-                : base(System.Security.Cryptography.SHA1.HashData, 20, 64) {
+                : base(HashAlgorithmName.SHA1, System.Security.Cryptography.SHA1.HashData, 20, 64) {
             }
         }
 
         [RubyClass("SHA256")]
         public class SHA256 : Base {
             public SHA256()
-                : base(System.Security.Cryptography.SHA256.HashData, 32, 64) {
+                : base(HashAlgorithmName.SHA256, System.Security.Cryptography.SHA256.HashData, 32, 64) {
             }
         }
 
         [RubyClass("SHA384")]
         public class SHA384 : Base {
             public SHA384()
-                : base(System.Security.Cryptography.SHA384.HashData, 48, 128) {
+                : base(HashAlgorithmName.SHA384, System.Security.Cryptography.SHA384.HashData, 48, 128) {
             }
         }
 
         [RubyClass("SHA512")]
         public class SHA512 : Base {
             public SHA512()
-                : base(System.Security.Cryptography.SHA512.HashData, 64, 128) {
+                : base(HashAlgorithmName.SHA512, System.Security.Cryptography.SHA512.HashData, 64, 128) {
             }
         }
 
         [RubyClass("Base")]
         public class Base : Class {
-            // The whole input is kept and hashed in one go by #finish, so the built-in digests
-            // need no HashAlgorithm of their own: the static one-shot HashData does the work.
-            // Creating a HashAlgorithm opens a native digest context (and a finalizable handle)
-            // for every Digest object - most of the cost of Digest::SHA256.hexdigest(str) - and
-            // ComputeHash reinitializes it afterwards. A subclass that brings an algorithm of its
-            // own still uses it.
+            // Input up to this many bytes is kept and hashed in one go by #finish, with the static
+            // one-shot HashData: most digests are of a short string, and an IncrementalHash would
+            // open a native digest context (and a finalizable handle) for each of them. Past it,
+            // the input streams into an IncrementalHash, so #update is O(length of the update)
+            // and a #digest after every update no longer rehashes everything fed in so far.
+            private const int BufferLimit = 64 * 1024;
+
+            // A subclass that brings a HashAlgorithm of its own keeps all of its input and hashes
+            // it with ComputeHash, as before.
             private readonly HashAlgorithm _algorithm;
+            private readonly HashAlgorithmName _algorithmName;
             private readonly Func<byte[], byte[]> _hashData;
             private readonly int _digestLength;
             private readonly int _blockLength;
-            private MutableString/*!*/ _buffer;
+
+            // the input not yet handed to _incremental (all of it while _incremental is null)
+            private byte[]/*!*/ _buffer = Array.Empty<byte>();
+            private int _count;
+
+            private IncrementalHash _incremental;
+#if !NET10_0_OR_GREATER
+            // IncrementalHash.Clone is .NET 10's: before it, a copy (#dup, #clone) of a digest
+            // that has gone incremental replays the input into a new one. The input is kept in
+            // the chunks it came in, so nothing is copied as it arrives.
+            private System.Collections.Generic.List<byte[]> _streamed;
+#endif
 
             protected Base(HashAlgorithm/*!*/ algorithm, int blockLength) {
                 Assert.NotNull(algorithm);
                 _algorithm = algorithm;
                 _digestLength = algorithm.HashSize / 8;
                 _blockLength = blockLength;
-                _buffer = MutableString.CreateBinary();
             }
 
-            private protected Base(Func<byte[], byte[]>/*!*/ hashData, int digestLength, int blockLength) {
+            private protected Base(HashAlgorithmName algorithmName, Func<byte[], byte[]>/*!*/ hashData, int digestLength, int blockLength) {
                 Assert.NotNull(hashData);
+                _algorithmName = algorithmName;
                 _hashData = hashData;
                 _digestLength = digestLength;
                 _blockLength = blockLength;
-                _buffer = MutableString.CreateBinary();
             }
 
             /// <summary>
@@ -123,39 +137,134 @@ namespace IronRuby.StandardLibrary.Digest {
                 return self._digestLength;
             }
 
+            // The input is bytes: a UTF-8 string and a binary one can be fed to the same digest,
+            // which raised Encoding::CompatibilityError while the input was kept in a String.
             [RubyMethod("<<")]
             [RubyMethod("update")]
-            public static Base/*!*/ Update(RubyContext/*!*/ context, Base/*!*/ self, MutableString str) {
-                self._buffer.Append(str);
+            public static Base/*!*/ Update(RubyContext/*!*/ context, Base/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
+                self.Append(str.ToByteArray());
                 return self;
             }
 
+            private void Append(byte[]/*!*/ data) {
+                if (_incremental != null) {
+                    _incremental.AppendData(data);
+#if !NET10_0_OR_GREATER
+                    _streamed.Add(data);
+#endif
+                    return;
+                }
+
+                if (_hashData != null && _count + data.Length > BufferLimit) {
+                    _incremental = IncrementalHash.CreateHash(_algorithmName);
+                    _incremental.AppendData(_buffer, 0, _count);
+                    _incremental.AppendData(data);
+#if !NET10_0_OR_GREATER
+                    _streamed = new System.Collections.Generic.List<byte[]>();
+                    _streamed.Add(_buffer.AsSpan(0, _count).ToArray());
+                    _streamed.Add(data);
+#endif
+                    _buffer = Array.Empty<byte>();
+                    _count = 0;
+                    return;
+                }
+
+                if (_count + data.Length > _buffer.Length) {
+                    Array.Resize(ref _buffer, Math.Max(_count + data.Length, Math.Max(64, _buffer.Length * 2)));
+                }
+                Buffer.BlockCopy(data, 0, _buffer, _count, data.Length);
+                _count += data.Length;
+            }
+
             /// <summary>
-            /// The accumulated input lives in a private CLR field, which object copying
+            /// The digest of everything fed in so far; the state is left as it is.
+            /// </summary>
+            internal byte[]/*!*/ GetCurrentHash() {
+                if (_incremental != null) {
+                    return _incremental.GetCurrentHash();
+                }
+                byte[] input = (_count == _buffer.Length) ? _buffer : _buffer.AsSpan(0, _count).ToArray();
+                return (_hashData != null) ? _hashData(input) : _algorithm.ComputeHash(input);
+            }
+
+            /// <summary>
+            /// The accumulated input lives in private CLR fields, which object copying
             /// does not carry across -- so without this, the clone that Digest::Instance#digest
             /// makes to snapshot the state started out empty and every no-argument
             /// digest/hexdigest returned the digest of "".
             /// </summary>
             [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
             public static Base/*!*/ InitializeCopy(Base/*!*/ self, [NotNull]Base/*!*/ other) {
-                self._buffer = other._buffer.Clone();
+                self.Clear();
+                self._buffer = other._buffer.AsSpan(0, other._count).ToArray();
+                self._count = other._count;
+                if (other._incremental != null) {
+#if NET10_0_OR_GREATER
+                    self._incremental = other._incremental.Clone();
+#else
+                    self._incremental = IncrementalHash.CreateHash(other._algorithmName);
+                    self._streamed = new System.Collections.Generic.List<byte[]>(other._streamed);
+                    foreach (var chunk in other._streamed) {
+                        self._incremental.AppendData(chunk);
+                    }
+#endif
+                }
                 return self;
             }
 
             [RubyMethod("finish", RubyMethodAttributes.PrivateInstance)]
             public static MutableString/*!*/ Finish(RubyContext/*!*/ context, Base/*!*/ self) {
-                byte[] input = self._buffer.ConvertToBytes();
-                byte[] hash = (self._hashData != null) ? self._hashData(input) : self._algorithm.ComputeHash(input);
-                return MutableString.CreateBinary(hash);
+                return MutableString.CreateBinary(self.GetCurrentHash());
             }
 
             [RubyMethod("reset")]
             public static Base/*!*/ Reset(RubyContext/*!*/ context, Base/*!*/ self) {
-                self._buffer = MutableString.CreateBinary();
+                self.Clear();
                 if (self._algorithm != null) {
                     self._algorithm.Initialize();
                 }
                 return self;
+            }
+
+            private void Clear() {
+                _buffer = Array.Empty<byte>();
+                _count = 0;
+                if (_incremental != null) {
+                    _incremental.Dispose();
+                    _incremental = null;
+                }
+#if !NET10_0_OR_GREATER
+                _streamed = null;
+#endif
+            }
+
+            /// <summary>
+            /// True when <paramref name="obj"/> is a built-in digest whose #finish and
+            /// #initialize_copy are these: Digest::Instance#digest can then read the current digest
+            /// straight off it rather than finishing a copy, which copied all of the input every
+            /// time (and, once streaming, would replay it).
+            /// </summary>
+            internal static bool CanSnapshot(RubyContext/*!*/ context, object obj) {
+                var digest = obj as Base;
+                if (digest == null) {
+                    return false;
+                }
+                RubyClass cls = context.GetImmediateClassOf(obj);
+                return IsBaseMethod(cls, "finish") && IsBaseMethod(cls, "initialize_copy");
+            }
+
+            private static bool IsBaseMethod(RubyClass/*!*/ cls, string/*!*/ name) {
+                var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
+                var info = resolved.Found ? resolved.Info as IronRuby.Runtime.Calls.RubyLibraryMethodInfo : null;
+                if (info == null) {
+                    return false;
+                }
+                foreach (var member in info.GetMembers()) {
+                    if (member.DeclaringType != typeof(Base)) {
+                        return false;
+                    }
+                }
+                return true;
             }
         }
 
@@ -227,6 +336,10 @@ namespace IronRuby.StandardLibrary.Digest {
                 CallSiteStorage<Func<CallSite, RubyClass, object>>/*!*/ allocateStorage,
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ finishStorage,
                 object self) {
+
+                if (Base.CanSnapshot(finishStorage.Context, self)) {
+                    return MutableString.CreateBinary(((Base)self).GetCurrentHash());
+                }
 
                 object clone;
                 if (!RubyUtils.TryDuplicateObject(initializeCopyStorage, allocateStorage, self, true, out clone)) {

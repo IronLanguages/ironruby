@@ -5068,15 +5068,44 @@ namespace IronRuby.Runtime {
                 throw RubyExceptions.CreateArgumentError("invalid encoding name (non ASCII)");
             }
             try {
-                return RubyEncoding.GetRubyEncoding(GetEncodingByRubyName(name.ToString()));
+                return GetRubyEncoding(name.ToString());
             } catch (ArgumentException) {
                 throw RubyExceptions.CreateArgumentError("unknown encoding name - {0}", name.ToAsciiString());
             }
         }
 
+        // Encoding names already resolved, case-insensitively as GetEncodingByRubyName matches
+        // them: the switch, the alias table and .NET's own lookup were most of the cost of
+        // Encoding.find and String#encode. Only names that resolved are kept, so the set stays
+        // as small as the names a program actually uses.
+        private const int MaxCachedEncodingNames = 256;
+        private const int MaxCachedEncodingNameLength = 64;
+
+        private readonly ConcurrentDictionary<string, RubyEncoding>/*!*/ _encodingsByName =
+            new ConcurrentDictionary<string, RubyEncoding>(StringComparer.OrdinalIgnoreCase);
+
         /// <exception cref="ArgumentException">Unknown encoding.</exception>
         public RubyEncoding/*!*/ GetRubyEncoding(string/*!*/ name) {
-            return RubyEncoding.GetRubyEncoding(GetEncodingByRubyName(name));
+            RubyEncoding result;
+            if (_encodingsByName.TryGetValue(name, out result)) {
+                return result;
+            }
+            result = RubyEncoding.GetRubyEncoding(GetEncodingByRubyName(name));
+            // Bounded, since names can come from input and many spellings resolve to the same
+            // encoding ("CP65001", "CP065001", ...): past the limits a name is resolved every time.
+            if (!IsMutableEncodingName(name) && name.Length <= MaxCachedEncodingNameLength &&
+                _encodingsByName.Count < MaxCachedEncodingNames) {
+                _encodingsByName[name] = result;
+            }
+            return result;
+        }
+
+        // The names whose encoding is a setting of the runtime rather than a fixed one.
+        private static bool IsMutableEncodingName(string/*!*/ name) {
+            return name.Equals("filesystem", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("locale", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("external", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("internal", StringComparison.OrdinalIgnoreCase);
         }
 
         public override string/*!*/ FormatObject(DynamicOperations/*!*/ operations, object obj) {

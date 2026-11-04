@@ -340,6 +340,71 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
+
+        #region key, slice, except
+
+        // The first key whose value is == to the argument (the value is the receiver of ==, as in
+        // CRuby's rb_hash_key), walked in place: the prelude's #each with a block per entry cost
+        // ten times as much.
+        [RubyMethod("key")]
+        public static object GetKey(BinaryOpStorage/*!*/ equals, Hash/*!*/ self, object value) {
+            var site = equals.GetCallSite("==");
+            self.BeginIteration();
+            try {
+                int index = 0;
+                object key, entryValue;
+                while (self.TryGetNextEntry(ref index, out key, out entryValue)) {
+                    if (Protocols.IsEqual(site, entryValue, value)) {
+                        return CustomStringDictionary.ObjToNull(key);
+                    }
+                }
+            } finally {
+                self.EndIteration();
+            }
+            return null;
+        }
+
+
+        // A fresh result for the non-mutating combinators: a plain Hash, with neither the default
+        // value nor the default proc, but with the compare_by_identity flag, as in CRuby.
+        private static Hash/*!*/ CreateResultHash(Hash/*!*/ self, int capacity) {
+            var result = new Hash(self.Comparer, capacity);
+            if (self.ComparesByIdentity) {
+                result.SetComparesByIdentity(true, null);
+            }
+            return result;
+        }
+
+        // Looks each key up in the table itself, as CRuby does: an overridden #[] or #key?, and the
+        // default value or proc, take no part. The keys of the result are the arguments.
+        [RubyMethod("slice")]
+        public static Hash/*!*/ Slice(RubyContext/*!*/ context, Hash/*!*/ self, params object[]/*!*/ keys) {
+            var result = CreateResultHash(self, Math.Min(keys.Length, self.Count));
+            for (int i = 0; i < keys.Length; i++) {
+                object value;
+                if (self.TryGetValue(CustomStringDictionary.NullToObj(keys[i]), out value)) {
+                    RubyUtils.SetHashElement(context, result, keys[i], value);
+                }
+            }
+            return result;
+        }
+
+        // A copy of the entries as they are stored (no key is hashed again), less the given keys.
+        [RubyMethod("except")]
+        public static Hash/*!*/ Except(Hash/*!*/ self, params object[]/*!*/ keys) {
+            var result = CreateResultHash(self, 0);
+            if (!result.TryCopyEntriesFrom(self)) {
+                foreach (var entry in self) {
+                    result[entry.Key] = entry.Value;
+                }
+            }
+            for (int i = 0; i < keys.Length; i++) {
+                result.Remove(CustomStringDictionary.NullToObj(keys[i]));
+            }
+            return result;
+        }
+
+        #endregion
     }
 
 }

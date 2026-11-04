@@ -831,6 +831,202 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
+
+        #region sqrt, pow, digits
+
+        // Math::DomainError is the prelude's (ruby4.rb); an ArgumentError stands in until it exists.
+        private static Exception/*!*/ CreateDomainError(BinaryOpStorage/*!*/ newStorage, string/*!*/ message) {
+            RubyContext context = newStorage.Context;
+            object math, errorClass;
+            if (context.ObjectClass.TryGetConstant(null, "Math", out math) && math is RubyModule &&
+                ((RubyModule)math).TryGetConstant(null, "DomainError", out errorClass)) {
+                var site = newStorage.GetCallSite("new");
+                var exception = site.Target(site, errorClass, MutableString.CreateAscii(message)) as Exception;
+                if (exception != null) {
+                    return exception;
+                }
+            }
+            return RubyExceptions.CreateArgumentError(message);
+        }
+
+        private static bool TryGetInteger(object value, out BigInteger result) {
+            if (value is int) {
+                result = (int)value;
+            } else if (value is long) {
+                result = (long)value;
+            } else if (value is BigInteger) {
+                result = (BigInteger)value;
+            } else {
+                result = BigInteger.Zero;
+                return false;
+            }
+            return true;
+        }
+
+        private static BigInteger/*!*/ CastToBigInteger(ConversionStorage<IntegerValue>/*!*/ integerCast, object value) {
+            BigInteger result;
+            if (TryGetInteger(value, out result)) {
+                return result;
+            }
+            IntegerValue converted = Protocols.CastToInteger(integerCast, value);
+            return converted.IsFixnum ? (BigInteger)converted.Fixnum : converted.Bignum;
+        }
+
+        /// <summary>
+        /// Integer.sqrt: the largest Integer whose square is at most n (n converted with #to_int).
+        /// Below 2**62 it is a double's square root, corrected to the exact floor; above, Newton's
+        /// iteration from 1 &lt;&lt; ((bit_length + 1) / 2), as the prelude did.
+        /// </summary>
+        [RubyMethod("sqrt", RubyMethodAttributes.PublicSingleton)]
+        public static object Sqrt(ConversionStorage<IntegerValue>/*!*/ integerCast, BinaryOpStorage/*!*/ newStorage, RubyClass/*!*/ self, object n) {
+            if (n is int) {
+                int value = (int)n;
+                if (value < 0) {
+                    throw CreateDomainError(newStorage, "Numerical argument is out of domain - \"isqrt\"");
+                }
+                return Protocols.Normalize(LongSqrt(value));
+            }
+
+            BigInteger number = CastToBigInteger(integerCast, n);
+            if (number.Sign < 0) {
+                throw CreateDomainError(newStorage, "Numerical argument is out of domain - \"isqrt\"");
+            }
+            if (number < (BigInteger.One << 62)) {
+                return Protocols.Normalize(LongSqrt((long)number));
+            }
+
+            // Newton's method from above: x stays at or above the root until it settles on it.
+            BigInteger x = BigInteger.One << (int)((number.GetBitLength() + 1) / 2);
+            while (true) {
+                BigInteger next = (x + number / x) >> 1;
+                if (next >= x) {
+                    return Protocols.Normalize(x);
+                }
+                x = next;
+            }
+        }
+
+        // floor(sqrt(n)) for 0 <= n < 2**62: the double's root, corrected by one either way where
+        // rounding put it off (sqrt(2**52 - 1) rounds up to 2**26, for one)
+        private static long LongSqrt(long n) {
+            long r = (long)Math.Sqrt(n);
+            while (r * r > n) {
+                r--;
+            }
+            while ((r + 1) * (r + 1) <= n) {
+                r++;
+            }
+            return r;
+        }
+
+        /// <summary>
+        /// Integer#pow with one argument is **. In MRI the two are one C function (rb_int_pow), so
+        /// a redefined ** does not change #pow: a Fixnum to a non-negative Fixnum power is computed
+        /// here directly. Anything else goes through a call to **, for the coercions it does and
+        /// for a negative exponent, which the prelude's rational.rb answers with a Rational.
+        /// </summary>
+        [RubyMethod("pow")]
+        public static object Pow(BinaryOpStorage/*!*/ powStorage, int self, int other) {
+            if (other >= 0) {
+                return ClrInteger.Power(self, other);
+            }
+            var site = powStorage.GetCallSite("**");
+            return site.Target(site, self, other);
+        }
+
+
+        [RubyMethod("pow")]
+        public static object Pow(BinaryOpStorage/*!*/ powStorage, object/*!*/ self, object other) {
+            var site = powStorage.GetCallSite("**");
+            return site.Target(site, self, other);
+        }
+
+        /// <summary>
+        /// Integer#pow(b, m): modular exponentiation, by BigInteger.ModPow, with MRI's checks in
+        /// MRI's order (rb_int_powm) and its sign rule - the result takes the sign of m.
+        /// </summary>
+        [RubyMethod("pow")]
+        public static object Pow(object/*!*/ self, object exponent, object modulus) {
+            BigInteger b, m;
+            if (!TryGetInteger(exponent, out b)) {
+                throw RubyExceptions.CreateTypeError("Integer#pow() 2nd argument not allowed unless a 1st argument is integer");
+            }
+            if (b.Sign < 0) {
+                throw RubyExceptions.CreateRangeError("Integer#pow() 1st argument cannot be negative when 2nd argument specified");
+            }
+            if (!TryGetInteger(modulus, out m)) {
+                throw RubyExceptions.CreateTypeError("Integer#pow() 2nd argument not allowed unless all arguments are integers");
+            }
+            bool negative = m.Sign < 0;
+            if (negative) {
+                m = -m;
+            }
+            if (m.IsZero) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            if (m.IsOne) {
+                return ClrInteger.Zero;
+            }
+
+            BigInteger a;
+            TryGetInteger(self, out a);
+            a %= m;
+            if (a.Sign < 0) {
+                a += m;
+            }
+            BigInteger z = BigInteger.ModPow(a, b, m);
+            if (negative && z.Sign > 0) {
+                z -= m;
+            }
+            return Protocols.Normalize(z);
+        }
+
+        /// <summary>
+        /// Integer#digits: the digits in the given base, least significant first. As in MRI
+        /// (rb_int_digits), a negative receiver is refused before the base is even converted.
+        /// </summary>
+        [RubyMethod("digits")]
+        public static RubyArray/*!*/ Digits(ConversionStorage<IntegerValue>/*!*/ integerCast, BinaryOpStorage/*!*/ newStorage,
+            object/*!*/ self, [Optional]object radix) {
+
+            BigInteger number;
+            TryGetInteger(self, out number);
+            if (number.Sign < 0) {
+                throw CreateDomainError(newStorage, "out of domain");
+            }
+
+            BigInteger radixValue = (radix == Missing.Value) ? new BigInteger(10) : CastToBigInteger(integerCast, radix);
+            if (radixValue.Sign < 0) {
+                throw RubyExceptions.CreateArgumentError("negative radix");
+            }
+            if (radixValue < 2) {
+                throw RubyExceptions.CreateArgumentError(String.Format("invalid radix {0}", radixValue));
+            }
+
+            var result = new RubyArray();
+            if (number.IsZero) {
+                result.Add(ClrInteger.Zero);
+                return result;
+            }
+
+            if (number <= Int64.MaxValue && radixValue <= Int64.MaxValue) {
+                long n = (long)number, r = (long)radixValue;
+                while (n > 0) {
+                    result.Add(Protocols.Normalize(n % r));
+                    n /= r;
+                }
+                return result;
+            }
+
+            while (!number.IsZero) {
+                BigInteger remainder;
+                number = BigInteger.DivRem(number, radixValue, out remainder);
+                result.Add(Protocols.Normalize(remainder));
+            }
+            return result;
+        }
+
+        #endregion
     }
 }
  

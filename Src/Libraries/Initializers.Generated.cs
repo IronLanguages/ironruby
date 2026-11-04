@@ -536,6 +536,11 @@ namespace IronRuby.Builtins {
         
         private static void LoadArray_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             LoadSystem__Collections__IList_Instance(module);
+            DefineLibraryMethod(module, "__numeric_sum__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Collections.IList, System.Object, System.Object>(IronRuby.Builtins.ArrayOps.NumericSum)
+            );
+            
             DefineLibraryMethod(module, "initialize", 0x52, 
                 new[] { 0x00000000U, 0x00000008U, 0x00000000U, 0x00000000U, 0x00020000U, 0x00000004U}, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ArrayOps.Reinitialize), 
@@ -1312,6 +1317,26 @@ namespace IronRuby.Builtins {
         #endif
         
         private static void LoadEnumerable_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__list_group_by__", 0x52, 
+                0x00000006U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.Enumerable.ListGroupBy)
+            );
+            
+            DefineLibraryMethod(module, "__list_tally__", 0x52, 
+                0x00000002U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Collections.IList, IronRuby.Builtins.Hash>(IronRuby.Builtins.Enumerable.ListTally)
+            );
+            
+            DefineLibraryMethod(module, "__plain_list__?", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Boolean>(IronRuby.Builtins.Enumerable.IsPlainList)
+            );
+            
+            DefineLibraryMethod(module, "__tally_store__", 0x52, 
+                0x00000002U, 
+                new Func<System.Object, IronRuby.Builtins.Hash, System.Object, System.Object, System.Object>(IronRuby.Builtins.Enumerable.TallyStore)
+            );
+            
             DefineLibraryMethod(module, "all?", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.Enumerable.TrueForAll)
@@ -2986,6 +3011,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Object, System.Object>(IronRuby.Builtins.HashOps.SetDefaultValue)
             );
             
+            DefineLibraryMethod(module, "except", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.Hash, System.Object[], IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Except)
+            );
+            
             DefineLibraryMethod(module, "hash", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Builtins.Hash, System.Int32>(IronRuby.Builtins.HashOps.GetHashCode)
@@ -3004,6 +3034,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, IronRuby.Builtins.Hash, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.InitializeCopy)
             );
             
+            DefineLibraryMethod(module, "key", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Builtins.Hash, System.Object, System.Object>(IronRuby.Builtins.HashOps.GetKey)
+            );
+            
             DefineLibraryMethod(module, "replace", 0x51, 
                 0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Replace)
@@ -3012,6 +3047,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "shift", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.Hash, System.Object, System.Object>>, IronRuby.Builtins.Hash, System.Object>(IronRuby.Builtins.HashOps.Shift)
+            );
+            
+            DefineLibraryMethod(module, "slice", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Object[], IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Slice)
             );
             
         }
@@ -3085,6 +3125,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "denominator", 0x51, 
                 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.Denominator)
+            );
+            
+            DefineLibraryMethod(module, "digits", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.Integer.Digits)
             );
             
             DefineLibraryMethod(module, "downto", 0x51, 
@@ -3170,6 +3215,13 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.Numerator)
             );
             
+            DefineLibraryMethod(module, "pow", 0x51, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.BinaryOpStorage, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Integer.Pow), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Pow), 
+                new Func<System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Pow)
+            );
+            
             DefineLibraryMethod(module, "pred", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<System.Int32, System.Object>(IronRuby.Builtins.Integer.Pred), 
@@ -3237,6 +3289,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.Integer.InducedFrom), 
                 new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Builtins.RubyClass, System.Double, System.Object>(IronRuby.Builtins.Integer.InducedFrom), 
                 new Func<IronRuby.Builtins.RubyClass, System.Object, System.Int32>(IronRuby.Builtins.Integer.InducedFrom)
+            );
+            
+            DefineLibraryMethod(module, "sqrt", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Runtime.BinaryOpStorage, IronRuby.Builtins.RubyClass, System.Object, System.Object>(IronRuby.Builtins.Integer.Sqrt)
             );
             
         }
@@ -4214,8 +4271,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "fdiv", 0x51, 
-                0x00000002U, 0x00000001U, 0x00000000U, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000001U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
+                new Func<System.Int32, System.Int32, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
+                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.FDiv)
             );
@@ -9505,8 +9564,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "shift", 0x51, 
-                0x00000000U, 
-                new Func<System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.Shift)
+                0x00000000U, 0x00000000U, 
+                new Func<System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.Shift), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, System.Collections.IList, System.Object, System.Object>(IronRuby.Builtins.IListOps.Shift)
             );
             
             DefineLibraryMethod(module, "shuffle", 0x51, 
@@ -12764,7 +12824,7 @@ namespace IronRuby.StandardLibrary.Digest {
         #if FEATURE_CRYPTOGRAPHY
         private static void LoadDigest__Base_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "<<", 0x11, 
-                0x00000000U, 
+                0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Digest.Digest.Base, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Digest.Digest.Base>(IronRuby.StandardLibrary.Digest.Digest.Base.Update)
             );
             
@@ -12794,7 +12854,7 @@ namespace IronRuby.StandardLibrary.Digest {
             );
             
             DefineLibraryMethod(module, "update", 0x11, 
-                0x00000000U, 
+                0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Digest.Digest.Base, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Digest.Digest.Base>(IronRuby.StandardLibrary.Digest.Digest.Base.Update)
             );
             

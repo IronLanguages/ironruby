@@ -346,5 +346,73 @@ SUB
             s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(sjisWide, sjisEncoding), true, sq).ToString();
             Assert(s == @"'\x82\xA0'");
         }
+
+        /// <summary>
+        /// #start_with? and #end_with? insist on a character boundary the way MRI does, which is not the
+        /// same test for both on bytes that are invalid UTF-8: #end_with? needs the suffix to start on a
+        /// lead byte, #start_with? steps over the character the offset is in (a truncated sequence
+        /// counting with the length its lead byte announces). Neither walks the string from its start
+        /// any more, and a single byte encoding answers without looking. String#sum adds in 64 bits.
+        /// </summary>
+        public void String_CharacterBoundaries1() {
+            TestOutput(@"
+require 'ruby4'
+u = ->(s) { s.dup.force_encoding(""UTF-8"") }
+[[""\xA9\xA9"", ""\xA9""], [""\xA9"" * 6, ""\xA9"" * 5], [""\xC3\xA9"", ""\xC3""], [""\xC3\xA9"", ""\xA9""],
+ [""\xE3\x81"", ""\xE3""], [""\xE3\x81"", ""\x81""], [""\xED\xA0\x80"", ""\xED""], [""\xC3\xC3\xA9"", ""\xC3""],
+ [""\xC3\xC3\xA9"", ""\xC3\xA9""], [""\xF0\x9F\x98"", ""\xF0\x9F""], [""xx\xBF"", ""\xBF""], [""\xE3\x81\x82\x81"", ""\xE3\x81\x82""],
+ [""aé"", ""é""], [""éa"", ""a""]].each do |s, a|
+  p [u.(s).start_with?(u.(a)), u.(s).end_with?(u.(a))]
+end
+b = (""x"" * 1000 + ""yz"").b
+p [b.end_with?(""yz""), b.end_with?(""y""), b.start_with?(""xx""), b.force_encoding(""ISO-8859-1"").end_with?(""z"")]
+p [""abc"".sum, ""abc"".sum(0), ""abc"".sum(1), (""\xFF"" * 1000).b.sum(8), (""\xFF"" * 20000).b.sum(64), (""\xFF"" * 20000).b.sum(16), ""x"".sum(100), """".sum]
+", @"
+[true, false]
+[false, false]
+[false, false]
+[false, false]
+[false, false]
+[false, false]
+[true, false]
+[true, false]
+[false, true]
+[false, false]
+[false, false]
+[true, false]
+[false, true]
+[false, true]
+[true, false, true, true]
+[294, 294, 0, 24, 5100000, 53728, 120, 0]
+");
+        }
+
+        /// <summary>
+        /// #count, #delete and #squeeze answer an ASCII character from a bitmask CharacterSelector
+        /// computes when it is parsed, negation and intersection included; anything else goes
+        /// through the selector's sets and ranges as before.
+        /// </summary>
+        public void String_CountDeleteSqueeze1() {
+            TestOutput(@"
+require 'ruby4'
+s = ""hello world""
+p [s.count(""lo""), s.count(""a-y""), s.count(""^l""), s.count(""lo"", ""o""), s.count(""^""), s.count(""\\^""), ""a^b"".count(""^""), ""x-y"".count(""x-""), s.count(""a-z"", ""^aeiou""), s.count(""^a-z"")]
+e = ""héllo wörld""
+p [e.count(""é-ö""), e.count(""^l""), e.delete(""é"").size, e.delete(""^é"").bytes, e.squeeze.size, ""a\u{1F600}\u{1F600}b"".count(""\u{1F600}""), ""a\u{1F600}\u{1F600}b"".squeeze.size]
+p [s.delete(""l""), s.delete(""a-z""), s.delete(""^l""), s.delete(""lo"", ""o""), ""aaabbb  ccc"".squeeze, ""aaabbb"".squeeze(""a""), ""aa"".squeeze!(""b"")]
+x = +""abc""
+p [x.delete!(""x""), x.delete!(""b""), x]
+y = ""\xFF\xFF\x80"".b
+p [y.count(""\xFF"".b), y.delete(""\x80"".b).bytes, y.squeeze.bytes]
+p((""abc"".count(""c-a"") rescue $!.message))
+", @"
+[5, 10, 8, 2, 0, 0, 1, 2, 7, 1]
+[2, 8, 10, [195, 169], 10, 2, 3]
+[""heo word"", "" "", ""lll"", ""hell wrld"", ""ab c"", ""abbb"", nil]
+[nil, ""ac"", ""ac""]
+[2, [255, 255], [255, 128]]
+""invalid range \""c-a\"" in string transliteration""
+");
+        }
     }
 }

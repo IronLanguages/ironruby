@@ -712,6 +712,35 @@ namespace IronRuby.Builtins {
             get { return _stamp; }
         }
 
+        /// <summary>
+        /// The first live entry at or after position <paramref name="index"/>, in insertion order;
+        /// <paramref name="index"/> is moved past it, so a loop that starts at 0 visits every entry
+        /// once. An iteration can walk the hash this way, with no copy of its entries, because
+        /// nothing a Ruby block may do to a hash while it is iterated moves an entry: adding a key -
+        /// the only thing that grows or compacts the entry array - raises while
+        /// <see cref="IsIterating"/> (as do #rehash, #replace and #compare_by_identity), a delete
+        /// leaves a tombstone where the entry was, and an overwrite writes into the entry in place.
+        /// A deleted entry the walk has not reached yet is skipped, and an overwritten one is seen
+        /// with its new value, which is what MRI does.
+        /// </summary>
+        public bool TryGetNextEntry(ref int index, out object key, out object value) {
+            Entry[] entries = _entries;
+            int count = Math.Min(_count, entries != null ? entries.Length : 0);
+            int i = Math.Max(index, _start);
+            while (i < count) {
+                ref Entry e = ref entries[i++];
+                if (e.Next != TombstoneNext) {
+                    index = i;
+                    key = e.Key;
+                    value = e.Value;
+                    return true;
+                }
+            }
+            index = i;
+            key = value = null;
+            return false;
+        }
+
         /// <summary>Keys and values in insertion order, in one pass over the entries.</summary>
         public void CopyKeysAndValues(object[]/*!*/ keys, object[]/*!*/ values) {
             Entry[] entries = _entries;

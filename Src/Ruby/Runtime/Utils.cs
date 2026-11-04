@@ -848,6 +848,10 @@ namespace IronRuby.Runtime {
         }
 
         internal static bool ContainsInvalidCharacters(char[]/*!*/ chars, int start, int count, Encoding/*!*/ encoding) {
+            return ContainsInvalidCharacters(new ReadOnlySpan<char>(chars, start, count), encoding);
+        }
+
+        internal static bool ContainsInvalidCharacters(ReadOnlySpan<char> chars, Encoding/*!*/ encoding) {
             // Every byte of a single byte encoding is valid in Ruby, see RubyOnlyEncodings.IsValid.
             if (encoding.IsSingleByte && encoding.CodePage != RubyEncoding.CodePageAscii && encoding.CodePage != RubyEncoding.CodePageBinary) {
                 return false;
@@ -857,7 +861,7 @@ namespace IronRuby.Runtime {
             var fallback = new CheckEncoderFallback();
             encoder.Fallback = fallback;
             try {
-                encoder.GetByteCount(chars, start, count, true);
+                encoder.GetByteCount(chars, true);
             } catch (EncoderFallbackException) {
                 return true;
             }
@@ -876,6 +880,15 @@ namespace IronRuby.Runtime {
         internal static bool ContainsInvalidCharacters(char[]/*!*/ chars, int start, int count, Encoding/*!*/ encoding) {
             try {
                 encoding.GetByteCount(chars, start, count);
+                return true;
+            } catch (EncoderFallbackException) {
+                return false;
+            }
+        }
+
+        internal static bool ContainsInvalidCharacters(ReadOnlySpan<char> chars, Encoding/*!*/ encoding) {
+            try {
+                encoding.GetByteCount(chars);
                 return true;
             } catch (EncoderFallbackException) {
                 return false;

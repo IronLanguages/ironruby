@@ -252,5 +252,100 @@ p [jit_fetch1(h, :a), jit_fetch1(h, 'b'), jit_fetch2(h, 2), jit_fetch2(h, :a)]
             int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
             Assert(specializedHere >= 2, System.String.Format("methods specialized: {0} (expected 2)", specializedHere));
         }
+
+        /// <summary>
+        /// A Hash is iterated in place, entry by entry, rather than over a copy of its entries taken
+        /// up front (which made {...}.first(n) and an early break O(size)): a key the block deletes
+        /// before its turn is skipped, a value it replaces is seen replaced, #clear ends the walk, and
+        /// #shift of an entry already visited changes nothing - as in MRI.
+        /// </summary>
+        public void HashIteration_InPlace1() {
+            TestOutput(@"
+h = {a: 1, b: 2, c: 3, d: 4}
+seen = []
+h.each { |k, v| seen << [k, v]; h.delete(:c) if k == :a; h[:d] = 40 if k == :b }
+p seen
+seen = []
+h.each { |k, v| seen << k; h.clear }
+p seen, h.size
+g = {a: 1, b: 2, c: 3}
+seen = []
+g.each { |k, v| seen << k; g.shift if k == :a }
+p seen, g.keys
+g = {nil => 1, x: 2, y: 3}
+p g.each_key.to_a, g.each_value.map { |v| v * 2 }
+seen = []
+g.each_value { |v| seen << v; g.delete(:y) }
+p seen
+p g.each { |k, v| break k }, g.first(2), g.first
+big = {}
+1000.times { |i| big[i] = i }
+500.times { |i| big.delete(i * 2) }
+p big.first(3), big.each_key.first(2)
+", @"
+[[:a, 1], [:b, 2], [:d, 40]]
+[:a]
+0
+[:a, :b, :c]
+[:b, :c]
+[nil, :x, :y]
+[2, 4, 6]
+[1, 2]
+nil
+[[nil, 1], [:x, 2]]
+[nil, 1]
+[[1, 1], [3, 3], [5, 5]]
+[1, 3]
+");
+        }
+
+        /// <summary>
+        /// Hash#slice, #except and #key are HashOps' own: #slice and #except read the table itself (an
+        /// overridden #[] or #key? takes no part, and neither does the default), keep the
+        /// compare_by_identity flag and nothing else, and #key compares with the value as the receiver
+        /// of ==.
+        /// </summary>
+        public void Hash_SliceExceptKey1() {
+            TestOutput(@"
+c = Class.new(Hash) { def [](k) = 99; def key?(k) = false }
+h = c.new
+h.update(a: 1, ""s"" => 2, nil => 3)
+r = h.slice(:a, ""s"", nil, :zz)
+p r.to_a, r.class, r.default
+s = +""s""
+k = {""s"" => 1}.slice(s).keys[0]
+p [k.frozen?, k.equal?(s)]
+i = {}.compare_by_identity
+key = ""a""
+i[key] = 1
+p i.slice(key, ""a"").to_a, i.slice(key).compare_by_identity?
+d = Hash.new(5)
+d.update(a: 1, b: 2, nil => 3)
+e = d.except(:a, nil, :zz)
+p e.to_a, e.default, e.class, d.size
+p i.except(""a"").size, i.except(key).size, i.except(key).compare_by_identity?
+v = {a: 1, b: 2.0, nil => 3, c: nil, d: 2}
+p [v.key(2), v.key(2.0), v.key(3), v.key(nil), v.key(9)]
+w = Object.new
+def w.==(x) = true
+p({a: w, b: 1}.key(5))
+", @"
+[[:a, 1], [""s"", 2], [nil, 3]]
+Hash
+nil
+[true, false]
+[[""a"", 1]]
+true
+[[:b, 2]]
+nil
+Hash
+3
+1
+0
+true
+[:b, :b, nil, :c, nil]
+:a
+");
+        }
     }
 }
