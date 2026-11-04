@@ -2777,7 +2777,7 @@ unless defined?(Fiber)
       def __handle__; @core.handle; end
       def __set_blocking__(b); @blocking = b; end
       def __set_transferred__; @transferred = true; end
-      def __post__(kind, payload = nil); @core.post(kind, payload); end
+      def __post__(kind, payload = nil); ::Thread.__fiber_core_post__(@core, kind, payload); end
       def __scheduler_get__; @scheduler; end
       def __scheduler_set__(s); @scheduler = s; end
 

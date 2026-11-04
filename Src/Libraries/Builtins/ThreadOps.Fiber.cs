@@ -534,6 +534,17 @@ namespace IronRuby.Builtins {
             return fiber;
         }
 
+        /// <summary>
+        /// Hands a fiber's result (or error) to the fiber that gets control back. Through a library
+        /// method, not a call to <see cref="FiberCore.Post"/> from Ruby: a CLR Object parameter would
+        /// turn a Ruby String into a System.String, and the resumer would get a new UTF-8 String.
+        /// </summary>
+        [RubyMethod("__fiber_core_post__", RubyMethodAttributes.PublicSingleton)]
+        public static object FiberCorePost(object self, [NotNull]FiberCore/*!*/ core, int kind, object payload) {
+            core.Post(kind, payload);
+            return null;
+        }
+
         [RubyMethod("__fiber_post__", RubyMethodAttributes.PublicSingleton)]
         public static object FiberPost(object self, [NotNull]FiberMailbox/*!*/ mailbox, object message) {
             mailbox.Post(message);

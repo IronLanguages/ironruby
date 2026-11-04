@@ -10358,6 +10358,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Threading.Thread, System.Boolean, IronRuby.Builtins.ThreadOps.FiberCore>(IronRuby.Builtins.ThreadOps.CreateFiberCore)
             );
             
+            DefineLibraryMethod(module, "__fiber_core_post__", 0x61, 
+                0x00000002U, 
+                new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberCore, System.Int32, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.FiberCorePost)
+            );
+            
             DefineLibraryMethod(module, "__fiber_current__", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GetCurrentFiber)
