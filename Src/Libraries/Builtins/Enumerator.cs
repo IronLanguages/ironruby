@@ -36,7 +36,23 @@ namespace IronRuby.Builtins {
     /// A call to "each" on the instance of Enumerator is forwarded to a call to a method of a given name on the wrapped object.
     /// </summary>
     [RubyClass("Enumerator"), Includes(typeof(Enumerable))]
-    public class Enumerator {
+    public class Enumerator : IRubyInstanceDataOwner {
+        // Its external iteration (#next, #peek, #rewind in ruby4.rb) keeps its state in instance
+        // variables, so they live here rather than in the runtime's table of instance data.
+        private RubyInstanceData _instanceData;
+
+        // An instance of a Ruby subclass (Enumerator::Lazy, or a user's) is an IRubyObject with instance
+        // data of its own, which every other path reads: that is the one to hand out then.
+        RubyInstanceData IRubyInstanceDataOwner.TryGetInstanceData() {
+            var rubyObject = this as IRubyObject;
+            return (rubyObject != null) ? rubyObject.TryGetInstanceData() : _instanceData;
+        }
+
+        RubyInstanceData IRubyInstanceDataOwner.GetInstanceData() {
+            var rubyObject = this as IRubyObject;
+            return (rubyObject != null) ? rubyObject.GetInstanceData() : RubyInstanceData.GetOrCreate(ref _instanceData);
+        }
+
         internal sealed class Wrapper : IEnumerator {
             private readonly object _targetObject;
             private readonly string/*!*/ _targetName;
