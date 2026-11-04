@@ -1380,10 +1380,13 @@ namespace IronRuby.Builtins {
 
         public void SetLength(int value) {
             ContractUtils.Requires(value >= 0, "value");
-            _flags |= CharIndexChangedFlags;
+            // a mutation like any other: refused on a frozen string, a copy-on-write string gets its own
+            // content first, and the cached CLR string (CharArrayContent's snapshot) is invalidated
             if (value < _content.Count) {
+                MutateRemove();
                 _content.Remove(value, _content.Count - value);
-            } else {
+            } else if (value > _content.Count) {
+                Mutate();
                 _content.Count = value;
             }
         }
