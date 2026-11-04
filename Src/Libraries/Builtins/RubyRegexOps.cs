@@ -505,7 +505,7 @@ namespace IronRuby.Builtins {
                 match = null;
             } else {
                 self.WarnHistoricalBinaryMatch(scope.RubyContext, str);
-                match = self.MatchFromCharacter(str, start, false, true);
+                match = self.MatchFromCharacter(str, start, true, true);
             }
 
             scope.GetInnerMostClosureScope().CurrentMatch = match;

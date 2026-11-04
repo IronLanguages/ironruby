@@ -51,6 +51,29 @@ puts(/b#{/a/}/)
 (?-mix:(?-mix:a)b)
 (?-mix:b(?-mix:a))
 ");
+
+            // A MatchData keeps the subject as it was when it matched: a later change to the
+            // string must not show through #pre_match, #[] or #string. Regexp#match,
+            // String#match and the $~ String#scan leaves behind used to share the live string.
+            TestOutput(@"
+def show(md) p [md.pre_match, md[0], md[1], md.post_match, md.string, md.string.frozen?] end
+s = 'hello world'.dup; md = /o (w)/.match(s); s.replace('ZZZZZZZZZZZZZZZZ'); show md
+s = 'hello world'.dup; md = s.match(/o (w)/); s.replace('ZZZZZZZZZZZZZZZZ'); show md
+s = 'hello world'.dup; md = s.match(/o(r)/, 5); s[0, 1] = 'J'; show md
+s = 'hello world'.dup; s.scan(/o(.)/); md = $~; s << '!!'; s[0] = 'J'; show md
+s = 'hello world'.dup; s =~ /o (w)/; md = $~; s.insert(0, 'AAA'); show md
+s = ""h\u00e9llo w\u00f6rld"".dup; md = /\u00f6(r)/.match(s); s.upcase!; p [md.begin(0), md.pre_match.size, md[1], md.post_match, md.string.ascii_only?, md.string.frozen?]
+s = 'hello world'.dup; mds = []; s.scan(/o(.)/) { mds << $~ }; s.clear; mds.each { |m| show m }
+", @"
+[""hell"", ""o w"", ""w"", ""orld"", ""hello world"", true]
+[""hell"", ""o w"", ""w"", ""orld"", ""hello world"", true]
+[""hello w"", ""or"", ""r"", ""ld"", ""hello world"", true]
+[""hello w"", ""or"", ""r"", ""ld"", ""hello world"", true]
+[""hell"", ""o w"", ""w"", ""orld"", ""hello world"", true]
+[7, 7, ""r"", ""ld"", false, true]
+[""hell"", ""o "", "" "", ""world"", ""hello world"", true]
+[""hello w"", ""or"", ""r"", ""ld"", ""hello world"", true]
+");
         }
 
         [Options(NoRuntime = true)]

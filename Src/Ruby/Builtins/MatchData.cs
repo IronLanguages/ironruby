@@ -65,7 +65,7 @@ namespace IronRuby.Builtins {
         public RubyRegex Regexp { get { return _regexp; } }
 
         public MutableString/*!*/ FrozenOriginalString {
-            get { return _frozenInput ?? (_frozenInput = MutableString.Create(_originalString).Freeze()); }
+            get { return _frozenInput ?? (_frozenInput = _originalString.CreateFrozenSnapshot()); }
         }
 
         /// <summary>
@@ -200,7 +200,7 @@ namespace IronRuby.Builtins {
             }
 
             if (freezeInput) {
-                input = input.Clone().Freeze();
+                input = input.CreateFrozenSnapshot();
             }
 
             MatchData result = (kcode == null || encodedInput == null)
