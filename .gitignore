@@ -75,8 +75,9 @@ Util/References
 # Where Util/rubybench/run.sh puts the gems a bundled benchmark needs.
 /.gems
 
-# Agent worktrees and local session state
-/.claude/
+# Agent worktrees and local session state; the project's skills are shared
+/.claude/*
+!/.claude/skills/
 # scratch copies of ir.sh pointing at an out-of-tree build
 /ir[0-9].sh
 
