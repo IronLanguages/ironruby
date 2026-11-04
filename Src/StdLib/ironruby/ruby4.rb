@@ -846,6 +846,11 @@ class Range
     from = self.begin
     to = self.end
     if from.is_a?(::Integer)
+      if ::Integer === to
+        # the common case, counted directly
+        n = to - from + (exclude_end? ? 0 : 1)
+        return n < 0 ? 0 : n
+      end
       if to.is_a?(::Numeric)
         return ::Enumerator::ArithmeticSequence.__interval_step_size__(from, to, 1, exclude_end?)
       end
@@ -3138,6 +3143,8 @@ module Kernel
       if base.nil? && true.equal?(exception) && !arg.nil? && arg.is_a?(::String)
         return __ir_Integer__(arg)
       end
+      # and an Integer is answered as it is, as the block below would
+      return arg if base.nil? && ::Integer === arg && true.equal?(exception)
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
         # a base goes with a String, and that is checked before anything else - Integer(nil, 8)
@@ -3206,6 +3213,12 @@ module Kernel
       # A String with failures raised goes to the C# parser below in any case; see Integer.
       if true.equal?(exception) && !arg.nil? && ::String === arg
         return __ir_Float__(arg)
+      end
+      # A Float is its own answer and an Integer is the C# conversion, as below, without the
+      # block, its rescue frame or the class tests.
+      if true.equal?(exception)
+        return arg if ::Float === arg
+        return __ir_Float__(arg) if ::Integer === arg
       end
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
@@ -7060,6 +7073,8 @@ end
     private :__bits_from__
 
     def [](index, length = nil)
+      # the common case, an Integer bit position, needs none of the conversions below
+      return __ir_bit__(index) if length.nil? && ::Integer === index
       unless index.is_a?(::Range)
         # through __bit_position__ so that a Float, or an object with #to_int, reaches the
         # built-in as the Integer it stands for

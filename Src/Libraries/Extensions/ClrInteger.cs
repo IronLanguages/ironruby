@@ -366,12 +366,43 @@ namespace IronRuby.Builtins {
         [RubyMethod("**")]
         public static object/*!*/ Power(int self, int other) {
             if (other >= 0) {
+                // in a long while it fits: going through BigInteger.Pow and back was most of the
+                // cost of a small power
+                long result;
+                if (TryPowerInt64(self, other, out result)) {
+                    return Narrow(result);
+                }
                 return ClrInteger.PowerNonNegative(self, other);
             } else if (self == 1) {
                 return One;
             } else {
                 return Math.Pow(self, other);
             }
+        }
+
+        // b ** e by squaring, false as soon as a step would overflow a long
+        private static bool TryPowerInt64(long b, int e, out long result) {
+            long r = 1;
+            while (true) {
+                if ((e & 1) != 0 && !TryMultiplyInt64(r, b, out r)) {
+                    result = 0;
+                    return false;
+                }
+                e >>= 1;
+                if (e == 0) {
+                    result = r;
+                    return true;
+                }
+                if (!TryMultiplyInt64(b, b, out b)) {
+                    result = 0;
+                    return false;
+                }
+            }
+        }
+
+        private static bool TryMultiplyInt64(long a, long b, out long product) {
+            long high = Math.BigMul(a, b, out product);
+            return high == (product >> 63);
         }
 
         /// <summary>
@@ -480,6 +511,18 @@ namespace IronRuby.Builtins {
                 return MinusMinValue();
             }
             return MathUtils.FloorDivideUnchecked(self, other);
+        }
+
+        // A Fixnum is exactly a double, so its quotient is the division of the two, as MRI's
+        // fix_fdiv_double does; without these the binder made both of them Bignums first.
+        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        public static double FDiv(int self, int other) {
+            return (double)self / (double)other;
+        }
+
+        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        public static double FDiv(int self, double other) {
+            return (double)self / other;
         }
 
         [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]

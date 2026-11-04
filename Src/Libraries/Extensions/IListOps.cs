@@ -2727,8 +2727,10 @@ namespace IronRuby.Builtins {
             return IsBuiltinMethod(context.IntegerClass, "<=>");
         }
 
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<KeyValuePair<RubyClass, string>, int>/*!*/ _builtinMethods =
-            new System.Collections.Concurrent.ConcurrentDictionary<KeyValuePair<RubyClass, string>, int>();
+        // keyed by a ValueTuple, whose hash is its fields': KeyValuePair has no GetHashCode of its
+        // own, and ValueType's reflects over the fields on every lookup
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<(RubyClass, string), int>/*!*/ _builtinMethods =
+            new System.Collections.Concurrent.ConcurrentDictionary<(RubyClass, string), int>();
 
         /// <summary>
         /// True while <paramref name="cls"/>'s <paramref name="name"/> is the library's own method,
@@ -2740,7 +2742,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static bool IsBuiltinMethod(RubyClass/*!*/ cls, string/*!*/ name) {
             int version = RubyModule.GlobalMethodVersion;
-            var key = new KeyValuePair<RubyClass, string>(cls, name);
+            var key = (cls, name);
             int checkedAt;
             if (_builtinMethods.TryGetValue(key, out checkedAt) && checkedAt == version) {
                 return true;

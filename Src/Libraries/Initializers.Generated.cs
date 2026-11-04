@@ -3119,6 +3119,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.Denominator)
             );
             
+            DefineLibraryMethod(module, "digits", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.Integer.Digits)
+            );
+            
             DefineLibraryMethod(module, "downto", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Runtime.BlockParam, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Integer.DownTo), 
@@ -3202,6 +3207,13 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.Numerator)
             );
             
+            DefineLibraryMethod(module, "pow", 0x51, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.BinaryOpStorage, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Integer.Pow), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Pow), 
+                new Func<System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Pow)
+            );
+            
             DefineLibraryMethod(module, "pred", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<System.Int32, System.Object>(IronRuby.Builtins.Integer.Pred), 
@@ -3269,6 +3281,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.Integer.InducedFrom), 
                 new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Builtins.RubyClass, System.Double, System.Object>(IronRuby.Builtins.Integer.InducedFrom), 
                 new Func<IronRuby.Builtins.RubyClass, System.Object, System.Int32>(IronRuby.Builtins.Integer.InducedFrom)
+            );
+            
+            DefineLibraryMethod(module, "sqrt", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Runtime.BinaryOpStorage, IronRuby.Builtins.RubyClass, System.Object, System.Object>(IronRuby.Builtins.Integer.Sqrt)
             );
             
         }
@@ -4246,8 +4263,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "fdiv", 0x51, 
-                0x00000002U, 0x00000001U, 0x00000000U, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000001U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
+                new Func<System.Int32, System.Int32, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
+                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.FDiv)
             );
@@ -12797,7 +12816,7 @@ namespace IronRuby.StandardLibrary.Digest {
         #if FEATURE_CRYPTOGRAPHY
         private static void LoadDigest__Base_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "<<", 0x11, 
-                0x00000000U, 
+                0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Digest.Digest.Base, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Digest.Digest.Base>(IronRuby.StandardLibrary.Digest.Digest.Base.Update)
             );
             
@@ -12827,7 +12846,7 @@ namespace IronRuby.StandardLibrary.Digest {
             );
             
             DefineLibraryMethod(module, "update", 0x11, 
-                0x00000000U, 
+                0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Digest.Digest.Base, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Digest.Digest.Base>(IronRuby.StandardLibrary.Digest.Digest.Base.Update)
             );
             

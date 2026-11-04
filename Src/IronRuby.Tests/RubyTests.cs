@@ -847,6 +847,8 @@ namespace IronRuby.Tests {
                 Encoding_Misc1,
                 Marshal_Misc1,
                 Marshal_LoadFloat1,
+                Integer_SqrtPowDigits1,
+                Digest_Incremental1,
                 Hash_SelfKey1,
                 Thread_JoinSelf1,
                 Reflection_Misc1,
