@@ -352,6 +352,10 @@ namespace IronRuby.Tests {
                 Scenario_RubyArrays4,
                 Scenario_RubyArrays5,
                 Scenario_RubyArrays6,
+                Array_DeleteInPlace1,
+                Array_CompactUniqInPlace1,
+                Array_SliceHugeLength1,
+                Array_SplatBlockYield1,
                 IListOps_EnumerateRecursively1,
 
                 Scenario_RubyHashes1A,
@@ -362,6 +366,7 @@ namespace IronRuby.Tests {
                 Scenario_RubyHashes4,
                 Scenario_RubyHashes5,
                 HashIteration_Mutation1,
+                Hash_KeysValues1,
                 Scenario_RubyArgSplatting1,
                 Scenario_RubyArgSplatting2,
                 Scenario_RubyArgSplatting3,
