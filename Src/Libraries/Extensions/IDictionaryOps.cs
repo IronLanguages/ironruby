@@ -531,6 +531,10 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("keys")]
         public static RubyArray/*!*/ GetKeys(IDictionary<object, object>/*!*/ self) {
+            var hash = self as Hash;
+            if (hash != null) {
+                return hash.GetKeyArray();
+            }
             RubyArray keys = new RubyArray(self.Count);
             foreach (object key in self.Keys) {
                 keys.Add(CustomStringDictionary.ObjToNull(key));
@@ -784,6 +788,10 @@ namespace IronRuby.Builtins {
         
         [RubyMethod("values")]
         public static RubyArray/*!*/ GetValues(IDictionary<object, object>/*!*/ self) {
+            var hash = self as Hash;
+            if (hash != null) {
+                return hash.GetValueArray();
+            }
             return new RubyArray(self.Values);
         }
 

@@ -726,6 +726,44 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Hash#keys: the keys in insertion order as a new Array, the nil key (which is stored as
+        /// the null sentinel) mapped back to nil. One pass over the entries, straight into the
+        /// array's storage.
+        /// </summary>
+        public RubyArray/*!*/ GetKeyArray() {
+            int liveCount = _liveCount;
+            object[] content = new object[Math.Max(liveCount, Utils.MinListSize)];
+            Entry[] entries = _entries;
+            int count = _count;
+            int index = 0;
+            for (int i = _start; i < count; i++) {
+                ref Entry e = ref entries[i];
+                if (e.Next != TombstoneNext) {
+                    content[index++] = Microsoft.Scripting.Runtime.CustomStringDictionary.ObjToNull(e.Key);
+                }
+            }
+            Debug.Assert(index == liveCount);
+            return new RubyArray(content, 0, liveCount);
+        }
+
+        /// <summary>Hash#values: the values in insertion order as a new Array, in one pass.</summary>
+        public RubyArray/*!*/ GetValueArray() {
+            int liveCount = _liveCount;
+            object[] content = new object[Math.Max(liveCount, Utils.MinListSize)];
+            Entry[] entries = _entries;
+            int count = _count;
+            int index = 0;
+            for (int i = _start; i < count; i++) {
+                ref Entry e = ref entries[i];
+                if (e.Next != TombstoneNext) {
+                    content[index++] = e.Value;
+                }
+            }
+            Debug.Assert(index == liveCount);
+            return new RubyArray(content, 0, liveCount);
+        }
+
         public void CopyTo(KeyValuePair<object, object>[]/*!*/ array, int index) {
             CheckCopyToArgs(array != null ? array.Length : 0, array == null, index);
             Entry[] entries = _entries;

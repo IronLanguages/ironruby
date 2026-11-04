@@ -105,6 +105,37 @@ foo a: 1, b: 2
         }
 
         /// <summary>
+        /// Hash#keys and #values: insertion order, deleted entries skipped, the nil key given back
+        /// as nil, a fresh plain Array each time.
+        /// </summary>
+        public void Hash_KeysValues1() {
+            TestOutput(@"
+h = { nil => 1, 2 => nil, 'a' => :b }
+p h.keys, h.values
+h = {}
+(1..10).each { |x| h[x] = x * 2 }
+h.delete(3); h.delete(1); h[11] = 0
+p h.keys, h.values
+k = h.keys; k << :x
+p h.size, {}.keys, {}.values
+p({ 1 => nil }.invert.keys)
+c = Class.new(Hash)
+p c[1, 2].keys.class, c[1, 2].values.class
+", @"
+[nil, 2, ""a""]
+[1, nil, :b]
+[2, 4, 5, 6, 7, 8, 9, 10, 11]
+[4, 8, 10, 12, 14, 16, 18, 20, 0]
+9
+[]
+[]
+[nil]
+Array
+Array
+");
+        }
+
+        /// <summary>
         /// Equality comparer doesn't call 'eql?' if the values are reference-equal.
         /// </summary>
         public void EqualityComparer1() {

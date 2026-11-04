@@ -116,6 +116,141 @@ puts a.inspect
             }, @"[1, [], [4]]");
         }
 
+        /// <summary>
+        /// Array#delete answers the last element that matched (MRI's rb_ary_delete), not the
+        /// argument; its block gets the argument; and deleting many elements is one pass.
+        /// </summary>
+        public void Array_DeleteInPlace1() {
+            TestOutput(@"
+a = [1, 1.0, 2, 1.0]
+x = a.delete(1)
+p x, x.class, a
+b = [1]
+a = [[1], b, 2]
+p a.delete([1]).equal?(b), a
+a = [1, 2, 3]
+p a.delete(5) { |x| [:none, x] }, a
+p a.delete(2) { |x| :none }, a
+p [1, 2].freeze.delete(3)
+begin; [1, 2].freeze.delete(1); rescue FrozenError; p :frozen; end
+a = [1, 2] * 100000
+a.delete(1)
+p a.size, a.uniq
+a = (1..10).to_a
+a.shift; a.shift
+a.push(1, 3, 1)
+p a.delete(3), a
+", @"
+1.0
+Float
+[2]
+true
+[2]
+[:none, 5]
+[1, 2, 3]
+2
+[1, 3]
+nil
+:frozen
+100000
+[2]
+3
+[4, 5, 6, 7, 8, 9, 10, 1, 1]
+");
+        }
+
+        public void Array_CompactUniqInPlace1() {
+            TestOutput(@"
+a = [nil, 1, nil, 2, nil]
+p a.compact!, a
+p [1, 2].compact!
+begin; [1].freeze.compact!; rescue FrozenError; p :frozen; end
+a = [1, nil] * 100000
+a.compact!
+p a.size
+a = [1, 2, 1, nil, 3, nil, 2, 1.0]
+p a.uniq!, a
+p [1, 2].uniq!
+a = (1..100000).to_a * 2
+a.uniq!
+p a.size, a.last
+", @"
+[1, 2]
+[1, 2]
+nil
+:frozen
+100000
+[1, 2, nil, 3, 1.0]
+[1, 2, nil, 3, 1.0]
+nil
+100000
+100000
+");
+        }
+
+        /// <summary>
+        /// A count so big that start + count overflowed Int32 used to keep its huge value, so
+        /// [1, 2, 3][1, 2**31 - 1] was [] and slice! raised.
+        /// </summary>
+        public void Array_SliceHugeLength1() {
+            TestOutput(@"
+a = [1, 2, 3]
+p a[1, 2**31 - 1], a[-1, 2**31 - 1], a[1, 2**31 - 2], a[3, 2**31 - 1], a[4, 2**31 - 1]
+b = a.dup
+p b.slice!(1, 2**31 - 1), b
+b = a.dup
+p b.slice!(2..0), b
+c = (1..10).to_a
+c.shift; c.shift; c.shift
+p c[1, 3]
+", @"
+[2, 3]
+[3]
+[2, 3]
+[]
+nil
+[2, 3]
+[1]
+[]
+[1, 2, 3]
+[5, 6, 7]
+");
+        }
+
+        /// <summary>
+        /// Blocks with a rest parameter and nothing before it - what Enumerable's C# methods
+        /// and the Ruby-written ones pass to #each - get every yielded value in the rest array.
+        /// </summary>
+        public void Array_SplatBlockYield1() {
+            TestOutput(@"
+def y1; yield 1; end
+def y1a; yield [1, 2]; end
+def y2; yield 1, 2; end
+def y4; yield 1, 2, 3, 4; end
+def y5; yield 1, 2, 3, 4, 5; end
+p y1 { |*a| a }, y1a { |*a| a }, y2 { |*a| a }, y4 { |*a| a }, y5 { |*a| a }
+p y1(&lambda { |*a| a }), y1a(&lambda { |*a| a }), y2(&proc { |*a| a << 0 })
+p (1..7).each_slice(3).to_a, (1..4).each_cons(2).to_a
+o = Object.new
+def o.each; yield 1, 2; yield 3; yield; end
+o.extend(Enumerable)
+p o.to_a, o.each_slice(2).to_a
+", @"
+[1]
+[[1, 2]]
+[1, 2]
+[1, 2, 3, 4]
+[1, 2, 3, 4, 5]
+[1]
+[[1, 2]]
+[1, 2, 0]
+[[1, 2, 3], [4, 5, 6], [7]]
+[[1, 2], [2, 3], [3, 4]]
+[[1, 2], 3, nil]
+[[[1, 2], 3], [nil]]
+");
+        }
+
         public void IListOps_EnumerateRecursively1() {
             var a = new RubyArray();
             var b = new RubyArray();
