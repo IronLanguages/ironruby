@@ -1379,6 +1379,14 @@ namespace IronRuby.Builtins {
             // (as per MRI behavior, the latter can expand the array if start > length, but the former doesn't)
             start = Math.Max(0, NormalizeIndex(self, start));
 
+            var array = self as RubyArray;
+            if (array != null) {
+                if (start < array.Count) {
+                    array.Fill(obj, start, array.Count - start);
+                }
+                return self;
+            }
+
             for (int i = start; i < self.Count; i++) {
                 self[i] = obj;
             }
@@ -1399,6 +1407,19 @@ namespace IronRuby.Builtins {
             }
 
             ExpandList(self, Math.Min(start, start + length));
+
+            var array = self as RubyArray;
+            if (array != null && length > 0) {
+                int end = start + length;
+                int overwritten = Math.Min(end, array.Count) - start;
+                if (overwritten > 0) {
+                    array.Fill(obj, start, overwritten);
+                }
+                if (end > array.Count) {
+                    array.AddMultiple(end - array.Count, obj);
+                }
+                return self;
+            }
 
             for (int i = 0; i < length; i++) {
                 OverwriteOrAdd(self, start + i, obj);

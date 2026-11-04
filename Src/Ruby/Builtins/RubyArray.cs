@@ -757,6 +757,17 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Overwrites count elements from index on with value: the elements must exist.
+        /// </summary>
+        public void Fill(object value, int index, int count) {
+            Mutate();
+            if (index < 0 || count < 0 || index > _count - count) {
+                throw new ArgumentOutOfRangeException("index");
+            }
+            Utils.Fill(_content, _start + index, value, count);
+        }
+
         public void Reverse() {
             Mutate();
             Array.Reverse(_content, _start, _count);
