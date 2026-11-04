@@ -1518,27 +1518,26 @@ c6 = class C6
   new
 end
 
-#(c1[1] = 2) rescue p $!              # TODO: raise exception
-#(c1[1,*[]] = 2) rescue p $!          # TODO: raise exception
-#(c2[1,2] = 3) rescue p $!            # TODO: raise exception
-#(c2[*[1,2]] = 3) rescue p $!         # TODO: raise exception
+(c1[1] = 2) rescue p $!
+(c1[1,*[]] = 2) rescue p $!
+(c2[1,2] = 3) rescue p $!
+(c2[*[1,2]] = 3) rescue p $!
 c3[1,2,*[]] = 3
 c4[1,*[2,3]] = 4
 c5[1,2,*[3,4]] = 5
 c6[1,2] = 3
 c6[1,*[2,3,4,5,6]] = 7
-", 
-// #<ArgumentError: wrong number of arguments (given 2, expected 1)>
-// #<ArgumentError: wrong number of arguments (given 2, expected 1)>
-// #<ArgumentError: wrong number of arguments (given 3, expected 2)>
-// #<ArgumentError: wrong number of arguments (given 3, expected 2)>
-@"
+", @"
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 3, expected 2)>
+#<ArgumentError: wrong number of arguments (given 3, expected 2)>
 [1, 2, 3]
 [1, 2, 3, 4]
 [1, 2, 3, 4, 5]
 [1, [2, 3]]
 [1, [2, 3, 4, 5, 6, 7]]
-", 2);
+");
         }
 
         public void Scenario_RubyBlockArgs6() {
@@ -1901,14 +1900,18 @@ end
 foo { }                         # line 9
 p lambda {}                     
 p Proc.new {}                   
-p method(:foo).to_proc          # TODO: source info not available
+p method(:foo).to_proc          # no location, as in MRI; #source_location still has it
+p [method(:foo).to_proc, method(:puts).to_proc].map { |x| x.inspect.include?('.rb') }
+p method(:foo).to_proc.source_location[1]
 p C.new {}                      
 "), @"
 #<Proc:0x* *ProcPosition1.rb:9>
 #<Proc:0x* *ProcPosition1.rb:10 (lambda)>
 #<Proc:0x* *ProcPosition1.rb:11>
 #<Proc:0x* (lambda)>
-#<C:0x* *ProcPosition1.rb:13>
+[false, false]
+2
+#<C:0x* *ProcPosition1.rb:15>
 ", OutputFlags.Match);
         }
 
