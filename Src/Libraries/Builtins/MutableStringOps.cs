@@ -4944,6 +4944,29 @@ namespace IronRuby.Builtins {
 
         #region unpack
 
+        /// <summary>
+        /// The splice String#bytesplice (ruby4.rb) ends with, once it has checked its arguments, the
+        /// character boundaries and the encodings: the bytes [index, index + length) replaced by
+        /// <paramref name="piece"/>'s, in place, and the result tagged with <paramref name="encoding"/>.
+        /// It used to rebuild the string from a dup, two slices and two concatenations, five copies of
+        /// the whole receiver per call, which made an encoder splicing length prefixes into a growing
+        /// buffer quadratic.
+        /// </summary>
+        [RubyMethod("__ir_bytesplice__", RubyMethodAttributes.PrivateInstance)]
+        public static MutableString/*!*/ ByteSpliceInPlace(MutableString/*!*/ self, int index, int length,
+            [NotNull]MutableString/*!*/ piece, [NotNull]RubyEncoding/*!*/ encoding) {
+
+            // refused whatever is replaced, an empty range too, as rb_str_modify does
+            self.RequireNotFrozen();
+            // a copy first: the piece may be self
+            byte[] bytes = piece.ToByteArray();
+            self.SwitchToBytes();
+            self.Remove(index, length);
+            self.Insert(index, bytes);
+            self.ForceEncoding(encoding);
+            return self;
+        }
+
         [RubyMethod("unpack")]
         public static RubyArray/*!*/ Unpack(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, MutableString/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ format,
@@ -4957,7 +4980,7 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]MutableString/*!*/ format,
             [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-            var result = RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options));
+            var result = RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options), true);
             return result.Count > 0 ? result[0] : null;
         }
 
@@ -4974,7 +4997,11 @@ namespace IronRuby.Builtins {
             }
 
             int offset = 0;
-            foreach (var entry in options) {
+            object value;
+            // `offset: i' alone, the call every unpack1-at-a-position makes: a lookup, not an enumerator
+            if (options.Count == 1 && options.TryGetValue(context.CreateAsciiSymbol("offset"), out value)) {
+                offset = Protocols.CastToFixnum(fixnumCast, value);
+            } else foreach (var entry in options) {
                 var key = entry.Key as RubySymbol;
                 if (key == null || key.ToString() != "offset") {
                     throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(entry.Key));

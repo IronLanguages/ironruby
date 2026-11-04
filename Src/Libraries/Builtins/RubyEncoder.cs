@@ -1611,7 +1611,21 @@ namespace IronRuby.Builtins {
         }
 
         public static RubyArray/*!*/ Unpack(RubyContext/*!*/ context, MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset) {
-            RubyArray result = new RubyArray(1 + self.Length / 2);
+            return Unpack(context, self, format, offset, false);
+        }
+
+        /// <param name="firstOnly">
+        /// String#unpack1: stop after the first directive that yields a value, as MRI's UNPACK_1 does,
+        /// rather than decoding the rest of the format for values that would be thrown away.
+        /// </param>
+        public static RubyArray/*!*/ Unpack(RubyContext/*!*/ context, MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset,
+            bool firstOnly) {
+
+            // The array grows with what is unpacked. It used to start at half the receiver's length,
+            // which made every unpack of a large buffer - unpack1("E", offset: i) reading one double
+            // out of a 4 MB message, say - allocate megabytes, and a decoder doing that per field
+            // quadratic.
+            RubyArray result = new RubyArray(firstOnly ? 1 : Math.Min(1 + self.Length / 2, 16));
 
             // TODO: encodings
             int position = offset;
@@ -1850,6 +1864,9 @@ namespace IronRuby.Builtins {
                 }
                 for (int i = 0; i < nilCount; i++) {
                     result.Add(null);
+                }
+                if (firstOnly && result.Count > 0) {
+                    break;
                 }
             }
             return result;

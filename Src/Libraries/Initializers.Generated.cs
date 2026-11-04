@@ -7881,6 +7881,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadString_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_bytesplice__", 0x52, 
+                0x00000018U, 
+                new Func<IronRuby.Builtins.MutableString, System.Int32, System.Int32, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ByteSpliceInPlace)
+            );
+            
             DefineLibraryMethod(module, "__ir_fstring__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.InternFrozen)
@@ -10351,6 +10356,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__fiber_core__", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Threading.Thread, System.Boolean, IronRuby.Builtins.ThreadOps.FiberCore>(IronRuby.Builtins.ThreadOps.CreateFiberCore)
+            );
+            
+            DefineLibraryMethod(module, "__fiber_core_post__", 0x61, 
+                0x00000002U, 
+                new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberCore, System.Int32, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.FiberCorePost)
             );
             
             DefineLibraryMethod(module, "__fiber_current__", 0x61, 
