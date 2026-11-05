@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -551,10 +551,96 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return result;
         }
 
+        /// <summary>A finite x as unscaled * 10**scale, the unscaled value carrying the sign.</summary>
+        private static void ToUnscaled(BigDecimal/*!*/ x, out System.Numerics.BigInteger unscaled, out long scale) {
+            string digits = x._fraction.ToString();
+            unscaled = System.Numerics.BigInteger.Parse(digits, CultureInfo.InvariantCulture);
+            if (x._sign < 0) {
+                unscaled = -unscaled;
+            }
+            scale = (long)x._exponent - digits.Length;
+        }
+
+        private static BigDecimal/*!*/ FromUnscaled(Config/*!*/ config, System.Numerics.BigInteger unscaled, long scale) {
+            return Create(config, unscaled.ToString(CultureInfo.InvariantCulture) + "e" + scale.ToString(CultureInfo.InvariantCulture));
+        }
+
+        /// <summary>
+        /// x / y to <paramref name="digits"/> significant digits in <paramref name="mode"/>, as bigdecimal's
+        /// BigDecimal_div2 makes it: the quotient is worked out exactly to one digit more, the remainder
+        /// stands for everything beyond it (so that a quotient that is not exact never looks like a tie
+        /// or a stop), and that is rounded. Fraction.Divide was asked for 2 words, so x / y had 18 digits
+        /// where MRI's has max(x.precision, y.precision) + 16, and at least 32.
+        /// </summary>
+        public static BigDecimal/*!*/ DivideRounded(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, int digits, RoundingModes mode) {
+            BigDecimal special = CheckSpecialResult(config, x, y, BasicOperations.Divide);
+            if (special != null) {
+                return special;
+            }
+            int sign = x._sign * y._sign;
+            if (IsZero(x)) {
+                return sign < 0 ? NegativeZero : PositiveZero;
+            }
+
+            System.Numerics.BigInteger a, b;
+            long ea, eb;
+            ToUnscaled(x, out a, out ea);
+            ToUnscaled(y, out b, out eb);
+            a = System.Numerics.BigInteger.Abs(a);
+            b = System.Numerics.BigInteger.Abs(b);
+
+            int aDigits = a.ToString(CultureInfo.InvariantCulture).Length;
+            int bDigits = b.ToString(CultureInfo.InvariantCulture).Length;
+            long shift = Math.Max(0, (long)digits + 2 + bDigits - aDigits);
+            System.Numerics.BigInteger remainder;
+            System.Numerics.BigInteger quotient = System.Numerics.BigInteger.DivRem(a * System.Numerics.BigInteger.Pow(10, (int)shift), b, out remainder);
+            long scale = ea - eb - shift;
+            if (!remainder.IsZero) {
+                quotient = quotient * 10 + 1;
+                scale--;
+            }
+
+            BigDecimal exact = FromUnscaled(config, quotient, scale);
+            if (!IsFinite(exact)) {
+                return sign < 0 ? NegativeInfinity : PositiveInfinity;
+            }
+            int offset;
+            Fraction fraction = Fraction.LimitPrecision(sign, exact._fraction, digits, mode, out offset);
+            return new BigDecimal(sign, fraction, exact._exponent + offset);
+        }
+
         public static void DivMod(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, out BigDecimal/*!*/ div, out BigDecimal/*!*/ mod) {
-            // TODO: This is horribly suboptimal!
             div = BigDecimal.NaN;
             mod = BigDecimal.NaN;
+
+            // Exactly, at the exponent of the finer of the two: the quotient of an 18-digit division,
+            // floored, was wrong whenever the true quotient needed more digits - BigDecimal("1e100") % 3
+            // was 0.1e83.
+            if (BigDecimal.IsFinite(x) && BigDecimal.IsFinite(y) && !IsZero(y)) {
+                if (IsZero(x)) {
+                    div = PositiveZero;
+                    mod = x;
+                    return;
+                }
+                System.Numerics.BigInteger a, b;
+                long ea, eb;
+                ToUnscaled(x, out a, out ea);
+                ToUnscaled(y, out b, out eb);
+                if (Math.Abs(ea - eb) <= 100000) {
+                    long e = Math.Min(ea, eb);
+                    a *= System.Numerics.BigInteger.Pow(10, (int)(ea - e));
+                    b *= System.Numerics.BigInteger.Pow(10, (int)(eb - e));
+                    System.Numerics.BigInteger r;
+                    System.Numerics.BigInteger q = System.Numerics.BigInteger.DivRem(a, b, out r);
+                    if (!r.IsZero && (r.Sign < 0) != (b.Sign < 0)) {
+                        q -= 1;
+                        r += b;
+                    }
+                    div = FromUnscaled(config, q, 0);
+                    mod = FromUnscaled(config, r, e);
+                    return;
+                }
+            }
             if (BigDecimal.IsFinite(x) && BigDecimal.IsFinite(y)) {
                 BigDecimal remainder;
                 BigDecimal quotient = Divide(config, x, y, 0, out remainder);
@@ -645,51 +731,58 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 return CheckOverflowExceptions(config, x);
             }
 
-            // Precision
+            // bigdecimal 4's sqrt (Ruby, Newton's method) works to the precision asked for plus some and
+            // rounds that to it: sqrt(n) has n digits, rounded in the current mode, and sqrt(0) has
+            // n_significant_digits + 16 (BigDecimal.double_fig) - no more than BigDecimal.limit. The
+            // computation this replaces kept a fixed number of words of whatever its iteration reached,
+            // so BigDecimal("0.1").sqrt(10) was 0.31622776600000000000000000093469343e0.
             if (limit == 0) {
-                limit = config.Limit;
-            }
-            int prec = x.Exponent;
-            if (prec > 0) {
-                ++prec;
-            } else {
-                --prec;
-            }
-            prec = prec - Math.Max(x.PrecisionDigits, limit + DOUBLE_FIG);
-
-            // Estimate the value using double (this round-about computation is to get round double's exponent limitation.
-            BigDecimal fraction = new BigDecimal(x._sign, x._fraction, 0, x._maxPrecision);
-            int exponent = x._exponent / 2;
-            if (x._exponent - exponent * 2 != 0) {
-                // The exponent is odd so we have to tweak the values
-                exponent = (x._exponent + 1) / 2;
-                fraction = BigDecimal.Multiply(config, fraction, BigDecimal.Create(config, 0.1));
-            }
-            double d = ToFloat(config, fraction);
-            BigDecimal y = BigDecimal.Create(config, Math.Sqrt(d));
-            y = new BigDecimal(y._sign, y._fraction, y._exponent + exponent);
-
-            // Converge on more accurate result
-            const int max_iterations = 100;
-            BigDecimal r = PositiveZero;
-            BigDecimal f = PositiveZero;
-            int iterations = Math.Max(limit, max_iterations);
-            int i = 0;
-            while (i < iterations) {
-                f = Divide(config, x, y, limit, out r); /* f = x/y    */
-                r = Subtract(config, f, y, limit); /* r = f - y  */
-                f = Multiply(config, Half, r, limit); /* f = 0.5*r  */
-                if (IsZero(f)) {
-                    break;
+                limit = x.Digits + 16;
+                if (config.Limit > 0 && config.Limit < limit) {
+                    limit = config.Limit;
                 }
-                y = Add(config, y, f); /* y = y + f  */
-                if (f.Exponent <= prec) {
-                    break;
-                }
-                i++;
             }
-            return y;
-            //            return LimitPrecision(config, y, limit, config.RoundingMode);
+            return SquareRootRounded(config, x, limit);
+        }
+
+        private static System.Numerics.BigInteger IntegerSquareRoot(System.Numerics.BigInteger n) {
+            if (n.IsZero) {
+                return n;
+            }
+            // Newton's method from a power of two above the root
+            int bits = (int)((n.GetBitLength() + 1) / 2);
+            System.Numerics.BigInteger x = System.Numerics.BigInteger.One << bits;
+            while (true) {
+                System.Numerics.BigInteger y = (x + n / x) >> 1;
+                if (y >= x) {
+                    return x;
+                }
+                x = y;
+            }
+        }
+
+        /// <summary>The square root of a finite positive x to <paramref name="digits"/> significant digits.</summary>
+        private static BigDecimal/*!*/ SquareRootRounded(Config/*!*/ config, BigDecimal/*!*/ x, int digits) {
+            System.Numerics.BigInteger a;
+            long scale;
+            ToUnscaled(x, out a, out scale);
+            if ((scale & 1) != 0) {
+                a *= 10;
+                scale--;
+            }
+            int aDigits = a.ToString(CultureInfo.InvariantCulture).Length;
+            long k = Math.Max(0, (long)digits + 2 - aDigits / 2 + 1);
+            System.Numerics.BigInteger n = a * System.Numerics.BigInteger.Pow(10, (int)(2 * k));
+            System.Numerics.BigInteger root = IntegerSquareRoot(n);
+            long rootScale = scale / 2 - k;
+            if (root * root != n) {
+                root = root * 10 + 1;
+                rootScale--;
+            }
+            BigDecimal exact = FromUnscaled(config, root, rootScale);
+            int offset;
+            Fraction fraction = Fraction.LimitPrecision(1, exact._fraction, digits, config.RoundingMode, out offset);
+            return new BigDecimal(1, fraction, exact._exponent + offset);
         }
 
         public static BigDecimal/*!*/ FractionalPart(Config/*!*/ config, BigDecimal/*!*/ x) {
