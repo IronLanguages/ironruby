@@ -94,7 +94,7 @@ namespace IronRuby.Runtime.Jit {
                     return false;
                 }
                 var stored = node.Right as LocalVariable;
-                if (node.Operation == null && stored != null && (node.Left is ArrayItemAccess || node.Left is InstanceVariable)) {
+                if (node.Operation == null && stored != null && (node.Left is ArrayItemAccess || node.Left is InstanceVariable || node.Left is AttributeAccess)) {
                     node.Left.Walk(this);
                     _stored.Add(Key(stored));
                     return false;
@@ -961,6 +961,55 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Assign(indexTemp, index),
                 Ast.Assign(valueTemp, value),
                 store,
+                valueTemp
+            );
+        }
+
+        /// <summary>
+        /// `o.x = v' in an outlined loop, o a local holding an object whose x= is a public attr_writer
+        /// (or a method that is one, see JitRuntime.SelfAttrSite.WriterVariable): the store the writer does (JitRuntime.WriteSelfAttr), of o as it is in its tuple slot, as
+        /// EmitCall reads `o.x' when x is an attr_reader. The store logs the value it replaces, as an
+        /// element store does, so the iteration stays restartable; one the writer would make by
+        /// adding the variable or raising deopts before it is made. The value is v.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitAttributeWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, out JT type) {
+            var receiverLocal = node.Qualifier as LocalVariable;
+            if (op != null || node.IsSafeNavigation || receiverLocal == null) {
+                throw Bail("attribute assignment " + node.Name);
+            }
+            return EmitAttributeWrite(receiverLocal, node.Name, right, out type);
+        }
+
+        private MSA.Expression/*!*/ EmitAttributeWrite(LocalVariable/*!*/ receiverLocal, string/*!*/ name, RExpr/*!*/ right, out JT type) {
+            if (_loop == null || _peekLocal == null || !_refinements.IsEmpty) {
+                throw Bail("attribute assignment " + name);
+            }
+            MSA.ParameterExpression bound;
+            JT boundType;
+            if (TryLookup(Key(receiverLocal), out bound, out boundType)) { throw Bail("attribute assignment to a typed local"); }
+            var peek = _peekLocal(receiverLocal);
+            object live = peek.HasValue ? peek.Value.Value : null;
+            string variableName = (live is RubyObject)
+                ? JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, live), name, true) : null;
+            if (variableName == null) { throw Bail("attribute assignment " + name + " that is not an attr_writer"); }
+
+            JT valueType;
+            var value = Emit(right, out valueType);
+            if (valueType == JT.Never || valueType == JT.None) { throw Bail("attribute assignment of a value that jumps away"); }
+            if (_peeked == null) { _peeked = new List<LocalVariable>(); }
+            _peeked.Add(receiverLocal);
+            var valueTemp = Ast.Variable(ClrType(valueType), "#value");
+            _canDeopt = true;
+            _hashWrite = true;
+            if (_undoLog == null) {
+                _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
+                _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+            }
+            type = valueType;
+            return Ast.Block(ClrType(valueType), new[] { valueTemp },
+                Ast.Assign(valueTemp, value),
+                Ast.Call(JitRuntime.M("WriteSelfAttr"), peek.Value.Key, BoxForStore(valueTemp, valueType),
+                    Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, true, true)), _undoLog),
                 valueTemp
             );
         }

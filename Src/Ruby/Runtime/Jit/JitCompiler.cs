@@ -996,6 +996,9 @@ namespace IronRuby.Runtime.Jit {
                 return Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(v, vt, JT.Obj), Ast.Constant(new InstanceVariableSite(ivarTarget.Name)));
             }
 
+            var attribute = node.Left as AttributeAccess;
+            if (attribute != null) { return EmitAttributeWrite(attribute, op, node.Right, out type); }
+
             var target = node.Left as LocalVariable;
             if (target == null || (_loop == null && target.DefinitionLexicalDepth != _scopeDepth)) { throw JitBailout.Instance; }
             if (_inKeywordDefault) { throw Bail("keyword default assigns a local"); }
@@ -1408,6 +1411,21 @@ namespace IronRuby.Runtime.Jit {
                         if (guard == null) { type = JT.Obj; return read; }
                         type = (value is int) ? JT.Int : (value is long) ? JT.Lng : JT.Dbl;
                         return Ast.Call(JitRuntime.M(guard), read);
+                    }
+                }
+            }
+
+            // `o.x(v)', o a local holding an object whose x writes v to an instance variable and does
+            // nothing else (an attr_writer called by name, or a method that is one): the store, as
+            // for `o.x = v' (EmitAttributeWrite).
+            if (argc == 1 && receiverLocal != null && _peekLocal != null && _refinements.IsEmpty && !(args.Expressions[0] is SplattedArgument)) {
+                MSA.ParameterExpression bound;
+                JT boundType;
+                if (!TryLookup(Key(receiverLocal), out bound, out boundType)) {
+                    var peek = _peekLocal(receiverLocal);
+                    object live = peek.HasValue ? peek.Value.Value : null;
+                    if (live is RubyObject && JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, live), node.MethodName, true) != null) {
+                        return EmitAttributeWrite(receiverLocal, node.MethodName, args.Expressions[0], out type);
                     }
                 }
             }
