@@ -12286,7 +12286,9 @@ class Exception
   def backtrace_locations
     return @__backtrace_locations if @__backtrace_locations
     return nil if defined?(@__backtrace_from_strings)
-    entries = backtrace
+    # a #set_backtrace of the exception's own that did not store the raise's backtrace leaves
+    # #backtrace nil, and MRI still has the locations of the raise
+    entries = backtrace || __raise_backtrace__
     return nil unless entries
     # The array is answered again as it is, rather than parsed afresh: MRI hands back
     # the one array, and a spec pushes onto it and looks again.

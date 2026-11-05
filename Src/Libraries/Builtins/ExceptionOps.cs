@@ -136,6 +136,16 @@ namespace IronRuby.Builtins {
             return RubyExceptionData.GetInstance(self).Cause;
         }
 
+        /// <summary>
+        /// The backtrace of the raise when a #set_backtrace of the exception's own was handed it
+        /// (RubyExceptionData.RaiseBacktrace): #backtrace_locations in the prelude (ruby4.rb) falls
+        /// back to it when that method did not store it, as MRI keeps the locations of the raise.
+        /// </summary>
+        [RubyMethod("__raise_backtrace__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray GetRaiseBacktrace(Exception/*!*/ self) {
+            return RubyExceptionData.GetInstance(self).RaiseBacktrace;
+        }
+
         [RubyMethod("set_backtrace", RubyMethodAttributes.PublicInstance)]
         public static RubyArray/*!*/ SetBacktrace(Exception/*!*/ self, [NotNull]MutableString/*!*/ backtrace) {
             return RubyExceptionData.GetInstance(self).Backtrace = RubyArray.Create(backtrace);

@@ -1787,6 +1787,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadException_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__raise_backtrace__", 0x52, 
+                0x00000000U, 
+                new Func<System.Exception, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ExceptionOps.GetRaiseBacktrace)
+            );
+            
             DefineLibraryMethod(module, "==", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RubyContext, System.Exception, System.Object, System.Boolean>(IronRuby.Builtins.ExceptionOps.Equal)

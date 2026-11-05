@@ -842,6 +842,7 @@ namespace IronRuby.Tests {
                 Time_StringParsing1,
                 Struct_IndexMessages1,
                 Backtrace_RaiseInRescue1,
+                Backtrace_RedefinedSetBacktrace1,
                 Enumerator_Copy1,
                 Io_Messages1,
                 Encoding_Misc1,
