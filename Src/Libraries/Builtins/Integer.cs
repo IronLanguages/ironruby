@@ -528,8 +528,8 @@ namespace IronRuby.Builtins {
         private static object TimesImpl(BlockParam/*!*/ block, int self) {
             int i = 0;
             // -X:OSR: once the block is hot, the rest of the loop runs in a typed copy of the loop
-            // this and the block make together (BlockLoopSite)
-            var loop = BlockLoopSite.For(block, BlockLoopKind.Times);
+            // this and the block make together (BlockLoopSite); one too short to be outlined never asks
+            var loop = (self >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.Times) : null;
             long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i < self) {
                 if (--countdown <= 0 && self - i >= BlockLoopSite.MinRun) {
@@ -599,7 +599,7 @@ namespace IronRuby.Builtins {
 
         private static object UpToImpl(BlockParam block, int self, int other) {
             int i = self;
-            var loop = BlockLoopSite.For(block, BlockLoopKind.UpTo);
+            var loop = ((long)other - self >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.UpTo) : null;
             long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i <= other) {
                 if (--countdown <= 0 && (long)other - i >= BlockLoopSite.MinRun) {
@@ -687,7 +687,7 @@ namespace IronRuby.Builtins {
 
         private static object DownToImpl(BlockParam/*!*/ block, int self, int other) {
             int i = self;
-            var loop = BlockLoopSite.For(block, BlockLoopKind.DownTo);
+            var loop = ((long)self - other >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.DownTo) : null;
             long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i >= other) {
                 if (--countdown <= 0 && (long)i - other >= BlockLoopSite.MinRun) {
@@ -1056,4 +1056,4 @@ namespace IronRuby.Builtins {
         #endregion
     }
 }
- 
+ 

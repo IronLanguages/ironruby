@@ -193,6 +193,12 @@ namespace IronRuby.Runtime.Osr {
             public override bool Enter(BlockDefinition/*!*/ node) { return Reject(); }
             public override bool Enter(BlockReference/*!*/ node) { return Reject(); }
 
+            // The Walker does not go into the block of a call (`a.each { }', `m(&b)'), so the two above
+            // never see one: catch it at the call. The loop emitter cannot take a call with a block either
+            // (JitCompiler: "call with a block"), so without this a block like `n.times { a.each { } }' was
+            // let through, and the first entry spent a whole OSR compile (~25ms) only to retire the site.
+            public override bool Enter(MethodCall/*!*/ node) { return node.Block != null ? Reject() : !_rejected; }
+
             public override bool Enter(LocalVariable/*!*/ node) {
                 // A local of the block's own is nil at the top of every iteration, which a loop slot
                 // carried over from the iteration before is not. The parameter is assigned at the top of
@@ -374,7 +380,12 @@ namespace IronRuby.Runtime.Osr {
             get { return _osr.Countdown; }
         }
 
-        /// <summary>On the way out: what this entry did not spend, so that short loops still add up.</summary>
+        /// <summary>
+        /// On the way out: what this entry did not spend, so that entries that leave early (a break, or a
+        /// search that stops) still add up. A loop shorter than MinRun never gets here: its iterator does
+        /// not ask for the site at all, which keeps a hot short loop (`a.each { }' over a handful of
+        /// elements, nested in a long one) the code it was before.
+        /// </summary>
         public void Leave(long countdown) {
             if (_osr.Counting && countdown < _osr.Countdown) {
                 _osr.Countdown = countdown;

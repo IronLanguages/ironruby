@@ -197,7 +197,7 @@ namespace IronRuby.Builtins {
             if (array != null) {
                 // -X:OSR: once the block is hot, the rest of a plain Array's search runs in a typed copy of
                 // the loop this and the block make together (BlockLoopSite)
-                var loop = (predicate != null && array.GetType() == typeof(RubyArray))
+                var loop = (predicate != null && array.Count >= BlockLoopSite.MinRun && array.GetType() == typeof(RubyArray))
                     ? BlockLoopSite.For(predicate, stop ? BlockLoopKind.FindTruthy : BlockLoopKind.FindFalsy) : null;
                 long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
                 for (int i = 0; i < array.Count; i++) {

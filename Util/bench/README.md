@@ -60,7 +60,10 @@ breaks out), specialized by the same compiler and under the same guards and deop
 other OSR loop (Src/Ruby/Runtime/Osr/BlockLoopSite.cs).
 The iterator stays the running method, and a deopt hands the loop back at an iteration
 boundary, from which it yields as before. A block with `break`/`next`/`redo`/`return`, a
-nested block, or a local of its own that it may read before assigning it is never outlined.
+nested block (including one given to a call in its body, `n.times { a.each { } }`), or a local
+of its own that it may read before assigning it is never outlined. Nor is a loop of fewer than
+16 iterations (`BlockLoopSite.MinRun`): its iterator does not look at the site at all, so a hot
+short loop - `nbody`'s `each` over 5 bodies - runs the code it ran before.
 Util/block-loop-matrix.rb is the differential matrix.
 
 Release, best of 6, CRuby 3.3 on the same machine for reference:
