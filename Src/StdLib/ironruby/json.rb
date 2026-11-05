@@ -20,6 +20,52 @@ module JSON
     Thread.current[:"JSON.create_id"] || 'json_class'
   end
 
+  # json/common.rb's JSON.dump: generate with dump_default_options, writing to an IO when given
+  # one. The C# module's dump was generate under another name, so JSON.dump(obj, file) returned
+  # the String and left the file empty, and a NaN raised instead of being written.
+  def self.dump_default_options
+    @dump_default_options ||= { max_nesting: false, allow_nan: true, script_safe: false }
+  end
+
+  def self.dump_default_options=(options)
+    @dump_default_options = options
+  end
+
+  def self.dump(obj, an_io = nil, limit = nil, kwargs = nil)
+    if kwargs.nil?
+      if limit.nil?
+        if an_io.is_a?(Hash)
+          kwargs = an_io
+          an_io = nil
+        end
+      elsif limit.is_a?(Hash)
+        kwargs = limit
+        limit = nil
+      end
+    end
+    unless an_io.nil?
+      if an_io.respond_to?(:to_io)
+        an_io = an_io.to_io
+      elsif limit.nil? && !an_io.respond_to?(:write)
+        an_io, limit = nil, an_io
+      end
+    end
+    opts = dump_default_options
+    opts = opts.merge(max_nesting: limit) if limit
+    opts = opts.merge(kwargs) if kwargs
+    begin
+      result = generate(obj, opts)
+    rescue JSON::NestingError
+      raise ArgumentError, "exceed depth limit"
+    end
+    if an_io.nil?
+      result
+    else
+      an_io.write(result)
+      an_io
+    end
+  end
+
   # Convenience wrappers the C# module does not need to provide itself.
   def self.pretty_unparse(obj, opts = nil); pretty_generate(obj, opts); end
   def self.unparse(obj, opts = nil); generate(obj, opts); end

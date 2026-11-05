@@ -14722,21 +14722,23 @@ namespace IronRuby.StandardLibrary.Json {
             IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("JSON", typeof(IronRuby.StandardLibrary.Json.JsonModule), 0x00000008, null, LoadJSON_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyClass def2 = DefineClass("JSON::JSONError", typeof(IronRuby.StandardLibrary.Json.JsonError), 0x00000000, classRef0, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyClass def3 = DefineClass("JSON::GeneratorError", typeof(IronRuby.StandardLibrary.Json.JsonGeneratorError), 0x00000000, def2, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyClass def4 = DefineClass("JSON::ParserError", typeof(IronRuby.StandardLibrary.Json.JsonParserError), 0x00000000, def2, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def5 = DefineClass("JSON::ParserError", typeof(IronRuby.StandardLibrary.Json.JsonParserError), 0x00000000, def2, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def4 = DefineClass("JSON::NestingError", typeof(IronRuby.StandardLibrary.Json.JsonNestingError), 0x00000000, def5, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             SetConstant(def1, "JSONError", def2);
             SetConstant(def1, "GeneratorError", def3);
-            SetConstant(def1, "ParserError", def4);
+            SetConstant(def1, "ParserError", def5);
+            SetConstant(def1, "NestingError", def4);
         }
         
         private static void LoadJSON_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "dump", 0x21, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate)
             );
             
             DefineLibraryMethod(module, "generate", 0x21, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate)
             );
             
             DefineLibraryMethod(module, "load", 0x21, 
@@ -14751,7 +14753,7 @@ namespace IronRuby.StandardLibrary.Json {
             
             DefineLibraryMethod(module, "pretty_generate", 0x21, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.PrettyGenerate)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.PrettyGenerate)
             );
             
         }
