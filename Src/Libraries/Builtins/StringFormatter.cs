@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation.
  *
@@ -1361,7 +1361,10 @@ namespace IronRuby.Builtins {
 
         /// <summary>"%f" of an Integer: all of its digits followed by a zero fraction.</summary>
         private void AppendExactInteger() {
-            BigInteger value = (_opts.Value is int) ? new BigInteger((int)_opts.Value) : (BigInteger)_opts.Value;
+            // an Integer between 2**31 and 2**63 is a boxed long, which (BigInteger) cannot unbox:
+            // "%.2f" % 2**31 was an InvalidCastException
+            object raw = _opts.Value;
+            BigInteger value = (raw is int) ? new BigInteger((int)raw) : (raw is long) ? new BigInteger((long)raw) : (BigInteger)raw;
 
             int precision = _opts.Precision;
             if (precision == UnspecifiedPrecision) {
