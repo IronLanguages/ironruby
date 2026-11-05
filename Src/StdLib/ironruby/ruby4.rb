@@ -11055,7 +11055,7 @@ class IO
   # The conversion options the stream was opened with, reduced to the ones
   # String#encode understands. The hash also carries :mode, :binmode and the
   # rest of IO.open's own options, which #encode would reject.
-  DECORATOR_OPTIONS__ = [:universal_newline, :cr_newline, :crlf_newline, :newline].freeze
+  DECORATOR_OPTIONS__ = [:universal_newline, :cr_newline, :crlf_newline, :lf_newline, :newline].freeze
   ENCODE_OPTIONS__ = ([:invalid, :undef, :replace, :fallback, :xml] + DECORATOR_OPTIONS__).freeze
 
   def __encode_options__
@@ -11075,23 +11075,42 @@ class IO
   # whose bytes are not valid characters of its own encoding. They are a
   # conversion in their own right, so they happen even when the two encodings
   # are the same; and :universal_newline is a decorator for the way in only.
+  #
+  # Universal newline is the one decorator for the way in. :crlf_newline,
+  # :cr_newline and :lf_newline (newline: :lf, which turns "\r\n" and "\r" into
+  # "\n") are for the way out only: MRI reads a stream opened with them as it is.
   def __decorate_newlines__(text, options, reading)
     newline = options[:newline]
-    if reading && (options[:universal_newline] || newline == :universal || newline == :lf)
-      return text.gsub("\r\n", "\n").gsub("\r", "\n")
+    if reading
+      if options[:universal_newline] || newline == :universal
+        return text.gsub("\r\n", "\n").gsub("\r", "\n")
+      end
+      return text
     end
     return text.gsub("\n", "\r\n") if options[:crlf_newline] || newline == :crlf
     return text.gsub("\n", "\r") if options[:cr_newline] || newline == :cr
+    return text.gsub("\r\n", "\n").gsub("\r", "\n") if options[:lf_newline] || newline == :lf
     text
   end
   private :__decorate_newlines__
 
   def __decorated__(options, reading)
     newline = options[:newline]
-    return true if options[:crlf_newline] || options[:cr_newline] || newline == :crlf || newline == :cr
-    reading && (options[:universal_newline] || newline == :universal || newline == :lf) ? true : false
+    if reading
+      return (options[:universal_newline] || newline == :universal) ? true : false
+    end
+    (options[:crlf_newline] || options[:cr_newline] || options[:lf_newline] ||
+      newline == :crlf || newline == :cr || newline == :lf) ? true : false
   end
   private :__decorated__
+
+  # Whether what is read has its "\r\n" and lone "\r" turned into "\n" - which
+  # has to happen before a line is looked for, so the line readers and #getc
+  # (IoOps.cs) ask this once a call, and only of a stream with conversion options.
+  def __universal_newline__?(_unused = nil)
+    __decorated__(__encode_options__, true)
+  end
+  private :__universal_newline__?
 
   # A stream opened "r:external:internal" is asking for the bytes to be read as
   # the external encoding and handed back as the internal one. #internal_encoding
@@ -11182,9 +11201,13 @@ class IO
     # the occasion, which is how the mode: and encoding options in the trailing
     # hash get a chance to apply - the specs open a file for writing that way and
     # expect the read to fail.
+    #
+    # Everything in the trailing hash but chomp: is for the open - mode:, the encodings,
+    # binmode: and the conversion options - and chomp: is for the read.
     def readlines(name, *args, **options)
-      ::File.open(name, options[:mode] || "r") do |io|
-        io.readlines(*args, **options.reject { |k, _| k == :mode })
+      chomp = options.key?(:chomp) ? { chomp: options[:chomp] } : {}
+      ::File.open(name, **options.reject { |k, _| k == :chomp }) do |io|
+        io.readlines(*args, **chomp)
       end
     end
 
@@ -11198,8 +11221,9 @@ class IO
       unless block
         return ::Enumerator.new { |y| foreach(name, *args, **options) { |l| y << l } }
       end
-      ::File.open(name, options[:mode] || "r") do |io|
-        io.each_line(*args, **options.reject { |k, _| k == :mode }, &block)
+      chomp = options.key?(:chomp) ? { chomp: options[:chomp] } : {}
+      ::File.open(name, **options.reject { |k, _| k == :chomp }) do |io|
+        io.each_line(*args, **chomp, &block)
       end
       # MRI's IO.foreach answers nil when it was given a block.
       nil

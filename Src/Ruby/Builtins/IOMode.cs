@@ -58,6 +58,12 @@ namespace IronRuby.Builtins {
 
         public IOMode Mode { get { return _mode ?? IOMode.Default; } }
         public bool HasMode { get { return _mode.HasValue; } }
+
+        /// <summary>
+        /// "t" in the mode, or textmode: true - which on a read means MRI's universal newline
+        /// decorator: "\r\n" and a lone "\r" read as "\n".
+        /// </summary>
+        public bool IsTextModeSpecified { get { return _textOrBinarySpecified && (Mode & IOMode.PreserveEndOfLines) == 0; } }
         public RubyEncoding ExternalEncoding { get { return _externalEncoding; } }
         public RubyEncoding InternalEncoding { get { return _internalEncoding; } }
         // Either side on its own counts: "internal_encoding: 'ISO-8859-1'" asks for a
@@ -300,7 +306,9 @@ namespace IronRuby.Builtins {
             } else if (textmode) {
                 mode &= ~IOMode.PreserveEndOfLines;
             }
-            return new IOInfo(_mode.HasValue ? (IOMode?)mode : null, _externalEncoding, _internalEncoding, true);
+            // binmode: true with no mode argument is still a binary read - "rb" - and has to be
+            // kept, or the stream opens as text and reads in the default external encoding.
+            return new IOInfo(_mode.HasValue || binmode ? (IOMode?)mode : null, _externalEncoding, _internalEncoding, true);
         }
 
         /// <summary>The :encoding option as it reads back in MRI's warning about ignoring it.</summary>

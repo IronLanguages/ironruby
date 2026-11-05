@@ -2815,6 +2815,120 @@ missing dir: ""Errno::ENOENT: No such file or directory""
         /// Integer fast paths of Range#include?, Range#step and Integer#step.
         /// </summary>
         /// <summary>
+        /// The line readers' arguments as MRI's rb_io_getline_args reads them, lineno as
+        /// rb_io_getline_0 counts it (a read cut short by the limit is not a line), the open
+        /// options IO.foreach and IO.readlines pass on, binmode: true, text mode's universal
+        /// newline decorator, and newline: :lf as a decorator for the way out.
+        /// </summary>
+        public void Io_LineReaders2() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+f = File.join(dir, 'a.txt')
+File.binwrite(f, ""one\r\ntwo\n\n\nthree\nlast"")
+o = Object.new; def o.to_str; 'o'; end
+i = Object.new; def i.to_int; 2; end
+def t(label)
+  r = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{label}: #{r.inspect}""
+end
+[[[o], {}], [[o], {chomp: true}], [[i], {}], [[i], {chomp: true}], [[nil, i], {}], [[o, i], {chomp: true}],
+ [[1, 2, 3], {}], [['x', 2, 3], {chomp: true}], [[nil, nil], {chomp: true}], [[1], {chomp: true, foo: 1}], [[0], {}]].each_with_index do |(a, kw), n|
+  t(""gets #{n}"") { File.open(f) { |io| [io.gets(*a, **kw), io.gets(*a, **kw), $_, io.lineno] } }
+  t(""readline #{n}"") { File.open(f) { |io| io.readline(*a, **kw) } }
+end
+t('gets positional hash') { File.open(f) { |io| io.gets({chomp: true}) } }
+[[3], ['e', 2], ['', 5], [""\n"", 4], [nil, 4]].each do |a|
+  t(""lineno #{a.inspect}"") { File.open(f) { |io| x = []; while l = io.gets(*a); x << io.lineno; end; x } }
+  t(""each_line lineno #{a.inspect}"") { File.open(f) { |io| io.each_line(*a).map { io.lineno } } }
+  t(""readlines lineno #{a.inspect}"") { File.open(f) { |io| io.readlines(*a); [io.lineno, $.] } }
+end
+g = File.join(dir, 'l1.txt')
+File.binwrite(g, ""caf\xE9\n"".b)
+t('foreach encoding') { IO.foreach(g, encoding: 'iso-8859-1:utf-8').map { |l| [l, l.encoding.to_s] } }
+t('readlines encoding') { IO.readlines(g, encoding: 'iso-8859-1:utf-8', chomp: true) }
+t('readlines external') { IO.readlines(g, external_encoding: 'iso-8859-1').map { |l| l.encoding.to_s } }
+t('readlines binmode') { IO.readlines(g, binmode: true).map { |l| l.encoding.to_s } }
+t('File.open binmode') { File.open(g, binmode: true) { |io| io.gets.encoding.to_s } }
+u = File.join(dir, 'u.txt')
+File.binwrite(u, ""a\r\nb\rc\r\n\r\nd\r"")
+[['rt', {}], ['r', {universal_newline: true}], ['r', {newline: :universal}], ['r', {newline: :lf}], ['rt', {newline: :crlf}], ['rb', {}]].each do |m, kw|
+  t(""#{m} #{kw.keys.inspect} #{kw.values.inspect}"") do
+    File.open(u, m, **kw) do |io|
+      lines = io.readlines
+      io.rewind
+      chars = []
+      while c = io.getc; chars << c; end
+      io.rewind
+      [io.read, lines, chars, File.open(u, m, **kw) { |x| x.readlines('', chomp: true) }, File.open(u, m, **kw) { |x| x.readlines(2) }]
+    end
+  end
+end
+w = File.join(dir, 'w.txt')
+[{newline: :lf}, {lf_newline: true}, {newline: :crlf}, {newline: :cr}, {universal_newline: true}].each do |kw|
+  File.open(w, 'w', **kw) { |io| io.write(""a\r\nb\rc\n"") }
+  t(""write #{kw.keys.inspect}"") { File.binread(w) }
+end
+", @"
+gets 0: [""o"", ""ne\r\ntwo"", ""ne\r\ntwo"", 2]
+readline 0: ""o""
+gets 1: ["""", ""ne\r\ntw"", ""ne\r\ntw"", 2]
+readline 1: """"
+gets 2: [""on"", ""e\r"", ""e\r"", 0]
+readline 2: ""on""
+gets 3: [""on"", ""e\r"", ""e\r"", 0]
+readline 3: ""on""
+gets 4: [""on"", ""e\r"", ""e\r"", 0]
+readline 4: ""on""
+gets 5: ["""", ""ne"", ""ne"", 1]
+readline 5: """"
+gets 6: [ArgumentError, ""wrong number of arguments (given 3, expected 0..2)""]
+readline 6: [ArgumentError, ""wrong number of arguments (given 3, expected 0..2)""]
+gets 7: [ArgumentError, ""wrong number of arguments (given 3, expected 0..2)""]
+readline 7: [ArgumentError, ""wrong number of arguments (given 3, expected 0..2)""]
+gets 8: [""one\r\ntwo\n\n\nthree\nlast"", nil, nil, 1]
+readline 8: ""one\r\ntwo\n\n\nthree\nlast""
+gets 9: [""o"", ""n"", ""n"", 0]
+readline 9: [ArgumentError, ""unknown keyword: :foo""]
+gets 10: ["""", """", """", 0]
+readline 10: """"
+gets positional hash: [TypeError, ""no implicit conversion of Hash into Integer""]
+lineno [3]: [0, 1, 1, 2, 3, 4, 4, 5, 5, 6]
+each_line lineno [3]: [0, 1, 1, 2, 3, 4, 4, 5, 5, 6]
+readlines lineno [3]: [6, 6]
+lineno [""e"", 2]: [0, 1, 1, 1, 1, 1, 1, 2, 3, 3, 3, 4]
+each_line lineno [""e"", 2]: [0, 1, 1, 1, 1, 1, 1, 2, 3, 3, 3, 4]
+readlines lineno [""e"", 2]: [4, 4]
+lineno ["""", 5]: [0, 1, 1, 2]
+each_line lineno ["""", 5]: [0, 1, 1, 2]
+readlines lineno ["""", 5]: [2, 2]
+lineno [""\n"", 4]: [0, 1, 2, 3, 4, 4, 5, 5]
+each_line lineno [""\n"", 4]: [0, 1, 2, 3, 4, 4, 5, 5]
+readlines lineno [""\n"", 4]: [5, 5]
+lineno [nil, 4]: [0, 0, 0, 0, 0, 1]
+each_line lineno [nil, 4]: [0, 0, 0, 0, 0, 1]
+readlines lineno [nil, 4]: [1, 1]
+foreach encoding: [[""café\n"", ""UTF-8""]]
+readlines encoding: [""café""]
+readlines external: [""ISO-8859-1""]
+readlines binmode: [""ASCII-8BIT""]
+File.open binmode: ""ASCII-8BIT""
+rt [] []: [""a\nb\nc\n\nd\n"", [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""], [""a"", ""\n"", ""b"", ""\n"", ""c"", ""\n"", ""\n"", ""d"", ""\n""], [""a\nb\nc"", ""d\n""], [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""]]
+r [:universal_newline] [true]: [""a\nb\nc\n\nd\n"", [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""], [""a"", ""\n"", ""b"", ""\n"", ""c"", ""\n"", ""\n"", ""d"", ""\n""], [""a\nb\nc"", ""d\n""], [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""]]
+r [:newline] [:universal]: [""a\nb\nc\n\nd\n"", [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""], [""a"", ""\n"", ""b"", ""\n"", ""c"", ""\n"", ""\n"", ""d"", ""\n""], [""a\nb\nc"", ""d\n""], [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""]]
+r [:newline] [:lf]: [""a\r\nb\rc\r\n\r\nd\r"", [""a\r\n"", ""b\rc\r\n"", ""\r\n"", ""d\r""], [""a"", ""\r"", ""\n"", ""b"", ""\r"", ""c"", ""\r"", ""\n"", ""\r"", ""\n"", ""d"", ""\r""], [""a\r\nb\rc\r\n\r\nd\r""], [""a\r"", ""\n"", ""b\r"", ""c\r"", ""\n"", ""\r\n"", ""d\r""]]
+rt [:newline] [:crlf]: [""a\r\nb\rc\r\n\r\nd\r"", [""a\r\n"", ""b\rc\r\n"", ""\r\n"", ""d\r""], [""a"", ""\r"", ""\n"", ""b"", ""\r"", ""c"", ""\r"", ""\n"", ""\r"", ""\n"", ""d"", ""\r""], [""a\r\nb\rc\r\n\r\nd\r""], [""a\r"", ""\n"", ""b\r"", ""c\r"", ""\n"", ""\r\n"", ""d\r""]]
+rb [] []: [""a\r\nb\rc\r\n\r\nd\r"", [""a\r\n"", ""b\rc\r\n"", ""\r\n"", ""d\r""], [""a"", ""\r"", ""\n"", ""b"", ""\r"", ""c"", ""\r"", ""\n"", ""\r"", ""\n"", ""d"", ""\r""], [""a\r\nb\rc\r\n\r\nd\r""], [""a\r"", ""\n"", ""b\r"", ""c\r"", ""\n"", ""\r\n"", ""d\r""]]
+write [:newline]: ""a\nb\nc\n""
+write [:lf_newline]: ""a\nb\nc\n""
+write [:newline]: ""a\r\r\nb\rc\r\n""
+write [:newline]: ""a\r\rb\rc\r""
+write [:universal_newline]: ""a\r\nb\rc\n""
+");
+        }
+
+        /// <summary>
         /// IO's line and character readers chomp, convert and measure characters in the built-ins
         /// (IoOps.cs) rather than a line or a character at a time in ruby4.rb, and IO#write
         /// decides there whether a String needs converting.
