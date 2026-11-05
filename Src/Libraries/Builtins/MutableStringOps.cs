@@ -1158,6 +1158,19 @@ namespace IronRuby.Builtins {
         // In an encoding that is not Unicode the ordinal is the character's own code, the bytes
         // read as a big-endian number: "\x81\x40" in Shift_JIS is 0x8140, not U+3000, and
         // "\x80" in Windows-1252 is 0x80, not U+20AC.
+        /// <summary>
+        /// What #codepoints and #each_codepoint answer for a character: its code in the string's
+        /// encoding, as #ord does - 0x82A0 for a Shift_JIS "あ", not U+3042.
+        /// </summary>
+        private static int NativeCode(RubyEncoding/*!*/ encoding, MutableString.Character character) {
+            int codepoint = character.Codepoint;
+            if (codepoint < 0x80 && encoding.IsAsciiIdentity) {
+                return codepoint;
+            }
+            return NativeCode(encoding,
+                character.IsSurrogate ? new[] { character.Value, character.LowSurrogate } : new[] { character.Value }, codepoint);
+        }
+
         private static int NativeCode(RubyEncoding/*!*/ encoding, char[]/*!*/ character, int codepoint) {
             if (encoding.IsUnicodeEncoding || ReferenceEquals(encoding, RubyEncoding.Binary) || encoding.IsDummy) {
                 return codepoint;
@@ -2037,7 +2050,7 @@ namespace IronRuby.Builtins {
                 if (!enumerator.Current.IsValid) {
                     throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", self.Encoding.Name);
                 }
-                result.Add(ScriptingRuntimeHelpers.Int32ToObject((int)enumerator.Current.Codepoint));
+                result.Add(ScriptingRuntimeHelpers.Int32ToObject(NativeCode(self.Encoding, enumerator.Current)));
             }
             return result;
         }
@@ -2052,7 +2065,7 @@ namespace IronRuby.Builtins {
                 }
 
                 object result;
-                if (block.Yield(ScriptingRuntimeHelpers.Int32ToObject((int)enumerator.Current.Codepoint), out result)) {
+                if (block.Yield(ScriptingRuntimeHelpers.Int32ToObject(NativeCode(self.Encoding, enumerator.Current)), out result)) {
                     return result;
                 }
             }
