@@ -275,6 +275,9 @@ namespace IronRuby.Builtins {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "div", self, other);
         }
 
+        // MRI's Fixnum range, 62 bits
+        private static readonly BigInteger FixnumMax = (BigInteger.One << 62) - 1, FixnumMin = -(BigInteger.One << 62);
+
         /// <summary>
         /// Converting each side to a double first overflows to Infinity for anything past
         /// Float::MAX, and Infinity/Infinity is NaN - so a division whose answer is an ordinary
@@ -290,6 +293,26 @@ namespace IronRuby.Builtins {
             }
             if (self.IsZero()) {
                 return (other.Sign > 0) ? 0.0 : -0.0;
+            }
+
+            // MRI's rb_int_fdiv_double reduces the two by their gcd first, and two that are then
+            // Fixnums divide as Fixnums do (see FDivExact): (x * 10**20).fdiv(y * 10**20) is x.fdiv(y).
+            BigInteger gcd = BigInteger.GreatestCommonDivisor(self, other);
+            if (!gcd.IsOne) {
+                self /= gcd;
+                other /= gcd;
+                if (self >= FixnumMin && self <= FixnumMax && other >= FixnumMin && other <= FixnumMax) {
+                    return FDivExact((long)self, (long)other);
+                }
+            }
+
+            // rb_big_fdiv_double: a Bignum over a Fixnum is the two as doubles, divided - unless the
+            // Bignum is too large for a double, which the division below handles.
+            if (other >= FixnumMin && other <= FixnumMax && (self < FixnumMin || self > FixnumMax)) {
+                double dividend = Protocols.ToDouble(self);
+                if (!Double.IsInfinity(dividend)) {
+                    return dividend / (double)(long)other;
+                }
             }
 
             long magnitude = (long)self.GetBitLength() - (long)other.GetBitLength();
