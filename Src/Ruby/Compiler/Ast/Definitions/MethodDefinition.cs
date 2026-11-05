@@ -295,6 +295,13 @@ namespace IronRuby.Compiler.Ast {
                     visiblePrameterCountAndSignatureFlags, ref statements);
             }
 
+            // The handler only takes the MethodUnwinder of a `return' from a block of this method. It
+            // used to take every exception, for IsMethodUnwinderTargetFrame to capture the backtrace in,
+            // but a filter here is a catch and a rethrow (TryStatementBuilder: DynamicMethods have no
+            // filters), and on .NET 8 each is a full CLR exception dispatch of its own: a raise that left
+            // n compiled methods was thrown n + 1 times. Any other exception now goes through with its
+            // CLR trace growing as it passes, and the frame that finally handles it - a rescue, a block,
+            // an interpreted frame, the top level - captures the same backtrace from there.
             MSA.Expression body = AstUtils.Try(
                 countCall,
                 recordRefinements,
@@ -302,8 +309,8 @@ namespace IronRuby.Compiler.Ast {
                 optionalsInitialization,
                 traceCall,
                 statements
-            ).Filter(unwinder = Ast.Parameter(typeof(Exception), "#u"),
-                // a light frame makes a scope for the filter only when an exception passes, as a block's does:
+            ).Filter(unwinder = Ast.Parameter(typeof(MethodUnwinder), "#u"),
+                // a light frame makes a scope for the filter only when a MethodUnwinder passes:
                 Methods.IsMethodUnwinderTargetFrame.OpCall((light != null) ? Ast.Coalesce(scopeVariable, light.MakeScope()) : (MSA.Expression)scopeVariable, unwinder),
                 Ast.Return(gen.ReturnLabel, Methods.GetMethodUnwinderReturnValue.OpCall(unwinder))
             ).Finally(  

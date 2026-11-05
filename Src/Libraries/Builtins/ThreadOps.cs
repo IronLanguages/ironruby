@@ -1268,6 +1268,7 @@ namespace IronRuby.Builtins {
                     info.Result = null;
                     if (!RubyUtils.IsRubyThreadExit(e) && !(e is ThreadInterruptedException)) {
                         Exception visible = RubyUtils.GetVisibleException(e);
+                        RubyExceptionData.GetInstance(visible).CaptureExceptionTrace(context);
                         info.Exception = visible;
 
                         // A thread killed while it was already unwinding a Thread#raise still dies
@@ -1279,6 +1280,8 @@ namespace IronRuby.Builtins {
                 } else {
                     e = RubyUtils.GetVisibleException(e);
                     RubyExceptionData.ActiveExceptionHandled(e);
+                    // a start routine that is a method (Thread.new(&method(:m))) has no Ruby frame that captured the backtrace:
+                    RubyExceptionData.GetInstance(e).CaptureExceptionTrace(context);
                     info.Exception = e;
 
                     StringBuilder trace = new StringBuilder();

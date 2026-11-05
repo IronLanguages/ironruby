@@ -203,6 +203,8 @@ namespace IronRuby.StandardLibrary.Fiddle {
                     }
                     return NativeCall.ToLong(result);
                 } catch (Exception e) {
+                    // thrown again from Fiddle::Function#call, which starts its CLR trace over:
+                    RubyExceptionData.GetInstance(e).CaptureExceptionTrace(self._context);
                     _pendingCallbackError = e;
                     return NativeCall.IsFloating(self._returnType) ? (object)0.0 : (object)0L;
                 }

@@ -873,12 +873,20 @@ namespace IronRuby.Runtime.Calls {
         /// them (RubyStackTraceBuilder) along with the CLR frames the exception passes, which are not the interpreter's when the
         /// methods in between are compiled; without them, the frames of the interpreted callers above would go missing. The rule's
         /// own frame is no Ruby frame, and this dispatcher has no Interpreter.Run frame to stand for it.
+        ///
+        /// It runs as an exception filter that never catches, not as a catch that rethrows: a rethrow is a second CLR exception
+        /// dispatch - stack walk and all - for every raise that leaves a library method, which made it half the cost of a
+        /// `raise' rescued in a loop. The filter sees the same state the catch did: it runs in the first pass, before the
+        /// finally blocks between the throw and here, but any frame in between that could change the current interpreted
+        /// frame (an interpreted or compiled Ruby frame) catches the exception itself, so the first pass never gets here past
+        /// one of them.
         /// </summary>
-        private static void SaveInterpretedFrames(Exception/*!*/ exception) {
+        private static bool SaveInterpretedFrames(Exception/*!*/ exception) {
             var frame = InterpretedFrame.CurrentFrame.Value;
             if (frame != null && InterpretedFrame.GetExceptionStackTrace(exception) == null) {
                 exception.SetData(typeof(InterpretedFrameInfo), new List<InterpretedFrameInfo>(frame.GetStackTraceDebugInfo()).ToArray());
             }
+            return false;
         }
 
         private RubyContext/*!*/ _context;
@@ -998,8 +1006,7 @@ namespace IronRuby.Runtime.Calls {
                 Spend();
                 try {
                     result = _rubyCall.Invoke(self, rubyBlock, args);
-                } catch (Exception e) {
-                    SaveInterpretedFrames(e);
+                } catch (Exception e) when (SaveInterpretedFrames(e)) {
                     throw;
                 }
                 return true;
@@ -1014,8 +1021,7 @@ namespace IronRuby.Runtime.Calls {
                 Spend();
                 try {
                     result = _send.Invoke(scope, self, sendBlock, args);
-                } catch (Exception e) {
-                    SaveInterpretedFrames(e);
+                } catch (Exception e) when (SaveInterpretedFrames(e)) {
                     throw;
                 }
                 return true;
@@ -1030,8 +1036,7 @@ namespace IronRuby.Runtime.Calls {
                 Spend();
                 try {
                     result = _construction.Invoke(args, initializerBlock);
-                } catch (Exception e) {
-                    SaveInterpretedFrames(e);
+                } catch (Exception e) when (SaveInterpretedFrames(e)) {
                     throw;
                 }
                 return true;
@@ -1048,8 +1053,7 @@ namespace IronRuby.Runtime.Calls {
             Spend();
             try {
                 result = _plan.Invoke(_context, scope, self, _hasBlock ? block : null, args);
-            } catch (Exception e) {
-                SaveInterpretedFrames(e);
+            } catch (Exception e) when (SaveInterpretedFrames(e)) {
                 throw;
             }
             return true;

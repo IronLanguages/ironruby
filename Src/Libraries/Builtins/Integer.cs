@@ -21,6 +21,7 @@ using System.Runtime.InteropServices;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
+using IronRuby.Runtime.Osr;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -526,14 +527,22 @@ namespace IronRuby.Builtins {
 
         private static object TimesImpl(BlockParam/*!*/ block, int self) {
             int i = 0;
+            // -X:OSR: once the block is hot, the rest of the loop runs in a typed copy of the loop
+            // this and the block make together (BlockLoopSite); one too short to be outlined never asks
+            var loop = (self >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.Times) : null;
+            long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i < self) {
+                if (--countdown <= 0 && self - i >= BlockLoopSite.MinRun) {
+                    i = loop.Run(block, i, self, ref countdown);
+                    if (i >= self) { break; }
+                }
                 object result;
                 if (block.Yield(i, out result)) {
                     return result;
                 }
                 i++;
             }
-
+            if (loop != null) { loop.Leave(countdown); }
             return self;
         }
 
@@ -590,13 +599,22 @@ namespace IronRuby.Builtins {
 
         private static object UpToImpl(BlockParam block, int self, int other) {
             int i = self;
+            var loop = ((long)other - self >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.UpTo) : null;
+            long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i <= other) {
+                if (--countdown <= 0 && (long)other - i >= BlockLoopSite.MinRun) {
+                    i = loop.Run(block, i, other, ref countdown);
+                    if (i > other) { break; }
+                }
                 object result;
                 if (block.Yield(i, out result)) {
                     return result;
                 }
+                // i++ would wrap round when other is Int32.MaxValue
+                if (i == other) { break; }
                 i++;
             }
+            if (loop != null) { loop.Leave(countdown); }
             return self;
         }
 
@@ -669,13 +687,22 @@ namespace IronRuby.Builtins {
 
         private static object DownToImpl(BlockParam/*!*/ block, int self, int other) {
             int i = self;
+            var loop = ((long)self - other >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.DownTo) : null;
+            long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i >= other) {
+                if (--countdown <= 0 && (long)i - other >= BlockLoopSite.MinRun) {
+                    i = loop.Run(block, i, other, ref countdown);
+                    if (i < other) { break; }
+                }
                 object result;
                 if (block.Yield(i, out result)) {
                     return result;
                 }
+                // i-- would wrap round when other is Int32.MinValue
+                if (i == other) { break; }
                 i--;
             }
+            if (loop != null) { loop.Leave(countdown); }
             return self;
         }
 
@@ -1029,4 +1056,4 @@ namespace IronRuby.Builtins {
         #endregion
     }
 }
- 
+ 

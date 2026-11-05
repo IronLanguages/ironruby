@@ -203,6 +203,40 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// Captures the backtrace of an exception a CLR method has caught, unless a Ruby frame has
+        /// already. Compiled Ruby methods leave the capture to whatever handles the exception (see
+        /// MethodDefinition.TransformBody), and when that is C# rather than Ruby - a thread's start
+        /// routine, a library that parks the exception to throw it again later, the host reporting it -
+        /// the Ruby frames it passed are in the exception's own CLR trace, which a `throw' of the
+        /// exception starts over. Call it from the catch block. Does nothing for an exception that was
+        /// never thrown.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void CaptureExceptionTrace(RubyContext/*!*/ context) {
+            if (HasBacktrace) {
+                return;
+            }
+#if FEATURE_STACK_TRACE
+            // the catch site's callers: this walk has the catching method too, below which they are (see Build)
+            var captured = new RubyStackTraceBuilder.CapturedTrace(context, _exception,
+                RubyStackTraceBuilder.GetClrStackTrace(null, context.DomainManager.Configuration.DebugMode));
+            if (captured.ThrowSiteTrace.FrameCount == 0) {
+                return;
+            }
+            _capturedTrace = captured;
+            if (!HasBuiltinSetBacktrace(context)) {
+                // This runs in a catch block (a thread's start, a callback from native code, an error
+                // parked for later): a user's #set_backtrace that raises must not replace the exception
+                // being handled there, as it could not from the exception filter of the RubyScope overload.
+                try {
+                    DynamicSetBacktrace(context, Backtrace);
+                } catch (Exception) {
+                }
+            }
+#endif
+        }
+
+        /// <summary>
         /// Whether #set_backtrace of the exception is IronRuby's own: the library method, or the
         /// prelude's (Src/StdLib/ironruby/ruby4.rb) which keeps Thread::Backtrace::Locations around
         /// and passes strings on to the library method. Called with the backtrace the runtime has just

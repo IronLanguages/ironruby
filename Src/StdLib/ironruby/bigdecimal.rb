@@ -107,10 +107,16 @@ class BigDecimal
   # BigDecimal outright). MRI expands the Rational into a BigDecimal itself, so
   # BigDecimal op Rational stays a BigDecimal.
   #
-  # A Rational may not have a terminating expansion, so a digit count has to be chosen:
-  # enough to cover self, plus a Float's worth of guard digits, doubled.
+  # A Rational may not have a terminating expansion, so a digit count has to be chosen. MRI's
+  # GetCoercePrec takes as many digits as self's internal words hold - 9 per word, the words
+  # aligned at the decimal point - and at least 2 * BIGDECIMAL_DOUBLE_FIGURES (32).
   def __bigdecimal_expand(other)
-    BigDecimal(other, [precision, BigDecimal.double_fig].max * 2)
+    words = 1
+    if finite? && !zero?
+      _, digits, _, exponent = split
+      words = (exponent - 1).div(9) - (exponent - digits.size).div(9) + 1
+    end
+    BigDecimal(other, [words * 9, 32].max)
   end
   private :__bigdecimal_expand
 
@@ -291,5 +297,51 @@ module BigMath
 
   class << self
     private :__coerce_for_bigmath
+  end
+end
+
+# bigdecimal 3.1's precision API that the C# class has no methods for, and the save_* blocks of
+# BigDecimal's class; all five were NoMethodErrors.
+class BigDecimal
+  # The digits after the decimal point - BigDecimal("123.456").scale is 3, BigDecimal("1e10").scale 0.
+  def scale
+    return 0 if zero? || !finite?
+    [n_significant_digits - exponent, 0].max
+  end unless method_defined?(:scale)
+
+  def precision_scale
+    [precision, scale]
+  end unless method_defined?(:precision_scale)
+
+  # The digits without leading and trailing zeros: 3 for 0.00012300.
+  def n_significant_digits
+    return 0 if zero? || !finite?
+    split[1].size
+  end unless method_defined?(:n_significant_digits)
+
+  class << self
+    def save_rounding_mode
+      mode = self.mode(ROUND_MODE)
+      yield
+    ensure
+      self.mode(ROUND_MODE, mode)
+    end unless method_defined?(:save_rounding_mode)
+
+    def save_exception_mode
+      saved = self.mode(EXCEPTION_ALL)
+      yield
+    ensure
+      # mode(flag, value) takes true or false, so the saved flags go back one by one
+      [EXCEPTION_NaN, EXCEPTION_INFINITY, EXCEPTION_UNDERFLOW, EXCEPTION_OVERFLOW, EXCEPTION_ZERODIVIDE].each do |flag|
+        self.mode(flag, (saved & flag) != 0)
+      end
+    end unless method_defined?(:save_exception_mode)
+
+    def save_limit
+      limit = self.limit
+      yield
+    ensure
+      self.limit(limit)
+    end unless method_defined?(:save_limit)
   end
 end

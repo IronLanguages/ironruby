@@ -4789,6 +4789,8 @@ namespace IronRuby.Runtime {
                 ? rawMessage.ToString()
                 : RubyExceptionData.GetClrMessage(this, reported);
 
+            // an exception that reached the host from a method with no Ruby frame to handle it:
+            data.CaptureExceptionTrace(this);
             RubyArray backtrace = data.Backtrace;
 
             // A message of several lines gets its "(Class)" after the first one, as MRI prints it.
