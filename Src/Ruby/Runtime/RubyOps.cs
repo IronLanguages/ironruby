@@ -3006,7 +3006,12 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static MutableString/*!*/ CreateMutableStringMM(MutableString str1, MutableString str2, RubyEncoding/*!*/ encoding) {
-            var result = MutableString.CreateInternal(str1, encoding);
+            var result = MutableString.TryConcatenateCharacters(str1, str2, encoding);
+            if (result != null) {
+                return result;
+            }
+
+            result = MutableString.CreateInternal(str1, encoding);
             AppendInterpolatedPart(result, str2);
             return result;
         }
@@ -3028,6 +3033,11 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static MutableString/*!*/ CreateMutableStringN(MutableString/*!*/[]/*!*/ parts) {
             Debug.Assert(parts.Length > 0);
+            var concatenated = MutableString.TryConcatenateCharacters(parts);
+            if (concatenated != null) {
+                return concatenated;
+            }
+
             // room for all of it up front rather than a regrowth per part (a part counts its
             // characters or its bytes, whichever it holds, which is what a capacity hint needs)
             int capacity = 0;

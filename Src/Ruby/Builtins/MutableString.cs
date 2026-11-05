@@ -2058,7 +2058,159 @@ namespace IronRuby.Builtins {
             var encoding = RequireCompatibleEncoding(other);
 
             // MRI doesn't create a subclass
-            return new MutableString(_content.Concat(other._content), encoding);
+            var result = new MutableString(_content.Concat(other._content), encoding);
+
+            // Two halves known to be ASCII make an ASCII whole (MRI's coderange of a concatenation),
+            // which keeps "a" + x + "b" from scanning the first sum again for the second:
+            const uint AsciiFlags = IsAsciiFlag | AsciiUnknownFlag;
+            if ((_flags & AsciiFlags) == IsAsciiFlag && (other._flags & AsciiFlags) == IsAsciiFlag && encoding.IsAsciiIdentity) {
+                result._flags = (result._flags & ~(AsciiFlags | SurrogatesUnknownFlag)) | IsAsciiFlag | NoSurrogatesFlag;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// What is known, part by part, about a string interpolation being built in one pass:
+        /// the encoding rb_str_concat_literals would arrive at, whether everything so far is ASCII,
+        /// and the number of characters. Fails (and the caller goes the general way, which raises
+        /// what is to be raised) for anything but a character representation, and for any pair of
+        /// encodings that the general way would have to do more than relabel for.
+        /// </summary>
+        private struct CharacterConcatenation {
+            public RubyEncoding/*!*/ Encoding;
+            public bool Ascii;
+            public bool Empty;
+            public int Length;
+
+            public CharacterConcatenation(RubyEncoding/*!*/ encoding) {
+                Encoding = encoding;
+                Ascii = true;
+                Empty = true;
+                Length = 0;
+            }
+
+            public bool Add(MutableString part) {
+                if ((object)part == null) {
+                    return true;
+                }
+
+                var content = part._content;
+                int count;
+                if (content is StringContent s) {
+                    count = s.Data.Length;
+                } else if (content is CharArrayContent c) {
+                    count = c.Count;
+                } else {
+                    return false;
+                }
+
+                // MutateAppend and GetCompatibleEncoding, for two character representations:
+                var partEncoding = part._encoding;
+                RubyEncoding encoding;
+                if (partEncoding == Encoding) {
+                    encoding = Encoding;
+                } else if (!Encoding.IsAsciiIdentity || !partEncoding.IsAsciiIdentity) {
+                    return false;
+                } else if (count == 0) {
+                    encoding = Encoding;
+                } else if (Empty) {
+                    encoding = part.IsAscii() ? Encoding : partEncoding;
+                } else {
+                    bool partAscii = part.IsAscii();
+                    if (Ascii != partAscii) {
+                        encoding = Ascii ? partEncoding : Encoding;
+                    } else if (partAscii) {
+                        encoding = Encoding;
+                    } else {
+                        // incompatible:
+                        return false;
+                    }
+                }
+
+                if (count != 0) {
+                    // a part already known not to be ASCII is not scanned again (MutateAppend):
+                    Ascii = Ascii && part.IsAscii();
+                    Empty = false;
+                    if ((Length += count) < 0) {
+                        return false;
+                    }
+                }
+
+                // RubyOps.AppendInterpolatedPart: a result still US-ASCII takes the part's encoding,
+                // which for ASCII characters relabels them and nothing else
+                if (partEncoding != RubyEncoding.Ascii && encoding == RubyEncoding.Ascii) {
+                    if (!Ascii) {
+                        return false;
+                    }
+                    encoding = partEncoding;
+                }
+
+                Encoding = encoding;
+                return true;
+            }
+
+            public MutableString/*!*/ Create(string/*!*/ chars) {
+                var result = new MutableString(new StringContent(chars, null), Encoding);
+                if (Encoding.IsAsciiIdentity) {
+                    const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
+                    uint flags = result._flags;
+                    result._flags = (flags & ~CharacterFlags) | (Ascii ?
+                        IsAsciiFlag | NoSurrogatesFlag :
+                        flags & (NoSurrogatesFlag | SurrogatesUnknownFlag));
+                }
+                return result;
+            }
+        }
+
+        private static void CopyCharacters(MutableString part, Span<char> target, ref int offset) {
+            if ((object)part != null) {
+                var content = part._content;
+                ReadOnlySpan<char> chars = (content is StringContent s) ? s.Data.AsSpan() : ((CharArrayContent)content).GetDataSpan();
+                chars.CopyTo(target.Slice(offset));
+                offset += chars.Length;
+            }
+        }
+
+        /// <summary>
+        /// "#{a}#{b}" in one pass (as TruffleRuby builds an interpolation): the parts' characters are
+        /// copied once, into a CLR string of exactly their total length, rather than into a copy of
+        /// the first part that each further part regrows; and the result knows it is ASCII when its
+        /// parts did, so a hash, a comparison or a conversion to bytes need not scan it again.
+        /// Null when a part is not held as characters, or the encodings need more than relabeling
+        /// (see <see cref="CharacterConcatenation"/>): the caller then takes the general way.
+        /// </summary>
+        internal static MutableString TryConcatenateCharacters(MutableString first, MutableString second, RubyEncoding/*!*/ encoding) {
+            var concat = new CharacterConcatenation(((object)first != null) ? first._encoding : encoding);
+            if (!concat.Add(first) || !concat.Add(second)) {
+                return null;
+            }
+
+            string chars = String.Create(concat.Length, (first, second), static (span, state) => {
+                int offset = 0;
+                CopyCharacters(state.first, span, ref offset);
+                CopyCharacters(state.second, span, ref offset);
+            });
+            return concat.Create(chars);
+        }
+
+        /// <summary>
+        /// The same for any number of parts, starting from the encoding of the first.
+        /// </summary>
+        internal static MutableString TryConcatenateCharacters(MutableString/*!*/[]/*!*/ parts) {
+            var concat = new CharacterConcatenation(((object)parts[0] != null) ? parts[0]._encoding : RubyEncoding.Ascii);
+            for (int i = 0; i < parts.Length; i++) {
+                if (!concat.Add(parts[i])) {
+                    return null;
+                }
+            }
+
+            string chars = String.Create(concat.Length, parts, static (span, parts) => {
+                int offset = 0;
+                for (int i = 0; i < parts.Length; i++) {
+                    CopyCharacters(parts[i], span, ref offset);
+                }
+            });
+            return concat.Create(chars);
         }
 
         #endregion
