@@ -117,7 +117,7 @@ namespace IronRuby.Builtins {
                     permissions = p.Value;
                 }
             }
-            self.ConversionOptions = options;
+            self.ConversionOptions = RubyIOOps.AddTextModeDecorator(context, info, options);
             
             // descriptor or path:
             int? descriptor = toIntSite.Target(toIntSite, descriptorOrPath);

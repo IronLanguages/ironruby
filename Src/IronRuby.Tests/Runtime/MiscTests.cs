@@ -3084,6 +3084,197 @@ symlink existing: Errno::EEXIST
         }
 
         /// <summary>
+        /// Text mode's universal newline decorator - "\r\n" and a lone "\r" are folded before the
+        /// line is split - and the newline options that are decorators for the way out only
+        /// (crlf, cr, and newline: :lf). POSIX only: Windows' own text mode reads "\r\n" as "\n"
+        /// whatever the options say, as MRI's does there.
+        /// </summary>
+        public void Io_LineReaders3() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+def t(label)
+  r = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{label}: #{r.inspect}""
+end
+u = File.join(dir, 'u.txt')
+File.binwrite(u, ""a\r\nb\rc\r\n\r\nd\r"")
+[['rt', {}], ['r', {universal_newline: true}], ['r', {newline: :universal}], ['r', {newline: :lf}], ['rt', {newline: :crlf}], ['rb', {}]].each do |m, kw|
+  t(""#{m} #{kw.keys.inspect} #{kw.values.inspect}"") do
+    File.open(u, m, **kw) do |io|
+      lines = io.readlines
+      io.rewind
+      chars = []
+      while c = io.getc; chars << c; end
+      io.rewind
+      [io.read, lines, chars, File.open(u, m, **kw) { |x| x.readlines('', chomp: true) }, File.open(u, m, **kw) { |x| x.readlines(2) }]
+    end
+  end
+end
+w = File.join(dir, 'w.txt')
+[{newline: :lf}, {lf_newline: true}, {newline: :crlf}, {newline: :cr}, {universal_newline: true}].each do |kw|
+  File.open(w, 'w', **kw) { |io| io.write(""a\r\nb\rc\n"") }
+  t(""write #{kw.keys.inspect}"") { File.binread(w) }
+end
+", @"
+rt [] []: [""a\nb\nc\n\nd\n"", [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""], [""a"", ""\n"", ""b"", ""\n"", ""c"", ""\n"", ""\n"", ""d"", ""\n""], [""a\nb\nc"", ""d\n""], [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""]]
+r [:universal_newline] [true]: [""a\nb\nc\n\nd\n"", [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""], [""a"", ""\n"", ""b"", ""\n"", ""c"", ""\n"", ""\n"", ""d"", ""\n""], [""a\nb\nc"", ""d\n""], [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""]]
+r [:newline] [:universal]: [""a\nb\nc\n\nd\n"", [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""], [""a"", ""\n"", ""b"", ""\n"", ""c"", ""\n"", ""\n"", ""d"", ""\n""], [""a\nb\nc"", ""d\n""], [""a\n"", ""b\n"", ""c\n"", ""\n"", ""d\n""]]
+r [:newline] [:lf]: [""a\r\nb\rc\r\n\r\nd\r"", [""a\r\n"", ""b\rc\r\n"", ""\r\n"", ""d\r""], [""a"", ""\r"", ""\n"", ""b"", ""\r"", ""c"", ""\r"", ""\n"", ""\r"", ""\n"", ""d"", ""\r""], [""a\r\nb\rc\r\n\r\nd\r""], [""a\r"", ""\n"", ""b\r"", ""c\r"", ""\n"", ""\r\n"", ""d\r""]]
+rt [:newline] [:crlf]: [""a\r\nb\rc\r\n\r\nd\r"", [""a\r\n"", ""b\rc\r\n"", ""\r\n"", ""d\r""], [""a"", ""\r"", ""\n"", ""b"", ""\r"", ""c"", ""\r"", ""\n"", ""\r"", ""\n"", ""d"", ""\r""], [""a\r\nb\rc\r\n\r\nd\r""], [""a\r"", ""\n"", ""b\r"", ""c\r"", ""\n"", ""\r\n"", ""d\r""]]
+rb [] []: [""a\r\nb\rc\r\n\r\nd\r"", [""a\r\n"", ""b\rc\r\n"", ""\r\n"", ""d\r""], [""a"", ""\r"", ""\n"", ""b"", ""\r"", ""c"", ""\r"", ""\n"", ""\r"", ""\n"", ""d"", ""\r""], [""a\r\nb\rc\r\n\r\nd\r""], [""a\r"", ""\n"", ""b\r"", ""c\r"", ""\n"", ""\r\n"", ""d\r""]]
+write [:newline]: ""a\nb\nc\n""
+write [:lf_newline]: ""a\nb\nc\n""
+write [:newline]: ""a\r\r\nb\rc\r\n""
+write [:newline]: ""a\r\rb\rc\r""
+write [:universal_newline]: ""a\r\nb\rc\n""
+");
+        }
+
+        /// <summary>
+        /// The line readers' arguments as MRI's rb_io_getline_args reads them, lineno as
+        /// rb_io_getline_0 counts it (a read cut short by the limit is not a line), the open
+        /// options IO.foreach and IO.readlines pass on, and binmode: true. Files with a "\r" in
+        /// them are read "rb": Windows' text mode reads "\r\n" as "\n", as MRI's does there.
+        /// </summary>
+        public void Io_LineReaders2() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+f = File.join(dir, 'a.txt')
+File.binwrite(f, ""one\r\ntwo\n\n\nthree\nlast"")
+o = Object.new; def o.to_str; 'o'; end
+i = Object.new; def i.to_int; 2; end
+def t(label)
+  r = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{label}: #{r.inspect}""
+end
+[[[o], {}], [[o], {chomp: true}], [[i], {}], [[i], {chomp: true}], [[nil, i], {}], [[o, i], {chomp: true}],
+ [[1, 2, 3], {}], [['x', 2, 3], {chomp: true}], [[nil, nil], {chomp: true}], [[1], {chomp: true, foo: 1}], [[0], {}]].each_with_index do |(a, kw), n|
+  t(""gets #{n}"") { File.open(f, 'rb') { |io| [io.gets(*a, **kw), io.gets(*a, **kw), $_, io.lineno] } }
+  t(""readline #{n}"") { File.open(f, 'rb') { |io| io.readline(*a, **kw) } }
+end
+t('gets positional hash') { File.open(f, 'rb') { |io| io.gets({chomp: true}) } }
+[[3], ['e', 2], ['', 5], [""\n"", 4], [nil, 4]].each do |a|
+  t(""lineno #{a.inspect}"") { File.open(f, 'rb') { |io| x = []; while l = io.gets(*a); x << io.lineno; end; x } }
+  t(""each_line lineno #{a.inspect}"") { File.open(f, 'rb') { |io| io.each_line(*a).map { io.lineno } } }
+  t(""readlines lineno #{a.inspect}"") { File.open(f, 'rb') { |io| io.readlines(*a); [io.lineno, $.] } }
+end
+g = File.join(dir, 'l1.txt')
+File.binwrite(g, ""caf\xE9\n"".b)
+t('foreach encoding') { IO.foreach(g, encoding: 'iso-8859-1:utf-8').map { |l| [l, l.encoding.to_s] } }
+t('readlines encoding') { IO.readlines(g, encoding: 'iso-8859-1:utf-8', chomp: true) }
+t('readlines external') { IO.readlines(g, external_encoding: 'iso-8859-1').map { |l| l.encoding.to_s } }
+t('readlines binmode') { IO.readlines(g, binmode: true).map { |l| l.encoding.to_s } }
+t('File.open binmode') { File.open(g, binmode: true) { |io| io.gets.encoding.to_s } }
+", @"
+gets 0: [""o"", ""ne\r\ntwo"", ""ne\r\ntwo"", 2]
+readline 0: ""o""
+gets 1: ["""", ""ne\r\ntw"", ""ne\r\ntw"", 2]
+readline 1: """"
+gets 2: [""on"", ""e\r"", ""e\r"", 0]
+readline 2: ""on""
+gets 3: [""on"", ""e\r"", ""e\r"", 0]
+readline 3: ""on""
+gets 4: [""on"", ""e\r"", ""e\r"", 0]
+readline 4: ""on""
+gets 5: ["""", ""ne"", ""ne"", 1]
+readline 5: """"
+gets 6: [ArgumentError, ""wrong number of arguments (given 3, expected 0..2)""]
+readline 6: [ArgumentError, ""wrong number of arguments (given 3, expected 0..2)""]
+gets 7: [ArgumentError, ""wrong number of arguments (given 3, expected 0..2)""]
+readline 7: [ArgumentError, ""wrong number of arguments (given 3, expected 0..2)""]
+gets 8: [""one\r\ntwo\n\n\nthree\nlast"", nil, nil, 1]
+readline 8: ""one\r\ntwo\n\n\nthree\nlast""
+gets 9: [""o"", ""n"", ""n"", 0]
+readline 9: [ArgumentError, ""unknown keyword: :foo""]
+gets 10: ["""", """", """", 0]
+readline 10: """"
+gets positional hash: [TypeError, ""no implicit conversion of Hash into Integer""]
+lineno [3]: [0, 1, 1, 2, 3, 4, 4, 5, 5, 6]
+each_line lineno [3]: [0, 1, 1, 2, 3, 4, 4, 5, 5, 6]
+readlines lineno [3]: [6, 6]
+lineno [""e"", 2]: [0, 1, 1, 1, 1, 1, 1, 2, 3, 3, 3, 4]
+each_line lineno [""e"", 2]: [0, 1, 1, 1, 1, 1, 1, 2, 3, 3, 3, 4]
+readlines lineno [""e"", 2]: [4, 4]
+lineno ["""", 5]: [0, 1, 1, 2]
+each_line lineno ["""", 5]: [0, 1, 1, 2]
+readlines lineno ["""", 5]: [2, 2]
+lineno [""\n"", 4]: [0, 1, 2, 3, 4, 4, 5, 5]
+each_line lineno [""\n"", 4]: [0, 1, 2, 3, 4, 4, 5, 5]
+readlines lineno [""\n"", 4]: [5, 5]
+lineno [nil, 4]: [0, 0, 0, 0, 0, 1]
+each_line lineno [nil, 4]: [0, 0, 0, 0, 0, 1]
+readlines lineno [nil, 4]: [1, 1]
+foreach encoding: [[""café\n"", ""UTF-8""]]
+readlines encoding: [""café""]
+readlines external: [""ISO-8859-1""]
+readlines binmode: [""ASCII-8BIT""]
+File.open binmode: ""ASCII-8BIT""
+");
+        }
+
+        /// <summary>
+        /// IO's line and character readers chomp, convert and measure characters in the built-ins
+        /// (IoOps.cs) rather than a line or a character at a time in ruby4.rb, and IO#write
+        /// decides there whether a String needs converting.
+        /// </summary>
+        public void Io_BuiltinReaders1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+f = File.join(dir, 'a.txt')
+File.binwrite(f, ""one\r\ntwo\n\n\nthree\nlast"")
+o = Object.new; def o.to_str; 'o'; end
+[[], [""\n""], [''], [nil], [3], ['o', 2], [o]].each do |a|
+  p [a.map { |x| x.equal?(o) ? :o : x }, File.open(f, 'rb') { |io| io.readlines(*a, chomp: true) }, File.open(f, 'rb') { |io| io.each_line(*a, chomp: true).to_a }]
+end
+p File.open(f, 'rb') { |io| x = []; io.each_line { |l| x << l }; [x, io.lineno] }
+p File.open(f, 'rb') { |io| io.each_line { |l| break l.upcase } }
+p IO.foreach(f, mode: 'rb', chomp: true).to_a
+p((File.open(f, 'rb') { |io| io.readlines(1, 2, 3) } rescue $!.class))
+g = File.join(dir, 'u.txt')
+File.binwrite(g, ""a\xC3\xA9\xE2\x82\xAC\xE9b\xF0\x9F"".b)
+p File.open(g, 'r:utf-8') { |io| x = []; while c = io.getc; x << c; end; x }
+p File.open(g, 'r:utf-8') { |io| io.each_char.to_a.size }
+p File.open(g, 'rb') { |io| [io.getc, io.readchar, io.getbyte, io.readbyte] }
+p File.open(g, 'r:iso-8859-1:utf-8') { |io| [io.getc, io.getc, io.getc.encoding.to_s] }
+p File.open(g, 'r:utf-8') { |io| io.ungetc('xy'); io.ungetc(0x41); io.ungetc(0x20AC); [io.getc, io.getc, io.getc, io.getc, io.getc] }
+p((File.open(g) { |io| io.read; io.readchar } rescue $!.class))
+w = File.join(dir, 'w.txt')
+p File.open(w, 'wb') { |io| io.write('a', 1, :b) }
+File.open(w, 'wb:iso-8859-1') { |io| io.write(""café""); io.puts('x'); io.print(""ü"") }
+p File.binread(w)
+", @"
+[[], [""one"", ""two"", """", """", ""three"", ""last""], [""one"", ""two"", """", """", ""three"", ""last""]]
+[[""\n""], [""one"", ""two"", """", """", ""three"", ""last""], [""one"", ""two"", """", """", ""three"", ""last""]]
+[[""""], [""one\r\ntwo"", ""three\nlast""], [""one\r\ntwo"", ""three\nlast""]]
+[[nil], [""one\r\ntwo\n\n\nthree\nlast""], [""one\r\ntwo\n\n\nthree\nlast""]]
+[[3], [""one"", """", ""two"", """", """", """", ""thr"", ""ee"", ""las"", ""t""], [""one"", """", ""two"", """", """", """", ""thr"", ""ee"", ""las"", ""t""]]
+[[""o"", 2], ["""", ""ne"", ""\r\n"", ""tw"", """", ""\n\n"", ""\nt"", ""hr"", ""ee"", ""\nl"", ""as"", ""t""], ["""", ""ne"", ""\r\n"", ""tw"", """", ""\n\n"", ""\nt"", ""hr"", ""ee"", ""\nl"", ""as"", ""t""]]
+[[:o], ["""", ""ne\r\ntw"", ""\n\n\nthree\nlast""], ["""", ""ne\r\ntw"", ""\n\n\nthree\nlast""]]
+[[""one\r\n"", ""two\n"", ""\n"", ""\n"", ""three\n"", ""last""], 6]
+""ONE\r\n""
+[""one"", ""two"", """", """", ""three"", ""last""]
+ArgumentError
+[""a"", ""é"", ""€"", ""\xE9"", ""b"", ""\xF0\x9F""]
+6
+[""a"", ""\xC3"", 169, 226]
+[""a"", ""Ã"", ""UTF-8""]
+[""€"", ""A"", ""x"", ""y"", ""a""]
+EOFError
+3
+""caf\xE9x\n\xFC""
+");
+        }
+
+        /// <summary>
         /// Range#first(n) and #last(n) of an Integer range are counted rather than walked - #last(n)
         /// built the whole range first, so (1..10**9).last(3) ran out of memory - and #last takes
         /// that path for a subclass whatever its #each, as MRI's rb_int_range_last does. Also the
