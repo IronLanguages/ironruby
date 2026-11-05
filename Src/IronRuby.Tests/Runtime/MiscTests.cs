@@ -2496,6 +2496,61 @@ base64: ""ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=""
         /// that path for a subclass whatever its #each, as MRI's rb_int_range_last does. Also the
         /// Integer fast paths of Range#include?, Range#step and Integer#step.
         /// </summary>
+        /// <summary>
+        /// IO's line and character readers chomp, convert and measure characters in the built-ins
+        /// (IoOps.cs) rather than a line or a character at a time in ruby4.rb, and IO#write
+        /// decides there whether a String needs converting.
+        /// </summary>
+        public void Io_BuiltinReaders1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+f = File.join(dir, 'a.txt')
+File.binwrite(f, ""one\r\ntwo\n\n\nthree\nlast"")
+o = Object.new; def o.to_str; 'o'; end
+[[], [""\n""], [''], [nil], [3], ['o', 2], [o]].each do |a|
+  p [a.map { |x| x.equal?(o) ? :o : x }, File.open(f) { |io| io.readlines(*a, chomp: true) }, File.open(f) { |io| io.each_line(*a, chomp: true).to_a }]
+end
+p File.open(f) { |io| x = []; io.each_line { |l| x << l }; [x, io.lineno] }
+p File.open(f) { |io| io.each_line { |l| break l.upcase } }
+p IO.foreach(f, chomp: true).to_a
+p((File.open(f) { |io| io.readlines(1, 2, 3) } rescue $!.class))
+g = File.join(dir, 'u.txt')
+File.binwrite(g, ""a\xC3\xA9\xE2\x82\xAC\xE9b\xF0\x9F"".b)
+p File.open(g, 'r:utf-8') { |io| x = []; while c = io.getc; x << c; end; x }
+p File.open(g, 'r:utf-8') { |io| io.each_char.to_a.size }
+p File.open(g, 'rb') { |io| [io.getc, io.readchar, io.getbyte, io.readbyte] }
+p File.open(g, 'r:iso-8859-1:utf-8') { |io| [io.getc, io.getc, io.getc.encoding.to_s] }
+p File.open(g, 'r:utf-8') { |io| io.ungetc('xy'); io.ungetc(0x41); io.ungetc(0x20AC); [io.getc, io.getc, io.getc, io.getc, io.getc] }
+p((File.open(g) { |io| io.read; io.readchar } rescue $!.class))
+w = File.join(dir, 'w.txt')
+p File.open(w, 'w') { |io| io.write('a', 1, :b) }
+File.open(w, 'w:iso-8859-1') { |io| io.write(""café""); io.puts('x'); io.print(""ü"") }
+p File.binread(w)
+", @"
+[[], [""one"", ""two"", """", """", ""three"", ""last""], [""one"", ""two"", """", """", ""three"", ""last""]]
+[[""\n""], [""one"", ""two"", """", """", ""three"", ""last""], [""one"", ""two"", """", """", ""three"", ""last""]]
+[[""""], [""one\r\ntwo"", ""three\nlast""], [""one\r\ntwo"", ""three\nlast""]]
+[[nil], [""one\r\ntwo\n\n\nthree\nlast""], [""one\r\ntwo\n\n\nthree\nlast""]]
+[[3], [""one"", """", ""two"", """", """", """", ""thr"", ""ee"", ""las"", ""t""], [""one"", """", ""two"", """", """", """", ""thr"", ""ee"", ""las"", ""t""]]
+[[""o"", 2], ["""", ""ne"", ""\r\n"", ""tw"", """", ""\n\n"", ""\nt"", ""hr"", ""ee"", ""\nl"", ""as"", ""t""], ["""", ""ne"", ""\r\n"", ""tw"", """", ""\n\n"", ""\nt"", ""hr"", ""ee"", ""\nl"", ""as"", ""t""]]
+[[:o], ["""", ""ne\r\ntw"", ""\n\n\nthree\nlast""], ["""", ""ne\r\ntw"", ""\n\n\nthree\nlast""]]
+[[""one\r\n"", ""two\n"", ""\n"", ""\n"", ""three\n"", ""last""], 6]
+""ONE\r\n""
+[""one"", ""two"", """", """", ""three"", ""last""]
+ArgumentError
+[""a"", ""é"", ""€"", ""\xE9"", ""b"", ""\xF0\x9F""]
+6
+[""a"", ""\xC3"", 169, 226]
+[""a"", ""Ã"", ""UTF-8""]
+[""€"", ""A"", ""x"", ""y"", ""a""]
+EOFError
+3
+""caf\xE9x\n\xFC""
+");
+        }
+
         public void Range_IntegerFastPaths1() {
             TestOutput(@"
 require 'ruby4'

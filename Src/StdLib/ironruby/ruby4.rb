@@ -11106,7 +11106,8 @@ class IO
   end
   private :__transcode__
 
-  # The mirror of __transcode__ for the way out. A stream opened "w:external"
+  # The mirror of __transcode__ for the way out, which IO#write (IoOps.cs) calls
+  # for a String that needs converting. A stream opened "w:external"
   # is asking for what is written to it to be converted into that encoding, and
   # nothing did it, so the bytes of whatever string was handed over went
   # straight to the file whatever its encoding said.
@@ -11128,25 +11129,6 @@ class IO
   end
   private :__encode_for_write__
 
-  alias :__ir_write__ :write
-
-  def write(*args)
-    total = 0
-    args.each do |arg|
-      # Anything that is not already a String is left to the built-in write to
-      # convert, which is the only thing that knows how MRI complains about an
-      # object that cannot become one. String === arg rather than
-      # arg.is_a?(String) because the argument may be a BasicObject, which has
-      # no #is_a? to call.
-      total += __ir_write__(::String === arg ? __encode_for_write__(arg) : arg)
-    end
-    total
-  end
-
-  # The line readers take a chomp: option, which the built-ins do not know
-  # about - the options hash landed in the separator or limit parameter and came
-  # back as "no implicit conversion of Hash into Integer". The option is split
-  # off here and the newline taken off each line afterwards.
   # chomp: is a keyword, so a Hash sitting in the last positional slot is a
   # separator argument - a TypeError - and not options. MRI tolerates keywords it
   # does not know here rather than refusing them.
@@ -11159,40 +11141,18 @@ class IO
   end
   private :__take_chomp__
 
-  # chomp removes the separator that was actually found, so what counts is which
-  # separator the read used - and whether one was given at all. An explicit nil
-  # separator reads the whole content and has nothing to chomp; an empty one reads
-  # paragraphs, whose separator is the run of newlines that ended them, and the
-  # last chunk of a file ends at end of file rather than at a separator.
-  def __chomp_line__(line, args)
-    return line if line.nil?
-    if args.empty?
-      sep = $/
-    else
-      sep = args[0]
-      return line if sep.nil?
-      sep = $/ unless sep.is_a?(::String)
-    end
-    return line if sep.nil?
-    if sep.empty?
-      return line unless line.end_with?("\n\n")
-      return line.sub(/\n+\z/, "")
-    end
-    # The default separator takes a CR before it too.
-    return line[0...-2] if sep == "\n" && line.end_with?("\r\n")
-    line.end_with?(sep) ?line[0...(line.length - sep.length)] : line
-  end
-  private :__chomp_line__
-
-  # #gets and #readline do chomp: and the transcoding in the built-ins (IoOps.cs):
-  # they set $_ for their caller, and a Ruby wrapper would set its own instead.
+  # The line readers do the chomping and the transcoding in the built-ins
+  # (IoOps.cs), a line at a time in C# - done here in Ruby it cost #readlines ten
+  # times its read. #gets and #readline take chomp: there too, since they set $_
+  # for their caller and a Ruby wrapper would set its own instead; #readlines and
+  # #each_line only have the keyword taken off here, once a call, and go to the
+  # chomping variants of the built-ins when it is given.
 
   alias :__ir_readlines__ :readlines
 
   def readlines(*args, **opts)
     args, chomp = __take_chomp__(args, opts)
-    lines = __ir_readlines__(*args).map { |l| __transcode__(l) }
-    chomp ? lines.map { |l| __chomp_line__(l, args) } : lines
+    chomp ? __readlines_chomp__(*args) : __ir_readlines__(*args)
   end
 
   alias :__ir_each_line__ :each_line
@@ -11202,10 +11162,7 @@ class IO
     unless block
       return ::Enumerator.new { |y| each_line(*args, chomp: chomp) { |l| y << l } }
     end
-    __ir_each_line__(*args) do |line|
-      line = __transcode__(line)
-      block.call(chomp ? __chomp_line__(line, args) : line)
-    end
+    chomp ? __each_line_chomp__(*args, &block) : __ir_each_line__(*args, &block)
   end
 
   # #each is #each_line under another name, so it is aliased rather than defined to
@@ -11365,32 +11322,6 @@ class IO
 
   # ---- the byte and character side of IO ---------------------------------
 
-  # getc answered a byte as an Integer, which is the 1.8 meaning; MRI has
-  # answered a one-character String since 1.9, reading as many bytes as the
-  # character needs.
-  if instance_method(:getc).arity == 0
-    alias :__ir_getc__ :getc
-    private :__ir_getc__
-
-    def getc
-      first = __ir_getc__
-      return nil if first.nil?
-      return first if first.is_a?(::String)
-      enc = (external_encoding rescue nil) || ::Encoding.default_external
-      bytes = [first]
-      char = nil
-      4.times do
-        char = bytes.pack("C*")
-        char.force_encoding(enc) if char.respond_to?(:force_encoding)
-        break if char.valid_encoding?
-        nxt = __ir_getc__
-        break if nxt.nil?
-        bytes << nxt
-      end
-      __transcode__(char)
-    end
-  end
-
   # seek and sysseek take the whence as a symbol as well as an Integer.
   SEEK_WHENCE__ = { CUR: 1, SET: 0, END: 2, DATA: 3, HOLE: 4 }.freeze
 
@@ -11416,33 +11347,11 @@ class IO
     __ir_sysseek__(amount, __seek_whence__(whence))
   end
 
-  # readchar is getc with an EOFError at the end, so it answers a one-character
-  # String too; the built-in still answers the first byte as an Integer.
-  def readchar
-    c = getc
-    ::Kernel.raise(::EOFError, "end of file reached") if c.nil?
-    c
-  end
-
-  def getbyte
-    s = read(1)
-    return nil if s.nil? || s.empty?
-    s.getbyte(0)
-  end unless method_defined?(:getbyte)
-
-  def readbyte
-    b = getbyte
-    ::Kernel.raise(::EOFError, "end of file reached") if b.nil?
-    b
-  end unless method_defined?(:readbyte)
-
   # ungetc takes a String as well as a codepoint, and a codepoint is a character
-  # in the stream's external encoding rather than a single byte. The built-in only
-  # ever pushed one byte back.
-  alias :__ir_ungetc__ :ungetc
-  private :__ir_ungetc__
-
-  def ungetc(value)
+  # in the stream's external encoding rather than a single byte. The built-in
+  # (IoOps.cs) pushes a String and an ASCII codepoint itself and hands anything
+  # else to this; __ir_ungetc__ pushes one byte.
+  def __ungetc_rest__(value)
     if value.is_a?(::Integer)
       enc = (external_encoding rescue nil) || ::Encoding.default_external
       text = (value.chr(enc) rescue value.chr)
@@ -11458,6 +11367,7 @@ class IO
     text.bytes.reverse_each { |b| __ir_ungetc__(b) }
     nil
   end
+  private :__ungetc_rest__
 
   # ungetbyte pushes bytes, never characters, so it goes straight to the built-in
   # rather than through #ungetc - and an Integer is taken modulo 256 rather than
@@ -11477,14 +11387,6 @@ class IO
     end
     nil
   end unless method_defined?(:ungetbyte)
-
-  def each_char
-    return ::Enumerator.new { |y| each_char { |c| y << c } } unless block_given?
-    while (c = getc)
-      yield c
-    end
-    self
-  end unless method_defined?(:each_char)
 
   def each_codepoint
     return ::Enumerator.new { |y| each_codepoint { |c| y << c } } unless block_given?

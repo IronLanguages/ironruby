@@ -1613,9 +1613,48 @@ namespace IronRuby.Builtins {
         }
 
 
+        // A String is converted into the stream's external encoding on the way out (the
+        // conversion is Ruby code, IO#__encode_for_write__ in ruby4.rb); what needs none is
+        // decided here, which is nearly every write. Anything else is made a String with #to_s
+        // and written as it comes, and several arguments are written one after another, adding
+        // up the bytes.
+
         [RubyMethod("write")]
-        public static int Write(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
-            return Write(self, val, true);
+        public static int Write(TranscodeStorage/*!*/ encodeForWrite, RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
+            return Write(self, EncodeForWrite(encodeForWrite, self, val), true);
+        }
+
+        [RubyMethod("write")]
+        public static int Write(TranscodeStorage/*!*/ encodeForWrite, ConversionStorage<MutableString>/*!*/ tosConversion,
+            RubyIO/*!*/ self, params object[]/*!*/ args) {
+            int total = 0;
+            foreach (object arg in args) {
+                var str = arg as MutableString;
+                total += (str != null)
+                    ? Write(encodeForWrite, self, str)
+                    : Write(tosConversion, self, arg);
+            }
+            return total;
+        }
+
+        /// <summary>
+        /// Only a stream that was told an external encoding converts what is written to it: MRI
+        /// leaves an ordinary stream alone, which keeps a binary string writable to $stdout. A
+        /// BINARY destination converts nothing either, and neither does text already in the
+        /// target encoding, or ASCII text going somewhere that keeps ASCII where it is. Newline
+        /// conversion options always go through the Ruby side.
+        /// </summary>
+        private static MutableString/*!*/ EncodeForWrite(TranscodeStorage/*!*/ encodeForWrite, RubyIO/*!*/ self, MutableString/*!*/ val) {
+            if (self.ConversionOptions == null) {
+                RubyEncoding target = GetExternalEncoding(self);
+                if (target == null || target == RubyEncoding.Binary || val.Encoding == target ||
+                    (target.IsAsciiIdentity && val.IsAscii())) {
+                    return val;
+                }
+            }
+
+            var site = encodeForWrite.GetCallSite("__encode_for_write__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, val) as MutableString ?? val;
         }
 
         private static int Write(RubyIO/*!*/ self, MutableString/*!*/ val, bool signalOnPipeError) {
@@ -1639,7 +1678,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("write")]
         public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, RubyIO/*!*/ self, object obj) {
-            return Write(self, Protocols.ConvertToString(tosConversion, obj));
+            return Write(self, Protocols.ConvertToString(tosConversion, obj), true);
         }
 
         [RubyMethod("syswrite")]
@@ -1710,7 +1749,7 @@ namespace IronRuby.Builtins {
             var pipe = io.GetStream().BaseStream as INonBlockingWriteStream;
             if (pipe == null) {
                 // MRI's write_nonblock is a bare write(2): nothing of it stays in a buffer.
-                int all = Write(io, val);
+                int all = Write(io, val, true);
                 io.Flush();
                 return all;
             }
@@ -1765,7 +1804,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("write_nonblock")]
         public static int WriteNoBlock(ConversionStorage<MutableString>/*!*/ tosConversion, RubyIO/*!*/ self, object obj) {
-            return Write(self, Protocols.ConvertToString(tosConversion, obj));
+            return Write(self, Protocols.ConvertToString(tosConversion, obj), true);
         }
         
         #endregion
@@ -2011,20 +2050,24 @@ namespace IronRuby.Builtins {
 
         #region readchar, readbyte (1.9), readline, readlines
 
-        // returns a string in 1.9
+        // readchar is getc with an EOFError at the end of the stream.
         [RubyMethod("readchar")]
-        public static int ReadChar(RubyIO/*!*/ self) {
-            self.RequireReadable();
-            int c = self.ReadByteNormalizeEoln();
-            
-            if (c == -1) {
+        public static object/*!*/ ReadChar(TranscodeStorage/*!*/ transcode, RubyIO/*!*/ self) {
+            object c = Getc(transcode, self);
+            if (c == null) {
                 throw new EOFError("end of file reached");
             }
-
             return c;
         }
 
-        // readbyte
+        [RubyMethod("readbyte")]
+        public static int ReadByte(RubyIO/*!*/ self) {
+            int b = self.ReadByteNormalizeEoln();
+            if (b == -1) {
+                throw new EOFError("end of file reached");
+            }
+            return b;
+        }
 
         [RubyMethod("readline")]
         public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self) {
@@ -2090,23 +2133,61 @@ namespace IronRuby.Builtins {
             return line;
         }
 
+        // The readers convert the lines when the stream has an internal encoding or conversion
+        // options, and #__readlines_chomp__ and #__each_line_chomp__ are #readlines and
+        // #each_line with chomp: - both done here, a line at a time, as IO#gets does. The
+        // keyword itself is taken off in ruby4.rb, by a wrapper that runs once a call: a
+        // trailing Hash overload here is ambiguous against (separator, limit) for a separator
+        // that only converts with #to_str.
+
         [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self) {
-            return ReadLines(context, self, context.InputSeparator, -1);
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self) {
+            return ReadLines(transcode, context, self, context.InputSeparator, -1, false);
         }
 
         [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self, DynamicNull separator) {
-            return ReadLines(context, self, null, -1);
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self, DynamicNull separator) {
+            return ReadLines(transcode, context, self, null, -1, false);
         }
 
         [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return ReadLines(context, self, context.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return ReadLines(context, self, separatorOrLimit.String(), -1);
-            }
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+            return ReadLines(transcode, context, self, separatorOrLimit, false);
+        }
+
+        [RubyMethod("readlines")]
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return ReadLines(transcode, context, self, separator, -1, false);
+        }
+
+        [RubyMethod("readlines")]
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+            return ReadLines(transcode, context, self, separator, limit, false);
+        }
+
+        [RubyMethod("__readlines_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ReadLinesChomp(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self) {
+            return ReadLines(transcode, context, self, context.InputSeparator, -1, true);
+        }
+
+        [RubyMethod("__readlines_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ReadLinesChomp(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self, DynamicNull separator) {
+            return ReadLines(transcode, context, self, null, -1, true);
+        }
+
+        [RubyMethod("__readlines_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ReadLinesChomp(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+            return ReadLines(transcode, context, self, separatorOrLimit, true);
+        }
+
+        [RubyMethod("__readlines_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ReadLinesChomp(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return ReadLines(transcode, context, self, separator, -1, true);
+        }
+
+        [RubyMethod("__readlines_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ReadLinesChomp(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+            return ReadLines(transcode, context, self, separator, limit, true);
         }
 
         /// <summary>
@@ -2119,25 +2200,45 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
-            return ReadLines(context, self, separator, -1);
+        private static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self,
+            Union<MutableString, int> separatorOrLimit, bool chomp) {
+            return separatorOrLimit.IsFixnum()
+                ? ReadLines(transcode, context, self, context.InputSeparator, separatorOrLimit.Fixnum(), chomp)
+                : ReadLines(transcode, context, self, separatorOrLimit.String(), -1, chomp);
         }
 
-        [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+        private static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, RubyIO/*!*/ self,
+            MutableString separator, int limit, bool chomp) {
             CheckLineLimit(limit, "readlines");
             RubyArray result = new RubyArray();
 
             // no dynamic call, doesn't modify $_ scope variable:
             MutableString line;
             while ((line = self.ReadLineOrParagraph(separator, limit)) != null) {
-                result.Add(line);
+                result.Add(FinishLine(transcode, self, line, separator, chomp));
             }
 
             self.LineNumber += result.Count;
             context.InputProvider.LastInputLineNumber = self.LineNumber;
             return result;
+        }
+
+        /// <summary>
+        /// What every line reader does to a line it has read: it is tainted, converted when the
+        /// stream has an internal encoding or conversion options (the conversion is Ruby code,
+        /// IO#__transcode__ in ruby4.rb), and chomped when chomp: was given.
+        /// </summary>
+        private static MutableString/*!*/ FinishLine(TranscodeStorage/*!*/ transcode, RubyIO/*!*/ self, MutableString/*!*/ line,
+            MutableString separator, bool chomp) {
+            line.IsTainted = true;
+            if (self.Enc2 != null || self.ConversionOptions != null) {
+                var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+                line = site.Target(site, self, line) as MutableString ?? line;
+            }
+            if (chomp) {
+                ChompLine(line, separator);
+            }
+            return line;
         }
 
         // TODO: to_hash, to_str, to_int
@@ -2147,31 +2248,31 @@ namespace IronRuby.Builtins {
         // io_readlines_options_19 examples ask for.
 
         [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
-            return ReadLines(toPath, self, path, self.Context.InputSeparator, -1);
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
+            return ReadLines(transcode, toPath, self, path, self.Context.InputSeparator, -1);
         }
 
         [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path, DynamicNull separator) {
-            return ReadLines(toPath, self, path, null, -1);
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path, DynamicNull separator) {
+            return ReadLines(transcode, toPath, self, path, null, -1);
         }
 
         [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
 
             return separatorOrLimit.IsFixnum()
-                ? ReadLines(toPath, self, path, self.Context.InputSeparator, separatorOrLimit.Fixnum())
-                : ReadLines(toPath, self, path, separatorOrLimit.String(), -1);
+                ? ReadLines(transcode, toPath, self, path, self.Context.InputSeparator, separatorOrLimit.Fixnum())
+                : ReadLines(transcode, toPath, self, path, separatorOrLimit.String(), -1);
         }
 
         [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
 
             MutableString pathString = Protocols.CastToPath(toPath, path);
             using (RubyIO io = new RubyIO(self.Context, self.Context.Platform.OpenInputFileStream(pathString.ConvertToString()), IOMode.ReadOnly)) {
-                return ReadLines(self.Context, io, separator, limit);
+                return ReadLines(transcode, self.Context, io, separator, limit, false);
             }
         }
 
@@ -2179,10 +2280,138 @@ namespace IronRuby.Builtins {
 
         #region getc, gets, ungetc, getbyte (1.9)
 
+        /// <summary>
+        /// One character, as a String in the external encoding, reading as many bytes as the
+        /// character needs - and converted, when the stream has an internal encoding or conversion
+        /// options (IO#__transcode__ in ruby4.rb).
+        /// </summary>
         [RubyMethod("getc")]
-        public static object Getc(RubyIO/*!*/ self) {
-            int c = self.ReadByteNormalizeEoln();
-            return (c != -1) ? ScriptingRuntimeHelpers.Int32ToObject(c) : null;
+        public static object Getc(TranscodeStorage/*!*/ transcode, RubyIO/*!*/ self) {
+            int first = self.ReadByteNormalizeEoln();
+            if (first == -1) {
+                return null;
+            }
+
+            RubyEncoding encoding = GetExternalEncoding(self) ?? self.Context.DefaultExternalEncoding;
+            MutableString c = ReadCharacter(self, (byte)first, encoding);
+            if (self.Enc2 != null || self.ConversionOptions != null) {
+                var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+                return site.Target(site, self, c);
+            }
+            return c;
+        }
+
+        /// <summary>
+        /// The character that starts with <paramref name="first"/>, as MRI's io_getc measures it.
+        /// An ASCII byte in an ASCII-compatible encoding is a character of its own, as every byte
+        /// is in BINARY. In UTF-8 a well-formed sequence (Unicode's table 3-7) is one character, a
+        /// sequence cut short by the end of the stream is one too, and a byte that does not
+        /// continue the sequence leaves the lead byte alone, a character of its own. Elsewhere
+        /// the shortest valid run of up to four bytes is the character, and the lead byte alone
+        /// when there is none. Bytes read past the character are pushed back.
+        /// </summary>
+        private static MutableString/*!*/ ReadCharacter(RubyIO/*!*/ self, byte first, RubyEncoding/*!*/ encoding) {
+            if ((first < 0x80 && encoding.IsAsciiIdentity) || encoding == RubyEncoding.Binary) {
+                return MutableString.CreateBinary(new byte[] { first }, encoding);
+            }
+
+            byte[] bytes = new byte[4];
+            bytes[0] = first;
+            int count = 1;
+
+            if (encoding == RubyEncoding.UTF8) {
+                int length;
+                byte low = 0x80, high = 0xBF;
+                if (first >= 0xC2 && first <= 0xDF) {
+                    length = 2;
+                } else if (first >= 0xE0 && first <= 0xEF) {
+                    length = 3;
+                    if (first == 0xE0) {
+                        low = 0xA0;
+                    } else if (first == 0xED) {
+                        high = 0x9F;
+                    }
+                } else if (first >= 0xF0 && first <= 0xF4) {
+                    length = 4;
+                    if (first == 0xF0) {
+                        low = 0x90;
+                    } else if (first == 0xF4) {
+                        high = 0x8F;
+                    }
+                } else {
+                    length = 1;
+                }
+
+                while (count < length) {
+                    int next = self.ReadByteNormalizeEoln();
+                    if (next == -1) {
+                        break;
+                    }
+                    if (next < low || next > high) {
+                        self.PushBack((byte)next);
+                        PushBack(self, bytes, 1, count);
+                        count = 1;
+                        break;
+                    }
+                    bytes[count++] = (byte)next;
+                    low = 0x80;
+                    high = 0xBF;
+                }
+                return MutableString.CreateBinary(Slice(bytes, count), encoding);
+            }
+
+            while (true) {
+                MutableString candidate = MutableString.CreateBinary(Slice(bytes, count), encoding);
+                if (!candidate.ContainsInvalidCharacters()) {
+                    return candidate;
+                }
+                int next = (count < bytes.Length) ? self.ReadByteNormalizeEoln() : -1;
+                if (next == -1) {
+                    PushBack(self, bytes, 1, count);
+                    return MutableString.CreateBinary(new byte[] { first }, encoding);
+                }
+                bytes[count++] = (byte)next;
+            }
+        }
+
+        private static byte[]/*!*/ Slice(byte[]/*!*/ bytes, int count) {
+            if (count == bytes.Length) {
+                return bytes;
+            }
+            byte[] result = new byte[count];
+            Buffer.BlockCopy(bytes, 0, result, 0, count);
+            return result;
+        }
+
+        // Pushes bytes[start..end) back so that bytes[start] is the next one read.
+        private static void PushBack(RubyIO/*!*/ self, byte[]/*!*/ bytes, int start, int end) {
+            for (int i = end - 1; i >= start; i--) {
+                self.PushBack(bytes[i]);
+            }
+        }
+
+        [RubyMethod("getbyte")]
+        public static object GetByte(RubyIO/*!*/ self) {
+            int b = self.ReadByteNormalizeEoln();
+            return (b != -1) ? ScriptingRuntimeHelpers.Int32ToObject(b) : null;
+        }
+
+        [RubyMethod("each_char")]
+        public static object EachChar(TranscodeStorage/*!*/ transcode, BlockParam block, RubyIO/*!*/ self) {
+            // MRI hands out the enumerator before it looks at the stream, closed or not.
+            if (block == null) {
+                return new Enumerator(self, "each_char") { SizeOp = "none" };
+            }
+            self.RequireReadable();
+
+            object c;
+            while ((c = Getc(transcode, self)) != null) {
+                object result;
+                if (block.Yield(c, out result)) {
+                    return result;
+                }
+            }
+            return self;
         }
 
         // IO#gets and IO#readline take a chomp: keyword, and they read into $_ of the method
@@ -2261,18 +2490,7 @@ namespace IronRuby.Builtins {
 
             MutableString result = self.ReadLineOrParagraph(separator, limit);
             if (result != null) {
-                result.IsTainted = true;
-
-                // A stream with an internal encoding or conversion options hands lines back
-                // converted; the conversion is Ruby code (IO#__transcode__ in ruby4.rb).
-                if (self.Enc2 != null || self.ConversionOptions != null) {
-                    var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
-                    result = site.Target(site, self, result) as MutableString ?? result;
-                }
-
-                if (chomp) {
-                    ChompLine(result, separator);
-                }
+                result = FinishLine(transcode, self, result, separator, chomp);
             }
 
             scope.GetInnerMostClosureScope().LastInputLine = result;
@@ -2340,10 +2558,42 @@ namespace IronRuby.Builtins {
             line.SetByteCount(count);
         }
 
-        [RubyMethod("ungetc")]
+        // The byte pusher the prelude's #ungetc and #ungetbyte are written in terms of.
+        [RubyMethod("__ir_ungetc__", RubyMethodAttributes.PrivateInstance)]
         public static void SetPreviousByte(RubyIO/*!*/ self, [DefaultProtocol]int b) {
             self.RequireReadable();
             self.PushBack(unchecked((byte)b));
+        }
+
+        /// <summary>
+        /// ungetc pushes a String's bytes back, and takes an Integer as a codepoint in the stream's
+        /// external encoding. A String, and an ASCII codepoint in an ASCII-compatible encoding,
+        /// are pushed here; anything else - a longer character, an object that converts with
+        /// #to_str, nil - is IO#__ungetc_rest__ in ruby4.rb.
+        /// </summary>
+        [RubyMethod("ungetc")]
+        public static object PushBack(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ rest, RubyIO/*!*/ self, object value) {
+            self.RequireReadable();
+
+            var str = value as MutableString;
+            if (str != null) {
+                for (int i = str.GetByteCount() - 1; i >= 0; i--) {
+                    self.PushBack(str.GetByte(i));
+                }
+                return null;
+            }
+
+            if (value is int) {
+                int codepoint = (int)value;
+                RubyEncoding encoding = GetExternalEncoding(self) ?? self.Context.DefaultExternalEncoding;
+                if (codepoint >= 0 && codepoint < 0x80 && encoding.IsAsciiIdentity) {
+                    self.PushBack((byte)codepoint);
+                    return null;
+                }
+            }
+
+            var site = rest.GetCallSite("__ungetc_rest__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, value);
         }
 
         // TODO: 1.9 only
@@ -2386,35 +2636,66 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each")]
         [RubyMethod("each_line")]
-        public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self) {
-            return Each(context, block, self, context.InputSeparator, -1);
+        public static object Each(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self) {
+            return Each(transcode, context, block, self, context.InputSeparator, -1, false);
         }
 
         [RubyMethod("each")]
         [RubyMethod("each_line")]
-        public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, DynamicNull separator) {
-            return Each(context, block, self, null, -1);
+        public static object Each(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, DynamicNull separator) {
+            return Each(transcode, context, block, self, null, -1, false);
         }
 
         [RubyMethod("each")]
         [RubyMethod("each_line")]
-        public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return Each(context, block, self, context.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return Each(context, block, self, separatorOrLimit.String(), -1);
-            }
+        public static object Each(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+            return Each(transcode, context, block, self, separatorOrLimit, false);
         }
 
         [RubyMethod("each")]
         [RubyMethod("each_line")]
-        public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
-            return Each(context, block, self, separator, -1);
+        public static object Each(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return Each(transcode, context, block, self, separator, -1, false);
         }
 
         [RubyMethod("each")]
         [RubyMethod("each_line")]
-        public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+        public static object Each(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+            return Each(transcode, context, block, self, separator, limit, false);
+        }
+
+        [RubyMethod("__each_line_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static object EachLineChomp(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self) {
+            return Each(transcode, context, block, self, context.InputSeparator, -1, true);
+        }
+
+        [RubyMethod("__each_line_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static object EachLineChomp(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, DynamicNull separator) {
+            return Each(transcode, context, block, self, null, -1, true);
+        }
+
+        [RubyMethod("__each_line_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static object EachLineChomp(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+            return Each(transcode, context, block, self, separatorOrLimit, true);
+        }
+
+        [RubyMethod("__each_line_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static object EachLineChomp(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return Each(transcode, context, block, self, separator, -1, true);
+        }
+
+        [RubyMethod("__each_line_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static object EachLineChomp(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+            return Each(transcode, context, block, self, separator, limit, true);
+        }
+
+        private static object Each(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, Union<MutableString, int> separatorOrLimit, bool chomp) {
+            return separatorOrLimit.IsFixnum()
+                ? Each(transcode, context, block, self, context.InputSeparator, separatorOrLimit.Fixnum(), chomp)
+                : Each(transcode, context, block, self, separatorOrLimit.String(), -1, chomp);
+        }
+
+        private static object Each(TranscodeStorage/*!*/ transcode, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, MutableString separator, int limit, bool chomp) {
             self.RequireReadable();
             CheckLineLimit(limit, "each_line");
 
@@ -2424,8 +2705,9 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.NoBlockGiven();
                 }
 
-                line.IsTainted = true;
+                // The line number moves before the conversion, which is Ruby code and may look.
                 context.InputProvider.LastInputLineNumber = ++self.LineNumber;
+                line = FinishLine(transcode, self, line, separator, chomp);
 
                 object result;
                 if (block.Yield(line, out result)) {
@@ -2446,14 +2728,10 @@ namespace IronRuby.Builtins {
                 return new Enumerator(self, "each_byte") { SizeOp = "none" };
             }
 
-            object aByte;
-            while ((aByte = Getc(self)) != null) {
-                if (block == null) {
-                    throw RubyExceptions.NoBlockGiven();
-                }
-
+            int aByte;
+            while ((aByte = self.ReadByteNormalizeEoln()) != -1) {
                 object result;
-                if (block.Yield((int)aByte, out result)) {
+                if (block.Yield(ScriptingRuntimeHelpers.Int32ToObject(aByte), out result)) {
                     return result;
                 }
             }
