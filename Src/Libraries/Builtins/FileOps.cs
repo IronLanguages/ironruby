@@ -1196,6 +1196,103 @@ namespace IronRuby.Builtins {
         private static extern bool UnlockFileEx(Microsoft.Win32.SafeHandles.SafeFileHandle handle, int reserved,
             uint lengthLow, uint lengthHigh, ref System.Threading.NativeOverlapped overlapped);
 
+        [System.Runtime.InteropServices.DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool CreateHardLinkW(string newFileName, string existingFileName, IntPtr securityAttributes);
+
+        /// <summary>
+        /// The errno win32.c's map_errno gives a Win32 error, for the ones File.link, File.symlink
+        /// and File.readlink can meet; EINVAL for the rest, as map_errno does.
+        /// </summary>
+        private static int Win32ErrorToErrno(int error) {
+            switch (error) {
+                case 2:    // ERROR_FILE_NOT_FOUND
+                case 3:    // ERROR_PATH_NOT_FOUND
+                case 15:   // ERROR_INVALID_DRIVE
+                case 161:  // ERROR_BAD_PATHNAME
+                case 206:  // ERROR_FILENAME_EXCED_RANGE
+                    return Posix.ENOENT;
+                case 5:    // ERROR_ACCESS_DENIED
+                case 32:   // ERROR_SHARING_VIOLATION
+                case 33:   // ERROR_LOCK_VIOLATION
+                case 1314: // ERROR_PRIVILEGE_NOT_HELD
+                    return Posix.EACCES;
+                case 17:   // ERROR_NOT_SAME_DEVICE
+                    return Posix.EXDEV;
+                case 80:   // ERROR_FILE_EXISTS
+                case 183:  // ERROR_ALREADY_EXISTS
+                    return Posix.EEXIST;
+                case 267:  // ERROR_DIRECTORY
+                    return Posix.ENOTDIR;
+                case 1921: // ERROR_CANT_RESOLVE_FILENAME
+                    return Posix.ELOOP;
+                default:
+                    return Posix.EINVAL;
+            }
+        }
+
+        // MRI reports an existing target by its own path, anything else by both paths.
+        private static Exception/*!*/ WindowsLinkError(int win32Error, string/*!*/ strOld, string/*!*/ strNew) {
+            int errno = Win32ErrorToErrno(win32Error);
+            return Posix.Error(errno, errno == Posix.EEXIST ? strNew : "(" + strOld + ", " + strNew + ")");
+        }
+
+        /// <summary>
+        /// win32.c's symlink(): the target with its slashes turned around, a directory link when the
+        /// target names a directory (relative to the current directory, as there), created without
+        /// the privilege where Windows allows that - which the BCL asks for itself.
+        /// </summary>
+        private static void WindowsSymLink(string/*!*/ strOld, string/*!*/ strNew) {
+            if (strNew.Length == 0) {
+                throw Posix.Error(Posix.ENOENT, "(" + strOld + ", " + strNew + ")");
+            }
+            if (strOld.Length == 0) {
+                throw Posix.Error(Posix.EINVAL, "(" + strOld + ", " + strNew + ")");
+            }
+            string target = strOld.Replace('/', '\\');
+            try {
+                if (Directory.Exists(target)) {
+                    Directory.CreateSymbolicLink(strNew, target);
+                } else {
+                    File.CreateSymbolicLink(strNew, target);
+                }
+            } catch (UnauthorizedAccessException) {
+                throw WindowsLinkError(5, strOld, strNew);
+            } catch (IOException e) {
+                throw WindowsLinkError(e.HResult & 0xFFFF, strOld, strNew);
+            }
+        }
+
+        /// <summary>
+        /// win32.c's readlink(): the target of a symbolic link or a junction, with backslashes as
+        /// slashes; EINVAL for anything that is neither, ENOENT for nothing at all.
+        /// </summary>
+        private static string/*!*/ WindowsReadLink(string/*!*/ strPath) {
+            FileAttributes attributes;
+            try {
+                // the attributes of the link itself, which may dangle
+                attributes = File.GetAttributes(strPath);
+            } catch (FileNotFoundException) {
+                throw Posix.Error(Posix.ENOENT, strPath);
+            } catch (DirectoryNotFoundException) {
+                throw Posix.Error(Posix.ENOENT, strPath);
+            } catch (UnauthorizedAccessException) {
+                throw Posix.Error(Posix.EACCES, strPath);
+            } catch (IOException e) {
+                throw Posix.Error(Win32ErrorToErrno(e.HResult & 0xFFFF), strPath);
+            }
+
+            string target = null;
+            if ((attributes & FileAttributes.ReparsePoint) != 0) {
+                FileSystemInfo info = (attributes & FileAttributes.Directory) != 0
+                    ? (FileSystemInfo)new DirectoryInfo(strPath) : new FileInfo(strPath);
+                target = info.LinkTarget;
+            }
+            if (target == null) {
+                throw Posix.Error(Posix.EINVAL, strPath);
+            }
+            return target.Replace('\\', '/');
+        }
+
         /// <summary>
         /// flock on Windows, as CRuby's win32.c does it: LockFileEx/UnlockFileEx over the
         /// whole file, shared or exclusive. A blocking lock polls with FAIL_IMMEDIATELY for
@@ -1250,6 +1347,9 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ Readlink(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
             if (!Posix.IsAvailable) {
+                if (OperatingSystem.IsWindows()) {
+                    return self.Context.EncodePath(WindowsReadLink(strPath));
+                }
                 throw new IronRuby.Builtins.NotImplementedError("readlink() function is unimplemented on this machine");
             }
 
@@ -1266,6 +1366,13 @@ namespace IronRuby.Builtins {
             string strOld = self.Context.DecodePath(Protocols.CastToPath(toPath, oldPath));
             string strNew = self.Context.DecodePath(Protocols.CastToPath(toPath, newPath));
             if (!Posix.IsAvailable) {
+                if (OperatingSystem.IsWindows()) {
+                    // win32.c's link(): CreateHardLinkW, new name first.
+                    if (!CreateHardLinkW(strNew, strOld, IntPtr.Zero)) {
+                        throw WindowsLinkError(Marshal.GetLastWin32Error(), strOld, strNew);
+                    }
+                    return 0;
+                }
                 throw new IronRuby.Builtins.NotImplementedError("link() function is unimplemented on this machine");
             }
 
@@ -1282,6 +1389,10 @@ namespace IronRuby.Builtins {
             string strOld = self.Context.DecodePath(Protocols.CastToPath(toPath, oldPath));
             string strNew = self.Context.DecodePath(Protocols.CastToPath(toPath, newPath));
             if (!Posix.IsAvailable) {
+                if (OperatingSystem.IsWindows()) {
+                    WindowsSymLink(strOld, strNew);
+                    return 0;
+                }
                 throw new IronRuby.Builtins.NotImplementedError("symlink() function is unimplemented on this machine");
             }
 
@@ -1292,7 +1403,9 @@ namespace IronRuby.Builtins {
             return 0;
         }
 
+        // MRI on Windows has no mkfifo: the rb_f_notimplement stub, which #respond_to? denies.
         [RubyMethod("mkfifo", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static int MakeFifo(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             [DefaultParameterValue(0x1B6 /* 0666 */)]int mode) {
 
@@ -1499,9 +1612,17 @@ namespace IronRuby.Builtins {
             return UpdateTimes(toPath, self, accessTime, modifiedTime, paths, true);
         }
 
+        // MRI on Windows has neither lutimes nor utimensat: File.lutime is the rb_f_notimplement
+        // stub there, which #respond_to? denies. Setting the times through the BCL would set the
+        // target's, not the link's.
         [RubyMethod("lutime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static int UpdateLinkTimes(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object accessTime, object modifiedTime,
             params object[]/*!*/ paths) {
+
+            if (OperatingSystem.IsWindows()) {
+                throw new IronRuby.Builtins.NotImplementedError("lutime() function is unimplemented on this machine");
+            }
 
             return UpdateTimes(toPath, self, accessTime, modifiedTime, paths, false);
         }

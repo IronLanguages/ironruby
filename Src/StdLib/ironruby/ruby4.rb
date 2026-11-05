@@ -9536,8 +9536,14 @@ module Process
   # and that function is exactly the case respond_to? answers false for - so portable
   # code asks whether the feature is there rather than whether the name is.
   # On Windows the resource-limit and priority functions are the same kind of stub in
-  # MRI; the libc behind ours is not there to call.
-  WINDOWS_NOT_IMPLEMENTED_METHODS__ = [:getrlimit, :setrlimit, :getpriority, :setpriority].freeze unless const_defined?(:WINDOWS_NOT_IMPLEMENTED_METHODS__)
+  # MRI; the libc behind ours is not there to call. So are the process-group, session,
+  # supplementary-group and set-id ones: win32/Makefile.sub defines none of getpgid,
+  # setpgid, getsid, setsid, getpgrp, setpgrp, getgroups, setgroups, initgroups or the
+  # setuid/setgid family, and process.c makes each of these methods rb_f_notimplement.
+  WINDOWS_NOT_IMPLEMENTED_METHODS__ = [:getrlimit, :setrlimit, :getpriority, :setpriority,
+    :getpgid, :setpgid, :getsid, :setsid, :getpgrp, :setpgrp,
+    :groups, :groups=, :initgroups, :maxgroups, :maxgroups=,
+    :uid=, :gid=, :euid=, :egid=].freeze unless const_defined?(:WINDOWS_NOT_IMPLEMENTED_METHODS__)
   unless const_defined?(:NOT_IMPLEMENTED_METHODS)
     NOT_IMPLEMENTED_METHODS = (::File::ALT_SEPARATOR == "\\" ?
       [:daemon, :fork, :_fork] + WINDOWS_NOT_IMPLEMENTED_METHODS__ : [:daemon, :fork, :_fork]).freeze

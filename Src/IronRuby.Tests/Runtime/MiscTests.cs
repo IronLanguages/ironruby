@@ -2929,6 +2929,75 @@ fiber of another thread: 2
         }
 
         /// <summary>
+        /// What MRI does on Windows with the functions win32/Makefile.sub leaves out, and with the ones
+        /// win32.c supplies. Dir.fchdir, Dir.for_fd, Dir#fileno, Dir.chroot, File.lutime, File.mkfifo and the
+        /// process-group and set-id parts of Process are rb_f_notimplement stubs there: NotImplementedError,
+        /// and #respond_to? false. Dir's threw CLR NotImplementedException or InvalidOperationException, and
+        /// all of them answered #respond_to? with true. File.link, File.symlink and File.readlink work there,
+        /// through CreateHardLinkW, CreateSymbolicLinkW and the reparse point; they raised NotImplementedError.
+        /// Windows only. The expected output is MRI's as its win32 sources give it, not a recorded run.
+        /// </summary>
+        public void Windows_NotImplementedAndLinks1() {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+require 'fileutils'
+def show(l); v = begin; yield; rescue Exception => e; e.is_a?(SystemCallError) ? e.class : ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+show(""stubs respond_to?"") { [Dir.respond_to?(:fchdir), Dir.respond_to?(:for_fd), Dir.respond_to?(:chroot), Dir.open(""."") { |x| x.respond_to?(:fileno) }, File.respond_to?(:lutime), File.respond_to?(:mkfifo), Process.respond_to?(:getpgid), Process.respond_to?(:setsid), Process.respond_to?(:groups), Process.respond_to?(:uid=)] }
+show(""links respond_to?"") { [File.respond_to?(:link), File.respond_to?(:symlink), File.respond_to?(:readlink)] }
+show(""Dir.fchdir"") { Dir.fchdir(0) }
+show(""Dir.for_fd"") { Dir.for_fd(0) }
+show(""Dir#fileno"") { Dir.open(""."") { |x| x.fileno } }
+show(""Dir.chroot"") { Dir.chroot(""."") }
+show(""File.lutime"") { File.lutime(nil, nil, ""x"") }
+show(""File.mkfifo"") { File.mkfifo(""x"") }
+show(""Process.getpgid"") { Process.getpgid(0) }
+show(""Process.uid="") { Process.uid = 0 }
+dir = Dir.mktmpdir
+begin
+  Dir.chdir(dir) do
+    File.write(""f"", ""x"")
+    Dir.mkdir(""sub"")
+    show(""link"") { File.link(""f"", ""h""); File.read(""h"") }
+    show(""link existing"") { File.link(""f"", ""h"") }
+    show(""link missing"") { File.link(""nope"", ""h2"") }
+    show(""symlink to file"") { File.symlink(""f"", ""s""); [File.symlink?(""s""), File.readlink(""s""), File.read(""s"")] }
+    show(""symlink to dir"") { File.symlink(""sub"", ""sd""); [File.symlink?(""sd""), File.directory?(""sd""), File.readlink(""sd"")] }
+    show(""symlink dangling"") { File.symlink(""sub/x"", ""sn""); [File.symlink?(""sn""), File.readlink(""sn"")] }
+    show(""symlink existing"") { File.symlink(""f"", ""s"") }
+    show(""readlink not a link"") { File.readlink(""f"") }
+    show(""readlink missing"") { File.readlink(""nope"") }
+  end
+ensure
+  FileUtils.rm_rf(dir) rescue nil
+end
+", @"
+stubs respond_to?: [false, false, false, false, false, false, false, false, false, false]
+links respond_to?: [true, true, true]
+Dir.fchdir: ""NotImplementedError: fchdir() function is unimplemented on this machine""
+Dir.for_fd: ""NotImplementedError: for_fd() function is unimplemented on this machine""
+Dir#fileno: ""NotImplementedError: fileno() function is unimplemented on this machine""
+Dir.chroot: ""NotImplementedError: chroot() function is unimplemented on this machine""
+File.lutime: ""NotImplementedError: lutime() function is unimplemented on this machine""
+File.mkfifo: ""NotImplementedError: mkfifo() function is unimplemented on this machine""
+Process.getpgid: ""NotImplementedError: getpgid() function is unimplemented on this machine""
+Process.uid=: ""NotImplementedError: uid=() function is unimplemented on this machine""
+link: ""x""
+link existing: Errno::EEXIST
+link missing: Errno::ENOENT
+symlink to file: [true, ""f"", ""x""]
+symlink to dir: [true, true, ""sub""]
+symlink dangling: [true, ""sub/x""]
+symlink existing: Errno::EEXIST
+readlink not a link: Errno::EINVAL
+readlink missing: Errno::ENOENT
+");
+        }
+
+        /// <summary>
         /// Range#first(n) and #last(n) of an Integer range are counted rather than walked - #last(n)
         /// built the whole range first, so (1..10**9).last(3) ran out of memory - and #last takes
         /// that path for a subclass whatever its #each, as MRI's rb_int_range_last does. Also the
