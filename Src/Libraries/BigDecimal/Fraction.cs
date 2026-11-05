@@ -101,6 +101,10 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
         public int MaxPrecision { get { return _words.Length; } }
 
+        internal uint GetWord(int index) {
+            return _words[index];
+        }
+
         public int DigitCount {
             get {
                 // Find last non-zero word
@@ -412,8 +416,27 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             Fraction result;
 
             if (digits <= 0) {
-                uint digit = (uint)(fraction.IsZero ? 0 : 1);
-                if (RoundDigit(sign, digit, 0, false, mode) > 0) {
+                // Nothing is kept. With digits == 0 the first discarded digit is the fraction's leading
+                // digit, and whether anything follows it decides the ties and the directed modes; with
+                // fewer it is a zero, and the whole fraction is what follows. This used 1 for any
+                // non-zero fraction - so BigDecimal("0.5").round was 0, 0.005.round(2) was 0.0 and
+                // 7.round(-1) was 0, and 0.9.round(0, :floor)-style cases asked the wrong question.
+                uint digit;
+                bool rest;
+                if (fraction.IsZero) {
+                    digit = 0;
+                    rest = false;
+                } else if (digits == 0) {
+                    digit = (fraction._words[0] / _powers[0]) % 10;
+                    rest = (fraction._words[0] % _powers[0]) != 0;
+                    for (int i = 1; !rest && i < fraction.Precision; i++) {
+                        rest = fraction._words[i] != 0;
+                    }
+                } else {
+                    digit = 0;
+                    rest = true;
+                }
+                if (RoundDigit(sign, digit, 0, rest, mode) > 0) {
                     offset = 1-digits;
                     return One;
                 } else {
@@ -452,7 +475,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
             // Calculate the current digits and rounding direction
             secondLastDigit = (fraction._words[secondLastWordIndex] / secondLastFactor) % 10;
-            if (lastWordIndex < fraction.MaxPrecision) {
+            if (lastWordIndex < fraction.Precision) {
                 lastDigit = (fraction._words[lastWordIndex] / lastFactor) % 10;
             } else {
                 lastDigit = 0;
@@ -462,10 +485,10 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             // 1.0 from 1.001 - without it both of those looked like an exact tie or an exact
             // stop, and rounded the wrong way.
             bool hasRemainder = false;
-            if (lastWordIndex < fraction.MaxPrecision && (fraction._words[lastWordIndex] % lastFactor) != 0) {
+            if (lastWordIndex < fraction.Precision && (fraction._words[lastWordIndex] % lastFactor) != 0) {
                 hasRemainder = true;
             } else {
-                for (int i = lastWordIndex + 1; i < fraction.MaxPrecision; i++) {
+                for (int i = lastWordIndex + 1; i < fraction.Precision; i++) {
                     if (fraction._words[i] != 0) {
                         hasRemainder = true;
                         break;

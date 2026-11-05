@@ -241,7 +241,14 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         [RubyMethod("exponent")]
         public static int Exponent(BigDecimal/*!*/ self) {
-            return self.Exponent;
+            return ZeroAwareExponent(self);
+        }
+
+        // A zero's exponent is 0 in MRI. The zeros computed here - BigDecimal("7").frac, 1 - 1 - carry
+        // the PositiveZero's 1, so their #exponent and #split said 1, and BigDecimal#to_digits (util.rb)
+        // made "0" * -1 of it - "negative argument" for every whole number.
+        private static int ZeroAwareExponent(BigDecimal/*!*/ self) {
+            return BigDecimal.IsZero(self) ? 0 : self.Exponent;
         }
 
         /// <summary>
@@ -269,7 +276,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         [RubyMethod("split")]
         public static RubyArray/*!*/ Split(BigDecimal/*!*/ self) {
-            return RubyOps.MakeArray4(self.Sign, MutableString.CreateAscii(self.GetFractionString()), 10, self.Exponent);
+            return RubyOps.MakeArray4(self.Sign, MutableString.CreateAscii(self.GetFractionString()), 10, ZeroAwareExponent(self));
         }
 
         [RubyMethod("fix")]
@@ -412,6 +419,15 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return BigDecimal.Add(config, self, BigDecimal.Create(config, other));
         }
 
+        // A Float operand is made a BigDecimal of its shortest digits, and the answer stays a BigDecimal,
+        // as in MRI: BigDecimal("1.5") * 1.5 is 0.225e1. Without these overloads the operand went
+        // through coercion and the answer was a Float.
+        [RubyMethod("+")]
+        public static BigDecimal/*!*/ Add(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
+            BigDecimal.Config config = GetConfig(context);
+            return BigDecimal.Add(config, self, BigDecimal.Create(config, other));
+        }
+
         [RubyMethod("+")]
         [RubyMethod("add")]
         public static object Add(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, 
@@ -473,6 +489,12 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         [RubyMethod("-")]
+        public static BigDecimal/*!*/ Subtract(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
+            BigDecimal.Config config = GetConfig(context);
+            return BigDecimal.Subtract(config, self, BigDecimal.Create(config, other));
+        }
+
+        [RubyMethod("-")]
         [RubyMethod("sub")]
         public static object Subtract(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, BigDecimal/*!*/ self, object other) {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "-", self, other);
@@ -529,6 +551,12 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         [RubyMethod("*")]
+        public static BigDecimal/*!*/ Multiply(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
+            BigDecimal.Config config = GetConfig(context);
+            return Multiply(context, self, BigDecimal.Create(config, other));
+        }
+
+        [RubyMethod("*")]
         public static object Multiply(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, 
             BigDecimal/*!*/ self, object other) {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "*", self, other);
@@ -569,8 +597,23 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         [RubyMethod("/")]
         [RubyMethod("quo")]
         public static BigDecimal/*!*/ Divide(RubyContext/*!*/ context, BigDecimal/*!*/ self, BigDecimal/*!*/ other) {
-            BigDecimal remainder;
-            return BigDecimal.Divide(GetConfig(context), self, other, 0, out remainder);
+            BigDecimal.Config config = GetConfig(context);
+            return BigDecimal.DivideRounded(config, self, other, DivisionDigits(config, self, other), config.RoundingMode);
+        }
+
+        /// <summary>
+        /// The significant digits of x / y in bigdecimal 4: the precision of the more precise operand plus
+        /// 16 (BIGDECIMAL_DOUBLE_FIGURES), at least 32, and no more than BigDecimal.limit when one is set.
+        /// </summary>
+        private static int DivisionDigits(BigDecimal.Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y) {
+            int digits = Math.Max(Precision(x), Precision(y)) + 16;
+            if (digits < 32) {
+                digits = 32;
+            }
+            if (config.Limit > 0 && config.Limit < digits) {
+                digits = config.Limit;
+            }
+            return digits;
         }
 
         // An Integer divisor is turned into a BigDecimal, as for #+ and #*. Without these it went
@@ -587,6 +630,12 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public static BigDecimal/*!*/ Divide(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
             BigDecimal.Config config = GetConfig(context);
             return Divide(context, self, BigDecimal.Create(config, other));
+        }
+
+        [RubyMethod("/")]
+        [RubyMethod("quo")]
+        public static BigDecimal/*!*/ Divide(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
+            return Divide(context, self, BigDecimal.Create(GetConfig(context), other));
         }
 
         [RubyMethod("/")]
@@ -678,8 +727,9 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             if (n < 0) {
                 throw RubyExceptions.CreateArgumentError("negative precision");
             }
-            BigDecimal remainder;
-            return BigDecimal.Divide(GetConfig(context), self, other, n, out remainder);
+            // div(other, 0) is other / self's quotient as #/ makes it; div(other, n) has n digits
+            BigDecimal.Config config = GetConfig(context);
+            return BigDecimal.DivideRounded(config, self, other, n == 0 ? DivisionDigits(config, self, other) : n, config.RoundingMode);
         }
 
         [RubyMethod("div")]
@@ -1159,6 +1209,19 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             int digits = digitsGiven ? Protocols.CastToFixnum(fixnumCast, n) : 0;
             bool answersInteger = !digitsGiven || (integerAtZeroPrecision && digits <= 0);
 
+            // MRI's VpMidRound counts the rounding position from the start of the number's first 9-digit
+            // word; a position before it rounds to zero in every mode but ceiling and floor - which only
+            // changes ROUND_UP: BigDecimal("0.04").round(-1, :up) and 1e-10.round(1, :up) are 0 in CRuby,
+            // where 0.0004.round(1, :up) is 0.1.
+            if (mode == BigDecimal.RoundingModes.Up && BigDecimal.IsFinite(self) && !BigDecimal.IsZero(self)) {
+                int exponent = self.Exponent;
+                int wordExponent = exponent > 0 ? (exponent + IronRuby.StandardLibrary.BigDecimal.Fraction.BASE_FIG - 1) / IronRuby.StandardLibrary.BigDecimal.Fraction.BASE_FIG : -((-exponent) / IronRuby.StandardLibrary.BigDecimal.Fraction.BASE_FIG);
+                if ((long)digits + (long)wordExponent * IronRuby.StandardLibrary.BigDecimal.Fraction.BASE_FIG < 0) {
+                    var zero = BigDecimal.LimitPrecision(GetConfig(context), self, digits, BigDecimal.RoundingModes.Down);
+                    return answersInteger ? BigDecimal.ToInteger(GetConfig(context), zero) : zero;
+                }
+            }
+
             if (!answersInteger) {
                 return BigDecimal.LimitPrecision(GetConfig(context), self, digits, mode);
             }
@@ -1194,7 +1257,10 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public static object Round(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, BigDecimal/*!*/ self,
             [Optional]object n, [Optional]object mode) {
 
-            return LimitPrecision(fixnumCast, context, self, n, ToRoundingMode(fixnumCast, context, mode), true);
+            // round, and round(n) for n <= 0, answer an Integer; given a rounding mode as well, round(n, mode)
+            // answers a BigDecimal whatever n is, as in MRI
+            bool modeGiven = !(mode == null || mode is Missing);
+            return LimitPrecision(fixnumCast, context, self, n, ToRoundingMode(fixnumCast, context, mode), !modeGiven);
         }
 
         [RubyMethod("truncate")]
