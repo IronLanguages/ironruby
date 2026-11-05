@@ -2809,6 +2809,95 @@ missing dir: ""Errno::ENOENT: No such file or directory""
         }
 
         /// <summary>
+        /// StringIO's line readers after the bare gets got an overload of its own, a one-byte
+        /// separator is looked for as a byte, and chomp: cuts the line where it is; lineno counts
+        /// the lines read and not the nil at the end. Also the byte side of a fresh literal, which
+        /// learns it is ASCII rather than being switched to bytes to find out.
+        /// </summary>
+        public void StringIO_LineReaders1() {
+            TestOutput(@"
+require 'ruby4'
+require 'stringio'
+def t(label)
+  r = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{label}: #{r.inspect}""
+end
+src = ""one\r\ntwo\n\n\nthréeéx\nlast""
+[[], [""\n""], [""e""], [""é""], [""éx""], [""""], [nil], [3], [""o"", 2], [""\r\n""]].each do |a|
+  t(""gets #{a.inspect}"") { s = StringIO.new(src); r = []; while l = s.gets(*a); r << l; end; [r, $_, s.lineno] }
+  t(""gets chomp #{a.inspect}"") { s = StringIO.new(src); r = []; while l = s.gets(*a, chomp: true); r << l; end; r }
+  t(""readlines chomp #{a.inspect}"") { StringIO.new(src).readlines(*a, chomp: true) }
+  t(""each_line chomp #{a.inspect}"") { StringIO.new(src).each_line(*a, chomp: true).to_a }
+end
+t(""binary sep"") { StringIO.new(""a\xFFb\xFFc"".b).readlines(""\xFF"".b, chomp: true) }
+t(""gets bare"") { s = StringIO.new(""x\ny""); [s.gets, s.gets, s.gets, $_] }
+t(""frozen line chomp"") { s = StringIO.new(""ab\n"".freeze); l = s.gets(chomp: true); [l, l.frozen?, s.string] }
+t(""chomp keeps source"") { str = +""a\nb\n""; s = StringIO.new(str); s.readlines(chomp: true); str }
+# literal byte access
+[""hello"", ""héllo"", """", ""\u{1F600}x""].each do |lit|
+  t(""bytes #{lit.inspect}"") { x = lit.dup; [x.bytesize, x.getbyte(0), x.getbyte(1), x.bytes, x.size, x.ascii_only?, x.b, x.byteslice(1, 2)] }
+end
+t(""iso literal"") { x = ""caf\xE9"".force_encoding(""iso-8859-1""); [x.bytesize, x.getbyte(3), x.bytes] }
+t(""utf16"") { x = ""ab"".encode(""UTF-16LE""); [x.bytesize, x.getbyte(0), x.getbyte(1), x.bytes] }
+t(""io write literal"") { s = StringIO.new(+""""); s.write(""abc""); s.write(""dé""); [s.string, s.string.bytesize, s.pos] }
+t(""string << then bytes"") { x = +""ab""; x << ""c""; [x.bytesize, x.getbyte(2), x.bytes] }
+", @"
+gets []: [[""one\r\n"", ""two\n"", ""\n"", ""\n"", ""thréeéx\n"", ""last""], nil, 6]
+gets chomp []: [""one"", ""two"", """", """", ""thréeéx"", ""last""]
+readlines chomp []: [""one"", ""two"", """", """", ""thréeéx"", ""last""]
+each_line chomp []: [""one"", ""two"", """", """", ""thréeéx"", ""last""]
+gets [""\n""]: [[""one\r\n"", ""two\n"", ""\n"", ""\n"", ""thréeéx\n"", ""last""], nil, 6]
+gets chomp [""\n""]: [""one"", ""two"", """", """", ""thréeéx"", ""last""]
+readlines chomp [""\n""]: [""one"", ""two"", """", """", ""thréeéx"", ""last""]
+each_line chomp [""\n""]: [""one"", ""two"", """", """", ""thréeéx"", ""last""]
+gets [""e""]: [[""one"", ""\r\ntwo\n\n\nthrée"", ""éx\nlast""], nil, 3]
+gets chomp [""e""]: [""on"", ""\r\ntwo\n\n\nthré"", ""éx\nlast""]
+readlines chomp [""e""]: [""on"", ""\r\ntwo\n\n\nthré"", ""éx\nlast""]
+each_line chomp [""e""]: [""on"", ""\r\ntwo\n\n\nthré"", ""éx\nlast""]
+gets [""é""]: [[""one\r\ntwo\n\n\nthré"", ""eé"", ""x\nlast""], nil, 3]
+gets chomp [""é""]: [""one\r\ntwo\n\n\nthr"", ""e"", ""x\nlast""]
+readlines chomp [""é""]: [""one\r\ntwo\n\n\nthr"", ""e"", ""x\nlast""]
+each_line chomp [""é""]: [""one\r\ntwo\n\n\nthr"", ""e"", ""x\nlast""]
+gets [""éx""]: [[""one\r\ntwo\n\n\nthréeéx"", ""\nlast""], nil, 2]
+gets chomp [""éx""]: [""one\r\ntwo\n\n\nthrée"", ""\nlast""]
+readlines chomp [""éx""]: [""one\r\ntwo\n\n\nthrée"", ""\nlast""]
+each_line chomp [""éx""]: [""one\r\ntwo\n\n\nthrée"", ""\nlast""]
+gets [""""]: [[""one\r\ntwo\n\n\n"", ""thréeéx\nlast""], nil, 2]
+gets chomp [""""]: [""one\r\ntwo"", ""thréeéx\nlast""]
+readlines chomp [""""]: [""one\r\ntwo"", ""thréeéx\nlast""]
+each_line chomp [""""]: [""one\r\ntwo"", ""thréeéx\nlast""]
+gets [nil]: [[""one\r\ntwo\n\n\nthréeéx\nlast""], nil, 1]
+gets chomp [nil]: [""one\r\ntwo\n\n\nthréeéx\nlast""]
+readlines chomp [nil]: [""one\r\ntwo\n\n\nthréeéx\nlast""]
+each_line chomp [nil]: [""one\r\ntwo\n\n\nthréeéx\nlast""]
+gets [3]: [[""one"", ""\r\n"", ""two"", ""\n"", ""\n"", ""\n"", ""thr"", ""ée"", ""éx"", ""\n"", ""las"", ""t""], nil, 12]
+gets chomp [3]: [""one"", """", ""two"", """", """", """", ""thr"", ""ée"", ""éx"", """", ""las"", ""t""]
+readlines chomp [3]: [""one"", """", ""two"", """", """", """", ""thr"", ""ée"", ""éx"", """", ""las"", ""t""]
+each_line chomp [3]: [""one"", """", ""two"", """", """", """", ""thr"", ""ée"", ""éx"", """", ""las"", ""t""]
+gets [""o"", 2]: [[""o"", ""ne"", ""\r\n"", ""tw"", ""o"", ""\n\n"", ""\nt"", ""hr"", ""é"", ""eé"", ""x\n"", ""la"", ""st""], nil, 13]
+gets chomp [""o"", 2]: ["""", ""ne"", ""\r\n"", ""tw"", """", ""\n\n"", ""\nt"", ""hr"", ""é"", ""eé"", ""x\n"", ""la"", ""st""]
+readlines chomp [""o"", 2]: ["""", ""ne"", ""\r\n"", ""tw"", """", ""\n\n"", ""\nt"", ""hr"", ""é"", ""eé"", ""x\n"", ""la"", ""st""]
+each_line chomp [""o"", 2]: ["""", ""ne"", ""\r\n"", ""tw"", """", ""\n\n"", ""\nt"", ""hr"", ""é"", ""eé"", ""x\n"", ""la"", ""st""]
+gets [""\r\n""]: [[""one\r\n"", ""two\n\n\nthréeéx\nlast""], nil, 2]
+gets chomp [""\r\n""]: [""one"", ""two\n\n\nthréeéx\nlast""]
+readlines chomp [""\r\n""]: [""one"", ""two\n\n\nthréeéx\nlast""]
+each_line chomp [""\r\n""]: [""one"", ""two\n\n\nthréeéx\nlast""]
+binary sep: [""a"", ""b"", ""c""]
+gets bare: [""x\n"", ""y"", nil, nil]
+frozen line chomp: [""ab"", false, ""ab\n""]
+chomp keeps source: ""a\nb\n""
+bytes ""hello"": [5, 104, 101, [104, 101, 108, 108, 111], 5, true, ""hello"", ""el""]
+bytes ""héllo"": [6, 104, 195, [104, 195, 169, 108, 108, 111], 5, false, ""h\xC3\xA9llo"", ""é""]
+bytes """": [0, nil, nil, [], 0, true, """", nil]
+bytes ""😀x"": [5, 240, 159, [240, 159, 152, 128, 120], 2, false, ""\xF0\x9F\x98\x80x"", ""\x9F\x98""]
+iso literal: [4, 233, [99, 97, 102, 233]]
+utf16: [4, 97, 0, [97, 0, 98, 0]]
+io write literal: [""abcdé"", 6, 6]
+string << then bytes: [3, 99, [97, 98, 99]]
+");
+        }
+
+        /// <summary>
         /// Text mode's universal newline decorator - "\r\n" and a lone "\r" are folded before the
         /// line is split - and the newline options that are decorators for the way out only
         /// (crlf, cr, and newline: :lf). POSIX only: Windows' own text mode reads "\r\n" as "\n"

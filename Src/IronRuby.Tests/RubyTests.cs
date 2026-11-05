@@ -861,6 +861,7 @@ namespace IronRuby.Tests {
                 Io_BuiltinReaders1,
                 Io_LineReaders2,
                 Io_LineReaders3,
+                StringIO_LineReaders1,
                 Method_LightFrame1,
                 Method_LightFrame2,
                 Hash_SelfKey1,
