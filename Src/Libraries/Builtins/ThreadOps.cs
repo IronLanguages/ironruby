@@ -361,10 +361,11 @@ namespace IronRuby.Builtins {
                     if (info.IsFiberWorker) {
                         continue;
                     }
-                    // A thread no Thread.new made (a host's) belongs to the runtime it is the main
-                    // thread of, or else to the one asking from it now.
+                    // The runtime's main thread is always its own, even when another runtime's Thread.new
+                    // made it; any other thread belongs to the runtime that made it, or, made by none (a
+                    // host's), to the one asking from it now.
                     RubyContext owner = info.Context;
-                    if (owner != null ? owner != context : (info.Thread != context.MainThread && info.Thread != Thread.CurrentThread)) {
+                    if (info.Thread != context.MainThread && (owner != null ? owner != context : info.Thread != Thread.CurrentThread)) {
                         continue;
                     }
                     FiberCore fiber = info.FiberExecution;

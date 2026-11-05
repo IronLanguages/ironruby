@@ -2897,12 +2897,6 @@ broken mid: nil
         }
 
         /// <summary>
-        /// Thread.stop with no other thread alive is MRI's ThreadError "stopping only thread" (rb_thread_stop),
-        /// where it slept forever. A fiber runs on a CLR thread of its own here but is part of the thread that
-        /// owns it, so neither it nor its thread counts as another thread - for Thread.stop, nor for Thread.list
-        /// and ThreadGroup#list, which used to list it.
-        /// </summary>
-        /// <summary>
         /// A host that creates the runtime on one thread and runs Ruby on another: the creating
         /// thread is Thread.main and is listed even though no Ruby code ever ran on it.
         /// </summary>
@@ -2930,6 +2924,39 @@ broken mid: nil
             }
         }
 
+        /// <summary>
+        /// A runtime created on a thread another runtime's Thread.new made: that thread is the new
+        /// runtime's Thread.main and is listed there, whoever made it.
+        /// </summary>
+        public void Thread_HostMainThread2() {
+            Microsoft.Scripting.Hosting.ScriptEngine engine = null;
+            var created = new System.Threading.ManualResetEvent(false);
+            var done = new System.Threading.ManualResetEvent(false);
+            Action create = () => {
+                engine = Ruby.CreateEngine();
+                created.Set();
+                done.WaitOne();
+            };
+            var scope = Engine.CreateScope();
+            scope.SetVariable("create", create);
+            Engine.Execute("$host_main_thread2 = Thread.new { create.invoke }", scope);
+            try {
+                Assert(created.WaitOne(30000));
+                var result = (RubyArray)engine.Execute<object>("[Thread.list.include?(Thread.main), Thread.list.size]");
+                Assert(result[0].Equals(true));
+                Assert(result[1].Equals(2));
+            } finally {
+                done.Set();
+                Engine.Execute("$host_main_thread2.join; $host_main_thread2 = nil");
+            }
+        }
+
+        /// <summary>
+        /// Thread.stop with no other thread alive is MRI's ThreadError "stopping only thread" (rb_thread_stop),
+        /// where it slept forever. A fiber runs on a CLR thread of its own here but is part of the thread that
+        /// owns it, so neither it nor its thread counts as another thread - for Thread.stop, nor for Thread.list
+        /// and ThreadGroup#list, which used to list it.
+        /// </summary>
         public void Thread_StopAlone1() {
             TestOutput(@"
 require 'ruby4'
