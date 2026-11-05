@@ -396,7 +396,8 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>
         /// `x', `self.x' or `o.x' in an outlined loop where x was, on the receiver, an attr_reader when
-        /// the loop was compiled (JitCompiler.EmitCall): one per such call.
+        /// the loop was compiled (JitCompiler.EmitCall): one per such call. Or `o.x = v' where x= was
+        /// an attr_writer (JitCompiler.EmitAttributeWrite), if <see cref="Writer"/>.
         /// </summary>
         public sealed class SelfAttrSite {
             internal readonly string/*!*/ Name;
@@ -404,6 +405,7 @@ namespace IronRuby.Runtime.Jit {
             internal readonly InstanceVariableSite/*!*/ Variable;
             // `o.x' with an explicit receiver other than self can only call a public x.
             internal readonly bool PublicOnly;
+            internal readonly bool Writer;
 
             // The class the reader was last found on, under which global method version. Replaced
             // as a whole, so a racing reader sees one consistent pair.
@@ -414,9 +416,14 @@ namespace IronRuby.Runtime.Jit {
             }
             private volatile Binding _bound;
 
-            internal SelfAttrSite(string/*!*/ name, string/*!*/ variableName, bool publicOnly) {
+            internal SelfAttrSite(string/*!*/ name, string/*!*/ variableName, bool publicOnly)
+                : this(name, variableName, publicOnly, false) {
+            }
+
+            internal SelfAttrSite(string/*!*/ name, string/*!*/ variableName, bool publicOnly, bool writer) {
                 Name = name;
                 PublicOnly = publicOnly;
+                Writer = writer;
                 VariableName = variableName;
                 Variable = new InstanceVariableSite(variableName);
             }
@@ -426,10 +433,10 @@ namespace IronRuby.Runtime.Jit {
                 return b != null && b.Class == cls && b.Version == RubyModule.GlobalMethodVersion;
             }
 
-            /// <summary>Whether Name is, on cls, the attr_reader of VariableName.</summary>
+            /// <summary>Whether Name is, on cls, the attr_reader (attr_writer) of VariableName.</summary>
             internal bool Bind(RubyClass/*!*/ cls) {
                 int version = RubyModule.GlobalMethodVersion;
-                if (ReaderVariable(cls, Name, PublicOnly) != VariableName) { return false; }
+                if ((Writer ? WriterVariable(cls, Name, PublicOnly) : ReaderVariable(cls, Name, PublicOnly)) != VariableName) { return false; }
                 _bound = new Binding(cls, version);
                 return true;
             }
@@ -440,8 +447,66 @@ namespace IronRuby.Runtime.Jit {
             /// </summary>
             internal static string ReaderVariable(RubyClass/*!*/ cls, string/*!*/ name, bool publicOnly) {
                 var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
-                var reader = resolved.Found ? resolved.Info as IronRuby.Runtime.Calls.RubyAttributeReaderInfo : null;
-                return (reader != null && (!publicOnly || reader.IsPublic)) ? reader.InstanceVariableName : null;
+                if (!resolved.Found || (publicOnly && !resolved.Info.IsPublic)) { return null; }
+                var reader = resolved.Info as IronRuby.Runtime.Calls.RubyAttributeReaderInfo;
+                return (reader != null) ? reader.InstanceVariableName : TrivialAccessorVariable(cls, resolved.Info, false);
+            }
+
+            /// <summary>
+            /// The instance variable `name' writes on cls, if it is an attr_writer there (or a Ruby method
+            /// that is one in all but name, see TrivialAccessorVariable).
+            /// </summary>
+            internal static string WriterVariable(RubyClass/*!*/ cls, string/*!*/ name, bool publicOnly) {
+                var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
+                if (!resolved.Found || (publicOnly && !resolved.Info.IsPublic)) { return null; }
+                var writer = resolved.Info as IronRuby.Runtime.Calls.RubyAttributeWriterInfo;
+                return (writer != null) ? writer.InstanceVariableName : TrivialAccessorVariable(cls, resolved.Info, true);
+            }
+
+            /// <summary>
+            /// `def x; @x; end' reads @x and `def x=(v); @x = v; end' (by whatever names) writes it, as
+            /// attr_reader and attr_writer do, and nothing a call of either does is observable but that
+            /// - not even in a backtrace, since a read cannot raise and a write that would deopts to the
+            /// real call first. So an outlined loop reads or writes such a method's variable as it would
+            /// an attribute's, as TruffleRuby inlines trivial methods. Null if the method is not one.
+            /// </summary>
+            private static string TrivialAccessorVariable(RubyClass/*!*/ cls, IronRuby.Runtime.Calls.RubyMemberInfo/*!*/ info, bool writer) {
+                var method = info as IronRuby.Runtime.Calls.RubyMethodInfo;
+                // nor under coverage: the call counts the method and its line, which a read of the variable would not
+                if (method == null || cls.Context.RubyOptions.EnableTracing || cls.Context.RubyOptions.Profile ||
+                    method.Body.Coverage != null) { return null; }
+
+                var ast = method.GetSyntaxTree();
+                var parameters = ast.Parameters;
+                int arity = writer ? 1 : 0;
+                if (parameters.Mandatory.Length != arity || parameters.Optional.Length != 0 || parameters.Unsplat != null ||
+                    parameters.Block != null || parameters.SuperSplat != null) {
+                    return null;
+                }
+                var signature = parameters.Signature;
+                if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords ||
+                    signature.MinPositionalCount != arity || signature.MaxPositionalCount != arity)) {
+                    return null;
+                }
+
+                var body = ast.Body;
+                if (body == null || body.RescueClauses != null && body.RescueClauses.Count != 0 || body.ElseStatements != null ||
+                    body.EnsureStatements != null || body.Statements.Count != 1) {
+                    return null;
+                }
+
+                var statement = body.Statements.First;
+                if (!writer) {
+                    var read = statement as IronRuby.Compiler.Ast.InstanceVariable;
+                    return (read != null) ? read.Name : null;
+                }
+
+                var assignment = statement as IronRuby.Compiler.Ast.SimpleAssignmentExpression;
+                var parameter = parameters.Mandatory[0] as IronRuby.Compiler.Ast.LocalVariable;
+                var target = (assignment != null && assignment.Operation == null) ? assignment.Left as IronRuby.Compiler.Ast.InstanceVariable : null;
+                var value = (target != null) ? assignment.Right as IronRuby.Compiler.Ast.LocalVariable : null;
+                return (parameter != null && value != null && value.Name == parameter.Name &&
+                    value.DefinitionLexicalDepth == parameter.DefinitionLexicalDepth) ? target.Name : null;
             }
         }
 
@@ -469,6 +534,49 @@ namespace IronRuby.Runtime.Jit {
                 return data.GetInstanceVariable(site.Variable);
             }
             return RubyOps.ReadInstanceVariable(context, self, site.Variable);
+        }
+
+        /// <summary>
+        /// The write an attr_writer does, under the same checks as ReadSelfAttr's, of a variable the
+        /// object already has: the slot's old value goes into the undo log, so a deopt later in the
+        /// iteration takes the write back (JitUndoLog.Rollback) and the restart is invisible. Anything
+        /// else - a frozen object (whose FrozenError needs the real call), a variable to add (a shape
+        /// change), a full log, an object that is not a RubyObject - deopts before writing.
+        /// </summary>
+        public static void WriteSelfAttr(object self, object value, SelfAttrSite/*!*/ site, JitUndoLog/*!*/ log) {
+            var obj = self as RubyObject;
+            if (obj == null || (!site.IsBoundTo(obj.ImmediateClass) && !site.Bind(obj.ImmediateClass))) {
+                throw Deopt();
+            }
+            var data = obj._instanceData;
+            if (data == null || data._frozen || log.IsFull) {
+                throw Deopt();
+            }
+            object[] slots = data._ivars;
+            var shape = RubyInstanceData.ShapeOf(slots);
+            var variable = site.Variable;
+            var entry = variable.Cache;
+            int index;
+            if (shape == entry.Shape && entry.Next == null) {
+                index = entry.Index;
+            } else if (shape == entry.OtherShape) {
+                index = entry.OtherIndex;
+            } else {
+                var current = (InstanceVariableShape)shape;
+                index = current.IsSentinel ? 0 : current.IndexOf(variable.Name);
+                if (index == 0) {
+                    throw Deopt();
+                }
+                variable.Update(entry.Remember(current, index));
+            }
+            object old = RubyInstanceData.GetSlot(slots, index);
+            RubyInstanceData.SetSlot(slots, index, value);
+            if (RubyInstanceData.ShapeOf(slots) != shape) {
+                // the slots moved under the write (another thread added or removed a variable):
+                // make the write again where they are now; the variable exists, so it is a store
+                data.SetInstanceVariable(variable.Name, value);
+            }
+            log.Replaced(data, variable.Name, old);
         }
 
         public static object SetIVar(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {

@@ -25,6 +25,7 @@ using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
+using IronRuby.Runtime.Osr;
 
 namespace IronRuby.Builtins {
     using EachSite = Func<CallSite, object, Proc, object>;
@@ -194,7 +195,18 @@ namespace IronRuby.Builtins {
             // array and yield each element once rather than going through #each and a block of ours.
             var array = self as RubyArray;
             if (array != null) {
+                // -X:OSR: once the block is hot, the rest of a plain Array's search runs in a typed copy of
+                // the loop this and the block make together (BlockLoopSite)
+                var loop = (predicate != null && array.Count >= BlockLoopSite.MinRun && array.GetType() == typeof(RubyArray))
+                    ? BlockLoopSite.For(predicate, stop ? BlockLoopKind.FindTruthy : BlockLoopKind.FindFalsy) : null;
+                long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
                 for (int i = 0; i < array.Count; i++) {
+                    if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinRun) {
+                        bool found;
+                        i = loop.Run(predicate, array, i, ref countdown, out found);
+                        if (found) { return ScriptingRuntimeHelpers.BooleanToObject(positiveResult); }
+                        if (i >= array.Count) { break; }
+                    }
                     object item = array[i];
                     if (predicate != null) {
                         object blockResult;
@@ -204,9 +216,11 @@ namespace IronRuby.Builtins {
                         item = blockResult;
                     }
                     if (Protocols.IsTrue(item) == stop) {
+                        if (loop != null) { loop.Leave(countdown); }
                         return ScriptingRuntimeHelpers.BooleanToObject(positiveResult);
                     }
                 }
+                if (loop != null) { loop.Leave(countdown); }
                 return ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
             }
 

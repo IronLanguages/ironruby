@@ -3006,7 +3006,12 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static MutableString/*!*/ CreateMutableStringMM(MutableString str1, MutableString str2, RubyEncoding/*!*/ encoding) {
-            var result = MutableString.CreateInternal(str1, encoding);
+            var result = MutableString.TryConcatenateCharacters(str1, str2, encoding);
+            if (result != null) {
+                return result;
+            }
+
+            result = MutableString.CreateInternal(str1, encoding);
             AppendInterpolatedPart(result, str2);
             return result;
         }
@@ -3028,6 +3033,11 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static MutableString/*!*/ CreateMutableStringN(MutableString/*!*/[]/*!*/ parts) {
             Debug.Assert(parts.Length > 0);
+            var concatenated = MutableString.TryConcatenateCharacters(parts);
+            if (concatenated != null) {
+                return concatenated;
+            }
+
             // room for all of it up front rather than a regrowth per part (a part counts its
             // characters or its bytes, whichever it holds, which is what a capacity hint needs)
             int capacity = 0;
@@ -3140,20 +3150,6 @@ namespace IronRuby.Runtime {
         //
 
         /// <summary>
-        /// Called in try-filter that wraps the entire body of a block. 
-        /// We just need to capture stack trace, should not filter out any exception.
-        /// </summary>
-        [Emitted]
-        public static bool FilterBlockException(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-            // Flow control (throw/catch, retry, Thread#kill) is never seen by Ruby code, so it needs no
-            // backtrace. One that escaped anyway would still get one at the top level.
-            if (!(exception is StackUnwinder)) {
-                RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
-            }
-            return false;
-        }
-
-        /// <summary>
         /// Called in try-filter that wraps the entire top-level code. 
         /// We just need to capture stack trace, should not filter out any exception.
         /// </summary>
@@ -3214,19 +3210,12 @@ namespace IronRuby.Runtime {
             return false;
         }
 
-        // Ruby method exit filter:
+        // Ruby method exit filter. It only sees MethodUnwinders: the backtrace of any other exception
+        // is captured by whatever handles it (see MethodDefinition.TransformBody).
         [Emitted]
         public static bool IsMethodUnwinderTargetFrame(RubyScope/*!*/ scope, Exception/*!*/ exception) {
             var unwinder = exception as MethodUnwinder;
-            if (unwinder == null) {
-                // see FilterBlockException
-                if (!(exception is StackUnwinder)) {
-                    RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
-                }
-                return false;
-            } else {
-                return unwinder.TargetFrame == scope.FlowControlScope;
-            }
+            return unwinder != null && unwinder.TargetFrame == scope.FlowControlScope;
         }
 
         [Emitted]

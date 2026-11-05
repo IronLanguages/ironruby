@@ -41,8 +41,8 @@ namespace IronRuby.Runtime.Jit {
     /// </summary>
     public sealed class JitUndoLog {
         private struct Entry {
-            internal object Target;   // a Hash or a RubyArray
-            internal object Key;      // a Hash's key
+            internal object Target;   // a Hash, a RubyArray or an object's RubyInstanceData
+            internal object Key;      // a Hash's key, an instance variable's name
             internal object Old;
             internal int Index;       // the replaced entry or element, or -1: the key was appended
         }
@@ -96,6 +96,14 @@ namespace IronRuby.Runtime.Jit {
             e.Index = index;
         }
 
+        internal void Replaced(RubyInstanceData/*!*/ data, string/*!*/ name, object old) {
+            ref Entry e = ref Add();
+            e.Target = data;
+            e.Key = name;
+            e.Old = old;
+            e.Index = 0;
+        }
+
         internal void Appended(Hash/*!*/ hash, object/*!*/ key) {
             ref Entry e = ref Add();
             e.Target = hash;
@@ -128,8 +136,12 @@ namespace IronRuby.Runtime.Jit {
             for (int i = _count - 1; i >= mark; i--) {
                 ref Entry e = ref _entries[i];
                 var array = e.Target as RubyArray;
+                var data = e.Target as RubyInstanceData;
                 if (array != null) {
                     array.JitRestoreElement(e.Index, e.Old);
+                } else if (data != null) {
+                    // an attr_writer's store (JitRuntime.WriteSelfAttr): the variable gets its old value back
+                    data.SetInstanceVariable((string)e.Key, e.Old);
                 } else if (e.Index < 0) {
                     ((Hash)e.Target).JitUndoAppend(e.Key);
                 } else {

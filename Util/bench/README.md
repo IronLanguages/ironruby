@@ -47,6 +47,39 @@ Note: outlining a loop *without* specializing it is worth nothing - IronRuby's c
 tier is no faster than its interpreter here, because the cost is the dynamic call site on
 every operator, not interpretation.
 
+## Core iterators: the loop the iterator and its block make together
+
+`n.times { }`, `a.upto(b) { }`, `a.downto(b) { }` and Array's `each`, `map`, `select`, `any?`,
+`all?` and `none?` loop in C# and yield to the block, so there is no `while` for -X:OSR to
+replace, and each iteration pays a block invocation and a dynamic call site per operator.
+TruffleRuby inlines the block into the iterator's loop; here, once one block literal has been
+yielded to ~2000 times by one of these iterators, the iterator hands the rest of its iterations
+to the `while` the two make together (`while #i < #n; i = #i; <block body>; #i += 1; end`;
+`map` stores the block's value into a result Array, `select` the element it keeps, `any?`
+breaks out), specialized by the same compiler and under the same guards and deopts as any
+other OSR loop (Src/Ruby/Runtime/Osr/BlockLoopSite.cs).
+The iterator stays the running method, and a deopt hands the loop back at an iteration
+boundary, from which it yields as before. A block with `break`/`next`/`redo`/`return`, a
+nested block (including one given to a call in its body, `n.times { a.each { } }`), or a local
+of its own that it may read before assigning it is never outlined. Nor is a loop of fewer than
+16 iterations (`BlockLoopSite.MinRun`): its iterator does not look at the site at all, so a hot
+short loop - `nbody`'s `each` over 5 bodies - runs the code it ran before.
+Util/block-loop-matrix.rb is the differential matrix.
+
+Release, best of 6, CRuby 3.3 on the same machine for reference:
+
+| benchmark     | before | after | CRuby |
+| ---           | ---:   | ---:  | ---:  |
+| `times_loop`  | 0.179  | 0.029 | 0.089 |
+| `upto_loop`   | 0.182  | 0.031 | 0.077 |
+| `each_loop`   | 0.164  | 0.053 | 0.081 |
+| `map_loop`    | 0.123  | 0.075 | 0.066 |
+| `select_loop` | 0.148  | 0.077 | 0.065 |
+| `any_loop`    | 0.104  | 0.052 | 0.054 |
+
+`yield_loop`, `yield_0` and `yield_3` are unchanged: there a Ruby method yields, and the block
+is not inlined into it.
+
 ## Both are on by default
 
 The full sweep (core library language command_line security) gives identical results with
@@ -62,7 +95,10 @@ before, 0.57x after.
 
 ## Known limits
 
-- `times`/`each`/`upto` loops are blocks, not `while` loops, so -X:OSR does not see them.
+- Every iterator other than the ones above (Range#each, Hash#each, each_with_index, a Ruby
+  method's `yield`, ...) still invokes its block once per element: a block given to one of those
+  is never outlined, whatever its body. A `while` inside such a block is still replaced by -X:OSR
+  as any other.
 - A *method* that deopts is not re-specialized the way a loop is: its entry stays installed
   and every later call whose argument types no longer match falls through to the generic
   body. Only -X:OSR rebuilds.
