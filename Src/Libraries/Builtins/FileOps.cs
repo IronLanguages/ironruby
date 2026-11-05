@@ -1931,13 +1931,28 @@ namespace IronRuby.Builtins {
                 }
 
                 PlatformAdaptationLayer pal = context.Platform;
-                if (!followLinks) {
-                    // lstat: a link answers for itself, dangling or not, as win32.c's does
-                    FileSystemInfo link = TryGetLink(path);
-                    if (link != null) {
+                FileSystemInfo link = TryGetLink(path);
+                if (link != null) {
+                    if (!followLinks) {
+                        // lstat: a link answers for itself, dangling or not, as win32.c's does
                         result = new StatInfo(link) { IsLink = true };
                         return true;
                     }
+                    // stat: what the link leads to - the BCL's FileInfo of a link describes the link
+                    // (its length, its times) - and ENOENT for a link that leads nowhere
+                    FileSystemInfo target;
+                    try {
+                        target = link.ResolveLinkTarget(true);
+                    } catch (IOException e) {
+                        errno = Win32ErrorToErrno(e.HResult & 0xFFFF);
+                        return false;
+                    }
+                    if (target == null || !target.Exists) {
+                        errno = Posix.ENOENT;
+                        return false;
+                    }
+                    result = new StatInfo(target);
+                    return true;
                 }
                 if (pal.FileExists(path)) {
                     result = new StatInfo(new FileInfo(path));
@@ -2339,8 +2354,9 @@ namespace IronRuby.Builtins {
                 if (d != null) {
                     return d.Mode;
                 }
-                // an lstat of a link describes the link: S_IFLNK, not the type of what it points at
-                int mode = IsLinkStat(self) ? Posix.S_IFLNK : (L(self) is FileInfo) ? 0x8000 : 0x4000;
+                // an lstat of a link describes the link: S_IFLNK, and S_IEXEC as win32.c gives a link,
+                // not the type of what it points at
+                int mode = IsLinkStat(self) ? Posix.S_IFLNK | 0x40 : (L(self) is FileInfo) ? 0x8000 : 0x4000;
                 mode |= 0x100; // S_IREAD;
                 if ((L(self).Attributes & FileAttributes.ReadOnly) == 0) {
                     mode |= 0x80; // S_IWRITE;

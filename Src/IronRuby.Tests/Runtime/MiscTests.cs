@@ -2937,9 +2937,10 @@ fiber of another thread: 2
         /// win32.c supplies. Dir.fchdir, Dir.for_fd, Dir#fileno, Dir.chroot, File.lutime, File.mkfifo and the
         /// process-group and set-id parts of Process are rb_f_notimplement stubs there: NotImplementedError,
         /// and #respond_to? false. Dir's threw CLR NotImplementedException or InvalidOperationException, and
-        /// all of them answered #respond_to? with true. File.link, File.symlink and File.readlink work there,
-        /// through CreateHardLinkW, CreateSymbolicLinkW and the reparse point; they raised NotImplementedError.
-        /// Windows only. The expected output is MRI's as its win32 sources give it, not a recorded run.
+        /// all of them answered #respond_to? with true. File.link and File.readlink work there,
+        /// through CreateHardLinkW and the reparse point; they raised NotImplementedError. File.symlink's
+        /// cases are Windows_SymLinks1, which needs the right to make symbolic links. Windows only. The
+        /// expected output is MRI's as its win32 sources give it, not a recorded run.
         /// </summary>
         public void Windows_NotImplementedAndLinks1() {
             if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
@@ -2968,12 +2969,6 @@ begin
     show(""link"") { File.link(""f"", ""h""); File.read(""h"") }
     show(""link existing"") { File.link(""f"", ""h"") }
     show(""link missing"") { File.link(""nope"", ""h2"") }
-    show(""symlink to file"") { File.symlink(""f"", ""s""); [File.symlink?(""s""), File.readlink(""s""), File.read(""s"")] }
-    show(""symlink to dir"") { File.symlink(""sub"", ""sd""); [File.symlink?(""sd""), File.directory?(""sd""), File.readlink(""sd"")] }
-    show(""symlink dangling"") { File.symlink(""sub/x"", ""sn""); [File.symlink?(""sn""), File.readlink(""sn"")] }
-    show(""relative symlink in a subdirectory"") { Dir.mkdir(""d2""); Dir.mkdir(""d2/tgt""); File.symlink(""tgt"", ""d2/ln""); [File.symlink?(""d2/ln""), File.directory?(""d2/ln""), File.readlink(""d2/ln"")] }
-    show(""lstat and stat"") { [File.lstat(""s"").symlink?, File.stat(""s"").symlink?, File.ftype(""s""), File.lstat(""sd"").symlink?, File.ftype(""sn"")] }
-    show(""symlink existing"") { File.symlink(""f"", ""s"") }
     show(""readlink not a link"") { File.readlink(""f"") }
     show(""readlink missing"") { File.readlink(""nope"") }
   end
@@ -2994,15 +2989,70 @@ Process.uid=: ""NotImplementedError: uid=() function is unimplemented on this ma
 link: ""x""
 link existing: Errno::EEXIST
 link missing: Errno::ENOENT
+readlink not a link: Errno::EINVAL
+readlink missing: Errno::ENOENT
+");
+        }
+
+        /// <summary>
+        /// File.symlink and the File::Stat of a link on Windows, as win32.c has them: CreateSymbolicLinkW
+        /// with a directory link for a directory target (looked up from the link's directory, as ruby/ruby
+        /// master does), readlink of the reparse point, an lstat that describes the link itself (S_IFLNK and
+        /// S_IEXEC, neither file? nor directory?), and a stat that follows it - ENOENT for a dangling one.
+        /// Windows only, and only where this process may make symbolic links (an administrator, or Developer
+        /// Mode): elsewhere File.symlink is EACCES, as in MRI, and there is nothing here to check. The
+        /// expected output is MRI's as its win32 sources give it; the same script prints the same under
+        /// CRuby and IronRuby on Linux.
+        /// </summary>
+        public void Windows_SymLinks1() {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT || !CanCreateSymbolicLinks()) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+require 'fileutils'
+def show(l); v = begin; yield; rescue Exception => e; e.is_a?(SystemCallError) ? e.class : ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+dir = Dir.mktmpdir
+begin
+  Dir.chdir(dir) do
+    File.write(""f"", ""x"")
+    Dir.mkdir(""sub"")
+    show(""symlink to file"") { File.symlink(""f"", ""s""); [File.symlink?(""s""), File.readlink(""s""), File.read(""s"")] }
+    show(""symlink to dir"") { File.symlink(""sub"", ""sd""); [File.symlink?(""sd""), File.directory?(""sd""), File.readlink(""sd"")] }
+    show(""symlink dangling"") { File.symlink(""sub/x"", ""sn""); [File.symlink?(""sn""), File.readlink(""sn"")] }
+    show(""relative symlink in a subdirectory"") { Dir.mkdir(""d2""); Dir.mkdir(""d2/tgt""); File.symlink(""tgt"", ""d2/ln""); [File.symlink?(""d2/ln""), File.directory?(""d2/ln""), File.readlink(""d2/ln"")] }
+    show(""lstat and stat"") { [File.lstat(""s"").symlink?, File.stat(""s"").symlink?, File.ftype(""s""), File.lstat(""sd"").symlink?, File.ftype(""sn"")] }
+    show(""lstat of a link"") { st = File.lstat(""s""); [st.file?, st.directory?, st.symlink?, st.mode & 0170000 == 0120000, st.mode & 0100 != 0] }
+    show(""stat follows the link"") { [File.stat(""s"").file?, File.size(""s""), File.stat(""sd"").directory?] }
+    show(""stat of a dangling link"") { File.stat(""sn"") }
+    show(""symlink existing"") { File.symlink(""f"", ""s"") }
+  end
+ensure
+  FileUtils.rm_rf(dir) rescue nil
+end
+", @"
 symlink to file: [true, ""f"", ""x""]
 symlink to dir: [true, true, ""sub""]
 symlink dangling: [true, ""sub/x""]
 relative symlink in a subdirectory: [true, true, ""tgt""]
 lstat and stat: [true, false, ""link"", true, ""link""]
+lstat of a link: [false, false, true, true, true]
+stat follows the link: [true, 1, true]
+stat of a dangling link: Errno::ENOENT
 symlink existing: Errno::EEXIST
-readlink not a link: Errno::EINVAL
-readlink missing: Errno::ENOENT
 ");
+        }
+
+        private static bool CanCreateSymbolicLinks() {
+            string link = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ir-symlink-probe-" + Guid.NewGuid().ToString("N"));
+            try {
+                System.IO.File.CreateSymbolicLink(link, "target");
+                System.IO.File.Delete(link);
+                return true;
+            } catch (Exception) {
+                return false;
+            }
         }
 
         /// <summary>

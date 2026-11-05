@@ -932,6 +932,8 @@ namespace IronRuby.Builtins {
 
             // CLR indices of the character representations: a byte-level operation (#start_with?,
             // #getbyte) may have left either one as bytes.
+            // rb_str_index: incompatible encodings are an error before anything is searched
+            self.RequireCompatibleEncoding(searchStr);
             if (IsBrokenNeedle(searchStr)) {
                 return null;
             }
@@ -1071,6 +1073,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("[]")]
         [RubyMethod("slice")]
         public static MutableString GetSubstring(MutableString/*!*/ self, [NotNull]MutableString/*!*/ searchStr) {
+            self.RequireCompatibleEncoding(searchStr);
             return (!IsBrokenNeedle(searchStr) && self.IndexOf(searchStr) != -1) ? searchStr.CloneDerived() : null;
         }
 
@@ -1287,6 +1290,7 @@ namespace IronRuby.Builtins {
             [NotNull]MutableString/*!*/ substring, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
             // see RemoveSubstringInPlace(self, searchStr)
+            self.RequireCompatibleEncoding(substring);
             self.PrepareForCharacterRead();
             substring.PrepareForCharacterRead();
             int index = IsBrokenNeedle(substring) ? -1 : self.IndexOf(substring);
@@ -3298,6 +3302,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("gsub!")]
         public static object ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ tosConversion, ConversionStorage<MutableString>/*!*/ stringTryCast,
             RubyScope/*!*/ scope, BlockParam block, MutableString/*!*/ self, object pattern) {
+            // rb_str_gsub_bang checks before anything else, the Enumerator included
+            self.RequireNotFrozen();
             if (block != null) {
                 return BlockReplaceInPlace(tosConversion, scope, block, self, ToPattern(stringTryCast, pattern), true);
             }
