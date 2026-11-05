@@ -14743,12 +14743,12 @@ namespace IronRuby.StandardLibrary.Json {
             
             DefineLibraryMethod(module, "load", 0x21, 
                 0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Hash, System.Object>(IronRuby.StandardLibrary.Json.JsonModule.Parse)
+                new Func<IronRuby.StandardLibrary.Json.JsonModule.DecimalHookStorage, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Hash, System.Object>(IronRuby.StandardLibrary.Json.JsonModule.Parse)
             );
             
             DefineLibraryMethod(module, "parse", 0x21, 
                 0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Hash, System.Object>(IronRuby.StandardLibrary.Json.JsonModule.Parse)
+                new Func<IronRuby.StandardLibrary.Json.JsonModule.DecimalHookStorage, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Hash, System.Object>(IronRuby.StandardLibrary.Json.JsonModule.Parse)
             );
             
             DefineLibraryMethod(module, "pretty_generate", 0x21, 

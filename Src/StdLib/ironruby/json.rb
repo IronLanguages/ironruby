@@ -231,6 +231,161 @@ module JSON
     map { |klass| klass.instance_method(:to_json) }.freeze
   private_constant :GENERIC_TO_JSON
 
+  # json/common.rb's parsing API on top of the C# parser. The parser reads the grammar's options
+  # itself (symbolize_names, allow_control_characters, allow_nan, allow_trailing_comma,
+  # max_nesting, decimal_class); what upstream does with the values as each Array or object is
+  # closed - object_class, array_class, create_additions - and freeze are done here, bottom up as
+  # upstream does them. None of these, nor JSON.load's IO and blank handling, load_file, parse!,
+  # unsafe_load or Kernel#JSON, existed before.
+  class << self
+    alias_method :__ir_parse__, :parse
+
+    def parse(source, opts = nil)
+      opts = __ir_parse_options__(opts)
+      source = source.to_str if !source.is_a?(::String) && source.respond_to?(:to_str)
+      result = __ir_parse__(source, opts)
+      __ir_after_parse__(result, opts)
+    end
+
+    def parse!(source, opts = nil)
+      parse(source, { max_nesting: false, allow_nan: true }.merge(__ir_parse_options__(opts) || {}))
+    end
+
+    def load_file(filespec, opts = nil)
+      parse(::File.read(filespec, encoding: ::Encoding::UTF_8), opts)
+    end
+
+    def load_file!(filespec, opts = nil)
+      parse!(::File.read(filespec, encoding: ::Encoding::UTF_8), opts)
+    end
+
+    attr_writer :load_default_options, :unsafe_load_default_options
+
+    def load_default_options
+      @load_default_options ||= { allow_nan: true, allow_blank: true, create_additions: false }
+    end
+
+    def unsafe_load_default_options
+      @unsafe_load_default_options ||= { max_nesting: false, allow_nan: true, allow_blank: true, create_additions: true }
+    end
+
+    def load(source, proc = nil, options = nil)
+      __ir_load__(source, proc, load_default_options.merge(options || {}))
+    end
+
+    def unsafe_load(source, proc = nil, options = nil)
+      __ir_load__(source, proc, unsafe_load_default_options.merge(options || {}))
+    end
+    alias_method :restore, :load
+
+    private
+
+    def __ir_load__(source, proc, opts)
+      unless source.is_a?(::String)
+        if source.respond_to?(:to_str)
+          source = source.to_str
+        elsif source.respond_to?(:to_io)
+          source = source.to_io.read
+        elsif source.respond_to?(:read)
+          source = source.read
+        end
+      end
+      source = "null" if opts[:allow_blank] && (source.nil? || source.empty?)
+      result = parse(source, opts)
+      proc ? __ir_on_load__(result, proc) : result
+    end
+
+    # The parser's on_load: every value, bottom up and a key before its value, is replaced by what
+    # the proc answers for it - the whole document included.
+    def __ir_on_load__(value, proc)
+      case value
+      when ::Array
+        value.map! { |x| __ir_on_load__(x, proc) }
+      when ::Hash
+        pairs = value.map { |k, v| [__ir_on_load__(k, proc), __ir_on_load__(v, proc)] }
+        value.clear
+        pairs.each { |k, v| value[k] = v }
+      end
+      proc.call(value)
+    end
+
+    def __ir_parse_options__(opts)
+      return nil if opts.nil?
+      opts = opts.to_hash if !opts.is_a?(::Hash) && opts.respond_to?(:to_hash)
+      opts = opts.to_h if !opts.is_a?(::Hash) && opts.respond_to?(:to_h)
+      opts
+    end
+
+    def __ir_after_parse__(result, opts)
+      return result if opts.nil?
+      object_class = opts[:object_class]
+      array_class = opts[:array_class]
+      additions = opts[:create_additions]
+      if object_class || array_class || additions
+        create_id = opts[:create_id] || JSON.create_id
+        result = __ir_rebuild__(result, object_class, array_class, additions, create_id)
+      end
+      __ir_deep_freeze__(result) if opts[:freeze]
+      result
+    end
+
+    def __ir_rebuild__(value, object_class, array_class, additions, create_id)
+      case value
+      when ::Array
+        items = value.map { |x| __ir_rebuild__(x, object_class, array_class, additions, create_id) }
+        if array_class
+          rebuilt = array_class.new
+          items.each { |x| rebuilt << x }
+          rebuilt
+        else
+          items
+        end
+      when ::Hash
+        rebuilt = object_class ? object_class.new : {}
+        value.each { |k, v| rebuilt[k] = __ir_rebuild__(v, object_class, array_class, additions, create_id) }
+        if additions && (class_name = rebuilt[create_id])
+          klass = JSON.deep_const_get(class_name)
+          return klass.json_create(rebuilt) if klass.respond_to?(:json_creatable?) ? klass.json_creatable? : klass.respond_to?(:json_create)
+        end
+        rebuilt
+      else
+        value
+      end
+    end
+
+    def __ir_deep_freeze__(value)
+      case value
+      when ::Array then value.each { |x| __ir_deep_freeze__(x) }
+      when ::Hash then value.each { |k, v| __ir_deep_freeze__(k); __ir_deep_freeze__(v) }
+      end
+      value.freeze
+    end
+  end
+
+  # json/common.rb: the class a create_additions name refers to
+  def self.deep_const_get(path)
+    ::Object.const_get(path)
+  rescue ::NameError => e
+    ::Kernel.raise ::ArgumentError, "can't get const #{path}: #{e}"
+  end unless respond_to?(:deep_const_get)
+
+  # The decimal_class of JSON.parse, given a Float literal's text, as upstream's parser makes it:
+  # Kernel#BigDecimal for BigDecimal, else the class's try_convert, its new, or the Kernel method
+  # named after it (Rational).
+  def self.__ir_decimal__(decimal_class, text)
+    if defined?(::BigDecimal) && decimal_class == ::BigDecimal
+      ::Kernel.BigDecimal(text)
+    elsif decimal_class.respond_to?(:try_convert)
+      decimal_class.try_convert(text)
+    elsif decimal_class.respond_to?(:new)
+      decimal_class.new(text)
+    elsif decimal_class.is_a?(::Class) && ::Kernel.respond_to?(decimal_class.name, true)
+      ::Kernel.send(decimal_class.name, text)
+    else
+      ::Kernel.raise ::ArgumentError, "can't create a #{decimal_class} from a JSON number"
+    end
+  end
+
   # Called by the C# generator for an object that is not exactly one of the core classes, the
   # way the json gem calls obj.to_json(state) for one: the String the object's own to_json makes,
   # or nil when its to_json is one of the generic ones above: a subclass of a core class is then
@@ -251,4 +406,29 @@ module JSON
     result
   end
 
+end
+
+module Kernel
+  private
+
+  # json/common.rb's Kernel#JSON, #j and #jj
+  def JSON(object, *args)
+    if object.is_a?(::String)
+      ::JSON.parse(object, args.first)
+    elsif object.respond_to?(:to_str)
+      ::JSON.parse(object.to_str, args.first)
+    else
+      ::JSON.generate(object, args.first)
+    end
+  end
+
+  def j(*objs)
+    objs.each { |obj| puts ::JSON.generate(obj, allow_nan: true, max_nesting: false) }
+    nil
+  end
+
+  def jj(*objs)
+    objs.each { |obj| puts ::JSON.pretty_generate(obj, allow_nan: true, max_nesting: false) }
+    nil
+  end
 end

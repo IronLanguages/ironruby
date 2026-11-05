@@ -72,7 +72,7 @@ namespace IronRuby.StandardLibrary.Json {
             internal static readonly GeneratorOptions Compact = new GeneratorOptions();
 
             /// <summary>The options as a Hash, for a JSON::State handed to an object's own to_json.</summary>
-            internal Hash/*!*/ ToHash(RubyContext/*!*/ context, int depth) {
+            internal Hash/*!*/ ToHash(RubyContext/*!*/ context) {
                 var hash = new Hash(context);
                 hash[context.CreateAsciiSymbol("indent")] = MutableString.Create(Indent, RubyEncoding.UTF8);
                 hash[context.CreateAsciiSymbol("space")] = MutableString.Create(Space, RubyEncoding.UTF8);
@@ -83,7 +83,6 @@ namespace IronRuby.StandardLibrary.Json {
                 hash[context.CreateAsciiSymbol("ascii_only")] = AsciiOnly;
                 hash[context.CreateAsciiSymbol("script_safe")] = ScriptSafe;
                 hash[context.CreateAsciiSymbol("max_nesting")] = MaxNesting;
-                hash[context.CreateAsciiSymbol("depth")] = depth;
                 return hash;
             }
 
@@ -199,9 +198,15 @@ namespace IronRuby.StandardLibrary.Json {
             /// </summary>
             private MutableString TryOwnToJson(object obj, int depth) {
                 var site = _toJson.GetCallSite("__ir_to_json__", 3);
-                object result = site.Target(site, _jsonModule, obj, _options.ToHash(_toJson.Context, depth), depth);
+                if (_optionsHash == null) {
+                    _optionsHash = _options.ToHash(_toJson.Context);
+                }
+                object result = site.Target(site, _jsonModule, obj, _optionsHash, depth);
                 return result as MutableString;
             }
+
+            // the options for a State, made once per generate and only when an object needs them
+            private Hash _optionsHash;
 
             // As the json gem counts it: each Array and Hash is a level, checked as it is entered.
             private void EnterLevel(int depth) {
@@ -246,9 +251,16 @@ namespace IronRuby.StandardLibrary.Json {
                     return;
                 }
 
+                // a Symbol is not one of the classes the json gem writes directly: json/add/symbol gives it
+                // a to_json of its own, and the generic one writes its name
                 var symbol = obj as RubySymbol;
                 if (symbol != null) {
-                    WriteString(symbol.ToString());
+                    MutableString ownSymbol = TryOwnToJson(obj, depth);
+                    if (ownSymbol != null) {
+                        Builder.Append(StringContent(ownSymbol));
+                    } else {
+                        WriteString(symbol.ToString());
+                    }
                     return;
                 }
 
@@ -463,18 +475,40 @@ namespace IronRuby.StandardLibrary.Json {
 
         [RubyMethod("parse", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
-        public static object Parse(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]MutableString/*!*/ source,
+        public static object Parse(DecimalHookStorage/*!*/ decimalHook, object self, [DefaultProtocol, NotNull]MutableString/*!*/ source,
             [DefaultParameterValue(null)]Hash options) {
 
+            var context = decimalHook.Context;
             var parser = new JsonParser(source.ConvertToString(), context);
             parser.SymbolizeNames = TruthyOption(context, options, "symbolize_names");
             parser.AllowControlCharacters = TruthyOption(context, options, "allow_control_characters");
+            parser.AllowNan = TruthyOption(context, options, "allow_nan");
+            parser.AllowTrailingComma = TruthyOption(context, options, "allow_trailing_comma");
+
+            // max_nesting: 100 unless given; false or nil (or 0) for no limit
+            object maxNesting;
+            if (options != null && options.TryGetValue(context.CreateAsciiSymbol("max_nesting"), out maxNesting)) {
+                parser.MaxNesting = (maxNesting is int) ? (int)maxNesting : RubyOps.IsTrue(maxNesting) ? 100 : 0;
+            }
+
+            // decimal_class: each Float literal goes to JSON.__ir_decimal__(decimal_class, its text) instead
+            object decimalClass;
+            if (options != null && options.TryGetValue(context.CreateAsciiSymbol("decimal_class"), out decimalClass) && decimalClass != null) {
+                var site = decimalHook.GetCallSite("__ir_decimal__", 2);
+                parser.DecimalClass = text => site.Target(site, self, decimalClass, MutableString.CreateAscii(text));
+            }
+
             object result = parser.ParseValue(0);
             parser.SkipWhitespace();
             if (!parser.AtEnd) {
                 throw new JsonParserError("unexpected token at '" + parser.Rest + "'");
             }
             return result;
+        }
+
+        /// <summary>The call site of JSON.__ir_decimal__(decimal_class, text), in json.rb.</summary>
+        public sealed class DecimalHookStorage : CallSiteStorage<Func<CallSite, object, object, object, object>> {
+            public DecimalHookStorage(RubyContext/*!*/ context) : base(context) { }
         }
 
         /// <summary>
@@ -541,6 +575,42 @@ namespace IronRuby.StandardLibrary.Json {
         /// </summary>
         internal bool AllowControlCharacters { get; set; }
 
+        /// <summary>allow_nan: NaN, Infinity and -Infinity are read as Floats.</summary>
+        internal bool AllowNan { get; set; }
+
+        /// <summary>allow_trailing_comma: a comma may follow the last element of an Array or object.</summary>
+        internal bool AllowTrailingComma { get; set; }
+
+        /// <summary>
+        /// max_nesting, counted as the json gem's parser counts it - an Array or object is a level once it
+        /// has something in it, so a hundred-and-first empty one is still within 100; 0 for no limit. It
+        /// was a fixed 100, whatever the option said.
+        /// </summary>
+        internal int MaxNesting { get; set; } = 100;
+
+        /// <summary>decimal_class: what a Float literal's text is made into, instead of a Float.</summary>
+        internal Func<string, object> DecimalClass { get; set; }
+
+        // Keys are frozen, as Hash#[]= makes a String key, and one String per distinct key is shared by
+        // every object of the document, as the json gem does. They were mutable: changing one in
+        // place left its Hash unable to find it.
+        private Dictionary<string, MutableString> _keys;
+
+        private MutableString/*!*/ KeyString(string/*!*/ name) {
+            if (_keys == null) {
+                _keys = new Dictionary<string, MutableString>();
+            }
+            MutableString key;
+            if (!_keys.TryGetValue(name, out key)) {
+                key = MutableString.Create(name, RubyEncoding.UTF8);
+                key.Freeze();
+                if (_keys.Count < 4096) {
+                    _keys[name] = key;
+                }
+            }
+            return key;
+        }
+
         internal JsonParser(string/*!*/ source, RubyContext/*!*/ context) {
             _source = source;
             _context = context;
@@ -574,11 +644,13 @@ namespace IronRuby.StandardLibrary.Json {
             }
         }
 
-        internal object ParseValue(int depth) {
-            if (depth > 100) {
-                throw new JsonParserError("nesting of 100 is too deep");
+        private void EnterLevel(int depth) {
+            if (MaxNesting > 0 && depth + 1 > MaxNesting) {
+                throw new JsonNestingError(String.Format("nesting of {0} is too deep", depth + 1));
             }
+        }
 
+        internal object ParseValue(int depth) {
             SkipWhitespace();
             if (AtEnd) {
                 throw new JsonParserError("unexpected end of input");
@@ -592,8 +664,23 @@ namespace IronRuby.StandardLibrary.Json {
                 case 't': Expect("true"); return ScriptingRuntimeHelpers.True;
                 case 'f': Expect("false"); return ScriptingRuntimeHelpers.False;
                 case 'n': Expect("null"); return null;
-                default: return ParseNumber();
+                case 'N':
+                    if (AllowNan) { Expect("NaN"); return Double.NaN; }
+                    break;
+                case 'I':
+                    if (AllowNan) { Expect("Infinity"); return Double.PositiveInfinity; }
+                    break;
+                case '-':
+                    if (AllowNan && String.CompareOrdinal(_source, _position, "-Infinity", 0, 9) == 0) {
+                        _position += 9;
+                        return Double.NegativeInfinity;
+                    }
+                    break;
             }
+            if (c == 'N' || c == 'I') {
+                throw new JsonParserError("unexpected token at '" + Rest + "'");
+            }
+            return ParseNumber();
         }
 
         private void Expect(string/*!*/ word) {
@@ -614,13 +701,18 @@ namespace IronRuby.StandardLibrary.Json {
 
             while (true) {
                 SkipWhitespace();
+                if (AllowTrailingComma && hash.Count > 0 && !AtEnd && _source[_position] == '}') {
+                    _position++;
+                    return hash;
+                }
                 if (AtEnd || _source[_position] != '"') {
                     throw new JsonParserError("expected object key at '" + Rest + "'");
                 }
+                if (hash.Count == 0) {
+                    EnterLevel(depth);
+                }
                 string name = ParseString();
-                object key = SymbolizeNames
-                    ? (object)_context.CreateSymbol(name, RubyEncoding.UTF8)
-                    : MutableString.Create(name, RubyEncoding.UTF8);
+                object key = SymbolizeNames ? (object)_context.CreateSymbol(name, RubyEncoding.UTF8) : KeyString(name);
                 SkipWhitespace();
                 if (AtEnd || _source[_position] != ':') {
                     throw new JsonParserError("expected ':' at '" + Rest + "'");
@@ -652,8 +744,16 @@ namespace IronRuby.StandardLibrary.Json {
                 _position++;
                 return array;
             }
+            EnterLevel(depth);
 
             while (true) {
+                if (AllowTrailingComma && array.Count > 0) {
+                    SkipWhitespace();
+                    if (!AtEnd && _source[_position] == ']') {
+                        _position++;
+                        return array;
+                    }
+                }
                 array.Add(ParseValue(depth + 1));
                 SkipWhitespace();
                 if (AtEnd) {
@@ -673,6 +773,20 @@ namespace IronRuby.StandardLibrary.Json {
 
         private string/*!*/ ParseString() {
             _position++; // opening quote
+
+            // most strings have no escape and no control character: take them as they are
+            int start = _position;
+            for (int i = start; i < _source.Length; i++) {
+                char ch = _source[i];
+                if (ch == '"') {
+                    _position = i + 1;
+                    return _source.Substring(start, i - start);
+                }
+                if (ch == '\\' || ch < ' ') {
+                    break;
+                }
+            }
+
             var builder = new StringBuilder();
             while (true) {
                 if (AtEnd) {
@@ -742,6 +856,10 @@ namespace IronRuby.StandardLibrary.Json {
                 throw new JsonParserError("unexpected token at '" + Rest + "'");
             }
 
+            if (isFloat && DecimalClass != null) {
+                return DecimalClass(text);
+            }
+
             if (isFloat) {
                 double result;
                 if (!Double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
@@ -755,9 +873,12 @@ namespace IronRuby.StandardLibrary.Json {
                 return ScriptingRuntimeHelpers.Int32ToObject(intResult);
             }
 
+            // an Integer that fits in 64 bits is a long, as everywhere else in the runtime: a BigInteger
+            // of the same value is a different Hash key - {3000000000 => 1}[JSON.parse("[3000000000]")[0]]
+            // was nil
             BigInteger bigResult;
             if (BigInteger.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out bigResult)) {
-                return bigResult;
+                return Protocols.Normalize(bigResult);
             }
 
             throw new JsonParserError("invalid number '" + text + "'");
