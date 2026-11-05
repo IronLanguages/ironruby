@@ -4266,9 +4266,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "fdiv", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000001U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000001U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
                 new Func<System.Int32, System.Int32, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
+                new Func<System.Int32, System.Int64, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
+                new Func<System.Int64, System.Int64, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
+                new Func<System.Int64, System.Int32, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
+                new Func<System.Int64, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
                 new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.FDiv), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.FDiv)
