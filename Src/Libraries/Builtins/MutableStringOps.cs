@@ -3279,18 +3279,44 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 1, expected 2)");
         }
 
+        // The pattern is converted - and a String one checked (RubyRegex.FromLiteralPattern) - when
+        // the Enumerator runs, not when it is made: MRI's str_gsub returns the Enumerator before
+        // get_pat_quoted, so "abc".gsub("\xFF") is an Enumerator whose #to_a raises.
         [RubyMethod("gsub")]
-        public static object ReplaceAll(ConversionStorage<MutableString>/*!*/ tosConversion, RubyScope/*!*/ scope,
-            MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
+        //
+        // The binder may pick these for a call with a block too (an object parameter needs no
+        // conversion), so they do the work at once when there is one, as MRI does.
+        public static object ReplaceAll(ConversionStorage<MutableString>/*!*/ tosConversion, ConversionStorage<MutableString>/*!*/ stringTryCast,
+            RubyScope/*!*/ scope, BlockParam block, MutableString/*!*/ self, object pattern) {
+            if (block != null) {
+                return BlockReplaceAll(tosConversion, scope, block, self, ToPattern(stringTryCast, pattern));
+            }
             scope.MarkCaptured();
-            return new Enumerator((_, block) => BlockReplaceAll(tosConversion, scope, block, self, pattern));
+            return new Enumerator((_, b) => BlockReplaceAll(tosConversion, scope, b, self, ToPattern(stringTryCast, pattern)));
         }
 
         [RubyMethod("gsub!")]
-        public static object ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ tosConversion, RubyScope/*!*/ scope,
-            MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
+        public static object ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ tosConversion, ConversionStorage<MutableString>/*!*/ stringTryCast,
+            RubyScope/*!*/ scope, BlockParam block, MutableString/*!*/ self, object pattern) {
+            if (block != null) {
+                return BlockReplaceInPlace(tosConversion, scope, block, self, ToPattern(stringTryCast, pattern), true);
+            }
             scope.MarkCaptured();
-            return new Enumerator((_, block) => BlockReplaceInPlace(tosConversion, scope, block, self, pattern, true));
+            return new Enumerator((_, b) => BlockReplaceInPlace(tosConversion, scope, b, self, ToPattern(stringTryCast, pattern), true));
+        }
+
+        // MRI's get_pat_quoted: a Regexp as it is, a String (or what #to_str makes one) as a
+        // literal pattern, anything else Check_Type's TypeError.
+        private static RubyRegex/*!*/ ToPattern(ConversionStorage<MutableString>/*!*/ stringTryCast, object pattern) {
+            var regex = pattern as RubyRegex;
+            if (regex != null) {
+                return regex;
+            }
+            MutableString str = Protocols.TryCastToString(stringTryCast, pattern);
+            if (str == null) {
+                throw RubyExceptions.CreateUnexpectedTypeError(stringTryCast.Context, pattern, "Regexp");
+            }
+            return RubyRegex.FromLiteralPattern(str);
         }
 
         #endregion

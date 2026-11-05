@@ -269,6 +269,11 @@ namespace IronRuby.Builtins {
                 var info = _threadInfo ?? (_threadInfo = RubyThreadInfo.FromThread(Thread.CurrentThread));
                 info[_currentKey] = handle;
                 info.FiberExecution = this;
+                if (!_root) {
+                    // set before it is ever cleared again, so that no moment between two fibers -
+                    // FiberExecution gone, not yet parked - counts this thread as a Ruby thread
+                    info.IsFiberWorker = true;
+                }
                 RubyUtils.SetFiberOwnerThread(_owner);
                 _mailbox.GetOwnerInfo(_owner).ActiveFiberThread = Thread.CurrentThread;
             }

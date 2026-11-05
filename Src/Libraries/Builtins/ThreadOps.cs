@@ -213,7 +213,24 @@ namespace IronRuby.Builtins {
             /// (a host's, the main thread). Each RubyContext is a VM of its own, as far as which
             /// threads it has goes.
             /// </summary>
-            internal RubyContext Context { get; set; }
+            internal RubyContext Context {
+                get {
+                    RubyContext context;
+                    return (_context != null && _context.TryGetTarget(out context)) ? context : null;
+                }
+                set { _context = (value != null) ? new WeakReference<RubyContext>(value) : null; }
+            }
+
+            // Weak: _mapping keeps every entry for good, and a strong reference here would keep a
+            // runtime the host has let go of alive for as long as the process runs.
+            private WeakReference<RubyContext> _context;
+
+            /// <summary>
+            /// A CLR thread that has run a fiber of some thread's (ThreadOps.Fiber.cs). It is never a
+            /// Ruby thread itself, before, between or after its fibers - Thread.current inside a
+            /// fiber is the thread that owns it - so the Ruby thread lists leave it out for good.
+            /// </summary>
+            internal volatile bool IsFiberWorker;
             internal bool ExitRequested { get; set; }
             internal MutableString Name { get; set; }
             internal bool ReportOnException { get; set; }
@@ -325,9 +342,9 @@ namespace IronRuby.Builtins {
 
             /// <summary>
             /// The Ruby threads of a runtime, as Thread.list and ThreadGroup#list see them:
-            /// <see cref="Threads"/> less the threads another runtime's Thread.new made - two
-            /// ScriptRuntimes in one process are two VMs, and neither lists the other's threads - and
-            /// less the CLR threads that run (or hold suspended) a fiber of another thread's. A fiber
+            /// <see cref="Threads"/> less the threads of another runtime - two ScriptRuntimes in one
+            /// process are two VMs, and neither lists the other's threads - and less the CLR threads
+            /// that run (or have run, or hold suspended) a fiber of a thread's. A fiber
             /// has a CLR thread of its own here, but in MRI it is part of the thread that owns it, and
             /// Thread.current inside it is that thread.
             /// </summary>
@@ -335,7 +352,13 @@ namespace IronRuby.Builtins {
                 RubyThreadInfo[] all = Threads;
                 var result = new List<RubyThreadInfo>(all.Length);
                 foreach (RubyThreadInfo info in all) {
-                    if (info.Context != null && info.Context != context) {
+                    if (info.IsFiberWorker) {
+                        continue;
+                    }
+                    // A thread no Thread.new made (a host's) belongs to the runtime it is the main
+                    // thread of, or else to the one asking from it now.
+                    RubyContext owner = info.Context;
+                    if (owner != null ? owner != context : (info.Thread != context.MainThread && info.Thread != Thread.CurrentThread)) {
                         continue;
                     }
                     FiberCore fiber = info.FiberExecution;

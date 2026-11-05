@@ -1238,8 +1238,10 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// win32.c's symlink(): the target with its slashes turned around, a directory link when the
-        /// target names a directory (relative to the current directory, as there), created without
-        /// the privilege where Windows allows that - which the BCL asks for itself.
+        /// target names a directory, created without the privilege where Windows allows that -
+        /// which the BCL asks for itself. A relative target is looked up from the link's directory,
+        /// where the link will resolve it, as ruby/ruby master's win32.c does (4.0.0 looked in the
+        /// current directory, and made a file link to a directory that is not there).
         /// </summary>
         private static void WindowsSymLink(string/*!*/ strOld, string/*!*/ strNew) {
             if (strNew.Length == 0) {
@@ -1249,8 +1251,12 @@ namespace IronRuby.Builtins {
                 throw Posix.Error(Posix.EINVAL, "(" + strOld + ", " + strNew + ")");
             }
             string target = strOld.Replace('/', '\\');
+            string link = strNew.Replace('/', '\\');
+            bool independent = (target.Length >= 2 && char.IsAsciiLetter(target[0]) && target[1] == ':') || target[0] == '\\';
+            int separator = link.LastIndexOf('\\');
+            string probe = (!independent && separator >= 0) ? link.Substring(0, separator + 1) + target : target;
             try {
-                if (Directory.Exists(target)) {
+                if (Directory.Exists(probe)) {
                     Directory.CreateSymbolicLink(strNew, target);
                 } else {
                     File.CreateSymbolicLink(strNew, target);
@@ -2097,13 +2103,13 @@ namespace IronRuby.Builtins {
             [RubyMethod("directory?")]
             public static bool IsDirectory(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null ? d.FileType == Posix.S_IFDIR : (L(self) is DirectoryInfo);
+                return d != null ? d.FileType == Posix.S_IFDIR : (!IsLinkStat(self) && L(self) is DirectoryInfo);
             }
 
             [RubyMethod("file?")]
             public static bool IsFile(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null ? d.FileType == Posix.S_IFREG : (L(self) is FileInfo);
+                return d != null ? d.FileType == Posix.S_IFREG : (!IsLinkStat(self) && L(self) is FileInfo);
             }
 
             [RubyMethod("pipe?")]
@@ -2121,19 +2127,20 @@ namespace IronRuby.Builtins {
             [RubyMethod("symlink?")]
             public static bool IsSymLink(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                if (d == null) {
-                    var si = self as StatInfo;
-                    return si != null && si.IsLink;
-                }
-                return d.FileType == Posix.S_IFLNK;
+                return d != null ? d.FileType == Posix.S_IFLNK : IsLinkStat(self);
+            }
+
+            // Off Unix: an lstat of a symbolic link or junction (StatInfo.IsLink).
+            private static bool IsLinkStat(FileSystemInfo/*!*/ self) {
+                var si = self as StatInfo;
+                return si != null && si.IsLink;
             }
 
             [RubyMethod("ftype")]
             public static MutableString/*!*/ FileType(FileSystemInfo/*!*/ self) {
                 var d = D(self);
                 if (d == null) {
-                    var si = self as StatInfo;
-                    if (si != null && si.IsLink) {
+                    if (IsLinkStat(self)) {
                         return MutableString.CreateAscii("link");
                     }
                     return MutableString.CreateAscii(IsFile(self) ? "file" : "directory");
@@ -2332,7 +2339,8 @@ namespace IronRuby.Builtins {
                 if (d != null) {
                     return d.Mode;
                 }
-                int mode = (L(self) is FileInfo) ? 0x8000 : 0x4000;
+                // an lstat of a link describes the link: S_IFLNK, not the type of what it points at
+                int mode = IsLinkStat(self) ? Posix.S_IFLNK : (L(self) is FileInfo) ? 0x8000 : 0x4000;
                 mode |= 0x100; // S_IREAD;
                 if ((L(self).Attributes & FileAttributes.ReadOnly) == 0) {
                     mode |= 0x80; // S_IWRITE;

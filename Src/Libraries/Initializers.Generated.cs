@@ -8204,18 +8204,18 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "gsub", 0x51, 
-                0x00000014U, 0x00000014U, 0x00100060U, 0x00040008U, 
+                0x00000014U, 0x00000014U, 0x00100060U, 0x00000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.Builtins.MutableStringOps.BlockReplaceAll), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.BlockReplaceAll), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ReplaceAll), 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceAll)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceAll)
             );
             
             DefineLibraryMethod(module, "gsub!", 0x51, 
-                0x00080014U, 0x00100060U, 0x00040008U, 
+                0x00080014U, 0x00100060U, 0x00000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.Builtins.MutableStringOps.BlockReplaceAllInPlace), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ReplaceAllInPlace), 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceAllInPlace)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceAllInPlace)
             );
             
             DefineLibraryMethod(module, "hex", 0x51, 

@@ -2827,6 +2827,7 @@ show(""sub blk"") { s.sub(pat) { ""Z"" } }
 show(""gsub"") { s.gsub(pat, ""Z"") }
 show(""gsub!"") { s.dup.gsub!(pat) { ""Z"" } }
 show(""gsub enum"") { s.gsub(pat).to_a }
+show(""gsub enum is lazy"") { [""abc"".gsub(pat).class, ""abc"".dup.gsub!(pat).class] }
 show(""gsub hash"") { s.gsub(pat, {}) }
 show(""scan"") { s.scan(pat) }
 show(""scan blk"") { s.scan(pat) { } }
@@ -2863,6 +2864,7 @@ sub blk: ""RegexpError: invalid multibyte character: /\\xFF/""
 gsub: ""RegexpError: invalid multibyte character: /\\xFF/""
 gsub!: ""RegexpError: invalid multibyte character: /\\xFF/""
 gsub enum: ""RegexpError: invalid multibyte character: /\\xFF/""
+gsub enum is lazy: [Enumerator, Enumerator]
 gsub hash: ""RegexpError: invalid multibyte character: /\\xFF/""
 scan: ""RegexpError: invalid multibyte character: /\\xFF/""
 scan blk: ""RegexpError: invalid multibyte character: /\\xFF/""
@@ -2911,8 +2913,10 @@ show(""in fiber: group list"") { Fiber.new { ThreadGroup::Default.list.size }.re
 show(""in fiber: stop"") { Fiber.new { Thread.stop }.resume }
 f = Fiber.new { Fiber.yield }; f.resume
 show(""suspended fiber: list"") { [Thread.list.size, Thread.list == [Thread.main]] }
-show(""another thread stops"") { t = Thread.new { Thread.stop; :woke }; Thread.pass until t.status == ""sleep""; t.run; t.value }
-show(""main stops, another wakes it"") { t = Thread.new { Thread.pass until Thread.main.status == ""sleep""; Thread.main.wakeup }; Thread.stop; t.join; :ok }
+# bounded, so that a Thread.stop that raised where it should sleep fails the test instead of hanging it
+def wait_for(seconds = 10); deadline = Time.now + seconds; Thread.pass until yield || Time.now > deadline; end
+show(""another thread stops"") { t = Thread.new { Thread.stop; :woke }; begin; wait_for { !t.alive? || t.status == ""sleep"" }; t.run if t.alive?; t.value; ensure; t.kill; end }
+show(""main stops, another wakes it"") { t = Thread.new { wait_for { Thread.main.status == ""sleep"" }; Thread.main.wakeup }; begin; Thread.stop; t.join; :ok; ensure; t.kill; end }
 show(""fiber of another thread"") { Thread.new { Fiber.new { Thread.list.size }.resume }.value }
 f.resume
 ", @"
@@ -2967,6 +2971,7 @@ begin
     show(""symlink to file"") { File.symlink(""f"", ""s""); [File.symlink?(""s""), File.readlink(""s""), File.read(""s"")] }
     show(""symlink to dir"") { File.symlink(""sub"", ""sd""); [File.symlink?(""sd""), File.directory?(""sd""), File.readlink(""sd"")] }
     show(""symlink dangling"") { File.symlink(""sub/x"", ""sn""); [File.symlink?(""sn""), File.readlink(""sn"")] }
+    show(""relative symlink in a subdirectory"") { Dir.mkdir(""d2""); Dir.mkdir(""d2/tgt""); File.symlink(""tgt"", ""d2/ln""); [File.symlink?(""d2/ln""), File.directory?(""d2/ln""), File.readlink(""d2/ln"")] }
     show(""lstat and stat"") { [File.lstat(""s"").symlink?, File.stat(""s"").symlink?, File.ftype(""s""), File.lstat(""sd"").symlink?, File.ftype(""sn"")] }
     show(""symlink existing"") { File.symlink(""f"", ""s"") }
     show(""readlink not a link"") { File.readlink(""f"") }
@@ -2992,6 +2997,7 @@ link missing: Errno::ENOENT
 symlink to file: [true, ""f"", ""x""]
 symlink to dir: [true, true, ""sub""]
 symlink dangling: [true, ""sub/x""]
+relative symlink in a subdirectory: [true, true, ""tgt""]
 lstat and stat: [true, false, ""link"", true, ""link""]
 symlink existing: Errno::EEXIST
 readlink not a link: Errno::EINVAL
