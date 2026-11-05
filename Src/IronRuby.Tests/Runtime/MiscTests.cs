@@ -2967,6 +2967,7 @@ begin
     show(""symlink to file"") { File.symlink(""f"", ""s""); [File.symlink?(""s""), File.readlink(""s""), File.read(""s"")] }
     show(""symlink to dir"") { File.symlink(""sub"", ""sd""); [File.symlink?(""sd""), File.directory?(""sd""), File.readlink(""sd"")] }
     show(""symlink dangling"") { File.symlink(""sub/x"", ""sn""); [File.symlink?(""sn""), File.readlink(""sn"")] }
+    show(""lstat and stat"") { [File.lstat(""s"").symlink?, File.stat(""s"").symlink?, File.ftype(""s""), File.lstat(""sd"").symlink?, File.ftype(""sn"")] }
     show(""symlink existing"") { File.symlink(""f"", ""s"") }
     show(""readlink not a link"") { File.readlink(""f"") }
     show(""readlink missing"") { File.readlink(""nope"") }
@@ -2991,6 +2992,7 @@ link missing: Errno::ENOENT
 symlink to file: [true, ""f"", ""x""]
 symlink to dir: [true, true, ""sub""]
 symlink dangling: [true, ""sub/x""]
+lstat and stat: [true, false, ""link"", true, ""link""]
 symlink existing: Errno::EEXIST
 readlink not a link: Errno::EINVAL
 readlink missing: Errno::ENOENT

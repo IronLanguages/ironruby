@@ -1790,6 +1790,10 @@ namespace IronRuby.Builtins {
             // way, which is what makes File.stat(...).instance_of?(File::Stat) true.
             internal readonly FileSystemInfo Legacy;
 
+            // Off Unix: an lstat of a symbolic link (or junction), which the BCL object cannot say
+            // by itself - File.symlink? and File.lstat(...).symlink? read it.
+            internal bool IsLink;
+
             internal StatInfo(string/*!*/ path, Posix.StatData/*!*/ data) {
                 Data = data;
                 OriginalPath = path;
@@ -1921,6 +1925,14 @@ namespace IronRuby.Builtins {
                 }
 
                 PlatformAdaptationLayer pal = context.Platform;
+                if (!followLinks) {
+                    // lstat: a link answers for itself, dangling or not, as win32.c's does
+                    FileSystemInfo link = TryGetLink(path);
+                    if (link != null) {
+                        result = new StatInfo(link) { IsLink = true };
+                        return true;
+                    }
+                }
                 if (pal.FileExists(path)) {
                     result = new StatInfo(new FileInfo(path));
                 } else if (pal.DirectoryExists(path)) {
@@ -1932,6 +1944,21 @@ namespace IronRuby.Builtins {
                     return false;
                 }
                 return true;
+            }
+
+            // The link at path itself if it is a symbolic link or a junction; null otherwise.
+            private static FileSystemInfo TryGetLink(string/*!*/ path) {
+                try {
+                    FileAttributes attributes = File.GetAttributes(path);
+                    if ((attributes & FileAttributes.ReparsePoint) == 0) {
+                        return null;
+                    }
+                    FileSystemInfo info = (attributes & FileAttributes.Directory) != 0
+                        ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path);
+                    return info.LinkTarget != null ? info : null;
+                } catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is ArgumentException || e is NotSupportedException) {
+                    return null;
+                }
             }
 
             private static Posix.StatData D(FileSystemInfo/*!*/ self) {
@@ -2094,13 +2121,21 @@ namespace IronRuby.Builtins {
             [RubyMethod("symlink?")]
             public static bool IsSymLink(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null && d.FileType == Posix.S_IFLNK;
+                if (d == null) {
+                    var si = self as StatInfo;
+                    return si != null && si.IsLink;
+                }
+                return d.FileType == Posix.S_IFLNK;
             }
 
             [RubyMethod("ftype")]
             public static MutableString/*!*/ FileType(FileSystemInfo/*!*/ self) {
                 var d = D(self);
                 if (d == null) {
+                    var si = self as StatInfo;
+                    if (si != null && si.IsLink) {
+                        return MutableString.CreateAscii("link");
+                    }
                     return MutableString.CreateAscii(IsFile(self) ? "file" : "directory");
                 }
                 switch (d.FileType) {
