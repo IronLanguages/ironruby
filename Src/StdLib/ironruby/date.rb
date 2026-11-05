@@ -417,6 +417,54 @@ class DateTime < Date
 
 end
 
+# date_core.c's d_lite_step, d_lite_upto and d_lite_downto: an Enumerator of the arguments as given
+# when there is no block; otherwise from self by `step` (1) with +, compared with the limit by <=> -
+# so a DateTime stops at its limit's time and a step may be a fraction of a day - and a zero step
+# yields self for ever.
+class Date
+  def step(limit, by = (by_omitted = true; 1))
+    return enum_for(:step, *(by_omitted ? [limit] : [limit, by])) unless block_given?
+    date = self
+    c = by <=> 0
+    if c.nil?
+      ::Kernel.raise ::ArgumentError, "comparison of #{by.class} with 0 failed"
+    elsif c < 0
+      while (date <=> limit) >= 0
+        yield date
+        date += by
+      end
+    elsif c == 0
+      loop { yield date }
+    else
+      while (date <=> limit) <= 0
+        yield date
+        date += by
+      end
+    end
+    self
+  end
+
+  def upto(max)
+    return enum_for(:upto, max) unless block_given?
+    date = self
+    while (date <=> max) <= 0
+      yield date
+      date += 1
+    end
+    self
+  end
+
+  def downto(min)
+    return enum_for(:downto, min) unless block_given?
+    date = self
+    while (date <=> min) >= 0
+      yield date
+      date -= 1
+    end
+    self
+  end
+end
+
 # The C# side registers each name separately; MRI defines them as real aliases
 # and ruby/spec checks `instance_method(:mday) == instance_method(:day)`.
 class Date

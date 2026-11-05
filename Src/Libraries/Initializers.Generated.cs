@@ -14878,11 +14878,6 @@ namespace IronRuby.StandardLibrary.Date {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Date.RubyDate, System.Object, IronRuby.Builtins.Hash>(IronRuby.StandardLibrary.Date.RubyDate.DeconstructKeys)
             );
             
-            DefineLibraryMethod(module, "downto", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Date.RubyDate, System.Object, System.Object>(IronRuby.StandardLibrary.Date.RubyDate.DownTo)
-            );
-            
             DefineLibraryMethod(module, "england", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.Date.RubyDate, IronRuby.StandardLibrary.Date.RubyDate>(IronRuby.StandardLibrary.Date.RubyDate.ToEngland)
@@ -15073,11 +15068,6 @@ namespace IronRuby.StandardLibrary.Date {
                 new Func<IronRuby.StandardLibrary.Date.RubyDate, System.Double>(IronRuby.StandardLibrary.Date.RubyDate.GetStart)
             );
             
-            DefineLibraryMethod(module, "step", 0x11, 
-                0x00040000U, 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Date.RubyDate, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Date.RubyDate.Step)
-            );
-            
             DefineLibraryMethod(module, "strftime", 0x11, 
                 0x00010000U, 
                 new Func<IronRuby.StandardLibrary.Date.RubyDate, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Date.RubyDate.Strftime)
@@ -15116,11 +15106,6 @@ namespace IronRuby.StandardLibrary.Date {
             DefineLibraryMethod(module, "tuesday?", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.Date.RubyDate, System.Boolean>(IronRuby.StandardLibrary.Date.RubyDate.IsTuesday)
-            );
-            
-            DefineLibraryMethod(module, "upto", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Date.RubyDate, System.Object, System.Object>(IronRuby.StandardLibrary.Date.RubyDate.UpTo)
             );
             
             DefineLibraryMethod(module, "wday", 0x11, 
