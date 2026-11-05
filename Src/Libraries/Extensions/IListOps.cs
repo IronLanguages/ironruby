@@ -1222,13 +1222,21 @@ namespace IronRuby.Builtins {
         public static object Map([NotNull]BlockParam/*!*/ collector, IList/*!*/ self) {
             var result = new RubyArray(self.Count);
             var array = self as RubyArray;
+            // -X:OSR: as Each
+            var loop = (array != null && array.GetType() == typeof(RubyArray)) ? BlockLoopSite.For(collector, BlockLoopKind.Map) : null;
+            long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             for (int i = 0; i < (array != null ? array.Count : self.Count); i++) {
+                if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinRun) {
+                    i = loop.Run(collector, array, result, i, ref countdown);
+                    if (i >= array.Count) { break; }
+                }
                 object blockResult;
                 if (collector.Yield(array != null ? array[i] : self[i], out blockResult)) {
                     return blockResult;
                 }
                 result.Add(blockResult);
             }
+            if (loop != null) { loop.Leave(countdown); }
             return result;
         }
 
@@ -1243,7 +1251,14 @@ namespace IronRuby.Builtins {
         public static object Select([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
             var result = new RubyArray();
             var array = self as RubyArray;
+            // -X:OSR: as Each
+            var loop = (array != null && array.GetType() == typeof(RubyArray)) ? BlockLoopSite.For(predicate, BlockLoopKind.Select) : null;
+            long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             for (int i = 0; i < (array != null ? array.Count : self.Count); i++) {
+                if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinRun) {
+                    i = loop.Run(predicate, array, result, i, ref countdown);
+                    if (i >= array.Count) { break; }
+                }
                 object blockResult;
                 if (predicate.Yield(array != null ? array[i] : self[i], out blockResult)) {
                     return blockResult;
@@ -1253,6 +1268,7 @@ namespace IronRuby.Builtins {
                     result.Add(i < self.Count ? self[i] : null);
                 }
             }
+            if (loop != null) { loop.Leave(countdown); }
             return result;
         }
 

@@ -1,6 +1,6 @@
 # Differential matrix for the loops of the core iterators that -X:OSR outlines together with their
 # block (Src/Ruby/Runtime/Osr/BlockLoopSite.cs): Integer#times, #upto, #downto (Fixnum bounds) and
-# Array#each. Run it under CRuby and under ./ir.sh with OSR on and off, and diff:
+# Array#each, #map, #select, #any?, #all?, #none?. Run it under CRuby and under ./ir.sh with OSR on and off, and diff:
 #
 #   ruby Util/block-loop-matrix.rb > /tmp/mri.txt
 #   ./ir.sh Util/block-loop-matrix.rb > /tmp/osr.txt
@@ -141,6 +141,36 @@ class Integer
   alias_method :+, :bl_plus
 end
 t('times: Integer#+ restored') { plus_loop }
+
+# ---------------------------------------------------------------- 7. map, select, any?, all?, none?
+
+A = (0...N).to_a
+t('map: x + 1') { r = A.map { |x| x + 1 }; [r.size, r.sum, r.first(2), r.last] }
+t('map: a Boolean') { A.map { |x| x > 3000 }.count(true) }
+t('map: a Float') { A.map { |x| x * 0.5 }.sum }
+t('map: locals of its own') { A.map { |x| y = x * 2; y - 1 }.last(2) }
+t('map: a Float element') { Array.new(N) { |i| i == 5000 ? 1.5 : i }.map { |x| x + 1 }[4999, 3] }
+t('map: a nil element') { Array.new(N) { |i| i == 5000 ? nil : i }.map { |x| x + 1 } }
+t('map: break') { A.map { |x| break 42 if x == 5000; x } }
+t('map: next') { A.map { |x| next 0 if x.odd?; x }.sum }
+t('map: no parameter') { c = 0; [A.map { c += 1 }.last, c] }
+t('map: writes the receiver') { m = (0...N).to_a; [m.map { |x| m[x] = -1 if x == 4000; x }.sum, m.sum] }
+t('map: an Array literal') { A.map { |x| [x] }.last }
+t('map: frozen') { A.dup.freeze.map { |x| x }.size }
+t('select: x > 500') { r = A.select { |x| x > 500 }; [r.size, r.sum, r.first(2)] }
+t('select: truthy elements') { Array.new(N) { |i| i == 5000 ? nil : i }.select { |x| x }.size }
+t('select: a String element') { Array.new(N) { |i| i == 5000 ? "s" : i }.select { |x| x > 10 } }
+t('select: % 3') { r = A.select { |x| x % 3 == 0 }; [r.size, r.last] }
+t('select: the element after a write') { m = (0...N).to_a; m.select { |x| m[x + 1] = -5 if x == 4000; x < 0 } }
+t('select: no parameter') { s = 0; [A.select { s += 1; true }.size, s] }
+t('any?') { [A.any? { |x| x > 5000 }, A.any? { |x| x > 50000 }] }
+t('all?') { [A.all? { |x| x < 5000 }, A.all? { |x| x >= 0 }] }
+t('none?') { [A.none? { |x| x == 4500 }, A.none? { |x| x < 0 }] }
+t('any?: stops at the first') { c = 0; [A.any? { |x| c += 1; x == 4000 }, c] }
+t('all?: a nil element') { Array.new(N) { |i| i == 5000 ? nil : i }.all? { |x| x } }
+t('any?: a String element') { Array.new(N) { |i| i == 5000 ? "s" : i }.any? { |x| x > N } }
+t('any?: break') { A.any? { |x| break :b if x == 4000; false } }
+t('all?: next') { A.all? { |x| next true if x.odd?; x < 3000 } }
 
 # ---------------------------------------------------------------- 6. TracePoint, threads
 
