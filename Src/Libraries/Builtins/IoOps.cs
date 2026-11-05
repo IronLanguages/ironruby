@@ -458,15 +458,36 @@ namespace IronRuby.Builtins {
             return io;
         }
 
-        // TODO: params, conversions, options?
-
+        /// <summary>
+        /// MRI's rb_io_s_sysopen: the path by #to_path; the mode as open(2) flags when it has
+        /// #to_int (IO.sysopen(path, File::WRONLY | File::CREAT)), as a mode string otherwise; and
+        /// the permission by #to_int, applied (less the umask) to a file the call creates. A nil
+        /// mode or permission means "not given". There are no keyword options.
+        /// </summary>
         [RubyMethod("sysopen", RubyMethodAttributes.PublicSingleton)]
-        public static int SysOpen(ConversionStorage<MutableString>/*!*/ toPath, ConversionStorage<MutableString>/*!*/ toStr,
+        public static int SysOpen(ConversionStorage<int?>/*!*/ toInt, ConversionStorage<MutableString>/*!*/ toPath,
+            ConversionStorage<MutableString>/*!*/ toStr,
             RubyClass/*!*/ self, object pathObject, [Optional]object modeObject, [Optional]object perm) {
 
-            // #to_path, and a nil mode or permission means "not given" rather than an empty one.
+            var context = self.Context;
             MutableString path = Protocols.CastToPath(toPath, pathObject);
-            MutableString mode = (modeObject == null || modeObject is Missing) ? null : Protocols.CastToString(toStr, modeObject);
+            var toIntSite = toInt.GetSite(TryConvertToFixnumAction.Make(context));
+
+            // The mode may carry an encoding suffix ("w:utf-8"), which only IOInfo parses.
+            IOInfo info = new IOInfo();
+            if (modeObject != Missing.Value && modeObject != null) {
+                int? flags = toIntSite.Target(toIntSite, modeObject);
+                info = flags.HasValue ? new IOInfo(IOModeNative.ToIOMode(flags.Value)) : IOInfo.Parse(context, Protocols.CastToString(toStr, modeObject));
+            }
+
+            int permissions = 0;
+            if (perm != Missing.Value && perm != null) {
+                int? p = toIntSite.Target(toIntSite, perm);
+                if (!p.HasValue) {
+                    throw RubyExceptions.CreateImplicitConversionError(context.GetClassName(perm), "Integer");
+                }
+                permissions = p.Value;
+            }
 
             if (RubyFileOps.DirectoryExists(self.Context, path)) {
                 // open(2) takes a directory read-only, and MRI hands that descriptor back. The CLR
@@ -483,15 +504,13 @@ namespace IronRuby.Builtins {
                 return self.Context.AllocateFileDescriptor(new DescriptorStream(fd, true, false, true));
             }
 
-            // The mode may carry an encoding suffix ("w:utf-8"), which only IOInfo parses.
-            IOMode ioMode = (mode != null) ? IOInfo.Parse(self.Context, mode).Mode : IOMode.Default;
-
             // The descriptor stays open: MRI hands back a descriptor the caller owns and is
             // expected to wrap in an IO. Closing it here left nothing behind but a table index,
             // and IO.new(index) then read the *kernel's* descriptor of that number - some
             // unrelated pipe - to decide what the file had been opened for.
-            RubyIO io = new RubyFile(self.Context, path.ToString(), ioMode);
-            return io.GetFileDescriptor();
+            var file = new RubyFile(context);
+            RubyFileOps.Reinitialize(file, path, info, permissions);
+            return file.GetFileDescriptor();
         }
 
         #endregion

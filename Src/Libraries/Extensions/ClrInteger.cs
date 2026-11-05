@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -518,6 +518,53 @@ namespace IronRuby.Builtins {
         [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
         public static double FDiv(int self, int other) {
             return (double)self / (double)other;
+        }
+
+        // An Integer in the long range: int.fdiv(long) had no overload of its own, and fdiv(int, Float)
+        // and fdiv(Bignum, Float) both took the long as a Float, which the binder could not choose
+        // between - 1.fdiv(2**40), and with it 0.5 * 10**-15 and Rational#to_f, raised
+        // AmbiguousMatchException.
+        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        public static double FDiv(int self, long other) {
+            return FDivExact(self, other);
+        }
+
+        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        public static double FDiv(long self, long other) {
+            return FDivExact(self, other);
+        }
+
+        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        public static double FDiv(long self, int other) {
+            return FDivExact(self, other);
+        }
+
+        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        public static double FDiv(long self, double other) {
+            return (double)self / other;
+        }
+
+        // As MRI's rb_int_fdiv_double does it: both reduced by their gcd first, then - fix_fdiv_double -
+        // a divisor below 2**53 divides as doubles, the dividend rounded to a double, and a wider one
+        // takes the Bignum division. So 3450683738566129354.fdiv(858) is 1725341869283064677 / 429.0,
+        // 4021775919074742.5, rather than the correctly rounded ...743.0.
+        private static double FDivExact(long self, long other) {
+            if (other != 0) {
+                BigInteger gcd = BigInteger.GreatestCommonDivisor(self, other);
+                if (gcd > Int64.MaxValue) {
+                    // both are Int64.MinValue (or one is and the other 0)
+                    return FDiv(new BigInteger(self), new BigInteger(other));
+                }
+                if (gcd > BigInteger.One) {
+                    self /= (long)gcd;
+                    other /= (long)gcd;
+                }
+            }
+            const long doubleExact = 1L << 53;
+            if (other > -doubleExact && other < doubleExact) {
+                return (double)self / (double)other;
+            }
+            return FDiv(new BigInteger(self), new BigInteger(other));
         }
 
         [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]

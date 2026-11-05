@@ -1158,6 +1158,19 @@ namespace IronRuby.Builtins {
         // In an encoding that is not Unicode the ordinal is the character's own code, the bytes
         // read as a big-endian number: "\x81\x40" in Shift_JIS is 0x8140, not U+3000, and
         // "\x80" in Windows-1252 is 0x80, not U+20AC.
+        /// <summary>
+        /// What #codepoints and #each_codepoint answer for a character: its code in the string's
+        /// encoding, as #ord does - 0x82A0 for a Shift_JIS "あ", not U+3042.
+        /// </summary>
+        private static int NativeCode(RubyEncoding/*!*/ encoding, MutableString.Character character) {
+            int codepoint = character.Codepoint;
+            if (codepoint < 0x80 && encoding.IsAsciiIdentity) {
+                return codepoint;
+            }
+            return NativeCode(encoding,
+                character.IsSurrogate ? new[] { character.Value, character.LowSurrogate } : new[] { character.Value }, codepoint);
+        }
+
         private static int NativeCode(RubyEncoding/*!*/ encoding, char[]/*!*/ character, int codepoint) {
             if (encoding.IsUnicodeEncoding || ReferenceEquals(encoding, RubyEncoding.Binary) || encoding.IsDummy) {
                 return codepoint;
@@ -2037,7 +2050,7 @@ namespace IronRuby.Builtins {
                 if (!enumerator.Current.IsValid) {
                     throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", self.Encoding.Name);
                 }
-                result.Add(ScriptingRuntimeHelpers.Int32ToObject((int)enumerator.Current.Codepoint));
+                result.Add(ScriptingRuntimeHelpers.Int32ToObject(NativeCode(self.Encoding, enumerator.Current)));
             }
             return result;
         }
@@ -2052,7 +2065,7 @@ namespace IronRuby.Builtins {
                 }
 
                 object result;
-                if (block.Yield(ScriptingRuntimeHelpers.Int32ToObject((int)enumerator.Current.Codepoint), out result)) {
+                if (block.Yield(ScriptingRuntimeHelpers.Int32ToObject(NativeCode(self.Encoding, enumerator.Current)), out result)) {
                     return result;
                 }
             }
@@ -2769,9 +2782,12 @@ namespace IronRuby.Builtins {
         // compatible with a replacement that already changed the result's encoding - an ASCII-only
         // stretch of the input is fine even when elsewhere the input is not.
         private static void AppendInputPiece(MutableString/*!*/ result, MutableString/*!*/ input, int start, int count) {
+            if (count == 0) {
+                return;
+            }
             if (result.Encoding == input.Encoding) {
                 result.Append(input, start, count);
-            } else if (count > 0) {
+            } else {
                 result.Append(input.GetSlice(start, count));
             }
         }
@@ -2887,17 +2903,43 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // A run of literal text from a replacement string. Char by char where that is the same as
+        // appending the piece - the replacement is in the result's encoding, or ASCII-only and the
+        // result's encoding agrees with ASCII - which is cheaper for the usual short replacement.
+        private static void AppendReplacementPiece(MutableString/*!*/ result, MutableString/*!*/ replacement, int start, int count) {
+            if (count == 0) {
+                return;
+            }
+            if (result.Encoding == replacement.Encoding || (result.Encoding.IsAsciiIdentity && replacement.IsAscii())) {
+                for (int i = start; i < start + count; i++) {
+                    result.Append(replacement.GetChar(i));
+                }
+            } else {
+                AppendInputPiece(result, replacement, start, count);
+            }
+        }
+
         private static void AppendReplacementExpression(MutableString/*!*/ input, MatchData/*!*/ match, MutableString/*!*/ result, 
             MutableString/*!*/ replacement) {
 
+            // Literal text is appended in runs, as pieces of the replacement string, so that the
+            // result's encoding follows String#<<'s rules as in MRI's str_gsub: an ASCII-only
+            // receiver takes on the replacement's encoding, and an incompatible pair raises.
+            // Appending it a char at a time would encode the chars in the receiver's encoding
+            // ("ab".b.sub("a", "\u00e9") was "\xE9b").
             int backslashCount = 0;
+            int runStart = 0;
             for (int i = 0; i < replacement.Length; i++) {
                 char c = replacement.GetChar(i);
                 if (c == '\\') {
+                    if (backslashCount == 0) {
+                        AppendReplacementPiece(result, replacement, runStart, i - runStart);
+                    }
                     backslashCount++;
                 } else if (backslashCount == 0) {
-                    result.Append(c);
+                    // part of the current literal run
                 } else {
+                    runStart = i + 1;
                     AppendBackslashes(backslashCount, result, 0);
                     // Odd number of \'s + digit means insert replacement expression
                     if ((backslashCount & 1) == 1) {
@@ -2918,20 +2960,25 @@ namespace IronRuby.Builtins {
                             AppendLastCharOfLastMatchGroup(match, result);
                         } else if (c == 'k' && TryAppendNamedGroup(match, result, replacement, ref i)) {
                             // \k<name> or \k'name': the group the pattern gave that name to
+                            runStart = i + 1;
                         } else {
                             // unknown escaped replacement char, go ahead and replace untouched
                             result.Append('\\');
-                            result.Append(c);
+                            runStart = i;
                         }
                     } else {
                         // Any other # of \'s or a non-digit character means insert literal \'s and character
                         AppendBackslashes(backslashCount, result, 1);
-                        result.Append(c);
+                        runStart = i;
                     }
                     backslashCount = 0;
                 }
             }
-            AppendBackslashes(backslashCount, result, 1);
+            if (backslashCount == 0) {
+                AppendReplacementPiece(result, replacement, runStart, replacement.Length - runStart);
+            } else {
+                AppendBackslashes(backslashCount, result, 1);
+            }
             result.TaintBy(replacement);
         }
 
@@ -3409,7 +3456,10 @@ namespace IronRuby.Builtins {
                     continue;
                 }
 
-                if (StartsWith(self, Protocols.CastToString(stringCast, prefixes[i]))) {
+                // rb_str_start_with: an incompatible prefix raises, as it does for end_with?
+                MutableString prefix = Protocols.CastToString(stringCast, prefixes[i]);
+                self.RequireCompatibleEncoding(prefix);
+                if (StartsWith(self, prefix)) {
                     return true;
                 }
             }
@@ -4680,31 +4730,42 @@ namespace IronRuby.Builtins {
                 return inplace ? src : src.CloneDerived();
             }
 
+            // MRI's tr_trans: the result is in the encoding the receiver shares with both character
+            // sets, and an incompatible pair raises. It differs from the receiver's own only when the
+            // receiver is ASCII-only, whose characters read the same in either. (The empty result
+            // built here used to be checked against `to' instead, which passed anything, and the
+            // characters went in encoded in the receiver's encoding: "ab".b.tr("a", "\u00e9") was
+            // "\xE9b".)
+            RubyEncoding e1 = src.RequireCompatibleEncoding(from);
+            RubyEncoding e2 = src.RequireCompatibleEncoding(to);
+            RubyEncoding encoding = (e1 == e2) ? e1 : from.RequireCompatibleEncoding(to);
+            RubyEncoding originalEncoding = src.Encoding;
+
             MutableString dst;
             if (inplace) {
                 dst = src;
             } else {
                 dst = src.CreateDerived().TaintBy(src);
             }
+            if (dst.Encoding != encoding) {
+                dst.ForceEncoding(encoding);
+            }
 
-            // TODO: KCODE
-            src.RequireCompatibleEncoding(from);
-            dst.RequireCompatibleEncoding(to);
             from.PrepareForCharacterRead();
             to.PrepareForCharacterRead();
 
             src.PrepareForCharacterRead();
             if (src.HasSurrogatePairs() || from.HasSurrogatePairs() || to.HasSurrogatePairs()) {
                 // CharacterMap maps single CLR chars; a pair anywhere takes the code point path.
-                MutableString translated = TranslateCodePoints(src, from, to, squeeze, out anyCharacterMaps);
+                MutableString translated = TranslateCodePoints(src, from, to, encoding, squeeze, out anyCharacterMaps);
                 if (inplace) {
                     if (anyCharacterMaps) {
                         src.Clear();
                         src.Append(translated);
                     }
-                    return src;
+                    return KeepEncodingIfUnchanged(src, originalEncoding, anyCharacterMaps);
                 }
-                return translated;
+                return KeepEncodingIfUnchanged(translated, originalEncoding, anyCharacterMaps);
             }
 
             CharacterMap map = CharacterMap.Create(from, to);
@@ -4717,7 +4778,18 @@ namespace IronRuby.Builtins {
                 anyCharacterMaps = MutableString.Translate(src, dst, map);
             }
 
-            return dst;
+            return KeepEncodingIfUnchanged(dst, originalEncoding, anyCharacterMaps);
+        }
+
+        // MRI gives the result the shared encoding only when a character was translated; an
+        // unchanged copy - or receiver, for tr! - keeps its own. It is ASCII-only whenever the two
+        // differ, so this changes no character.
+        private static MutableString/*!*/ KeepEncodingIfUnchanged(MutableString/*!*/ result, RubyEncoding/*!*/ originalEncoding,
+            bool anyCharacterMaps) {
+            if (!anyCharacterMaps && result.Encoding != originalEncoding) {
+                result.ForceEncoding(originalEncoding);
+            }
+            return result;
         }
 
         /// <summary>The code point at CLR index <paramref name="i"/>, which it moves past it.</summary>
@@ -4777,7 +4849,7 @@ namespace IronRuby.Builtins {
 
         /// <summary>#tr and #tr_s by code point, for strings with characters above U+FFFF.</summary>
         private static MutableString/*!*/ TranslateCodePoints(MutableString/*!*/ src, MutableString/*!*/ from, MutableString/*!*/ to,
-            bool squeeze, out bool anyCharacterMaps) {
+            RubyEncoding/*!*/ encoding, bool squeeze, out bool anyCharacterMaps) {
 
             bool negated, ignored;
             List<int> fromRanges = ParseTrOperand(from, true, out negated);
@@ -4786,6 +4858,9 @@ namespace IronRuby.Builtins {
             bool delete = to.IsEmpty;
 
             var result = src.CreateDerived().TaintBy(src);
+            if (result.Encoding != encoding) {
+                result.ForceEncoding(encoding);
+            }
             anyCharacterMaps = false;
             int previous = -1;
             for (int i = 0; i < src.Length; ) {

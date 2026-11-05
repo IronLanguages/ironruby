@@ -148,7 +148,8 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// MRI's format is "#&lt;Proc:0xADDRESS file:line (lambda)&gt;", with the location separated
         /// by a space rather than by the '@' this used to print, omitted entirely when the proc has
-        /// no Ruby source, and replaced by "(&amp;:name)" for a proc a Symbol produced. The result is
+        /// no Ruby source or comes from Method#to_proc, and replaced by "(&amp;:name)" for a proc a
+        /// Symbol produced. The result is
         /// a binary string, as every #inspect-ish description in MRI is.
         /// </summary>
         [RubyMethod("to_s"), RubyMethod("inspect")]
@@ -160,7 +161,7 @@ namespace IronRuby.Builtins {
                 str.Append("(&:");
                 str.Append(self.SymbolName);
                 str.Append(')');
-            } else if (self.SourcePath != null) {
+            } else if (self.SourcePath != null && !self.Dispatcher.WrapsMethod) {
                 str.Append(' ');
                 str.Append(self.SourcePath);
                 str.Append(':');

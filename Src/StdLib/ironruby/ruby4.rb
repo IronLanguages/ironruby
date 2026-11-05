@@ -1526,8 +1526,11 @@ class String
     (!prefix.empty? && start_with?(prefix)) ? self[prefix.length..-1] : dup
   end unless method_defined?(:delete_prefix)
 
+  # MRI's deleted_suffix_length removes nothing for a suffix with broken bytes - where
+  # deleted_prefix_length still compares them, only skipping the encoding check.
   def delete_suffix(suffix)
     suffix = __affix__(suffix)
+    return dup unless suffix.valid_encoding?
     (!suffix.empty? && end_with?(suffix)) ? self[0...-suffix.length] : dup
   end unless method_defined?(:delete_suffix)
 

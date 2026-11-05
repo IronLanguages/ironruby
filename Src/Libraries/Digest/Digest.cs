@@ -29,12 +29,6 @@ namespace IronRuby.StandardLibrary.Digest {
 
         #region Module Methods
 
-        [RubyMethod("const_missing", RubyMethodAttributes.PublicSingleton)]
-        public static object ConstantMissing(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
-            // TODO:
-            throw new NotImplementedException();
-        }
-
         [RubyMethod("hexencode", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ HexEncode(RubyModule/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
             return Class.HexEncode(str);
@@ -42,7 +36,10 @@ namespace IronRuby.StandardLibrary.Digest {
 
         #endregion
 
-        // TODO: MRI doesn't define MD5 constant here, it implements const_missing
+        // MRI's digest.so leaves MD5, SHA1 and the SHA2 family to Digest.const_missing, which
+        // requires digest/md5 and friends on first use. Here they are defined up front, and the
+        // const_missing in Src/StdLib/ironruby/digest.rb only runs for the names that still live
+        // in a file (RMD160, Bubble Babble) or do not exist.
         [RubyClass("MD5")]
         public class MD5 : Base {
             public MD5()
@@ -272,7 +269,7 @@ namespace IronRuby.StandardLibrary.Digest {
         public class Class {
 
             [RubyMethod("digest", RubyMethodAttributes.PublicSingleton)]
-            public static MutableString Digest(
+            public static object Digest(
                 CallSiteStorage<Func<CallSite, RubyClass, object>>/*!*/ allocateStorage,
                 CallSiteStorage<Func<CallSite, object, MutableString, object>>/*!*/ digestStorage,
                 RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
@@ -283,9 +280,10 @@ namespace IronRuby.StandardLibrary.Digest {
                 var allocateSite = allocateStorage.GetCallSite("new", 0);
                 object obj = allocateSite.Target(allocateSite, self);
 
-                // TODO: check obj
+                // Whatever #digest answers, as MRI's rb_digest_class_s_digest returns it unchecked:
+                // a subclass whose #finish is not a String still has its result handed back.
                 var site = digestStorage.GetCallSite("digest", 1);
-                return (MutableString)site.Target(site, obj, str);
+                return site.Target(site, obj, str);
             }
 
             [RubyMethod("digest", RubyMethodAttributes.PublicSingleton)]
@@ -294,13 +292,15 @@ namespace IronRuby.StandardLibrary.Digest {
             }
 
             [RubyMethod("hexdigest", RubyMethodAttributes.PublicSingleton)]
-            public static MutableString/*!*/ HexDigest(CallSiteStorage<Func<CallSite, object, MutableString, object>>/*!*/ storage, 
+            public static MutableString/*!*/ HexDigest(CallSiteStorage<Func<CallSite, object, MutableString, object>>/*!*/ storage,
+                ConversionStorage<MutableString>/*!*/ stringCast,
                 RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
 
                 var site = storage.GetCallSite("digest", 1);
-                MutableString result = (MutableString)site.Target(site, self, str);
-                // TODO: check result != null
-                return HexEncode(result);
+                // MRI's hexencode_str_new runs StringValue on the digest, so a #digest that answers
+                // nil or a Symbol is a TypeError ("no implicit conversion of ... into String"), not
+                // a cast failure.
+                return HexEncode(Protocols.CastToString(stringCast, site.Target(site, self, str)));
             }
 
             [RubyMethod("hexdigest", RubyMethodAttributes.PublicSingleton)]
@@ -331,7 +331,7 @@ namespace IronRuby.StandardLibrary.Digest {
         public class Instance {
 
             [RubyMethod("digest")]
-            public static MutableString Digest(
+            public static object Digest(
                 CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage,
                 CallSiteStorage<Func<CallSite, RubyClass, object>>/*!*/ allocateStorage,
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ finishStorage,
@@ -347,12 +347,12 @@ namespace IronRuby.StandardLibrary.Digest {
                 }
 
                 var finish = finishStorage.GetCallSite("finish", 0);
-                // TODO: cast?
-                return (MutableString)finish.Target(finish, clone);
+                // #finish's result as it is: MRI's rb_digest_instance_digest does not check it.
+                return finish.Target(finish, clone);
             }
 
             [RubyMethod("digest")]
-            public static MutableString Digest(
+            public static object Digest(
                 CallSiteStorage<Func<CallSite, object, MutableString, object>>/*!*/ updateStorage,
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ finishStorage,
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ resetStorage,
@@ -371,12 +371,11 @@ namespace IronRuby.StandardLibrary.Digest {
 
                 reset.Target(reset, self);
 
-                // TODO: cast?
-                return (MutableString)value;
+                return value;
             }
 
             [RubyMethod("digest!")]
-            public static MutableString DigestNew(
+            public static object DigestNew(
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ finishStorage,
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ resetStorage,
                 object self) {
@@ -387,35 +386,37 @@ namespace IronRuby.StandardLibrary.Digest {
                 var reset = resetStorage.GetCallSite("reset", 0);
                 reset.Target(reset, self);
 
-                // TODO: cast?
-                return (MutableString)value;
+                return value;
             }
 
             [RubyMethod("hexdigest")]
             public static MutableString HexDigest(
+                ConversionStorage<MutableString>/*!*/ stringCast,
                 CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage,
                 CallSiteStorage<Func<CallSite, RubyClass, object>>/*!*/ allocateStorage,
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ finishStorage,
                 object self) {
 
-                return Class.HexEncode(Digest(initializeCopyStorage, allocateStorage, finishStorage, self));
+                return Class.HexEncode(Protocols.CastToString(stringCast, Digest(initializeCopyStorage, allocateStorage, finishStorage, self)));
             }
 
             [RubyMethod("hexdigest")]
             public static MutableString HexDigest(
+                ConversionStorage<MutableString>/*!*/ stringCast,
                 CallSiteStorage<Func<CallSite, object, MutableString, object>>/*!*/ updateStorage,
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ finishStorage,
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ resetStorage,
                 object self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
-                return Class.HexEncode(Digest(updateStorage, finishStorage, resetStorage, self, str));
+                return Class.HexEncode(Protocols.CastToString(stringCast, Digest(updateStorage, finishStorage, resetStorage, self, str)));
             }
 
             [RubyMethod("hexdigest!")]
             public static MutableString HexDigestNew(
+                ConversionStorage<MutableString>/*!*/ stringCast,
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ finishStorage,
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ resetStorage,
                 object self) {
-                return Class.HexEncode(DigestNew(finishStorage, resetStorage, self));
+                return Class.HexEncode(Protocols.CastToString(stringCast, DigestNew(finishStorage, resetStorage, self)));
             }
         }
     }

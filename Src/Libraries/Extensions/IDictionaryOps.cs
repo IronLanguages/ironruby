@@ -136,7 +136,7 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        // TODO: remove, frozen check should be implemented in Hash indexer
+        // The Hash overload exists for the frozen check: Hash's indexer does not make it (see Hash).
         [RubyMethod("[]=")]
         [RubyMethod("store")]
         public static object SetElement(RubyContext/*!*/ context, Hash/*!*/ self, object key, object value) {
@@ -150,7 +150,7 @@ namespace IronRuby.Builtins {
             return RubyUtils.SetHashElement(context, self, key, value);
         }
 
-        // TODO: remove, frozen check should be implemented in Hash.Clear
+        // The Hash overload exists for the frozen check: Hash.Clear does not make it (see Hash).
         [RubyMethod("clear")]
         public static IDictionary<object, object>/*!*/ Clear(Hash/*!*/ self) {
             self.RequireNotFrozen();
