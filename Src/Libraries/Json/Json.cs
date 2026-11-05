@@ -15,6 +15,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Numerics;
 using System.Text;
@@ -35,6 +36,11 @@ namespace IronRuby.StandardLibrary.Json {
 
         [RubyClass("ParserError", Extends = typeof(JsonParserError), Inherits = typeof(JsonError))]
         public static class JsonParserErrorOps {
+        }
+
+        // json/common.rb: what a max_nesting that is exceeded raises, from the generator as from the parser
+        [RubyClass("NestingError", Extends = typeof(JsonNestingError), Inherits = typeof(JsonParserError))]
+        public static class JsonNestingErrorOps {
         }
 
         [RubyClass("GeneratorError", Extends = typeof(JsonGeneratorError), Inherits = typeof(JsonError))]
@@ -58,8 +64,27 @@ namespace IronRuby.StandardLibrary.Json {
             internal string ObjectNl = "";
             internal string ArrayNl = "";
             internal int MaxNesting = 100;
+            internal bool AllowNan;
+            internal bool AsciiOnly;
+            internal bool ScriptSafe;
+            internal int Depth;
 
             internal static readonly GeneratorOptions Compact = new GeneratorOptions();
+
+            /// <summary>The options as a Hash, for a JSON::State handed to an object's own to_json.</summary>
+            internal Hash/*!*/ ToHash(RubyContext/*!*/ context) {
+                var hash = new Hash(context);
+                hash[context.CreateAsciiSymbol("indent")] = MutableString.Create(Indent, RubyEncoding.UTF8);
+                hash[context.CreateAsciiSymbol("space")] = MutableString.Create(Space, RubyEncoding.UTF8);
+                hash[context.CreateAsciiSymbol("space_before")] = MutableString.Create(SpaceBefore, RubyEncoding.UTF8);
+                hash[context.CreateAsciiSymbol("object_nl")] = MutableString.Create(ObjectNl, RubyEncoding.UTF8);
+                hash[context.CreateAsciiSymbol("array_nl")] = MutableString.Create(ArrayNl, RubyEncoding.UTF8);
+                hash[context.CreateAsciiSymbol("allow_nan")] = AllowNan;
+                hash[context.CreateAsciiSymbol("ascii_only")] = AsciiOnly;
+                hash[context.CreateAsciiSymbol("script_safe")] = ScriptSafe;
+                hash[context.CreateAsciiSymbol("max_nesting")] = MaxNesting;
+                return hash;
+            }
 
             internal static GeneratorOptions/*!*/ Pretty() {
                 return new GeneratorOptions { Indent = "  ", Space = " ", ObjectNl = "\n", ArrayNl = "\n" };
@@ -78,6 +103,10 @@ namespace IronRuby.StandardLibrary.Json {
                     ObjectNl = defaults.ObjectNl,
                     ArrayNl = defaults.ArrayNl,
                     MaxNesting = defaults.MaxNesting,
+                    AllowNan = defaults.AllowNan,
+                    AsciiOnly = defaults.AsciiOnly,
+                    ScriptSafe = defaults.ScriptSafe,
+                    Depth = defaults.Depth,
                 };
 
                 foreach (var entry in hash) {
@@ -88,6 +117,11 @@ namespace IronRuby.StandardLibrary.Json {
                         case "space_before": result.SpaceBefore = OptionString(entry.Value); break;
                         case "object_nl": result.ObjectNl = OptionString(entry.Value); break;
                         case "array_nl": result.ArrayNl = OptionString(entry.Value); break;
+                        case "allow_nan": result.AllowNan = RubyOps.IsTrue(entry.Value); break;
+                        case "ascii_only": result.AsciiOnly = RubyOps.IsTrue(entry.Value); break;
+                        case "script_safe":
+                        case "escape_slash": result.ScriptSafe = RubyOps.IsTrue(entry.Value); break;
+                        case "depth": if (entry.Value is int) { result.Depth = (int)entry.Value; } break;
                         case "max_nesting":
                             if (entry.Value is int) {
                                 result.MaxNesting = (int)entry.Value;
@@ -117,167 +151,322 @@ namespace IronRuby.StandardLibrary.Json {
 
         [RubyMethod("generate", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("dump", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ Generate(RubyContext/*!*/ context, object self, object obj,
-            [Optional]object opts) {
+        public static MutableString/*!*/ Generate(ConversionStorage<MutableString>/*!*/ toS, ToJsonHookStorage/*!*/ toJson,
+            object self, object obj, [Optional]object opts) {
 
-            var builder = new StringBuilder();
-            WriteValue(context, builder, obj, GeneratorOptions.Parse(opts, GeneratorOptions.Compact), 0);
-            return MutableString.Create(builder.ToString(), RubyEncoding.UTF8);
+            var options = GeneratorOptions.Parse(opts, GeneratorOptions.Compact);
+            var writer = new Writer(toS, toJson, self, options);
+            writer.WriteValue(obj, options.Depth);
+            return MutableString.Create(writer.Builder.ToString(), RubyEncoding.UTF8);
         }
 
         [RubyMethod("pretty_generate", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ PrettyGenerate(RubyContext/*!*/ context, object self, object obj,
-            [Optional]object opts) {
+        public static MutableString/*!*/ PrettyGenerate(ConversionStorage<MutableString>/*!*/ toS, ToJsonHookStorage/*!*/ toJson,
+            object self, object obj, [Optional]object opts) {
 
-            var builder = new StringBuilder();
-            WriteValue(context, builder, obj, GeneratorOptions.Parse(opts, GeneratorOptions.Pretty()), 0);
-            return MutableString.Create(builder.ToString(), RubyEncoding.UTF8);
+            var options = GeneratorOptions.Parse(opts, GeneratorOptions.Pretty());
+            var writer = new Writer(toS, toJson, self, options);
+            writer.WriteValue(obj, options.Depth);
+            return MutableString.Create(writer.Builder.ToString(), RubyEncoding.UTF8);
         }
 
-        private static void WriteValue(RubyContext/*!*/ context, StringBuilder/*!*/ builder, object obj,
-            GeneratorOptions/*!*/ options, int depth) {
-
-            if (options.MaxNesting > 0 && depth > options.MaxNesting) {
-                throw new JsonGeneratorError(String.Format("nesting of {0} is too deep", options.MaxNesting));
-            }
-
-            if (obj == null) {
-                builder.Append("null");
-                return;
-            }
-
-            if (obj is bool) {
-                builder.Append((bool)obj ? "true" : "false");
-                return;
-            }
-
-            if (obj is int || obj is BigInteger || obj is long) {
-                builder.Append(obj.ToString());
-                return;
-            }
-
-            if (obj is double) {
-                double value = (double)obj;
-                if (Double.IsNaN(value) || Double.IsInfinity(value)) {
-                    throw new JsonGeneratorError(String.Format("{0} not allowed in JSON", value));
-                }
-                builder.Append(value.ToString("R", CultureInfo.InvariantCulture));
-                return;
-            }
-
-            var str = obj as MutableString;
-            if (str != null) {
-                WriteString(builder, str.ConvertToString());
-                return;
-            }
-
-            var symbol = obj as RubySymbol;
-            if (symbol != null) {
-                WriteString(builder, symbol.ToString());
-                return;
-            }
-
-            var hash = obj as Hash;
-            if (hash != null) {
-                WriteHash(context, builder, hash, options, depth);
-                return;
-            }
-
-            var list = obj as IList<object>;
-            if (list != null) {
-                WriteArray(context, builder, list, options, depth);
-                return;
-            }
-
-            // anything else is rendered through to_s, as the json gem does
-            WriteString(builder, context.Inspect(obj).ConvertToString());
+        /// <summary>The call site of JSON.__ir_to_json__(obj, state options, depth), in json.rb.</summary>
+        public sealed class ToJsonHookStorage : CallSiteStorage<Func<CallSite, object, object, object, object, object>> {
+            public ToJsonHookStorage(RubyContext/*!*/ context) : base(context) { }
         }
 
-        private static void WriteHash(RubyContext/*!*/ context, StringBuilder/*!*/ builder, Hash/*!*/ hash,
-            GeneratorOptions/*!*/ options, int depth) {
+        private sealed class Writer {
+            internal readonly StringBuilder/*!*/ Builder = new StringBuilder();
+            private readonly ConversionStorage<MutableString>/*!*/ _toS;
+            private readonly ToJsonHookStorage/*!*/ _toJson;
+            private readonly object _jsonModule;
+            private readonly GeneratorOptions/*!*/ _options;
 
-            builder.Append('{');
-            bool first = true;
-            foreach (var entry in hash) {
-                if (!first) {
-                    builder.Append(',');
+            internal Writer(ConversionStorage<MutableString>/*!*/ toS, ToJsonHookStorage/*!*/ toJson, object jsonModule,
+                GeneratorOptions/*!*/ options) {
+                _toS = toS;
+                _toJson = toJson;
+                _jsonModule = jsonModule;
+                _options = options;
+            }
+
+            /// <summary>
+            /// What the object's own to_json makes of it, or null when it has none: the json gem calls
+            /// obj.to_json(state) for anything that is not exactly one of the core classes, and its
+            /// generic Object#to_json is the object's to_s as a String. Without this a class with a
+            /// to_json of its own - a serializer, ActiveSupport's as_json - was written as its inspect.
+            /// </summary>
+            private MutableString TryOwnToJson(object obj, int depth) {
+                var site = _toJson.GetCallSite("__ir_to_json__", 3);
+                if (_optionsHash == null) {
+                    _optionsHash = _options.ToHash(_toJson.Context);
                 }
-                first = false;
-                NewLine(builder, options.ObjectNl, options.Indent, depth + 1);
+                object result = site.Target(site, _jsonModule, obj, _optionsHash, depth);
+                return result as MutableString;
+            }
 
-                // JSON object keys are always strings
-                var key = entry.Key;
-                var keyString = key as MutableString;
-                var keySymbol = key as RubySymbol;
-                if (keyString != null) {
-                    WriteString(builder, keyString.ConvertToString());
-                } else if (keySymbol != null) {
-                    WriteString(builder, keySymbol.ToString());
-                } else if (key == null) {
-                    WriteString(builder, "");
-                } else {
-                    WriteString(builder, key.ToString());
+            // the options for a State, made once per generate and only when an object needs them
+            private Hash _optionsHash;
+
+            // As the json gem counts it: each Array and Hash is a level, checked as it is entered.
+            private void EnterLevel(int depth) {
+                if (_options.MaxNesting > 0 && depth + 1 > _options.MaxNesting) {
+                    throw new JsonNestingError(String.Format(
+                        "nesting of {0} is too deep. Did you try to serialize objects with circular references?", depth));
+                }
+            }
+
+            internal void WriteValue(object obj, int depth) {
+                if (obj == null) {
+                    Builder.Append("null");
+                    return;
                 }
 
-                builder.Append(options.SpaceBefore);
-                builder.Append(':');
-                builder.Append(options.Space);
-                WriteValue(context, builder, entry.Value, options, depth + 1);
-            }
-            if (!first) {
-                NewLine(builder, options.ObjectNl, options.Indent, depth);
-            }
-            builder.Append('}');
-        }
-
-        private static void WriteArray(RubyContext/*!*/ context, StringBuilder/*!*/ builder, IList<object>/*!*/ list,
-            GeneratorOptions/*!*/ options, int depth) {
-
-            builder.Append('[');
-            for (int i = 0; i < list.Count; i++) {
-                if (i > 0) {
-                    builder.Append(',');
+                if (obj is bool) {
+                    Builder.Append((bool)obj ? "true" : "false");
+                    return;
                 }
-                NewLine(builder, options.ArrayNl, options.Indent, depth + 1);
-                WriteValue(context, builder, list[i], options, depth + 1);
-            }
-            if (list.Count > 0) {
-                NewLine(builder, options.ArrayNl, options.Indent, depth);
-            }
-            builder.Append(']');
-        }
 
-        private static void NewLine(StringBuilder/*!*/ builder, string/*!*/ newLine, string/*!*/ indent, int depth) {
-            if (newLine.Length == 0 && indent.Length == 0) {
-                return;
-            }
-            builder.Append(newLine);
-            for (int i = 0; i < depth; i++) {
-                builder.Append(indent);
-            }
-        }
+                if (obj is int || obj is BigInteger || obj is long) {
+                    Builder.Append(obj.ToString());
+                    return;
+                }
 
-        private static void WriteString(StringBuilder/*!*/ builder, string/*!*/ value) {
-            builder.Append('"');
-            foreach (char c in value) {
-                switch (c) {
-                    case '"': builder.Append("\\\""); break;
-                    case '\\': builder.Append("\\\\"); break;
-                    case '\n': builder.Append("\\n"); break;
-                    case '\r': builder.Append("\\r"); break;
-                    case '\t': builder.Append("\\t"); break;
-                    case '\b': builder.Append("\\b"); break;
-                    case '\f': builder.Append("\\f"); break;
-                    default:
-                        if (c < 0x20) {
-                            builder.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
-                        } else {
-                            builder.Append(c);
+                if (obj is double) {
+                    double value = (double)obj;
+                    if (Double.IsNaN(value) || Double.IsInfinity(value)) {
+                        if (!_options.AllowNan) {
+                            throw new JsonGeneratorError(String.Format("{0} not allowed in JSON", FloatToRubyString(value)));
                         }
-                        break;
+                        Builder.Append(FloatToRubyString(value));
+                        return;
+                    }
+                    AppendFloat(Builder, value);
+                    return;
+                }
+
+                var str = obj as MutableString;
+                if (str != null && str.GetType() == typeof(MutableString)) {
+                    WriteString(StringContent(str));
+                    return;
+                }
+
+                // a Symbol is not one of the classes the json gem writes directly: json/add/symbol gives it
+                // a to_json of its own, and the generic one writes its name
+                var symbol = obj as RubySymbol;
+                if (symbol != null) {
+                    MutableString ownSymbol = TryOwnToJson(obj, depth);
+                    if (ownSymbol != null) {
+                        Builder.Append(StringContent(ownSymbol));
+                    } else {
+                        WriteString(symbol.ToString());
+                    }
+                    return;
+                }
+
+                var hash = obj as Hash;
+                if (hash != null && hash.GetType() == typeof(Hash)) {
+                    WriteHash(hash, depth);
+                    return;
+                }
+
+                var list = obj as IList<object>;
+                if (list != null && list.GetType() == typeof(RubyArray)) {
+                    WriteArray(list, depth);
+                    return;
+                }
+
+                MutableString own = TryOwnToJson(obj, depth);
+                if (own != null) {
+                    Builder.Append(StringContent(own));
+                    return;
+                }
+
+                // a subclass of the core classes without a to_json of its own is written as they are
+                if (str != null) {
+                    WriteString(StringContent(str));
+                } else if (hash != null) {
+                    WriteHash(hash, depth);
+                } else if (list != null) {
+                    WriteArray(list, depth);
+                } else {
+                    // anything else is its to_s as a JSON string, as Object#to_json is in the json gem
+                    WriteString(StringContent(Protocols.ConvertToString(_toS, obj)));
                 }
             }
-            builder.Append('"');
+
+            private void WriteHash(Hash/*!*/ hash, int depth) {
+                EnterLevel(depth);
+                Builder.Append('{');
+                bool first = true;
+                foreach (var entry in hash) {
+                    if (!first) {
+                        Builder.Append(',');
+                    }
+                    first = false;
+                    NewLine(_options.ObjectNl, depth + 1);
+
+                    // JSON object keys are strings: a String or Symbol as it is, anything else
+                    // by its to_s - nil is "" (the Hash keeps it as a sentinel object, whose CLR
+                    // ToString was "System.Object"), 1.5 is "1.5"
+                    object key = CustomStringDictionary.ObjToNull(entry.Key);
+                    var keyString = key as MutableString;
+                    var keySymbol = key as RubySymbol;
+                    if (keyString != null) {
+                        WriteString(StringContent(keyString));
+                    } else if (keySymbol != null) {
+                        WriteString(keySymbol.ToString());
+                    } else if (key == null) {
+                        WriteString("");
+                    } else {
+                        WriteString(StringContent(Protocols.ConvertToString(_toS, key)));
+                    }
+
+                    Builder.Append(_options.SpaceBefore);
+                    Builder.Append(':');
+                    Builder.Append(_options.Space);
+                    WriteValue(entry.Value, depth + 1);
+                }
+                if (!first) {
+                    NewLine(_options.ObjectNl, depth);
+                }
+                Builder.Append('}');
+            }
+
+            private void WriteArray(IList<object>/*!*/ list, int depth) {
+                EnterLevel(depth);
+                Builder.Append('[');
+                for (int i = 0; i < list.Count; i++) {
+                    if (i > 0) {
+                        Builder.Append(',');
+                    }
+                    NewLine(_options.ArrayNl, depth + 1);
+                    WriteValue(list[i], depth + 1);
+                }
+                if (list.Count > 0) {
+                    NewLine(_options.ArrayNl, depth);
+                }
+                Builder.Append(']');
+            }
+
+            private void NewLine(string/*!*/ newLine, int depth) {
+                string indent = _options.Indent;
+                if (newLine.Length == 0 && indent.Length == 0) {
+                    return;
+                }
+                Builder.Append(newLine);
+                for (int i = 0; i < depth; i++) {
+                    Builder.Append(indent);
+                }
+            }
+
+            private void WriteString(string/*!*/ value) {
+                Builder.Append('"');
+                foreach (char c in value) {
+                    switch (c) {
+                        case '"': Builder.Append("\\\""); break;
+                        case '\\': Builder.Append("\\\\"); break;
+                        case '\n': Builder.Append("\\n"); break;
+                        case '\r': Builder.Append("\\r"); break;
+                        case '\t': Builder.Append("\\t"); break;
+                        case '\b': Builder.Append("\\b"); break;
+                        case '\f': Builder.Append("\\f"); break;
+                        case '/':
+                            Builder.Append(_options.ScriptSafe ? "\\/" : "/");
+                            break;
+                        default:
+                            // ascii_only escapes every non-ASCII character (a pair as its two halves),
+                            // script_safe the two line terminators JavaScript does not allow in a string
+                            if (c < 0x20 || (_options.AsciiOnly && c >= 0x80) ||
+                                (_options.ScriptSafe && (c == '\u2028' || c == '\u2029'))) {
+                                Builder.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                            } else {
+                                Builder.Append(c);
+                            }
+                            break;
+                    }
+                }
+                Builder.Append('"');
+            }
+        }
+
+        /// <summary>
+        /// The characters of a String as JSON writes them, which is UTF-8. A string whose bytes are not
+        /// valid UTF-8 is a GeneratorError, as in the json gem - a binary "\xFF" used to come out as "ÿ",
+        /// its byte read as Latin-1. A string in another encoding is written as its characters.
+        /// </summary>
+        private static string/*!*/ StringContent(MutableString/*!*/ str) {
+            var encoding = str.Encoding;
+            if ((encoding == RubyEncoding.Binary || encoding == RubyEncoding.UTF8 || encoding == RubyEncoding.Ascii) && !str.IsAscii()) {
+                byte[] bytes = str.ToByteArray();
+                try {
+                    return new UTF8Encoding(false, true).GetString(bytes);
+                } catch (DecoderFallbackException) {
+                    throw new JsonGeneratorError(String.Format("source sequence is illegal/malformed utf-8"));
+                }
+            }
+            if (str.ContainsInvalidCharacters()) {
+                throw new JsonGeneratorError(String.Format("source sequence is illegal/malformed utf-8"));
+            }
+            return str.ConvertToString();
+        }
+
+        private static string/*!*/ FloatToRubyString(double value) {
+            return Double.IsNaN(value) ? "NaN" : value > 0 ? "Infinity" : "-Infinity";
+        }
+
+        /// <summary>
+        /// A Float the way the json gem (2.10 and later, its fpconv_dtoa) writes it: the shortest digits
+        /// that read back as the same Float, as digits x 10**K. With E the exponent of the leading digit,
+        /// a whole number is written out with ".0" while E is below 15 (100.0, 123456789012345.0) and in
+        /// exponent form from there (1e+15); a number with a fraction is written out while K is above -7
+        /// or E is within 10 of zero (0.0000001, 0.000123456789) and in exponent form otherwise (1e-10).
+        /// The exponent form has no ".0" and no padding: 1e+20, 1.5e-16, 5e-324.
+        /// </summary>
+        internal static void AppendFloat(StringBuilder/*!*/ builder, double value) {
+            if (value == 0) {
+                builder.Append(Double.IsNegative(value) ? "-0.0" : "0.0");
+                return;
+            }
+            if (value < 0) {
+                builder.Append('-');
+                value = -value;
+            }
+
+            // .NET's "R" is the shortest round-tripping representation; take its digits and exponent
+            string r = value.ToString("R", CultureInfo.InvariantCulture);
+            int exponent = 0;
+            int e = r.IndexOfAny(new[] { 'E', 'e' });
+            string mantissa = r;
+            if (e >= 0) {
+                exponent = Int32.Parse(r.Substring(e + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+                mantissa = r.Substring(0, e);
+            }
+            int dot = mantissa.IndexOf('.');
+            string whole = dot < 0 ? mantissa : mantissa.Substring(0, dot);
+            string all = dot < 0 ? mantissa : whole + mantissa.Substring(dot + 1);
+            string digits = all.TrimStart('0');
+            int pointPosition = whole.Length + exponent - (all.Length - digits.Length);
+            digits = digits.TrimEnd('0');
+            int nd = digits.Length;
+            int k = pointPosition - nd;                  // value = digits * 10**k
+            int leading = k + nd - 1;                    // exponent of the leading digit
+
+            if (k >= 0 && Math.Abs(leading) < 15) {
+                builder.Append(digits).Append('0', k).Append(".0");
+            } else if (k < 0 && (k > -7 || Math.Abs(leading) < 10)) {
+                if (pointPosition > 0) {
+                    builder.Append(digits, 0, pointPosition).Append('.').Append(digits, pointPosition, nd - pointPosition);
+                } else {
+                    builder.Append("0.").Append('0', -pointPosition).Append(digits);
+                }
+            } else {
+                builder.Append(digits[0]);
+                if (nd > 1) {
+                    builder.Append('.').Append(digits, 1, nd - 1);
+                }
+                builder.Append('e').Append(leading < 0 ? '-' : '+').Append(Math.Abs(leading).ToString(CultureInfo.InvariantCulture));
+            }
         }
 
         #endregion
@@ -286,18 +475,40 @@ namespace IronRuby.StandardLibrary.Json {
 
         [RubyMethod("parse", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
-        public static object Parse(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]MutableString/*!*/ source,
+        public static object Parse(DecimalHookStorage/*!*/ decimalHook, object self, [DefaultProtocol, NotNull]MutableString/*!*/ source,
             [DefaultParameterValue(null)]Hash options) {
 
+            var context = decimalHook.Context;
             var parser = new JsonParser(source.ConvertToString(), context);
             parser.SymbolizeNames = TruthyOption(context, options, "symbolize_names");
             parser.AllowControlCharacters = TruthyOption(context, options, "allow_control_characters");
+            parser.AllowNan = TruthyOption(context, options, "allow_nan");
+            parser.AllowTrailingComma = TruthyOption(context, options, "allow_trailing_comma");
+
+            // max_nesting: 100 unless given; false or nil (or 0) for no limit
+            object maxNesting;
+            if (options != null && options.TryGetValue(context.CreateAsciiSymbol("max_nesting"), out maxNesting)) {
+                parser.MaxNesting = (maxNesting is int) ? (int)maxNesting : RubyOps.IsTrue(maxNesting) ? 100 : 0;
+            }
+
+            // decimal_class: each Float literal goes to JSON.__ir_decimal__(decimal_class, its text) instead
+            object decimalClass;
+            if (options != null && options.TryGetValue(context.CreateAsciiSymbol("decimal_class"), out decimalClass) && decimalClass != null) {
+                var site = decimalHook.GetCallSite("__ir_decimal__", 2);
+                parser.DecimalClass = text => site.Target(site, self, decimalClass, MutableString.CreateAscii(text));
+            }
+
             object result = parser.ParseValue(0);
             parser.SkipWhitespace();
             if (!parser.AtEnd) {
                 throw new JsonParserError("unexpected token at '" + parser.Rest + "'");
             }
             return result;
+        }
+
+        /// <summary>The call site of JSON.__ir_decimal__(decimal_class, text), in json.rb.</summary>
+        public sealed class DecimalHookStorage : CallSiteStorage<Func<CallSite, object, object, object, object>> {
+            public DecimalHookStorage(RubyContext/*!*/ context) : base(context) { }
         }
 
         /// <summary>
@@ -332,6 +543,11 @@ namespace IronRuby.StandardLibrary.Json {
         public JsonParserError() : this("parser error") { }
     }
 
+    public class JsonNestingError : JsonParserError {
+        public JsonNestingError(string message) : base(message) { }
+        public JsonNestingError() : this("nesting error") { }
+    }
+
     public class JsonGeneratorError : JsonError {
         public JsonGeneratorError(string message) : base(message) { }
         public JsonGeneratorError() : this("generator error") { }
@@ -358,6 +574,42 @@ namespace IronRuby.StandardLibrary.Json {
         /// a string as it is.
         /// </summary>
         internal bool AllowControlCharacters { get; set; }
+
+        /// <summary>allow_nan: NaN, Infinity and -Infinity are read as Floats.</summary>
+        internal bool AllowNan { get; set; }
+
+        /// <summary>allow_trailing_comma: a comma may follow the last element of an Array or object.</summary>
+        internal bool AllowTrailingComma { get; set; }
+
+        /// <summary>
+        /// max_nesting, counted as the json gem's parser counts it - an Array or object is a level once it
+        /// has something in it, so a hundred-and-first empty one is still within 100; 0 for no limit. It
+        /// was a fixed 100, whatever the option said.
+        /// </summary>
+        internal int MaxNesting { get; set; } = 100;
+
+        /// <summary>decimal_class: what a Float literal's text is made into, instead of a Float.</summary>
+        internal Func<string, object> DecimalClass { get; set; }
+
+        // Keys are frozen, as Hash#[]= makes a String key, and one String per distinct key is shared by
+        // every object of the document, as the json gem does. They were mutable: changing one in
+        // place left its Hash unable to find it.
+        private Dictionary<string, MutableString> _keys;
+
+        private MutableString/*!*/ KeyString(string/*!*/ name) {
+            if (_keys == null) {
+                _keys = new Dictionary<string, MutableString>();
+            }
+            MutableString key;
+            if (!_keys.TryGetValue(name, out key)) {
+                key = MutableString.Create(name, RubyEncoding.UTF8);
+                key.Freeze();
+                if (_keys.Count < 4096) {
+                    _keys[name] = key;
+                }
+            }
+            return key;
+        }
 
         internal JsonParser(string/*!*/ source, RubyContext/*!*/ context) {
             _source = source;
@@ -392,11 +644,13 @@ namespace IronRuby.StandardLibrary.Json {
             }
         }
 
-        internal object ParseValue(int depth) {
-            if (depth > 100) {
-                throw new JsonParserError("nesting of 100 is too deep");
+        private void EnterLevel(int depth) {
+            if (MaxNesting > 0 && depth + 1 > MaxNesting) {
+                throw new JsonNestingError(String.Format("nesting of {0} is too deep", depth + 1));
             }
+        }
 
+        internal object ParseValue(int depth) {
             SkipWhitespace();
             if (AtEnd) {
                 throw new JsonParserError("unexpected end of input");
@@ -410,8 +664,23 @@ namespace IronRuby.StandardLibrary.Json {
                 case 't': Expect("true"); return ScriptingRuntimeHelpers.True;
                 case 'f': Expect("false"); return ScriptingRuntimeHelpers.False;
                 case 'n': Expect("null"); return null;
-                default: return ParseNumber();
+                case 'N':
+                    if (AllowNan) { Expect("NaN"); return Double.NaN; }
+                    break;
+                case 'I':
+                    if (AllowNan) { Expect("Infinity"); return Double.PositiveInfinity; }
+                    break;
+                case '-':
+                    if (AllowNan && String.CompareOrdinal(_source, _position, "-Infinity", 0, 9) == 0) {
+                        _position += 9;
+                        return Double.NegativeInfinity;
+                    }
+                    break;
             }
+            if (c == 'N' || c == 'I') {
+                throw new JsonParserError("unexpected token at '" + Rest + "'");
+            }
+            return ParseNumber();
         }
 
         private void Expect(string/*!*/ word) {
@@ -432,13 +701,18 @@ namespace IronRuby.StandardLibrary.Json {
 
             while (true) {
                 SkipWhitespace();
+                if (AllowTrailingComma && hash.Count > 0 && !AtEnd && _source[_position] == '}') {
+                    _position++;
+                    return hash;
+                }
                 if (AtEnd || _source[_position] != '"') {
                     throw new JsonParserError("expected object key at '" + Rest + "'");
                 }
+                if (hash.Count == 0) {
+                    EnterLevel(depth);
+                }
                 string name = ParseString();
-                object key = SymbolizeNames
-                    ? (object)_context.CreateSymbol(name, RubyEncoding.UTF8)
-                    : MutableString.Create(name, RubyEncoding.UTF8);
+                object key = SymbolizeNames ? (object)_context.CreateSymbol(name, RubyEncoding.UTF8) : KeyString(name);
                 SkipWhitespace();
                 if (AtEnd || _source[_position] != ':') {
                     throw new JsonParserError("expected ':' at '" + Rest + "'");
@@ -470,8 +744,16 @@ namespace IronRuby.StandardLibrary.Json {
                 _position++;
                 return array;
             }
+            EnterLevel(depth);
 
             while (true) {
+                if (AllowTrailingComma && array.Count > 0) {
+                    SkipWhitespace();
+                    if (!AtEnd && _source[_position] == ']') {
+                        _position++;
+                        return array;
+                    }
+                }
                 array.Add(ParseValue(depth + 1));
                 SkipWhitespace();
                 if (AtEnd) {
@@ -491,6 +773,20 @@ namespace IronRuby.StandardLibrary.Json {
 
         private string/*!*/ ParseString() {
             _position++; // opening quote
+
+            // most strings have no escape and no control character: take them as they are
+            int start = _position;
+            for (int i = start; i < _source.Length; i++) {
+                char ch = _source[i];
+                if (ch == '"') {
+                    _position = i + 1;
+                    return _source.Substring(start, i - start);
+                }
+                if (ch == '\\' || ch < ' ') {
+                    break;
+                }
+            }
+
             var builder = new StringBuilder();
             while (true) {
                 if (AtEnd) {
@@ -560,6 +856,10 @@ namespace IronRuby.StandardLibrary.Json {
                 throw new JsonParserError("unexpected token at '" + Rest + "'");
             }
 
+            if (isFloat && DecimalClass != null) {
+                return DecimalClass(text);
+            }
+
             if (isFloat) {
                 double result;
                 if (!Double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
@@ -573,9 +873,12 @@ namespace IronRuby.StandardLibrary.Json {
                 return ScriptingRuntimeHelpers.Int32ToObject(intResult);
             }
 
+            // an Integer that fits in 64 bits is a long, as everywhere else in the runtime: a BigInteger
+            // of the same value is a different Hash key - {3000000000 => 1}[JSON.parse("[3000000000]")[0]]
+            // was nil
             BigInteger bigResult;
             if (BigInteger.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out bigResult)) {
-                return bigResult;
+                return Protocols.Normalize(bigResult);
             }
 
             throw new JsonParserError("invalid number '" + text + "'");

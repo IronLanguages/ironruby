@@ -2334,9 +2334,13 @@ namespace IronRuby.Builtins {
             return this;
         }
 
+        /// <summary>
+        /// Inserts <paramref name="value"/> before the CLR char at <paramref name="index"/>.
+        /// </summary>
         public MutableString/*!*/ Insert(int index, MutableString value) {
             //RequiresArrayInsertIndex(index);
             if (value != null) {
+                index = ToContentInsertIndex(index, value);
                 MutateAppend(value, true);
                 value._content.InsertTo(_content, index, 0, value._content.Count);
             }
@@ -2349,9 +2353,32 @@ namespace IronRuby.Builtins {
             ContractUtils.RequiresNotNull(value, "value");
             //value.RequiresArrayRange(start, count);
 
+            index = ToContentInsertIndex(index, value);
             MutateAppend(value, start == 0 && count == value._content.Count);
             value._content.InsertTo(_content, index, start, count);
             return this;
+        }
+
+        /// <summary>
+        /// The index the content takes for inserting <paramref name="value"/> before the CLR char at
+        /// <paramref name="index"/>. A value held as bytes is inserted as bytes, into this string's
+        /// bytes, so the content takes the index as a byte offset - which is the same only while
+        /// every character before it is a single byte. "あい".b.force_encoding("UTF-8") had a
+        /// character inserted after its first byte, and s[1] = str corrupted s the same way.
+        /// </summary>
+        private int ToContentInsertIndex(int index, MutableString/*!*/ value) {
+            if (index <= 0 || !value.IsBinary) {
+                return index;
+            }
+
+            // binary content that is not one byte per character is switched to characters, so that
+            // the index means what it does for every other operation:
+            PrepareForCharacterRead();
+            if (IsBinary || HasSingleByteCharacters || DetectByteCharacters()) {
+                return index;
+            }
+
+            return (index >= _content.Count) ? _content.GetByteCount() : GetSlice(0, index).GetByteCount();
         }
 
         #endregion
