@@ -207,6 +207,13 @@ namespace IronRuby.Builtins {
             internal Exception Exception { get; set; }
             internal object Result { get; set; }
             internal bool CreatedFromRuby { get; set; }
+
+            /// <summary>
+            /// The runtime whose Thread.new made this thread; null for a thread Ruby did not create
+            /// (a host's, the main thread). Each RubyContext is a VM of its own, as far as which
+            /// threads it has goes.
+            /// </summary>
+            internal RubyContext Context { get; set; }
             internal bool ExitRequested { get; set; }
             internal MutableString Name { get; set; }
             internal bool ReportOnException { get; set; }
@@ -314,6 +321,29 @@ namespace IronRuby.Builtins {
                         return result.ToArray();
                     }
                 }
+            }
+
+            /// <summary>
+            /// The Ruby threads of a runtime, as Thread.list and ThreadGroup#list see them:
+            /// <see cref="Threads"/> less the threads another runtime's Thread.new made - two
+            /// ScriptRuntimes in one process are two VMs, and neither lists the other's threads - and
+            /// less the CLR threads that run (or hold suspended) a fiber of another thread's. A fiber
+            /// has a CLR thread of its own here, but in MRI it is part of the thread that owns it, and
+            /// Thread.current inside it is that thread.
+            /// </summary>
+            internal static RubyThreadInfo[]/*!*/ GetRubyThreads(RubyContext/*!*/ context) {
+                RubyThreadInfo[] all = Threads;
+                var result = new List<RubyThreadInfo>(all.Length);
+                foreach (RubyThreadInfo info in all) {
+                    if (info.Context != null && info.Context != context) {
+                        continue;
+                    }
+                    FiberCore fiber = info.FiberExecution;
+                    if (fiber == null || fiber.Owner == info.Thread) {
+                        result.Add(info);
+                    }
+                }
+                return result.ToArray();
             }
 
             /// <summary>
@@ -986,10 +1016,10 @@ namespace IronRuby.Builtins {
         //    exclusive
         //    fork
         [RubyMethod("list", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ List(object self) {
+        public static RubyArray/*!*/ List(RubyContext/*!*/ context, object self) {
             RubyThreadInfo.RegisterCurrentThread();
 
-            RubyThreadInfo[] threads = RubyThreadInfo.Threads;
+            RubyThreadInfo[] threads = RubyThreadInfo.GetRubyThreads(context);
             RubyArray result = new RubyArray(threads.Length);
             foreach (RubyThreadInfo threadInfo in threads) {
                 Thread thread = threadInfo.Thread;
@@ -1097,6 +1127,7 @@ namespace IronRuby.Builtins {
             // #inspect, #priority, #report_on_exception - has to be in place before Start().
             RubyThreadInfo info = RubyThreadInfo.FromThread(result);
             info.CreatedFromRuby = true;
+            info.Context = context;
             info.Group = group;
             info.Priority = creator.Priority;
             info.Location = GetCallerLocation(context);
@@ -1308,6 +1339,12 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("stop", RubyMethodAttributes.PublicSingleton)]
         public static void Stop(RubyContext/*!*/ context, object self) {
+            // MRI's rb_thread_stop: with no other thread alive nothing could ever wake this one.
+            // (Kernel#sleep has no such check: a signal can end it.)
+            RubyThreadInfo.RegisterCurrentThread();
+            if (RubyThreadInfo.GetRubyThreads(context).Length <= 1) {
+                throw new ThreadError("stopping only thread\n\tnote: use sleep to stop forever");
+            }
             if (context.CriticalThread == Thread.CurrentThread) {
                 SetCritical(context, false);
             }
@@ -1316,7 +1353,6 @@ namespace IronRuby.Builtins {
 
         internal static void DoSleep() {
             RubyThreadInfo.RegisterCurrentThread();
-            // TODO: MRI throws an exception if you try to stop the main thread
             RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
             info.Sleep();
             // Waking up is a safe point: a signal that arrived while we slept runs its trap handler

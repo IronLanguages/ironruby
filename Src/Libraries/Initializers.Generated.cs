@@ -10461,7 +10461,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "list", 0x61, 
                 0x00000000U, 
-                new Func<System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ThreadOps.List)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ThreadOps.List)
             );
             
             DefineLibraryMethod(module, "main", 0x61, 
@@ -10537,8 +10537,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "list", 0x51, 
-                0x00000001U, 
-                new Func<IronRuby.Builtins.ThreadGroup, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ThreadGroup.List)
+                0x00000002U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.ThreadGroup, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ThreadGroup.List)
             );
             
             DefineLibraryMethod(module, "to_s", 0x51, 

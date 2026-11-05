@@ -2809,6 +2809,126 @@ missing dir: ""Errno::ENOENT: No such file or directory""
         }
 
         /// <summary>
+        /// A String pattern whose bytes are not valid in its encoding, as MRI treats it: #sub, #gsub, their
+        /// bang forms and #scan raise Regexp.new's RegexpError (string.c's get_pat_quoted), where IronRuby said
+        /// ArgumentError or, with a valid receiver, matched nothing; the searches - #index, #rindex, #byteindex,
+        /// #byterindex, #[], #slice, #slice!, #[]=, #partition, #rpartition - find nothing (rb_strseq_index),
+        /// where IronRuby found the bytes.
+        /// </summary>
+        public void String_BrokenPattern1() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+s = ""a\xffb\xffc""; pat = ""\xff""
+show(""Regexp.new"") { Regexp.new(pat) }
+show(""sub"") { s.sub(pat, ""Z"") }
+show(""sub!"") { s.dup.sub!(pat, ""Z"") }
+show(""sub blk"") { s.sub(pat) { ""Z"" } }
+show(""gsub"") { s.gsub(pat, ""Z"") }
+show(""gsub!"") { s.dup.gsub!(pat) { ""Z"" } }
+show(""gsub enum"") { s.gsub(pat).to_a }
+show(""gsub hash"") { s.gsub(pat, {}) }
+show(""scan"") { s.scan(pat) }
+show(""scan blk"") { s.scan(pat) { } }
+show(""split"") { s.split(pat) }
+show(""index"") { s.index(pat) }
+show(""include?"") { s.include?(pat) }
+show(""start_with?"") { s.start_with?(pat) }
+show(""partition"") { s.partition(pat) }
+show(""count"") { s.count(pat) }
+show(""binary ok"") { ""a\xffb"".b.gsub(""\xff"".b, ""Z"") }
+show(""other enc broken"") { ""a\xffb"".force_encoding(""EUC-JP"").gsub(""\xff"".force_encoding(""EUC-JP""), ""Z"") }
+show(""to_str broken"") { o = Object.new; def o.to_str; ""\xff""; end; ""a"".gsub(o, ""Z"") }
+show(""valid receiver"") { ""abc"".gsub(""\xff"", ""Z"") }
+show(""mid"") { ""x"".sub(""a\xe3b"", ""Z"") }
+show(""index"") { s.index(pat) }
+show(""index off"") { s.index(pat, 2) }
+show(""rindex"") { s.rindex(pat) }
+show(""byteindex"") { s.byteindex(pat) }
+show(""byterindex"") { s.byterindex(pat) }
+show(""include?"") { s.include?(pat) }
+show(""[]"") { s[pat] }
+show(""slice"") { s.slice(pat) }
+show(""slice!"") { t = s.dup; [t.slice!(pat), t] }
+show(""[]="") { t = s.dup; t[pat] = ""Z""; t }
+show(""partition"") { s.partition(pat) }
+show(""rpartition"") { s.rpartition(pat) }
+show(""valid in broken"") { s.index(""b"") }
+show(""broken mid"") { ""ab\xe3"".index(""\xe3"") }
+", @"
+Regexp.new: ""RegexpError: invalid multibyte character: /\\xFF/""
+sub: ""RegexpError: invalid multibyte character: /\\xFF/""
+sub!: ""RegexpError: invalid multibyte character: /\\xFF/""
+sub blk: ""RegexpError: invalid multibyte character: /\\xFF/""
+gsub: ""RegexpError: invalid multibyte character: /\\xFF/""
+gsub!: ""RegexpError: invalid multibyte character: /\\xFF/""
+gsub enum: ""RegexpError: invalid multibyte character: /\\xFF/""
+gsub hash: ""RegexpError: invalid multibyte character: /\\xFF/""
+scan: ""RegexpError: invalid multibyte character: /\\xFF/""
+scan blk: ""RegexpError: invalid multibyte character: /\\xFF/""
+split: ""ArgumentError: invalid byte sequence in UTF-8""
+index: nil
+include?: false
+start_with?: false
+partition: [""a\xFFb\xFFc"", """", """"]
+count: ""ArgumentError: invalid byte sequence in UTF-8""
+binary ok: ""aZb""
+other enc broken: ""RegexpError: invalid multibyte character: /\\xFF/""
+to_str broken: ""RegexpError: invalid multibyte character: /\\xFF/""
+valid receiver: ""RegexpError: invalid multibyte character: /\\xFF/""
+mid: ""RegexpError: invalid multibyte character: /a\\xE3b/""
+index: nil
+index off: nil
+rindex: nil
+byteindex: nil
+byterindex: nil
+include?: false
+[]: nil
+slice: nil
+slice!: [nil, ""a\xFFb\xFFc""]
+[]=: ""IndexError: string not matched""
+partition: [""a\xFFb\xFFc"", """", """"]
+rpartition: ["""", """", ""a\xFFb\xFFc""]
+valid in broken: 2
+broken mid: nil
+");
+        }
+
+        /// <summary>
+        /// Thread.stop with no other thread alive is MRI's ThreadError "stopping only thread" (rb_thread_stop),
+        /// where it slept forever. A fiber runs on a CLR thread of its own here but is part of the thread that
+        /// owns it, so neither it nor its thread counts as another thread - for Thread.stop, nor for Thread.list
+        /// and ThreadGroup#list, which used to list it.
+        /// </summary>
+        public void Thread_StopAlone1() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message.inspect}""; end; puts ""#{l}: #{v.inspect}""; end
+show(""alone"") { Thread.stop }
+show(""list"") { Thread.list.size }
+show(""in fiber: list"") { Fiber.new { Thread.list.size }.resume }
+show(""in fiber: group list"") { Fiber.new { ThreadGroup::Default.list.size }.resume }
+show(""in fiber: stop"") { Fiber.new { Thread.stop }.resume }
+f = Fiber.new { Fiber.yield }; f.resume
+show(""suspended fiber: list"") { [Thread.list.size, Thread.list == [Thread.main]] }
+show(""another thread stops"") { t = Thread.new { Thread.stop; :woke }; Thread.pass until t.status == ""sleep""; t.run; t.value }
+show(""main stops, another wakes it"") { t = Thread.new { Thread.pass until Thread.main.status == ""sleep""; Thread.main.wakeup }; Thread.stop; t.join; :ok }
+show(""fiber of another thread"") { Thread.new { Fiber.new { Thread.list.size }.resume }.value }
+f.resume
+", @"
+alone: ""ThreadError: \""stopping only thread\\n\\tnote: use sleep to stop forever\""""
+list: 1
+in fiber: list: 1
+in fiber: group list: 1
+in fiber: stop: ""ThreadError: \""stopping only thread\\n\\tnote: use sleep to stop forever\""""
+suspended fiber: list: [1, true]
+another thread stops: :woke
+main stops, another wakes it: :ok
+fiber of another thread: 2
+");
+        }
+
+        /// <summary>
         /// Range#first(n) and #last(n) of an Integer range are counted rather than walked - #last(n)
         /// built the whole range first, so (1..10**9).last(3) ran out of memory - and #last takes
         /// that path for a subclass whatever its #each, as MRI's rb_int_range_last does. Also the

@@ -932,6 +932,9 @@ namespace IronRuby.Builtins {
 
             // CLR indices of the character representations: a byte-level operation (#start_with?,
             // #getbyte) may have left either one as bytes.
+            if (IsBrokenNeedle(searchStr)) {
+                return null;
+            }
             self.PrepareForCharacterRead();
             searchStr.PrepareForCharacterRead();
             int index = self.IndexOf(searchStr);
@@ -1068,7 +1071,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("[]")]
         [RubyMethod("slice")]
         public static MutableString GetSubstring(MutableString/*!*/ self, [NotNull]MutableString/*!*/ searchStr) {
-            return (self.IndexOf(searchStr) != -1) ? searchStr.CloneDerived() : null;
+            return (!IsBrokenNeedle(searchStr) && self.IndexOf(searchStr) != -1) ? searchStr.CloneDerived() : null;
         }
 
         [RubyMethod("[]")]
@@ -1273,7 +1276,7 @@ namespace IronRuby.Builtins {
             // see RemoveSubstringInPlace(self, searchStr)
             self.PrepareForCharacterRead();
             substring.PrepareForCharacterRead();
-            int index = self.IndexOf(substring);
+            int index = IsBrokenNeedle(substring) ? -1 : self.IndexOf(substring);
             if (index == -1) {
                 throw RubyExceptions.CreateIndexError("string not matched");
             }
@@ -3111,8 +3114,8 @@ namespace IronRuby.Builtins {
 
             object blockResult;
             MutableString result;
-            // TODO:
-            var regex = new RubyRegex(MutableString.CreateMutable(Regex.Escape(matchString.ToString()), matchString.Encoding), RubyRegexOptions.NONE);
+            // The same literal pattern the String forms without a block get from the Regexp conversion.
+            var regex = RubyRegex.FromLiteralPattern(matchString);
 
             return BlockReplaceFirst(tosConversion, scope, self, block, regex, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
         }
@@ -3124,8 +3127,8 @@ namespace IronRuby.Builtins {
 
             object blockResult;
             MutableString result;
-            // TODO:
-            var regex = new RubyRegex(MutableString.CreateMutable(Regex.Escape(matchString.ToString()), matchString.Encoding), RubyRegexOptions.NONE);
+            // The same literal pattern the String forms without a block get from the Regexp conversion.
+            var regex = RubyRegex.FromLiteralPattern(matchString);
 
             self.TrackChanges();
             object r = BlockReplaceAll(tosConversion, scope, self, block, regex, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
@@ -3282,6 +3285,15 @@ namespace IronRuby.Builtins {
 
         #region index, rindex
 
+        /// <summary>
+        /// MRI's rb_strseq_index and rb_str_rindex give up on a needle whose bytes are not valid in
+        /// its encoding: not found, rather than a search for the bytes. So do #index, #rindex,
+        /// #byteindex, #byterindex, #include?, #[], #slice, #slice!, #[]=, #partition and #rpartition.
+        /// </summary>
+        private static bool IsBrokenNeedle(MutableString/*!*/ needle) {
+            return needle.ContainsInvalidCharacters();
+        }
+
         // encoding aware
         [RubyMethod("index")]
         public static object Index(MutableString/*!*/ self, 
@@ -3292,6 +3304,9 @@ namespace IronRuby.Builtins {
             }
 
             self.RequireCompatibleEncoding(substring);
+            if (IsBrokenNeedle(substring)) {
+                return null;
+            }
             substring.PrepareForCharacterRead();
 
             int result = self.IndexOf(substring, self.ToClrIndex(start));
@@ -3338,6 +3353,9 @@ namespace IronRuby.Builtins {
             }
 
             self.RequireCompatibleEncoding(substring);
+            if (IsBrokenNeedle(substring)) {
+                return null;
+            }
             // A substring with a pair cannot occur in a receiver without one, so its CLR length -
             // no scan of a fresh literal needed - is good enough for the checks below then.
             int subCharCount = self.KnowsCharIndexIsClrIndex

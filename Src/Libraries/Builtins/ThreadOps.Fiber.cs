@@ -229,6 +229,11 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            /// <summary>The thread this fiber belongs to, which is Thread.current inside it.</summary>
+            internal Thread/*!*/ Owner {
+                get { return _owner; }
+            }
+
             internal FiberCore(RubyContext context, object handle, Thread owner, bool root) {
                 _mailbox = new FiberMailbox();
                 _owner = owner;

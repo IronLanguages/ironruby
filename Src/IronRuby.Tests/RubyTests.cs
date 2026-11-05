@@ -857,6 +857,8 @@ namespace IronRuby.Tests {
                 File_StatPredicatesToIo2,
                 IO_SysOpenArguments1,
                 IO_SysOpenPermission1,
+                String_BrokenPattern1,
+                Thread_StopAlone1,
                 Range_IntegerFastPaths1,
                 Method_LightFrame1,
                 Method_LightFrame2,
