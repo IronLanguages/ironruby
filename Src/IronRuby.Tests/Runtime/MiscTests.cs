@@ -1808,6 +1808,43 @@ uncaught throw :zz
 ");
         }
 
+        public void Backtrace_RedefinedSetBacktrace1() {
+            // As MRI's setup_exception: a #set_backtrace of the exception's own is called once per raise
+            // and decides #backtrace (nil unless it calls super), and an exception the method raises is
+            // dropped - it used to escape the rescue, and the thread. #backtrace_locations, which the prelude
+            // defines and this host does not load, is in Util/set-backtrace-matrix.rb.
+            TestOutput(@"
+$n = 0
+class A < StandardError; def set_backtrace(b); $n += 1; super; end; end
+class B < StandardError; def set_backtrace(b); $n += 1; end; end
+class C < StandardError; def set_backtrace(b) = raise('sb'); end
+def d2(k) = d1(k)
+def d1(k) = raise(k, 'x')
+[A, B, C].each do |k|
+  $n = 0
+  begin; d2(k); rescue Exception => e
+    puts [k, e.class, $n, e.backtrace.class].join(' ')
+  end
+  begin; [1].each { raise k, 'blk' }; rescue Exception => e; puts [k, e.class, e.message].join(' '); end
+end
+t = Thread.new { Thread.current.report_on_exception = false; raise C, 't' }
+begin; t.join; rescue Exception => e; puts [:thread, e.class, e.message].join(' '); end
+$n = 0
+begin; d2(B); rescue B => e
+  begin; raise e; rescue B; puts [:reraise, $n].join(' '); end
+end
+", @"
+A A 1 Array
+A A blk
+B B 1 NilClass
+B B blk
+C C 0 NilClass
+C C blk
+thread C t
+reraise 2
+");
+        }
+
         public void Reflection_Misc1() {
             TestOutput(@"
 class RBase; def self.cm; end; def priv; end; private :priv; def prot; end; protected :prot; end
