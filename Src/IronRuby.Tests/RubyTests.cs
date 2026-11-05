@@ -850,6 +850,8 @@ namespace IronRuby.Tests {
                 Integer_SqrtPowDigits1,
                 Digest_Incremental1,
                 Range_IntegerFastPaths1,
+                Method_LightFrame1,
+                Method_LightFrame2,
                 Hash_SelfKey1,
                 Thread_JoinSelf1,
                 Reflection_Misc1,

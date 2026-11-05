@@ -1181,6 +1181,22 @@ var closureScope = scope as RubyClosureScope;
 #endif
     }
 
+    /// <summary>
+    /// What a light-frame method's scope is made of that is the same on every call of one compilation:
+    /// its locals' names, its parameter count and signature flags, and the name it was defined under.
+    /// </summary>
+    public sealed class MethodFrameShape {
+        internal readonly string/*!*/[]/*!*/ VariableNames;
+        internal readonly int VisibleParameterCountAndSignatureFlags;
+        internal readonly string/*!*/ DefinitionName;
+
+        internal MethodFrameShape(string[] variableNames, int visibleParameterCountAndSignatureFlags, string/*!*/ definitionName) {
+            VariableNames = variableNames ?? ArrayUtils.EmptyStrings;
+            VisibleParameterCountAndSignatureFlags = visibleParameterCountAndSignatureFlags;
+            DefinitionName = definitionName;
+        }
+    }
+
     public sealed class RubyMethodScope : RubyClosureScope {
         private readonly RubyModule/*!*/ _declaringModule;
         private readonly string/*!*/ _definitionName;
@@ -1259,6 +1275,37 @@ var closureScope = scope as RubyClosureScope;
                 var record = _definitionRefinements;
                 return (record != null) ? record.Value : null;
             }
+        }
+
+        /// <summary>
+        /// The scope of a call of a light-frame method (see RubyOps.EnterLightMethod), made only if something asks
+        /// for it - a TracePoint hook, or an exception filter. The call's flow-control frame already exists: the
+        /// literal block, converted when the call began, or the shared inactive frame when there is none. A
+        /// scope made for it delegates to the first and stands for itself otherwise, so a break or return aimed
+        /// at the call still finds an active frame.
+        /// </summary>
+        internal RubyMethodScope(MethodFrameShape/*!*/ shape, RubyScope/*!*/ parent, RubyModule/*!*/ declaringModule, MutableTuple locals,
+            object selfObject, Proc blockParameter, InterpretedFrame interpretedFrame, RuntimeFlowControl/*!*/ rfc, string calleeName) {
+            Assert.NotNull(shape, parent, declaringModule, rfc);
+
+            // RuntimeFlowControl:
+            _activeFlowControlScope = rfc.IsActiveMethod ? rfc : this;
+
+            // RubyScope:
+            _parent = parent;
+            _top = parent.Top;
+            _selfObject = selfObject;
+            _methodAttributes = RubyMethodAttributes.PublicInstance;
+            _locals = locals;
+            _variableNames = shape.VariableNames;
+            _visibleParameterCountAndSignatureFlags = shape.VisibleParameterCountAndSignatureFlags;
+            InterpretedFrame = interpretedFrame;
+
+            // RubyMethodScope:
+            _declaringModule = declaringModule;
+            _definitionName = shape.DefinitionName;
+            _blockParameter = blockParameter;
+            _calleeName = calleeName;
         }
 
         internal RubyMethodScope(MutableTuple locals, string/*!*/[]/*!*/ variableNames, int visibleParameterCountAndSignatureFlags,

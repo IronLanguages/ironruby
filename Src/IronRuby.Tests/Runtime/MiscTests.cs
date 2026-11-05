@@ -2588,5 +2588,203 @@ rstep ret: true
 rstep float: [1.0, 1.5, 2.0]
 ");
         }
+
+        /// <summary>
+        /// A method whose body only yields and returns over self, its parameters, locals and literals runs without a
+        /// RubyMethodScope (MethodDefinition.TransformLightFrame): the literal block is the call's flow-control frame,
+        /// and a scope is made only for a TracePoint hook or an exception filter. Everything a block can do to the
+        /// call - break, next, return, redo, raise - and the TracePoint :call/:return events and callee_id still
+        /// behave as with a scope; so does a call through an alias, and a lambda, proc, Method or Symbol passed as the block.
+        /// </summary>
+        public void Method_LightFrame1() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+class Foo
+  def y0 = yield
+  def y1(x) = yield(x)
+  def y2(a, b) = yield(a, b)
+  def tap1 = (yield self; self)
+  def twice(x); a = yield(x); b = yield(a); b; end
+  def ret_early(x); return x if x; yield; end
+  def with_blk(x, &b) = yield(x)
+  def nested(x) = y1(x) { |v| yield(v * 2) }   # not light (calls y1) - for comparison
+end
+f = Foo.new
+show(""y0"") { f.y0 { 42 } }
+show(""y1"") { f.y1(3) { |x| x + 1 } }
+show(""y2"") { f.y2(1, 2) { |a, b| a + b } }
+show(""y2 one param"") { f.y2(1, 2) { |a| a } }
+show(""y1 array splat"") { f.y1([1, 2]) { |a, b| [a, b] } }
+show(""tap1"") { f.tap1 { |s| s.class }.class }
+show(""twice"") { f.twice(1) { |v| v * 10 } }
+show(""ret_early"") { [f.ret_early(5) { :no }, f.ret_early(nil) { :yes }] }
+show(""break"") { f.y1(1) { |x| break x * 100 } }
+show(""break twice"") { f.twice(1) { |v| break :out if v > 5; v * 10 } }
+show(""next"") { f.y1(1) { |x| next x * 7 if x; 0 } }
+show(""return from block"") { def m(f) = f.y1(1) { |x| return x + 1000 }; m(f) }
+show(""return twice"") { def m2(f) = (f.twice(1) { |v| return :r if v > 5; v * 10 }; :not); m2(f) }
+show(""no block"") { f.y1(1) }
+show(""lambda"") { f.y1(5, &->(x) { x * 3 }) }
+show(""lambda arity"") { f.y2(1, 2, &->(x) { x }) }
+show(""lambda break"") { f.y1(5, &->(x) { break x + 1 }) }
+show(""proc"") { pr = proc { |x| x - 1 }; f.y1(5, &pr) }
+show(""proc break"") { pr = proc { |x| break 9 }; f.y1(5, &pr) }
+show(""method obj"") { f.y1(4, &5.method(:+)) }
+show(""symbol"") { f.y1(""ab"", &:upcase) }
+show(""with_blk"") { f.with_blk(2) { |x| x * x } }
+show(""raise in block"") { f.y1(1) { raise ArgumentError, ""boom"" } }
+show(""rescue around"") { begin; f.y1(1) { raise ""x"" }; rescue => e; e.backtrace.grep(/y1/).size; end }
+show(""nested"") { f.nested(3) { |v| v + 1 } }
+show(""recursion"") { def rec(f, n) = n == 0 ? 0 : f.y1(n) { |x| x + rec(f, n - 1) }; rec(f, 50) }
+show(""redo"") { c = 0; f.y1(1) { |x| c += 1; redo if c < 3; c } }
+show(""break from loop in block"") { f.y1(1) { |x| [1, 2].each { |i| break i }; :after } }
+show(""yield in proc result"") { f.y1(1) { |x| proc { x } }.call }
+show(""binding in block"") { a = 5; f.y1(a) { |x| binding.local_variable_get(:a) + x } }
+show(""method_missing interplay"") { f.respond_to?(:y1) }
+show(""frozen self"") { f.freeze; f.y1(1) { |x| x } }
+class Foo; alias yy1 y1; end
+ids = []
+tp2 = TracePoint.new(:call) { |t| ids << [t.method_id, t.callee_id] if t.defined_class == Foo }
+tp2.enable { f.yy1(1) { } ; f.y1(1) { } }
+show(""callee_id"") { ids }
+show(""enable inside block"") { ev = []; t = TracePoint.new(:return) { |x| ev << x.method_id if x.defined_class == Foo }; f.y1(1) { t.enable }; t.disable; ev }
+tp_events = []
+tp = TracePoint.new(:call, :return) { |t| tp_events << [t.event, t.method_id, (t.event == :return ? (t.return_value.is_a?(Foo) ? Foo : t.return_value) : nil)] if t.defined_class == Foo }
+tp.enable { f.y1(7) { |x| x * 2 }; f.tap1 { } }
+show(""tracepoint call/return"") { tp_events }
+", @"
+y0: 42
+y1: 4
+y2: 3
+y2 one param: 1
+y1 array splat: [1, 2]
+tap1: Foo
+twice: 100
+ret_early: [5, :yes]
+break: 100
+break twice: :out
+next: 7
+return from block: 1001
+return twice: :r
+no block: ""LocalJumpError: no block given (yield)""
+lambda: 15
+lambda arity: ""ArgumentError: wrong number of arguments (given 2, expected 1)""
+lambda break: 6
+proc: 4
+proc break: ""LocalJumpError: break from proc-closure""
+method obj: 9
+symbol: ""AB""
+with_blk: 4
+raise in block: ""ArgumentError: boom""
+rescue around: 1
+nested: 7
+recursion: 1275
+redo: 3
+break from loop in block: :after
+yield in proc result: 1
+binding in block: 10
+method_missing interplay: true
+frozen self: 1
+callee_id: [[:y1, :yy1], [:y1, :y1]]
+enable inside block: [:y1]
+tracepoint call/return: [[:call, :y1, nil], [:return, :y1, 14], [:call, :tap1, nil], [:return, :tap1, Foo]]
+");
+        }
+
+        /// <summary>
+        /// A light frame (see Method_LightFrame1) also takes instance variable reads and writes and constant reads, whose
+        /// helpers are handed the declaring scope instead of a method scope: the runtime is the same, and a method scope
+        /// has no module, so a constant lookup from it starts at the declaring scope anyway. Constructors and accessors,
+        /// frozen receivers, class-level and BasicObject instance variables, lexical, ::top-level and A::B constants,
+        /// const_missing, a redefined constant and autoload behave as they do with a scope.
+        /// </summary>
+        public void Method_LightFrame2() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+X = :top
+module Outer
+  X = :outer
+  LIMIT = 10
+  class Pt
+    def initialize(x, y); @x = x; @y = y; end
+    def x = @x
+    def x=(v); @x = v; end
+    def pair = [@x, @y]          # array literal: not light (fine either way)
+    def unset = @nope
+    def limit = LIMIT
+    def lex = X
+    def top = ::X
+    def qual = Outer::LIMIT
+    def missing = NOPE_CONST
+    def chain = Outer::Pt
+    def ytwo = yield(@x, @y)
+  end
+  class << self
+    def sing_x = X
+  end
+end
+class Outer::Pt
+  def lex2 = X        # lexical scope here is top-level (class Outer::Pt), so X is :top
+end
+p1 = Outer::Pt.new(1, 2)
+show(""ctor"") { [p1.x, p1.pair] }
+show(""setter"") { p1.x = 5; p1.x }
+show(""unset ivar"") { p1.unset }
+show(""frozen setter"") { q = Outer::Pt.new(1, 2).freeze; begin; q.x = 3; rescue FrozenError => e; [e.class, e.receiver.equal?(q)]; end }
+show(""constants"") { [p1.limit, p1.lex, p1.top, p1.qual, p1.chain, p1.lex2, Outer.sing_x] }
+show(""const_missing"") { p1.missing }
+show(""const_missing hook"") { class Outer::Pt; def self.const_missing(n) = ""cm:#{n}""; end; p1.missing }
+show(""redefined const"") { Outer.send(:remove_const, :LIMIT); Outer.const_set(:LIMIT, 20); p1.limit }
+show(""ytwo"") { p1.ytwo { |a, b| a + b } }
+class Cls
+  @count = 7
+  def self.count = @count
+  def self.count=(v); @count = v; end
+end
+show(""class ivar"") { Cls.count = Cls.count + 1; Cls.count }
+class BO < BasicObject
+  def initialize(v); @v = v; end
+  def v = @v
+end
+show(""basicobject"") { BO.new(3).v }
+m = Module.new do
+  def self.k = X
+end
+show(""module new"") { m.k }
+S1 = Struct.new(:a) do
+  def twice_a = @twice
+end
+show(""struct ivar"") { S1.new(1).twice_a }
+o = Object.new
+def o.sing = @s
+o.instance_variable_set(:@s, 9)
+show(""singleton ivar"") { o.sing }
+show(""ivars on frozen string"") { s = +""abc""; def s.iv = @iv; s.iv }
+show(""ivar on integer receiver via instance_exec"") { 5.instance_exec { @z } }
+show(""autoload const"") { module AL; autoload :Thing, ""/nonexistent/thing""; def self.get = Thing; end; AL.get }
+show(""tracepoint ctor"") { ev = []; tp = TracePoint.new(:call, :return) { |t| ev << [t.event, t.method_id] if t.defined_class == Outer::Pt }; tp.enable { Outer::Pt.new(1, 2).x }; ev }
+", @"
+ctor: [1, [1, 2]]
+setter: 5
+unset ivar: nil
+frozen setter: [FrozenError, true]
+constants: [10, :outer, :top, 10, Outer::Pt, :top, :outer]
+const_missing: ""NameError: uninitialized constant Outer::Pt::NOPE_CONST""
+const_missing hook: ""cm:NOPE_CONST""
+redefined const: 20
+ytwo: 7
+class ivar: 8
+basicobject: 3
+module new: :top
+struct ivar: nil
+singleton ivar: 9
+ivars on frozen string: nil
+ivar on integer receiver via instance_exec: nil
+autoload const: ""LoadError: cannot load such file -- /nonexistent/thing""
+tracepoint ctor: [[:call, :initialize], [:return, :initialize], [:call, :x], [:return, :x]]
+");
+        }
     }
 }
