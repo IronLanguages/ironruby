@@ -3443,7 +3443,10 @@ namespace IronRuby.Builtins {
                     continue;
                 }
 
-                if (StartsWith(self, Protocols.CastToString(stringCast, prefixes[i]))) {
+                // rb_str_start_with: an incompatible prefix raises, as it does for end_with?
+                MutableString prefix = Protocols.CastToString(stringCast, prefixes[i]);
+                self.RequireCompatibleEncoding(prefix);
+                if (StartsWith(self, prefix)) {
                     return true;
                 }
             }
