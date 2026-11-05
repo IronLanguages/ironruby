@@ -860,6 +860,7 @@ namespace IronRuby.Tests {
                 Range_IntegerFastPaths1,
                 Io_BuiltinReaders1,
                 Io_LineReaders2,
+                Io_LineReaders3,
                 Method_LightFrame1,
                 Method_LightFrame2,
                 Hash_SelfKey1,

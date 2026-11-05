@@ -1769,7 +1769,13 @@ namespace IronRuby.Builtins {
             if (pipe == null) {
                 // MRI's write_nonblock is a bare write(2): nothing of it stays in a buffer.
                 int all = Write(io, val, true);
-                io.Flush();
+                // The write only filled the buffer; this flush is the write(2), and a reader that
+                // is gone is EPIPE (or SIGPIPE on the standard streams) here as anywhere else.
+                try {
+                    io.Flush();
+                } catch (IOException e) {
+                    throw TranslateWriteError(e, io);
+                }
                 return all;
             }
 
