@@ -101,6 +101,10 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
         public int MaxPrecision { get { return _words.Length; } }
 
+        internal uint GetWord(int index) {
+            return _words[index];
+        }
+
         public int DigitCount {
             get {
                 // Find last non-zero word

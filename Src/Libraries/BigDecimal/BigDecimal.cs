@@ -552,17 +552,59 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         /// <summary>A finite x as unscaled * 10**scale, the unscaled value carrying the sign.</summary>
+        // The fraction's words hold its digits left-aligned (0.w0 w1 ... * 10**exponent, w0's first digit
+        // non-zero), so the unscaled value is the words read as one base 10**9 number, 9 digits a word.
         private static void ToUnscaled(BigDecimal/*!*/ x, out System.Numerics.BigInteger unscaled, out long scale) {
-            string digits = x._fraction.ToString();
-            unscaled = System.Numerics.BigInteger.Parse(digits, CultureInfo.InvariantCulture);
+            int precision = x._fraction.Precision;
+            if (precision <= 2) {
+                ulong value = x._fraction.GetWord(0);
+                if (precision == 2) {
+                    value = value * Fraction.BASE + x._fraction.GetWord(1);
+                }
+                unscaled = value;
+            } else {
+                System.Numerics.BigInteger value = System.Numerics.BigInteger.Zero;
+                for (int i = 0; i < precision; i++) {
+                    value = value * Fraction.BASE + x._fraction.GetWord(i);
+                }
+                unscaled = value;
+            }
             if (x._sign < 0) {
                 unscaled = -unscaled;
             }
-            scale = (long)x._exponent - digits.Length;
+            scale = (long)x._exponent - (long)precision * Fraction.BASE_FIG;
+        }
+
+        /// <summary>The digit count of a positive value made by ToUnscaled: 9 for each word.</summary>
+        private static int UnscaledDigits(BigDecimal/*!*/ x) {
+            return x._fraction.Precision * Fraction.BASE_FIG;
         }
 
         private static BigDecimal/*!*/ FromUnscaled(Config/*!*/ config, System.Numerics.BigInteger unscaled, long scale) {
-            return Create(config, unscaled.ToString(CultureInfo.InvariantCulture) + "e" + scale.ToString(CultureInfo.InvariantCulture));
+            if (unscaled.IsZero) {
+                return PositiveZero;
+            }
+            int sign = unscaled.Sign;
+            string digits = System.Numerics.BigInteger.Abs(unscaled).ToString(CultureInfo.InvariantCulture);
+            int length = digits.Length;
+            while (length > 1 && digits[length - 1] == '0') {
+                length--;
+            }
+            long exponent = scale + digits.Length;
+            if (exponent > Int32.MaxValue || exponent < Int32.MinValue) {
+                return Create(config, (sign < 0 ? "-" : "") + digits + "e" + scale.ToString(CultureInfo.InvariantCulture));
+            }
+            int wordCount = (length + Fraction.BASE_FIG - 1) / Fraction.BASE_FIG;
+            var words = new uint[wordCount];
+            for (int w = 0; w < wordCount; w++) {
+                uint word = 0;
+                for (int d = 0; d < Fraction.BASE_FIG; d++) {
+                    int i = w * Fraction.BASE_FIG + d;
+                    word = word * 10 + (i < length ? (uint)(digits[i] - '0') : 0);
+                }
+                words[w] = word;
+            }
+            return new BigDecimal(sign, new Fraction(words), (int)exponent);
         }
 
         /// <summary>
@@ -589,8 +631,8 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             a = System.Numerics.BigInteger.Abs(a);
             b = System.Numerics.BigInteger.Abs(b);
 
-            int aDigits = a.ToString(CultureInfo.InvariantCulture).Length;
-            int bDigits = b.ToString(CultureInfo.InvariantCulture).Length;
+            int aDigits = UnscaledDigits(x);
+            int bDigits = UnscaledDigits(y);
             long shift = Math.Max(0, (long)digits + 2 + bDigits - aDigits);
             System.Numerics.BigInteger remainder;
             System.Numerics.BigInteger quotient = System.Numerics.BigInteger.DivRem(a * System.Numerics.BigInteger.Pow(10, (int)shift), b, out remainder);
