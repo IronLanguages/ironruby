@@ -1943,12 +1943,32 @@ namespace IronRuby.Builtins {
                     FileSystemInfo target;
                     try {
                         target = link.ResolveLinkTarget(true);
+                    } catch (UnauthorizedAccessException) {
+                        errno = Posix.EACCES;
+                        return false;
                     } catch (IOException e) {
                         errno = Win32ErrorToErrno(e.HResult & 0xFFFF);
                         return false;
                     }
-                    if (target == null || !target.Exists) {
+                    if (target == null) {
                         errno = Posix.ENOENT;
+                        return false;
+                    }
+                    // FileSystemInfo.Exists says false for any failure; ask the file system so a
+                    // denied target reports EACCES, not ENOENT
+                    try {
+                        File.GetAttributes(target.FullName);
+                    } catch (UnauthorizedAccessException) {
+                        errno = Posix.EACCES;
+                        return false;
+                    } catch (FileNotFoundException) {
+                        errno = Posix.ENOENT;
+                        return false;
+                    } catch (DirectoryNotFoundException) {
+                        errno = Posix.ENOENT;
+                        return false;
+                    } catch (IOException e) {
+                        errno = Win32ErrorToErrno(e.HResult & 0xFFFF);
                         return false;
                     }
                     result = new StatInfo(target);

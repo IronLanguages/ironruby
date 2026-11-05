@@ -2902,6 +2902,34 @@ broken mid: nil
         /// owns it, so neither it nor its thread counts as another thread - for Thread.stop, nor for Thread.list
         /// and ThreadGroup#list, which used to list it.
         /// </summary>
+        /// <summary>
+        /// A host that creates the runtime on one thread and runs Ruby on another: the creating
+        /// thread is Thread.main and is listed even though no Ruby code ever ran on it.
+        /// </summary>
+        public void Thread_HostMainThread1() {
+            Microsoft.Scripting.Hosting.ScriptEngine engine = null;
+            var created = new System.Threading.ManualResetEvent(false);
+            var done = new System.Threading.ManualResetEvent(false);
+            var creator = new System.Threading.Thread(() => {
+                engine = Ruby.CreateEngine();
+                created.Set();
+                done.WaitOne();
+            });
+            creator.IsBackground = true;
+            creator.Start();
+            try {
+                Assert(created.WaitOne(30000));
+                var result = engine.Execute<object>(@"
+[Thread.list.include?(Thread.main), Thread.list.size, Thread.current != Thread.main]
+");
+                Assert(((RubyArray)result)[0].Equals(true));
+                Assert(((RubyArray)result)[1].Equals(2));
+                Assert(((RubyArray)result)[2].Equals(true));
+            } finally {
+                done.Set();
+            }
+        }
+
         public void Thread_StopAlone1() {
             TestOutput(@"
 require 'ruby4'

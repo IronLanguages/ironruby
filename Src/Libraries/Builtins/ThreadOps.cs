@@ -349,6 +349,12 @@ namespace IronRuby.Builtins {
             /// Thread.current inside it is that thread.
             /// </summary>
             internal static RubyThreadInfo[]/*!*/ GetRubyThreads(RubyContext/*!*/ context) {
+                // The runtime's main thread counts even when no Ruby code has run on it yet
+                // (a host that creates the runtime on one thread and runs Ruby on another).
+                Thread main = context.MainThread;
+                if (main != null && main.IsAlive) {
+                    FromThread(main);
+                }
                 RubyThreadInfo[] all = Threads;
                 var result = new List<RubyThreadInfo>(all.Length);
                 foreach (RubyThreadInfo info in all) {
