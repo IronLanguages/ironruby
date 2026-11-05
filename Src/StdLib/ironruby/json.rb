@@ -397,9 +397,19 @@ module JSON
       return nil
     end
     return nil if GENERIC_TO_JSON.include?(to_json.unbind)
+    # A to_json of a core subclass that calls super - HashWithIndifferentAccess and SafeBuffer under
+    # ActiveSupport - comes back to JSON.generate with the same object; the gem then writes it as its
+    # core class, and so does the C# writer when this answers nil for it.
+    active = (::Thread.current[:__ir_json_to_json_active__] ||= {}.compare_by_identity)
+    return nil if active.key?(obj)
     state = State.new(options)
     state.depth = depth
-    result = obj.to_json(state)
+    active[obj] = true
+    begin
+      result = obj.to_json(state)
+    ensure
+      active.delete(obj)
+    end
     unless result.is_a?(::String)
       ::Kernel.raise ::TypeError, "wrong argument type #{result.class} (expected String)"
     end
