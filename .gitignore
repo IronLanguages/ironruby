@@ -78,6 +78,8 @@ Util/References
 # Agent worktrees and local session state; the project's skills are shared
 /.claude/*
 !/.claude/skills/
+!/.claude/hooks/
+!/.claude/settings.json
 # scratch copies of ir.sh pointing at an out-of-tree build
 /ir[0-9].sh
 
