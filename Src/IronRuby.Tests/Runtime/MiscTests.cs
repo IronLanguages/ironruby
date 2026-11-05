@@ -2809,6 +2809,95 @@ missing dir: ""Errno::ENOENT: No such file or directory""
         }
 
         /// <summary>
+        /// Kernel#Integer and #Float with exception: false answer nil from the C# parser instead of
+        /// raising and rescuing; a String in an ASCII-incompatible encoding is refused either way,
+        /// and Float names a NUL. Array#inject over Fixnums, Array#minmax as [min, max], and
+        /// Enumerable#zip with an Integer Range worked out from the index.
+        /// </summary>
+        public void Kernel_ConversionsInjectZip1() {
+            TestOutput(@"
+require 'ruby4'
+def t(label)
+  r = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{label}: #{r.inspect}""
+end
+['123', ' 0x1A ', '0b101', '1_000', '1__0', '', '  ', 'x', '12x', ""1\0"", '-0o17', '0d19', '08', '+5', 'ff'].each do |s|
+  t(""Integer #{s.inspect}"") { [Integer(s, exception: false), Integer(s, 16, exception: false), Float(s, exception: false)] }
+end
+['1.5', '1e3', '.5', '1_0.5', 'Infinity', 'NaN', '0x1p3', ' 2.5 ', '1e', ""1\0""].each do |s|
+  t(""Float #{s.inspect}"") { Float(s, exception: false) }
+  t(""Float! #{s.inspect}"") { Float(s) }
+end
+t('radix 99') { Integer('1', 99, exception: false) }
+u = '12'.encode('UTF-16LE')
+t('utf16') { [(Integer(u) rescue $!.class), (Integer(u, exception: false) rescue $!.class), (Float(u, exception: false) rescue $!.class)] }
+t('nil') { Integer(nil, exception: false) }
+[1.5, -2.9, 1e20, Float::NAN, Float::INFINITY].each { |f| t(""Integer(#{f})"") { [(Integer(f) rescue $!.class), Integer(f, exception: false)] } }
+a = [1, 2, 3, 2**62, 2**62]
+t('inject +') { [a.inject(:+), a.inject(10, :+), [].inject(:+), [].inject(5, :+), [1, 2.5, 3].inject(:+), ([1, 'a'].inject(:+) rescue $!.class)] }
+t('inject sym') { [[2, 3, 4].inject(:*), [1, 2].inject('+'), %w[a b c].inject(:+), (1..4).inject(:+), [3].inject(:+)] }
+t('inject block') { [[1, 2, 3].inject { |s, x| s * 10 + x }, [1, 2, 3].inject(100) { |s, x| s - x }, [1, 2, 3].inject { |s, x| break s * 7 if x == 3; s + x }] }
+t('inject subclass') { Class.new(Array) { def each; yield 9; end }.new([1, 2]).inject(:+) }
+t('minmax') { [[3, 1, 2].minmax, [].minmax, %w[b a].minmax, [1.5, 1, 2**70].minmax, [3, 1, 2].minmax { |x, y| y <=> x }, ([1, nil].minmax rescue $!.class)] }
+t('zip') { [(1..5).zip(1..3), (1..5).zip(2...4), (1..4).zip(10..), (1..3).zip(5..1), (1..3).zip(2**64..2**64 + 1), (1..3).zip('a'..'b')] }
+t('zip block') { r = []; [(1..3).zip(4..6) { |x| r << x }, r] }
+t('zip subclass') { (1..2).zip(Class.new(Range) { def each; yield 42; end }.new(1, 5)) }
+", @"
+Integer ""123"": [123, 291, 123.0]
+Integer "" 0x1A "": [26, 26, 26.0]
+Integer ""0b101"": [5, 45313, nil]
+Integer ""1_000"": [1000, 4096, 1000.0]
+Integer ""1__0"": [nil, nil, nil]
+Integer """": [nil, nil, nil]
+Integer ""  "": [nil, nil, nil]
+Integer ""x"": [nil, nil, nil]
+Integer ""12x"": [nil, nil, nil]
+Integer ""1\u0000"": [nil, nil, nil]
+Integer ""-0o17"": [-15, nil, nil]
+Integer ""0d19"": [19, 3353, nil]
+Integer ""08"": [nil, 8, 8.0]
+Integer ""+5"": [5, 5, 5.0]
+Integer ""ff"": [nil, 255, nil]
+Float ""1.5"": 1.5
+Float! ""1.5"": 1.5
+Float ""1e3"": 1000.0
+Float! ""1e3"": 1000.0
+Float "".5"": 0.5
+Float! "".5"": 0.5
+Float ""1_0.5"": 10.5
+Float! ""1_0.5"": 10.5
+Float ""Infinity"": nil
+Float! ""Infinity"": [ArgumentError, ""invalid value for Float(): \""Infinity\""""]
+Float ""NaN"": nil
+Float! ""NaN"": [ArgumentError, ""invalid value for Float(): \""NaN\""""]
+Float ""0x1p3"": 8.0
+Float! ""0x1p3"": 8.0
+Float "" 2.5 "": 2.5
+Float! "" 2.5 "": 2.5
+Float ""1e"": nil
+Float! ""1e"": [ArgumentError, ""invalid value for Float(): \""1e\""""]
+Float ""1\u0000"": nil
+Float! ""1\u0000"": [ArgumentError, ""string for Float contains null byte""]
+radix 99: [ArgumentError, ""invalid radix 99""]
+utf16: [Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError]
+nil: nil
+Integer(1.5): [1, 1]
+Integer(-2.9): [-2, -2]
+Integer(1.0e+20): [100000000000000000000, 100000000000000000000]
+Integer(NaN): [FloatDomainError, nil]
+Integer(Infinity): [FloatDomainError, nil]
+inject +: [9223372036854775814, 9223372036854775824, nil, 5, 6.5, TypeError]
+inject sym: [24, 3, ""abc"", 10, 3]
+inject block: [123, 94, 21]
+inject subclass: 9
+minmax: [[1, 3], [nil, nil], [""a"", ""b""], [1, 1180591620717411303424], [3, 1], ArgumentError]
+zip: [[[1, 1], [2, 2], [3, 3], [4, nil], [5, nil]], [[1, 2], [2, 3], [3, nil], [4, nil], [5, nil]], [[1, 10], [2, 11], [3, 12], [4, 13]], [[1, nil], [2, nil], [3, nil]], [[1, 18446744073709551616], [2, 18446744073709551617], [3, nil]], [[1, ""a""], [2, ""b""], [3, nil]]]
+zip block: [nil, [[1, 4], [2, 5], [3, 6]]]
+zip subclass: [[1, 42], [2, nil]]
+");
+        }
+
+        /// <summary>
         /// StringIO's line readers after the bare gets got an overload of its own, a one-byte
         /// separator is looked for as a byte, and chomp: cuts the line where it is; lineno counts
         /// the lines read and not the nil at the end. Also the byte side of a fresh literal, which

@@ -129,6 +129,25 @@ namespace IronRuby.Builtins {
             return Protocols.CastToFloat(floatConversion, value);
         }
 
+        // A String has to be readable as a number at all: in an ASCII-compatible encoding - MRI
+        // checks that before anything else, and exception: false does not change it - and, for
+        // Float, without a NUL, which MRI names rather than calling the value invalid.
+        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
+        public static object ToFloat(RubyContext/*!*/ context, object self, [NotNull]MutableString/*!*/ value) {
+            RequireAsciiCompatible(value);
+            if (value.IndexOf('\0') >= 0) {
+                throw RubyExceptions.CreateArgumentError("string for Float contains null byte");
+            }
+            return RubyOps.ConvertMutableStringToFloat(context, value);
+        }
+
+        private static void RequireAsciiCompatible(MutableString/*!*/ value) {
+            if (!value.Encoding.IsAsciiIdentity) {
+                throw new EncodingCompatibilityError("ASCII incompatible encoding: " + value.Encoding.Name);
+            }
+        }
+
         [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
         public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value) {
@@ -138,6 +157,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
         public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value, [DefaultProtocol]int radix) {
+            RequireAsciiCompatible(value);
             var str = value.ConvertToString();
 
             // A negative radix means "this is only a hint, a prefix wins"; zero and the
@@ -160,6 +180,40 @@ namespace IronRuby.Builtins {
             }
 
             throw InvalidIntegerValue(str);
+        }
+
+        // Kernel#Integer and #Float with exception: false (ruby4.rb): a String that does not read
+        // as a number answers nil here, rather than raising an ArgumentError for the prelude to
+        // rescue - which cost ~55 us a failure. An invalid radix still raises, as it does in MRI
+        // whatever exception: says.
+
+        [RubyMethod("__ir_try_Integer__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__ir_try_Integer__", RubyMethodAttributes.PublicSingleton)]
+        public static object TryToInteger(object self, [NotNull]MutableString/*!*/ value) {
+            return TryToInteger(self, value, 0);
+        }
+
+        [RubyMethod("__ir_try_Integer__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__ir_try_Integer__", RubyMethodAttributes.PublicSingleton)]
+        public static object TryToInteger(object self, [NotNull]MutableString/*!*/ value, [DefaultProtocol]int radix) {
+            RequireAsciiCompatible(value);
+            var str = value.ConvertToString();
+            if (!HasIntegerDigits(str)) {
+                return null;
+            }
+            if (radix > 0 && (radix < 2 || radix > 36)) {
+                throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
+            }
+            object result;
+            return TryParseRubyInteger(str, radix, out result) ? result : null;
+        }
+
+        [RubyMethod("__ir_try_Float__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__ir_try_Float__", RubyMethodAttributes.PublicSingleton)]
+        public static object TryToFloat(object self, [NotNull]MutableString/*!*/ value) {
+            RequireAsciiCompatible(value);
+            double result;
+            return RubyOps.TryParseRubyFloat(value.ConvertToString(), out result) ? (object)result : null;
         }
 
         #region Kernel#Integer string grammar
