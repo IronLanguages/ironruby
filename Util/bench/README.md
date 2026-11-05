@@ -96,8 +96,9 @@ before, 0.57x after.
 ## Known limits
 
 - Every iterator other than the ones above (Range#each, Hash#each, each_with_index, a Ruby
-  method's `yield`, ...) still invokes its block once per element, and a block passed to those is
-  only outlined (see above) when its body is one a `while` could be specialized for.
+  method's `yield`, ...) still invokes its block once per element: a block given to one of those
+  is never outlined, whatever its body. A `while` inside such a block is still replaced by -X:OSR
+  as any other.
 - A *method* that deopts is not re-specialized the way a loop is: its entry stays installed
   and every later call whose argument types no longer match falls through to the generic
   body. Only -X:OSR rebuilds.

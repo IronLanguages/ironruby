@@ -723,6 +723,9 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     try {
                         return _verifyCallback.Call(null, chain, (int)errors) is bool accepted && accepted;
                     } catch (Exception error) {
+                        // parked for #connect to throw, by which time the callback's frames are gone: no
+                        // Ruby frame between here and the callback saw it go by (they no longer rethrow)
+                        RubyExceptionData.GetInstance(error).CaptureExceptionTrace(_context);
                         _callbackError = error;
                         return false;
                     }
@@ -1264,4 +1267,4 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         }
     }
 }
-#endif
+#endif

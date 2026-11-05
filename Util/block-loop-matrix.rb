@@ -179,7 +179,7 @@ def traced(n); s = 0; n.times { |i|
 traced(N)
 t('times: TracePoint :line') do
   lines = 0
-  tp = TracePoint.new(:line) { |tr| lines += 1 if tr.lineno == __LINE__ - 5 }
+  tp = TracePoint.new(:line) { |tr| lines += 1 if tr.lineno == __LINE__ - 4 }
   tp.enable { traced(100) }
   lines
 end

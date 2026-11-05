@@ -472,7 +472,9 @@ namespace IronRuby.Runtime.Jit {
             /// </summary>
             private static string TrivialAccessorVariable(RubyClass/*!*/ cls, IronRuby.Runtime.Calls.RubyMemberInfo/*!*/ info, bool writer) {
                 var method = info as IronRuby.Runtime.Calls.RubyMethodInfo;
-                if (method == null || cls.Context.RubyOptions.EnableTracing || cls.Context.RubyOptions.Profile) { return null; }
+                // nor under coverage: the call counts the method and its line, which a read of the variable would not
+                if (method == null || cls.Context.RubyOptions.EnableTracing || cls.Context.RubyOptions.Profile ||
+                    method.Body.Coverage != null) { return null; }
 
                 var ast = method.GetSyntaxTree();
                 var parameters = ast.Parameters;

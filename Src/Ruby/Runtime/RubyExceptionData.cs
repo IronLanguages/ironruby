@@ -225,7 +225,13 @@ namespace IronRuby.Runtime {
             }
             _capturedTrace = captured;
             if (!HasBuiltinSetBacktrace(context)) {
-                DynamicSetBacktrace(context, Backtrace);
+                // This runs in a catch block (a thread's start, a callback from native code, an error
+                // parked for later): a user's #set_backtrace that raises must not replace the exception
+                // being handled there, as it could not from the exception filter of the RubyScope overload.
+                try {
+                    DynamicSetBacktrace(context, Backtrace);
+                } catch (Exception) {
+                }
             }
 #endif
         }
