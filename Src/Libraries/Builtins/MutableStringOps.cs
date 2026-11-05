@@ -2769,9 +2769,12 @@ namespace IronRuby.Builtins {
         // compatible with a replacement that already changed the result's encoding - an ASCII-only
         // stretch of the input is fine even when elsewhere the input is not.
         private static void AppendInputPiece(MutableString/*!*/ result, MutableString/*!*/ input, int start, int count) {
+            if (count == 0) {
+                return;
+            }
             if (result.Encoding == input.Encoding) {
                 result.Append(input, start, count);
-            } else if (count > 0) {
+            } else {
                 result.Append(input.GetSlice(start, count));
             }
         }
@@ -2887,17 +2890,43 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // A run of literal text from a replacement string. Char by char where that is the same as
+        // appending the piece - the replacement is in the result's encoding, or ASCII-only and the
+        // result's encoding agrees with ASCII - which is cheaper for the usual short replacement.
+        private static void AppendReplacementPiece(MutableString/*!*/ result, MutableString/*!*/ replacement, int start, int count) {
+            if (count == 0) {
+                return;
+            }
+            if (result.Encoding == replacement.Encoding || (result.Encoding.IsAsciiIdentity && replacement.IsAscii())) {
+                for (int i = start; i < start + count; i++) {
+                    result.Append(replacement.GetChar(i));
+                }
+            } else {
+                AppendInputPiece(result, replacement, start, count);
+            }
+        }
+
         private static void AppendReplacementExpression(MutableString/*!*/ input, MatchData/*!*/ match, MutableString/*!*/ result, 
             MutableString/*!*/ replacement) {
 
+            // Literal text is appended in runs, as pieces of the replacement string, so that the
+            // result's encoding follows String#<<'s rules as in MRI's str_gsub: an ASCII-only
+            // receiver takes on the replacement's encoding, and an incompatible pair raises.
+            // Appending it a char at a time would encode the chars in the receiver's encoding
+            // ("ab".b.sub("a", "\u00e9") was "\xE9b").
             int backslashCount = 0;
+            int runStart = 0;
             for (int i = 0; i < replacement.Length; i++) {
                 char c = replacement.GetChar(i);
                 if (c == '\\') {
+                    if (backslashCount == 0) {
+                        AppendReplacementPiece(result, replacement, runStart, i - runStart);
+                    }
                     backslashCount++;
                 } else if (backslashCount == 0) {
-                    result.Append(c);
+                    // part of the current literal run
                 } else {
+                    runStart = i + 1;
                     AppendBackslashes(backslashCount, result, 0);
                     // Odd number of \'s + digit means insert replacement expression
                     if ((backslashCount & 1) == 1) {
@@ -2918,20 +2947,25 @@ namespace IronRuby.Builtins {
                             AppendLastCharOfLastMatchGroup(match, result);
                         } else if (c == 'k' && TryAppendNamedGroup(match, result, replacement, ref i)) {
                             // \k<name> or \k'name': the group the pattern gave that name to
+                            runStart = i + 1;
                         } else {
                             // unknown escaped replacement char, go ahead and replace untouched
                             result.Append('\\');
-                            result.Append(c);
+                            runStart = i;
                         }
                     } else {
                         // Any other # of \'s or a non-digit character means insert literal \'s and character
                         AppendBackslashes(backslashCount, result, 1);
-                        result.Append(c);
+                        runStart = i;
                     }
                     backslashCount = 0;
                 }
             }
-            AppendBackslashes(backslashCount, result, 1);
+            if (backslashCount == 0) {
+                AppendReplacementPiece(result, replacement, runStart, replacement.Length - runStart);
+            } else {
+                AppendBackslashes(backslashCount, result, 1);
+            }
             result.TaintBy(replacement);
         }
 
