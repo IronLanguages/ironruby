@@ -15050,7 +15050,7 @@ namespace IronRuby.StandardLibrary.Date {
             
             DefineLibraryMethod(module, "rfc3339", 0x11, 
                 0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Date.RubyDate, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Date.RubyDate.Iso8601)
+                new Func<IronRuby.StandardLibrary.Date.RubyDate, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Date.RubyDate.Rfc3339)
             );
             
             DefineLibraryMethod(module, "rfc822", 0x11, 

@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Date for IronRuby.
  *
@@ -689,11 +689,13 @@ namespace IronRuby.StandardLibrary.Date {
         public static object Step(BlockParam block, RubyDate/*!*/ self, object limit,
             [DefaultProtocol, DefaultParameterValue(1)]int step) {
 
+            if (block == null) {
+                // without a block, an Enumerator, as in MRI (it raised "no block given"); a zero step
+                // is refused only once it is iterated
+                return new IronRuby.Builtins.Enumerator(self, "step", limit, ScriptingRuntimeHelpers.Int32ToObject(step));
+            }
             if (step == 0) {
                 throw RubyExceptions.CreateArgumentError("step can't be 0");
-            }
-            if (block == null) {
-                throw RubyExceptions.CreateArgumentError("no block given");
             }
             var limitDate = limit as RubyDate;
             long limitJd = limitDate != null ? limitDate._jd : ToLong(limit);
@@ -710,11 +712,17 @@ namespace IronRuby.StandardLibrary.Date {
 
         [RubyMethod("upto")]
         public static object UpTo(BlockParam block, RubyDate/*!*/ self, object limit) {
+            if (block == null) {
+                return new IronRuby.Builtins.Enumerator(self, "upto", limit);
+            }
             return Step(block, self, limit, 1);
         }
 
         [RubyMethod("downto")]
         public static object DownTo(BlockParam block, RubyDate/*!*/ self, object limit) {
+            if (block == null) {
+                return new IronRuby.Builtins.Enumerator(self, "downto", limit);
+            }
             return Step(block, self, limit, -1);
         }
 
@@ -937,9 +945,14 @@ namespace IronRuby.StandardLibrary.Date {
 
         [RubyMethod("iso8601")]
         [RubyMethod("xmlschema")]
-        [RubyMethod("rfc3339")]
         public static MutableString/*!*/ Iso8601(RubyDate/*!*/ self) {
             return MutableString.CreateAscii(DateFormatter.Format(self, "%Y-%m-%d"));
+        }
+
+        // Date#rfc3339 is a date and time, unlike #iso8601: MRI's is strftime('%Y-%m-%dT%H:%M:%S%:z')
+        [RubyMethod("rfc3339")]
+        public static MutableString/*!*/ Rfc3339(RubyDate/*!*/ self) {
+            return MutableString.CreateAscii(DateFormatter.Format(self, "%Y-%m-%dT%H:%M:%S%:z"));
         }
 
         [RubyMethod("rfc2822")]

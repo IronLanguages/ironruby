@@ -426,7 +426,7 @@ class Date
   alias_method :succ, :next
   alias_method :rfc822, :rfc2822
   alias_method :xmlschema, :iso8601
-  alias_method :rfc3339, :iso8601
+  # not rfc3339: Date#rfc3339 is a date and a time (2024-02-29T00:00:00+00:00), Date#iso8601 a date
   class << self
     alias_method :valid_date?, :valid_civil?
     alias_method :rfc822, :rfc2822

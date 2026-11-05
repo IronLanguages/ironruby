@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Date#strftime for IronRuby.
  *
@@ -259,12 +259,13 @@ namespace IronRuby.StandardLibrary.Date {
                     case 'e': isNumeric = true; numeric = day; defaultWidth = 2; defaultPad = ' '; break;
                     case 'j': isNumeric = true; numeric = Yday(date); defaultWidth = 3; break;
                     case 'm': isNumeric = true; numeric = month; defaultWidth = 2; break;
-                    case 'Y': isNumeric = true; numeric = year; defaultWidth = 4; break;
+                    // a negative year is four digits after its sign, as in MRI: -0001, not -001
+                    case 'Y': isNumeric = true; numeric = year; defaultWidth = year < 0 ? 5 : 4; break;
                     case 'y': isNumeric = true; numeric = DateMath.FloorMod(year, 100); defaultWidth = 2; break;
                     case 'G': {
                             long cwy; int cw, cd;
                             DateMath.JdToCommercial(date._jd, date._sg, out cwy, out cw, out cd);
-                            isNumeric = true; numeric = cwy; defaultWidth = 4;
+                            isNumeric = true; numeric = cwy; defaultWidth = cwy < 0 ? 5 : 4;
                             break;
                         }
                     case 'g': {
