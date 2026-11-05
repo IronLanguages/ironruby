@@ -164,6 +164,12 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         private bool _ruby2Keywords;
 
+        /// <summary>
+        /// -X:OSR: the block literal, when it can be outlined into the loop of an iterator that yields
+        /// to it (BlockLoopSite); null otherwise.
+        /// </summary>
+        internal IronRuby.Runtime.Osr.BlockLoopInfo LoopInfo;
+
         public bool Ruby2Keywords {
             get { return _ruby2Keywords; }
             set { _ruby2Keywords = value; }

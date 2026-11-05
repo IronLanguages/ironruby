@@ -47,6 +47,23 @@ Note: outlining a loop *without* specializing it is worth nothing - IronRuby's c
 tier is no faster than its interpreter here, because the cost is the dynamic call site on
 every operator, not interpretation.
 
+## Core iterators: the loop the iterator and its block make together
+
+`n.times { }`, `a.upto(b) { }`, `a.downto(b) { }` and `array.each { }` loop in C# and yield to
+the block, so there is no `while` for -X:OSR to replace, and each iteration pays a block
+invocation and a dynamic call site per operator. TruffleRuby inlines the block into the
+iterator's loop; here, once one block literal has been yielded to ~2000 times by one of these
+iterators, the iterator hands the rest of its iterations to the `while` the two make together
+(`while #i < #n; i = #i; <block body>; #i += 1; end`), specialized by the same compiler and
+under the same guards and deopts as any other OSR loop (Src/Ruby/Runtime/Osr/BlockLoopSite.cs).
+The iterator stays the running method, and a deopt hands the loop back at an iteration
+boundary, from which it yields as before. A block with `break`/`next`/`redo`/`return`, a
+nested block, or a local of its own that it may read before assigning it is never outlined.
+Util/block-loop-matrix.rb is the differential matrix.
+
+`times_loop` 0.20 -> 0.031 s, `upto_loop` 0.19 -> 0.029 s, `each_loop` 0.18 -> 0.055 s
+(CRuby 3.3: 0.108, 0.097, 0.105).
+
 ## Both are on by default
 
 The full sweep (core library language command_line security) gives identical results with
@@ -62,7 +79,9 @@ before, 0.57x after.
 
 ## Known limits
 
-- `times`/`each`/`upto` loops are blocks, not `while` loops, so -X:OSR does not see them.
+- `map`, `select`, `any?` and every iterator other than `Integer#times`/`upto`/`downto` and
+  `Array#each` still yield to their block once per element, and a block passed to those four is
+  only outlined (see above) when its body is one a `while` could be specialized for.
 - A *method* that deopts is not re-specialized the way a loop is: its entry stays installed
   and every later call whose argument types no longer match falls through to the generic
   body. Only -X:OSR rebuilds.

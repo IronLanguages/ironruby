@@ -27,6 +27,7 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
+using IronRuby.Runtime.Osr;
 using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Builtins {
@@ -1176,12 +1177,21 @@ namespace IronRuby.Builtins {
             var array = self as RubyArray;
             if (array != null) {
                 // the same loop, without an interface call for Count and the element every time round
+                // -X:OSR: once the block is hot, the rest of a plain Array's loop runs in a typed copy of
+                // the loop this and the block make together (BlockLoopSite)
+                var loop = (array.GetType() == typeof(RubyArray)) ? BlockLoopSite.For(block, BlockLoopKind.Each) : null;
+                long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
                 for (int i = 0; i < array.Count; i++) {
+                    if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinRun) {
+                        i = loop.Run(block, array, i, ref countdown);
+                        if (i >= array.Count) { break; }
+                    }
                     object result;
                     if (block.Yield(array[i], out result)) {
                         return result;
                     }
                 }
+                if (loop != null) { loop.Leave(countdown); }
                 return self;
             }
 

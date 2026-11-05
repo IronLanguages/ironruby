@@ -29,6 +29,8 @@ using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 
+using IronRuby.Runtime.Osr;
+
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -311,6 +313,12 @@ namespace IronRuby.Compiler.Ast {
 
             var blockDispatcher = BlockDispatcher.Create(parameterCount, PostParameterCount, attributes, gen.SourcePath, Location.Start.Line);
             blockDispatcher.ParameterSignature = _parameters.Signature;
+            if (!isLambda && gen.CanReplaceLoops) {
+                // -X:OSR: `n.times { }', `a.each { }' and the like run their loop in C#; a block that
+                // can be is outlined into that loop once it is hot (BlockLoopSite)
+                blockDispatcher.LoopInfo = BlockLoopInfo.TryCreate(this, gen.Context, _definedScope.Depth,
+                    gen.SourcePath + ":" + Location.Start.Line);
+            }
 
             var dispatcher = Ast.Constant(blockDispatcher, typeof(BlockDispatcher));
 
