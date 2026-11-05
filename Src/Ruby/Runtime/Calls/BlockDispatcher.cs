@@ -169,6 +169,18 @@ namespace IronRuby.Runtime.Calls {
             set { _ruby2Keywords = value; }
         }
 
+        private bool _wrapsMethod;
+
+        /// <summary>
+        /// The dispatcher of a Method#to_proc proc. Its source location is the method's, which
+        /// Proc#source_location answers, but MRI's Proc#inspect leaves it out for such a proc:
+        /// "#&lt;Proc:0x... (lambda)&gt;". On the dispatcher, so every copy of the proc agrees.
+        /// </summary>
+        public bool WrapsMethod {
+            get { return _wrapsMethod; }
+            internal set { _wrapsMethod = value; }
+        }
+
         /// <summary>
         /// The array the block's rest parameter is about to be given. See
         /// <see cref="RubyOps.NormalizeRestArgument(RubyArray, bool)"/>.

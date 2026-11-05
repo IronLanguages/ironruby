@@ -2491,6 +2491,324 @@ base64: ""ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=""
         }
 
         /// <summary>
+        /// Digest::Instance#digest, #digest! and Digest::Class.digest hand back whatever #finish answers,
+        /// as MRI does; the hexdigest forms run it through to_str, so a non-String is a TypeError rather
+        /// than the InvalidCastException a cast to MutableString used to throw.
+        /// </summary>
+        public void Digest_NonStringResult1() {
+            TestOutput(@"
+require 'ruby4'
+require 'digest'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+c = Class.new(Digest::Class) { def update(s); self; end; def finish; :sym; end; def reset; self; end }
+show(""digest"") { [c.new.digest, c.new.digest(""x""), c.new.digest!, c.digest(""x"")] }
+show(""hexdigest"") { c.new.hexdigest }
+show(""hexdigest(str)"") { c.new.hexdigest(""x"") }
+show(""hexdigest!"") { c.new.hexdigest! }
+show(""Class.hexdigest"") { c.hexdigest(""x"") }
+n = Class.new(c) { def finish; nil; end }
+show(""nil finish"") { [n.new.digest, n.hexdigest(""x"")] }
+s = Class.new(c) { def finish; o = Object.new; def o.to_str; ""\x01\xFF"".b; end; o; end }
+show(""to_str finish"") { [s.new.hexdigest, s.hexdigest(""x""), s.new.hexdigest!] }
+", @"
+digest: [:sym, :sym, :sym, :sym]
+hexdigest: ""TypeError: no implicit conversion of Symbol into String""
+hexdigest(str): ""TypeError: no implicit conversion of Symbol into String""
+hexdigest!: ""TypeError: no implicit conversion of Symbol into String""
+Class.hexdigest: ""TypeError: no implicit conversion of Symbol into String""
+nil finish: ""TypeError: no implicit conversion of nil into String""
+to_str finish: [""01ff"", ""01ff"", ""01ff""]
+");
+        }
+
+        /// <summary>
+        /// main has no #initialize of its own - it is BasicObject's - so send(:initialize) answers nil
+        /// where a stub used to throw NotImplementedException.
+        /// </summary>
+        public void Main_Initialize1() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+show(""initialize"") { send(:initialize) }
+show(""initialize(1)"") { send(:initialize, 1) }
+", @"
+initialize: nil
+initialize(1): ""ArgumentError: wrong number of arguments (given 1, expected 0)""
+");
+        }
+
+        /// <summary>
+        /// Dir.chdir, Dir.entries, Dir.mkdir and Dir.rmdir on a path that is, or runs through, a regular file
+        /// raise Errno::ENOTDIR as MRI's do; chdir said ENOENT and the "file/sub" forms said ENOENT too.
+        /// </summary>
+        public void Dir_NotADirectory1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+def show(l); v = begin; yield; rescue SystemCallError => e; e.class; end; puts ""#{l}: #{v.inspect}""; end
+dir = Dir.mktmpdir
+file = File.join(dir, ""file"")
+File.write(file, """")
+begin
+  show(""chdir file"") { Dir.chdir(file) }
+  show(""chdir file/sub"") { Dir.chdir(File.join(file, ""sub"")) }
+  show(""chdir missing"") { Dir.chdir(File.join(dir, ""missing"")) }
+  show(""entries file"") { Dir.entries(file) }
+  show(""entries file/sub"") { Dir.entries(File.join(file, ""sub"")) }
+  show(""children missing"") { Dir.children(File.join(dir, ""missing"")) }
+  show(""mkdir file"") { Dir.mkdir(file) }
+  show(""mkdir file/sub"") { Dir.mkdir(File.join(file, ""sub"")) }
+  show(""mkdir missing/sub"") { Dir.mkdir(File.join(dir, ""missing"", ""sub"")) }
+  show(""rmdir file"") { Dir.rmdir(file) }
+  show(""rmdir file/sub"") { Dir.rmdir(File.join(file, ""sub"")) }
+  show(""rmdir missing"") { Dir.rmdir(File.join(dir, ""missing"")) }
+ensure
+  File.delete(file)
+  Dir.rmdir(dir)
+end
+", @"
+chdir file: Errno::ENOTDIR
+chdir file/sub: Errno::ENOTDIR
+chdir missing: Errno::ENOENT
+entries file: Errno::ENOTDIR
+entries file/sub: Errno::ENOTDIR
+children missing: Errno::ENOENT
+mkdir file: Errno::EEXIST
+mkdir file/sub: Errno::ENOTDIR
+mkdir missing/sub: Errno::ENOENT
+rmdir file: Errno::ENOTDIR
+rmdir file/sub: Errno::ENOTDIR
+rmdir missing: Errno::ENOENT
+");
+        }
+
+        /// <summary>
+        /// Dir_NotADirectory1 through symbolic links: a dangling link is a missing directory (ENOENT), not
+        /// a file, and Dir.rmdir of a link - even one to a directory - is ENOTDIR and leaves the link alone,
+        /// where it used to delete it. POSIX only: making a symbolic link on Windows needs a privilege.
+        /// </summary>
+        public void Dir_NotADirectorySymlinks1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+def show(l); v = begin; yield; :ok; rescue SystemCallError => e; e.class; end; puts ""#{l}: #{v.inspect}""; end
+dir = Dir.mktmpdir
+broken = File.join(dir, ""broken""); File.symlink(File.join(dir, ""nothing""), broken)
+file = File.join(dir, ""file""); File.write(file, """"); tofile = File.join(dir, ""tofile""); File.symlink(file, tofile)
+sub = File.join(dir, ""sub""); Dir.mkdir(sub); todir = File.join(dir, ""todir""); File.symlink(sub, todir)
+begin
+  show(""chdir broken"") { Dir.chdir(broken) { } }
+  show(""chdir broken/x"") { Dir.chdir(File.join(broken, ""x"")) { } }
+  show(""chdir tofile"") { Dir.chdir(tofile) { } }
+  show(""chdir todir"") { Dir.chdir(todir) { } }
+  show(""entries broken"") { Dir.entries(broken) }
+  show(""entries tofile"") { Dir.entries(tofile) }
+  show(""entries todir"") { Dir.entries(todir) }
+  show(""mkdir broken/x"") { Dir.mkdir(File.join(broken, ""x"")) }
+  show(""mkdir tofile/x"") { Dir.mkdir(File.join(tofile, ""x"")) }
+  show(""mkdir todir/x"") { Dir.mkdir(File.join(todir, ""x"")); Dir.rmdir(File.join(sub, ""x"")) }
+  show(""rmdir broken"") { Dir.rmdir(broken) }
+  show(""rmdir broken/x"") { Dir.rmdir(File.join(broken, ""x"")) }
+  show(""rmdir tofile"") { Dir.rmdir(tofile) }
+  show(""rmdir todir"") { Dir.rmdir(todir) }
+  show(""link still there"") { File.lstat(todir).symlink? or raise Errno::ENOENT }
+ensure
+  [broken, tofile, todir, file].each { |x| File.unlink(x) rescue nil }
+  Dir.rmdir(sub)
+  Dir.rmdir(dir)
+end
+", @"
+chdir broken: Errno::ENOENT
+chdir broken/x: Errno::ENOENT
+chdir tofile: Errno::ENOTDIR
+chdir todir: :ok
+entries broken: Errno::ENOENT
+entries tofile: Errno::ENOTDIR
+entries todir: :ok
+mkdir broken/x: Errno::ENOENT
+mkdir tofile/x: Errno::ENOTDIR
+mkdir todir/x: :ok
+rmdir broken: Errno::ENOTDIR
+rmdir broken/x: Errno::ENOENT
+rmdir tofile: Errno::ENOTDIR
+rmdir todir: Errno::ENOTDIR
+link still there: :ok
+");
+        }
+
+        /// <summary>
+        /// The File and FileTest predicates MRI answers with rb_stat (exist?, file?, size, zero?, the times,
+        /// identical?, ...) take an IO, or anything whose #to_io gives one, and fstat it; they raised TypeError
+        /// for a #to_io object. The access(2) ones (readable?, writable?, executable?) and symlink? still take
+        /// only a path, as in MRI. A #to_io that gives nil means "use the path"; one that gives anything else
+        /// is a TypeError.
+        /// </summary>
+        public void File_StatPredicatesToIo1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+f = File.join(dir, ""file"")
+File.write(f, ""abc"")
+io = File.open(f)
+ti = Object.new; ti.define_singleton_method(:to_io) { io }
+%i[blockdev? chardev? directory? exist? file? pipe? size size? socket? zero? empty?].each do |m|
+  puts ""#{m}: #{[io, ti].map { |a| File.send(m, a) rescue $!.class }.inspect}""
+end
+puts ""FileTest.exist?: #{FileTest.exist?(ti).inspect}""
+puts ""times: #{%i[atime mtime ctime].map { |m| File.send(m, ti).class }.inspect}""
+puts ""identical?: #{[File.identical?(ti, f), File.identical?(io, ti)].inspect}""
+puts ""path only: #{%i[readable? writable? executable? symlink?].map { |m| File.send(m, ti) rescue $!.class }.inspect}""
+x = Object.new; def x.to_io; 5; end
+puts ""to_io gives Integer: #{(File.exist?(x) rescue ""#{$!.class}: #{$!.message}"")}""
+x = Object.new; def x.to_io; nil; end; def x.to_path; ""/nonexistent""; end
+puts ""to_io gives nil: #{File.exist?(x).inspect}""
+io.close
+puts ""closed: #{(File.exist?(io) rescue ""#{$!.class}: #{$!.message}"")}""
+File.delete(f)
+Dir.rmdir(dir)
+", @"
+blockdev?: [false, false]
+chardev?: [false, false]
+directory?: [false, false]
+exist?: [true, true]
+file?: [true, true]
+pipe?: [false, false]
+size: [3, 3]
+size?: [3, 3]
+socket?: [false, false]
+zero?: [false, false]
+empty?: [false, false]
+FileTest.exist?: true
+times: [Time, Time, Time]
+identical?: [true, true]
+path only: [TypeError, TypeError, TypeError, TypeError]
+to_io gives Integer: TypeError: can't convert Object to IO (Object#to_io gives Integer)
+to_io gives nil: false
+closed: IOError: closed stream
+");
+        }
+
+        /// <summary>
+        /// File_StatPredicatesToIo1 for the streams only fstat can answer for: a pipe, and a file that was
+        /// deleted while open. Windows has no fstat, and there IronRuby answers from the path a File was opened
+        /// with - a pipe has none, and an open file cannot be deleted - so this one is POSIX only.
+        /// </summary>
+        public void File_StatPredicatesToIo2() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+f = File.join(dir, ""file"")
+File.write(f, ""abc"")
+r, w = IO.pipe
+tr = Object.new; tr.define_singleton_method(:to_io) { r }
+%i[exist? file? pipe? size size? zero?].each do |m|
+  puts ""#{m}: #{[r, tr].map { |a| File.send(m, a) rescue $!.class }.inspect}""
+end
+puts ""identical?: #{[File.identical?(r, tr), File.identical?(r, f)].inspect}""
+g = File.open(f); File.delete(f)
+puts ""deleted but open: #{[File.exist?(g), File.file?(g), File.size(g)].inspect}""
+g.close; r.close; w.close
+Dir.rmdir(dir)
+", @"
+exist?: [true, true]
+file?: [false, false]
+pipe?: [true, true]
+size: [0, 0]
+size?: [nil, nil]
+zero?: [true, true]
+identical?: [true, false]
+deleted but open: [true, true, 3]
+");
+        }
+
+        /// <summary>
+        /// IO.sysopen takes its mode as open(2) flags when it has #to_int (File::RDONLY used to be a TypeError,
+        /// "no implicit conversion of Integer into String") and as a mode string otherwise, and its permission
+        /// by #to_int: a String or a Hash there is a TypeError, where it used to be ignored.
+        /// </summary>
+        public void IO_SysOpenArguments1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message.sub(/ @ \w+/, '').sub(/ - .*/, '')}""; end; puts ""#{l}: #{v.inspect}""; end
+dir = Dir.mktmpdir
+f = File.join(dir, ""file"")
+File.write(f, ""abc"")
+tp = Object.new; tp.define_singleton_method(:to_path) { f }
+rd = ->(fd) { io = IO.for_fd(fd); s = io.read; io.close; s }
+show(""string mode"") { rd.(IO.sysopen(f, ""r"")) }
+show(""no mode"") { rd.(IO.sysopen(tp)) }
+show(""nil mode, nil perm"") { rd.(IO.sysopen(f, nil, nil)) }
+show(""integer mode"") { rd.(IO.sysopen(f, File::RDONLY)) }
+show(""to_int mode"") { o = Object.new; def o.to_int; File::RDONLY; end; rd.(IO.sysopen(f, o)) }
+show(""to_str mode"") { o = Object.new; def o.to_str; ""r""; end; rd.(IO.sysopen(f, o)) }
+show(""to_int perm"") { o = Object.new; def o.to_int; 0644; end; rd.(IO.sysopen(f, ""r"", o)) }
+show(""symbol mode"") { IO.sysopen(f, :r) }
+show(""string perm"") { IO.sysopen(f, ""r"", ""x"") }
+show(""hash perm"") { IO.sysopen(f, ""r"", {}) }
+show(""bad mode"") { IO.sysopen(f, ""zz"") }
+File.delete(f)
+Dir.rmdir(dir)
+", @"
+string mode: ""abc""
+no mode: ""abc""
+nil mode, nil perm: ""abc""
+integer mode: ""abc""
+to_int mode: ""abc""
+to_str mode: ""abc""
+to_int perm: ""abc""
+symbol mode: ""TypeError: no implicit conversion of Symbol into String""
+string perm: ""TypeError: no implicit conversion of String into Integer""
+hash perm: ""TypeError: no implicit conversion of Hash into Integer""
+bad mode: ""ArgumentError: invalid access mode zz""
+");
+        }
+
+        /// <summary>
+        /// IO.sysopen's permission reaches a file the call creates, less the umask, as open(2)'s does; it
+        /// used to be dropped, so the file came out 0644. POSIX only: off it the permission is not applied.
+        /// </summary>
+        public void IO_SysOpenPermission1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message.sub(/ @ \w+/, '').sub(/ - .*/, '')}""; end; puts ""#{l}: #{v.inspect}""; end
+dir = Dir.mktmpdir
+f = File.join(dir, ""file"")
+File.write(f, ""abc"")
+tp = Object.new; tp.define_singleton_method(:to_path) { f }
+File.umask(022)
+g = File.join(dir, ""created"")
+show(""perm on create"") { IO.for_fd(IO.sysopen(g, ""w"", 0600)).close; File.stat(g).mode & 0777 }
+h = File.join(dir, ""flags"")
+show(""flags create"") { IO.for_fd(IO.sysopen(h, File::WRONLY | File::CREAT | File::EXCL, 0640)).close; File.stat(h).mode & 0777 }
+show(""flags excl again"") { IO.sysopen(h, File::WRONLY | File::CREAT | File::EXCL) }
+show(""perm on existing"") { IO.for_fd(IO.sysopen(g, ""w"", 0666)).close; File.stat(g).mode & 0777 }
+show(""missing dir"") { IO.sysopen(File.join(dir, ""missing"", ""x""), ""w"") }
+File.delete(f)
+[g, h].each { |x| File.delete(x) }
+Dir.rmdir(dir)
+", @"
+perm on create: 384
+flags create: 416
+flags excl again: ""Errno::EEXIST: File exists""
+perm on existing: 384
+missing dir: ""Errno::ENOENT: No such file or directory""
+");
+        }
+
+        /// <summary>
         /// Range#first(n) and #last(n) of an Integer range are counted rather than walked - #last(n)
         /// built the whole range first, so (1..10**9).last(3) ran out of memory - and #last takes
         /// that path for a subclass whatever its #each, as MRI's rb_int_range_last does. Also the

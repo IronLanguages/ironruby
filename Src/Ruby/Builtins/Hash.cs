@@ -24,7 +24,10 @@ using IronRuby.Runtime;
 namespace IronRuby.Builtins {
 
     /// <summary>
-    /// TODO: all operations should check frozen state!
+    /// The frozen check is made by the Ruby-facing operations (HashOps, IDictionaryOps, and the
+    /// DefaultValue/DefaultProc setters here), not by the storage's indexer, Add or Clear, which
+    /// IronRuby itself uses to fill hashes and which sit on the hot path. Every mutating Hash
+    /// method raises FrozenError on a frozen receiver, as MRI's do.
     /// 
     /// Dictionary inherits from Object, mixes in Enumerable.
     /// Ruby hash is an IDictionary{object, object}, but it adds default value/proc.

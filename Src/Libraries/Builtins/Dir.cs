@@ -245,6 +245,11 @@ namespace IronRuby.Builtins {
         [RubyMethod("unlink", RubyMethodAttributes.PublicSingleton)]
         public static int RemoveDirectory(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname) {
             string strDir = self.Context.DecodePath(Protocols.CastToPath(toPath, dirname));
+            // rmdir(2) does not follow a symbolic link: on a link to a directory it is ENOTDIR,
+            // where the BCL's delete removed the link.
+            if (GetEntryKind(strDir, false) == EntryKind.NotDirectory) {
+                throw CreateENOTDIR(strDir);
+            }
             try {
                 self.Context.Platform.DeleteDirectory(strDir, false);
             } catch (Exception ex) {
@@ -441,6 +446,10 @@ namespace IronRuby.Builtins {
             }
 
             string containingDir = platform.GetDirectoryName(strDir);
+            if (!String.IsNullOrEmpty(containingDir) && RunsThroughFile(containingDir)) {
+                // mkdir(2) of "file/sub" is ENOTDIR, not a missing parent
+                throw CreateENOTDIR(strDir);
+            }
             if (!String.IsNullOrEmpty(containingDir) && !platform.DirectoryExists(containingDir)) {
                 // mkdir(2) reports the path it was given, not the missing parent
                 throw RubyExceptions.CreateENOENT("No such file or directory - {0}", strDir);
@@ -756,7 +765,58 @@ namespace IronRuby.Builtins {
             return defaultResult;
         }
 
-        // TODO: to match the C-Ruby exception
+        /// <summary>
+        /// True if <paramref name="path"/> or one of its parents exists and is not a directory:
+        /// chdir(2), opendir(3), mkdir(2) and rmdir(2) all fail with ENOTDIR on "file" and on
+        /// "file/sub", where the BCL reports both as a directory that is not there.
+        ///
+        /// Each component is looked at as the kernel resolves it, through symbolic links - a
+        /// dangling link is a missing directory (ENOENT), not a file - except that rmdir(2) does
+        /// not follow the last one (<paramref name="followLast"/> false): there a link is ENOTDIR,
+        /// whatever it points at. A component that cannot be stat'd (missing, or EACCES) is not a
+        /// file, so the caller's ENOENT or EACCES stands.
+        /// </summary>
+        private static bool RunsThroughFile(string path, bool followLast = true) {
+            try {
+                bool last = true;
+                for (string p = path; !String.IsNullOrEmpty(p); p = Path.GetDirectoryName(p), last = false) {
+                    switch (GetEntryKind(p, !last || followLast)) {
+                        case EntryKind.NotDirectory: return true;
+                        case EntryKind.Directory: return false;
+                    }
+                }
+            } catch (Exception e) when (e is ArgumentException || e is PathTooLongException || e is NotSupportedException) {
+                // a path the BCL cannot take apart is not one we can say anything about
+            }
+            return false;
+        }
+
+        private enum EntryKind { None, Directory, NotDirectory }
+
+        private static EntryKind GetEntryKind(string/*!*/ path, bool followLinks) {
+            if (Posix.IsAvailable) {
+                Posix.StatData data;
+                int errno;
+                if (Posix.TryStat(path, followLinks, out data, out errno)) {
+                    return data.FileType == Posix.S_IFDIR ? EntryKind.Directory : EntryKind.NotDirectory;
+                }
+                if (errno != 0) {
+                    return EntryKind.None;
+                }
+                // no statx: fall back to the BCL
+            }
+            // File.Exists is also true for a dangling link on Unix; Windows has no fstatat to ask.
+            return Directory.Exists(path) ? EntryKind.Directory : File.Exists(path) ? EntryKind.NotDirectory : EntryKind.None;
+        }
+
+        private static Exception/*!*/ CreateENOTDIR(string path) {
+            // Errno::ENOTDIR is backed by DirectoryNotFoundException
+            return new DirectoryNotFoundException("Not a directory - " + path);
+        }
+
+        // Maps the BCL's exception to the Errno MRI raises for the same call. The messages leave
+        // out MRI's " @ function" (e.g. "@ dir_s_rmdir"), as the rest of IronRuby's Errno
+        // messages do.
         private static Exception ToRubyException(Exception/*!*/ ex, string path, DirectoryOperation op) {
             Assert.NotNull(ex);
             
@@ -764,17 +824,25 @@ namespace IronRuby.Builtins {
 
             switch (op) {
                 case DirectoryOperation.ChangeDir:
+                    if (RunsThroughFile(path)) {
+                        return CreateENOTDIR(path);
+                    }
                     // .NET reports a missing directory as DirectoryNotFoundException, which
                     // IronRuby's Errno table maps to ENOTDIR; MRI's chdir says ENOENT.
                     if (ex is DirectoryNotFoundException || ex is FileNotFoundException) {
                         return RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
                     }
+                    if (ex is UnauthorizedAccessException) {
+                        break;
+                    }
                     return RubyExceptions.CreateEINVAL(path);
 
                 case DirectoryOperation.Open:
-                    // opendir(3) on a file is ENOTDIR, which a CLR DirectoryNotFoundException maps to
-                    if (File.Exists(path)) {
-                        return new DirectoryNotFoundException("Not a directory - " + path);
+                    if (RunsThroughFile(path)) {
+                        return CreateENOTDIR(path);
+                    }
+                    if (ex is UnauthorizedAccessException) {
+                        break;
                     }
                     return RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
 
@@ -786,8 +854,8 @@ namespace IronRuby.Builtins {
                     // failure used to collapse into EACCES. rmdir(2) distinguishes them and
                     // so does MRI; the filesystem is the only thing that can tell them apart.
                     if (ex is IOException) {
-                        if (File.Exists(path)) {
-                            return new DirectoryNotFoundException("Not a directory - " + path);
+                        if (RunsThroughFile(path, false)) {
+                            return CreateENOTDIR(path);
                         }
                         if (!Directory.Exists(path)) {
                             return RubyExceptions.CreateENOENT("No such file or directory - {0}", path);

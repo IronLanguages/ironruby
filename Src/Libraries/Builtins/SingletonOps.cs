@@ -28,16 +28,9 @@ namespace IronRuby.Builtins {
     /// </summary>
     [RubyModule(RubyClass.MainSingletonName)]
     public static class MainSingletonOps {
-        #region Private Instance Methods
-
-        // Reinitialization. Not called when a factory/non-default ctor is called.
-        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static object/*!*/ Initialize(object/*!*/ self) {
-            // TODO:
-            throw new NotImplementedException("TODO");
-        }
-
-        #endregion
+        // No #initialize of its own: MRI's main inherits BasicObject's, so send(:initialize)
+        // answers nil and send(:initialize, 1) is an ArgumentError, where a stub here threw
+        // NotImplementedException.
 
         #region Public Instance Methods
 
