@@ -96,25 +96,9 @@ namespace IronRuby.Builtins {
         public static RubyRegex/*!*/ Create(RubyClass/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [DefaultProtocol, Optional]MutableString encoding) {
 
-            // MRI rejects a pattern that is not valid in its own encoding before compiling it.
-            if (pattern.Encoding != RubyEncoding.Binary && pattern.ContainsInvalidCharacters()) {
-                throw new RegexpError("invalid multibyte character: /" + EscapeNonAsciiBytes(pattern) + "/");
-            }
+            RubyRegex.RequireValidPattern(pattern);
             double? timeout = TakeTimeout(self.Context, ref options);
             return new RubyRegex(pattern, MakeOptions(self.Context, options, encoding)) { Timeout = timeout };
-        }
-
-        // For an error message about bytes that do not decode: ASCII as is, the rest as \xHH.
-        private static string/*!*/ EscapeNonAsciiBytes(MutableString/*!*/ str) {
-            var result = new System.Text.StringBuilder();
-            foreach (byte b in str.ToByteArray()) {
-                if (b < 0x80) {
-                    result.Append((char)b);
-                } else {
-                    result.Append("\\x").Append(b.ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
-                }
-            }
-            return result.ToString();
         }
 
         [RubyConstructor]

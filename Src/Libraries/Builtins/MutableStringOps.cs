@@ -932,6 +932,11 @@ namespace IronRuby.Builtins {
 
             // CLR indices of the character representations: a byte-level operation (#start_with?,
             // #getbyte) may have left either one as bytes.
+            // rb_str_index: incompatible encodings are an error before anything is searched
+            self.RequireCompatibleEncoding(searchStr);
+            if (IsBrokenNeedle(searchStr)) {
+                return null;
+            }
             self.PrepareForCharacterRead();
             searchStr.PrepareForCharacterRead();
             int index = self.IndexOf(searchStr);
@@ -1068,7 +1073,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("[]")]
         [RubyMethod("slice")]
         public static MutableString GetSubstring(MutableString/*!*/ self, [NotNull]MutableString/*!*/ searchStr) {
-            return (self.IndexOf(searchStr) != -1) ? searchStr.CloneDerived() : null;
+            self.RequireCompatibleEncoding(searchStr);
+            return (!IsBrokenNeedle(searchStr) && self.IndexOf(searchStr) != -1) ? searchStr.CloneDerived() : null;
         }
 
         [RubyMethod("[]")]
@@ -1284,9 +1290,10 @@ namespace IronRuby.Builtins {
             [NotNull]MutableString/*!*/ substring, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
             // see RemoveSubstringInPlace(self, searchStr)
+            self.RequireCompatibleEncoding(substring);
             self.PrepareForCharacterRead();
             substring.PrepareForCharacterRead();
-            int index = self.IndexOf(substring);
+            int index = IsBrokenNeedle(substring) ? -1 : self.IndexOf(substring);
             if (index == -1) {
                 throw RubyExceptions.CreateIndexError("string not matched");
             }
@@ -3124,8 +3131,8 @@ namespace IronRuby.Builtins {
 
             object blockResult;
             MutableString result;
-            // TODO:
-            var regex = new RubyRegex(MutableString.CreateMutable(Regex.Escape(matchString.ToString()), matchString.Encoding), RubyRegexOptions.NONE);
+            // The same literal pattern the String forms without a block get from the Regexp conversion.
+            var regex = RubyRegex.FromLiteralPattern(matchString);
 
             return BlockReplaceFirst(tosConversion, scope, self, block, regex, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
         }
@@ -3137,8 +3144,8 @@ namespace IronRuby.Builtins {
 
             object blockResult;
             MutableString result;
-            // TODO:
-            var regex = new RubyRegex(MutableString.CreateMutable(Regex.Escape(matchString.ToString()), matchString.Encoding), RubyRegexOptions.NONE);
+            // The same literal pattern the String forms without a block get from the Regexp conversion.
+            var regex = RubyRegex.FromLiteralPattern(matchString);
 
             self.TrackChanges();
             object r = BlockReplaceAll(tosConversion, scope, self, block, regex, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
@@ -3276,24 +3283,61 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 1, expected 2)");
         }
 
+        // The pattern is converted - and a String one checked (RubyRegex.FromLiteralPattern) - when
+        // the Enumerator runs, not when it is made: MRI's str_gsub returns the Enumerator before
+        // get_pat_quoted, so "abc".gsub("\xFF") is an Enumerator whose #to_a raises.
         [RubyMethod("gsub")]
-        public static object ReplaceAll(ConversionStorage<MutableString>/*!*/ tosConversion, RubyScope/*!*/ scope,
-            MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
+        //
+        // The binder may pick these for a call with a block too (an object parameter needs no
+        // conversion), so they do the work at once when there is one, as MRI does.
+        public static object ReplaceAll(ConversionStorage<MutableString>/*!*/ tosConversion, ConversionStorage<MutableString>/*!*/ stringTryCast,
+            RubyScope/*!*/ scope, BlockParam block, MutableString/*!*/ self, object pattern) {
+            if (block != null) {
+                return BlockReplaceAll(tosConversion, scope, block, self, ToPattern(stringTryCast, pattern));
+            }
             scope.MarkCaptured();
-            return new Enumerator((_, block) => BlockReplaceAll(tosConversion, scope, block, self, pattern));
+            return new Enumerator((_, b) => BlockReplaceAll(tosConversion, scope, b, self, ToPattern(stringTryCast, pattern)));
         }
 
         [RubyMethod("gsub!")]
-        public static object ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ tosConversion, RubyScope/*!*/ scope,
-            MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
+        public static object ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ tosConversion, ConversionStorage<MutableString>/*!*/ stringTryCast,
+            RubyScope/*!*/ scope, BlockParam block, MutableString/*!*/ self, object pattern) {
+            // rb_str_gsub_bang checks before anything else, the Enumerator included
+            self.RequireNotFrozen();
+            if (block != null) {
+                return BlockReplaceInPlace(tosConversion, scope, block, self, ToPattern(stringTryCast, pattern), true);
+            }
             scope.MarkCaptured();
-            return new Enumerator((_, block) => BlockReplaceInPlace(tosConversion, scope, block, self, pattern, true));
+            return new Enumerator((_, b) => BlockReplaceInPlace(tosConversion, scope, b, self, ToPattern(stringTryCast, pattern), true));
+        }
+
+        // MRI's get_pat_quoted: a Regexp as it is, a String (or what #to_str makes one) as a
+        // literal pattern, anything else Check_Type's TypeError.
+        private static RubyRegex/*!*/ ToPattern(ConversionStorage<MutableString>/*!*/ stringTryCast, object pattern) {
+            var regex = pattern as RubyRegex;
+            if (regex != null) {
+                return regex;
+            }
+            MutableString str = Protocols.TryCastToString(stringTryCast, pattern);
+            if (str == null) {
+                throw RubyExceptions.CreateUnexpectedTypeError(stringTryCast.Context, pattern, "Regexp");
+            }
+            return RubyRegex.FromLiteralPattern(str);
         }
 
         #endregion
 
 
         #region index, rindex
+
+        /// <summary>
+        /// MRI's rb_strseq_index and rb_str_rindex give up on a needle whose bytes are not valid in
+        /// its encoding: not found, rather than a search for the bytes. So do #index, #rindex,
+        /// #byteindex, #byterindex, #include?, #[], #slice, #slice!, #[]=, #partition and #rpartition.
+        /// </summary>
+        private static bool IsBrokenNeedle(MutableString/*!*/ needle) {
+            return needle.ContainsInvalidCharacters();
+        }
 
         // encoding aware
         [RubyMethod("index")]
@@ -3305,6 +3349,9 @@ namespace IronRuby.Builtins {
             }
 
             self.RequireCompatibleEncoding(substring);
+            if (IsBrokenNeedle(substring)) {
+                return null;
+            }
             substring.PrepareForCharacterRead();
 
             int result = self.IndexOf(substring, self.ToClrIndex(start));
@@ -3351,6 +3398,9 @@ namespace IronRuby.Builtins {
             }
 
             self.RequireCompatibleEncoding(substring);
+            if (IsBrokenNeedle(substring)) {
+                return null;
+            }
             // A substring with a pair cannot occur in a receiver without one, so its CLR length -
             // no scan of a fresh literal needed - is good enough for the checks below then.
             int subCharCount = self.KnowsCharIndexIsClrIndex

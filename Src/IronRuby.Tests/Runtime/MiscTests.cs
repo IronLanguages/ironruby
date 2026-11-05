@@ -2809,6 +2809,308 @@ missing dir: ""Errno::ENOENT: No such file or directory""
         }
 
         /// <summary>
+        /// A String pattern whose bytes are not valid in its encoding, as MRI treats it: #sub, #gsub, their
+        /// bang forms and #scan raise Regexp.new's RegexpError (string.c's get_pat_quoted), where IronRuby said
+        /// ArgumentError or, with a valid receiver, matched nothing; the searches - #index, #rindex, #byteindex,
+        /// #byterindex, #[], #slice, #slice!, #[]=, #partition, #rpartition - find nothing (rb_strseq_index),
+        /// where IronRuby found the bytes.
+        /// </summary>
+        public void String_BrokenPattern1() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+s = ""a\xffb\xffc""; pat = ""\xff""
+show(""Regexp.new"") { Regexp.new(pat) }
+show(""sub"") { s.sub(pat, ""Z"") }
+show(""sub!"") { s.dup.sub!(pat, ""Z"") }
+show(""sub blk"") { s.sub(pat) { ""Z"" } }
+show(""gsub"") { s.gsub(pat, ""Z"") }
+show(""gsub!"") { s.dup.gsub!(pat) { ""Z"" } }
+show(""gsub enum"") { s.gsub(pat).to_a }
+show(""gsub enum is lazy"") { [""abc"".gsub(pat).class, ""abc"".dup.gsub!(pat).class] }
+show(""gsub hash"") { s.gsub(pat, {}) }
+show(""scan"") { s.scan(pat) }
+show(""scan blk"") { s.scan(pat) { } }
+show(""split"") { s.split(pat) }
+show(""index"") { s.index(pat) }
+show(""include?"") { s.include?(pat) }
+show(""start_with?"") { s.start_with?(pat) }
+show(""partition"") { s.partition(pat) }
+show(""count"") { s.count(pat) }
+show(""binary ok"") { ""a\xffb"".b.gsub(""\xff"".b, ""Z"") }
+show(""other enc broken"") { ""a\xffb"".force_encoding(""EUC-JP"").gsub(""\xff"".force_encoding(""EUC-JP""), ""Z"") }
+show(""to_str broken"") { o = Object.new; def o.to_str; ""\xff""; end; ""a"".gsub(o, ""Z"") }
+show(""valid receiver"") { ""abc"".gsub(""\xff"", ""Z"") }
+show(""mid"") { ""x"".sub(""a\xe3b"", ""Z"") }
+show(""index"") { s.index(pat) }
+show(""index off"") { s.index(pat, 2) }
+show(""rindex"") { s.rindex(pat) }
+show(""byteindex"") { s.byteindex(pat) }
+show(""byterindex"") { s.byterindex(pat) }
+show(""include?"") { s.include?(pat) }
+show(""[]"") { s[pat] }
+show(""slice"") { s.slice(pat) }
+show(""slice!"") { t = s.dup; [t.slice!(pat), t] }
+show(""[]="") { t = s.dup; t[pat] = ""Z""; t }
+show(""partition"") { s.partition(pat) }
+show(""rpartition"") { s.rpartition(pat) }
+show(""valid in broken"") { s.index(""b"") }
+show(""broken mid"") { ""ab\xe3"".index(""\xe3"") }
+", @"
+Regexp.new: ""RegexpError: invalid multibyte character: /\\xFF/""
+sub: ""RegexpError: invalid multibyte character: /\\xFF/""
+sub!: ""RegexpError: invalid multibyte character: /\\xFF/""
+sub blk: ""RegexpError: invalid multibyte character: /\\xFF/""
+gsub: ""RegexpError: invalid multibyte character: /\\xFF/""
+gsub!: ""RegexpError: invalid multibyte character: /\\xFF/""
+gsub enum: ""RegexpError: invalid multibyte character: /\\xFF/""
+gsub enum is lazy: [Enumerator, Enumerator]
+gsub hash: ""RegexpError: invalid multibyte character: /\\xFF/""
+scan: ""RegexpError: invalid multibyte character: /\\xFF/""
+scan blk: ""RegexpError: invalid multibyte character: /\\xFF/""
+split: ""ArgumentError: invalid byte sequence in UTF-8""
+index: nil
+include?: false
+start_with?: false
+partition: [""a\xFFb\xFFc"", """", """"]
+count: ""ArgumentError: invalid byte sequence in UTF-8""
+binary ok: ""aZb""
+other enc broken: ""RegexpError: invalid multibyte character: /\\xFF/""
+to_str broken: ""RegexpError: invalid multibyte character: /\\xFF/""
+valid receiver: ""RegexpError: invalid multibyte character: /\\xFF/""
+mid: ""RegexpError: invalid multibyte character: /a\\xE3b/""
+index: nil
+index off: nil
+rindex: nil
+byteindex: nil
+byterindex: nil
+include?: false
+[]: nil
+slice: nil
+slice!: [nil, ""a\xFFb\xFFc""]
+[]=: ""IndexError: string not matched""
+partition: [""a\xFFb\xFFc"", """", """"]
+rpartition: ["""", """", ""a\xFFb\xFFc""]
+valid in broken: 2
+broken mid: nil
+");
+        }
+
+        /// <summary>
+        /// A host that creates the runtime on one thread and runs Ruby on another: the creating
+        /// thread is Thread.main and is listed even though no Ruby code ever ran on it.
+        /// </summary>
+        public void Thread_HostMainThread1() {
+            Microsoft.Scripting.Hosting.ScriptEngine engine = null;
+            var created = new System.Threading.ManualResetEvent(false);
+            var done = new System.Threading.ManualResetEvent(false);
+            var creator = new System.Threading.Thread(() => {
+                engine = Ruby.CreateEngine();
+                created.Set();
+                done.WaitOne();
+            });
+            creator.IsBackground = true;
+            creator.Start();
+            try {
+                Assert(created.WaitOne(30000));
+                var result = engine.Execute<object>(@"
+[Thread.list.include?(Thread.main), Thread.list.size, Thread.current != Thread.main]
+");
+                Assert(((RubyArray)result)[0].Equals(true));
+                Assert(((RubyArray)result)[1].Equals(2));
+                Assert(((RubyArray)result)[2].Equals(true));
+            } finally {
+                done.Set();
+            }
+        }
+
+        /// <summary>
+        /// A runtime created on a thread another runtime's Thread.new made: that thread is the new
+        /// runtime's Thread.main and is listed there, whoever made it.
+        /// </summary>
+        public void Thread_HostMainThread2() {
+            Microsoft.Scripting.Hosting.ScriptEngine engine = null;
+            var created = new System.Threading.ManualResetEvent(false);
+            var done = new System.Threading.ManualResetEvent(false);
+            Action create = () => {
+                engine = Ruby.CreateEngine();
+                created.Set();
+                done.WaitOne();
+            };
+            var scope = Engine.CreateScope();
+            scope.SetVariable("create", create);
+            Engine.Execute("$host_main_thread2 = Thread.new { create.invoke }", scope);
+            try {
+                Assert(created.WaitOne(30000));
+                var result = (RubyArray)engine.Execute<object>("[Thread.list.include?(Thread.main), Thread.list.size]");
+                Assert(result[0].Equals(true));
+                Assert(result[1].Equals(2));
+            } finally {
+                done.Set();
+                Engine.Execute("$host_main_thread2.join; $host_main_thread2 = nil");
+            }
+        }
+
+        /// <summary>
+        /// Thread.stop with no other thread alive is MRI's ThreadError "stopping only thread" (rb_thread_stop),
+        /// where it slept forever. A fiber runs on a CLR thread of its own here but is part of the thread that
+        /// owns it, so neither it nor its thread counts as another thread - for Thread.stop, nor for Thread.list
+        /// and ThreadGroup#list, which used to list it.
+        /// </summary>
+        public void Thread_StopAlone1() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message.inspect}""; end; puts ""#{l}: #{v.inspect}""; end
+show(""alone"") { Thread.stop }
+show(""list"") { Thread.list.size }
+show(""in fiber: list"") { Fiber.new { Thread.list.size }.resume }
+show(""in fiber: group list"") { Fiber.new { ThreadGroup::Default.list.size }.resume }
+show(""in fiber: stop"") { Fiber.new { Thread.stop }.resume }
+f = Fiber.new { Fiber.yield }; f.resume
+show(""suspended fiber: list"") { [Thread.list.size, Thread.list == [Thread.main]] }
+# bounded, so that a Thread.stop that raised where it should sleep fails the test instead of hanging it
+def wait_for(seconds = 10); deadline = Time.now + seconds; Thread.pass until yield || Time.now > deadline; end
+show(""another thread stops"") { t = Thread.new { Thread.stop; :woke }; begin; wait_for { !t.alive? || t.status == ""sleep"" }; t.run if t.alive?; t.value; ensure; t.kill; end }
+show(""main stops, another wakes it"") { t = Thread.new { wait_for { Thread.main.status == ""sleep"" }; Thread.main.wakeup }; begin; Thread.stop; t.join; :ok; ensure; t.kill; end }
+show(""fiber of another thread"") { Thread.new { Fiber.new { Thread.list.size }.resume }.value }
+f.resume
+", @"
+alone: ""ThreadError: \""stopping only thread\\n\\tnote: use sleep to stop forever\""""
+list: 1
+in fiber: list: 1
+in fiber: group list: 1
+in fiber: stop: ""ThreadError: \""stopping only thread\\n\\tnote: use sleep to stop forever\""""
+suspended fiber: list: [1, true]
+another thread stops: :woke
+main stops, another wakes it: :ok
+fiber of another thread: 2
+");
+        }
+
+        /// <summary>
+        /// What MRI does on Windows with the functions win32/Makefile.sub leaves out, and with the ones
+        /// win32.c supplies. Dir.fchdir, Dir.for_fd, Dir#fileno, Dir.chroot, File.lutime, File.mkfifo and the
+        /// process-group and set-id parts of Process are rb_f_notimplement stubs there: NotImplementedError,
+        /// and #respond_to? false. Dir's threw CLR NotImplementedException or InvalidOperationException, and
+        /// all of them answered #respond_to? with true. File.link and File.readlink work there,
+        /// through CreateHardLinkW and the reparse point; they raised NotImplementedError. File.symlink's
+        /// cases are Windows_SymLinks1, which needs the right to make symbolic links. Windows only. The
+        /// expected output is MRI's as its win32 sources give it, not a recorded run.
+        /// </summary>
+        public void Windows_NotImplementedAndLinks1() {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+require 'fileutils'
+def show(l); v = begin; yield; rescue Exception => e; e.is_a?(SystemCallError) ? e.class : ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+show(""stubs respond_to?"") { [Dir.respond_to?(:fchdir), Dir.respond_to?(:for_fd), Dir.respond_to?(:chroot), Dir.open(""."") { |x| x.respond_to?(:fileno) }, File.respond_to?(:lutime), File.respond_to?(:mkfifo), Process.respond_to?(:getpgid), Process.respond_to?(:setsid), Process.respond_to?(:groups), Process.respond_to?(:uid=)] }
+show(""links respond_to?"") { [File.respond_to?(:link), File.respond_to?(:symlink), File.respond_to?(:readlink)] }
+show(""Dir.fchdir"") { Dir.fchdir(0) }
+show(""Dir.for_fd"") { Dir.for_fd(0) }
+show(""Dir#fileno"") { Dir.open(""."") { |x| x.fileno } }
+show(""Dir.chroot"") { Dir.chroot(""."") }
+show(""File.lutime"") { File.lutime(nil, nil, ""x"") }
+show(""File.mkfifo"") { File.mkfifo(""x"") }
+show(""Process.getpgid"") { Process.getpgid(0) }
+show(""Process.uid="") { Process.uid = 0 }
+dir = Dir.mktmpdir
+begin
+  Dir.chdir(dir) do
+    File.write(""f"", ""x"")
+    Dir.mkdir(""sub"")
+    show(""link"") { File.link(""f"", ""h""); File.read(""h"") }
+    show(""link existing"") { File.link(""f"", ""h"") }
+    show(""link missing"") { File.link(""nope"", ""h2"") }
+    show(""readlink not a link"") { File.readlink(""f"") }
+    show(""readlink missing"") { File.readlink(""nope"") }
+  end
+ensure
+  FileUtils.rm_rf(dir) rescue nil
+end
+", @"
+stubs respond_to?: [false, false, false, false, false, false, false, false, false, false]
+links respond_to?: [true, true, true]
+Dir.fchdir: ""NotImplementedError: fchdir() function is unimplemented on this machine""
+Dir.for_fd: ""NotImplementedError: for_fd() function is unimplemented on this machine""
+Dir#fileno: ""NotImplementedError: fileno() function is unimplemented on this machine""
+Dir.chroot: ""NotImplementedError: chroot() function is unimplemented on this machine""
+File.lutime: ""NotImplementedError: lutime() function is unimplemented on this machine""
+File.mkfifo: ""NotImplementedError: mkfifo() function is unimplemented on this machine""
+Process.getpgid: ""NotImplementedError: getpgid() function is unimplemented on this machine""
+Process.uid=: ""NotImplementedError: uid=() function is unimplemented on this machine""
+link: ""x""
+link existing: Errno::EEXIST
+link missing: Errno::ENOENT
+readlink not a link: Errno::EINVAL
+readlink missing: Errno::ENOENT
+");
+        }
+
+        /// <summary>
+        /// File.symlink and the File::Stat of a link on Windows, as win32.c has them: CreateSymbolicLinkW
+        /// with a directory link for a directory target (looked up from the link's directory, as ruby/ruby
+        /// master does), readlink of the reparse point, an lstat that describes the link itself (S_IFLNK and
+        /// S_IEXEC, neither file? nor directory?), and a stat that follows it - ENOENT for a dangling one.
+        /// Windows only, and only where this process may make symbolic links (an administrator, or Developer
+        /// Mode): elsewhere File.symlink is EACCES, as in MRI, and there is nothing here to check. The
+        /// expected output is MRI's as its win32 sources give it; the same script prints the same under
+        /// CRuby and IronRuby on Linux.
+        /// </summary>
+        public void Windows_SymLinks1() {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT || !CanCreateSymbolicLinks()) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+require 'fileutils'
+def show(l); v = begin; yield; rescue Exception => e; e.is_a?(SystemCallError) ? e.class : ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+dir = Dir.mktmpdir
+begin
+  Dir.chdir(dir) do
+    File.write(""f"", ""x"")
+    Dir.mkdir(""sub"")
+    show(""symlink to file"") { File.symlink(""f"", ""s""); [File.symlink?(""s""), File.readlink(""s""), File.read(""s"")] }
+    show(""symlink to dir"") { File.symlink(""sub"", ""sd""); [File.symlink?(""sd""), File.directory?(""sd""), File.readlink(""sd"")] }
+    show(""symlink dangling"") { File.symlink(""sub/x"", ""sn""); [File.symlink?(""sn""), File.readlink(""sn"")] }
+    show(""relative symlink in a subdirectory"") { Dir.mkdir(""d2""); Dir.mkdir(""d2/tgt""); File.symlink(""tgt"", ""d2/ln""); [File.symlink?(""d2/ln""), File.directory?(""d2/ln""), File.readlink(""d2/ln"")] }
+    show(""lstat and stat"") { [File.lstat(""s"").symlink?, File.stat(""s"").symlink?, File.ftype(""s""), File.lstat(""sd"").symlink?, File.ftype(""sn"")] }
+    show(""lstat of a link"") { st = File.lstat(""s""); [st.file?, st.directory?, st.symlink?, st.mode & 0170000 == 0120000, st.mode & 0100 != 0] }
+    show(""stat follows the link"") { [File.stat(""s"").file?, File.size(""s""), File.stat(""sd"").directory?] }
+    show(""stat of a dangling link"") { File.stat(""sn"") }
+    show(""symlink existing"") { File.symlink(""f"", ""s"") }
+  end
+ensure
+  FileUtils.rm_rf(dir) rescue nil
+end
+", @"
+symlink to file: [true, ""f"", ""x""]
+symlink to dir: [true, true, ""sub""]
+symlink dangling: [true, ""sub/x""]
+relative symlink in a subdirectory: [true, true, ""tgt""]
+lstat and stat: [true, false, ""link"", true, ""link""]
+lstat of a link: [false, false, true, true, true]
+stat follows the link: [true, 1, true]
+stat of a dangling link: Errno::ENOENT
+symlink existing: Errno::EEXIST
+");
+        }
+
+        private static bool CanCreateSymbolicLinks() {
+            string link = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ir-symlink-probe-" + Guid.NewGuid().ToString("N"));
+            try {
+                System.IO.File.CreateSymbolicLink(link, "target");
+                System.IO.File.Delete(link);
+                return true;
+            } catch (Exception) {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Text mode's universal newline decorator - "\r\n" and a lone "\r" are folded before the
         /// line is split - and the newline options that are decorators for the way out only
         /// (crlf, cr, and newline: :lf). POSIX only: Windows' own text mode reads "\r\n" as "\n"
