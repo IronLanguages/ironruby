@@ -1541,6 +1541,39 @@ namespace IronRuby.Builtins {
             return str.EscapeRegularExpression();
         }
 
+        /// <summary>
+        /// MRI refuses a pattern whose bytes are not valid in its own encoding before compiling it:
+        /// Regexp.new, and #sub, #gsub, their bang forms and #scan given a String (string.c's
+        /// get_pat_quoted), all raise "RegexpError: invalid multibyte character: /\xFF/".
+        /// </summary>
+        public static void RequireValidPattern(MutableString/*!*/ pattern) {
+            if (pattern.Encoding != RubyEncoding.Binary && pattern.ContainsInvalidCharacters()) {
+                throw new RegexpError("invalid multibyte character: /" + EscapeNonAsciiBytes(pattern) + "/");
+            }
+        }
+
+        // For an error message about bytes that do not decode: ASCII as is, the rest as \xHH.
+        private static string/*!*/ EscapeNonAsciiBytes(MutableString/*!*/ str) {
+            var result = new StringBuilder();
+            foreach (byte b in str.ToByteArray()) {
+                if (b < 0x80) {
+                    result.Append((char)b);
+                } else {
+                    result.Append("\\x").Append(b.ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+            return result.ToString();
+        }
+
+        /// <summary>
+        /// A String used as a pattern by #sub, #gsub, #sub!, #gsub! and #scan: matched literally, and
+        /// refused first if it is not valid in its encoding, as MRI does.
+        /// </summary>
+        public static RubyRegex/*!*/ FromLiteralPattern(MutableString/*!*/ pattern) {
+            RequireValidPattern(pattern);
+            return new RubyRegex(Escape(pattern), RubyRegexOptions.NONE);
+        }
+
         private static int SkipNonSpecial(string/*!*/ pattern, int i, out char escaped) {
             while (i < pattern.Length) {
                 char c = pattern[i];

@@ -177,7 +177,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(descriptor), "Integer");
             }
             Reinitialize(self, desc.Value, info);
-            self.ConversionOptions = options;
+            self.ConversionOptions = AddTextModeDecorator(context, info, options);
 
             // #autoclose? is kept in an instance variable by the prelude, which is where the
             // option has to land for IO.new(fd, autoclose: false) to be visible.
@@ -1632,9 +1632,48 @@ namespace IronRuby.Builtins {
         }
 
 
+        // A String is converted into the stream's external encoding on the way out (the
+        // conversion is Ruby code, IO#__encode_for_write__ in ruby4.rb); what needs none is
+        // decided here, which is nearly every write. Anything else is made a String with #to_s
+        // and written as it comes, and several arguments are written one after another, adding
+        // up the bytes.
+
         [RubyMethod("write")]
-        public static int Write(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
-            return Write(self, val, true);
+        public static int Write(TranscodeStorage/*!*/ encodeForWrite, RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
+            return Write(self, EncodeForWrite(encodeForWrite, self, val), true);
+        }
+
+        [RubyMethod("write")]
+        public static int Write(TranscodeStorage/*!*/ encodeForWrite, ConversionStorage<MutableString>/*!*/ tosConversion,
+            RubyIO/*!*/ self, params object[]/*!*/ args) {
+            int total = 0;
+            foreach (object arg in args) {
+                var str = arg as MutableString;
+                total += (str != null)
+                    ? Write(encodeForWrite, self, str)
+                    : Write(tosConversion, self, arg);
+            }
+            return total;
+        }
+
+        /// <summary>
+        /// Only a stream that was told an external encoding converts what is written to it: MRI
+        /// leaves an ordinary stream alone, which keeps a binary string writable to $stdout. A
+        /// BINARY destination converts nothing either, and neither does text already in the
+        /// target encoding, or ASCII text going somewhere that keeps ASCII where it is. Newline
+        /// conversion options always go through the Ruby side.
+        /// </summary>
+        private static MutableString/*!*/ EncodeForWrite(TranscodeStorage/*!*/ encodeForWrite, RubyIO/*!*/ self, MutableString/*!*/ val) {
+            if (self.ConversionOptions == null) {
+                RubyEncoding target = GetExternalEncoding(self);
+                if (target == null || target == RubyEncoding.Binary || val.Encoding == target ||
+                    (target.IsAsciiIdentity && val.IsAscii())) {
+                    return val;
+                }
+            }
+
+            var site = encodeForWrite.GetCallSite("__encode_for_write__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, val) as MutableString ?? val;
         }
 
         private static int Write(RubyIO/*!*/ self, MutableString/*!*/ val, bool signalOnPipeError) {
@@ -1658,7 +1697,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("write")]
         public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, RubyIO/*!*/ self, object obj) {
-            return Write(self, Protocols.ConvertToString(tosConversion, obj));
+            return Write(self, Protocols.ConvertToString(tosConversion, obj), true);
         }
 
         [RubyMethod("syswrite")]
@@ -1729,8 +1768,14 @@ namespace IronRuby.Builtins {
             var pipe = io.GetStream().BaseStream as INonBlockingWriteStream;
             if (pipe == null) {
                 // MRI's write_nonblock is a bare write(2): nothing of it stays in a buffer.
-                int all = Write(io, val);
-                io.Flush();
+                int all = Write(io, val, true);
+                // The write only filled the buffer; this flush is the write(2), and a reader that
+                // is gone is EPIPE (or SIGPIPE on the standard streams) here as anywhere else.
+                try {
+                    io.Flush();
+                } catch (IOException e) {
+                    throw TranslateWriteError(e, io);
+                }
                 return all;
             }
 
@@ -1784,7 +1829,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("write_nonblock")]
         public static int WriteNoBlock(ConversionStorage<MutableString>/*!*/ tosConversion, RubyIO/*!*/ self, object obj) {
-            return Write(self, Protocols.ConvertToString(tosConversion, obj));
+            return Write(self, Protocols.ConvertToString(tosConversion, obj), true);
         }
         
         #endregion
@@ -2030,76 +2075,43 @@ namespace IronRuby.Builtins {
 
         #region readchar, readbyte (1.9), readline, readlines
 
-        // returns a string in 1.9
+        // readchar is getc with an EOFError at the end of the stream.
         [RubyMethod("readchar")]
-        public static int ReadChar(RubyIO/*!*/ self) {
-            self.RequireReadable();
-            int c = self.ReadByteNormalizeEoln();
-            
-            if (c == -1) {
+        public static object/*!*/ ReadChar(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self) {
+            object c = Getc(transcode, universal, self);
+            if (c == null) {
                 throw new EOFError("end of file reached");
             }
-
             return c;
         }
 
-        // readbyte
+        [RubyMethod("readbyte")]
+        public static int ReadByte(RubyIO/*!*/ self) {
+            int b = self.ReadByteNormalizeEoln();
+            if (b == -1) {
+                throw new EOFError("end of file reached");
+            }
+            return b;
+        }
+
+        // readline is gets with an EOFError at the end of the stream. MRI defines it in Ruby
+        // (io.rb, readline(sep = $/, limit = nil, chomp: false)), so unlike gets it refuses a
+        // keyword it does not know.
 
         [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self) {
-            return RequireLine(Gets(transcode, scope, self));
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyScope/*!*/ scope, RubyIO/*!*/ self) {
+            return RequireLine(Gets(transcode, universal, scope, self));
         }
 
         [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, [NotNull]Hash/*!*/ options) {
-            return RequireLine(Gets(transcode, scope, self, options));
-        }
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, ConversionStorage<MutableString>/*!*/ toStr,
+            ConversionStorage<int>/*!*/ toInt, RubyScope/*!*/ scope, RubyIO/*!*/ self, params object[]/*!*/ args) {
 
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, DynamicNull separator) {
-            return RequireLine(Gets(transcode, scope, self, separator));
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, DynamicNull separator,
-            [NotNull]Hash/*!*/ options) {
-            return RequireLine(Gets(transcode, scope, self, separator, options));
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            return RequireLine(Gets(transcode, scope, self, separatorOrLimit));
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit, [NotNull]Hash/*!*/ options) {
-            return RequireLine(Gets(transcode, scope, self, separatorOrLimit, options));
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
-            return RequireLine(Gets(transcode, scope, self, separator, limit));
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit, object options) {
-            return RequireLine(Gets(transcode, scope, self, separator, limit, options));
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol]MutableString separator, DynamicNull limit) {
-            return RequireLine(Gets(transcode, scope, self, separator, -1, false));
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol]MutableString separator, DynamicNull limit, object options) {
-            return RequireLine(Gets(transcode, scope, self, separator, -1, TakeChomp(scope.RubyContext, options)));
+            MutableString separator;
+            int limit;
+            bool chomp;
+            ParseLineArguments(toStr, toInt, scope.RubyContext, args, true, out separator, out limit, out chomp);
+            return RequireLine(Gets(transcode, universal, scope, self, separator, limit, chomp));
         }
 
         private static MutableString/*!*/ RequireLine(MutableString line) {
@@ -2109,23 +2121,61 @@ namespace IronRuby.Builtins {
             return line;
         }
 
+        // The readers convert the lines when the stream has an internal encoding or conversion
+        // options, and #__readlines_chomp__ and #__each_line_chomp__ are #readlines and
+        // #each_line with chomp: - both done here, a line at a time, as IO#gets does. The
+        // keyword itself is taken off in ruby4.rb, by a wrapper that runs once a call: a
+        // trailing Hash overload here is ambiguous against (separator, limit) for a separator
+        // that only converts with #to_str.
+
         [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self) {
-            return ReadLines(context, self, context.InputSeparator, -1);
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self) {
+            return ReadLines(transcode, universal, context, self, context.InputSeparator, -1, false);
         }
 
         [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self, DynamicNull separator) {
-            return ReadLines(context, self, null, -1);
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self, DynamicNull separator) {
+            return ReadLines(transcode, universal, context, self, null, -1, false);
         }
 
         [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return ReadLines(context, self, context.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return ReadLines(context, self, separatorOrLimit.String(), -1);
-            }
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+            return ReadLines(transcode, universal, context, self, separatorOrLimit, false);
+        }
+
+        [RubyMethod("readlines")]
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return ReadLines(transcode, universal, context, self, separator, -1, false);
+        }
+
+        [RubyMethod("readlines")]
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+            return ReadLines(transcode, universal, context, self, separator, limit, false);
+        }
+
+        [RubyMethod("__readlines_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ReadLinesChomp(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self) {
+            return ReadLines(transcode, universal, context, self, context.InputSeparator, -1, true);
+        }
+
+        [RubyMethod("__readlines_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ReadLinesChomp(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self, DynamicNull separator) {
+            return ReadLines(transcode, universal, context, self, null, -1, true);
+        }
+
+        [RubyMethod("__readlines_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ReadLinesChomp(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+            return ReadLines(transcode, universal, context, self, separatorOrLimit, true);
+        }
+
+        [RubyMethod("__readlines_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ReadLinesChomp(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return ReadLines(transcode, universal, context, self, separator, -1, true);
+        }
+
+        [RubyMethod("__readlines_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ReadLinesChomp(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+            return ReadLines(transcode, universal, context, self, separator, limit, true);
         }
 
         /// <summary>
@@ -2138,25 +2188,166 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
-            return ReadLines(context, self, separator, -1);
+        private static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self,
+            Union<MutableString, int> separatorOrLimit, bool chomp) {
+            return separatorOrLimit.IsFixnum()
+                ? ReadLines(transcode, universal, context, self, context.InputSeparator, separatorOrLimit.Fixnum(), chomp)
+                : ReadLines(transcode, universal, context, self, separatorOrLimit.String(), -1, chomp);
         }
 
-        [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+        private static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self,
+            MutableString separator, int limit, bool chomp) {
             CheckLineLimit(limit, "readlines");
             RubyArray result = new RubyArray();
 
             // no dynamic call, doesn't modify $_ scope variable:
+            bool universalNewline = IsUniversalNewline(universal, self);
             MutableString line;
-            while ((line = self.ReadLineOrParagraph(separator, limit)) != null) {
-                result.Add(line);
+            while ((line = ReadLineOrParagraph(self, universalNewline, separator, limit)) != null) {
+                if (CountsAsLine(line, separator, limit)) {
+                    self.LineNumber++;
+                }
+                result.Add(FinishLine(transcode, self, line, separator, chomp));
             }
 
-            self.LineNumber += result.Count;
             context.InputProvider.LastInputLineNumber = self.LineNumber;
             return result;
+        }
+
+        /// <summary>
+        /// A stream opened for reading in text mode ("rt", textmode: true) reads with MRI's
+        /// universal newline decorator, as if universal_newline: true had been given - unless
+        /// the options already say what to do with newlines.
+        /// </summary>
+        internal static IDictionary<object, object> AddTextModeDecorator(RubyContext/*!*/ context, IOInfo info,
+            IDictionary<object, object> options) {
+
+            if (!info.IsTextModeSpecified || !info.Mode.CanRead()) {
+                return options;
+            }
+
+            var result = new Hash(context);
+            if (options != null) {
+                foreach (var name in new[] { "newline", "universal_newline", "crlf_newline", "cr_newline", "lf_newline" }) {
+                    if (options.ContainsKey(context.CreateAsciiSymbol(name))) {
+                        return options;
+                    }
+                }
+                foreach (var entry in options) {
+                    result[entry.Key] = entry.Value;
+                }
+            }
+            result[context.CreateAsciiSymbol("universal_newline")] = ScriptingRuntimeHelpers.True;
+            return result;
+        }
+
+        /// <summary>
+        /// Whether the stream reads "\r\n" and a lone "\r" as "\n" (IO#__universal_newline__? in
+        /// ruby4.rb, which knows the decorators and binmode). Only a stream with conversion
+        /// options can, so nothing else pays for asking.
+        /// </summary>
+        private static bool IsUniversalNewline(TranscodeStorage/*!*/ storage, RubyIO/*!*/ self) {
+            if (self.ConversionOptions == null) {
+                return false;
+            }
+            var site = storage.GetCallSite("__universal_newline__?", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+            return RubyOps.IsTrue(site.Target(site, self, null));
+        }
+
+        // One byte as a universal newline stream reads it: "\r\n" and a lone "\r" are "\n".
+        private static int ReadByteUniversal(RubyIO/*!*/ self) {
+            int b = self.ReadByteNormalizeEoln();
+            if (b == '\r') {
+                if (self.PeekByteNormalizeEoln() == '\n') {
+                    self.ReadByteNormalizeEoln();
+                }
+                return '\n';
+            }
+            return b;
+        }
+
+        /// <summary>
+        /// The line reader of a universal newline stream. The newlines have to be folded before
+        /// the separator is looked for - "a\rb" is two lines - so this reads a byte at a time;
+        /// only streams that asked for the decorator come here. The separator, the limit and
+        /// paragraph mode (an empty separator: a blank line ends it, and the newlines around it
+        /// are skipped) mean what they do for any other stream.
+        /// </summary>
+        private static MutableString ReadLineUniversal(RubyIO/*!*/ self, MutableString separator, int limit) {
+            self.RequireReadable();
+            if (limit == 0) {
+                return MutableString.CreateEmpty(self.ExternalEncoding);
+            }
+
+            bool paragraph = separator != null && separator.IsEmpty;
+            byte[] sep = (separator == null) ? null : paragraph ? new byte[] { (byte)'\n', (byte)'\n' } : separator.ToByteArray();
+            if (paragraph) {
+                SkipNewlinesUniversal(self);
+            }
+
+            var bytes = new List<byte>();
+            int b;
+            bool atSeparator = false;
+            while ((b = ReadByteUniversal(self)) != -1) {
+                bytes.Add((byte)b);
+                if (sep != null && EndsWith(bytes, sep)) {
+                    atSeparator = true;
+                    break;
+                }
+                if (limit > 0 && bytes.Count >= limit) {
+                    break;
+                }
+            }
+
+            if (bytes.Count == 0) {
+                return null;
+            }
+            if (paragraph && atSeparator) {
+                SkipNewlinesUniversal(self);
+            }
+            return MutableString.CreateBinary(bytes.ToArray(), self.ExternalEncoding);
+        }
+
+        private static void SkipNewlinesUniversal(RubyIO/*!*/ self) {
+            int next;
+            while ((next = self.PeekByteNormalizeEoln()) == '\n' || next == '\r') {
+                ReadByteUniversal(self);
+            }
+        }
+
+        private static bool EndsWith(List<byte>/*!*/ bytes, byte[]/*!*/ suffix) {
+            int start = bytes.Count - suffix.Length;
+            if (start < 0 || suffix.Length == 0) {
+                return false;
+            }
+            for (int i = 0; i < suffix.Length; i++) {
+                if (bytes[start + i] != suffix[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static MutableString ReadLineOrParagraph(RubyIO/*!*/ self, bool universal, MutableString separator, int limit) {
+            return universal ? ReadLineUniversal(self, separator, limit) : self.ReadLineOrParagraph(separator, limit);
+        }
+
+        /// <summary>
+        /// What every line reader does to a line it has read: it is tainted, converted when the
+        /// stream has an internal encoding or conversion options (the conversion is Ruby code,
+        /// IO#__transcode__ in ruby4.rb), and chomped when chomp: was given.
+        /// </summary>
+        private static MutableString/*!*/ FinishLine(TranscodeStorage/*!*/ transcode, RubyIO/*!*/ self, MutableString/*!*/ line,
+            MutableString separator, bool chomp) {
+            line.IsTainted = true;
+            if (self.Enc2 != null || self.ConversionOptions != null) {
+                var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+                line = site.Target(site, self, line) as MutableString ?? line;
+            }
+            if (chomp) {
+                ChompLine(line, separator);
+            }
+            return line;
         }
 
         // TODO: to_hash, to_str, to_int
@@ -2166,31 +2357,31 @@ namespace IronRuby.Builtins {
         // io_readlines_options_19 examples ask for.
 
         [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
-            return ReadLines(toPath, self, path, self.Context.InputSeparator, -1);
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
+            return ReadLines(transcode, universal, toPath, self, path, self.Context.InputSeparator, -1);
         }
 
         [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path, DynamicNull separator) {
-            return ReadLines(toPath, self, path, null, -1);
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path, DynamicNull separator) {
+            return ReadLines(transcode, universal, toPath, self, path, null, -1);
         }
 
         [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
 
             return separatorOrLimit.IsFixnum()
-                ? ReadLines(toPath, self, path, self.Context.InputSeparator, separatorOrLimit.Fixnum())
-                : ReadLines(toPath, self, path, separatorOrLimit.String(), -1);
+                ? ReadLines(transcode, universal, toPath, self, path, self.Context.InputSeparator, separatorOrLimit.Fixnum())
+                : ReadLines(transcode, universal, toPath, self, path, separatorOrLimit.String(), -1);
         }
 
         [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+        public static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
 
             MutableString pathString = Protocols.CastToPath(toPath, path);
             using (RubyIO io = new RubyIO(self.Context, self.Context.Platform.OpenInputFileStream(pathString.ConvertToString()), IOMode.ReadOnly)) {
-                return ReadLines(self.Context, io, separator, limit);
+                return ReadLines(transcode, universal, self.Context, io, separator, limit, false);
             }
         }
 
@@ -2198,127 +2389,287 @@ namespace IronRuby.Builtins {
 
         #region getc, gets, ungetc, getbyte (1.9)
 
+        /// <summary>
+        /// One character, as a String in the external encoding, reading as many bytes as the
+        /// character needs - and converted, when the stream has an internal encoding or conversion
+        /// options (IO#__transcode__ in ruby4.rb).
+        /// </summary>
         [RubyMethod("getc")]
-        public static object Getc(RubyIO/*!*/ self) {
-            int c = self.ReadByteNormalizeEoln();
-            return (c != -1) ? ScriptingRuntimeHelpers.Int32ToObject(c) : null;
+        public static object Getc(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self) {
+            int first = self.ReadByteNormalizeEoln();
+            if (first == -1) {
+                return null;
+            }
+
+            RubyEncoding encoding = GetExternalEncoding(self) ?? self.Context.DefaultExternalEncoding;
+            // A universal newline stream reads "\r\n" as one "\n", not two characters.
+            if (first == '\r' && encoding.IsAsciiIdentity && IsUniversalNewline(universal, self)
+                && self.PeekByteNormalizeEoln() == '\n') {
+                first = self.ReadByteNormalizeEoln();
+            }
+            MutableString c = ReadCharacter(self, (byte)first, encoding);
+            if (self.Enc2 != null || self.ConversionOptions != null) {
+                var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+                return site.Target(site, self, c);
+            }
+            return c;
+        }
+
+        /// <summary>
+        /// The character that starts with <paramref name="first"/>, as MRI's io_getc measures it.
+        /// An ASCII byte in an ASCII-compatible encoding is a character of its own, as every byte
+        /// is in BINARY. In UTF-8 a well-formed sequence (Unicode's table 3-7) is one character, a
+        /// sequence cut short by the end of the stream is one too, and a byte that does not
+        /// continue the sequence leaves the lead byte alone, a character of its own. Elsewhere
+        /// the shortest valid run of up to four bytes is the character, and the lead byte alone
+        /// when there is none. Bytes read past the character are pushed back.
+        /// </summary>
+        private static MutableString/*!*/ ReadCharacter(RubyIO/*!*/ self, byte first, RubyEncoding/*!*/ encoding) {
+            if ((first < 0x80 && encoding.IsAsciiIdentity) || encoding == RubyEncoding.Binary) {
+                return MutableString.CreateBinary(new byte[] { first }, encoding);
+            }
+
+            byte[] bytes = new byte[4];
+            bytes[0] = first;
+            int count = 1;
+
+            if (encoding == RubyEncoding.UTF8) {
+                int length;
+                byte low = 0x80, high = 0xBF;
+                if (first >= 0xC2 && first <= 0xDF) {
+                    length = 2;
+                } else if (first >= 0xE0 && first <= 0xEF) {
+                    length = 3;
+                    if (first == 0xE0) {
+                        low = 0xA0;
+                    } else if (first == 0xED) {
+                        high = 0x9F;
+                    }
+                } else if (first >= 0xF0 && first <= 0xF4) {
+                    length = 4;
+                    if (first == 0xF0) {
+                        low = 0x90;
+                    } else if (first == 0xF4) {
+                        high = 0x8F;
+                    }
+                } else {
+                    length = 1;
+                }
+
+                while (count < length) {
+                    int next = self.ReadByteNormalizeEoln();
+                    if (next == -1) {
+                        break;
+                    }
+                    if (next < low || next > high) {
+                        self.PushBack((byte)next);
+                        PushBack(self, bytes, 1, count);
+                        count = 1;
+                        break;
+                    }
+                    bytes[count++] = (byte)next;
+                    low = 0x80;
+                    high = 0xBF;
+                }
+                return MutableString.CreateBinary(Slice(bytes, count), encoding);
+            }
+
+            while (true) {
+                MutableString candidate = MutableString.CreateBinary(Slice(bytes, count), encoding);
+                if (!candidate.ContainsInvalidCharacters()) {
+                    return candidate;
+                }
+                int next = (count < bytes.Length) ? self.ReadByteNormalizeEoln() : -1;
+                if (next == -1) {
+                    PushBack(self, bytes, 1, count);
+                    return MutableString.CreateBinary(new byte[] { first }, encoding);
+                }
+                bytes[count++] = (byte)next;
+            }
+        }
+
+        private static byte[]/*!*/ Slice(byte[]/*!*/ bytes, int count) {
+            if (count == bytes.Length) {
+                return bytes;
+            }
+            byte[] result = new byte[count];
+            Buffer.BlockCopy(bytes, 0, result, 0, count);
+            return result;
+        }
+
+        // Pushes bytes[start..end) back so that bytes[start] is the next one read.
+        private static void PushBack(RubyIO/*!*/ self, byte[]/*!*/ bytes, int start, int end) {
+            for (int i = end - 1; i >= start; i--) {
+                self.PushBack(bytes[i]);
+            }
+        }
+
+        [RubyMethod("getbyte")]
+        public static object GetByte(RubyIO/*!*/ self) {
+            int b = self.ReadByteNormalizeEoln();
+            return (b != -1) ? ScriptingRuntimeHelpers.Int32ToObject(b) : null;
+        }
+
+        [RubyMethod("each_char")]
+        public static object EachChar(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, BlockParam block, RubyIO/*!*/ self) {
+            // MRI hands out the enumerator before it looks at the stream, closed or not.
+            if (block == null) {
+                return new Enumerator(self, "each_char") { SizeOp = "none" };
+            }
+            self.RequireReadable();
+
+            object c;
+            while ((c = Getc(transcode, universal, self)) != null) {
+                object result;
+                if (block.Yield(c, out result)) {
+                    return result;
+                }
+            }
+            return self;
         }
 
         // IO#gets and IO#readline take a chomp: keyword, and they read into $_ of the method
         // that called them - which is why the keyword and the transcoding are handled here
         // rather than in a Ruby wrapper, whose own frame would get $_ instead. Keyword
-        // arguments arrive as a trailing Hash flagged IsKeywordArguments.
+        // arguments arrive as a trailing Hash flagged IsKeywordArguments. Everything but the
+        // bare call is parsed by hand, as MRI's rb_io_getline_args does: a set of typed
+        // overloads with and without a trailing Hash was ambiguous for a separator that only
+        // converts with #to_str, and gave the wrong error for three positional arguments.
 
         [RubyMethod("gets")]
-        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self) {
-            return Gets(transcode, scope, self, scope.RubyContext.InputSeparator, -1, false);
-        }
-
-        [RubyMethod("gets")]
-        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, [NotNull]Hash/*!*/ options) {
-            return Gets(transcode, scope, self, scope.RubyContext.InputSeparator, -1, TakeChomp(scope.RubyContext, options));
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyScope/*!*/ scope, RubyIO/*!*/ self) {
+            return Gets(transcode, universal, scope, self, scope.RubyContext.InputSeparator, -1, false);
         }
 
         [RubyMethod("gets")]
-        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, DynamicNull separator) {
-            return Gets(transcode, scope, self, null, -1, false);
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, ConversionStorage<MutableString>/*!*/ toStr,
+            ConversionStorage<int>/*!*/ toInt, RubyScope/*!*/ scope, RubyIO/*!*/ self, params object[]/*!*/ args) {
+
+            MutableString separator;
+            int limit;
+            bool chomp;
+            ParseLineArguments(toStr, toInt, scope.RubyContext, args, false, out separator, out limit, out chomp);
+            return Gets(transcode, universal, scope, self, separator, limit, chomp);
         }
 
-        [RubyMethod("gets")]
-        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, DynamicNull separator, [NotNull]Hash/*!*/ options) {
-            return Gets(transcode, scope, self, null, -1, TakeChomp(scope.RubyContext, options));
-        }
-
-        [RubyMethod("gets")]
-        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            return Gets(transcode, scope, self, separatorOrLimit, false);
-        }
-
-        [RubyMethod("gets")]
-        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit, [NotNull]Hash/*!*/ options) {
-            return Gets(transcode, scope, self, separatorOrLimit, TakeChomp(scope.RubyContext, options));
-        }
-
-        [RubyMethod("gets")]
-        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
-            return Gets(transcode, scope, self, separator, limit, false);
-        }
-
-        [RubyMethod("gets")]
-        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit, object options) {
-            return Gets(transcode, scope, self, separator, limit, TakeChomp(scope.RubyContext, options));
-        }
-
-        // A nil limit is no limit: gets(nil, nil) reads the rest and gets("", nil) a paragraph.
-        [RubyMethod("gets")]
-        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol]MutableString separator, DynamicNull limit) {
-            return Gets(transcode, scope, self, separator, -1, false);
-        }
-
-        [RubyMethod("gets")]
-        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            [DefaultProtocol]MutableString separator, DynamicNull limit, object options) {
-            return Gets(transcode, scope, self, separator, -1, TakeChomp(scope.RubyContext, options));
-        }
-
-        private static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
-            Union<MutableString, int> separatorOrLimit, bool chomp) {
-            if (separatorOrLimit.IsFixnum()) {
-                return Gets(transcode, scope, self, scope.RubyContext.InputSeparator, separatorOrLimit.Fixnum(), chomp);
-            } else {
-                return Gets(transcode, scope, self, separatorOrLimit.String(), -1, chomp);
-            }
-        }
-
-        private static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+        private static MutableString Gets(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyScope/*!*/ scope, RubyIO/*!*/ self,
             MutableString separator, int limit, bool chomp) {
 
-            MutableString result = self.ReadLineOrParagraph(separator, limit);
+            MutableString result = ReadLineOrParagraph(self, IsUniversalNewline(universal, self), separator, limit);
             if (result != null) {
-                result.IsTainted = true;
-
-                // A stream with an internal encoding or conversion options hands lines back
-                // converted; the conversion is Ruby code (IO#__transcode__ in ruby4.rb).
-                if (self.Enc2 != null || self.ConversionOptions != null) {
-                    var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
-                    result = site.Target(site, self, result) as MutableString ?? result;
+                if (CountsAsLine(result, separator, limit)) {
+                    self.LineNumber++;
                 }
-
-                if (chomp) {
-                    ChompLine(result, separator);
-                }
+                result = FinishLine(transcode, self, result, separator, chomp);
             }
 
             scope.GetInnerMostClosureScope().LastInputLine = result;
-            scope.RubyContext.InputProvider.LastInputLineNumber = ++self.LineNumber;
+            scope.RubyContext.InputProvider.LastInputLineNumber = self.LineNumber;
 
             return result;
         }
 
         /// <summary>
-        /// MRI tolerates keywords the line readers do not know; only chomp: means anything. A Hash
-        /// passed positionally is a separator or limit argument, and not a usable one.
+        /// The arguments of the line readers, as rb_io_getline_args reads them: with one, nil is
+        /// "no separator", anything that converts with #to_str a separator, and anything else a
+        /// limit (#to_int); with two, a separator (nil or #to_str) and a limit (nil or #to_int).
+        /// A negative limit is no limit. A trailing keyword Hash holds chomp:; gets lets other
+        /// keywords through, readline (Ruby code in MRI) refuses them. A Hash passed positionally
+        /// is just an argument, and not a usable one.
         /// </summary>
-        private static bool TakeChomp(RubyContext/*!*/ context, Hash/*!*/ options) {
-            if (!options.IsKeywordArguments) {
-                throw RubyExceptions.CreateImplicitConversionError("Hash", "Integer");
+        private static void ParseLineArguments(ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyContext/*!*/ context, object[]/*!*/ args, bool strictKeywords,
+            out MutableString separator, out int limit, out bool chomp) {
+
+            int count = args.Length;
+            var options = (count > 0) ? args[count - 1] as Hash : null;
+            if (options != null && options.IsKeywordArguments) {
+                count--;
+            } else {
+                options = null;
             }
-            object value;
-            return options.TryGetValue(context.CreateAsciiSymbol("chomp"), out value) && RubyOps.IsTrue(value);
+
+            if (count > 2) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0..2)", count);
+            }
+
+            separator = context.InputSeparator;
+            limit = -1;
+            if (count == 1) {
+                object arg = args[0];
+                if (arg == null) {
+                    separator = null;
+                } else {
+                    MutableString str = Protocols.TryCastToString(toStr, arg);
+                    if (str != null) {
+                        separator = str;
+                    } else {
+                        limit = Protocols.CastToFixnum(toInt, arg);
+                    }
+                }
+            } else if (count == 2) {
+                separator = (args[0] != null) ? Protocols.CastToString(toStr, args[0]) : null;
+                if (args[1] != null) {
+                    limit = Protocols.CastToFixnum(toInt, args[1]);
+                }
+            }
+            if (limit < 0) {
+                limit = -1;
+            }
+
+            chomp = false;
+            if (options != null) {
+                var chompKey = context.CreateAsciiSymbol("chomp");
+                List<string> unknown = null;
+                foreach (var entry in options) {
+                    if (chompKey.Equals(entry.Key)) {
+                        chomp = RubyOps.IsTrue(entry.Value);
+                    } else if (strictKeywords) {
+                        (unknown ?? (unknown = new List<string>())).Add(context.Inspect(entry.Key).ToString());
+                    }
+                }
+                if (unknown != null) {
+                    throw RubyExceptions.CreateArgumentError(
+                        (unknown.Count == 1 ? "unknown keyword: " : "unknown keywords: ") + String.Join(", ", unknown));
+                }
+            }
         }
 
-        // After a separator and a limit only keywords can follow.
-        private static bool TakeChomp(RubyContext/*!*/ context, object options) {
-            var hash = options as Hash;
-            if (hash == null || !hash.IsKeywordArguments) {
-                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 3, expected 0..2)");
+        /// <summary>
+        /// MRI's rb_io_getline_0 counts a read as a line unless it stopped because the limit ran
+        /// out: a read that reached the separator or the end of the stream first is a line, and
+        /// so is one whose limit ran out exactly at the separator. A zero limit reads nothing and
+        /// counts nothing. The line is looked at before it is chomped.
+        /// </summary>
+        private static bool CountsAsLine(MutableString/*!*/ line, MutableString separator, int limit) {
+            if (limit < 0) {
+                return true;
             }
-            return TakeChomp(context, hash);
+            if (limit == 0) {
+                return false;
+            }
+            int count = line.GetByteCount();
+            if (count < limit) {
+                return true;
+            }
+            if (separator == null) {
+                return false;
+            }
+
+            int sepLength = separator.GetByteCount();
+            if (sepLength == 0) {
+                // a paragraph ends at a blank line
+                return count >= 2 && line.GetByte(count - 1) == '\n' && line.GetByte(count - 2) == '\n';
+            }
+            if (count < sepLength) {
+                return false;
+            }
+            for (int i = 0; i < sepLength; i++) {
+                if (line.GetByte(count - sepLength + i) != separator.GetByte(i)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         /// <summary>
@@ -2359,10 +2710,42 @@ namespace IronRuby.Builtins {
             line.SetByteCount(count);
         }
 
-        [RubyMethod("ungetc")]
+        // The byte pusher the prelude's #ungetc and #ungetbyte are written in terms of.
+        [RubyMethod("__ir_ungetc__", RubyMethodAttributes.PrivateInstance)]
         public static void SetPreviousByte(RubyIO/*!*/ self, [DefaultProtocol]int b) {
             self.RequireReadable();
             self.PushBack(unchecked((byte)b));
+        }
+
+        /// <summary>
+        /// ungetc pushes a String's bytes back, and takes an Integer as a codepoint in the stream's
+        /// external encoding. A String, and an ASCII codepoint in an ASCII-compatible encoding,
+        /// are pushed here; anything else - a longer character, an object that converts with
+        /// #to_str, nil - is IO#__ungetc_rest__ in ruby4.rb.
+        /// </summary>
+        [RubyMethod("ungetc")]
+        public static object PushBack(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ rest, RubyIO/*!*/ self, object value) {
+            self.RequireReadable();
+
+            var str = value as MutableString;
+            if (str != null) {
+                for (int i = str.GetByteCount() - 1; i >= 0; i--) {
+                    self.PushBack(str.GetByte(i));
+                }
+                return null;
+            }
+
+            if (value is int) {
+                int codepoint = (int)value;
+                RubyEncoding encoding = GetExternalEncoding(self) ?? self.Context.DefaultExternalEncoding;
+                if (codepoint >= 0 && codepoint < 0x80 && encoding.IsAsciiIdentity) {
+                    self.PushBack((byte)codepoint);
+                    return null;
+                }
+            }
+
+            var site = rest.GetCallSite("__ungetc_rest__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, value);
         }
 
         // TODO: 1.9 only
@@ -2405,46 +2788,82 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each")]
         [RubyMethod("each_line")]
-        public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self) {
-            return Each(context, block, self, context.InputSeparator, -1);
+        public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self) {
+            return Each(transcode, universal, context, block, self, context.InputSeparator, -1, false);
         }
 
         [RubyMethod("each")]
         [RubyMethod("each_line")]
-        public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, DynamicNull separator) {
-            return Each(context, block, self, null, -1);
+        public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, DynamicNull separator) {
+            return Each(transcode, universal, context, block, self, null, -1, false);
         }
 
         [RubyMethod("each")]
         [RubyMethod("each_line")]
-        public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return Each(context, block, self, context.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return Each(context, block, self, separatorOrLimit.String(), -1);
-            }
+        public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+            return Each(transcode, universal, context, block, self, separatorOrLimit, false);
         }
 
         [RubyMethod("each")]
         [RubyMethod("each_line")]
-        public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
-            return Each(context, block, self, separator, -1);
+        public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return Each(transcode, universal, context, block, self, separator, -1, false);
         }
 
         [RubyMethod("each")]
         [RubyMethod("each_line")]
-        public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+        public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+            return Each(transcode, universal, context, block, self, separator, limit, false);
+        }
+
+        [RubyMethod("__each_line_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static object EachLineChomp(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self) {
+            return Each(transcode, universal, context, block, self, context.InputSeparator, -1, true);
+        }
+
+        [RubyMethod("__each_line_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static object EachLineChomp(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, DynamicNull separator) {
+            return Each(transcode, universal, context, block, self, null, -1, true);
+        }
+
+        [RubyMethod("__each_line_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static object EachLineChomp(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+            return Each(transcode, universal, context, block, self, separatorOrLimit, true);
+        }
+
+        [RubyMethod("__each_line_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static object EachLineChomp(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return Each(transcode, universal, context, block, self, separator, -1, true);
+        }
+
+        [RubyMethod("__each_line_chomp__", RubyMethodAttributes.PrivateInstance)]
+        public static object EachLineChomp(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+            return Each(transcode, universal, context, block, self, separator, limit, true);
+        }
+
+        private static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, Union<MutableString, int> separatorOrLimit, bool chomp) {
+            return separatorOrLimit.IsFixnum()
+                ? Each(transcode, universal, context, block, self, context.InputSeparator, separatorOrLimit.Fixnum(), chomp)
+                : Each(transcode, universal, context, block, self, separatorOrLimit.String(), -1, chomp);
+        }
+
+        private static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, MutableString separator, int limit, bool chomp) {
             self.RequireReadable();
             CheckLineLimit(limit, "each_line");
 
+            bool universalNewline = IsUniversalNewline(universal, self);
             MutableString line;
-            while ((line = self.ReadLineOrParagraph(separator, limit)) != null) {
+            while ((line = ReadLineOrParagraph(self, universalNewline, separator, limit)) != null) {
                 if (block == null) {
                     throw RubyExceptions.NoBlockGiven();
                 }
 
-                line.IsTainted = true;
-                context.InputProvider.LastInputLineNumber = ++self.LineNumber;
+                // The line number moves before the conversion, which is Ruby code and may look.
+                if (CountsAsLine(line, separator, limit)) {
+                    self.LineNumber++;
+                }
+                context.InputProvider.LastInputLineNumber = self.LineNumber;
+                line = FinishLine(transcode, self, line, separator, chomp);
 
                 object result;
                 if (block.Yield(line, out result)) {
@@ -2465,14 +2884,10 @@ namespace IronRuby.Builtins {
                 return new Enumerator(self, "each_byte") { SizeOp = "none" };
             }
 
-            object aByte;
-            while ((aByte = Getc(self)) != null) {
-                if (block == null) {
-                    throw RubyExceptions.NoBlockGiven();
-                }
-
+            int aByte;
+            while ((aByte = self.ReadByteNormalizeEoln()) != -1) {
                 object result;
-                if (block.Yield((int)aByte, out result)) {
+                if (block.Yield(ScriptingRuntimeHelpers.Int32ToObject(aByte), out result)) {
                     return result;
                 }
             }

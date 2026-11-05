@@ -62,8 +62,8 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("list")]
-        public static RubyArray/*!*/ List([NotNull]ThreadGroup/*!*/ self) {
-            ThreadOps.RubyThreadInfo[] threads = ThreadOps.RubyThreadInfo.Threads;
+        public static RubyArray/*!*/ List(RubyContext/*!*/ context, [NotNull]ThreadGroup/*!*/ self) {
+            ThreadOps.RubyThreadInfo[] threads = ThreadOps.RubyThreadInfo.GetRubyThreads(context);
             RubyArray result = new RubyArray(threads.Length);
             foreach (ThreadOps.RubyThreadInfo threadInfo in threads) {
                 Thread thread = threadInfo.Thread;

@@ -117,7 +117,7 @@ namespace IronRuby.Builtins {
                     permissions = p.Value;
                 }
             }
-            self.ConversionOptions = options;
+            self.ConversionOptions = RubyIOOps.AddTextModeDecorator(context, info, options);
             
             // descriptor or path:
             int? descriptor = toIntSite.Target(toIntSite, descriptorOrPath);
@@ -1196,6 +1196,109 @@ namespace IronRuby.Builtins {
         private static extern bool UnlockFileEx(Microsoft.Win32.SafeHandles.SafeFileHandle handle, int reserved,
             uint lengthLow, uint lengthHigh, ref System.Threading.NativeOverlapped overlapped);
 
+        [System.Runtime.InteropServices.DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool CreateHardLinkW(string newFileName, string existingFileName, IntPtr securityAttributes);
+
+        /// <summary>
+        /// The errno win32.c's map_errno gives a Win32 error, for the ones File.link, File.symlink
+        /// and File.readlink can meet; EINVAL for the rest, as map_errno does.
+        /// </summary>
+        private static int Win32ErrorToErrno(int error) {
+            switch (error) {
+                case 2:    // ERROR_FILE_NOT_FOUND
+                case 3:    // ERROR_PATH_NOT_FOUND
+                case 15:   // ERROR_INVALID_DRIVE
+                case 161:  // ERROR_BAD_PATHNAME
+                case 206:  // ERROR_FILENAME_EXCED_RANGE
+                    return Posix.ENOENT;
+                case 5:    // ERROR_ACCESS_DENIED
+                case 32:   // ERROR_SHARING_VIOLATION
+                case 33:   // ERROR_LOCK_VIOLATION
+                case 1314: // ERROR_PRIVILEGE_NOT_HELD
+                    return Posix.EACCES;
+                case 17:   // ERROR_NOT_SAME_DEVICE
+                    return Posix.EXDEV;
+                case 80:   // ERROR_FILE_EXISTS
+                case 183:  // ERROR_ALREADY_EXISTS
+                    return Posix.EEXIST;
+                case 267:  // ERROR_DIRECTORY
+                    return Posix.ENOTDIR;
+                case 1921: // ERROR_CANT_RESOLVE_FILENAME
+                    return Posix.ELOOP;
+                default:
+                    return Posix.EINVAL;
+            }
+        }
+
+        // MRI reports an existing target by its own path, anything else by both paths.
+        private static Exception/*!*/ WindowsLinkError(int win32Error, string/*!*/ strOld, string/*!*/ strNew) {
+            int errno = Win32ErrorToErrno(win32Error);
+            return Posix.Error(errno, errno == Posix.EEXIST ? strNew : "(" + strOld + ", " + strNew + ")");
+        }
+
+        /// <summary>
+        /// win32.c's symlink(): the target with its slashes turned around, a directory link when the
+        /// target names a directory, created without the privilege where Windows allows that -
+        /// which the BCL asks for itself. A relative target is looked up from the link's directory,
+        /// where the link will resolve it, as ruby/ruby master's win32.c does (4.0.0 looked in the
+        /// current directory, and made a file link to a directory that is not there).
+        /// </summary>
+        private static void WindowsSymLink(string/*!*/ strOld, string/*!*/ strNew) {
+            if (strNew.Length == 0) {
+                throw Posix.Error(Posix.ENOENT, "(" + strOld + ", " + strNew + ")");
+            }
+            if (strOld.Length == 0) {
+                throw Posix.Error(Posix.EINVAL, "(" + strOld + ", " + strNew + ")");
+            }
+            string target = strOld.Replace('/', '\\');
+            string link = strNew.Replace('/', '\\');
+            bool independent = (target.Length >= 2 && char.IsAsciiLetter(target[0]) && target[1] == ':') || target[0] == '\\';
+            int separator = link.LastIndexOf('\\');
+            string probe = (!independent && separator >= 0) ? link.Substring(0, separator + 1) + target : target;
+            try {
+                if (Directory.Exists(probe)) {
+                    Directory.CreateSymbolicLink(strNew, target);
+                } else {
+                    File.CreateSymbolicLink(strNew, target);
+                }
+            } catch (UnauthorizedAccessException) {
+                throw WindowsLinkError(5, strOld, strNew);
+            } catch (IOException e) {
+                throw WindowsLinkError(e.HResult & 0xFFFF, strOld, strNew);
+            }
+        }
+
+        /// <summary>
+        /// win32.c's readlink(): the target of a symbolic link or a junction, with backslashes as
+        /// slashes; EINVAL for anything that is neither, ENOENT for nothing at all.
+        /// </summary>
+        private static string/*!*/ WindowsReadLink(string/*!*/ strPath) {
+            FileAttributes attributes;
+            try {
+                // the attributes of the link itself, which may dangle
+                attributes = File.GetAttributes(strPath);
+            } catch (FileNotFoundException) {
+                throw Posix.Error(Posix.ENOENT, strPath);
+            } catch (DirectoryNotFoundException) {
+                throw Posix.Error(Posix.ENOENT, strPath);
+            } catch (UnauthorizedAccessException) {
+                throw Posix.Error(Posix.EACCES, strPath);
+            } catch (IOException e) {
+                throw Posix.Error(Win32ErrorToErrno(e.HResult & 0xFFFF), strPath);
+            }
+
+            string target = null;
+            if ((attributes & FileAttributes.ReparsePoint) != 0) {
+                FileSystemInfo info = (attributes & FileAttributes.Directory) != 0
+                    ? (FileSystemInfo)new DirectoryInfo(strPath) : new FileInfo(strPath);
+                target = info.LinkTarget;
+            }
+            if (target == null) {
+                throw Posix.Error(Posix.EINVAL, strPath);
+            }
+            return target.Replace('\\', '/');
+        }
+
         /// <summary>
         /// flock on Windows, as CRuby's win32.c does it: LockFileEx/UnlockFileEx over the
         /// whole file, shared or exclusive. A blocking lock polls with FAIL_IMMEDIATELY for
@@ -1250,6 +1353,9 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ Readlink(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
             if (!Posix.IsAvailable) {
+                if (OperatingSystem.IsWindows()) {
+                    return self.Context.EncodePath(WindowsReadLink(strPath));
+                }
                 throw new IronRuby.Builtins.NotImplementedError("readlink() function is unimplemented on this machine");
             }
 
@@ -1266,6 +1372,13 @@ namespace IronRuby.Builtins {
             string strOld = self.Context.DecodePath(Protocols.CastToPath(toPath, oldPath));
             string strNew = self.Context.DecodePath(Protocols.CastToPath(toPath, newPath));
             if (!Posix.IsAvailable) {
+                if (OperatingSystem.IsWindows()) {
+                    // win32.c's link(): CreateHardLinkW, new name first.
+                    if (!CreateHardLinkW(strNew, strOld, IntPtr.Zero)) {
+                        throw WindowsLinkError(Marshal.GetLastWin32Error(), strOld, strNew);
+                    }
+                    return 0;
+                }
                 throw new IronRuby.Builtins.NotImplementedError("link() function is unimplemented on this machine");
             }
 
@@ -1282,6 +1395,10 @@ namespace IronRuby.Builtins {
             string strOld = self.Context.DecodePath(Protocols.CastToPath(toPath, oldPath));
             string strNew = self.Context.DecodePath(Protocols.CastToPath(toPath, newPath));
             if (!Posix.IsAvailable) {
+                if (OperatingSystem.IsWindows()) {
+                    WindowsSymLink(strOld, strNew);
+                    return 0;
+                }
                 throw new IronRuby.Builtins.NotImplementedError("symlink() function is unimplemented on this machine");
             }
 
@@ -1292,7 +1409,9 @@ namespace IronRuby.Builtins {
             return 0;
         }
 
+        // MRI on Windows has no mkfifo: the rb_f_notimplement stub, which #respond_to? denies.
         [RubyMethod("mkfifo", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static int MakeFifo(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             [DefaultParameterValue(0x1B6 /* 0666 */)]int mode) {
 
@@ -1499,9 +1618,17 @@ namespace IronRuby.Builtins {
             return UpdateTimes(toPath, self, accessTime, modifiedTime, paths, true);
         }
 
+        // MRI on Windows has neither lutimes nor utimensat: File.lutime is the rb_f_notimplement
+        // stub there, which #respond_to? denies. Setting the times through the BCL would set the
+        // target's, not the link's.
         [RubyMethod("lutime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static int UpdateLinkTimes(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object accessTime, object modifiedTime,
             params object[]/*!*/ paths) {
+
+            if (OperatingSystem.IsWindows()) {
+                throw new IronRuby.Builtins.NotImplementedError("lutime() function is unimplemented on this machine");
+            }
 
             return UpdateTimes(toPath, self, accessTime, modifiedTime, paths, false);
         }
@@ -1669,6 +1796,10 @@ namespace IronRuby.Builtins {
             // way, which is what makes File.stat(...).instance_of?(File::Stat) true.
             internal readonly FileSystemInfo Legacy;
 
+            // Off Unix: an lstat of a symbolic link (or junction), which the BCL object cannot say
+            // by itself - File.symlink? and File.lstat(...).symlink? read it.
+            internal bool IsLink;
+
             internal StatInfo(string/*!*/ path, Posix.StatData/*!*/ data) {
                 Data = data;
                 OriginalPath = path;
@@ -1800,6 +1931,49 @@ namespace IronRuby.Builtins {
                 }
 
                 PlatformAdaptationLayer pal = context.Platform;
+                FileSystemInfo link = TryGetLink(path);
+                if (link != null) {
+                    if (!followLinks) {
+                        // lstat: a link answers for itself, dangling or not, as win32.c's does
+                        result = new StatInfo(link) { IsLink = true };
+                        return true;
+                    }
+                    // stat: what the link leads to - the BCL's FileInfo of a link describes the link
+                    // (its length, its times) - and ENOENT for a link that leads nowhere
+                    FileSystemInfo target;
+                    try {
+                        target = link.ResolveLinkTarget(true);
+                    } catch (UnauthorizedAccessException) {
+                        errno = Posix.EACCES;
+                        return false;
+                    } catch (IOException e) {
+                        errno = Win32ErrorToErrno(e.HResult & 0xFFFF);
+                        return false;
+                    }
+                    if (target == null) {
+                        errno = Posix.ENOENT;
+                        return false;
+                    }
+                    // FileSystemInfo.Exists says false for any failure; ask the file system so a
+                    // denied target reports EACCES, not ENOENT
+                    try {
+                        File.GetAttributes(target.FullName);
+                    } catch (UnauthorizedAccessException) {
+                        errno = Posix.EACCES;
+                        return false;
+                    } catch (FileNotFoundException) {
+                        errno = Posix.ENOENT;
+                        return false;
+                    } catch (DirectoryNotFoundException) {
+                        errno = Posix.ENOENT;
+                        return false;
+                    } catch (IOException e) {
+                        errno = Win32ErrorToErrno(e.HResult & 0xFFFF);
+                        return false;
+                    }
+                    result = new StatInfo(target);
+                    return true;
+                }
                 if (pal.FileExists(path)) {
                     result = new StatInfo(new FileInfo(path));
                 } else if (pal.DirectoryExists(path)) {
@@ -1811,6 +1985,21 @@ namespace IronRuby.Builtins {
                     return false;
                 }
                 return true;
+            }
+
+            // The link at path itself if it is a symbolic link or a junction; null otherwise.
+            private static FileSystemInfo TryGetLink(string/*!*/ path) {
+                try {
+                    FileAttributes attributes = File.GetAttributes(path);
+                    if ((attributes & FileAttributes.ReparsePoint) == 0) {
+                        return null;
+                    }
+                    FileSystemInfo info = (attributes & FileAttributes.Directory) != 0
+                        ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path);
+                    return info.LinkTarget != null ? info : null;
+                } catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is ArgumentException || e is NotSupportedException) {
+                    return null;
+                }
             }
 
             private static Posix.StatData D(FileSystemInfo/*!*/ self) {
@@ -1949,13 +2138,13 @@ namespace IronRuby.Builtins {
             [RubyMethod("directory?")]
             public static bool IsDirectory(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null ? d.FileType == Posix.S_IFDIR : (L(self) is DirectoryInfo);
+                return d != null ? d.FileType == Posix.S_IFDIR : (!IsLinkStat(self) && L(self) is DirectoryInfo);
             }
 
             [RubyMethod("file?")]
             public static bool IsFile(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null ? d.FileType == Posix.S_IFREG : (L(self) is FileInfo);
+                return d != null ? d.FileType == Posix.S_IFREG : (!IsLinkStat(self) && L(self) is FileInfo);
             }
 
             [RubyMethod("pipe?")]
@@ -1973,13 +2162,22 @@ namespace IronRuby.Builtins {
             [RubyMethod("symlink?")]
             public static bool IsSymLink(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null && d.FileType == Posix.S_IFLNK;
+                return d != null ? d.FileType == Posix.S_IFLNK : IsLinkStat(self);
+            }
+
+            // Off Unix: an lstat of a symbolic link or junction (StatInfo.IsLink).
+            private static bool IsLinkStat(FileSystemInfo/*!*/ self) {
+                var si = self as StatInfo;
+                return si != null && si.IsLink;
             }
 
             [RubyMethod("ftype")]
             public static MutableString/*!*/ FileType(FileSystemInfo/*!*/ self) {
                 var d = D(self);
                 if (d == null) {
+                    if (IsLinkStat(self)) {
+                        return MutableString.CreateAscii("link");
+                    }
                     return MutableString.CreateAscii(IsFile(self) ? "file" : "directory");
                 }
                 switch (d.FileType) {
@@ -2176,7 +2374,9 @@ namespace IronRuby.Builtins {
                 if (d != null) {
                     return d.Mode;
                 }
-                int mode = (L(self) is FileInfo) ? 0x8000 : 0x4000;
+                // an lstat of a link describes the link: S_IFLNK, and S_IEXEC as win32.c gives a link,
+                // not the type of what it points at
+                int mode = IsLinkStat(self) ? Posix.S_IFLNK | 0x40 : (L(self) is FileInfo) ? 0x8000 : 0x4000;
                 mode |= 0x100; // S_IREAD;
                 if ((L(self).Attributes & FileAttributes.ReadOnly) == 0) {
                     mode |= 0x80; // S_IWRITE;
