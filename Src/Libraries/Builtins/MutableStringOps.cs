@@ -4714,31 +4714,42 @@ namespace IronRuby.Builtins {
                 return inplace ? src : src.CloneDerived();
             }
 
+            // MRI's tr_trans: the result is in the encoding the receiver shares with both character
+            // sets, and an incompatible pair raises. It differs from the receiver's own only when the
+            // receiver is ASCII-only, whose characters read the same in either. (The empty result
+            // built here used to be checked against `to' instead, which passed anything, and the
+            // characters went in encoded in the receiver's encoding: "ab".b.tr("a", "\u00e9") was
+            // "\xE9b".)
+            RubyEncoding e1 = src.RequireCompatibleEncoding(from);
+            RubyEncoding e2 = src.RequireCompatibleEncoding(to);
+            RubyEncoding encoding = (e1 == e2) ? e1 : from.RequireCompatibleEncoding(to);
+            RubyEncoding originalEncoding = src.Encoding;
+
             MutableString dst;
             if (inplace) {
                 dst = src;
             } else {
                 dst = src.CreateDerived().TaintBy(src);
             }
+            if (dst.Encoding != encoding) {
+                dst.ForceEncoding(encoding);
+            }
 
-            // TODO: KCODE
-            src.RequireCompatibleEncoding(from);
-            dst.RequireCompatibleEncoding(to);
             from.PrepareForCharacterRead();
             to.PrepareForCharacterRead();
 
             src.PrepareForCharacterRead();
             if (src.HasSurrogatePairs() || from.HasSurrogatePairs() || to.HasSurrogatePairs()) {
                 // CharacterMap maps single CLR chars; a pair anywhere takes the code point path.
-                MutableString translated = TranslateCodePoints(src, from, to, squeeze, out anyCharacterMaps);
+                MutableString translated = TranslateCodePoints(src, from, to, encoding, squeeze, out anyCharacterMaps);
                 if (inplace) {
                     if (anyCharacterMaps) {
                         src.Clear();
                         src.Append(translated);
                     }
-                    return src;
+                    return KeepEncodingIfUnchanged(src, originalEncoding, anyCharacterMaps);
                 }
-                return translated;
+                return KeepEncodingIfUnchanged(translated, originalEncoding, anyCharacterMaps);
             }
 
             CharacterMap map = CharacterMap.Create(from, to);
@@ -4751,7 +4762,18 @@ namespace IronRuby.Builtins {
                 anyCharacterMaps = MutableString.Translate(src, dst, map);
             }
 
-            return dst;
+            return KeepEncodingIfUnchanged(dst, originalEncoding, anyCharacterMaps);
+        }
+
+        // MRI gives the result the shared encoding only when a character was translated; an
+        // unchanged copy - or receiver, for tr! - keeps its own. It is ASCII-only whenever the two
+        // differ, so this changes no character.
+        private static MutableString/*!*/ KeepEncodingIfUnchanged(MutableString/*!*/ result, RubyEncoding/*!*/ originalEncoding,
+            bool anyCharacterMaps) {
+            if (!anyCharacterMaps && result.Encoding != originalEncoding) {
+                result.ForceEncoding(originalEncoding);
+            }
+            return result;
         }
 
         /// <summary>The code point at CLR index <paramref name="i"/>, which it moves past it.</summary>
@@ -4811,7 +4833,7 @@ namespace IronRuby.Builtins {
 
         /// <summary>#tr and #tr_s by code point, for strings with characters above U+FFFF.</summary>
         private static MutableString/*!*/ TranslateCodePoints(MutableString/*!*/ src, MutableString/*!*/ from, MutableString/*!*/ to,
-            bool squeeze, out bool anyCharacterMaps) {
+            RubyEncoding/*!*/ encoding, bool squeeze, out bool anyCharacterMaps) {
 
             bool negated, ignored;
             List<int> fromRanges = ParseTrOperand(from, true, out negated);
@@ -4820,6 +4842,9 @@ namespace IronRuby.Builtins {
             bool delete = to.IsEmpty;
 
             var result = src.CreateDerived().TaintBy(src);
+            if (result.Encoding != encoding) {
+                result.ForceEncoding(encoding);
+            }
             anyCharacterMaps = false;
             int previous = -1;
             for (int i = 0; i < src.Length; ) {
