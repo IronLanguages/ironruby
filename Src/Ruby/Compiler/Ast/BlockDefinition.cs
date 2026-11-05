@@ -174,7 +174,7 @@ namespace IronRuby.Compiler.Ast {
             );
 
             MSA.Expression paramInit = MakeParametersInitialization(gen, parameters);
-            MSA.ParameterExpression blockUnwinder, filterVariable;
+            MSA.ParameterExpression blockUnwinder;
 
             MSA.Expression traceCall, traceReturn;
 			if (gen.TraceEnabled) {
@@ -193,7 +193,7 @@ namespace IronRuby.Compiler.Ast {
             // A body that never uses its scope - { }, { |x| x } - has no use for the RubyBlockScope
             // every invocation would allocate, except to hand to the TracePoint hooks, which only
             // evaluate their scope while a TracePoint listens: there it is made on demand.
-            MSA.Expression lazyScope = null, filterScope = scopeVariable;
+            MSA.Expression lazyScope = null;
             if (!hasNestedReturn && !gen.TraceEnabled && !gen.CompilerOptions.IsEval && !scope.HasClosures && IsScopeFreeBody()) {
                 var names = scope.GetVariableNamesExpression();
                 Func<MSA.Expression> makeScope = () => Methods.CreateBlockScopeLazy.OpCall(
@@ -207,7 +207,6 @@ namespace IronRuby.Compiler.Ast {
                     paramInit = lazyParamInit;
                     statements = lazyStatements;
                     lazyScope = lazy;
-                    filterScope = Ast.Coalesce(scopeVariable, makeScope());
                 }
             }
 
@@ -235,14 +234,15 @@ namespace IronRuby.Compiler.Ast {
                 enterNestedReturn = leaveNestedReturn = Ast.Empty();
             }
 
+            // No handler for the exceptions that leave the block: it used to have one whose filter captured
+            // their backtrace, but a filter is a catch and a rethrow, a CLR exception dispatch of its own per
+            // block an exception leaves (see MethodDefinition.TransformBody, which does the same).
             MSA.Expression body = AstUtils.Try(
                 enterNestedReturn,
                 paramInit,
                 traceCall,
                 Ast.Label(redoLabel),
                 bodyTry
-            ).Filter(filterVariable = Ast.Parameter(typeof(Exception), "#e"),
-                Methods.FilterBlockException.OpCall(filterScope, filterVariable)
             ).Finally(
                 AstUtils.Try(traceReturn).Finally(
                     leaveNestedReturn,

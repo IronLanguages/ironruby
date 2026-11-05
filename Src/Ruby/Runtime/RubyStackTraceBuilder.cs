@@ -70,7 +70,28 @@ namespace IronRuby.Runtime {
         private RubyStackTraceBuilder(CapturedTrace/*!*/ captured)
             : this(captured.Context, captured.Encoding) {
             _interpretedFrames = captured.InterpretedFrames;
-            AddExceptionBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace, captured.IsCatchSiteInterpreted);
+            if (captured.IsCatchSiteClr) {
+                AddClrCaughtBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace);
+            } else {
+                AddExceptionBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace, captured.IsCatchSiteInterpreted);
+            }
+        }
+
+        // The catch site is a CLR method (RubyExceptionData.CaptureExceptionTrace(RubyContext)): the throw-site trace ends with
+        // it, and the catch-site walk has it - below the frames of the capture itself - with its callers below it. They go on
+        // from where the throw-site trace ends.
+        private void AddClrCaughtBacktrace(StackTrace/*!*/ throwSiteTrace, StackTrace/*!*/ catchSiteTrace) {
+            var throwFrames = throwSiteTrace.GetFrames();
+            AddBacktrace(throwFrames, 0, false);
+
+            var catchingMethod = throwFrames[throwFrames.Length - 1].GetMethod();
+            var catchFrames = catchSiteTrace.GetFrames();
+            for (int i = 0; i < catchFrames.Length; i++) {
+                if (catchingMethod != null && catchFrames[i].GetMethod() == catchingMethod) {
+                    AddBacktrace(new ArraySegment<StackFrame>(catchFrames, i + 1, catchFrames.Length - i - 1), 0, false);
+                    return;
+                }
+            }
         }
 
         private void AddExceptionBacktrace(StackTrace/*!*/ throwSiteTrace, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) {
@@ -100,6 +121,7 @@ namespace IronRuby.Runtime {
             internal readonly StackTrace CatchSiteTrace;
             internal readonly IList<InterpretedFrameInfo> InterpretedFrames;
             internal readonly bool IsCatchSiteInterpreted;
+            internal readonly bool IsCatchSiteClr;
 
             internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) {
                 Context = context;
@@ -110,6 +132,11 @@ namespace IronRuby.Runtime {
                 InterpretedFrames = GetInterpretedFrames(exception);
                 CatchSiteTrace = catchSiteTrace;
                 IsCatchSiteInterpreted = isCatchSiteInterpreted;
+            }
+
+            internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace/*!*/ clrCatchSiteTrace)
+                : this(context, exception, clrCatchSiteTrace, false) {
+                IsCatchSiteClr = true;
             }
 
             internal RubyArray/*!*/ Build() {

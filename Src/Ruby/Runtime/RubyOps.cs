@@ -3150,20 +3150,6 @@ namespace IronRuby.Runtime {
         //
 
         /// <summary>
-        /// Called in try-filter that wraps the entire body of a block. 
-        /// We just need to capture stack trace, should not filter out any exception.
-        /// </summary>
-        [Emitted]
-        public static bool FilterBlockException(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-            // Flow control (throw/catch, retry, Thread#kill) is never seen by Ruby code, so it needs no
-            // backtrace. One that escaped anyway would still get one at the top level.
-            if (!(exception is StackUnwinder)) {
-                RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
-            }
-            return false;
-        }
-
-        /// <summary>
         /// Called in try-filter that wraps the entire top-level code. 
         /// We just need to capture stack trace, should not filter out any exception.
         /// </summary>
@@ -3224,19 +3210,12 @@ namespace IronRuby.Runtime {
             return false;
         }
 
-        // Ruby method exit filter:
+        // Ruby method exit filter. It only sees MethodUnwinders: the backtrace of any other exception
+        // is captured by whatever handles it (see MethodDefinition.TransformBody).
         [Emitted]
         public static bool IsMethodUnwinderTargetFrame(RubyScope/*!*/ scope, Exception/*!*/ exception) {
             var unwinder = exception as MethodUnwinder;
-            if (unwinder == null) {
-                // see FilterBlockException
-                if (!(exception is StackUnwinder)) {
-                    RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
-                }
-                return false;
-            } else {
-                return unwinder.TargetFrame == scope.FlowControlScope;
-            }
+            return unwinder != null && unwinder.TargetFrame == scope.FlowControlScope;
         }
 
         [Emitted]

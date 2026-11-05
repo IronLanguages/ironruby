@@ -1390,6 +1390,8 @@ namespace IronRuby.StandardLibrary.Oj {
                 }
                 throw pi.State.NewException(pi.ErrClas, MutableString.Create(pi.ErrMsg, RubyEncoding.UTF8));
             } else if (raised != null) {
+                // a throw starts the CLR trace over; this frame is the one that caught it, so the capture still has its callers
+                RubyExceptionData.GetInstance(raised).CaptureExceptionTrace(context);
                 throw raised;
             }
 

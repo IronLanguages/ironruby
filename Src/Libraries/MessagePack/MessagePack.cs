@@ -1804,6 +1804,8 @@ namespace IronRuby.StandardLibrary.MessagePack {
                     return CallProc(proc, arg);
                 } catch (Exception e) {
                     raised = true;
+                    // thrown again once the unpacker unwinds, which starts its CLR trace over:
+                    RubyExceptionData.GetInstance(e).CaptureExceptionTrace(Context);
                     _raised = e;
                     return null;
                 }
