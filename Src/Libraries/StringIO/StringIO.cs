@@ -1045,7 +1045,9 @@ namespace IronRuby.StandardLibrary.StringIO {
             // $_ is frame local, and the frame it belongs in is the caller's - which is why this
             // is not wrapped in Ruby the way the chomp: option once was.
             scope.GetInnerMostClosureScope().LastInputLine = result;
-            self._lineNumber++;
+            if (result != null && limit != 0) {
+                self._lineNumber++;
+            }
 
             return result;
         }
@@ -1377,7 +1379,7 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyMethod("fcntl")]
         public static void FileControl(StringIO/*!*/ self) {
-            throw new NotImplementedError();
+            throw new NotImplementedError("fcntl() function is unimplemented on this machine");
         }
 
         [RubyMethod("fileno")]
