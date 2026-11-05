@@ -1159,6 +1159,19 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             int digits = digitsGiven ? Protocols.CastToFixnum(fixnumCast, n) : 0;
             bool answersInteger = !digitsGiven || (integerAtZeroPrecision && digits <= 0);
 
+            // MRI's VpMidRound counts the rounding position from the start of the number's first 9-digit
+            // word; a position before it rounds to zero in every mode but ceiling and floor - which only
+            // changes ROUND_UP: BigDecimal("0.04").round(-1, :up) and 1e-10.round(1, :up) are 0 in CRuby,
+            // where 0.0004.round(1, :up) is 0.1.
+            if (mode == BigDecimal.RoundingModes.Up && BigDecimal.IsFinite(self) && !BigDecimal.IsZero(self)) {
+                int exponent = self.Exponent;
+                int wordExponent = exponent > 0 ? (exponent + IronRuby.StandardLibrary.BigDecimal.Fraction.BASE_FIG - 1) / IronRuby.StandardLibrary.BigDecimal.Fraction.BASE_FIG : -((-exponent) / IronRuby.StandardLibrary.BigDecimal.Fraction.BASE_FIG);
+                if ((long)digits + (long)wordExponent * IronRuby.StandardLibrary.BigDecimal.Fraction.BASE_FIG < 0) {
+                    var zero = BigDecimal.LimitPrecision(GetConfig(context), self, digits, BigDecimal.RoundingModes.Down);
+                    return answersInteger ? BigDecimal.ToInteger(GetConfig(context), zero) : zero;
+                }
+            }
+
             if (!answersInteger) {
                 return BigDecimal.LimitPrecision(GetConfig(context), self, digits, mode);
             }
@@ -1194,7 +1207,10 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public static object Round(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, BigDecimal/*!*/ self,
             [Optional]object n, [Optional]object mode) {
 
-            return LimitPrecision(fixnumCast, context, self, n, ToRoundingMode(fixnumCast, context, mode), true);
+            // round, and round(n) for n <= 0, answer an Integer; given a rounding mode as well, round(n, mode)
+            // answers a BigDecimal whatever n is, as in MRI
+            bool modeGiven = !(mode == null || mode is Missing);
+            return LimitPrecision(fixnumCast, context, self, n, ToRoundingMode(fixnumCast, context, mode), !modeGiven);
         }
 
         [RubyMethod("truncate")]
