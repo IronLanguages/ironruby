@@ -15,6 +15,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Numerics;
 using System.Text;
@@ -66,8 +67,25 @@ namespace IronRuby.StandardLibrary.Json {
             internal bool AllowNan;
             internal bool AsciiOnly;
             internal bool ScriptSafe;
+            internal int Depth;
 
             internal static readonly GeneratorOptions Compact = new GeneratorOptions();
+
+            /// <summary>The options as a Hash, for a JSON::State handed to an object's own to_json.</summary>
+            internal Hash/*!*/ ToHash(RubyContext/*!*/ context, int depth) {
+                var hash = new Hash(context);
+                hash[context.CreateAsciiSymbol("indent")] = MutableString.Create(Indent, RubyEncoding.UTF8);
+                hash[context.CreateAsciiSymbol("space")] = MutableString.Create(Space, RubyEncoding.UTF8);
+                hash[context.CreateAsciiSymbol("space_before")] = MutableString.Create(SpaceBefore, RubyEncoding.UTF8);
+                hash[context.CreateAsciiSymbol("object_nl")] = MutableString.Create(ObjectNl, RubyEncoding.UTF8);
+                hash[context.CreateAsciiSymbol("array_nl")] = MutableString.Create(ArrayNl, RubyEncoding.UTF8);
+                hash[context.CreateAsciiSymbol("allow_nan")] = AllowNan;
+                hash[context.CreateAsciiSymbol("ascii_only")] = AsciiOnly;
+                hash[context.CreateAsciiSymbol("script_safe")] = ScriptSafe;
+                hash[context.CreateAsciiSymbol("max_nesting")] = MaxNesting;
+                hash[context.CreateAsciiSymbol("depth")] = depth;
+                return hash;
+            }
 
             internal static GeneratorOptions/*!*/ Pretty() {
                 return new GeneratorOptions { Indent = "  ", Space = " ", ObjectNl = "\n", ArrayNl = "\n" };
@@ -89,6 +107,7 @@ namespace IronRuby.StandardLibrary.Json {
                     AllowNan = defaults.AllowNan,
                     AsciiOnly = defaults.AsciiOnly,
                     ScriptSafe = defaults.ScriptSafe,
+                    Depth = defaults.Depth,
                 };
 
                 foreach (var entry in hash) {
@@ -103,6 +122,7 @@ namespace IronRuby.StandardLibrary.Json {
                         case "ascii_only": result.AsciiOnly = RubyOps.IsTrue(entry.Value); break;
                         case "script_safe":
                         case "escape_slash": result.ScriptSafe = RubyOps.IsTrue(entry.Value); break;
+                        case "depth": if (entry.Value is int) { result.Depth = (int)entry.Value; } break;
                         case "max_nesting":
                             if (entry.Value is int) {
                                 result.MaxNesting = (int)entry.Value;
@@ -132,31 +152,55 @@ namespace IronRuby.StandardLibrary.Json {
 
         [RubyMethod("generate", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("dump", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ Generate(ConversionStorage<MutableString>/*!*/ toS, object self, object obj,
-            [Optional]object opts) {
+        public static MutableString/*!*/ Generate(ConversionStorage<MutableString>/*!*/ toS, ToJsonHookStorage/*!*/ toJson,
+            object self, object obj, [Optional]object opts) {
 
-            var writer = new Writer(toS, GeneratorOptions.Parse(opts, GeneratorOptions.Compact));
-            writer.WriteValue(obj, 0);
+            var options = GeneratorOptions.Parse(opts, GeneratorOptions.Compact);
+            var writer = new Writer(toS, toJson, self, options);
+            writer.WriteValue(obj, options.Depth);
             return MutableString.Create(writer.Builder.ToString(), RubyEncoding.UTF8);
         }
 
         [RubyMethod("pretty_generate", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ PrettyGenerate(ConversionStorage<MutableString>/*!*/ toS, object self, object obj,
-            [Optional]object opts) {
+        public static MutableString/*!*/ PrettyGenerate(ConversionStorage<MutableString>/*!*/ toS, ToJsonHookStorage/*!*/ toJson,
+            object self, object obj, [Optional]object opts) {
 
-            var writer = new Writer(toS, GeneratorOptions.Parse(opts, GeneratorOptions.Pretty()));
-            writer.WriteValue(obj, 0);
+            var options = GeneratorOptions.Parse(opts, GeneratorOptions.Pretty());
+            var writer = new Writer(toS, toJson, self, options);
+            writer.WriteValue(obj, options.Depth);
             return MutableString.Create(writer.Builder.ToString(), RubyEncoding.UTF8);
+        }
+
+        /// <summary>The call site of JSON.__ir_to_json__(obj, state options, depth), in json.rb.</summary>
+        public sealed class ToJsonHookStorage : CallSiteStorage<Func<CallSite, object, object, object, object, object>> {
+            public ToJsonHookStorage(RubyContext/*!*/ context) : base(context) { }
         }
 
         private sealed class Writer {
             internal readonly StringBuilder/*!*/ Builder = new StringBuilder();
             private readonly ConversionStorage<MutableString>/*!*/ _toS;
+            private readonly ToJsonHookStorage/*!*/ _toJson;
+            private readonly object _jsonModule;
             private readonly GeneratorOptions/*!*/ _options;
 
-            internal Writer(ConversionStorage<MutableString>/*!*/ toS, GeneratorOptions/*!*/ options) {
+            internal Writer(ConversionStorage<MutableString>/*!*/ toS, ToJsonHookStorage/*!*/ toJson, object jsonModule,
+                GeneratorOptions/*!*/ options) {
                 _toS = toS;
+                _toJson = toJson;
+                _jsonModule = jsonModule;
                 _options = options;
+            }
+
+            /// <summary>
+            /// What the object's own to_json makes of it, or null when it has none: the json gem calls
+            /// obj.to_json(state) for anything that is not exactly one of the core classes, and its
+            /// generic Object#to_json is the object's to_s as a String. Without this a class with a
+            /// to_json of its own - a serializer, ActiveSupport's as_json - was written as its inspect.
+            /// </summary>
+            private MutableString TryOwnToJson(object obj, int depth) {
+                var site = _toJson.GetCallSite("__ir_to_json__", 3);
+                object result = site.Target(site, _jsonModule, obj, _options.ToHash(_toJson.Context, depth), depth);
+                return result as MutableString;
             }
 
             // As the json gem counts it: each Array and Hash is a level, checked as it is entered.
@@ -197,7 +241,7 @@ namespace IronRuby.StandardLibrary.Json {
                 }
 
                 var str = obj as MutableString;
-                if (str != null) {
+                if (str != null && str.GetType() == typeof(MutableString)) {
                     WriteString(StringContent(str));
                     return;
                 }
@@ -209,19 +253,34 @@ namespace IronRuby.StandardLibrary.Json {
                 }
 
                 var hash = obj as Hash;
-                if (hash != null) {
+                if (hash != null && hash.GetType() == typeof(Hash)) {
                     WriteHash(hash, depth);
                     return;
                 }
 
                 var list = obj as IList<object>;
-                if (list != null) {
+                if (list != null && list.GetType() == typeof(RubyArray)) {
                     WriteArray(list, depth);
                     return;
                 }
 
-                // anything else is its to_s as a JSON string, as Object#to_json is in the json gem
-                WriteString(StringContent(Protocols.ConvertToString(_toS, obj)));
+                MutableString own = TryOwnToJson(obj, depth);
+                if (own != null) {
+                    Builder.Append(StringContent(own));
+                    return;
+                }
+
+                // a subclass of the core classes without a to_json of its own is written as they are
+                if (str != null) {
+                    WriteString(StringContent(str));
+                } else if (hash != null) {
+                    WriteHash(hash, depth);
+                } else if (list != null) {
+                    WriteArray(list, depth);
+                } else {
+                    // anything else is its to_s as a JSON string, as Object#to_json is in the json gem
+                    WriteString(StringContent(Protocols.ConvertToString(_toS, obj)));
+                }
             }
 
             private void WriteHash(Hash/*!*/ hash, int depth) {

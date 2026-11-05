@@ -66,9 +66,6 @@ module JSON
     end
   end
 
-  # Convenience wrappers the C# module does not need to provide itself.
-  def self.pretty_unparse(obj, opts = nil); pretty_generate(obj, opts); end
-  def self.unparse(obj, opts = nil); generate(obj, opts); end
 
   # MRI declares these with module_function, so "include JSON" hands them on as
   # private instance methods - which is how JSON's own test suite calls parse().
@@ -79,8 +76,18 @@ module JSON
   end
 end
 
+# The json gem's generic to_json methods (generator/generator_methods): the core classes generate
+# themselves, and any other object is its to_s as a JSON string. Object#to_json used to be
+# JSON.generate(self), so a to_json that calls super with a State - ActiveSupport's does - went
+# round JSON.generate and back into itself.
 class Object
-  def to_json(*args); JSON.generate(self, *args); end unless method_defined?(:to_json)
+  def to_json(state = nil, *) = to_s.to_json(state)
+end
+
+[Hash, Array, String, Integer, Float, NilClass, TrueClass, FalseClass].each do |klass|
+  klass.class_eval do
+    def to_json(state = nil, *) = JSON.generate(self, state)
+  end
 end
 
 module JSON
@@ -187,6 +194,61 @@ module JSON
   # JSON.state is how upstream hands out the generator's state class.
   def self.state
     State
+  end
+
+  # The C# generator takes its options as a Hash; upstream's also takes a State, or anything
+  # with #to_hash - a State's options were dropped.
+  class << self
+    alias_method :__ir_generate__, :generate
+    alias_method :__ir_pretty_generate__, :pretty_generate
+
+    def generate(obj, opts = nil)
+      __ir_generate__(obj, __ir_options__(opts))
+    end
+
+    def pretty_generate(obj, opts = nil)
+      __ir_pretty_generate__(obj, __ir_options__(opts))
+    end
+
+    def unparse(obj, opts = nil) = generate(obj, opts)
+    def pretty_unparse(obj, opts = nil) = pretty_generate(obj, opts)
+
+    private
+
+    def __ir_options__(opts)
+      case opts
+      when nil, ::Hash then opts
+      else
+        if opts.is_a?(State) then opts.to_h
+        elsif opts.respond_to?(:to_hash) then opts.to_hash
+        else ::Kernel.raise ::TypeError, "can't convert #{opts.class} into Hash"
+        end
+      end
+    end
+  end
+
+  GENERIC_TO_JSON = [::Object, ::Hash, ::Array, ::String, ::Integer, ::Float, ::NilClass, ::TrueClass, ::FalseClass].
+    map { |klass| klass.instance_method(:to_json) }.freeze
+  private_constant :GENERIC_TO_JSON
+
+  # Called by the C# generator for an object that is not exactly one of the core classes, the
+  # way the json gem calls obj.to_json(state) for one: the String the object's own to_json makes,
+  # or nil when its to_json is one of the generic ones above: a subclass of a core class is then
+  # written as that class, and anything else as its to_s.
+  def self.__ir_to_json__(obj, options, depth)
+    to_json = begin
+      ::Kernel.instance_method(:method).bind_call(obj, :to_json)
+    rescue ::NameError
+      return nil
+    end
+    return nil if GENERIC_TO_JSON.include?(to_json.unbind)
+    state = State.new(options)
+    state.depth = depth
+    result = obj.to_json(state)
+    unless result.is_a?(::String)
+      ::Kernel.raise ::TypeError, "wrong argument type #{result.class} (expected String)"
+    end
+    result
   end
 
 end
