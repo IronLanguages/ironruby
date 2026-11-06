@@ -847,6 +847,35 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Whether MRI case maps the encoding's characters by Unicode's rules, context and
+        /// all: the Unicode encodings, UTF-8's carrier variants and CESU-8.
+        /// </summary>
+        public bool HasUnicodeCaseMapping {
+            get {
+                return IsUnicodeEncoding || CodePage == CodePageCESU8 || CodePage == CodePageUTF8DoCoMo ||
+                    CodePage == CodePageUTF8KDDI || CodePage == CodePageUTF8SoftBank;
+            }
+        }
+
+        /// <summary>
+        /// Whether MRI case maps characters beyond ASCII one at a time, as Onigmo's tables do
+        /// for the ISO-8859 and Windows-125x encodings that have letters with case. Every other
+        /// encoding but the Unicode ones (KOI8-R, the IBM code pages, Shift_JIS, GB18030, ...)
+        /// maps ASCII letters only.
+        /// </summary>
+        public bool HasSingleByteCaseMapping {
+            get {
+                switch (CodePage) {
+                    case 28591: case 28592: case 28593: case 28594: case 28595: case 28597: case 28599:
+                    case CodePageISO8859_10: case 28603: case CodePageISO8859_14: case 28605: case CodePageISO8859_16:
+                    case 1250: case 1251: case 1252: case 1253: case 1254: case 1257:
+                        return true;
+                }
+                return false;
+            }
+        }
+
         Expression/*!*/ IExpressionSerializable.CreateExpression() {
             // TODO: use static fields
             return Methods.CreateEncoding.OpCall(Expression.Constant(CodePage));

@@ -5897,20 +5897,25 @@ class String
       end
     end
 
-    # A non-ASCII-compatible encoding (UTF-16, UTF-7, ...) is never split: MRI
-    # has to transcode the separator first, which either fails outright or
-    # cannot match. The transcode is still attempted so that an encoding with
-    # no converter raises Encoding::ConverterNotFoundError.
-    unless encoding.ascii_compatible?
-      separator.encode(encoding) if separator
-      return [] if empty?
-      return [__ir_each_line_all__(nil)]
+    # An ASCII incompatible encoding (UTF-16, UTF-32): MRI transcodes $/, and
+    # paragraph mode's "\n\n", into the receiver's encoding (an encoding with no
+    # converter raises Encoding::ConverterNotFoundError), while any other
+    # separator has to be compatible with the receiver as it is.
+    newline = "\n"
+    unless encoding.ascii_compatible? || separator.nil?
+      if args.empty? || separator.empty?
+        newline = newline.encode(encoding)
+        separator = separator.encode(encoding)
+      elsif !::Encoding.compatible?(self, separator)
+        ::Kernel.raise(::Encoding::CompatibilityError,
+          "incompatible character encodings: #{encoding} and #{separator.encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : separator.encoding}")
+      end
     end
 
     return empty? ? [] : [__ir_chomp_line__(__ir_each_line_all__(nil), nil, chomp)] if separator.nil?
 
     if separator.empty?
-      lines = __ir_paragraphs__(__ir_each_line_all__("\n"))
+      lines = __ir_paragraphs__(__ir_each_line_all__(newline), newline)
     else
       lines = __ir_each_line_all__(separator)
     end
@@ -5930,12 +5935,13 @@ class String
   # Paragraph mode: a paragraph ends at the first blank line after some
   # content, that blank line is kept, and every further blank line of the run
   # is dropped.
-  def __ir_paragraphs__(physical)
+  def __ir_paragraphs__(physical, newline)
     result = []
     buffer = nil
     skipping = false
+    crlf = newline.encoding.ascii_compatible? ? "\r\n" : "\r\n".encode(newline.encoding)
     physical.each do |line|
-      blank = (line == "\n" || line == "\r\n")
+      blank = (line == newline || line == crlf)
       if skipping
         next if blank
         skipping = false
@@ -5956,6 +5962,16 @@ class String
 
   def __ir_chomp_line__(line, separator, chomp)
     return line unless chomp
+    unless line.encoding.ascii_compatible?
+      # MRI takes off the separator alone: "b\r\n" in UTF-16 chomps to "b\r"
+      return line if separator.nil?
+      if separator.empty?
+        newline = "\n".encode(line.encoding)
+        line = line[0...-1] while line.end_with?(newline)
+        return line
+      end
+      return line.end_with?(separator) ? line[0, line.length - separator.length] : line
+    end
     if separator.nil? || separator == "\n"
       line = line[0...-1] if line.end_with?("\n")
       line = line[0...-1] if line.end_with?("\r")

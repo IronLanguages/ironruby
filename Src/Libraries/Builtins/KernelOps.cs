@@ -391,7 +391,7 @@ namespace IronRuby.Builtins {
             // MRI complains about the string before it complains about the radix, so
             // Integer("\n", 1) is "invalid value", not "invalid radix".
             if (!HasIntegerDigits(str)) {
-                return raise ? throw InvalidIntegerValue(str) : null;
+                return raise ? throw InvalidIntegerValue(value) : null;
             }
 
             // Only a positive radix is range-checked; a negative one is a hint, and an
@@ -404,7 +404,7 @@ namespace IronRuby.Builtins {
             if (TryParseRubyInteger(str, radix, out result)) {
                 return result;
             }
-            return raise ? throw InvalidIntegerValue(str) : null;
+            return raise ? throw InvalidIntegerValue(value) : null;
         }
 
         #endregion
@@ -426,34 +426,12 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// MRI quotes the offending string with control characters escaped and everything
-        /// else passed through, so "\n" reads as \n but an accented letter stays itself.
+        /// MRI quotes the offending string as #inspect does: control characters and bytes that
+        /// are not valid in its encoding escaped ("1\xFF"), everything else passed through.
         /// </summary>
-        private static Exception/*!*/ InvalidIntegerValue(string/*!*/ str) {
-            var text = new StringBuilder(str.Length + 8);
-            foreach (char c in str) {
-                switch (c) {
-                    case '\n': text.Append("\\n"); break;
-                    case '\t': text.Append("\\t"); break;
-                    case '\r': text.Append("\\r"); break;
-                    case '\f': text.Append("\\f"); break;
-                    case '\v': text.Append("\\v"); break;
-                    case '\a': text.Append("\\a"); break;
-                    case '\b': text.Append("\\b"); break;
-                    case (char)27: text.Append("\\e"); break;
-                    case '"': text.Append("\\\""); break;
-                    case '\\': text.Append("\\\\"); break;
-                    default:
-                        // the other control characters the way #inspect spells them
-                        if (c < 0x20 || c == 0x7f) {
-                            text.Append("\\u").Append(((int)c).ToString("X4", System.Globalization.CultureInfo.InvariantCulture));
-                        } else {
-                            text.Append(c);
-                        }
-                        break;
-                }
-            }
-            return RubyExceptions.CreateArgumentError("invalid value for Integer(): \"{0}\"", text.ToString());
+        private static Exception/*!*/ InvalidIntegerValue(MutableString/*!*/ value) {
+            return RubyExceptions.CreateArgumentError("invalid value for Integer(): {0}",
+                MutableStringOps.GetQuotedStringRepresentation(value, false, '"'));
         }
 
         private static bool IsIntegerWhitespace(char c) {
@@ -3001,9 +2979,7 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ Sprintf(StringFormatterSiteStorage/*!*/ storage,
             object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
 
-            if (!format.Encoding.IsAsciiIdentity) {
-                throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", format.Encoding.Name);
-            }
+            // StringFormatter refuses a format in an ASCII incompatible encoding
             return new StringFormatter(storage, format.ConvertToString(), format.Encoding, args).Format();
         }
 

@@ -147,6 +147,12 @@ namespace IronRuby.Builtins {
         internal StringFormatter(RubyContext/*!*/ context, string/*!*/ format, RubyEncoding/*!*/ encoding, IList/*!*/ data) {
             Assert.NotNull(context, format, data, encoding);
 
+            // MRI's rb_str_format reads the format as ASCII directives, so it has to be ASCII
+            // compatible itself, even an empty one
+            if (!encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateAsciiIncompatibleEncodingError(encoding);
+            }
+
             _context = context;
             _format = format;
             _data = data;

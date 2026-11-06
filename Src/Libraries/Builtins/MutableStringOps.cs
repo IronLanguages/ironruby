@@ -1420,6 +1420,40 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// The mapping MRI gives the string's characters. Unicode encodings map by Unicode's
+        /// rules; the ISO-8859 and Windows-125x encodings map one character at a time, and only
+        /// to characters they have ("\xFF" in ISO-8859-1, ÿ, stays: Ÿ is not in it); every other
+        /// encoding maps ASCII letters only.
+        /// </summary>
+        private static string/*!*/ MapCase(MutableString/*!*/ self, string/*!*/ source, CaseMappingKind kind, CaseMappingOptions flags) {
+            RubyEncoding encoding = self.Encoding;
+            if (encoding.HasUnicodeCaseMapping || (flags & CaseMappingOptions.Ascii) != 0) {
+                return UnicodeCaseMapping.Apply(source, kind, flags);
+            }
+            if (!encoding.HasSingleByteCaseMapping) {
+                return UnicodeCaseMapping.Apply(source, kind, flags | CaseMappingOptions.Ascii);
+            }
+
+            StringBuilder result = null;
+            for (int i = 0; i < source.Length; i++) {
+                string c = source.Substring(i, 1);
+                CaseMappingKind charKind = (kind == CaseMappingKind.Capitalize && i > 0) ? CaseMappingKind.DownCase : kind;
+                string mapped = UnicodeCaseMapping.Apply(c, charKind, flags);
+                if (mapped != c && !CanEncode(encoding, mapped)) {
+                    // A mapping the encoding cannot spell leaves the character as it is: ÿ upcased
+                    // in ISO-8859-1, ΐ in ISO-8859-7. Onigmo's tables make one exception, the
+                    // Turkish İ, which lowercases to a plain "i" rather than to "i̇".
+                    mapped = (c[0] == 'İ') ? "i" : c;
+                }
+                if (result == null && mapped != c) {
+                    result = new StringBuilder(source, 0, i, source.Length + 1);
+                }
+                result?.Append(mapped);
+            }
+            return (result != null) ? result.ToString() : source;
+        }
+
         private static MutableString/*!*/ CaseMap(MutableString/*!*/ self, CaseMappingKind kind,
             object[]/*!*/ options, bool foldingAllowed) {
 
@@ -1428,7 +1462,7 @@ namespace IronRuby.Builtins {
 
             string source = TryDecodeForCaseMapping(self);
             if (source != null) {
-                return MutableString.Create(UnicodeCaseMapping.Apply(source, kind, flags), self.Encoding);
+                return MutableString.Create(MapCase(self, source, kind, flags), self.Encoding);
             }
 
             byte[] bytes = self.ToByteArray();
@@ -1446,7 +1480,7 @@ namespace IronRuby.Builtins {
 
             string source = TryDecodeForCaseMapping(self);
             if (source != null) {
-                string mapped = UnicodeCaseMapping.Apply(source, kind, flags);
+                string mapped = MapCase(self, source, kind, flags);
                 if (ReferenceEquals(mapped, source)) {
                     return null;
                 }
@@ -1502,7 +1536,7 @@ namespace IronRuby.Builtins {
             }
             string source = TryDecodeForCaseMapping(str);
             if (source != null) {
-                return UnicodeCaseMapping.Fold(source);
+                return MapCase(str, source, CaseMappingKind.DownCase, CaseMappingOptions.Fold);
             }
             byte[] bytes = str.ToByteArray();
             byte[] mapped = MapAsciiBytes(bytes, CaseMappingKind.DownCase) ?? bytes;
@@ -1538,6 +1572,10 @@ namespace IronRuby.Builtins {
             MutableString str = (other is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, other);
             if (str == null || !AreComparableEncodings(self, str)) {
                 return null;
+            }
+            // MRI folds both with String#downcase(:fold), which refuses a broken string
+            if (self.ContainsInvalidCharacters() || str.ContainsInvalidCharacters()) {
+                throw RubyExceptions.CreateArgumentError("input string invalid");
             }
             return ScriptingRuntimeHelpers.BooleanToObject(FoldForComparison(self) == FoldForComparison(str));
         }
@@ -1594,23 +1632,18 @@ namespace IronRuby.Builtins {
             [DefaultProtocol]int length,
             [Optional, DefaultProtocol]MutableString padding) {
 
-            if (padding != null && padding.IsEmpty) {
-                throw RubyExceptions.CreateArgumentError("zero width padding");
+            padding ??= _DefaultPadding;
+            int count = JustifyCount(self, length, padding);
+            if (count <= 0) {
+                return self.CloneDerived();
             }
 
-            if (padding == null) {
-                padding = _DefaultPadding;
-            } else {
-                self.RequireCompatibleEncoding(padding);
-            }
+            int left = count / 2;
+            int right = count - left;
 
-            int selfLength = GetCharacterLength(self);
-            if (selfLength >= length) {
-                return self;
+            if (padding == _DefaultPadding && !self.Encoding.IsAsciiIdentity) {
+                return PadWithSpaceBytes(self, left, right);
             }
-
-            int left = (length - selfLength) / 2;
-            int right = length - selfLength - left;
 
             // Built by appending strings rather than characters, so that padding of another
             // encoding decides the result's along with the receiver's: "abc" in IBM437 centred
@@ -1620,6 +1653,34 @@ namespace IronRuby.Builtins {
             result.Append(self);
             AppendPadding(result, padding, right);
             return result;
+        }
+
+        /// <summary>
+        /// How many characters of padding #center, #ljust or #rjust add, checking the padding the
+        /// way MRI's rb_str_justify does: its encoding first, so that the error names the
+        /// receiver's encoding first, then its width.
+        /// </summary>
+        private static int JustifyCount(MutableString/*!*/ self, int width, MutableString/*!*/ padding) {
+            if (padding != _DefaultPadding) {
+                self.RequireCompatibleEncoding(padding);
+                if (padding.IsEmpty) {
+                    throw RubyExceptions.CreateArgumentError("zero width padding");
+                }
+            }
+            return width - GetCharacterLength(self);
+        }
+
+        /// <summary>
+        /// MRI's rb_str_justify without a pad argument writes its default pad, " ", as the one
+        /// byte 0x20 whatever the receiver's encoding, and never checks the two are compatible:
+        /// "abc".encode("UTF-16LE").ljust(5) is the six bytes of "abc" and then two 0x20 bytes.
+        /// </summary>
+        private static MutableString/*!*/ PadWithSpaceBytes(MutableString/*!*/ self, int left, int right) {
+            byte[] bytes = self.ToByteArray();
+            var result = new byte[left + bytes.Length + right];
+            result.AsSpan().Fill((byte)' ');
+            bytes.CopyTo(result, left);
+            return MutableString.CreateBinary(result, self.Encoding);
         }
 
         /// <summary>Appends the padding, repeated and then cut short, until count characters are added.</summary>
@@ -1670,7 +1731,13 @@ namespace IronRuby.Builtins {
             return str.GetSlice(0, end);
         }
 
-        private static MutableString InternalChomp(MutableString/*!*/ self, MutableString separator) {
+        /// <summary>
+        /// <paramref name="defaultSeparator"/> is set when the separator is $/ rather than an
+        /// argument: MRI's chompped_length takes "\n" for a newline in the receiver's own encoding
+        /// then, and otherwise only when it is a whole character of that encoding - "\n" is not
+        /// one in UTF-16 - and anything else has to be compatible with the receiver.
+        /// </summary>
+        private static MutableString InternalChomp(MutableString/*!*/ self, MutableString separator, bool defaultSeparator) {
             if (separator == null) {
                 return self.CloneDerived();
             }
@@ -1683,7 +1750,12 @@ namespace IronRuby.Builtins {
             // Remove single trailing CR/LFs
             MutableString result = self.CloneDerived();
             int length = result.GetCharCount();
-            if (separator.StartsWith('\n') && separator.GetLength() == 1) {
+            bool newline = separator.StartsWith('\n') && separator.GetLength() == 1 &&
+                (defaultSeparator || self.Encoding.IsAsciiIdentity || separator.Encoding == self.Encoding);
+            if (!newline) {
+                self.RequireCompatibleEncoding(separator);
+            }
+            if (newline) {
                 if (length > 1 && result.GetChar(length - 2) == '\r' && result.GetChar(length - 1) == '\n') {
                     result.Remove(length - 2, 2);
                 } else if (length > 0 && (self.GetChar(length - 1) == '\n' || result.GetChar(length - 1) == '\r')) {
@@ -1704,22 +1776,26 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("chomp")]
         public static MutableString/*!*/ Chomp(RubyContext/*!*/ context, MutableString/*!*/ self) {
-            return InternalChomp(self, context.InputSeparator);
+            return InternalChomp(self, context.InputSeparator, true);
         }
 
         [RubyMethod("chomp")]
         public static MutableString/*!*/ Chomp(MutableString/*!*/ self, [DefaultProtocol]MutableString separator) {
-            return InternalChomp(self, separator);
+            return InternalChomp(self, separator, false);
         }
 
         [RubyMethod("chomp!")]
         public static MutableString/*!*/ ChompInPlace(RubyContext/*!*/ context, MutableString/*!*/ self) {
-            return ChompInPlace(self, context.InputSeparator);
+            return ChompInPlace(self, context.InputSeparator, true);
         }
 
         [RubyMethod("chomp!")]
         public static MutableString ChompInPlace(MutableString/*!*/ self, [DefaultProtocol]MutableString separator) {
-            MutableString result = InternalChomp(self, separator);
+            return ChompInPlace(self, separator, false);
+        }
+
+        private static MutableString ChompInPlace(MutableString/*!*/ self, MutableString separator, bool defaultSeparator) {
+            MutableString result = InternalChomp(self, separator, defaultSeparator);
 
             if (result.Equals(self) || result == null) {
                 self.RequireNotFrozen();
@@ -2252,10 +2328,19 @@ namespace IronRuby.Builtins {
                     to = toStr.Context.GetRubyEncoding(toEncodingName);
                 }
             } catch (ArgumentException) {
-                throw new ConverterNotFoundError(RubyExceptions.FormatMessage("code converter not found ({0} to {1})",
-                    (fromEncodingName != null) ? fromEncodingName.ToAsciiString() : from.Name, 
-                    (toEncodingName != null) ? toEncodingName.ToAsciiString() : to.Name
-                ));
+                string fromName = (fromEncodingName != null) ? fromEncodingName.ToAsciiString() : from.Name;
+                string toName = (toEncodingName != null) ? toEncodingName.ToAsciiString() : to?.Name ?? "";
+                if (fromName.Length != 0 && toName.Length != 0) {
+                    throw new ConverterNotFoundError(RubyExceptions.FormatMessage("code converter not found ({0} to {1})", fromName, toName));
+                }
+                if (fromName.Length != 0 || toName.Length != 0) {
+                    // MRI names only the encoding that is there, and the decorators it was to run
+                    var decorators = TranscodeSettings.Parse(toStr.Context, toHash, options, self.Encoding).DecoratorNames();
+                    throw new ConverterNotFoundError("code converter not found (" + (fromName.Length != 0 ? fromName : toName) +
+                        (decorators.Length != 0 ? " with " + decorators : "") + ")");
+                }
+                // "" to "" converts nothing
+                from = to = self.Encoding;
             }
 
             self.RequireNotFrozen();
@@ -2307,6 +2392,23 @@ namespace IronRuby.Builtins {
             internal object Fallback;
             internal int XmlMode;           // 0 none, 't' text, 'a' attr
             internal int Newline;           // 0 none, 'u' universal, 'r' cr, 'c' crlf
+
+            /// <summary>The decorators, named and ordered as MRI's error messages list them.</summary>
+            internal string/*!*/ DecoratorNames() {
+                var names = new List<string>();
+                switch (Newline) {
+                    case 'u': names.Add("universal_newline"); break;
+                    case 'c': names.Add("crlf_newline"); break;
+                    case 'r': names.Add("cr_newline"); break;
+                }
+                if (XmlMode == 't') {
+                    names.Add("xml_text");
+                } else if (XmlMode == 'a') {
+                    names.Add("xml_attr_content");
+                    names.Add("xml_attr_quote");
+                }
+                return String.Join(",", names);
+            }
 
             /// <summary>
             /// MRI's default replacement is U+FFFD when the target can hold it and "?" otherwise.
@@ -2680,6 +2782,10 @@ namespace IronRuby.Builtins {
             }
 
             return result.ToString();
+        }
+
+        private static bool CanEncode(RubyEncoding/*!*/ encoding, string/*!*/ str) {
+            return CanEncode(encoding.StrictEncoding, str.ToCharArray(), str.Length);
         }
 
         private static bool CanEncode(Encoding/*!*/ encoder, char[]/*!*/ buffer, int charCount) {
@@ -5047,17 +5153,16 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ LeftJustify(MutableString/*!*/ self, 
             [DefaultProtocol]int width, [DefaultProtocol, NotNull]MutableString/*!*/ padding) {
 
-            if (padding.IsEmpty) {
-                throw RubyExceptions.CreateArgumentError("zero width padding");
-            }
-
             // Characters, not bytes: MutableString.Length is the content's own count, which for a
             // string held as bytes is its bytesize. "  ü-umlaut  ".ljust(13) is 13 bytes but 12
             // characters, so measuring in bytes left it unpadded - the width of every non-ASCII
             // cell terminal-table draws came out one short.
-            int count = width - GetCharacterLength(self);
+            int count = JustifyCount(self, width, padding);
             if (count <= 0) {
-                return self;
+                return self.CloneDerived();
+            }
+            if (padding == _DefaultPadding && !self.Encoding.IsAsciiIdentity) {
+                return PadWithSpaceBytes(self, 0, count);
             }
 
             MutableString result = self.CloneDerived();
@@ -5079,14 +5184,13 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ RightJustify(MutableString/*!*/ self, 
             [DefaultProtocol]int width, [DefaultProtocol, NotNull]MutableString/*!*/ padding) {
 
-            if (padding.IsEmpty) {
-                throw RubyExceptions.CreateArgumentError("zero width padding");
-            }
-
             // Characters, not bytes - see #ljust.
-            int count = width - GetCharacterLength(self);
+            int count = JustifyCount(self, width, padding);
             if (count <= 0) {
-                return self;
+                return self.CloneDerived();
+            }
+            if (padding == _DefaultPadding && !self.Encoding.IsAsciiIdentity) {
+                return PadWithSpaceBytes(self, count, 0);
             }
 
             MutableString result = self.CreateDerived();

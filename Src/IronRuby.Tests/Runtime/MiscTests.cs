@@ -2308,6 +2308,142 @@ t { ec.convert(""b"") }
 ""ArgumentError: converter already finished""
 ");
         }
+        /// <summary>
+        /// Undefined conversions on the first leg: ASCII-8BIT's high bytes, and the bytes a
+        /// Windows/ISO code page leaves undefined; the messages that name the encodings.
+        /// </summary>
+        public void Encoding_Converter2() {
+            TestOutput(@"
+require 'ruby4'
+def t
+  r = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+  p r
+end
+t { Encoding::Converter.new(""BINARY"", ""UTF-8"").convert(""\xff"".b) }
+t { Encoding::Converter.new(""BINARY"", ""UTF-8"", undef: :replace).convert(""a\xffb"".b) }
+t { ec = Encoding::Converter.new(""BINARY"", ""UTF-8""); s = ""a\xffb"".b; [ec.primitive_convert(s, d = +""""), d, s, ec.primitive_errinfo] }
+t { ec = Encoding::Converter.new(""Windows-1252"", ""UTF-8""); s = ""a\x81b"".force_encoding(""Windows-1252""); [ec.primitive_convert(s, d = +""""), d, s, ec.primitive_errinfo] }
+t { ""a\x81b"".force_encoding(""Windows-1252"").encode(""UTF-8"") }
+t { ""\xaa"".force_encoding(""Windows-1253"").encode(""UTF-8"") }
+t { ""\x80\xe9"".force_encoding(""Windows-1252"").encode(""UTF-8"") }
+t { ""\u0081"".encode(""Windows-1252"") }
+t { ""あ"".encode(""Windows-1252"") }
+t { ""\x81"".force_encoding(""Windows-1252"").valid_encoding? }
+t { ""\xff"".b.encode(""Shift_JIS"") }
+t { ""a"".encode("""", crlf_newline: true) }
+t { ""a"".encode(""UTF-8"", """", xml: :attr) }
+t { ""a"".encode("""") }
+t { Integer(""1\xFF"") }
+t { Integer(""1\xFF"".b, 16) }
+t { Integer(""1é\0"") }
+", @"
+""Encoding::UndefinedConversionError: \""\\xFF\"" from ASCII-8BIT to UTF-8""
+""a�b""
+[:undefined_conversion, ""a"", ""b"", [:undefined_conversion, ""ASCII-8BIT"", ""UTF-8"", ""\xFF"", """"]]
+[:undefined_conversion, ""a"", ""b"", [:undefined_conversion, ""WINDOWS-1252"", ""UTF-8"", ""\x81"", """"]]
+""Encoding::UndefinedConversionError: \""\\x81\"" from WINDOWS-1252 to UTF-8""
+""Encoding::UndefinedConversionError: \""\\xAA\"" from WINDOWS-1253 to UTF-8""
+""€é""
+""Encoding::UndefinedConversionError: U+0081 from UTF-8 to WINDOWS-1252""
+""Encoding::UndefinedConversionError: U+3042 from UTF-8 to WINDOWS-1252""
+true
+""Encoding::UndefinedConversionError: \""\\xFF\"" to UTF-8 in conversion from ASCII-8BIT to UTF-8 to Shift_JIS""
+""Encoding::ConverterNotFoundError: code converter not found (UTF-8 with crlf_newline)""
+""Encoding::ConverterNotFoundError: code converter not found (UTF-8 with xml_attr_content,xml_attr_quote)""
+""Encoding::ConverterNotFoundError: code converter not found (UTF-8)""
+""ArgumentError: invalid value for Integer(): \""1\\xFF\""""
+""ArgumentError: invalid value for Integer(): \""1\\xFF\""""
+""ArgumentError: invalid value for Integer(): \""1é\\u0000\""""
+");
+        }
+
+
+        /// <summary>
+        /// UTF-16/32 strings against ASCII arguments (MRI pads with 0x20 bytes, compares bytes, refuses
+        /// the rest), case mapping by encoding, broken strings in casecmp?, EUC sequences that name
+        /// no character.
+        /// </summary>
+        public void Encoding_AsciiIncompatible1() {
+            TestOutput(@"
+def t
+  r = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+  p r
+end
+s = ""abc"".encode(""UTF-16LE"")
+t { [s.center(8).bytes, s.ljust(5).bytes, s.rjust(4, ""x"".encode(""UTF-16LE"")).bytes, s.size, s.bytes] }
+t { s.center(10, ""*"") }
+t { s.rjust(5, ""xy"") }
+t { s.ljust(1, """") }
+t { ""ab"".ljust(1).equal?(""ab"") }
+t { [s == ""abc"", s.eql?(""abc""), s <=> ""abc"", """".encode(""UTF-16LE"") == """"] }
+t { s.chomp(""c"") }
+t { (""ab\n"".encode(""UTF-16LE"")).chomp.bytes }
+t { s.tr(""a"".encode(""UTF-16LE""), ""x"".encode(""UTF-16LE"")).bytes }
+t { s % [] }
+t { format(""%s"".encode(""UTF-32BE""), 1) }
+t { [s, s].join(""-"") }
+t { [""a"".force_encoding(""BINARY""), ""b"".force_encoding(""BINARY"")].join(""-"").encoding }
+t { ""abc"".encode(""UTF-16LE"").succ.bytes }
+t { [(0x80..0xff).map(&:chr).join.force_encoding(""KOI8-U"").upcase.bytes.uniq.size, ""\xa0"".force_encoding(""IBM852"").casecmp?(""\xb5"".force_encoding(""IBM852""))] }
+t { [""\xdf\xff\xe9"".force_encoding(""ISO-8859-1"").upcase.bytes, ""\xdf\xff"".force_encoding(""Windows-1252"").upcase.bytes, ""\xdf"".force_encoding(""ISO-8859-1"").capitalize.bytes] }
+t { [""\xdd"".force_encoding(""ISO-8859-9"").downcase.bytes, ""\xc0"".force_encoding(""ISO-8859-7"").upcase.bytes, ""\xd3\xd3 "".force_encoding(""ISO-8859-7"").downcase.bytes] }
+t { ""aａα"".encode(""EUC-JP"").upcase.encode(""UTF-8"") }
+t { ""\xff"".casecmp?(""\xff"") }
+t { ""\xff"".casecmp(""\xff"") }
+t { [""a\x8f\xa1\xa1\x8f\xb0\xa1b"".force_encoding(""EUC-JP"").chars.map(&:bytesize), ""\x8f\xa1\xa1"".force_encoding(""EUC-JP"").reverse.bytes] }
+t { ""a\xa4\xa1\x8e\xa2\xa1\xa1b"".force_encoding(""EUC-TW"").chars.map(&:bytesize) }
+", @"
+[[32, 32, 97, 0, 98, 0, 99, 0, 32, 32, 32], [97, 0, 98, 0, 99, 0, 32, 32], [120, 0, 97, 0, 98, 0, 99, 0], 3, [97, 0, 98, 0, 99, 0]]
+""Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8""
+""Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8""
+""ArgumentError: zero width padding""
+false
+[false, false, -1, true]
+""Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8""
+[97, 0, 98, 0]
+[120, 0, 98, 0, 99, 0]
+""Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE""
+""Encoding::CompatibilityError: ASCII incompatible encoding: UTF-32BE""
+""Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8""
+#<Encoding:BINARY (ASCII-8BIT)>
+[97, 0, 98, 0, 100, 0]
+[128, false]
+[[83, 83, 255, 201], [83, 83, 159], [83, 115]]
+[[105], [192], [243, 243, 32]]
+""Aａα""
+""ArgumentError: input string invalid""
+0
+[[1, 3, 3, 1], [143, 161, 161]]
+[1, 2, 4, 1]
+");
+        }
+
+
+        /// <summary>
+        /// String#each_line on UTF-16: $/ and paragraph mode are transcoded, other separators checked.
+        /// </summary>
+        public void Encoding_AsciiIncompatibleLines1() {
+            TestOutput(@"
+require 'ruby4'
+s = ""a\n\n\nb\r\nc"".encode(""UTF-16LE"")
+p s.lines.map { |l| l.encode(""UTF-8"") }, s.lines("""").map { |l| l.encode(""UTF-8"") }
+p s.lines(chomp: true).map { |l| l.encode(""UTF-8"") }, s.lines("""", chomp: true).map { |l| l.encode(""UTF-8"") }
+p s.lines(""b"".encode(""UTF-16LE""), chomp: true).map { |l| l.encode(""UTF-8"") }
+p((s.lines(""\n"") rescue $!), (s.each_line(""b"") { } rescue $!))
+u = ""abc"".encode(""UTF-16LE"")
+p u.upto(u).to_a.size
+", @"
+[""a\n"", ""\n"", ""\n"", ""b\r\n"", ""c""]
+[""a\n\n"", ""b\r\nc""]
+[""a"", """", """", ""b\r"", ""c""]
+[""a"", ""b\r\nc""]
+[""a\n\n\n"", ""\r\nc""]
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+1
+");
+        }
+
 
         public void Io_Messages1() {
             TestOutput(@"
