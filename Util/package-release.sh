@@ -69,7 +69,6 @@ for f in "${launchers[@]}" README.md; do
   cp "$IR_ROOT/$f" "$STAGE/"
 done
 cp -R "$IR_ROOT/Src/StdLib" "$STAGE/Src/"
-rm -f "$STAGE/Src/StdLib/StdLib.rbproj"
 
 # The startup library (Util/aot/build-startup.sh, IronRuby.Startup.dll): the Ruby code every start runs -
 # the prelude, rubygems and the rest - compiled ahead of time against exactly this build and the archive's
