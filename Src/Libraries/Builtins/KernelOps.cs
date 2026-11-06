@@ -853,6 +853,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("fail", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("fail", RubyMethodAttributes.PublicSingleton)]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static void RaiseException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
             RubyScope/*!*/ scope, object self, params object[]/*!*/ args) {
@@ -892,6 +893,7 @@ namespace IronRuby.Builtins {
         /// *calling* context - without the throw. Private, and not part of MRI's Kernel.
         /// </summary>
         [RubyMethod("__build_exception__", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static Exception/*!*/ BuildException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
             RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
@@ -1214,12 +1216,14 @@ namespace IronRuby.Builtins {
         /// itself is the prelude's __ir_gets__ / __ir_readline__.
         /// </summary>
         [RubyMethod("__ir_argf_gets__", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static object ArgfGets(CallSiteStorage<Func<CallSite, object, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, params object[]/*!*/ args) {
             return ArgfRead(storage, scope, self, "__ir_gets__", args);
         }
 
         [RubyMethod("__ir_argf_readline__", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static object ArgfReadline(CallSiteStorage<Func<CallSite, object, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, params object[]/*!*/ args) {
             return ArgfRead(storage, scope, self, "__ir_readline__", args);
@@ -1835,6 +1839,7 @@ namespace IronRuby.Builtins {
         // The name is converted here rather than by the binder, so that a bad one is reported
         // from inside public_send, as MRI's backtrace has it.
         [RubyMethod("public_send")]
+        [ReceivesKeywords]
         public static object PublicSendMessage(ConversionStorage<string>/*!*/ stringCast,
             SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ sendStorage,
             RubyScope/*!*/ scope, BlockParam block, object self, object name, params object[]/*!*/ args) {
@@ -1848,6 +1853,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
             var site = GetSendSite(storage, scope, methodName,
@@ -1858,6 +1864,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0&
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
             var site = GetSendSite(storage, scope, methodName,
@@ -1868,6 +1875,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
@@ -1881,6 +1889,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1&
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
@@ -1893,6 +1902,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
@@ -1906,6 +1916,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2&
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
@@ -1918,6 +1929,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
@@ -1931,6 +1943,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3&
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
@@ -1943,6 +1956,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
@@ -1956,6 +1970,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
@@ -3139,6 +3154,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_enum")]
         [RubyMethod("enum_for")]
+        [ReceivesKeywords]
         public static Enumerator/*!*/ Create(object self, [DefaultProtocol, NotNull]string/*!*/ enumeratorName, params object[]/*!*/ targetParameters) {
             return new Enumerator(self, enumeratorName, targetParameters);
         }

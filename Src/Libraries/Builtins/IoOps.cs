@@ -2129,6 +2129,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("readline")]
+        [ReceivesKeywords]
         public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, ConversionStorage<MutableString>/*!*/ toStr,
             ConversionStorage<int>/*!*/ toInt, RubyScope/*!*/ scope, RubyIO/*!*/ self, params object[]/*!*/ args) {
 
@@ -2566,6 +2567,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("gets")]
+        [ReceivesKeywords]
         public static MutableString Gets(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, ConversionStorage<MutableString>/*!*/ toStr,
             ConversionStorage<int>/*!*/ toInt, RubyScope/*!*/ scope, RubyIO/*!*/ self, params object[]/*!*/ args) {
 
@@ -2780,6 +2782,7 @@ namespace IronRuby.Builtins {
         // mode: option and reads through #each_line). What is left here is $_: MRI's foreach
         // reads into its caller's, so once the block has had every line it is nil.
         [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static object ForEach(CallSiteStorage<Func<CallSite, object, Proc, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, RubyClass/*!*/ self, params object[]/*!*/ args) {
 

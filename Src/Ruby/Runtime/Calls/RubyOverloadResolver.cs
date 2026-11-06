@@ -310,6 +310,48 @@ namespace IronRuby.Runtime.Calls {
             });
         }
 
+        // Whether a method's overload gets the keyword arguments of its call marked as such; read once per method.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<MethodBase, bool>/*!*/ _receivesKeywords =
+            new System.Collections.Concurrent.ConcurrentDictionary<MethodBase, bool>();
+
+        /// <summary>
+        /// Whether <paramref name="method"/> - an overload of a library method - is given a keyword Hash its call passes still
+        /// marked as keyword arguments: it is [ReceivesKeywords] or has a [Keywords] parameter. Any other library or CLR method
+        /// gets it as the positional Hash it is to a method that takes no keywords (see <see cref="ReceivesKeywordsAttribute"/>).
+        /// </summary>
+        internal static bool ReceivesKeywordArguments(MethodBase method) {
+            if (method == null) {
+                return false;
+            }
+            return _receivesKeywords.GetOrAdd(method, m => {
+                if (m.IsDefined(typeof(ReceivesKeywordsAttribute), false)) {
+                    return true;
+                }
+                foreach (var parameter in m.GetParameters()) {
+                    if (parameter.IsDefined(typeof(KeywordsAttribute), false)) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+        }
+
+        /// <summary>
+        /// The expression of the last argument the call passes, where a keyword Hash would be - the last simple argument, or
+        /// the last item of the splatted list, read from the list the splat test stored - or null if there is none (or a rhs).
+        /// Evaluated after the rule's tests.
+        /// </summary>
+        internal Expression GetLastArgumentExpression() {
+            if (_args.Signature.HasRhsArgument) {
+                return null;
+            }
+            if (_args.Signature.HasSplattedArgument && _listVariable != null && _list.Count > 0) {
+                return Ast.Call(_listVariable, Methods.IList_get_Item, AstUtils.Constant(_list.Count - 1));
+            }
+            int count = _args.SimpleArgumentCount;
+            return (count > 0) ? _args.GetSimpleArgumentExpression(count - 1) : null;
+        }
+
         /// <summary>
         /// The numbers of positional arguments the library method of <paramref name="overloads"/> takes, if one of them
         /// receives keyword arguments in a [Keywords] parameter, else null: what MRI counts, which a keyword Hash is not

@@ -432,6 +432,11 @@ namespace IronRuby.Compiler.Ast {
             return (paramsArray != null) ? (MSA.Expression)Ast.ArrayAccess(paramsArray, AstUtils.Constant(i)) : parameters[HiddenParameterCount + i];
         }
 
+        private MSA.Expression/*!*/ GetPositionalParameterAccess(AstParameters/*!*/ parameters, MSA.Expression paramsArray, int i, bool clearsKeywords) {
+            var access = GetParameterAccess(parameters, paramsArray, i);
+            return clearsKeywords ? Methods.ClearKeywordArguments.OpCall(access) : access;
+        }
+
         private MSA.Expression/*!*/ MakeParametersInitialization(AstGenerator/*!*/ gen, AstParameters/*!*/ parameters) {
             var result = new AstExpressions(
                 ParameterCount + 
@@ -445,15 +450,20 @@ namespace IronRuby.Compiler.Ast {
 
             var paramsArray = HasFormalParametersInArray ? parameters[HiddenParameterCount] : null;
 
+            // A block that declares no keywords takes a Hash passed as keywords (yield(a: 1)) as a positional argument, which
+            // it may keep: it stops saying it is keyword arguments, as for a method (RubyOps.ClearKeywordArguments).
+            var signature = _parameters.Signature;
+            bool clearsKeywords = signature != null && !signature.TakesKeywords && !signature.RefusesKeywords;
+
             int parameterIndex = 0;
             for (int i = 0; i < _parameters.Mandatory.Length; i++) {
-                result.Add(_parameters.Mandatory[i].TransformWrite(gen, GetParameterAccess(parameters, paramsArray, parameterIndex)));
+                result.Add(_parameters.Mandatory[i].TransformWrite(gen, GetPositionalParameterAccess(parameters, paramsArray, parameterIndex, clearsKeywords)));
                 parameterIndex++;
             }
 
             if (_parameters.Optional.Length > 0) {
                 for (int i = 0; i < _parameters.Optional.Length; i++) {
-                    result.Add(_parameters.Optional[i].Left.TransformWrite(gen, GetParameterAccess(parameters, paramsArray, parameterIndex)));
+                    result.Add(_parameters.Optional[i].Left.TransformWrite(gen, GetPositionalParameterAccess(parameters, paramsArray, parameterIndex, clearsKeywords)));
                     parameterIndex++;
                 }
                 result.Add(_parameters.TransformOptionalsInitialization(gen));

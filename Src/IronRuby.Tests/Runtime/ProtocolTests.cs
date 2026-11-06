@@ -158,6 +158,79 @@ ArgumentError: wrong number of arguments (given 4, expected 1..3)
         }
 
         /// <summary>
+        /// A Hash passed as keywords to a library method that takes none - an attribute writer, a Struct member's writer, a
+        /// block without keyword parameters - is a positional argument there, which it may keep, and a kept one no longer says
+        /// it is keyword arguments: a.push(x: 1) followed by f(a[0]) passed f a positional Hash, not keywords (MRI's C methods
+        /// keep no mark on the hash at all). Kernel#send, Proc#call and the like still pass keywords on as keywords.
+        /// </summary>
+        public void LibraryKeywordsStored1() {
+            TestOutput(@"
+def f(h = nil, **kw) = [h, kw]
+a = []
+a.push(x: 1)
+a.<<(x: 2)
+a.unshift(x: 3)
+a.insert(1, x: 4)
+a.[]=(4, x: 5)
+3.times { a.push(1, x: 6) }
+h = {}
+h.store(:k, x: 7)
+o = Object.new
+o.instance_variable_set(:@v, x: 8)
+c = Class.new { attr_accessor :v }.new
+c.send(:v=, x: 9)
+s = Struct.new(:m).new
+s.send(:m=, x: 10)
+p a.map { |e| f(e) }
+p f(h[:k]), f(o.instance_variable_get(:@v)), f(c.v), f(s.m)
+p f(a.send(:push, x: 11).last), f(a.method(:push).call(x: 12).last), f(a.public_send(:fetch, 99, x: 13))
+def y1 = yield(1, x: 14)
+p y1 { |a, b| f(b) }, y1 { |a, b = 2| f(b) }, y1 { |a, *r| f(r[0]) }, f(proc { |h| h }.call(x: 15)), f(->(h) { h }.(x: 16))
+def kw(**k) = k
+p send(:kw, x: 1), method(:kw).call(x: 2), proc { |**k| k }.call(x: 3), instance_exec(x: 4) { |**k| k }
+p Class.new { def initialize(**k) = @k = k; attr_reader :k }.new(x: 5).k, Integer(""z"", exception: false), y1 { |a, b = 2, **k| [b, k] }
+", @"
+[[{x: 3}, {}], [{x: 4}, {}], [{x: 1}, {}], [{x: 2}, {}], [{x: 5}, {}], [1, {}], [{x: 6}, {}], [1, {}], [{x: 6}, {}], [1, {}], [{x: 6}, {}]]
+[{x: 7}, {}]
+[{x: 8}, {}]
+[{x: 9}, {}]
+[{x: 10}, {}]
+[{x: 11}, {}]
+[{x: 12}, {}]
+[{x: 13}, {}]
+[{x: 14}, {}]
+[{x: 14}, {}]
+[{x: 14}, {}]
+[{x: 15}, {}]
+[{x: 16}, {}]
+{x: 1}
+{x: 2}
+{x: 3}
+{x: 4}
+{x: 5}
+nil
+[2, {x: 14}]
+");
+        }
+
+        /// <summary>
+        /// Keywords given to Enumerator::Yielder#yield are keywords of the block it yields to, as in MRI.
+        /// </summary>
+        public void PreludeKeywordsYielder1() {
+            TestOutput(@"
+require 'ruby4'
+r = nil
+Enumerator.new { |y| y.yield(x: 1) }.each { |**k| r = k }
+p r
+Enumerator.new { |y| y.yield(x: 2) }.each { |h = nil, **k| r = [h, k] }
+p r
+", @"
+{x: 1}
+[nil, {x: 2}]
+");
+        }
+
+        /// <summary>
         /// Kernel#Integer and #Float as MRI's rb_convert_to_integer and rb_convert_to_float: a base only with a
         /// String or #to_str, #to_int (whose errors and non-Integer answers are ignored) before #to_str before
         /// #to_i, private conversion methods called, exception: false answering nil for any failure but a bad

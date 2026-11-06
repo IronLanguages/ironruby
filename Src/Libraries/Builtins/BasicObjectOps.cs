@@ -71,6 +71,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
             return KernelOps.SendMessage(storage, scope, self, methodName);
@@ -78,6 +79,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0&
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
             return KernelOps.SendMessage(storage, scope, block, self, methodName);
@@ -85,6 +87,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
@@ -93,6 +96,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1&
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
@@ -101,6 +105,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
@@ -109,6 +114,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2&
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
@@ -117,6 +123,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
@@ -125,6 +132,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3&
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
@@ -133,6 +141,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
@@ -141,6 +150,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
@@ -232,6 +242,7 @@ namespace IronRuby.Builtins {
         // [NotNull] made instance_exec(nil) { } a TypeError - which is every ActiveRecord
         // association scope, `relation.instance_exec(owner, &scope)` with no owner.
         [RubyMethod("instance_exec")]
+        [ReceivesKeywords]
         public static object InstanceExec(BlockParam block, object self, params object[] args) {
             args = args ?? new object[] { null };
             if (block == null) {

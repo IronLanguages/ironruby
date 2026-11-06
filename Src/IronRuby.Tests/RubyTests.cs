@@ -960,6 +960,8 @@ namespace IronRuby.Tests {
                 Kernel_IntegerFloat1,
                 LibraryKeywordsArity1,
                 PreludeKeywordsArity1,
+                LibraryKeywordsStored1,
+                PreludeKeywordsYielder1,
                 ToIntToStrConversion1,
                 ConvertToFixnum1,
                 ProtocolCaching1,

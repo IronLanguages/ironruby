@@ -366,6 +366,7 @@ namespace IronRuby.StandardLibrary.Zstd {
 
         [RubyMethod("compress", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("compress", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static MutableString/*!*/ Compress(RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
             object[] pos;
             Hash kwargs = Args.Split(args, 1, 1, out pos);
@@ -454,6 +455,7 @@ namespace IronRuby.StandardLibrary.Zstd {
 
         [RubyMethod("decompress", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("decompress", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static MutableString/*!*/ Decompress(RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
             object[] pos;
             Hash kwargs = Args.Split(args, 1, 0, out pos);
@@ -548,6 +550,7 @@ namespace IronRuby.StandardLibrary.Zstd {
 
         [RubyMethod("write_skippable_frame", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("write_skippable_frame", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static MutableString/*!*/ WriteSkippableFrame(RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
             object[] pos;
             Hash kwargs = Args.Split(args, 2, 0, out pos);
@@ -735,6 +738,7 @@ namespace IronRuby.StandardLibrary.Zstd {
             }
 
             [RubyConstructor]
+            [ReceivesKeywords]
             public static StreamingCompress/*!*/ Create(RubyClass/*!*/ self, params object[]/*!*/ args) {
                 var result = new StreamingCompress(self);
                 Initialize(self.Context, result, args);
@@ -742,6 +746,7 @@ namespace IronRuby.StandardLibrary.Zstd {
             }
 
             [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+            [ReceivesKeywords]
             public static object Initialize(RubyContext/*!*/ context, StreamingCompress/*!*/ self, params object[]/*!*/ args) {
                 object[] pos;
                 Hash kwargs = Args.Split(args, 0, 1, out pos);
@@ -864,6 +869,7 @@ namespace IronRuby.StandardLibrary.Zstd {
             }
 
             [RubyConstructor]
+            [ReceivesKeywords]
             public static StreamingDecompress/*!*/ Create(RubyClass/*!*/ self, params object[]/*!*/ args) {
                 var result = new StreamingDecompress(self);
                 Initialize(self.Context, result, args);
@@ -871,6 +877,7 @@ namespace IronRuby.StandardLibrary.Zstd {
             }
 
             [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+            [ReceivesKeywords]
             public static object Initialize(RubyContext/*!*/ context, StreamingDecompress/*!*/ self, params object[]/*!*/ args) {
                 object[] pos;
                 Hash kwargs = Args.Split(args, 0, 0, out pos);

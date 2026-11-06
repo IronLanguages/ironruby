@@ -84,8 +84,12 @@ namespace IronRuby.Runtime.Calls {
         private readonly Parameter _block;
         private readonly int _blockIndex;
 
+        // whether a keyword Hash the call passes stops saying it is keyword arguments, as the rule has it
+        // (RubyMethodGroupBase.BuildCallNoFlow): the overload does not receive keywords
+        private readonly bool _clearsKeywords;
+
         private LibraryCallPlan(LibraryFunctionCall function, CallInstruction call, Parameter/*!*/[]/*!*/ parameters, Type/*!*/ returnType,
-            int mandatoryCount, int positionalCount, int positionalLimit, Parameter paramsParameter, Parameter block) {
+            int mandatoryCount, int positionalCount, int positionalLimit, Parameter paramsParameter, Parameter block, bool clearsKeywords) {
             Debug.Assert((function != null) != (call != null));
             _function = function;
             _call = call;
@@ -97,6 +101,7 @@ namespace IronRuby.Runtime.Calls {
             _params = paramsParameter;
             _block = block;
             _blockIndex = Array.IndexOf(parameters, block);
+            _clearsKeywords = clearsKeywords;
         }
 
         /// <summary>
@@ -194,6 +199,10 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal object/*!*/ Invoke(RubyContext/*!*/ context, RubyScope/*!*/ scope, object self, Proc block, object[]/*!*/ args) {
+            if (_clearsKeywords && args.Length > 0) {
+                RubyOps.ClearKeywordArguments(args[args.Length - 1]);
+            }
+
             var clrArgs = new object[_parameters.Length];
             BlockParam bfc = null;
 
@@ -440,7 +449,8 @@ namespace IronRuby.Runtime.Calls {
             }
 
             return new LibraryCallPlan(function, call, parameters, returnType, mandatoryCount, positionalCount,
-                (positionalLimit >= 0) ? positionalLimit : positionalCount, paramsParameter, block);
+                (positionalLimit >= 0) ? positionalLimit : positionalCount, paramsParameter, block,
+                !RubyOverloadResolver.ReceivesKeywordArguments(method));
         }
 
         private static bool IsPlainParameterType(Type/*!*/ type) {

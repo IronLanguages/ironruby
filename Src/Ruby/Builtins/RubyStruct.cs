@@ -190,7 +190,8 @@ namespace IronRuby.Builtins {
                     metaBuilder.Result = Methods.RubyStruct_SetValue.OpCall(
                         Ast.Convert(args.TargetExpression, typeof(RubyStruct)),
                         AstUtils.Constant(index),
-                        AstUtils.Box(actualArgs[0].Expression)
+                        // a positional argument, even a Hash passed as keywords: kept, it stops saying so
+                        Methods.ClearKeywordArguments.OpCall(AstUtils.Box(actualArgs[0].Expression))
                     );
                 }
             };

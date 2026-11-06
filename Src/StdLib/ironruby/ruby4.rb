@@ -4500,7 +4500,8 @@ class Enumerator
       @block = block
     end
 
-    def yield(*args)
+    # keywords given to #yield are the block's keywords (MRI's yielder_yield passes them on)
+    ruby2_keywords def yield(*args)
       @block.call(*args)
     end
 
@@ -4510,7 +4511,7 @@ class Enumerator
       self
     end
 
-    def call(*args)
+    ruby2_keywords def call(*args)
       @block.call(*args)
     end
 

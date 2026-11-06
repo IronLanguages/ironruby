@@ -97,6 +97,7 @@ namespace IronRuby.Builtins {
         // a flagged Hash after the positional values; a Hash passed as a value is not flagged, and
         // stays a positional argument (MRI's rb_struct_initialize_m tells them apart the same way).
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static object Initialize(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slowPath,
             RubyStruct/*!*/ self, params object[]/*!*/ items) {
 
@@ -126,6 +127,9 @@ namespace IronRuby.Builtins {
             // Without the prelude (the test harness runs the libraries alone) there is no slow path:
             // store what was given, as the C# `def initialize(*args)' did.
             if (!self.ImmediateClass.ResolveMethod("__struct_initialize_slow__", VisibilityContext.AllVisible).Found) {
+                if (keywords != null) {
+                    items[positional] = keywords;
+                }
                 self.SetValues(items);
                 return null;
             }

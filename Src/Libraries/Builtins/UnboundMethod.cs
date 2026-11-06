@@ -143,6 +143,7 @@ namespace IronRuby.Builtins {
         /// turned unrelated failures into "undefined method `bind_call'" noise.
         /// </summary>
         [RubyMethod("bind_call")]
+        [ReceivesKeywords]
         public static object BindCall(RubyScope/*!*/ scope, BlockParam block, UnboundMethod/*!*/ self, object target,
             params object[]/*!*/ args) {
 
