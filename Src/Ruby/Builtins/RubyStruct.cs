@@ -190,8 +190,7 @@ namespace IronRuby.Builtins {
                     metaBuilder.Result = Methods.RubyStruct_SetValue.OpCall(
                         Ast.Convert(args.TargetExpression, typeof(RubyStruct)),
                         AstUtils.Constant(index),
-                        // a positional argument, even a Hash passed as keywords: kept, it stops saying so
-                        Methods.ClearKeywordArguments.OpCall(AstUtils.Box(actualArgs[0].Expression))
+                        AstUtils.Box(actualArgs[0].Expression)
                     );
                 }
             };
@@ -272,12 +271,17 @@ namespace IronRuby.Builtins {
             return self._data[index];
         }
 
+        /// <summary>
+        /// The member writer: the value is a positional argument, even a Hash passed as keywords (s.send(:a=, k: 1)), and kept,
+        /// it stops saying so (<see cref="RubyOps.ClearKeywordArguments"/>) - here rather than in the rule, which is interpreted
+        /// for its first calls.
+        /// </summary>
         [Emitted]
         public static object SetValue(RubyStruct/*!*/ self, int index, object value) {
             if (self.IsFrozen) {
                 throw RubyExceptions.CreateObjectFrozenErrorFor(self, "Struct");
             }
-            return self._data[index] = value;
+            return self._data[index] = RubyOps.ClearKeywordArguments(value);
         }
 
         #endregion

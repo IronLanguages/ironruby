@@ -1424,6 +1424,10 @@ namespace IronRuby.Builtins {
         }
 
         private static bool IsHiddenConstant(RubyModule/*!*/ owner, string/*!*/ name, bool inherit) {
+            // the common case, a name no module hid, without the lock:
+            if (!owner.Context.MayBeHiddenConstant(name)) {
+                return false;
+            }
             if (!inherit) {
                 return owner.IsHiddenConstant(name);
             }
@@ -1498,19 +1502,29 @@ namespace IronRuby.Builtins {
         /// </summary>
         private sealed class ConstantPath {
             private readonly string/*!*/ _name;
-            private readonly List<string>/*!*/ _segments = new List<string>();
+            // the first segment, and all of them once there is more than one: a plain name - const_get(:Foo), the common
+            // case - takes no list
+            private string _first;
+            private List<string> _segments;
             // the segment before whose lookup the whole path is reported as malformed, or -1
             private readonly int _malformedAt = -1;
 
             public bool IsTopLevel { get; }
-            public int Count => Math.Max(_segments.Count, 1);
-            public string/*!*/ this[int index] => _segments[index];
+            public int Count => (_segments != null) ? _segments.Count : 1;
+            public string/*!*/ this[int index] => (_segments != null) ? _segments[index] : _first;
+
+            private void Add(string/*!*/ segment) {
+                if (_first == null) {
+                    _first = segment;
+                } else {
+                    (_segments ??= new List<string> { _first }).Add(segment);
+                }
+            }
 
             public ConstantPath(ConversionStorage<MutableString>/*!*/ stringCast, object name) {
                 var symbol = name as RubySymbol;
                 if (symbol != null) {
-                    _name = symbol.ToString();
-                    _segments.Add(_name);
+                    _name = _first = symbol.ToString();
                     return;
                 }
 
@@ -1528,9 +1542,9 @@ namespace IronRuby.Builtins {
                     while (p < end && _name[p] != ':') {
                         p++;
                     }
-                    _segments.Add(_name.Substring(start, p - start));
+                    Add(_name.Substring(start, p - start));
                     if (start == p || p < end && (p + 2 >= end || _name[p + 1] != ':')) {
-                        _malformedAt = _segments.Count - 1;
+                        _malformedAt = Count - 1;
                         break;
                     }
                     p += 2;
@@ -1552,8 +1566,8 @@ namespace IronRuby.Builtins {
                         throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", _name);
                     }
                 }
-                if (!Tokenizer.IsConstantName(_segments[index])) {
-                    throw RubyExceptions.CreateNameError(String.Format("wrong constant name {0}", _segments[index]));
+                if (!Tokenizer.IsConstantName(this[index])) {
+                    throw RubyExceptions.CreateNameError(String.Format("wrong constant name {0}", this[index]));
                 }
                 return owner;
             }

@@ -572,6 +572,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _RubyStruct_SetValue;
         public static MethodInfo/*!*/ SerializeObject { get { return _SerializeObject ?? (_SerializeObject = GetMethod(typeof(RubyOps), "SerializeObject")); } }
         private static MethodInfo _SerializeObject;
+        public static MethodInfo/*!*/ SetAttribute { get { return _SetAttribute ?? (_SetAttribute = CallInstruction.CacheFunc<System.Object, System.Object, IronRuby.Runtime.RubyScope, IronRuby.Runtime.InstanceVariableSite, System.Object>(RubyOps.SetAttribute)); } }
+        private static MethodInfo _SetAttribute;
         public static MethodInfo/*!*/ SetCachedGlobalVariable { get { return _SetCachedGlobalVariable ?? (_SetCachedGlobalVariable = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, IronRuby.Runtime.GlobalVariableSite, System.Object>(RubyOps.SetCachedGlobalVariable)); } }
         private static MethodInfo _SetCachedGlobalVariable;
         public static MethodInfo/*!*/ SetCalleeFrame { get { return _SetCalleeFrame ?? (_SetCalleeFrame = CallInstruction.CacheFunc<System.Exception, System.String, System.Int32, System.String, System.Exception>(RubyOps.SetCalleeFrame)); } }

@@ -2211,13 +2211,17 @@ namespace IronRuby.Runtime {
         ///
         /// The hash is always one the call site made for this call (see
         /// <see cref="MakeKeywordArgumentsHash"/> and the copies the splat paths take), so it can
-        /// be cleared in place.
+        /// be cleared in place. Being one of those, it is a Hash and not an instance of a subclass:
+        /// the test is of the exact class, which for anything else is a compare, where `is Hash'
+        /// walks the class's base types on every call made with an argument that is not a Hash.
         /// </summary>
         [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object ClearKeywordArguments(object obj) {
-            var hash = obj as Hash;
-            if (hash != null && hash.IsKeywordArguments) {
-                hash.IsKeywordArguments = false;
+            if (obj != null && obj.GetType() == typeof(Hash)) {
+                var hash = Unsafe.As<Hash>(obj);
+                if (hash.IsKeywordArguments) {
+                    hash.IsKeywordArguments = false;
+                }
             }
             return obj;
         }
@@ -4428,6 +4432,16 @@ namespace IronRuby.Runtime {
             }
             scope.RubyContext.SetInstanceVariable(self, value, site);
             return value;
+        }
+
+        /// <summary>
+        /// An attribute writer (attr_writer, attr_accessor): <see cref="SetInstanceVariable"/> of a value that is a positional
+        /// argument, even a Hash passed as keywords (o.send(:x=, k: 1)) - kept, it stops saying so (<see cref="ClearKeywordArguments"/>).
+        /// Here rather than in the writer's rule, which is interpreted for its first calls.
+        /// </summary>
+        [Emitted]
+        public static object SetAttribute(object self, object value, RubyScope/*!*/ scope, InstanceVariableSite/*!*/ site) {
+            return SetInstanceVariable(self, ClearKeywordArguments(value), scope, site);
         }
 
         // The cached store of a CLR object that keeps its own instance data (IRubyInstanceDataOwner);

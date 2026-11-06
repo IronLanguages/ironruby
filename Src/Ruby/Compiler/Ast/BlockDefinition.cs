@@ -447,8 +447,9 @@ namespace IronRuby.Compiler.Ast {
 
         private MSA.Expression/*!*/ GetPositionalParameterAccess(AstParameters/*!*/ parameters, MSA.Expression paramsArray, int i, bool clearsKeywords) {
             var access = GetParameterAccess(parameters, paramsArray, i);
-            // the call only for a Hash: the type test is all an argument of any other class costs
-            return clearsKeywords ? Ast.Condition(Ast.TypeIs(access, typeof(Hash)), Methods.ClearKeywordArguments.OpCall(access), access) : access;
+            // the call only for a Hash (exactly, see RubyOps.ClearKeywordArguments): the test is all an argument of any other
+            // class costs
+            return clearsKeywords ? Ast.Condition(Ast.TypeEqual(access, typeof(Hash)), Methods.ClearKeywordArguments.OpCall(access), access) : access;
         }
 
         private MSA.Expression/*!*/ MakeParametersInitialization(AstGenerator/*!*/ gen, AstParameters/*!*/ parameters) {
@@ -465,9 +466,11 @@ namespace IronRuby.Compiler.Ast {
             var paramsArray = HasFormalParametersInArray ? parameters[HiddenParameterCount] : null;
 
             // A block that declares no keywords takes a Hash passed as keywords (yield(a: 1)) as a positional argument, which
-            // it may keep: it stops saying it is keyword arguments, as for a method (RubyOps.ClearKeywordArguments).
+            // it may keep: it stops saying it is keyword arguments, as for a method (RubyOps.ClearKeywordArguments). The
+            // dispatcher of a block with few plain parameters does that before the call (BlockDispatcher.Positional).
             var signature = _parameters.Signature;
-            bool clearsKeywords = signature != null && !signature.TakesKeywords && !signature.RefusesKeywords;
+            bool clearsKeywords = signature != null && !signature.TakesKeywords && !signature.RefusesKeywords &&
+                !BlockDispatcher.UnmarksKeywordArguments(ParameterCount, PostParameterCount, _parameters.GetBlockSignatureAttributes());
 
             int parameterIndex = 0;
             for (int i = 0; i < _parameters.Mandatory.Length; i++) {

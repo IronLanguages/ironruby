@@ -21,6 +21,7 @@ using Microsoft.Scripting.Interpreter;
 using IronRuby.Builtins;
 using System.Collections;
 using System.Threading;
+using System.Runtime.CompilerServices;
 
 namespace IronRuby.Runtime.Calls {
     using Ast = Expression;
@@ -242,7 +243,26 @@ namespace IronRuby.Runtime.Calls {
             set {
                 _parameterSignature = value;
                 _checksKeywords = value != null && (value.TakesKeywords || value.RefusesKeywords);
+                _unmarksKeywords = value != null && !value.TakesKeywords && !value.RefusesKeywords;
             }
+        }
+
+        // the block declares no keywords (nor **nil): a Hash passed as keywords is a positional argument to it
+        private bool _unmarksKeywords;
+
+        /// <summary>
+        /// The argument a positional parameter of the block is about to be given. A block that declares no keywords takes a
+        /// Hash passed as keywords (yield(a: 1)) as a positional argument, which it may keep: it stops saying it is keyword
+        /// arguments, as for a method (<see cref="RubyOps.ClearKeywordArguments"/>). The dispatchers of blocks with at most
+        /// <see cref="MaxBlockArity"/> plain parameters do it here, in C#, rather than the block's prologue, where the test
+        /// would be interpreted on every call of the block while it is (see <see cref="UnmarksKeywordArguments"/>).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        protected object Positional(object arg) {
+            if (_unmarksKeywords) {
+                RubyOps.ClearKeywordArguments(arg);
+            }
+            return arg;
         }
 
         // the signature declares keywords or **nil, so even a proc's arguments are checked on a yield
@@ -323,6 +343,16 @@ namespace IronRuby.Runtime.Calls {
 
         internal static BlockDispatcher/*!*/ Create(int parameterCount, BlockSignatureAttributes attributesAndArity, string sourcePath, int sourceLine) {
             return Create(parameterCount, 0, attributesAndArity, sourcePath, sourceLine);
+        }
+
+        /// <summary>
+        /// Whether the dispatcher <see cref="Create(int, int, BlockSignatureAttributes, string, int)"/> makes for a block of this
+        /// shape takes the keyword mark off the arguments it gives the block's positional parameters (<see cref="Positional"/>),
+        /// so that the block's prologue need not: BlockDispatcher0 to 4.
+        /// </summary>
+        internal static bool UnmarksKeywordArguments(int parameterCount, int postCount, BlockSignatureAttributes attributesAndArity) {
+            return postCount == 0 && parameterCount <= MaxBlockArity &&
+                (attributesAndArity & (BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter)) == 0;
         }
 
         internal static BlockDispatcher/*!*/ Create(int parameterCount, int postCount, BlockSignatureAttributes attributesAndArity, string sourcePath, int sourceLine) {

@@ -127,9 +127,9 @@ namespace IronRuby.Runtime.Calls {
             var actualArgs = RubyOverloadResolver.NormalizeArguments(metaBuilder, args, 1, 1);
             if (!metaBuilder.Error) {
                 // the value is a positional argument, even a Hash passed as keywords (a.send(:x=, k: 1)): kept, it stops saying so
-                metaBuilder.Result = Methods.SetInstanceVariable.OpCall(
+                metaBuilder.Result = Methods.SetAttribute.OpCall(
                     AstUtils.Box(args.TargetExpression),
-                    Methods.ClearKeywordArguments.OpCall(AstUtils.Box(actualArgs[0].Expression)),
+                    AstUtils.Box(actualArgs[0].Expression),
                     AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope)),
                     AstUtils.Constant(new InstanceVariableSite(InstanceVariableName))
                 );

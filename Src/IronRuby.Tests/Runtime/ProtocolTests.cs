@@ -214,6 +214,36 @@ nil
         }
 
         /// <summary>
+        /// A block with up to four plain parameters has the keyword mark taken off by its dispatcher (BlockDispatcher.Positional),
+        /// one with a rest, a block or a post parameter by its prologue: whichever parameter the keyword Hash lands on.
+        /// </summary>
+        public void BlockKeywordsPositional1() {
+            TestOutput(@"
+def f(h = nil, **kw) = [h, kw]
+def y1 = yield(x: 1)
+def y2 = yield(1, x: 2)
+def ys(*a) = yield(*a)
+r = []
+y1 { |a, b, c, d| r << f(a) }
+y1 { |a, b, c, d, e| r << f(a) }
+y2 { |a, b, c| r << f(b) }
+y1 { |a, &b| r << f(a) }
+y2 { |a, *b, c| r << f(c) }
+y2 { |a, (b, c)| r << f(b) }
+ys(1, {x: 3}) { |a, h| r << f(h) }
+ys(1, **{x: 4}) { |a, h| r << f(h) }
+r << [[1, {x: 6}]].map { |a, h| f(h) }
+o = Object.new
+o.define_singleton_method(:m) { |a, h| h }
+r << f(o.m(1, x: 7))
+y1 { |h, **nil| r << h } rescue r << $!.class
+p r
+", @"
+[[{x: 1}, {}], [{x: 1}, {}], [{x: 2}, {}], [{x: 1}, {}], [{x: 2}, {}], [{x: 2}, {}], [{x: 3}, {}], [{x: 4}, {}], [[{x: 6}, {}]], [{x: 7}, {}], ArgumentError]
+");
+        }
+
+        /// <summary>
         /// Keywords given to Enumerator::Yielder#yield are keywords of the block it yields to, as in MRI.
         /// </summary>
         public void PreludeKeywordsYielder1() {
