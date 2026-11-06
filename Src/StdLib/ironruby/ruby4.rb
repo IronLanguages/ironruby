@@ -804,7 +804,7 @@ module Enumerable
         return converted if converted.is_a?(Array)
       end
       if other.instance_of?(::Range) && ::Integer === other.begin &&
-          (other.end.nil? || ::Integer === other.end) && ::Range.instance_method(:each) == RANGE_EACH__
+          (other.end.nil? || ::Integer === other.end) && other.method(:each).unbind == RANGE_EACH__
         last = other.end
         last -= 1 if last && other.exclude_end?
         return ZipIntegerRange__.new(other.begin, last)
