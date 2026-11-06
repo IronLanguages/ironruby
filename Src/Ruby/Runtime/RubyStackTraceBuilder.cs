@@ -441,6 +441,11 @@ namespace IronRuby.Runtime {
                     }
 
                     if (!_keepInternalFrames && IsInternalFile(file)) {
+                        // A core method written in Ruby that wraps the library method of the same
+                        // name (Kernel#sleep, Kernel#require) is one method to Ruby: one frame.
+                        if (_lastDeferredIsLibrary && _deferredMethodNames[_deferredMethodNames.Count - 1] == methodName) {
+                            _deferredMethodNames.RemoveAt(_deferredMethodNames.Count - 1);
+                        }
                         if (IsInternalMethodFrame(methodName)) {
                             _deferredMethodNames.Add(methodName);
                             _lastDeferredIsLibrary = false;
