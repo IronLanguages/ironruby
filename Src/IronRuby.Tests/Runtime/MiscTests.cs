@@ -197,10 +197,11 @@ foo
         }
         
         public void Scenario_RubyMethodMissing2() {
-            AssertExceptionThrown<MissingMethodException>(delegate {
+            // a bare name is a NameError, as in MRI, also where the top level's method_missing looks up the host's scope first
+            AssertExceptionThrown<MemberAccessException>(delegate {
                 CompilerTest(@"unknown_method");
-            }, delegate(MissingMethodException e) {
-                return e.Message.StartsWith("undefined method");
+            }, delegate(MemberAccessException e) {
+                return e.Message.StartsWith("undefined local variable or method 'unknown_method'");
             });
         }
 

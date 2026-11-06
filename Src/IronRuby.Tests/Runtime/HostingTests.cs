@@ -124,7 +124,8 @@ namespace IronRuby.Tests {
             scope.SetVariable("some_variable", 123);
             Assert(compiled.Execute<int>(scope) == 123);
             
-            AssertExceptionThrown<MissingMethodException>(() => compiled.Execute());
+            // NameError: undefined local variable or method 'some_variable'
+            AssertExceptionThrown<MemberAccessException>(() => compiled.Execute());
 
             scope.SetVariable("some_variable", "foo");
             Assert(compiled.Execute<string>(scope) == "foo");
