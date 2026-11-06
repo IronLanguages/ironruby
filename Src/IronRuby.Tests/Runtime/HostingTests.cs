@@ -427,7 +427,7 @@ a = 'ba'.gsub /b/, '1'
             var scope = Engine.CreateScope();
             scope.SetVariable("ops", Engine.Operations);
             s = Engine.Execute<string>(@"ops.format({1 => 2, 3 => 4})", scope);
-            Assert(s == "{1=>2, 3=>4}");
+            Assert(s == "{1 => 2, 3 => 4}");
         }
 
         public void Scenario_RubyConsole1() {

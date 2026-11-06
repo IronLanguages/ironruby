@@ -4810,12 +4810,17 @@ class SystemCallError
     nil
   end
 
+  # MRI's strerror(errno): an Errno class keeps its own text (IO::EAGAINWaitReadable
+  # inherits it), and any other subclass whose Errno names a known number - including
+  # one that sets Errno itself - says what strerror says for it.
   def self.__default_message__(klass, errno)
     while klass && klass < ::SystemCallError
       return klass.const_get(:Message) if klass.const_defined?(:Message, false)
       klass = klass.superclass
     end
-    errno.nil? ? "unknown error" : "Unknown error #{errno}"
+    return "unknown error" if errno.nil?
+    entry = ::Errno::ERRNO_TABLE[errno]
+    entry ? entry[1] : "Unknown error #{errno}"
   end
 
   # MRI converts the errno with Integer(), so a Float or an exactly-real Complex
@@ -4848,10 +4853,13 @@ class SystemCallError
     message.to_str
   end
 
+  # The location is shown only with a message, as in MRI.
   def self.__build_message__(default, message, location)
     text = default.dup
-    text << " @ " << location.to_s unless location.nil?
-    text << " - " << message unless message.nil?
+    unless message.nil?
+      text << " @ " << location.to_s unless location.nil?
+      text << " - " << message
+    end
     text
   end
 
@@ -4885,9 +4893,16 @@ class SystemCallError
         errno = ::SystemCallError.__coerce_errno__(args[1])
       end
     else
+      if args.size > 2
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..2)")
+      end
+      # MRI reads the number with rb_const_get(klass, :Errno), which a subclass that is
+      # not under Errno answers with the Errno *module* - a TypeError, so such a class
+      # cannot be instantiated unless it defines Errno itself.
+      errno = ::SystemCallError.__errno_of__(klass)
+      errno = ::SystemCallError.__coerce_errno__(klass.const_get(:Errno)) if errno.nil?
       message = ::SystemCallError.__coerce_message__(args[0])
       location = args[1]
-      errno = ::SystemCallError.__errno_of__(klass)
     end
 
     @__errno__ = errno

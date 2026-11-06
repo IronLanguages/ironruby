@@ -259,11 +259,11 @@ namespace IronRuby.StandardLibrary.Zlib {
         public const int FINISH = 4;
 
         [RubyConstant("ZLIB_VERSION")]
-        public static string ZLIB_VERSION = LibZ.Version;
+        public static readonly MutableString ZLIB_VERSION = MutableString.CreateAscii(LibZ.Version).Freeze();
 
         // The version of the `zlib` gem whose API this implements, not libz's own version.
         [RubyConstant("VERSION")]
-        public static string VERSION = "3.2.3";
+        public static readonly MutableString VERSION = MutableString.CreateAscii("3.2.3").Freeze();
 
         [RubyConstant("MAXBITS")]
         public const int MAXBITS = 15;

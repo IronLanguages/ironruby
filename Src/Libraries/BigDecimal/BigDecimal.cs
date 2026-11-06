@@ -20,16 +20,12 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using IronRuby.Builtins;
+using IronRuby.Runtime;
 using System.Numerics;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.StandardLibrary.BigDecimal {
-    public class BigDecimal : IComparable<BigDecimal>, IEquatable<BigDecimal> {
-
-        static BigDecimal() {
-            CreateSC();
-            CreateSR();
-        }
+    public class BigDecimal : IComparable<BigDecimal>, IEquatable<BigDecimal>, IRubyObjectState {
 
         /// <summary>
         /// This class holds the configuration information for the BigDecimal calculations
@@ -53,7 +49,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         private readonly int _sign;
         private readonly Fraction _fraction;
         private readonly int _exponent;
-        private readonly int _maxPrecision;
         #endregion
 
         #region Private Constants
@@ -127,10 +122,9 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         private enum BasicOperations {
-            Add = 0,
-            Subtract = 1,
-            Multiply = 2,
-            Divide = 3
+            Add,
+            Multiply,
+            Divide
         }
 
         #endregion
@@ -139,8 +133,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal One = new BigDecimal(1, Fraction.One, 1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
-        public static readonly BigDecimal Half = new BigDecimal(1, Fraction.Five, 0);
         [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal NaN = new BigDecimal(NumberTypes.NaN, 0);
         [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
@@ -158,50 +150,23 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #region Private Constructors
 
-        public BigDecimal() : this(0, NaN) {
+        public BigDecimal() : this(NumberTypes.NaN, 0) {
         }
 
-        private BigDecimal(int sign, Fraction/*!*/ fraction, int exponent)
-            : this(sign, fraction, exponent, fraction.Precision) {
-        }
-
-        private BigDecimal(int sign, Fraction/*!*/ fraction, int exponent, int maxPrecision) {
+        private BigDecimal(int sign, Fraction/*!*/ fraction, int exponent) {
             Debug.Assert(sign == 1 || sign == -1);
             _type = NumberTypes.Finite;
             _sign = sign;
             _fraction = fraction;
             _exponent = exponent;
-            // If maxPrecision is 0 then default to the precision of the fraction
-            _maxPrecision = maxPrecision == 0 ? fraction.Precision : maxPrecision;
         }
 
-        private BigDecimal(int sign, BigDecimal/*!*/ copyFrom) {
-            _type = copyFrom._type;
-            _sign = sign;
-            _fraction = copyFrom._fraction;
-            _exponent = copyFrom._exponent;
-            _maxPrecision = copyFrom._maxPrecision;
-        }
-
-        private BigDecimal(int sign, BigDecimal/*!*/ copyFrom, int maxPrecision) {
-            _type = copyFrom._type;
-            _sign = sign;
-            _fraction = new Fraction(copyFrom._fraction, maxPrecision);
-            _exponent = copyFrom._exponent;
-            _maxPrecision = maxPrecision;
-        }
-
-        private BigDecimal(NumberTypes type, int sign)
-            : this(type, sign, 1) {
-        }
-
-        private BigDecimal(NumberTypes type, int sign, int maxPrecision) {
+        private BigDecimal(NumberTypes type, int sign) {
             Debug.Assert(type != NumberTypes.Finite);
             _type = type;
             _sign = sign;
             _fraction = Fraction.Zero;
             _exponent = 0;
-            _maxPrecision = maxPrecision;
         }
 
         #endregion
@@ -211,27 +176,31 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public int Sign { get { return _sign; } }
         public int Exponent { get { return _exponent; } }
         public int Precision { get { return _fraction.Precision; } }
-        public int MaxPrecision { get { return _maxPrecision; } }
         public int Digits { get { return _fraction.DigitCount; } }
-        public int MaxPrecisionDigits { get { return _maxPrecision * BASE_FIG; } }
+        #endregion
+
+        #region IRubyObjectState
+
+        // A BigDecimal is immutable and, as in MRI, always frozen.
+        public bool IsFrozen => true;
+        public void Freeze() { }
+        public bool IsTainted { get => false; set { } }
+        public bool IsUntrusted { get => false; set { } }
+
         #endregion
 
         #region Create Methods
 
         public static BigDecimal Create(Config/*!*/config, object value) {
             Debug.Assert(!(value is double) && !(value is float)); // Need to use CultureInfo.InvariantCulture for double
-            return Create(config, value.ToString(), 0);
+            return Create(config, value.ToString());
         }
 
         public static BigDecimal Create(Config/*!*/config, double value) {
-            return Create(config, value.ToString(CultureInfo.InvariantCulture), 0);
+            return Create(config, value.ToString(CultureInfo.InvariantCulture));
         }
 
         public static BigDecimal Create(Config/*!*/config, string value) {
-            return Create(config, value, 0);
-        }
-
-        public static BigDecimal Create(Config/*!*/config, string value, int maxPrecision) {
             value = value.Trim();
             BigDecimal result = CheckSpecialCases(value);
 
@@ -269,7 +238,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                     // Normalize exponent where mantissa < 1.0
                     exponent -= (fractionStr.Length - strippedFractionStr.Length);
                 }
-                result = new BigDecimal(sign, fraction, exponent, maxPrecision);
+                result = new BigDecimal(sign, fraction, exponent);
             }
             return CheckOverflowExceptions(config, result);
         }
@@ -457,92 +426,12 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 return result;
             }
 
-            // Default to the global limit
-            if (limit == 0) {
-                limit = config.Limit;
-            }
-
-            // Calculate the number of digits if not specified
-            if (limit == 0) {
-                limit = x.Digits + y.Digits;
-            }
-
-            int sign = y._sign * x._sign;
-            // #mult's limit counts significant digits, but LimitPrecision's counts decimal
-            // places, so the multiply-by-one short cut has to convert between the two -
-            // otherwise BigDecimal("1.234").mult(1, 2) keeps three digits instead of two.
-            if (IsOne(x)) {
-                BigDecimal scaled = new BigDecimal(sign, y._fraction, y._exponent);
-                return LimitPrecision(config, scaled, limit - scaled.Exponent, config.RoundingMode);
-            }
-            if (IsOne(y)) {
-                BigDecimal scaled = new BigDecimal(sign, x._fraction, x._exponent);
-                return LimitPrecision(config, scaled, limit - scaled.Exponent, config.RoundingMode);
-            }
-
-            int exponent;
-            Fraction fraction;
-            try {
-                checked {
-                    int diffDigits1, diffDigits2;
-                    fraction = Fraction.Multiply(x._fraction, y._fraction, out diffDigits1);
-                    fraction = Fraction.LimitPrecision(sign, fraction, limit, config.RoundingMode, out diffDigits2);
-                    exponent = x._exponent + y._exponent + diffDigits1 + diffDigits2;
-                }
-            } catch (OverflowException) {
-                return ExponentOverflow(config, sign, x._exponent);
-            }
-
-            result = new BigDecimal(sign, fraction, exponent, limit);
-            return result;
-        }
-
-        public static BigDecimal Divide(Config config, BigDecimal x, BigDecimal y, int limit, out BigDecimal remainder) {
-            BigDecimal result = CheckSpecialResult(config, x, y, BasicOperations.Divide);
-            if (result != null) {
-                remainder = BigDecimal.PositiveZero;
-                return result;
-            }
-
-            // Default to global limit if not specified
-            if (limit == 0) {
-                limit = config.Limit;
-            }
-
-            // Sign
-            int sign = x._sign * y._sign;
-
-            if (IsOne(y)) {
-                remainder = BigDecimal.PositiveZero;
-                return new BigDecimal(sign, x._fraction, x._exponent);
-            }
-
-            // Fraction
-            int xOffset, rOffset, limitOffset;
-            int minPrecision = (int)Math.Ceiling((double)limit / BASE_FIG) + 1;
-            Fraction rFraction;
-            Fraction fraction = Fraction.Divide(x._fraction, y._fraction, minPrecision, out rFraction, out xOffset, out rOffset);
-            if (limit == 0) {
-                limitOffset = 0;
-            } else {
-                fraction = Fraction.LimitPrecision(sign, fraction, limit, config.RoundingMode, out limitOffset);
-            }
-
-            // Exponent
-            int exponent, rExponent;
-            try {
-                checked {
-                    exponent = x._exponent - y._exponent + xOffset + limitOffset;
-                    rExponent = x._exponent - y._exponent + rOffset;
-                }
-            } catch (OverflowException) {
-                remainder = BigDecimal.PositiveZero;
-                return ExponentOverflow(config, sign, x._exponent);
-            }
-
-            remainder = new BigDecimal(sign, rFraction, rExponent, rFraction.MaxPrecision);
-            result = new BigDecimal(sign, fraction, exponent, fraction.MaxPrecision);
-            return result;
+            // The exact product, rounded to #mult's limit of significant digits, or to the global one.
+            System.Numerics.BigInteger a, b;
+            long ea, eb;
+            ToUnscaled(x, out a, out ea);
+            ToUnscaled(y, out b, out eb);
+            return RoundExact(config, a * b, ea + eb, limit != 0 ? limit : config.Limit);
         }
 
         /// <summary>A finite x as unscaled * 10**scale, the unscaled value carrying the sign.</summary>
@@ -649,9 +538,9 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             div = BigDecimal.NaN;
             mod = BigDecimal.NaN;
 
-            // Exactly, at the exponent of the finer of the two: the quotient of an 18-digit division,
-            // floored, was wrong whenever the true quotient needed more digits - BigDecimal("1e100") % 3
-            // was 0.1e83.
+            // Exactly, at the exponent of the finer of the two, however many digits that takes (as in MRI):
+            // the quotient of an 18-digit division, floored, was wrong whenever the true quotient needed
+            // more digits - BigDecimal("1e100") % 3 was 0.1e83.
             if (BigDecimal.IsFinite(x) && BigDecimal.IsFinite(y) && !IsZero(y)) {
                 if (IsZero(x)) {
                     div = PositiveZero;
@@ -662,106 +551,33 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 long ea, eb;
                 ToUnscaled(x, out a, out ea);
                 ToUnscaled(y, out b, out eb);
-                if (Math.Abs(ea - eb) <= 100000) {
-                    long e = Math.Min(ea, eb);
-                    a *= System.Numerics.BigInteger.Pow(10, (int)(ea - e));
-                    b *= System.Numerics.BigInteger.Pow(10, (int)(eb - e));
-                    System.Numerics.BigInteger r;
-                    System.Numerics.BigInteger q = System.Numerics.BigInteger.DivRem(a, b, out r);
-                    if (!r.IsZero && (r.Sign < 0) != (b.Sign < 0)) {
-                        q -= 1;
-                        r += b;
-                    }
-                    div = FromUnscaled(config, q, 0);
-                    mod = FromUnscaled(config, r, e);
-                    return;
+                long e = Math.Min(ea, eb);
+                a *= System.Numerics.BigInteger.Pow(10, checked((int)(ea - e)));
+                b *= System.Numerics.BigInteger.Pow(10, checked((int)(eb - e)));
+                System.Numerics.BigInteger r;
+                System.Numerics.BigInteger q = System.Numerics.BigInteger.DivRem(a, b, out r);
+                if (!r.IsZero && (r.Sign < 0) != (b.Sign < 0)) {
+                    q -= 1;
+                    r += b;
                 }
+                div = FromUnscaled(config, q, 0);
+                mod = FromUnscaled(config, r, e);
             }
-            if (BigDecimal.IsFinite(x) && BigDecimal.IsFinite(y)) {
-                BigDecimal remainder;
-                BigDecimal quotient = Divide(config, x, y, 0, out remainder);
-                if (BigDecimal.IsFinite(quotient)) {
-                    // Calculate the div: floor(quotient)
-                    div = LimitPrecision(config, quotient, 0, BigDecimal.RoundingModes.Floor);
-                    // Calculate the mod: x - (div * y)
-                    mod = Subtract(config, x, Multiply(config, div, y));
-                }
-            }
-        }
-
-        public static BigDecimal/*!*/ Power(Config/*!*/ config, BigDecimal/*!*/ x, int power) {
-            if (IsNaN(x)) {
-                return CheckOverflowExceptions(config, NaN);
-            }
-
-            if (power == 0) {
-                // Even Infinity ** 0 is 1.
-                return One;
-            }
-
-            // power is odd  => sign = x.Sign
-            // power is even => sign = 1
-            int sign = (power % 2 != 0) ? x.Sign : 1;
-
-            if (IsInfinite(x)) {
-                // Infinity to a positive power stays infinite; to a negative power it
-                // collapses onto a (signed) zero, exactly as 0 ** -n blows up to Infinity.
-                if (power < 0) {
-                    return new BigDecimal(sign, PositiveZero);
-                }
-                return CheckOverflowExceptions(config, sign < 0 ? NegativeInfinity : PositiveInfinity);
-            }
-
-            if (IsOne(x)) {
-                return new BigDecimal(sign, One);
-            }
-
-            if (IsZero(x)) {
-                if (power < 0) {
-                    return CheckOverflowExceptions(config, new BigDecimal(sign, PositiveInfinity));
-                } else {
-                    return new BigDecimal(sign, PositiveZero);
-                }
-            }
-
-            BigDecimal result = x;
-            int n = Math.Abs(power) - 1;
-            int precision = x.Precision * (n + 2);
-            while (n > 0) {
-                // Copy x into temp ensuring a good precision
-                BigDecimal temp = new BigDecimal(x.Sign, x, precision);
-                int s = 2;
-                int ss = 1;
-                while (s <= n) {
-                    temp = Multiply(config, temp, temp);
-                    ss = s;
-                    s += s;
-                }
-                n -= ss;
-                result = Multiply(config, result, temp);
-            }
-            if (power < 0) {
-                BigDecimal remainder;
-                result = Divide(config, One, result, precision * (BASE_FIG + 1), out remainder);
-            }
-            return result;
         }
 
         public static BigDecimal/*!*/ SquareRoot(Config/*!*/ config, BigDecimal/*!*/ x, int limit) {
             if (limit < 0) {
-                throw new ArgumentException("argument must be positive");
+                throw new ArgumentException("Negative precision for sqrt");
             }
             // Special cases
             if (IsZero(x) || IsPositiveOne(x)) {
                 return x;
             }
-            if (x.Sign < 0) {
-                throw new FloatDomainError("SQRT(negative value)");
-                // Really it seems more consistent to check the overflow exceptions
-                // return CheckOverflowExceptions(config, NaN);
-            }
             if (IsNaN(x)) {
-                throw new FloatDomainError("SQRT(NaN)");
+                throw new FloatDomainError("sqrt of 'NaN'(Not a Number)");
+            }
+            if (x.Sign < 0) {
+                throw new FloatDomainError("sqrt of negative value");
             }
             if (!IsFinite(x)) {
                 return CheckOverflowExceptions(config, x);
@@ -876,9 +692,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             if (limit < 0) {
                 throw new ArgumentException("limit must be positive");
             }
-            if (limit == 0) {
-                limit = config.Limit;
-            }
 
             // This method is used for both adding and subtracting, but the special cases are the same.
             BigDecimal result = CheckSpecialResult(config, x, y, BasicOperations.Add);
@@ -886,55 +699,38 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 return result;
             }
 
-            if (IsZero(x)) {
-                if (limit == 0) {
-                    return y;
-                } else {
-                    return LimitPrecision(config, y, limit, config.RoundingMode);
-                }
-            }
-            if (IsZero(y)) {
-                if (limit == 0) {
-                    return x;
-                } else {
-                    return LimitPrecision(config, x, limit, config.RoundingMode);
-                }
-            }
+            // The exact sum, aligned at the finer of the two exponents, rounded to the limit if there is one.
+            System.Numerics.BigInteger a, b;
+            long ea, eb;
+            ToUnscaled(x, out a, out ea);
+            ToUnscaled(y, out b, out eb);
+            long e = Math.Min(ea, eb);
+            System.Numerics.BigInteger sum =
+                a * System.Numerics.BigInteger.Pow(10, checked((int)(ea - e))) +
+                b * System.Numerics.BigInteger.Pow(10, checked((int)(eb - e)));
+            return RoundExact(config, sum, e, limit != 0 ? limit : config.Limit);
+        }
 
-            int exponent = Math.Max(x._exponent, y._exponent);
-            int sign = x._sign;
-            Fraction fraction;
-            int exponentDiff;
-
-            try {
-                checked {
-                    exponentDiff = checked(x._exponent - y._exponent);
-                    int diffDigits;
-                    if (x._sign == y._sign) {
-                        fraction = Fraction.Add(x._fraction, y._fraction, exponentDiff, out diffDigits);
-                        exponent = exponent + diffDigits;
-                        sign = x._sign;
-                    } else {
-                        // Signs are different then we have to do a subtraction instead
-                        fraction = Fraction.Subtract(x._fraction, y._fraction, exponentDiff, out diffDigits, out sign);
-                        exponent = exponent + diffDigits;
-                        if (sign == 0) {
-                            return PositiveZero;
-                        }
-                        sign = x._sign * sign;
-                    }
-                    if (limit == 0) {
-                        limit = fraction.DigitCount;
-                    }
-                    fraction = Fraction.LimitPrecision(sign, fraction, limit, config.RoundingMode, out diffDigits);
-                    exponent = exponent + diffDigits;
-                }
-            } catch (OverflowException) {
-                return ExponentOverflow(config, sign, x._exponent);
+        /// <summary>
+        /// unscaled * 10**scale rounded to <paramref name="limit"/> significant digits in the current mode, or
+        /// exactly for a limit of 0. Zero is +0, and an exponent beyond our Int32 one overflows.
+        /// </summary>
+        private static BigDecimal/*!*/ RoundExact(Config/*!*/ config, System.Numerics.BigInteger unscaled, long scale, int limit) {
+            if (unscaled.IsZero) {
+                return PositiveZero;
             }
-
-            result = new BigDecimal(sign, fraction, exponent);
-            return result;
+            int sign = unscaled.Sign;
+            long exponent = scale + System.Numerics.BigInteger.Abs(unscaled).ToString(CultureInfo.InvariantCulture).Length;
+            if (exponent > Int32.MaxValue || exponent < Int32.MinValue) {
+                return ExponentOverflow(config, sign, exponent > 0 ? 1 : -1);
+            }
+            BigDecimal exact = FromUnscaled(config, unscaled, scale);
+            if (limit == 0) {
+                return exact;
+            }
+            int offset;
+            Fraction fraction = Fraction.LimitPrecision(sign, exact._fraction, limit, config.RoundingMode, out offset);
+            return new BigDecimal(sign, fraction, exact._exponent + offset);
         }
 
         private static BigDecimal ExponentOverflow(Config config, int sign, int exponent) {
@@ -956,1630 +752,95 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #endregion
 
-        #region Special Comparisons
+        #region Special Comparisons and Results
 
-        //TODO: There is some redundancy in this table that could be removed.
-        private static int? CheckSpecialComparison(BigDecimal x, BigDecimal y) {
-            // Non-zero comparisons are not allowed (since these are not special cases)
-            Debug.Assert(!IsNonZeroFinite(x) || !IsNonZeroFinite(y));
-
-            // Encode the array indices
-            int xSign = x._sign == -1 ? 0 : 1;
-            int ySign = y._sign == -1 ? 0 : 1;
-            int xZero = IsZero(x) ? 0 : 1;
-            int yZero = IsZero(y) ? 0 : 1;
-            int xType = (int)x._type;
-            int yType = (int)y._type;
-            return SC[xSign, xZero, xType, ySign, yZero, yType];
-        }
-
-        // # Generated by the following ruby code:
-        // require 'bigdecimal'
-        // 
-        // signs = [:-, :+]
-        // zeros = [true, false]
-        // types = [:NaN, :Finite, :Infinite]
-        // ops = [:+, :-, :*, :/]
-        // 
-        // def CreateBigDecimal(sign, zero, type, finiteValue) 
-        //   if zero
-        //     BigDecimal.new("#{sign}0.0")
-        //   else
-        //     if type == :NaN
-        //       BigDecimal.new("NaN")
-        //     elsif type == :Infinite
-        //       BigDecimal.new("#{sign}Infinity")
-        //     else
-        //       BigDecimal.new("#{sign}#{finiteValue}")
-        //     end
-        //   end
-        // end
-        // 
-        // def map(r, null)
-        //    if r.sign == BigDecimal::SIGN_NaN
-        //      result = 'NaN'
-        //    elsif r.sign == BigDecimal::SIGN_POSITIVE_INFINITE
-        //      result = 'PositiveInfinity'
-        //    elsif r.sign == BigDecimal::SIGN_NEGATIVE_INFINITE
-        //      result = 'NegativeInfinity'
-        //    elsif r.sign == BigDecimal::SIGN_POSITIVE_ZERO
-        //      result = 'PositiveZero'
-        //    elsif r.sign == BigDecimal::SIGN_NEGATIVE_ZERO
-        //      result = 'NegativeZero'
-        //    elsif null
-        //      result = 'null'
-        //    else
-        //      result = 'Finite'
-        //    end
-        // end
-        // signs.each do |xSign|
-        //     zeros.each do |xZero|
-        //         types.each do |xType|
-        //             signs.each do |ySign|
-        //                 zeros.each do |yZero|
-        //                     types.each do |yType|
-        //                         x = CreateBigDecimal(xSign, xZero, xType, 7)
-        //                         y = CreateBigDecimal(ySign, yZero, yType, 11)
-        //                         cmp = (x <=> y) || "null"
-        //                         puts "// #{map(x, false)} <=> #{map(y, false)} = #{cmp}"
-        //                         puts "SC[#{signs.index(xSign)}, #{zeros.index(xZero)}, #{types.index(xType)}, #{signs.index(ySign)}, #{zeros.index(yZero)}, #{types.index(yType)}] = #{cmp};"
-        //                     end
-        //                 end
-        //             end
-        //         end
-        //     end
-        // end
-        private static readonly int?[, , , , ,] SC = new int?[2, 2, 3, 2, 2, 3];
-
-        private static void CreateSC() {
-            // xSign, xZero, xType, ySign, yZero, yType
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 0, 0, 0, 0] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 0, 0, 0, 1] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 0, 0, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 0, 0, 1, 0] = null;
-            // NegativeZero <=> Finite = 1
-            SC[0, 0, 0, 0, 1, 1] = 1;
-            // NegativeZero <=> NegativeInfinity = 1
-            SC[0, 0, 0, 0, 1, 2] = 1;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 0, 1, 0, 0] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 0, 1, 0, 1] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 0, 1, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 0, 1, 1, 0] = null;
-            // NegativeZero <=> Finite = -1
-            SC[0, 0, 0, 1, 1, 1] = -1;
-            // NegativeZero <=> PositiveInfinity = -1
-            SC[0, 0, 0, 1, 1, 2] = -1;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 1, 0, 0, 0] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 1, 0, 0, 1] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 1, 0, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 1, 0, 1, 0] = null;
-            // NegativeZero <=> Finite = 1
-            SC[0, 0, 1, 0, 1, 1] = 1;
-            // NegativeZero <=> NegativeInfinity = 1
-            SC[0, 0, 1, 0, 1, 2] = 1;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 1, 1, 0, 0] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 1, 1, 0, 1] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 1, 1, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 1, 1, 1, 0] = null;
-            // NegativeZero <=> Finite = -1
-            SC[0, 0, 1, 1, 1, 1] = -1;
-            // NegativeZero <=> PositiveInfinity = -1
-            SC[0, 0, 1, 1, 1, 2] = -1;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 2, 0, 0, 0] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 2, 0, 0, 1] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 2, 0, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 2, 0, 1, 0] = null;
-            // NegativeZero <=> Finite = 1
-            SC[0, 0, 2, 0, 1, 1] = 1;
-            // NegativeZero <=> NegativeInfinity = 1
-            SC[0, 0, 2, 0, 1, 2] = 1;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 2, 1, 0, 0] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 2, 1, 0, 1] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 2, 1, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 2, 1, 1, 0] = null;
-            // NegativeZero <=> Finite = -1
-            SC[0, 0, 2, 1, 1, 1] = -1;
-            // NegativeZero <=> PositiveInfinity = -1
-            SC[0, 0, 2, 1, 1, 2] = -1;
-            // NaN <=> NegativeZero = null
-            SC[0, 1, 0, 0, 0, 0] = null;
-            // NaN <=> NegativeZero = null
-            SC[0, 1, 0, 0, 0, 1] = null;
-            // NaN <=> NegativeZero = null
-            SC[0, 1, 0, 0, 0, 2] = null;
-            // NaN <=> NaN = null
-            SC[0, 1, 0, 0, 1, 0] = null;
-            // NaN <=> Finite = null
-            SC[0, 1, 0, 0, 1, 1] = null;
-            // NaN <=> NegativeInfinity = null
-            SC[0, 1, 0, 0, 1, 2] = null;
-            // NaN <=> PositiveZero = null
-            SC[0, 1, 0, 1, 0, 0] = null;
-            // NaN <=> PositiveZero = null
-            SC[0, 1, 0, 1, 0, 1] = null;
-            // NaN <=> PositiveZero = null
-            SC[0, 1, 0, 1, 0, 2] = null;
-            // NaN <=> NaN = null
-            SC[0, 1, 0, 1, 1, 0] = null;
-            // NaN <=> Finite = null
-            SC[0, 1, 0, 1, 1, 1] = null;
-            // NaN <=> PositiveInfinity = null
-            SC[0, 1, 0, 1, 1, 2] = null;
-            // Finite <=> NegativeZero = -1
-            SC[0, 1, 1, 0, 0, 0] = -1;
-            // Finite <=> NegativeZero = -1
-            SC[0, 1, 1, 0, 0, 1] = -1;
-            // Finite <=> NegativeZero = -1
-            SC[0, 1, 1, 0, 0, 2] = -1;
-            // Finite <=> NaN = null
-            SC[0, 1, 1, 0, 1, 0] = null;
-            // Finite <=> Finite = 1
-            SC[0, 1, 1, 0, 1, 1] = 1;
-            // Finite <=> NegativeInfinity = 1
-            SC[0, 1, 1, 0, 1, 2] = 1;
-            // Finite <=> PositiveZero = -1
-            SC[0, 1, 1, 1, 0, 0] = -1;
-            // Finite <=> PositiveZero = -1
-            SC[0, 1, 1, 1, 0, 1] = -1;
-            // Finite <=> PositiveZero = -1
-            SC[0, 1, 1, 1, 0, 2] = -1;
-            // Finite <=> NaN = null
-            SC[0, 1, 1, 1, 1, 0] = null;
-            // Finite <=> Finite = -1
-            SC[0, 1, 1, 1, 1, 1] = -1;
-            // Finite <=> PositiveInfinity = -1
-            SC[0, 1, 1, 1, 1, 2] = -1;
-            // NegativeInfinity <=> NegativeZero = -1
-            SC[0, 1, 2, 0, 0, 0] = -1;
-            // NegativeInfinity <=> NegativeZero = -1
-            SC[0, 1, 2, 0, 0, 1] = -1;
-            // NegativeInfinity <=> NegativeZero = -1
-            SC[0, 1, 2, 0, 0, 2] = -1;
-            // NegativeInfinity <=> NaN = null
-            SC[0, 1, 2, 0, 1, 0] = null;
-            // NegativeInfinity <=> Finite = -1
-            SC[0, 1, 2, 0, 1, 1] = -1;
-            // NegativeInfinity <=> NegativeInfinity = 0
-            SC[0, 1, 2, 0, 1, 2] = 0;
-            // NegativeInfinity <=> PositiveZero = -1
-            SC[0, 1, 2, 1, 0, 0] = -1;
-            // NegativeInfinity <=> PositiveZero = -1
-            SC[0, 1, 2, 1, 0, 1] = -1;
-            // NegativeInfinity <=> PositiveZero = -1
-            SC[0, 1, 2, 1, 0, 2] = -1;
-            // NegativeInfinity <=> NaN = null
-            SC[0, 1, 2, 1, 1, 0] = null;
-            // NegativeInfinity <=> Finite = -1
-            SC[0, 1, 2, 1, 1, 1] = -1;
-            // NegativeInfinity <=> PositiveInfinity = -1
-            SC[0, 1, 2, 1, 1, 2] = -1;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 0, 0, 0, 0] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 0, 0, 0, 1] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 0, 0, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 0, 0, 1, 0] = null;
-            // PositiveZero <=> Finite = 1
-            SC[1, 0, 0, 0, 1, 1] = 1;
-            // PositiveZero <=> NegativeInfinity = 1
-            SC[1, 0, 0, 0, 1, 2] = 1;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 0, 1, 0, 0] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 0, 1, 0, 1] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 0, 1, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 0, 1, 1, 0] = null;
-            // PositiveZero <=> Finite = -1
-            SC[1, 0, 0, 1, 1, 1] = -1;
-            // PositiveZero <=> PositiveInfinity = -1
-            SC[1, 0, 0, 1, 1, 2] = -1;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 1, 0, 0, 0] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 1, 0, 0, 1] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 1, 0, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 1, 0, 1, 0] = null;
-            // PositiveZero <=> Finite = 1
-            SC[1, 0, 1, 0, 1, 1] = 1;
-            // PositiveZero <=> NegativeInfinity = 1
-            SC[1, 0, 1, 0, 1, 2] = 1;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 1, 1, 0, 0] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 1, 1, 0, 1] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 1, 1, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 1, 1, 1, 0] = null;
-            // PositiveZero <=> Finite = -1
-            SC[1, 0, 1, 1, 1, 1] = -1;
-            // PositiveZero <=> PositiveInfinity = -1
-            SC[1, 0, 1, 1, 1, 2] = -1;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 2, 0, 0, 0] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 2, 0, 0, 1] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 2, 0, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 2, 0, 1, 0] = null;
-            // PositiveZero <=> Finite = 1
-            SC[1, 0, 2, 0, 1, 1] = 1;
-            // PositiveZero <=> NegativeInfinity = 1
-            SC[1, 0, 2, 0, 1, 2] = 1;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 2, 1, 0, 0] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 2, 1, 0, 1] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 2, 1, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 2, 1, 1, 0] = null;
-            // PositiveZero <=> Finite = -1
-            SC[1, 0, 2, 1, 1, 1] = -1;
-            // PositiveZero <=> PositiveInfinity = -1
-            SC[1, 0, 2, 1, 1, 2] = -1;
-            // NaN <=> NegativeZero = null
-            SC[1, 1, 0, 0, 0, 0] = null;
-            // NaN <=> NegativeZero = null
-            SC[1, 1, 0, 0, 0, 1] = null;
-            // NaN <=> NegativeZero = null
-            SC[1, 1, 0, 0, 0, 2] = null;
-            // NaN <=> NaN = null
-            SC[1, 1, 0, 0, 1, 0] = null;
-            // NaN <=> Finite = null
-            SC[1, 1, 0, 0, 1, 1] = null;
-            // NaN <=> NegativeInfinity = null
-            SC[1, 1, 0, 0, 1, 2] = null;
-            // NaN <=> PositiveZero = null
-            SC[1, 1, 0, 1, 0, 0] = null;
-            // NaN <=> PositiveZero = null
-            SC[1, 1, 0, 1, 0, 1] = null;
-            // NaN <=> PositiveZero = null
-            SC[1, 1, 0, 1, 0, 2] = null;
-            // NaN <=> NaN = null
-            SC[1, 1, 0, 1, 1, 0] = null;
-            // NaN <=> Finite = null
-            SC[1, 1, 0, 1, 1, 1] = null;
-            // NaN <=> PositiveInfinity = null
-            SC[1, 1, 0, 1, 1, 2] = null;
-            // Finite <=> NegativeZero = 1
-            SC[1, 1, 1, 0, 0, 0] = 1;
-            // Finite <=> NegativeZero = 1
-            SC[1, 1, 1, 0, 0, 1] = 1;
-            // Finite <=> NegativeZero = 1
-            SC[1, 1, 1, 0, 0, 2] = 1;
-            // Finite <=> NaN = null
-            SC[1, 1, 1, 0, 1, 0] = null;
-            // Finite <=> Finite = 1
-            SC[1, 1, 1, 0, 1, 1] = 1;
-            // Finite <=> NegativeInfinity = 1
-            SC[1, 1, 1, 0, 1, 2] = 1;
-            // Finite <=> PositiveZero = 1
-            SC[1, 1, 1, 1, 0, 0] = 1;
-            // Finite <=> PositiveZero = 1
-            SC[1, 1, 1, 1, 0, 1] = 1;
-            // Finite <=> PositiveZero = 1
-            SC[1, 1, 1, 1, 0, 2] = 1;
-            // Finite <=> NaN = null
-            SC[1, 1, 1, 1, 1, 0] = null;
-            // Finite <=> Finite = -1
-            SC[1, 1, 1, 1, 1, 1] = -1;
-            // Finite <=> PositiveInfinity = -1
-            SC[1, 1, 1, 1, 1, 2] = -1;
-            // PositiveInfinity <=> NegativeZero = 1
-            SC[1, 1, 2, 0, 0, 0] = 1;
-            // PositiveInfinity <=> NegativeZero = 1
-            SC[1, 1, 2, 0, 0, 1] = 1;
-            // PositiveInfinity <=> NegativeZero = 1
-            SC[1, 1, 2, 0, 0, 2] = 1;
-            // PositiveInfinity <=> NaN = null
-            SC[1, 1, 2, 0, 1, 0] = null;
-            // PositiveInfinity <=> Finite = 1
-            SC[1, 1, 2, 0, 1, 1] = 1;
-            // PositiveInfinity <=> NegativeInfinity = 1
-            SC[1, 1, 2, 0, 1, 2] = 1;
-            // PositiveInfinity <=> PositiveZero = 1
-            SC[1, 1, 2, 1, 0, 0] = 1;
-            // PositiveInfinity <=> PositiveZero = 1
-            SC[1, 1, 2, 1, 0, 1] = 1;
-            // PositiveInfinity <=> PositiveZero = 1
-            SC[1, 1, 2, 1, 0, 2] = 1;
-            // PositiveInfinity <=> NaN = null
-            SC[1, 1, 2, 1, 1, 0] = null;
-            // PositiveInfinity <=> Finite = 1
-            SC[1, 1, 2, 1, 1, 1] = 1;
-            // PositiveInfinity <=> PositiveInfinity = 0
-            SC[1, 1, 2, 1, 1, 2] = 0;
-        }
-        #endregion
-
-        #region Special Results
-        //TODO: Probably don't need the subtract operation since it is symetric with addition operation in terms of special results
         /// <summary>
-        /// Look up special results for calculations that involve unusual values such as NaN, infinity and zero.
+        /// x &lt;=&gt; y when one of them is not a non-zero finite number: nil with a NaN, and otherwise the
+        /// order -Infinity &lt; negative &lt; zero (either sign) &lt; positive &lt; Infinity.
         /// </summary>
-        /// <param name="x">The left hand side of the operation</param>
-        /// <param name="y">The right hand side of the operation</param>
-        /// <param name="op">The operation itself</param>
-        /// <returns>The special result or null if the result is not special</returns>
-        private static BigDecimal CheckSpecialResult(Config config, BigDecimal x, BigDecimal y, BasicOperations op) {
-            // Encode the array indices
-            int xSign = x._sign == -1 ? 0 : 1;
-            int ySign = y._sign == -1 ? 0 : 1;
-            int xZero = IsZero(x) ? 0 : 1;
-            int yZero = IsZero(y) ? 0 : 1;
-            int xType = (int)x._type;
-            int yType = (int)y._type;
-            int opValue = (int)op;
-
-            // Look up the special result
-            BigDecimal result = SR[xSign, xZero, xType, opValue, ySign, yZero, yType];
-            if (result != null) {
-                return CheckOverflowExceptions(config, result);
+        private static int? CheckSpecialComparison(BigDecimal x, BigDecimal y) {
+            Debug.Assert(!IsNonZeroFinite(x) || !IsNonZeroFinite(y));
+            if (IsNaN(x) || IsNaN(y)) {
+                return null;
             }
-            return null;
+            return Rank(x).CompareTo(Rank(y));
+        }
+
+        private static int Rank(BigDecimal/*!*/ x) {
+            return IsZero(x) ? 0 : (IsInfinite(x) ? 2 : 1) * x._sign;
+        }
+
+        /// <summary>
+        /// The result of x + y, x * y or x / y when it is decided by NaN, an infinity or a zero, as in MRI;
+        /// null when it has to be computed. (x - y is x + -y.) An infinite operand raises in the
+        /// EXCEPTION_INFINITY mode even when the result is finite, as MRI checks the operands too.
+        /// </summary>
+        private static BigDecimal CheckSpecialResult(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, BasicOperations op) {
+            if (IsNonZeroFinite(x) && IsNonZeroFinite(y)) {
+                return null;
+            }
+            if (IsNaN(x) || IsNaN(y)) {
+                return CheckOverflowExceptions(config, NaN);
+            }
+            if (IsInfinite(x) || IsInfinite(y)) {
+                CheckOverflowExceptions(config, IsInfinite(x) ? x : y);
+            }
+
+            int sign = x._sign * y._sign;
+            switch (op) {
+                case BasicOperations.Add:
+                    if (IsInfinite(x) && IsInfinite(y)) {
+                        return x._sign == y._sign ? x : CheckOverflowExceptions(config, NaN);
+                    }
+                    if (IsInfinite(x) || IsInfinite(y)) {
+                        return IsInfinite(x) ? x : y;
+                    }
+                    if (IsZero(x) && IsZero(y)) {
+                        // -0 + -0 is -0; any other sum of zeros is +0
+                        return x._sign < 0 && y._sign < 0 ? NegativeZero : PositiveZero;
+                    }
+                    return null;
+
+                case BasicOperations.Multiply:
+                    if (IsInfinite(x) || IsInfinite(y)) {
+                        return IsZero(x) || IsZero(y) ? CheckOverflowExceptions(config, NaN) : Infinity(sign);
+                    }
+                    return Zero(sign);
+
+                case BasicOperations.Divide:
+                    if (IsInfinite(x)) {
+                        return IsInfinite(y) ? CheckOverflowExceptions(config, NaN) : Infinity(sign);
+                    }
+                    if (IsInfinite(y)) {
+                        return Zero(sign);
+                    }
+                    if (IsZero(y)) {
+                        return IsZero(x) ? CheckOverflowExceptions(config, NaN) : CheckOverflowExceptions(config, Infinity(sign));
+                    }
+                    return Zero(sign);
+
+                default:
+                    throw Assert.Unreachable;
+            }
+        }
+
+        private static BigDecimal/*!*/ Infinity(int sign) {
+            return sign < 0 ? NegativeInfinity : PositiveInfinity;
+        }
+
+        private static BigDecimal/*!*/ Zero(int sign) {
+            return sign < 0 ? NegativeZero : PositiveZero;
         }
 
         private static BigDecimal/*!*/ CheckOverflowExceptions(Config/*!*/ config, BigDecimal/*!*/ result) {
             if (IsNaN(result) && (config.OverflowMode & OverflowExceptionModes.NaN) == OverflowExceptionModes.NaN) {
                 throw new FloatDomainError("Computation results to 'NaN'");
             } else if (IsInfinite(result) && (config.OverflowMode & OverflowExceptionModes.Infinity) == OverflowExceptionModes.Infinity) {
-                throw new FloatDomainError("Computation results to 'Infinity'");
+                throw new FloatDomainError(result.Sign > 0 ? "Computation results in 'Infinity'" : "Computation results in '-Infinity'");
             }
             return result;
         }
 
-        /// <remarks>
-        /// Generated by the following ruby code
-        /// <code>
-        ///   require 'bigdecimal'
-        ///   
-        ///   signs = [:-, :+]
-        ///   zeros = [true, false]
-        ///   types = [:NaN, :Finite, :Infinite]
-        ///   ops = [:+, :-, :*, :/]
-        ///   
-        ///   def CreateBigDecimal(sign, zero, type, finiteValue) 
-        ///     if zero
-        ///       BigDecimal.new("#{sign}0.0")
-        ///     else
-        ///       if type == :NaN
-        ///         BigDecimal.new("NaN")
-        ///       elsif type == :Infinite
-        ///         BigDecimal.new("#{sign}Infinity")
-        ///       else
-        ///         BigDecimal.new("#{sign}#{finiteValue}")
-        ///       end
-        ///     end
-        ///   end
-        ///   
-        ///   def map(r, null)
-        ///      if r.sign == BigDecimal::SIGN_NaN
-        ///        result = 'NaN'
-        ///      elsif r.sign == BigDecimal::SIGN_POSITIVE_INFINITE
-        ///        result = 'PositiveInfinity'
-        ///      elsif r.sign == BigDecimal::SIGN_NEGATIVE_INFINITE
-        ///        result = 'NegativeInfinity'
-        ///      elsif r.sign == BigDecimal::SIGN_POSITIVE_ZERO
-        ///        result = 'PositiveZero'
-        ///      elsif r.sign == BigDecimal::SIGN_NEGATIVE_ZERO
-        ///        result = 'NegativeZero'
-        ///      elsif null
-        ///        result = 'null'
-        ///      else
-        ///        result = 'Finite'
-        ///      end
-        ///   end
-        ///   
-        ///   signs.each do |xSign|
-        ///   zeros.each do |xZero|
-        ///    types.each do |xType|
-        ///      ops.each do |op|
-        ///        signs.each do |ySign|
-        ///          zeros.each do |yZero|
-        ///            types.each do |yType|
-        ///              x = CreateBigDecimal(xSign, xZero, xType, 7)
-        ///              y = CreateBigDecimal(ySign, yZero, yType, 11)
-        ///              r = x.send(op, y)
-        ///              result = map(r, true)
-        ///              puts "// #{map(x, false)} #{op} #{map(y, false)} = #{result}"
-        ///              puts "SR[#{signs.index(xSign)}, #{zeros.index(xZero)}, #{types.index(xType)}, #{ops.index(op)}, #{signs.index(ySign)}, #{zeros.index(yZero)}, #{types.index(yType)}] = #{result};"
-        ///            end
-        ///          end
-        ///        end
-        ///      end
-        ///    end
-        ///   end
-        ///   end 
-        ///   </code>
-        /// </remarks>
-        private static readonly BigDecimal[, , , , , ,] SR = new BigDecimal[2, 2, 3, 4, 2, 2, 3];
-        private static void CreateSR() {
-            //[xSign, xZero, xType, Op, ySign, yZero, yType]
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 0, 0, 0, 0, 0] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 0, 0, 0, 0, 1] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 0, 0, 0, 0, 2] = NegativeZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 0, 0, 0, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 0, 0, 0, 1, 1] = null;
-            // NegativeZero + NegativeInfinity = NegativeInfinity
-            SR[0, 0, 0, 0, 0, 1, 2] = NegativeInfinity;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 0, 0, 1, 0, 0] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 0, 0, 1, 0, 1] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 0, 0, 1, 0, 2] = PositiveZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 0, 0, 1, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 0, 0, 1, 1, 1] = null;
-            // NegativeZero + PositiveInfinity = PositiveInfinity
-            SR[0, 0, 0, 0, 1, 1, 2] = PositiveInfinity;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 0, 1, 0, 0, 0] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 0, 1, 0, 0, 1] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 0, 1, 0, 0, 2] = PositiveZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 0, 1, 0, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 0, 1, 0, 1, 1] = null;
-            // NegativeZero - NegativeInfinity = PositiveInfinity
-            SR[0, 0, 0, 1, 0, 1, 2] = PositiveInfinity;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 0, 1, 1, 0, 0] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 0, 1, 1, 0, 1] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 0, 1, 1, 0, 2] = NegativeZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 0, 1, 1, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 0, 1, 1, 1, 1] = null;
-            // NegativeZero - PositiveInfinity = NegativeInfinity
-            SR[0, 0, 0, 1, 1, 1, 2] = NegativeInfinity;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 0, 2, 0, 0, 0] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 0, 2, 0, 0, 1] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 0, 2, 0, 0, 2] = PositiveZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 0, 2, 0, 1, 0] = NaN;
-            // NegativeZero * Finite = PositiveZero
-            SR[0, 0, 0, 2, 0, 1, 1] = PositiveZero;
-            // NegativeZero * NegativeInfinity = NaN
-            SR[0, 0, 0, 2, 0, 1, 2] = NaN;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 0, 2, 1, 0, 0] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 0, 2, 1, 0, 1] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 0, 2, 1, 0, 2] = NegativeZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 0, 2, 1, 1, 0] = NaN;
-            // NegativeZero * Finite = NegativeZero
-            SR[0, 0, 0, 2, 1, 1, 1] = NegativeZero;
-            // NegativeZero * PositiveInfinity = NaN
-            SR[0, 0, 0, 2, 1, 1, 2] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 0, 3, 0, 0, 0] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 0, 3, 0, 0, 1] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 0, 3, 0, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 0, 3, 0, 1, 0] = NaN;
-            // NegativeZero / Finite = PositiveZero
-            SR[0, 0, 0, 3, 0, 1, 1] = PositiveZero;
-            // NegativeZero / NegativeInfinity = PositiveZero
-            SR[0, 0, 0, 3, 0, 1, 2] = PositiveZero;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 0, 3, 1, 0, 0] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 0, 3, 1, 0, 1] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 0, 3, 1, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 0, 3, 1, 1, 0] = NaN;
-            // NegativeZero / Finite = NegativeZero
-            SR[0, 0, 0, 3, 1, 1, 1] = NegativeZero;
-            // NegativeZero / PositiveInfinity = NegativeZero
-            SR[0, 0, 0, 3, 1, 1, 2] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 1, 0, 0, 0, 0] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 1, 0, 0, 0, 1] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 1, 0, 0, 0, 2] = NegativeZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 1, 0, 0, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 1, 0, 0, 1, 1] = null;
-            // NegativeZero + NegativeInfinity = NegativeInfinity
-            SR[0, 0, 1, 0, 0, 1, 2] = NegativeInfinity;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 1, 0, 1, 0, 0] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 1, 0, 1, 0, 1] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 1, 0, 1, 0, 2] = PositiveZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 1, 0, 1, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 1, 0, 1, 1, 1] = null;
-            // NegativeZero + PositiveInfinity = PositiveInfinity
-            SR[0, 0, 1, 0, 1, 1, 2] = PositiveInfinity;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 1, 1, 0, 0, 0] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 1, 1, 0, 0, 1] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 1, 1, 0, 0, 2] = PositiveZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 1, 1, 0, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 1, 1, 0, 1, 1] = null;
-            // NegativeZero - NegativeInfinity = PositiveInfinity
-            SR[0, 0, 1, 1, 0, 1, 2] = PositiveInfinity;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 1, 1, 1, 0, 0] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 1, 1, 1, 0, 1] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 1, 1, 1, 0, 2] = NegativeZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 1, 1, 1, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 1, 1, 1, 1, 1] = null;
-            // NegativeZero - PositiveInfinity = NegativeInfinity
-            SR[0, 0, 1, 1, 1, 1, 2] = NegativeInfinity;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 1, 2, 0, 0, 0] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 1, 2, 0, 0, 1] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 1, 2, 0, 0, 2] = PositiveZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 1, 2, 0, 1, 0] = NaN;
-            // NegativeZero * Finite = PositiveZero
-            SR[0, 0, 1, 2, 0, 1, 1] = PositiveZero;
-            // NegativeZero * NegativeInfinity = NaN
-            SR[0, 0, 1, 2, 0, 1, 2] = NaN;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 1, 2, 1, 0, 0] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 1, 2, 1, 0, 1] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 1, 2, 1, 0, 2] = NegativeZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 1, 2, 1, 1, 0] = NaN;
-            // NegativeZero * Finite = NegativeZero
-            SR[0, 0, 1, 2, 1, 1, 1] = NegativeZero;
-            // NegativeZero * PositiveInfinity = NaN
-            SR[0, 0, 1, 2, 1, 1, 2] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 1, 3, 0, 0, 0] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 1, 3, 0, 0, 1] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 1, 3, 0, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 1, 3, 0, 1, 0] = NaN;
-            // NegativeZero / Finite = PositiveZero
-            SR[0, 0, 1, 3, 0, 1, 1] = PositiveZero;
-            // NegativeZero / NegativeInfinity = PositiveZero
-            SR[0, 0, 1, 3, 0, 1, 2] = PositiveZero;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 1, 3, 1, 0, 0] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 1, 3, 1, 0, 1] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 1, 3, 1, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 1, 3, 1, 1, 0] = NaN;
-            // NegativeZero / Finite = NegativeZero
-            SR[0, 0, 1, 3, 1, 1, 1] = NegativeZero;
-            // NegativeZero / PositiveInfinity = NegativeZero
-            SR[0, 0, 1, 3, 1, 1, 2] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 2, 0, 0, 0, 0] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 2, 0, 0, 0, 1] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 2, 0, 0, 0, 2] = NegativeZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 2, 0, 0, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 2, 0, 0, 1, 1] = null;
-            // NegativeZero + NegativeInfinity = NegativeInfinity
-            SR[0, 0, 2, 0, 0, 1, 2] = NegativeInfinity;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 2, 0, 1, 0, 0] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 2, 0, 1, 0, 1] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 2, 0, 1, 0, 2] = PositiveZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 2, 0, 1, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 2, 0, 1, 1, 1] = null;
-            // NegativeZero + PositiveInfinity = PositiveInfinity
-            SR[0, 0, 2, 0, 1, 1, 2] = PositiveInfinity;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 2, 1, 0, 0, 0] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 2, 1, 0, 0, 1] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 2, 1, 0, 0, 2] = PositiveZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 2, 1, 0, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 2, 1, 0, 1, 1] = null;
-            // NegativeZero - NegativeInfinity = PositiveInfinity
-            SR[0, 0, 2, 1, 0, 1, 2] = PositiveInfinity;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 2, 1, 1, 0, 0] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 2, 1, 1, 0, 1] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 2, 1, 1, 0, 2] = NegativeZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 2, 1, 1, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 2, 1, 1, 1, 1] = null;
-            // NegativeZero - PositiveInfinity = NegativeInfinity
-            SR[0, 0, 2, 1, 1, 1, 2] = NegativeInfinity;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 2, 2, 0, 0, 0] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 2, 2, 0, 0, 1] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 2, 2, 0, 0, 2] = PositiveZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 2, 2, 0, 1, 0] = NaN;
-            // NegativeZero * Finite = PositiveZero
-            SR[0, 0, 2, 2, 0, 1, 1] = PositiveZero;
-            // NegativeZero * NegativeInfinity = NaN
-            SR[0, 0, 2, 2, 0, 1, 2] = NaN;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 2, 2, 1, 0, 0] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 2, 2, 1, 0, 1] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 2, 2, 1, 0, 2] = NegativeZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 2, 2, 1, 1, 0] = NaN;
-            // NegativeZero * Finite = NegativeZero
-            SR[0, 0, 2, 2, 1, 1, 1] = NegativeZero;
-            // NegativeZero * PositiveInfinity = NaN
-            SR[0, 0, 2, 2, 1, 1, 2] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 2, 3, 0, 0, 0] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 2, 3, 0, 0, 1] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 2, 3, 0, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 2, 3, 0, 1, 0] = NaN;
-            // NegativeZero / Finite = PositiveZero
-            SR[0, 0, 2, 3, 0, 1, 1] = PositiveZero;
-            // NegativeZero / NegativeInfinity = PositiveZero
-            SR[0, 0, 2, 3, 0, 1, 2] = PositiveZero;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 2, 3, 1, 0, 0] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 2, 3, 1, 0, 1] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 2, 3, 1, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 2, 3, 1, 1, 0] = NaN;
-            // NegativeZero / Finite = NegativeZero
-            SR[0, 0, 2, 3, 1, 1, 1] = NegativeZero;
-            // NegativeZero / PositiveInfinity = NegativeZero
-            SR[0, 0, 2, 3, 1, 1, 2] = NegativeZero;
-            // NaN + NegativeZero = NaN
-            SR[0, 1, 0, 0, 0, 0, 0] = NaN;
-            // NaN + NegativeZero = NaN
-            SR[0, 1, 0, 0, 0, 0, 1] = NaN;
-            // NaN + NegativeZero = NaN
-            SR[0, 1, 0, 0, 0, 0, 2] = NaN;
-            // NaN + NaN = NaN
-            SR[0, 1, 0, 0, 0, 1, 0] = NaN;
-            // NaN + Finite = NaN
-            SR[0, 1, 0, 0, 0, 1, 1] = NaN;
-            // NaN + NegativeInfinity = NaN
-            SR[0, 1, 0, 0, 0, 1, 2] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[0, 1, 0, 0, 1, 0, 0] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[0, 1, 0, 0, 1, 0, 1] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[0, 1, 0, 0, 1, 0, 2] = NaN;
-            // NaN + NaN = NaN
-            SR[0, 1, 0, 0, 1, 1, 0] = NaN;
-            // NaN + Finite = NaN
-            SR[0, 1, 0, 0, 1, 1, 1] = NaN;
-            // NaN + PositiveInfinity = NaN
-            SR[0, 1, 0, 0, 1, 1, 2] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[0, 1, 0, 1, 0, 0, 0] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[0, 1, 0, 1, 0, 0, 1] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[0, 1, 0, 1, 0, 0, 2] = NaN;
-            // NaN - NaN = NaN
-            SR[0, 1, 0, 1, 0, 1, 0] = NaN;
-            // NaN - Finite = NaN
-            SR[0, 1, 0, 1, 0, 1, 1] = NaN;
-            // NaN - NegativeInfinity = NaN
-            SR[0, 1, 0, 1, 0, 1, 2] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[0, 1, 0, 1, 1, 0, 0] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[0, 1, 0, 1, 1, 0, 1] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[0, 1, 0, 1, 1, 0, 2] = NaN;
-            // NaN - NaN = NaN
-            SR[0, 1, 0, 1, 1, 1, 0] = NaN;
-            // NaN - Finite = NaN
-            SR[0, 1, 0, 1, 1, 1, 1] = NaN;
-            // NaN - PositiveInfinity = NaN
-            SR[0, 1, 0, 1, 1, 1, 2] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[0, 1, 0, 2, 0, 0, 0] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[0, 1, 0, 2, 0, 0, 1] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[0, 1, 0, 2, 0, 0, 2] = NaN;
-            // NaN * NaN = NaN
-            SR[0, 1, 0, 2, 0, 1, 0] = NaN;
-            // NaN * Finite = NaN
-            SR[0, 1, 0, 2, 0, 1, 1] = NaN;
-            // NaN * NegativeInfinity = NaN
-            SR[0, 1, 0, 2, 0, 1, 2] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[0, 1, 0, 2, 1, 0, 0] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[0, 1, 0, 2, 1, 0, 1] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[0, 1, 0, 2, 1, 0, 2] = NaN;
-            // NaN * NaN = NaN
-            SR[0, 1, 0, 2, 1, 1, 0] = NaN;
-            // NaN * Finite = NaN
-            SR[0, 1, 0, 2, 1, 1, 1] = NaN;
-            // NaN * PositiveInfinity = NaN
-            SR[0, 1, 0, 2, 1, 1, 2] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[0, 1, 0, 3, 0, 0, 0] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[0, 1, 0, 3, 0, 0, 1] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[0, 1, 0, 3, 0, 0, 2] = NaN;
-            // NaN / NaN = NaN
-            SR[0, 1, 0, 3, 0, 1, 0] = NaN;
-            // NaN / Finite = NaN
-            SR[0, 1, 0, 3, 0, 1, 1] = NaN;
-            // NaN / NegativeInfinity = NaN
-            SR[0, 1, 0, 3, 0, 1, 2] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[0, 1, 0, 3, 1, 0, 0] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[0, 1, 0, 3, 1, 0, 1] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[0, 1, 0, 3, 1, 0, 2] = NaN;
-            // NaN / NaN = NaN
-            SR[0, 1, 0, 3, 1, 1, 0] = NaN;
-            // NaN / Finite = NaN
-            SR[0, 1, 0, 3, 1, 1, 1] = NaN;
-            // NaN / PositiveInfinity = NaN
-            SR[0, 1, 0, 3, 1, 1, 2] = NaN;
-            // Finite + NegativeZero = null
-            SR[0, 1, 1, 0, 0, 0, 0] = null;
-            // Finite + NegativeZero = null
-            SR[0, 1, 1, 0, 0, 0, 1] = null;
-            // Finite + NegativeZero = null
-            SR[0, 1, 1, 0, 0, 0, 2] = null;
-            // Finite + NaN = NaN
-            SR[0, 1, 1, 0, 0, 1, 0] = NaN;
-            // Finite + Finite = null
-            SR[0, 1, 1, 0, 0, 1, 1] = null;
-            // Finite + NegativeInfinity = NegativeInfinity
-            SR[0, 1, 1, 0, 0, 1, 2] = NegativeInfinity;
-            // Finite + PositiveZero = null
-            SR[0, 1, 1, 0, 1, 0, 0] = null;
-            // Finite + PositiveZero = null
-            SR[0, 1, 1, 0, 1, 0, 1] = null;
-            // Finite + PositiveZero = null
-            SR[0, 1, 1, 0, 1, 0, 2] = null;
-            // Finite + NaN = NaN
-            SR[0, 1, 1, 0, 1, 1, 0] = NaN;
-            // Finite + Finite = null
-            SR[0, 1, 1, 0, 1, 1, 1] = null;
-            // Finite + PositiveInfinity = PositiveInfinity
-            SR[0, 1, 1, 0, 1, 1, 2] = PositiveInfinity;
-            // Finite - NegativeZero = null
-            SR[0, 1, 1, 1, 0, 0, 0] = null;
-            // Finite - NegativeZero = null
-            SR[0, 1, 1, 1, 0, 0, 1] = null;
-            // Finite - NegativeZero = null
-            SR[0, 1, 1, 1, 0, 0, 2] = null;
-            // Finite - NaN = NaN
-            SR[0, 1, 1, 1, 0, 1, 0] = NaN;
-            // Finite - Finite = null
-            SR[0, 1, 1, 1, 0, 1, 1] = null;
-            // Finite - NegativeInfinity = PositiveInfinity
-            SR[0, 1, 1, 1, 0, 1, 2] = PositiveInfinity;
-            // Finite - PositiveZero = null
-            SR[0, 1, 1, 1, 1, 0, 0] = null;
-            // Finite - PositiveZero = null
-            SR[0, 1, 1, 1, 1, 0, 1] = null;
-            // Finite - PositiveZero = null
-            SR[0, 1, 1, 1, 1, 0, 2] = null;
-            // Finite - NaN = NaN
-            SR[0, 1, 1, 1, 1, 1, 0] = NaN;
-            // Finite - Finite = null
-            SR[0, 1, 1, 1, 1, 1, 1] = null;
-            // Finite - PositiveInfinity = NegativeInfinity
-            SR[0, 1, 1, 1, 1, 1, 2] = NegativeInfinity;
-            // Finite * NegativeZero = PositiveZero
-            SR[0, 1, 1, 2, 0, 0, 0] = PositiveZero;
-            // Finite * NegativeZero = PositiveZero
-            SR[0, 1, 1, 2, 0, 0, 1] = PositiveZero;
-            // Finite * NegativeZero = PositiveZero
-            SR[0, 1, 1, 2, 0, 0, 2] = PositiveZero;
-            // Finite * NaN = NaN
-            SR[0, 1, 1, 2, 0, 1, 0] = NaN;
-            // Finite * Finite = null
-            SR[0, 1, 1, 2, 0, 1, 1] = null;
-            // Finite * NegativeInfinity = PositiveInfinity
-            SR[0, 1, 1, 2, 0, 1, 2] = PositiveInfinity;
-            // Finite * PositiveZero = NegativeZero
-            SR[0, 1, 1, 2, 1, 0, 0] = NegativeZero;
-            // Finite * PositiveZero = NegativeZero
-            SR[0, 1, 1, 2, 1, 0, 1] = NegativeZero;
-            // Finite * PositiveZero = NegativeZero
-            SR[0, 1, 1, 2, 1, 0, 2] = NegativeZero;
-            // Finite * NaN = NaN
-            SR[0, 1, 1, 2, 1, 1, 0] = NaN;
-            // Finite * Finite = null
-            SR[0, 1, 1, 2, 1, 1, 1] = null;
-            // Finite * PositiveInfinity = NegativeInfinity
-            SR[0, 1, 1, 2, 1, 1, 2] = NegativeInfinity;
-            // Finite / NegativeZero = PositiveInfinity
-            SR[0, 1, 1, 3, 0, 0, 0] = PositiveInfinity;
-            // Finite / NegativeZero = PositiveInfinity
-            SR[0, 1, 1, 3, 0, 0, 1] = PositiveInfinity;
-            // Finite / NegativeZero = PositiveInfinity
-            SR[0, 1, 1, 3, 0, 0, 2] = PositiveInfinity;
-            // Finite / NaN = NaN
-            SR[0, 1, 1, 3, 0, 1, 0] = NaN;
-            // Finite / Finite = null
-            SR[0, 1, 1, 3, 0, 1, 1] = null;
-            // Finite / NegativeInfinity = PositiveZero
-            SR[0, 1, 1, 3, 0, 1, 2] = PositiveZero;
-            // Finite / PositiveZero = NegativeInfinity
-            SR[0, 1, 1, 3, 1, 0, 0] = NegativeInfinity;
-            // Finite / PositiveZero = NegativeInfinity
-            SR[0, 1, 1, 3, 1, 0, 1] = NegativeInfinity;
-            // Finite / PositiveZero = NegativeInfinity
-            SR[0, 1, 1, 3, 1, 0, 2] = NegativeInfinity;
-            // Finite / NaN = NaN
-            SR[0, 1, 1, 3, 1, 1, 0] = NaN;
-            // Finite / Finite = null
-            SR[0, 1, 1, 3, 1, 1, 1] = null;
-            // Finite / PositiveInfinity = NegativeZero
-            SR[0, 1, 1, 3, 1, 1, 2] = NegativeZero;
-            // NegativeInfinity + NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 0, 0, 0, 0] = NegativeInfinity;
-            // NegativeInfinity + NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 0, 0, 0, 1] = NegativeInfinity;
-            // NegativeInfinity + NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 0, 0, 0, 2] = NegativeInfinity;
-            // NegativeInfinity + NaN = NaN
-            SR[0, 1, 2, 0, 0, 1, 0] = NaN;
-            // NegativeInfinity + Finite = NegativeInfinity
-            SR[0, 1, 2, 0, 0, 1, 1] = NegativeInfinity;
-            // NegativeInfinity + NegativeInfinity = NegativeInfinity
-            SR[0, 1, 2, 0, 0, 1, 2] = NegativeInfinity;
-            // NegativeInfinity + PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 0, 1, 0, 0] = NegativeInfinity;
-            // NegativeInfinity + PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 0, 1, 0, 1] = NegativeInfinity;
-            // NegativeInfinity + PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 0, 1, 0, 2] = NegativeInfinity;
-            // NegativeInfinity + NaN = NaN
-            SR[0, 1, 2, 0, 1, 1, 0] = NaN;
-            // NegativeInfinity + Finite = NegativeInfinity
-            SR[0, 1, 2, 0, 1, 1, 1] = NegativeInfinity;
-            // NegativeInfinity + PositiveInfinity = NaN
-            SR[0, 1, 2, 0, 1, 1, 2] = NaN;
-            // NegativeInfinity - NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 1, 0, 0, 0] = NegativeInfinity;
-            // NegativeInfinity - NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 1, 0, 0, 1] = NegativeInfinity;
-            // NegativeInfinity - NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 1, 0, 0, 2] = NegativeInfinity;
-            // NegativeInfinity - NaN = NaN
-            SR[0, 1, 2, 1, 0, 1, 0] = NaN;
-            // NegativeInfinity - Finite = NegativeInfinity
-            SR[0, 1, 2, 1, 0, 1, 1] = NegativeInfinity;
-            // NegativeInfinity - NegativeInfinity = NaN
-            SR[0, 1, 2, 1, 0, 1, 2] = NaN;
-            // NegativeInfinity - PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 1, 1, 0, 0] = NegativeInfinity;
-            // NegativeInfinity - PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 1, 1, 0, 1] = NegativeInfinity;
-            // NegativeInfinity - PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 1, 1, 0, 2] = NegativeInfinity;
-            // NegativeInfinity - NaN = NaN
-            SR[0, 1, 2, 1, 1, 1, 0] = NaN;
-            // NegativeInfinity - Finite = NegativeInfinity
-            SR[0, 1, 2, 1, 1, 1, 1] = NegativeInfinity;
-            // NegativeInfinity - PositiveInfinity = NegativeInfinity
-            SR[0, 1, 2, 1, 1, 1, 2] = NegativeInfinity;
-            // NegativeInfinity * NegativeZero = NaN
-            SR[0, 1, 2, 2, 0, 0, 0] = NaN;
-            // NegativeInfinity * NegativeZero = NaN
-            SR[0, 1, 2, 2, 0, 0, 1] = NaN;
-            // NegativeInfinity * NegativeZero = NaN
-            SR[0, 1, 2, 2, 0, 0, 2] = NaN;
-            // NegativeInfinity * NaN = NaN
-            SR[0, 1, 2, 2, 0, 1, 0] = NaN;
-            // NegativeInfinity * Finite = PositiveInfinity
-            SR[0, 1, 2, 2, 0, 1, 1] = PositiveInfinity;
-            // NegativeInfinity * NegativeInfinity = PositiveInfinity
-            SR[0, 1, 2, 2, 0, 1, 2] = PositiveInfinity;
-            // NegativeInfinity * PositiveZero = NaN
-            SR[0, 1, 2, 2, 1, 0, 0] = NaN;
-            // NegativeInfinity * PositiveZero = NaN
-            SR[0, 1, 2, 2, 1, 0, 1] = NaN;
-            // NegativeInfinity * PositiveZero = NaN
-            SR[0, 1, 2, 2, 1, 0, 2] = NaN;
-            // NegativeInfinity * NaN = NaN
-            SR[0, 1, 2, 2, 1, 1, 0] = NaN;
-            // NegativeInfinity * Finite = NegativeInfinity
-            SR[0, 1, 2, 2, 1, 1, 1] = NegativeInfinity;
-            // NegativeInfinity * PositiveInfinity = NegativeInfinity
-            SR[0, 1, 2, 2, 1, 1, 2] = NegativeInfinity;
-            // NegativeInfinity / NegativeZero = PositiveInfinity
-            SR[0, 1, 2, 3, 0, 0, 0] = PositiveInfinity;
-            // NegativeInfinity / NegativeZero = PositiveInfinity
-            SR[0, 1, 2, 3, 0, 0, 1] = PositiveInfinity;
-            // NegativeInfinity / NegativeZero = PositiveInfinity
-            SR[0, 1, 2, 3, 0, 0, 2] = PositiveInfinity;
-            // NegativeInfinity / NaN = NaN
-            SR[0, 1, 2, 3, 0, 1, 0] = NaN;
-            // NegativeInfinity / Finite = PositiveInfinity
-            SR[0, 1, 2, 3, 0, 1, 1] = PositiveInfinity;
-            // NegativeInfinity / NegativeInfinity = NaN
-            SR[0, 1, 2, 3, 0, 1, 2] = NaN;
-            // NegativeInfinity / PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 3, 1, 0, 0] = NegativeInfinity;
-            // NegativeInfinity / PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 3, 1, 0, 1] = NegativeInfinity;
-            // NegativeInfinity / PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 3, 1, 0, 2] = NegativeInfinity;
-            // NegativeInfinity / NaN = NaN
-            SR[0, 1, 2, 3, 1, 1, 0] = NaN;
-            // NegativeInfinity / Finite = NegativeInfinity
-            SR[0, 1, 2, 3, 1, 1, 1] = NegativeInfinity;
-            // NegativeInfinity / PositiveInfinity = NaN
-            SR[0, 1, 2, 3, 1, 1, 2] = NaN;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 0, 0, 0, 0, 0] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 0, 0, 0, 0, 1] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 0, 0, 0, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 0, 0, 0, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 0, 0, 0, 1, 1] = null;
-            // PositiveZero + NegativeInfinity = NegativeInfinity
-            SR[1, 0, 0, 0, 0, 1, 2] = NegativeInfinity;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 0, 0, 1, 0, 0] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 0, 0, 1, 0, 1] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 0, 0, 1, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 0, 0, 1, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 0, 0, 1, 1, 1] = null;
-            // PositiveZero + PositiveInfinity = PositiveInfinity
-            SR[1, 0, 0, 0, 1, 1, 2] = PositiveInfinity;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 0, 1, 0, 0, 0] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 0, 1, 0, 0, 1] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 0, 1, 0, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 0, 1, 0, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 0, 1, 0, 1, 1] = null;
-            // PositiveZero - NegativeInfinity = PositiveInfinity
-            SR[1, 0, 0, 1, 0, 1, 2] = PositiveInfinity;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 0, 1, 1, 0, 0] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 0, 1, 1, 0, 1] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 0, 1, 1, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 0, 1, 1, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 0, 1, 1, 1, 1] = null;
-            // PositiveZero - PositiveInfinity = NegativeInfinity
-            SR[1, 0, 0, 1, 1, 1, 2] = NegativeInfinity;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 0, 2, 0, 0, 0] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 0, 2, 0, 0, 1] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 0, 2, 0, 0, 2] = NegativeZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 0, 2, 0, 1, 0] = NaN;
-            // PositiveZero * Finite = NegativeZero
-            SR[1, 0, 0, 2, 0, 1, 1] = NegativeZero;
-            // PositiveZero * NegativeInfinity = NaN
-            SR[1, 0, 0, 2, 0, 1, 2] = NaN;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 0, 2, 1, 0, 0] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 0, 2, 1, 0, 1] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 0, 2, 1, 0, 2] = PositiveZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 0, 2, 1, 1, 0] = NaN;
-            // PositiveZero * Finite = PositiveZero
-            SR[1, 0, 0, 2, 1, 1, 1] = PositiveZero;
-            // PositiveZero * PositiveInfinity = NaN
-            SR[1, 0, 0, 2, 1, 1, 2] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 0, 3, 0, 0, 0] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 0, 3, 0, 0, 1] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 0, 3, 0, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 0, 3, 0, 1, 0] = NaN;
-            // PositiveZero / Finite = NegativeZero
-            SR[1, 0, 0, 3, 0, 1, 1] = NegativeZero;
-            // PositiveZero / NegativeInfinity = NegativeZero
-            SR[1, 0, 0, 3, 0, 1, 2] = NegativeZero;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 0, 3, 1, 0, 0] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 0, 3, 1, 0, 1] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 0, 3, 1, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 0, 3, 1, 1, 0] = NaN;
-            // PositiveZero / Finite = PositiveZero
-            SR[1, 0, 0, 3, 1, 1, 1] = PositiveZero;
-            // PositiveZero / PositiveInfinity = PositiveZero
-            SR[1, 0, 0, 3, 1, 1, 2] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 1, 0, 0, 0, 0] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 1, 0, 0, 0, 1] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 1, 0, 0, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 1, 0, 0, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 1, 0, 0, 1, 1] = null;
-            // PositiveZero + NegativeInfinity = NegativeInfinity
-            SR[1, 0, 1, 0, 0, 1, 2] = NegativeInfinity;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 1, 0, 1, 0, 0] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 1, 0, 1, 0, 1] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 1, 0, 1, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 1, 0, 1, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 1, 0, 1, 1, 1] = null;
-            // PositiveZero + PositiveInfinity = PositiveInfinity
-            SR[1, 0, 1, 0, 1, 1, 2] = PositiveInfinity;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 1, 1, 0, 0, 0] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 1, 1, 0, 0, 1] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 1, 1, 0, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 1, 1, 0, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 1, 1, 0, 1, 1] = null;
-            // PositiveZero - NegativeInfinity = PositiveInfinity
-            SR[1, 0, 1, 1, 0, 1, 2] = PositiveInfinity;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 1, 1, 1, 0, 0] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 1, 1, 1, 0, 1] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 1, 1, 1, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 1, 1, 1, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 1, 1, 1, 1, 1] = null;
-            // PositiveZero - PositiveInfinity = NegativeInfinity
-            SR[1, 0, 1, 1, 1, 1, 2] = NegativeInfinity;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 1, 2, 0, 0, 0] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 1, 2, 0, 0, 1] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 1, 2, 0, 0, 2] = NegativeZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 1, 2, 0, 1, 0] = NaN;
-            // PositiveZero * Finite = NegativeZero
-            SR[1, 0, 1, 2, 0, 1, 1] = NegativeZero;
-            // PositiveZero * NegativeInfinity = NaN
-            SR[1, 0, 1, 2, 0, 1, 2] = NaN;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 1, 2, 1, 0, 0] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 1, 2, 1, 0, 1] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 1, 2, 1, 0, 2] = PositiveZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 1, 2, 1, 1, 0] = NaN;
-            // PositiveZero * Finite = PositiveZero
-            SR[1, 0, 1, 2, 1, 1, 1] = PositiveZero;
-            // PositiveZero * PositiveInfinity = NaN
-            SR[1, 0, 1, 2, 1, 1, 2] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 1, 3, 0, 0, 0] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 1, 3, 0, 0, 1] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 1, 3, 0, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 1, 3, 0, 1, 0] = NaN;
-            // PositiveZero / Finite = NegativeZero
-            SR[1, 0, 1, 3, 0, 1, 1] = NegativeZero;
-            // PositiveZero / NegativeInfinity = NegativeZero
-            SR[1, 0, 1, 3, 0, 1, 2] = NegativeZero;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 1, 3, 1, 0, 0] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 1, 3, 1, 0, 1] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 1, 3, 1, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 1, 3, 1, 1, 0] = NaN;
-            // PositiveZero / Finite = PositiveZero
-            SR[1, 0, 1, 3, 1, 1, 1] = PositiveZero;
-            // PositiveZero / PositiveInfinity = PositiveZero
-            SR[1, 0, 1, 3, 1, 1, 2] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 2, 0, 0, 0, 0] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 2, 0, 0, 0, 1] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 2, 0, 0, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 2, 0, 0, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 2, 0, 0, 1, 1] = null;
-            // PositiveZero + NegativeInfinity = NegativeInfinity
-            SR[1, 0, 2, 0, 0, 1, 2] = NegativeInfinity;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 2, 0, 1, 0, 0] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 2, 0, 1, 0, 1] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 2, 0, 1, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 2, 0, 1, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 2, 0, 1, 1, 1] = null;
-            // PositiveZero + PositiveInfinity = PositiveInfinity
-            SR[1, 0, 2, 0, 1, 1, 2] = PositiveInfinity;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 2, 1, 0, 0, 0] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 2, 1, 0, 0, 1] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 2, 1, 0, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 2, 1, 0, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 2, 1, 0, 1, 1] = null;
-            // PositiveZero - NegativeInfinity = PositiveInfinity
-            SR[1, 0, 2, 1, 0, 1, 2] = PositiveInfinity;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 2, 1, 1, 0, 0] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 2, 1, 1, 0, 1] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 2, 1, 1, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 2, 1, 1, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 2, 1, 1, 1, 1] = null;
-            // PositiveZero - PositiveInfinity = NegativeInfinity
-            SR[1, 0, 2, 1, 1, 1, 2] = NegativeInfinity;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 2, 2, 0, 0, 0] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 2, 2, 0, 0, 1] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 2, 2, 0, 0, 2] = NegativeZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 2, 2, 0, 1, 0] = NaN;
-            // PositiveZero * Finite = NegativeZero
-            SR[1, 0, 2, 2, 0, 1, 1] = NegativeZero;
-            // PositiveZero * NegativeInfinity = NaN
-            SR[1, 0, 2, 2, 0, 1, 2] = NaN;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 2, 2, 1, 0, 0] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 2, 2, 1, 0, 1] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 2, 2, 1, 0, 2] = PositiveZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 2, 2, 1, 1, 0] = NaN;
-            // PositiveZero * Finite = PositiveZero
-            SR[1, 0, 2, 2, 1, 1, 1] = PositiveZero;
-            // PositiveZero * PositiveInfinity = NaN
-            SR[1, 0, 2, 2, 1, 1, 2] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 2, 3, 0, 0, 0] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 2, 3, 0, 0, 1] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 2, 3, 0, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 2, 3, 0, 1, 0] = NaN;
-            // PositiveZero / Finite = NegativeZero
-            SR[1, 0, 2, 3, 0, 1, 1] = NegativeZero;
-            // PositiveZero / NegativeInfinity = NegativeZero
-            SR[1, 0, 2, 3, 0, 1, 2] = NegativeZero;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 2, 3, 1, 0, 0] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 2, 3, 1, 0, 1] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 2, 3, 1, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 2, 3, 1, 1, 0] = NaN;
-            // PositiveZero / Finite = PositiveZero
-            SR[1, 0, 2, 3, 1, 1, 1] = PositiveZero;
-            // PositiveZero / PositiveInfinity = PositiveZero
-            SR[1, 0, 2, 3, 1, 1, 2] = PositiveZero;
-            // NaN + NegativeZero = NaN
-            SR[1, 1, 0, 0, 0, 0, 0] = NaN;
-            // NaN + NegativeZero = NaN
-            SR[1, 1, 0, 0, 0, 0, 1] = NaN;
-            // NaN + NegativeZero = NaN
-            SR[1, 1, 0, 0, 0, 0, 2] = NaN;
-            // NaN + NaN = NaN
-            SR[1, 1, 0, 0, 0, 1, 0] = NaN;
-            // NaN + Finite = NaN
-            SR[1, 1, 0, 0, 0, 1, 1] = NaN;
-            // NaN + NegativeInfinity = NaN
-            SR[1, 1, 0, 0, 0, 1, 2] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[1, 1, 0, 0, 1, 0, 0] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[1, 1, 0, 0, 1, 0, 1] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[1, 1, 0, 0, 1, 0, 2] = NaN;
-            // NaN + NaN = NaN
-            SR[1, 1, 0, 0, 1, 1, 0] = NaN;
-            // NaN + Finite = NaN
-            SR[1, 1, 0, 0, 1, 1, 1] = NaN;
-            // NaN + PositiveInfinity = NaN
-            SR[1, 1, 0, 0, 1, 1, 2] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[1, 1, 0, 1, 0, 0, 0] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[1, 1, 0, 1, 0, 0, 1] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[1, 1, 0, 1, 0, 0, 2] = NaN;
-            // NaN - NaN = NaN
-            SR[1, 1, 0, 1, 0, 1, 0] = NaN;
-            // NaN - Finite = NaN
-            SR[1, 1, 0, 1, 0, 1, 1] = NaN;
-            // NaN - NegativeInfinity = NaN
-            SR[1, 1, 0, 1, 0, 1, 2] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[1, 1, 0, 1, 1, 0, 0] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[1, 1, 0, 1, 1, 0, 1] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[1, 1, 0, 1, 1, 0, 2] = NaN;
-            // NaN - NaN = NaN
-            SR[1, 1, 0, 1, 1, 1, 0] = NaN;
-            // NaN - Finite = NaN
-            SR[1, 1, 0, 1, 1, 1, 1] = NaN;
-            // NaN - PositiveInfinity = NaN
-            SR[1, 1, 0, 1, 1, 1, 2] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[1, 1, 0, 2, 0, 0, 0] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[1, 1, 0, 2, 0, 0, 1] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[1, 1, 0, 2, 0, 0, 2] = NaN;
-            // NaN * NaN = NaN
-            SR[1, 1, 0, 2, 0, 1, 0] = NaN;
-            // NaN * Finite = NaN
-            SR[1, 1, 0, 2, 0, 1, 1] = NaN;
-            // NaN * NegativeInfinity = NaN
-            SR[1, 1, 0, 2, 0, 1, 2] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[1, 1, 0, 2, 1, 0, 0] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[1, 1, 0, 2, 1, 0, 1] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[1, 1, 0, 2, 1, 0, 2] = NaN;
-            // NaN * NaN = NaN
-            SR[1, 1, 0, 2, 1, 1, 0] = NaN;
-            // NaN * Finite = NaN
-            SR[1, 1, 0, 2, 1, 1, 1] = NaN;
-            // NaN * PositiveInfinity = NaN
-            SR[1, 1, 0, 2, 1, 1, 2] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[1, 1, 0, 3, 0, 0, 0] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[1, 1, 0, 3, 0, 0, 1] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[1, 1, 0, 3, 0, 0, 2] = NaN;
-            // NaN / NaN = NaN
-            SR[1, 1, 0, 3, 0, 1, 0] = NaN;
-            // NaN / Finite = NaN
-            SR[1, 1, 0, 3, 0, 1, 1] = NaN;
-            // NaN / NegativeInfinity = NaN
-            SR[1, 1, 0, 3, 0, 1, 2] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[1, 1, 0, 3, 1, 0, 0] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[1, 1, 0, 3, 1, 0, 1] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[1, 1, 0, 3, 1, 0, 2] = NaN;
-            // NaN / NaN = NaN
-            SR[1, 1, 0, 3, 1, 1, 0] = NaN;
-            // NaN / Finite = NaN
-            SR[1, 1, 0, 3, 1, 1, 1] = NaN;
-            // NaN / PositiveInfinity = NaN
-            SR[1, 1, 0, 3, 1, 1, 2] = NaN;
-            // Finite + NegativeZero = null
-            SR[1, 1, 1, 0, 0, 0, 0] = null;
-            // Finite + NegativeZero = null
-            SR[1, 1, 1, 0, 0, 0, 1] = null;
-            // Finite + NegativeZero = null
-            SR[1, 1, 1, 0, 0, 0, 2] = null;
-            // Finite + NaN = NaN
-            SR[1, 1, 1, 0, 0, 1, 0] = NaN;
-            // Finite + Finite = null
-            SR[1, 1, 1, 0, 0, 1, 1] = null;
-            // Finite + NegativeInfinity = NegativeInfinity
-            SR[1, 1, 1, 0, 0, 1, 2] = NegativeInfinity;
-            // Finite + PositiveZero = null
-            SR[1, 1, 1, 0, 1, 0, 0] = null;
-            // Finite + PositiveZero = null
-            SR[1, 1, 1, 0, 1, 0, 1] = null;
-            // Finite + PositiveZero = null
-            SR[1, 1, 1, 0, 1, 0, 2] = null;
-            // Finite + NaN = NaN
-            SR[1, 1, 1, 0, 1, 1, 0] = NaN;
-            // Finite + Finite = null
-            SR[1, 1, 1, 0, 1, 1, 1] = null;
-            // Finite + PositiveInfinity = PositiveInfinity
-            SR[1, 1, 1, 0, 1, 1, 2] = PositiveInfinity;
-            // Finite - NegativeZero = null
-            SR[1, 1, 1, 1, 0, 0, 0] = null;
-            // Finite - NegativeZero = null
-            SR[1, 1, 1, 1, 0, 0, 1] = null;
-            // Finite - NegativeZero = null
-            SR[1, 1, 1, 1, 0, 0, 2] = null;
-            // Finite - NaN = NaN
-            SR[1, 1, 1, 1, 0, 1, 0] = NaN;
-            // Finite - Finite = null
-            SR[1, 1, 1, 1, 0, 1, 1] = null;
-            // Finite - NegativeInfinity = PositiveInfinity
-            SR[1, 1, 1, 1, 0, 1, 2] = PositiveInfinity;
-            // Finite - PositiveZero = null
-            SR[1, 1, 1, 1, 1, 0, 0] = null;
-            // Finite - PositiveZero = null
-            SR[1, 1, 1, 1, 1, 0, 1] = null;
-            // Finite - PositiveZero = null
-            SR[1, 1, 1, 1, 1, 0, 2] = null;
-            // Finite - NaN = NaN
-            SR[1, 1, 1, 1, 1, 1, 0] = NaN;
-            // Finite - Finite = null
-            SR[1, 1, 1, 1, 1, 1, 1] = null;
-            // Finite - PositiveInfinity = NegativeInfinity
-            SR[1, 1, 1, 1, 1, 1, 2] = NegativeInfinity;
-            // Finite * NegativeZero = NegativeZero
-            SR[1, 1, 1, 2, 0, 0, 0] = NegativeZero;
-            // Finite * NegativeZero = NegativeZero
-            SR[1, 1, 1, 2, 0, 0, 1] = NegativeZero;
-            // Finite * NegativeZero = NegativeZero
-            SR[1, 1, 1, 2, 0, 0, 2] = NegativeZero;
-            // Finite * NaN = NaN
-            SR[1, 1, 1, 2, 0, 1, 0] = NaN;
-            // Finite * Finite = null
-            SR[1, 1, 1, 2, 0, 1, 1] = null;
-            // Finite * NegativeInfinity = NegativeInfinity
-            SR[1, 1, 1, 2, 0, 1, 2] = NegativeInfinity;
-            // Finite * PositiveZero = PositiveZero
-            SR[1, 1, 1, 2, 1, 0, 0] = PositiveZero;
-            // Finite * PositiveZero = PositiveZero
-            SR[1, 1, 1, 2, 1, 0, 1] = PositiveZero;
-            // Finite * PositiveZero = PositiveZero
-            SR[1, 1, 1, 2, 1, 0, 2] = PositiveZero;
-            // Finite * NaN = NaN
-            SR[1, 1, 1, 2, 1, 1, 0] = NaN;
-            // Finite * Finite = null
-            SR[1, 1, 1, 2, 1, 1, 1] = null;
-            // Finite * PositiveInfinity = PositiveInfinity
-            SR[1, 1, 1, 2, 1, 1, 2] = PositiveInfinity;
-            // Finite / NegativeZero = NegativeInfinity
-            SR[1, 1, 1, 3, 0, 0, 0] = NegativeInfinity;
-            // Finite / NegativeZero = NegativeInfinity
-            SR[1, 1, 1, 3, 0, 0, 1] = NegativeInfinity;
-            // Finite / NegativeZero = NegativeInfinity
-            SR[1, 1, 1, 3, 0, 0, 2] = NegativeInfinity;
-            // Finite / NaN = NaN
-            SR[1, 1, 1, 3, 0, 1, 0] = NaN;
-            // Finite / Finite = null
-            SR[1, 1, 1, 3, 0, 1, 1] = null;
-            // Finite / NegativeInfinity = NegativeZero
-            SR[1, 1, 1, 3, 0, 1, 2] = NegativeZero;
-            // Finite / PositiveZero = PositiveInfinity
-            SR[1, 1, 1, 3, 1, 0, 0] = PositiveInfinity;
-            // Finite / PositiveZero = PositiveInfinity
-            SR[1, 1, 1, 3, 1, 0, 1] = PositiveInfinity;
-            // Finite / PositiveZero = PositiveInfinity
-            SR[1, 1, 1, 3, 1, 0, 2] = PositiveInfinity;
-            // Finite / NaN = NaN
-            SR[1, 1, 1, 3, 1, 1, 0] = NaN;
-            // Finite / Finite = null
-            SR[1, 1, 1, 3, 1, 1, 1] = null;
-            // Finite / PositiveInfinity = PositiveZero
-            SR[1, 1, 1, 3, 1, 1, 2] = PositiveZero;
-            // PositiveInfinity + NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 0, 0, 0, 0] = PositiveInfinity;
-            // PositiveInfinity + NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 0, 0, 0, 1] = PositiveInfinity;
-            // PositiveInfinity + NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 0, 0, 0, 2] = PositiveInfinity;
-            // PositiveInfinity + NaN = NaN
-            SR[1, 1, 2, 0, 0, 1, 0] = NaN;
-            // PositiveInfinity + Finite = PositiveInfinity
-            SR[1, 1, 2, 0, 0, 1, 1] = PositiveInfinity;
-            // PositiveInfinity + NegativeInfinity = NaN
-            SR[1, 1, 2, 0, 0, 1, 2] = NaN;
-            // PositiveInfinity + PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 0, 1, 0, 0] = PositiveInfinity;
-            // PositiveInfinity + PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 0, 1, 0, 1] = PositiveInfinity;
-            // PositiveInfinity + PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 0, 1, 0, 2] = PositiveInfinity;
-            // PositiveInfinity + NaN = NaN
-            SR[1, 1, 2, 0, 1, 1, 0] = NaN;
-            // PositiveInfinity + Finite = PositiveInfinity
-            SR[1, 1, 2, 0, 1, 1, 1] = PositiveInfinity;
-            // PositiveInfinity + PositiveInfinity = PositiveInfinity
-            SR[1, 1, 2, 0, 1, 1, 2] = PositiveInfinity;
-            // PositiveInfinity - NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 1, 0, 0, 0] = PositiveInfinity;
-            // PositiveInfinity - NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 1, 0, 0, 1] = PositiveInfinity;
-            // PositiveInfinity - NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 1, 0, 0, 2] = PositiveInfinity;
-            // PositiveInfinity - NaN = NaN
-            SR[1, 1, 2, 1, 0, 1, 0] = NaN;
-            // PositiveInfinity - Finite = PositiveInfinity
-            SR[1, 1, 2, 1, 0, 1, 1] = PositiveInfinity;
-            // PositiveInfinity - NegativeInfinity = PositiveInfinity
-            SR[1, 1, 2, 1, 0, 1, 2] = PositiveInfinity;
-            // PositiveInfinity - PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 1, 1, 0, 0] = PositiveInfinity;
-            // PositiveInfinity - PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 1, 1, 0, 1] = PositiveInfinity;
-            // PositiveInfinity - PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 1, 1, 0, 2] = PositiveInfinity;
-            // PositiveInfinity - NaN = NaN
-            SR[1, 1, 2, 1, 1, 1, 0] = NaN;
-            // PositiveInfinity - Finite = PositiveInfinity
-            SR[1, 1, 2, 1, 1, 1, 1] = PositiveInfinity;
-            // PositiveInfinity - PositiveInfinity = NaN
-            SR[1, 1, 2, 1, 1, 1, 2] = NaN;
-            // PositiveInfinity * NegativeZero = NaN
-            SR[1, 1, 2, 2, 0, 0, 0] = NaN;
-            // PositiveInfinity * NegativeZero = NaN
-            SR[1, 1, 2, 2, 0, 0, 1] = NaN;
-            // PositiveInfinity * NegativeZero = NaN
-            SR[1, 1, 2, 2, 0, 0, 2] = NaN;
-            // PositiveInfinity * NaN = NaN
-            SR[1, 1, 2, 2, 0, 1, 0] = NaN;
-            // PositiveInfinity * Finite = NegativeInfinity
-            SR[1, 1, 2, 2, 0, 1, 1] = NegativeInfinity;
-            // PositiveInfinity * NegativeInfinity = NegativeInfinity
-            SR[1, 1, 2, 2, 0, 1, 2] = NegativeInfinity;
-            // PositiveInfinity * PositiveZero = NaN
-            SR[1, 1, 2, 2, 1, 0, 0] = NaN;
-            // PositiveInfinity * PositiveZero = NaN
-            SR[1, 1, 2, 2, 1, 0, 1] = NaN;
-            // PositiveInfinity * PositiveZero = NaN
-            SR[1, 1, 2, 2, 1, 0, 2] = NaN;
-            // PositiveInfinity * NaN = NaN
-            SR[1, 1, 2, 2, 1, 1, 0] = NaN;
-            // PositiveInfinity * Finite = PositiveInfinity
-            SR[1, 1, 2, 2, 1, 1, 1] = PositiveInfinity;
-            // PositiveInfinity * PositiveInfinity = PositiveInfinity
-            SR[1, 1, 2, 2, 1, 1, 2] = PositiveInfinity;
-            // PositiveInfinity / NegativeZero = NegativeInfinity
-            SR[1, 1, 2, 3, 0, 0, 0] = NegativeInfinity;
-            // PositiveInfinity / NegativeZero = NegativeInfinity
-            SR[1, 1, 2, 3, 0, 0, 1] = NegativeInfinity;
-            // PositiveInfinity / NegativeZero = NegativeInfinity
-            SR[1, 1, 2, 3, 0, 0, 2] = NegativeInfinity;
-            // PositiveInfinity / NaN = NaN
-            SR[1, 1, 2, 3, 0, 1, 0] = NaN;
-            // PositiveInfinity / Finite = NegativeInfinity
-            SR[1, 1, 2, 3, 0, 1, 1] = NegativeInfinity;
-            // PositiveInfinity / NegativeInfinity = NaN
-            SR[1, 1, 2, 3, 0, 1, 2] = NaN;
-            // PositiveInfinity / PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 3, 1, 0, 0] = PositiveInfinity;
-            // PositiveInfinity / PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 3, 1, 0, 1] = PositiveInfinity;
-            // PositiveInfinity / PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 3, 1, 0, 2] = PositiveInfinity;
-            // PositiveInfinity / NaN = NaN
-            SR[1, 1, 2, 3, 1, 1, 0] = NaN;
-            // PositiveInfinity / Finite = PositiveInfinity
-            SR[1, 1, 2, 3, 1, 1, 1] = PositiveInfinity;
-            // PositiveInfinity / PositiveInfinity = NaN
-            SR[1, 1, 2, 3, 1, 1, 2] = NaN;
-        }
         #endregion
 
         #region ToString

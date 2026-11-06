@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -28,7 +29,7 @@ using Microsoft.Scripting.Utils;
 using System.Globalization;
 
 namespace IronRuby.StandardLibrary.BigDecimal {
-    [RubyClass("BigDecimal", Inherits = typeof(Numeric), Extends = typeof(BigDecimal))]
+    [RubyClass("BigDecimal", Inherits = typeof(Numeric), Extends = typeof(BigDecimal), Restrictions = ModuleRestrictions.NoUnderlyingType)]
     public sealed class BigDecimalOps {
 
         internal static readonly object BigDecimalOpsClassKey = new object();
@@ -45,12 +46,12 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         #region Construction
 
         [RubyConstructor]
-        public static BigDecimal/*!*/ CreateBigDecimal(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol]MutableString/*!*/ value, [Optional]int n) {
+        public static BigDecimal/*!*/ CreateBigDecimal(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol]MutableString/*!*/ value) {
             string str = value.ConvertToString();
             if (!BigDecimal.IsValidNumericString(str)) {
                 throw RubyExceptions.CreateArgumentError("invalid value for BigDecimal(): \"{0}\"", str);
             }
-            return BigDecimal.Create(GetConfig(context), str, n);
+            return BigDecimal.Create(GetConfig(context), str);
         }
 
         #endregion
@@ -58,7 +59,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         #region Constants
 
         [RubyConstant]
-        public const uint BASE = BigDecimal.BASE;
+        public const int BASE = (int)BigDecimal.BASE;
         [RubyConstant]
         public const int EXCEPTION_ALL = (int)BigDecimal.OverflowExceptionModes.All;
         [RubyConstant]
@@ -105,28 +106,20 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #region Singleton Methods
 
+        /// <summary>
+        /// "&lt;digits&gt;:&lt;value&gt;" as #_dump writes it. The digit count sizes MRI's storage and is only
+        /// checked here; the value is read as Kernel#BigDecimal reads a String.
+        /// </summary>
         [RubyMethod("_load", RubyMethodAttributes.PublicSingleton)]
         public static BigDecimal/*!*/ Load(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol]MutableString/*!*/ str) {
-            try {
-                MutableString[] components = str.Split(new char[] { ':' }, 2, StringSplitOptions.None);
-                int maxDigits = 0;
-                int maxPrecision = 1;
-                string digits = "";
-
-                if (!(components[0] == null) || components[0].IsEmpty) {
-                    maxDigits = int.Parse(components[0].ToString(), CultureInfo.InvariantCulture);
+            string text = str.ToString();
+            int colon = text.IndexOf(':');
+            for (int i = 0; i < (colon < 0 ? text.Length + 1 : colon); i++) {
+                if (i == text.Length || text[i] < '0' || text[i] > '9') {
+                    throw RubyExceptions.CreateTypeError("load failed: invalid character in the marshaled string");
                 }
-                if (maxDigits != 0) {
-                    maxPrecision = maxDigits / BigDecimal.BASE_FIG + (maxDigits % BigDecimal.BASE_FIG == 0 ? 0 : 1);
-                }
-                if (components.Length == 2 && components[1] != null) {
-                    digits = components[1].ToString();
-                }
-
-                return BigDecimal.Create(GetConfig(context), digits, maxPrecision);
-            } catch {
-                throw RubyExceptions.CreateTypeError("load failed: invalid character in the marshaled string.");
             }
+            return CreateBigDecimal(context, self, MutableString.Create(text.Substring(colon + 1), str.Encoding));
         }
 
         [RubyMethod("double_fig", RubyMethodAttributes.PublicSingleton)]
@@ -196,7 +189,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         /// </summary>
         [RubyMethod("interpret_loosely", RubyMethodAttributes.PublicSingleton)]
         public static BigDecimal/*!*/ InterpretLoosely(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol]MutableString/*!*/ value) {
-            return BigDecimal.Create(GetConfig(context), value.ConvertToString(), 0);
+            return BigDecimal.Create(GetConfig(context), value.ConvertToString());
         }
 
         #endregion
@@ -304,24 +297,11 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #region coerce
 
+        // An Integer, a Float or a BigDecimal becomes a BigDecimal (a Rational too - bigdecimal.rb expands it).
         [RubyMethod("coerce")]
-        public static RubyArray/*!*/ Coerce(BigDecimal/*!*/ self, BigDecimal/*!*/ other) {
-            return RubyOps.MakeArray2(other, self);
-        }
-
-        [RubyMethod("coerce")]
-        public static RubyArray/*!*/ Coerce(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return RubyOps.MakeArray2(BigDecimal.Create(GetConfig(context), other), self);
-        }
-
-        [RubyMethod("coerce")]
-        public static RubyArray/*!*/ Coerce(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return RubyOps.MakeArray2(BigDecimal.Create(GetConfig(context), other.ToString(CultureInfo.InvariantCulture)), self);
-        }
-
-        [RubyMethod("coerce")]
-        public static RubyArray/*!*/ Coerce(RubyContext/*!*/ context, BigDecimal/*!*/ self, BigInteger/*!*/ other) {
-            return RubyOps.MakeArray2(BigDecimal.Create(GetConfig(context), other.ToString(CultureInfo.InvariantCulture)), self);
+        public static RubyArray/*!*/ Coerce(RubyContext/*!*/ context, BigDecimal/*!*/ self, object other) {
+            BigDecimal value = ToBigDecimal(GetConfig(context), other) ?? throw RubyExceptions.MakeCoercionError(context, other, self);
+            return RubyOps.MakeArray2(value, self);
         }
 
         #endregion
@@ -330,12 +310,23 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         [RubyMethod("_dump")]
         public static MutableString/*!*/ Dump(BigDecimal/*!*/ self, [Optional]object limit) {
-            // We ignore the limit value as BigDecimal does not contain other objects.
+            // The limit is ignored as a BigDecimal holds no other objects. The prefix is the digits MRI's
+            // words hold: 9 to a word, the words aligned at the decimal point, so "18:0.15e1" for 1.5.
+            int words = 1;
+            if (BigDecimal.IsFinite(self) && !BigDecimal.IsZero(self)) {
+                int exponent = self.Exponent;
+                int digits = self.GetFractionString().Length;
+                words = FloorDiv(exponent - 1, BigDecimal.BASE_FIG) - FloorDiv(exponent - digits, BigDecimal.BASE_FIG) + 1;
+            }
             return MutableString.CreateMutable(RubyEncoding.Binary).
-                Append(self.MaxPrecisionDigits.ToString(CultureInfo.InvariantCulture)).
+                Append((words * BigDecimal.BASE_FIG).ToString(CultureInfo.InvariantCulture)).
                 Append(':').
                 Append(self.ToString()
             );
+        }
+
+        private static int FloorDiv(int a, int b) {
+            return a / b - (a % b < 0 ? 1 : 0);
         }
 
         #endregion
@@ -363,208 +354,76 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #region Arithmetic Operations
 
-        #region add, +
+        /// <summary>
+        /// The operand of an arithmetic or comparison operator as a BigDecimal: an Integer exactly, and a
+        /// Float by its shortest digits - so BigDecimal("1.5") * 1.5 is 0.225e1, a BigDecimal, as in MRI
+        /// rather than the Float that Float's own coercion would make it. Anything else (but a Rational,
+        /// which bigdecimal.rb expands first) is null and goes through #coerce.
+        /// </summary>
+        private static BigDecimal ToBigDecimal(BigDecimal.Config/*!*/ config, object other) {
+            switch (other) {
+                case BigDecimal value: return value;
+                case int value: return BigDecimal.Create(config, value.ToString(CultureInfo.InvariantCulture));
+                case long value: return BigDecimal.Create(config, value.ToString(CultureInfo.InvariantCulture));
+                case BigInteger value: return BigDecimal.Create(config, value.ToString(CultureInfo.InvariantCulture));
+                case double value: return BigDecimal.Create(config, value);
+                default: return null;
+            }
+        }
 
-        [RubyMethod("+")]
-        [RubyMethod("add")]
-        public static BigDecimal/*!*/ Add(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            return BigDecimal.Add(GetConfig(context), self, other);
+        private static BigDecimal/*!*/ ToBigDecimalOrError(BigDecimal.Config/*!*/ config, RubyContext/*!*/ context, BigDecimal/*!*/ self, object other) {
+            return ToBigDecimal(config, other) ?? throw RubyExceptions.MakeCoercionError(context, other, self);
         }
 
         [RubyMethod("+")]
-        [RubyMethod("add")]
-        public static BigDecimal/*!*/ Add(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Add(config, self, BigDecimal.Create(config, other));
-        }
-
-        [RubyMethod("+")]
-        [RubyMethod("add")]
-        public static BigDecimal/*!*/ Add(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Add(config, self, BigDecimal.Create(config, other));
-        }
-
-        // A Float operand is made a BigDecimal of its shortest digits, and the answer stays a BigDecimal,
-        // as in MRI: BigDecimal("1.5") * 1.5 is 0.225e1. Without these overloads the operand went
-        // through coercion and the answer was a Float.
-        [RubyMethod("+")]
-        public static BigDecimal/*!*/ Add(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Add(config, self, BigDecimal.Create(config, other));
-        }
-
-        [RubyMethod("+")]
-        [RubyMethod("add")]
-        public static object Add(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, 
-            BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, opStorage, "+", self, other);
+        public static object Add(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, BigDecimal/*!*/ self, object other) {
+            BigDecimal.Config config = GetConfig(coercionStorage.Context);
+            BigDecimal y = ToBigDecimal(config, other);
+            return y != null ? BigDecimal.Add(config, self, y) : Protocols.CoerceAndApply(coercionStorage, opStorage, "+", self, other);
         }
 
         [RubyMethod("add")]
-        public static BigDecimal/*!*/ Add(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other, int n) {
-            return BigDecimal.Add(GetConfig(context), self, other, n);
-        }
-
-        [RubyMethod("add")]
-        public static BigDecimal/*!*/ Add(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other, int n) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Add(config, self, BigDecimal.Create(config, other), n);
-        }
-
-        [RubyMethod("add")]
-        public static BigDecimal/*!*/ Add(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other, int n) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Add(config, self, BigDecimal.Create(config, other), n);
-        }
-
-        [RubyMethod("add")]
-        public static BigDecimal/*!*/ Add(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other, int n) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Add(config, self, BigDecimal.Create(config, other), n);
-        }
-
-        [RubyMethod("add")]
-        public static object Add(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, 
-            BigDecimal/*!*/ self, object other, [DefaultProtocol]int n) {
-            return Protocols.CoerceAndApply(coercionStorage, opStorage, "+", self, other);
-        }
-
-        #endregion
-
-        #region sub, -
-
-        [RubyMethod("-")]
-        [RubyMethod("sub")]
-        public static BigDecimal/*!*/ Subtract(RubyContext/*!*/ context, BigDecimal/*!*/ self, BigDecimal/*!*/ other) {
-            return BigDecimal.Subtract(GetConfig(context), self, other);
+        public static object Add(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, BigDecimal/*!*/ self, object other, [DefaultProtocol]int n) {
+            BigDecimal.Config config = GetConfig(coercionStorage.Context);
+            BigDecimal y = ToBigDecimal(config, other);
+            return y != null ? BigDecimal.Add(config, self, y, n) : Protocols.CoerceAndApply(coercionStorage, opStorage, "+", self, other);
         }
 
         [RubyMethod("-")]
-        [RubyMethod("sub")]
-        public static BigDecimal/*!*/ Subtract(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Subtract(config, self, BigDecimal.Create(config, other));
-        }
-
-        [RubyMethod("-")]
-        [RubyMethod("sub")]
-        public static BigDecimal/*!*/ Subtract(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Subtract(config, self, BigDecimal.Create(config, other));
-        }
-
-        [RubyMethod("-")]
-        public static BigDecimal/*!*/ Subtract(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Subtract(config, self, BigDecimal.Create(config, other));
-        }
-
-        [RubyMethod("-")]
-        [RubyMethod("sub")]
-        public static object Subtract(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "-", self, other);
+        public static object Subtract(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, BigDecimal/*!*/ self, object other) {
+            BigDecimal.Config config = GetConfig(coercionStorage.Context);
+            BigDecimal y = ToBigDecimal(config, other);
+            return y != null ? BigDecimal.Subtract(config, self, y) : Protocols.CoerceAndApply(coercionStorage, opStorage, "-", self, other);
         }
 
         [RubyMethod("sub")]
-        public static BigDecimal/*!*/ Subtract(RubyContext/*!*/ context, BigDecimal/*!*/ self, BigDecimal/*!*/ other, int n) {
-            return BigDecimal.Subtract(GetConfig(context), self, other, n);
-        }
-
-        [RubyMethod("sub")]
-        public static BigDecimal/*!*/ Subtract(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other, int n) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Subtract(config, self, BigDecimal.Create(config, other), n);
-        }
-
-        [RubyMethod("sub")]
-        public static BigDecimal/*!*/ Subtract(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other, int n) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Subtract(config, self, BigDecimal.Create(config, other), n);
-        }
-
-        [RubyMethod("sub")]
-        public static BigDecimal/*!*/ Subtract(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other, int n) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Subtract(config, self, BigDecimal.Create(config, other), n);
-        }
-
-        [RubyMethod("sub")]
-        public static object Subtract(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, 
-            BigDecimal/*!*/ self, object other, [DefaultProtocol]int n) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "sub", self, other);
-        }
-
-        #endregion
-
-        #region mult, *
-
-        [RubyMethod("*")]
-        public static BigDecimal/*!*/ Multiply(RubyContext/*!*/ context, BigDecimal/*!*/ self, BigDecimal/*!*/ other) {
-            return BigDecimal.Multiply(GetConfig(context), self, other);
+        public static object Subtract(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, BigDecimal/*!*/ self, object other, [DefaultProtocol]int n) {
+            BigDecimal.Config config = GetConfig(coercionStorage.Context);
+            BigDecimal y = ToBigDecimal(config, other);
+            return y != null ? BigDecimal.Subtract(config, self, y, n) : Protocols.CoerceAndApply(coercionStorage, opStorage, "-", self, other);
         }
 
         [RubyMethod("*")]
-        public static BigDecimal/*!*/ Multiply(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Multiply(config, self, BigDecimal.Create(config, other));
-        }
-
-        [RubyMethod("*")]
-        public static BigDecimal/*!*/ Multiply(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Multiply(config, self, BigDecimal.Create(config, other));
-        }
-
-        [RubyMethod("*")]
-        public static BigDecimal/*!*/ Multiply(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            BigDecimal.Config config = GetConfig(context);
-            return Multiply(context, self, BigDecimal.Create(config, other));
-        }
-
-        [RubyMethod("*")]
-        public static object Multiply(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, 
-            BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "*", self, other);
+        public static object Multiply(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, BigDecimal/*!*/ self, object other) {
+            BigDecimal.Config config = GetConfig(coercionStorage.Context);
+            BigDecimal y = ToBigDecimal(config, other);
+            return y != null ? BigDecimal.Multiply(config, self, y) : Protocols.CoerceAndApply(coercionStorage, opStorage, "*", self, other);
         }
 
         [RubyMethod("mult")]
-        public static BigDecimal/*!*/ Multiply(RubyContext/*!*/ context, BigDecimal/*!*/ self, BigDecimal/*!*/ other, int n) {
-            return BigDecimal.Multiply(GetConfig(context), self, other, n);
+        public static object Multiply(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, BigDecimal/*!*/ self, object other, [DefaultProtocol]int n) {
+            BigDecimal.Config config = GetConfig(coercionStorage.Context);
+            BigDecimal y = ToBigDecimal(config, other);
+            return y != null ? BigDecimal.Multiply(config, self, y, n) : Protocols.CoerceAndApply(coercionStorage, opStorage, "*", self, other);
         }
-
-        [RubyMethod("mult")]
-        public static BigDecimal/*!*/ Multiply(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other, int n) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Multiply(config, self, BigDecimal.Create(config, other), n);
-        }
-
-        [RubyMethod("mult")]
-        public static BigDecimal/*!*/ Multiply(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other, int n) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Multiply(config, self, BigDecimal.Create(config, other), n);
-        }
-
-        [RubyMethod("mult")]
-        public static BigDecimal/*!*/ Multiply(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other, int n) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.Multiply(config, self, BigDecimal.Create(config, other), n);
-        }
-
-        [RubyMethod("mult")]
-        public static object Multiply(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, 
-            BigDecimal/*!*/ self, object other, [DefaultProtocol]int n) {
-            // TODO: converts result to BigDecimal
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "mult", self, other);
-        }
-
-        #endregion
 
         [RubyMethod("/")]
-        [RubyMethod("quo")]
-        public static BigDecimal/*!*/ Divide(RubyContext/*!*/ context, BigDecimal/*!*/ self, BigDecimal/*!*/ other) {
-            BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.DivideRounded(config, self, other, DivisionDigits(config, self, other), config.RoundingMode);
+        public static object Divide(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, BigDecimal/*!*/ self, object other) {
+            BigDecimal.Config config = GetConfig(coercionStorage.Context);
+            BigDecimal y = ToBigDecimal(config, other);
+            return y != null
+                ? BigDecimal.DivideRounded(config, self, y, DivisionDigits(config, self, y), config.RoundingMode)
+                : Protocols.CoerceAndApply(coercionStorage, opStorage, "/", self, other);
         }
 
         /// <summary>
@@ -580,40 +439,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 digits = config.Limit;
             }
             return digits;
-        }
-
-        // An Integer divisor is turned into a BigDecimal, as for #+ and #*. Without these it went
-        // through Integer#coerce, which answers a pair of Floats, so BigDecimal("3.14") / 2 was 1.57.
-        [RubyMethod("/")]
-        [RubyMethod("quo")]
-        public static BigDecimal/*!*/ Divide(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            BigDecimal.Config config = GetConfig(context);
-            return Divide(context, self, BigDecimal.Create(config, other));
-        }
-
-        [RubyMethod("/")]
-        [RubyMethod("quo")]
-        public static BigDecimal/*!*/ Divide(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            BigDecimal.Config config = GetConfig(context);
-            return Divide(context, self, BigDecimal.Create(config, other));
-        }
-
-        [RubyMethod("/")]
-        [RubyMethod("quo")]
-        public static BigDecimal/*!*/ Divide(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return Divide(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("/")]
-        public static object Divide(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
-            BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "/", self, other);
-        }
-
-        [RubyMethod("quo")]
-        public static object Quotient(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
-            BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "quo", self, other);
         }
 
         #region div
@@ -659,58 +484,26 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         [RubyMethod("div")]
-        public static object Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            BigDecimal.Config config = GetConfig(context);
-            BigDecimal div, mod;
-            IntegerDivMod(config, self, other, out div, out mod);
+        public static object Div(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, BigDecimal/*!*/ self, object other) {
+            BigDecimal.Config config = GetConfig(coercionStorage.Context);
+            BigDecimal y = ToBigDecimal(config, other);
+            if (y == null) {
+                return Protocols.CoerceAndApply(coercionStorage, opStorage, "div", self, other);
+            }
+            IntegerDivMod(config, self, y, out BigDecimal div, out _);
             // Since bigdecimal 4.0 the precision-less #div answers an Integer, not a BigDecimal.
             return BigDecimal.ToInteger(config, div);
         }
 
         [RubyMethod("div")]
-        public static object Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return Div(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("div")]
-        public static object Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return Div(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("div")]
-        public static object Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return Div(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("div")]
-        public static object Div(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
-            BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "div", self, other);
-        }
-
-        [RubyMethod("div")]
-        public static BigDecimal/*!*/ Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other, [DefaultProtocol]int n) {
+        public static BigDecimal/*!*/ Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, object other, [DefaultProtocol]int n) {
             if (n < 0) {
                 throw RubyExceptions.CreateArgumentError("negative precision");
             }
             // div(other, 0) is other / self's quotient as #/ makes it; div(other, n) has n digits
             BigDecimal.Config config = GetConfig(context);
-            return BigDecimal.DivideRounded(config, self, other, n == 0 ? DivisionDigits(config, self, other) : n, config.RoundingMode);
-        }
-
-        [RubyMethod("div")]
-        public static BigDecimal/*!*/ Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other, [DefaultProtocol]int n) {
-            return Div(context, self, BigDecimal.Create(GetConfig(context), other), n);
-        }
-
-        [RubyMethod("div")]
-        public static BigDecimal/*!*/ Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other, [DefaultProtocol]int n) {
-            return Div(context, self, BigDecimal.Create(GetConfig(context), other), n);
-        }
-
-        [RubyMethod("div")]
-        public static BigDecimal/*!*/ Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other, [DefaultProtocol]int n) {
-            return Div(context, self, BigDecimal.Create(GetConfig(context), other), n);
+            BigDecimal y = ToBigDecimalOrError(config, context, self, other);
+            return BigDecimal.DivideRounded(config, self, y, n == 0 ? DivisionDigits(config, self, y) : n, config.RoundingMode);
         }
 
         #endregion
@@ -741,49 +534,17 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return mod;
         }
 
-        // #modulo is not a second implementation of #% but the very same method, which is
-        // what BigDecimal.instance_method(:modulo) == BigDecimal.instance_method(:%) asserts:
-        // every overload below has to carry both names for the two method groups to be equal.
-
+        // #modulo is the very same method as #% (BigDecimal.instance_method(:modulo) == instance_method(:%)),
+        // which bigdecimal.rb re-establishes after wrapping #%.
         [RubyMethod("%")]
         [RubyMethod("modulo")]
-        public static BigDecimal/*!*/ Modulo(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            return ModuloCore(GetConfig(context), self, other);
-        }
-
-        [RubyMethod("%")]
-        [RubyMethod("modulo")]
-        public static BigDecimal/*!*/ Modulo(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return Modulo(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("%")]
-        [RubyMethod("modulo")]
-        public static BigDecimal/*!*/ Modulo(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return Modulo(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("%")]
-        [RubyMethod("modulo")]
-        public static BigDecimal/*!*/ Modulo(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            // A Float operand does not drag the result down to a Float: MRI keeps it a BigDecimal.
-            return Modulo(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("%")]
-        [RubyMethod("modulo")]
-        public static object Modulo(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
-            RubyContext/*!*/ context, BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "%", self, other);
+        public static object Modulo(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, BigDecimal/*!*/ self, object other) {
+            BigDecimal.Config config = GetConfig(coercionStorage.Context);
+            BigDecimal y = ToBigDecimal(config, other);
+            return y != null ? ModuloCore(config, self, y) : Protocols.CoerceAndApply(coercionStorage, opStorage, "%", self, other);
         }
 
         #endregion
-
-        [RubyMethod("**")]
-        [RubyMethod("power")]
-        public static BigDecimal/*!*/ Power(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return BigDecimal.Power(GetConfig(context), self, other);
-        }
 
         [RubyMethod("+@")]
         public static BigDecimal/*!*/ Identity(BigDecimal/*!*/ self) {
@@ -800,41 +561,17 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return BigDecimal.Abs(GetConfig(context), self);
         }
 
-        #region divmod
-
         [RubyMethod("divmod")]
-        public static RubyArray/*!*/ DivMod(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            BigDecimal.Config config = GetConfig(context);
-            BigDecimal div, mod;
-            IntegerDivMod(config, self, other, out div, out mod);
+        public static object DivMod(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, BigDecimal/*!*/ self, object other) {
+            BigDecimal.Config config = GetConfig(coercionStorage.Context);
+            BigDecimal y = ToBigDecimal(config, other);
+            if (y == null) {
+                return Protocols.CoerceAndApply(coercionStorage, opStorage, "divmod", self, other);
+            }
+            IntegerDivMod(config, self, y, out BigDecimal div, out BigDecimal mod);
             // Since bigdecimal 4.0 the quotient is an Integer, as it is for Integer#divmod.
             return RubyOps.MakeArray2(BigDecimal.ToInteger(config, div), mod);
         }
-
-        [RubyMethod("divmod")]
-        public static RubyArray/*!*/ DivMod(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return DivMod(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("divmod")]
-        public static RubyArray/*!*/ DivMod(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return DivMod(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("divmod")]
-        public static RubyArray/*!*/ DivMod(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return DivMod(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("divmod")]
-        public static object DivMod(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, 
-            RubyContext/*!*/ context, BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "divmod", self, other);
-        }
-
-        #endregion
-
-        #region remainder
 
         /// <summary>
         /// #remainder truncates where #% floors, so it differs from #% only when the signs
@@ -844,275 +581,86 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         /// but a zero divisor still raises, and NaN still wins over the zero check.
         /// </summary>
         [RubyMethod("remainder")]
-        public static BigDecimal/*!*/ Remainder(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            BigDecimal.Config config = GetConfig(context);
-            if (BigDecimal.IsNaN(self) || BigDecimal.IsNaN(other)) {
+        public static object Remainder(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ opStorage, BigDecimal/*!*/ self, object other) {
+            BigDecimal.Config config = GetConfig(coercionStorage.Context);
+            BigDecimal y = ToBigDecimal(config, other);
+            if (y == null) {
+                return Protocols.CoerceAndApply(coercionStorage, opStorage, "remainder", self, other);
+            }
+            if (BigDecimal.IsNaN(self) || BigDecimal.IsNaN(y)) {
                 return BigDecimal.NaN;
             }
-            if (BigDecimal.IsZero(other)) {
+            if (BigDecimal.IsZero(y)) {
                 throw new DivideByZeroException("divided by 0");
             }
             if (BigDecimal.IsInfinite(self)) {
                 return BigDecimal.NaN;
             }
-            if (BigDecimal.IsInfinite(other)) {
+            if (BigDecimal.IsInfinite(y)) {
                 return self;
             }
-            BigDecimal mod = ModuloCore(config, self, other);
-            if (BigDecimal.IsZero(mod) || self.Sign == other.Sign) {
+            BigDecimal mod = ModuloCore(config, self, y);
+            if (BigDecimal.IsZero(mod) || self.Sign == y.Sign) {
                 return mod;
             }
-            return BigDecimal.Subtract(config, mod, other);
+            return BigDecimal.Subtract(config, mod, y);
         }
 
-        [RubyMethod("remainder")]
-        public static BigDecimal/*!*/ Remainder(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return Remainder(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("remainder")]
-        public static BigDecimal/*!*/ Remainder(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return Remainder(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("remainder")]
-        public static BigDecimal/*!*/ Remainder(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return Remainder(context, self, BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("remainder")]
-        public static object Remainder(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "remainder", self, other);
-        }
-
-        #endregion
-
+        // #** and #power are bigdecimal 4's own Ruby (bigdecimal.rb); #sqrt stays here, where the root
+        // is an exact BigInteger one rather than Newton's iteration on BigDecimals.
         [RubyMethod("sqrt")]
-        public static BigDecimal/*!*/ SquareRoot(RubyContext/*!*/ context, BigDecimal/*!*/ self, int n) {
+        public static BigDecimal/*!*/ SquareRoot(RubyContext/*!*/ context, BigDecimal/*!*/ self, [DefaultProtocol]int n) {
             return BigDecimal.SquareRoot(GetConfig(context), self, n);
-        }
-
-        [RubyMethod("sqrt")]
-        public static object SquareRoot(RubyContext/*!*/ context, BigDecimal/*!*/ self, object n) {
-            throw RubyExceptions.CreateUnexpectedTypeError(context, n, "Integer");
         }
 
         #endregion
 
         #region Comparison Operations
 
-        #region <=>
-         
-        [RubyMethod("<=>")]
-        public static object Compare(BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            return self.CompareBigDecimal(other);
-        }
-
-        [RubyMethod("<=>")]
-        public static object Compare(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("<=>")]
-        public static object Compare(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("<=>")]
-        public static object Compare(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other));
-        }
+        // NaN makes a comparison unordered: <=> answers nil for it, and the relational operators false.
 
         [RubyMethod("<=>")]
         public static object Compare(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndCompare(coercionStorage, comparisonStorage, self, other);
-        }
-
-        #endregion
-
-        #region >
-
-        private static object GreaterThenResult(int? comparisonResult) {
-            // NaN makes the comparison unordered; <=> answers nil for that but the relational
-            // operators are all simply false.
-            return ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.HasValue && comparisonResult.Value > 0);
-        }
-
-        [RubyMethod(">")]
-        public static object GreaterThan(BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            return GreaterThenResult(self.CompareBigDecimal(other));
-        }
-
-        [RubyMethod(">")]
-        public static object GreaterThan(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return GreaterThenResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
-            
-        }
-
-        [RubyMethod(">")]
-        public static object GreaterThan(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return GreaterThenResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
-        }
-
-        [RubyMethod(">")]
-        public static object GreaterThan(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return GreaterThenResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
+            BigDecimal y = ToBigDecimal(GetConfig(coercionStorage.Context), other);
+            return y != null ? self.CompareBigDecimal(y) : Protocols.CoerceAndCompare(coercionStorage, comparisonStorage, self, other);
         }
 
         [RubyMethod(">")]
         public static object GreaterThan(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, ">", self, other); 
-        }
-
-        #endregion
-
-        #region >=
-
-        private static object GreaterThanOrEqualResult(int? comparisonResult) {
-            return ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.HasValue && comparisonResult.Value >= 0);
+            BigDecimal y = ToBigDecimal(GetConfig(coercionStorage.Context), other);
+            return y != null ? self.CompareBigDecimal(y) > 0 : Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, ">", self, other);
         }
 
         [RubyMethod(">=")]
-        public static object GreaterThanOrEqual(BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            return GreaterThanOrEqualResult(self.CompareBigDecimal(other));
-        }
-
-        [RubyMethod(">=")]
-        public static object GreaterThanOrEqual(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return GreaterThanOrEqualResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
-        }
-
-        [RubyMethod(">=")]
-        public static object GreaterThanOrEqual(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return GreaterThanOrEqualResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
-        }
-
-        [RubyMethod(">=")]
-        public static object GreaterThanOrEqual(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return GreaterThanOrEqualResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
-        }
-
-        [RubyMethod(">=")]
-        public static object GreaterThanOrEqual(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, 
-            BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, ">=", self, other);
-        }
-
-        #endregion
-
-        #region <
-
-        private static object LessThenResult(int? comparisonResult) {
-            return ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.HasValue && comparisonResult.Value < 0);
+        public static object GreaterThanOrEqual(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, BigDecimal/*!*/ self, object other) {
+            BigDecimal y = ToBigDecimal(GetConfig(coercionStorage.Context), other);
+            return y != null ? self.CompareBigDecimal(y) >= 0 : Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, ">=", self, other);
         }
 
         [RubyMethod("<")]
-        public static object LessThan(BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            return LessThenResult(self.CompareBigDecimal(other));
-        }
-
-        [RubyMethod("<")]
-        public static object LessThan(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return LessThenResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
-        }
-
-        [RubyMethod("<")]
-        public static object LessThan(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return LessThenResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
-        }
-
-        [RubyMethod("<")]
-        public static object LessThan(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return LessThenResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
-        }
-
-        [RubyMethod("<")]
-        public static object LessThan(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, 
-            BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, "<", self, other);
-        }
-
-        #endregion
-
-        #region <=
-
-        private static object LessThanOrEqualResult(int? comparisonResult) {
-            return ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.HasValue && comparisonResult.Value <= 0);
-        }
-        
-        [RubyMethod("<=")]
-        public static object LessThanOrEqual(BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            return LessThanOrEqualResult(self.CompareBigDecimal(other));
+        public static object LessThan(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, BigDecimal/*!*/ self, object other) {
+            BigDecimal y = ToBigDecimal(GetConfig(coercionStorage.Context), other);
+            return y != null ? self.CompareBigDecimal(y) < 0 : Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, "<", self, other);
         }
 
         [RubyMethod("<=")]
-        public static object LessThanOrEqual(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return LessThanOrEqualResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
+        public static object LessThanOrEqual(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, BigDecimal/*!*/ self, object other) {
+            BigDecimal y = ToBigDecimal(GetConfig(coercionStorage.Context), other);
+            return y != null ? self.CompareBigDecimal(y) <= 0 : Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, "<=", self, other);
         }
 
-        [RubyMethod("<=")]
-        public static object LessThanOrEqual(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return LessThanOrEqualResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
-        }
-
-        [RubyMethod("<=")]
-        public static object LessThanOrEqual(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return LessThanOrEqualResult(self.CompareBigDecimal(BigDecimal.Create(GetConfig(context), other)));
-        }
-
-        [RubyMethod("<=")]
-        public static object LessThanOrEqual(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, 
-            BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, "<=", self, other);
-        }
-
-        #endregion
-
-        #region eql?, ==, ===
-
-        [RubyMethod("eql?")]
+        // #eql? and #=== are #== itself, aliased in bigdecimal.rb. Any other operand is compared the way
+        // MRI's rb_num_coerce_cmp does - other.coerce(self), then == - and is unequal when it cannot be
+        // coerced. (Asking other == self instead never ended for an operand whose == asks back.)
         [RubyMethod("==")]
-        [RubyMethod("===")]
-        public static object Equal(BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            // NaN is not equal to anything, including itself - and answers false, not nil.
-            if (BigDecimal.IsNaN(self) || BigDecimal.IsNaN(other)) {
-                return ScriptingRuntimeHelpers.False;
+        public static bool Equal(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ equals, BigDecimal/*!*/ self, object other) {
+            BigDecimal y = ToBigDecimal(GetConfig(equals.Context), other);
+            if (y != null) {
+                // NaN is not equal to anything, including itself.
+                return !BigDecimal.IsNaN(self) && !BigDecimal.IsNaN(y) && self.Equals(y);
             }
-            return self.Equals(other);
+            return RubyOps.IsTrue(Protocols.TryCoerceAndApply(coercionStorage, equals, "==", self, other));
         }
-
-        [RubyMethod("eql?")]
-        [RubyMethod("==")]
-        [RubyMethod("===")]
-        public static bool Equal(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
-            return self.Equals(BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("eql?")]
-        [RubyMethod("==")]
-        [RubyMethod("===")]
-        public static bool Equal(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return self.Equals(BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("eql?")]
-        [RubyMethod("==")]
-        [RubyMethod("===")]
-        public static bool Equal(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return self.Equals(BigDecimal.Create(GetConfig(context), other));
-        }
-
-        [RubyMethod("eql?")] // HACK - this is actually semantically wrong but is what the BigDecimal library does.
-        [RubyMethod("==")]
-        [RubyMethod("===")]
-        public static object Equal(BinaryOpStorage/*!*/ equals, BigDecimal/*!*/ self, object other) {
-            if (other == null) {
-                return ScriptingRuntimeHelpers.False;
-            }
-            return Protocols.IsEqual(equals, other, self);
-        }
-
-        #endregion
 
         #endregion
 
@@ -1224,9 +772,34 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             [Optional]object n, [Optional]object mode) {
 
             // round, and round(n) for n <= 0, answer an Integer; given a rounding mode as well, round(n, mode)
-            // answers a BigDecimal whatever n is, as in MRI
+            // answers a BigDecimal whatever n is, as in MRI - and so does round(half: ...), whose options
+            // hash MRI counts as the first argument.
+            if (n is IDictionary<object, object> nOptions) {
+                return LimitPrecision(fixnumCast, context, self, 0, ToHalfRoundingMode(context, nOptions), false);
+            }
+            if (mode is IDictionary<object, object> options) {
+                return LimitPrecision(fixnumCast, context, self, n, ToHalfRoundingMode(context, options), false);
+            }
             bool modeGiven = !(mode == null || mode is Missing);
             return LimitPrecision(fixnumCast, context, self, n, ToRoundingMode(fixnumCast, context, mode), !modeGiven);
+        }
+
+        /// <summary>
+        /// MRI's check_rounding_mode_option: half: :up, :down or :even (or the String), and the current
+        /// mode when it is nil or not given.
+        /// </summary>
+        private static BigDecimal.RoundingModes ToHalfRoundingMode(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ options) {
+            object half;
+            if (!options.TryGetValue(context.CreateAsciiSymbol("half"), out half) || half == null) {
+                return GetConfig(context).RoundingMode;
+            }
+            string name = (half as RubySymbol)?.ToString() ?? (half as MutableString)?.ToString();
+            switch (name) {
+                case "up": return BigDecimal.RoundingModes.HalfUp;
+                case "down": return BigDecimal.RoundingModes.HalfDown;
+                case "even": return BigDecimal.RoundingModes.HalfEven;
+            }
+            throw RubyExceptions.CreateArgumentError("invalid rounding mode ({0})", name ?? context.Inspect(half).ToString());
         }
 
         [RubyMethod("truncate")]

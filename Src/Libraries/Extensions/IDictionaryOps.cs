@@ -766,28 +766,55 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_s")]
         [RubyMethod("inspect")]
         public static MutableString/*!*/ ToMutableString(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ self) {
+            return Inspect(context, self, self);
+        }
 
+        /// <summary>
+        /// Hash#inspect's format since Ruby 3.4 - {a: 1, "b" => 2, "c d": 3} - for a CLR dictionary.
+        /// </summary>
+        internal static MutableString/*!*/ Inspect(RubyContext/*!*/ context, object/*!*/ self, IEnumerable<KeyValuePair<object, object>>/*!*/ entries) {
             using (IDisposable handle = RubyUtils.InfiniteInspectTracker.TrackObject(self)) {
                 if (handle == null) {
                     return MutableString.CreateAscii("{...}");
                 }
 
-                MutableString str = MutableString.CreateMutable(RubyEncoding.Binary);
+                // US-ASCII until an inspected key or value brings another encoding, as for Array#inspect.
+                MutableString str = MutableString.CreateMutable(RubyEncoding.Ascii);
                 str.Append('{');
                 bool first = true;
-                foreach (var entry in self) {
+                foreach (var entry in entries) {
                     if (first) {
                         first = false;
                     } else {
                         str.Append(", ");
                     }
-                    str.Append(context.Inspect(CustomStringDictionary.ObjToNull(entry.Key)));
-                    str.Append("=>");
-                    str.Append(context.Inspect(entry.Value));
+
+                    object key = CustomStringDictionary.ObjToNull(entry.Key);
+                    if (key is RubySymbol symbol) {
+                        // MRI's symbol_key_needs_quote: bare when the symbol inspects bare and the name
+                        // reads back as a label (not `a=`, `+`, `@a`, `$a`, `!`).
+                        MutableString inspected = context.Inspect(symbol);
+                        string name = symbol.ToString();
+                        bool bare = !inspected.ToString().StartsWith(":\"", StringComparison.Ordinal) && name.Length > 0 &&
+                            "@$!".IndexOf(name[0]) < 0 && "+-*/`%^&|]<=>~@".IndexOf(name[name.Length - 1]) < 0;
+                        AppendInspected(str, bare ? inspected.GetSlice(1) : context.Inspect(symbol.String));
+                        str.Append(": ");
+                    } else {
+                        AppendInspected(str, context.Inspect(key));
+                        str.Append(" => ");
+                    }
+                    AppendInspected(str, context.Inspect(entry.Value));
                 }
                 str.Append('}');
                 return str;
             }
+        }
+
+        private static void AppendInspected(MutableString/*!*/ str, MutableString/*!*/ item) {
+            if (str.Encoding == RubyEncoding.Ascii && item.Encoding != RubyEncoding.Ascii) {
+                str.ForceEncoding(item.Encoding);
+            }
+            str.Append(item);
         }
         
         [RubyMethod("values")]
@@ -810,4 +837,21 @@ namespace IronRuby.Builtins {
         }
     }
 
+    /// <summary>
+    /// Any other CLR dictionary - Dictionary&lt;string, int&gt;, Hashtable - inspects as a Hash does.
+    /// </summary>
+    [RubyModule(Extends = typeof(IDictionary), Restrictions = ModuleRestrictions.None)]
+    public static class NonGenericIDictionaryOps {
+        [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, IDictionary/*!*/ self) {
+            return IDictionaryOps.Inspect(context, self, Entries(self));
+        }
+
+        private static IEnumerable<KeyValuePair<object, object>> Entries(IDictionary/*!*/ self) {
+            foreach (DictionaryEntry entry in self) {
+                yield return new KeyValuePair<object, object>(entry.Key, entry.Value);
+            }
+        }
+    }
 }

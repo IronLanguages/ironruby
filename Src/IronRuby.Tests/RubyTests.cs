@@ -580,6 +580,7 @@ namespace IronRuby.Tests {
                 ClrHashEqualsToString3,
                 ClrToString1,
                 ClrHashEquals4,
+                ClrDictionaryInspect1,
                 ClrTypeVariance1,
                 ClrValueTypes1,
                 ClrValueTypes2,
@@ -708,6 +709,7 @@ namespace IronRuby.Tests {
                 ExceptionMapping1,
                 ExceptionMapping2,
                 ExceptionMapping3,
+                SystemCallErrorSubclass1,
 
                 ClassVariables1,
                 UnqualifiedConstants2,
@@ -891,6 +893,7 @@ namespace IronRuby.Tests {
                 Kernel_ConversionsInjectZip1,
                 Method_LightFrame1,
                 Method_LightFrame2,
+                BigDecimal_Ruby4_1,
                 Hash_SelfKey1,
                 Thread_JoinSelf1,
                 Reflection_Misc1,

@@ -3297,6 +3297,31 @@ p D.new, E.new, F.new
 ", OutputFlags.Match);
         }
 
+        /// <summary>
+        /// A CLR dictionary inspects in Ruby 3.4's Hash#inspect format, generic over object or not.
+        /// </summary>
+        public void ClrDictionaryInspect1() {
+            TestOutput(@"
+d = System::Collections::Generic::Dictionary[Object, Object].new
+d[:foo] = 'bar'
+d[1] = 2
+d[:'a b'] = nil
+d[:a=] = 3
+d[:k] = d
+p d
+puts d.to_s
+s = System::Collections::Generic::Dictionary[System::String, Integer].new
+s['x'] = 1
+p s
+p System::Collections::Hashtable.new
+", @"
+{foo: 'bar', 1 => 2, ""a b"": nil, ""a="": 3, k: {...}}
+{foo: 'bar', 1 => 2, ""a b"": nil, ""a="": 3, k: {...}}
+{'x' => 1}
+{}
+");
+        }
+
         public void ClrHashEquals4() {
             var e = new RubyObject(Context.ObjectClass);
             int h;

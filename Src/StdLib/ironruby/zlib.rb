@@ -366,7 +366,7 @@ module Zlib
         raise GzipFile::Error, 'not in gzip format'
       end
       unless bytes[2] == 8 # deflate, the only method gzip ever defined
-        raise GzipFile::Error, 'unsupported compression method'
+        raise GzipFile::Error, "unsupported compression method #{bytes[2]}"
       end
 
       flags = bytes[3]

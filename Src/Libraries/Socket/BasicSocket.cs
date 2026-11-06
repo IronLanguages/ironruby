@@ -970,7 +970,13 @@ namespace IronRuby.StandardLibrary.Sockets {
             if (IPAddress.TryParse(hostNameOrAddress, out address)) {
                 return new[] { address };
             }
-            IPAddress[] addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            IPAddress[] addresses;
+            try {
+                addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            } catch (SocketException e) when (e.SocketErrorCode is SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain) {
+                // CRuby names the call that failed: "getaddrinfo(3): Name or service not known".
+                throw SocketErrorOps.Create(MutableString.Create("getaddrinfo(3): " + e.Message, RubyEncoding.UTF8));
+            }
             var ordered = new List<IPAddress>(addresses.Length);
             foreach (var hostAddress in addresses) {
                 if (hostAddress.AddressFamily == AddressFamily.InterNetwork) {
