@@ -3057,6 +3057,15 @@ puts ""full, exception: false: #{w.write_nonblock('a', exception: false).inspect
 r.close
 puts ""reader gone: #{begin; w.write_nonblock('a'); rescue SystemCallError => e; e.class; end}""
 w.close
+r, w = IO.pipe
+writer = Thread.new { w.write('a' * 100_000) }
+wait_for { writer.stop? }
+started = Time.now
+other = begin; w.write_nonblock('b'); rescue IO::WaitWritable; :wait_writable; end
+puts ""behind a blocked writer: #{other.inspect}, at once: #{Time.now - started < 2}""
+r.read(100_000)
+writer.join
+r.close; w.close
 ", @"
 blocked reader: ""sleep""
 closed underneath: ""stream closed in another thread""
@@ -3066,6 +3075,7 @@ two bytes: ""ab""
 full: :wait_writable after some bytes
 full, exception: false: :wait_writable
 reader gone: Errno::EPIPE
+behind a blocked writer: :wait_writable, at once: true
 ");
         }
 
