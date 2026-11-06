@@ -2749,32 +2749,34 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        [RubyMethod("each")]
+        // #each_line first: a backtrace names the frame by it, which makes it one frame with the Ruby
+        // #each_line that wraps it (ruby4.rb)
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self) {
             return Each(transcode, universal, context, block, self, context.InputSeparator, -1, false);
         }
 
-        [RubyMethod("each")]
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, DynamicNull separator) {
             return Each(transcode, universal, context, block, self, null, -1, false);
         }
 
-        [RubyMethod("each")]
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
             return Each(transcode, universal, context, block, self, separatorOrLimit, false);
         }
 
-        [RubyMethod("each")]
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
             return Each(transcode, universal, context, block, self, separator, -1, false);
         }
 
-        [RubyMethod("each")]
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
             return Each(transcode, universal, context, block, self, separator, limit, false);
         }

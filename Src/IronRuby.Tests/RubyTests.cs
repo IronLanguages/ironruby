@@ -1023,6 +1023,9 @@ namespace IronRuby.Tests {
                 Backtrace6,
                 Backtrace7,
                 Backtrace8,
+                Backtrace_CalledNameLabels1,
+                Enumerator_CalledName1,
+                StringIO_IteratorNames1,
 
                 Dlr_RubySnippet,
                 Dlr_ClrSubtype,

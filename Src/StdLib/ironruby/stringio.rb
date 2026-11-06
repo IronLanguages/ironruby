@@ -79,8 +79,10 @@ class StringIO
     nil
   end
 
+  # Without a block an Enumerator of the method, as MRI's (#<Enumerator: #<StringIO>:each_char>), and like
+  # MRI's of no known size.
   def each_char
-    return ::Enumerator.new { |y| each_char { |c| y << c } } unless block_given?
+    return to_enum(:each_char) { nil } unless block_given?
     while (c = getc)
       yield c
     end
@@ -88,7 +90,7 @@ class StringIO
   end unless method_defined?(:each_char)
 
   def each_codepoint
-    return ::Enumerator.new { |y| each_codepoint { |c| y << c } } unless block_given?
+    return to_enum(:each_codepoint) { nil } unless block_given?
     each_char { |c| yield c.ord }
     self
   end unless method_defined?(:each_codepoint)
@@ -154,7 +156,7 @@ class StringIO
   private :__ir_each_byte__
 
   def each_byte(&block)
-    return ::Enumerator.new { |y| each_byte { |b| y << b } } unless block
+    return to_enum(:each_byte) { nil } unless block
     __ir_each_byte__(&block)
   end
 
@@ -162,9 +164,8 @@ class StringIO
   private :__ir_each_line__
 
   def each_line(*args, **opts, &block)
-    unless block
-      return ::Enumerator.new { |y| each_line(*args, **opts) { |l| y << l } }
-    end
+    # #<Enumerator: #<StringIO>:each>, by the name called, as MRI's
+    return to_enum(__callee__, *args, **opts) { nil } unless block
     __ir_each_line__(*args, **opts, &block)
   end
 

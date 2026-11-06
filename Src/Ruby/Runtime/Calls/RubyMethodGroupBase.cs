@@ -86,8 +86,9 @@ namespace IronRuby.Runtime.Calls {
             if (mine.Length != theirs.Length) {
                 return false;
             }
+            // (a name's own method that only calls another counts as that one, see SameRubyMethodAttribute)
             for (int i = 0; i < mine.Length; i++) {
-                if (!Equals(mine[i].ReflectionInfo, theirs[i].ReflectionInfo)) {
+                if (!Equals(SameRubyMethodAttribute.GetTarget(mine[i].ReflectionInfo), SameRubyMethodAttribute.GetTarget(theirs[i].ReflectionInfo))) {
                     return false;
                 }
             }
@@ -97,7 +98,7 @@ namespace IronRuby.Runtime.Calls {
         public override int GetEquivalenceHashCode() {
             int result = 0;
             foreach (var method in MethodBases) {
-                result ^= method.ReflectionInfo.GetHashCode();
+                result ^= SameRubyMethodAttribute.GetTarget(method.ReflectionInfo).GetHashCode();
             }
             return result;
         }
@@ -320,7 +321,7 @@ namespace IronRuby.Runtime.Calls {
                     continue;
                 }
 
-                resolver = new RubyOverloadResolver(metaBuilder, args, callConvention, implicitProtocolConversions);
+                resolver = new RubyOverloadResolver(metaBuilder, args, callConvention, implicitProtocolConversions, name);
                 resolver.Overloads = overloads;
                 if (byName) {
                     resolver.BindKeywordsByName(keywords, overloads);

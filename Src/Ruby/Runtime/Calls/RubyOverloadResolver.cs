@@ -87,9 +87,18 @@ namespace IronRuby.Runtime.Calls {
             get { return _argumentAssumptions != null && _argumentAssumptions.Count > 0; }
         }
 
+        // What a [CalledName] parameter receives (see CalledNameAttribute).
+        private readonly string _calledName;
+
         internal RubyOverloadResolver(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, SelfCallConvention callConvention,
             bool implicitProtocolConversions)
+            : this(metaBuilder, args, callConvention, implicitProtocolConversions, null) {
+        }
+
+        internal RubyOverloadResolver(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, SelfCallConvention callConvention,
+            bool implicitProtocolConversions, string calledName)
             : base(args.RubyContext.Binder) {
+            _calledName = calledName;
             _args = args;
             _metaBuilder = metaBuilder;
             _callConvention = callConvention;
@@ -121,10 +130,10 @@ namespace IronRuby.Runtime.Calls {
             var infos = method.Parameters;
             var special = new BitArray(infos.Count);
 
-            // Method signatures                                                                                  SelfCallConvention
-            // RubyMethod/RubyCtor:   [(CallSiteStorage)*, (RubyContext|RubyScope)?, (BlockParam)?, self, args]  SelfIsParameter
-            // static:                [(CallSiteStorage)*, (RubyContext|RubyScope)?, (BlockParam)?, args]        NoSelf
-            // instance/extension/op: [self, (CallSiteStorage)*, (RubyContext|RubyScope)?, (BlockParam)?, args]  SelfIsInstace
+            // Method signatures                                                                                                  SelfCallConvention
+            // RubyMethod/RubyCtor:   [(CallSiteStorage)*, (RubyContext|RubyScope)?, ([CalledName])?, (BlockParam)?, self, args]  SelfIsParameter
+            // static:                [(CallSiteStorage)*, (RubyContext|RubyScope)?, ([CalledName])?, (BlockParam)?, args]        NoSelf
+            // instance/extension/op: [self, (CallSiteStorage)*, (RubyContext|RubyScope)?, ([CalledName])?, (BlockParam)?, args]  SelfIsInstace
 
             var i = 0;
 
@@ -166,6 +175,11 @@ namespace IronRuby.Runtime.Calls {
                     mapping.AddBuilder(new ImplicitArgBuilder(info, static (resolver, _) => resolver._args.TargetExpression));
                     special[i++] = true;
                 }
+            }
+
+            if (i < infos.Count && CalledNameAttribute.IsDefinedOn(infos[i])) {
+                mapping.AddBuilder(new ImplicitArgBuilder(infos[i], static (resolver, _) => AstUtils.Constant(resolver._calledName, typeof(string))));
+                special[i++] = true;
             }
 
             // If the method overload doesn't have a BlockParam parameter, we inject MissingBlockParam parameter and arg builder.
@@ -237,6 +251,10 @@ namespace IronRuby.Runtime.Calls {
                 } else if (method.IsConstructor && info.ParameterType == typeof(RubyClass)) {
                     i++;
                 }
+            }
+
+            if (i < infos.Count && CalledNameAttribute.IsDefinedOn(infos[i])) {
+                i++;
             }
 
             if (i < infos.Count && infos[i].ParameterType == typeof(BlockParam)) {

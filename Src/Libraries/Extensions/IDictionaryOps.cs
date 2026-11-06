@@ -244,10 +244,21 @@ namespace IronRuby.Builtins {
 
         /// <summary>select! and filter!: keep_if that answers nil when nothing was removed.</summary>
         [RubyMethod("select!")]
-        [RubyMethod("filter!")]
         public static object SelectMutate(BlockParam block, IDictionary<object, object>/*!*/ self) {
+            return SelectMutate(block, self, "select!");
+        }
+
+        // a method of its own to have a frame of its own (see IListOps.Map)
+        [RubyMethod("filter!")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("SelectMutate")]
+        public static object FilterMutate(BlockParam block, IDictionary<object, object>/*!*/ self) {
+            return SelectMutate(block, self, "filter!");
+        }
+
+        private static object SelectMutate(BlockParam block, IDictionary<object, object>/*!*/ self, string/*!*/ name) {
             if (block == null) {
-                return new Enumerator(self, "select!");
+                return new Enumerator(self, name);
             }
             object breakResult;
             int removed = RemoveWhere(block, self, false, out breakResult);
@@ -315,12 +326,19 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each")]
         [RubyMethod("each_pair")]
-        public static Enumerator/*!*/ Each(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ self) {
-            return new Enumerator(self, "each");
+        public static Enumerator/*!*/ Each(RubyContext/*!*/ context, [CalledName]string/*!*/ name, IDictionary<object, object>/*!*/ self) {
+            return new Enumerator(self, name);
+        }
+
+        // a method of its own to have a frame of its own (see IListOps.Map)
+        [RubyMethod("each_pair")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Each")]
+        public static object EachPair(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
+            return Each(context, block, self);
         }
 
         [RubyMethod("each")]
-        [RubyMethod("each_pair")]
         public static object Each(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
                 bool yieldPair = IsPairYieldOptimizable(block);
@@ -674,13 +692,20 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("select")]
         [RubyMethod("filter")]
-        public static Enumerator/*!*/ Select(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ self) {
-            return new Enumerator(self, "select");
+        public static Enumerator/*!*/ Select(RubyContext/*!*/ context, [CalledName]string/*!*/ name, IDictionary<object, object>/*!*/ self) {
+            return new Enumerator(self, name);
         }
 
         [RubyMethod("select")]
-        [RubyMethod("filter")]
         public static object Select(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
+            return Filter(context, block, self, true);
+        }
+
+        // a method of its own to have a frame of its own (see IListOps.Map)
+        [RubyMethod("filter")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Select")]
+        public static object Filter(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             return Filter(context, block, self, true);
         }
 

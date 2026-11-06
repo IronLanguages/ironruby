@@ -10817,7 +10817,6 @@ class Struct
   end
 
   alias :deconstruct :to_a
-  alias :filter :select
 end
 
 # Struct.new(..., keyword_init: true) (2.5) and StructClass#keyword_init? (3.1).

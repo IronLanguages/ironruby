@@ -14,6 +14,8 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Concurrent;
+using System.Reflection;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 
@@ -327,5 +329,54 @@ namespace IronRuby.Runtime {
     public sealed class KeywordsAttribute : Attribute {
     }
 
+    /// <summary>
+    /// Marks a hidden string parameter of a library method that receives the name of the method being called - the
+    /// name the method was defined with, which for an alias is the aliased method's (MRI's rb_frame_this_func, which
+    /// is what <c>[1].collect</c> without a block names its Enumerator by). A method registered under several names
+    /// ([RubyMethod("map")], [RubyMethod("collect")]) learns which one was called. Opt-in: methods without it pay nothing.
+    /// The parameter goes after RubyCallSiteStorage and RubyContext/RubyScope parameters and before the BlockParam.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false)]
+    public sealed class CalledNameAttribute : Attribute {
+        internal static bool IsDefinedOn(ParameterInfo/*!*/ parameter) {
+            return parameter.ParameterType == typeof(string) && parameter.IsDefined(typeof(CalledNameAttribute), false);
+        }
+    }
+
+    /// <summary>
+    /// Marks a library method that does nothing but call another of the same type with the same parameters - named by
+    /// <see cref="ClrName"/> - under another Ruby name. MRI defines `collect' and `map' as one C function under two names,
+    /// and its backtrace names the frame by the name called; a backtrace here names a library frame by its CLR method, so
+    /// each name that can show in one has a method of its own. To Ruby the two are still one method (UnboundMethod#==).
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+    public sealed class SameRubyMethodAttribute : Attribute {
+        private readonly string/*!*/ _clrName;
+
+        public string/*!*/ ClrName { get { return _clrName; } }
+
+        public SameRubyMethodAttribute(string/*!*/ clrName) {
+            ContractUtils.RequiresNotNull(clrName, "clrName");
+            _clrName = clrName;
+        }
+
+        private static readonly ConcurrentDictionary<MethodBase, MethodBase>/*!*/ _targets = new ConcurrentDictionary<MethodBase, MethodBase>();
+
+        /// <summary>The method <paramref name="method"/> calls if it is marked so, or the method itself.</summary>
+        internal static MethodBase/*!*/ GetTarget(MethodBase/*!*/ method) {
+            return _targets.GetOrAdd(method, static m => {
+                var attr = (SameRubyMethodAttribute)Attribute.GetCustomAttribute(m, typeof(SameRubyMethodAttribute), false);
+                if (attr == null || m.DeclaringType == null) {
+                    return m;
+                }
+                var parameters = m.GetParameters();
+                var types = new Type[parameters.Length];
+                for (int i = 0; i < types.Length; i++) {
+                    types[i] = parameters[i].ParameterType;
+                }
+                return (MethodBase)m.DeclaringType.GetMethod(attr.ClrName, BindingFlags.Public | BindingFlags.Static, null, types, null) ?? m;
+            });
+        }
+    }
 }
 

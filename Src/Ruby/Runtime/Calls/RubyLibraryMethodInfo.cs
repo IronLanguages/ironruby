@@ -221,7 +221,8 @@ namespace IronRuby.Runtime.Calls {
         #endregion
 
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
-            BuildCallNoFlow(metaBuilder, args, name, MethodBases, CallConvention, ImplicitProtocolConversions);
+            // An alias calls the method it aliases: a [CalledName] parameter gets that one's name, as in MRI.
+            BuildCallNoFlow(metaBuilder, args, OriginalName ?? name, MethodBases, CallConvention, ImplicitProtocolConversions);
 
             // Rules are rebound when c_call tracing is switched on or off, so a rule bound without it costs nothing.
             if (TracePoint.CCallTracing && !metaBuilder.Error && metaBuilder.Result != null) {
