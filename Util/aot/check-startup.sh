@@ -41,7 +41,7 @@ fi
 # 2. a copy of the tree elsewhere, with a library file edited
 COPY="$TMP/tree"
 mkdir -p "$COPY/$HOST"
-cp "$IR_ROOT/ir.sh" "$COPY/"
+cp "$IR_ROOT/ir.sh" "$IR_ROOT/ironruby" "$COPY/"
 cp -r "$IR_ROOT/Src/StdLib" "$COPY/Src/"
 cp -r "$IR_ROOT/$HOST/." "$COPY/$HOST/"
 cat >"$TMP/edit.rb" <<'EOF'

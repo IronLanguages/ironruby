@@ -147,7 +147,7 @@ namespace IronRuby.Aot {
             for (int i = 0; i < paths.Length; i++) {
                 var unit = units[i] = _context.CreateFileUnit(paths[i]);
                 bool isMain = mainFile != null && paths[i] == Path.GetFullPath(mainFile);
-                var options = unitOptions[i] = new RubyCompilerOptions(_context.RubyOptions) { FactoryKind = isMain ? TopScopeFactoryKind.Main : TopScopeFactoryKind.File };
+                var options = unitOptions[i] = new RubyCompilerOptions() { FactoryKind = isMain ? TopScopeFactoryKind.Main : TopScopeFactoryKind.File };
                 asts[i] = IronRuby.Prism.PrismAstBridge.Parse(unit, options, ErrorSink.Default);
                 if (asts[i] == null) throw new InvalidOperationException("syntax error in " + paths[i]);
                 new ExtendWalker(extended).Walk(asts[i]);
@@ -681,6 +681,10 @@ namespace IronRuby.Aot {
                 case IsDefinedConstantSiteCache:
                     hint = "constcache";
                     return Expression.New(value.GetType());
+
+                case ArrayExtremeSite extreme:
+                    hint = "extreme";
+                    return Expression.New(typeof(ArrayExtremeSite).GetConstructor(new[] { typeof(bool) }), Expression.Constant(extreme.IsMax));
 
                 case BinaryOpStorage:
                     hint = "opstorage";
