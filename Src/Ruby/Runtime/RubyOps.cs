@@ -746,10 +746,7 @@ namespace IronRuby.Runtime {
                 int positional = argCount - (keywords != null ? 1 : 0);
                 int min = signature.MinPositionalCount, max = signature.MaxPositionalCount;
                 if (positional < min || (max >= 0 && positional > max)) {
-                    var inv = System.Globalization.CultureInfo.InvariantCulture;
-                    string expected = (min == max) ? min.ToString(inv)
-                        : min.ToString(inv) + (max < 0 ? "+" : ".." + max.ToString(inv));
-                    throw MakeWrongNumberOfArgumentsErrorN(positional, expected + MissingRequiredKeywordsNote(signature, keywords));
+                    throw MakeWrongNumberOfArgumentsErrorN(positional, signature.DescribeExpectedArguments());
                 }
                 return;
             }
@@ -771,18 +768,6 @@ namespace IronRuby.Runtime {
                 throw MakeWrongNumberOfArgumentsErrorN(argCount,
                     (-arity - 1).ToString(System.Globalization.CultureInfo.InvariantCulture) + "+");
             }
-        }
-
-        /// <summary>
-        /// MRI's argument_arity_error names every required keyword, given or not:
-        /// "wrong number of arguments (given 2, expected 1; required keyword: b)".
-        /// </summary>
-        private static string/*!*/ MissingRequiredKeywordsNote(RubyParameterSignature/*!*/ signature, Hash keywords) {
-            string[] required = signature.RequiredKeywordNames;
-            if (required.Length == 0) {
-                return "";
-            }
-            return (required.Length == 1 ? "; required keyword: " : "; required keywords: ") + String.Join(", ", required);
         }
 
         [Emitted]

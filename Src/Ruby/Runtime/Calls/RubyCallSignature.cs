@@ -96,8 +96,6 @@ namespace IronRuby.Runtime.Calls {
 
         public int ArgumentCount { get { return (int)(_countAndFlags >> FlagsCount); } }
         internal RubyCallFlags Flags { get { return (RubyCallFlags)(_countAndFlags & FlagsMask); } }
-        
-        // total call-site arguments w/o RubyContext/RubyScope
 
         /// <summary>
         /// Used by defined? operator applied on methods.
@@ -163,6 +161,11 @@ namespace IronRuby.Runtime.Calls {
         public bool Equals(RubyCallSignature other) {
             return _countAndFlags == other._countAndFlags;
         }
+
+        public override bool Equals(object obj) => obj is RubyCallSignature other && Equals(other);
+
+        // the signature is a binder cache key: hash the packed value without boxing it
+        public override int GetHashCode() => (int)_countAndFlags;
 
         public override string/*!*/ ToString() {
             return "(" +

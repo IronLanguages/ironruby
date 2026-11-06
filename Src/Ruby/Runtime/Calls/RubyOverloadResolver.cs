@@ -55,7 +55,7 @@ namespace IronRuby.Runtime.Calls {
         private IList _list;
 
         // An optional list of assumptions upon arguments that were made during resolution.
-        private List<(int, NarrowingLevel, Expression)> _argumentAssumptions;
+        private List<(int Position, NarrowingLevel Level, Expression Test)> _argumentAssumptions;
 
         // Arguments whose class the rule tests, because the protocol conversions their class implements decided the binding.
         private List<DynamicMetaObject> _classTestedArguments;
@@ -81,14 +81,6 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         internal bool HasArgumentAssumptions {
             get { return _argumentAssumptions != null && _argumentAssumptions.Count > 0; }
-        }
-
-        internal Expression/*!*/ ScopeExpression {
-            get { return _args.MetaScope.Expression; }
-        }
-
-        internal Expression/*!*/ ContextExpression {
-            get { return _args.MetaContext.Expression; }
         }
 
         internal RubyOverloadResolver(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, SelfCallConvention callConvention,
@@ -153,7 +145,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             while (i < infos.Count && infos[i].ParameterType.IsSubclassOf(typeof(RubyCallSiteStorage))) {
-                mapping.AddBuilder(new RubyCallSiteStorageBuilder(infos[i]));
+                mapping.AddBuilder(new ImplicitArgBuilder(infos[i], static (resolver, info) => AstUtils.Constant(RubyCallSiteStorage.Create(info.ParameterType, resolver.Context))));
                 special[i++] = true;
             }
 
@@ -161,13 +153,13 @@ namespace IronRuby.Runtime.Calls {
                 var info = infos[i];
 
                 if (info.ParameterType == typeof(RubyScope)) {
-                    mapping.AddBuilder(new RubyScopeArgBuilder(info));
+                    mapping.AddBuilder(new ImplicitArgBuilder(info, static (resolver, _) => resolver._args.MetaScope.Expression));
                     special[i++] = true;
                 } else if (info.ParameterType == typeof(RubyContext)) {
-                    mapping.AddBuilder(new RubyContextArgBuilder(info));
+                    mapping.AddBuilder(new ImplicitArgBuilder(info, static (resolver, _) => resolver._args.MetaContext.Expression));
                     special[i++] = true;
                 } else if (method.IsConstructor && info.ParameterType == typeof(RubyClass)) {
-                    mapping.AddBuilder(new RubyClassCtorArgBuilder(info));
+                    mapping.AddBuilder(new ImplicitArgBuilder(info, static (resolver, _) => resolver._args.TargetExpression));
                     special[i++] = true;
                 }
             }
@@ -191,7 +183,7 @@ namespace IronRuby.Runtime.Calls {
             if (i < infos.Count && infos[i].ParameterType == typeof(BlockParam)) {
                 AddSimpleHiddenMapping(mapping, infos[i], mapping.Overload.ProhibitsNull(i));
                 special[i++] = true;
-            } else if (i >= infos.Count || infos[i].ParameterType != typeof(BlockParam)) {
+            } else {
                 mapping.AddBuilder(new MissingBlockArgBuilder(mapping.ArgIndex));
                 mapping.AddParameter(new ParameterWrapper(null, typeof(MissingBlockParam), null, ParameterBindingFlags.IsHidden));
             }
@@ -632,7 +624,7 @@ namespace IronRuby.Runtime.Calls {
         internal static DynamicMetaObject/*!*/ MakeSplattedItem(IList/*!*/ list, Expression/*!*/ listVariable, int index) {
             return DynamicMetaObject.Create(
                 list[index],
-                Ast.Call(listVariable, typeof(IList).GetMethod("get_Item"), AstUtils.Constant(index))
+                Ast.Call(listVariable, Methods.IList_get_Item, AstUtils.Constant(index))
             );
         }
 
@@ -664,8 +656,8 @@ namespace IronRuby.Runtime.Calls {
 
             if (_argumentAssumptions != null) {
                 foreach (var assumption in _argumentAssumptions) {
-                    if (assumption.Item2 == bindingTarget.NarrowingLevel) {
-                        metaBuilder.AddCondition(assumption.Item3);
+                    if (assumption.Level == bindingTarget.NarrowingLevel) {
+                        metaBuilder.AddCondition(assumption.Test);
                     }
                 }
             }
@@ -684,12 +676,11 @@ namespace IronRuby.Runtime.Calls {
             );
 
             if (result.Assumption != null) {
-                if (_argumentAssumptions == null) {
-                    _argumentAssumptions = new List<(int, NarrowingLevel, Ast)>();
-                }
+                _argumentAssumptions ??= new();
 
-                if (_argumentAssumptions.FindIndex((k) => k.Item1 == toParameter.ParameterInfo.Position && k.Item2 == level) < 0) {
-                    _argumentAssumptions.Add((toParameter.ParameterInfo.Position, level, result.Assumption));
+                int position = toParameter.ParameterInfo.Position;
+                if (!_argumentAssumptions.Exists(a => a.Position == position && a.Level == level)) {
+                    _argumentAssumptions.Add((position, level, result.Assumption));
                 }
             }
 
@@ -1222,75 +1213,24 @@ namespace IronRuby.Runtime.Calls {
             return _list[index];
         }
 
-        internal sealed class RubyContextArgBuilder : ArgBuilder {
-            public RubyContextArgBuilder(ParameterInfo/*!*/ info)
+        /// <summary>
+        /// A parameter the call passes no argument for, which the resolver fills in: the context, the scope,
+        /// call-site storage or the class a constructor is instantiating.
+        /// </summary>
+        private sealed class ImplicitArgBuilder : ArgBuilder {
+            private readonly Func<RubyOverloadResolver, ParameterInfo, Expression>/*!*/ _value;
+
+            public ImplicitArgBuilder(ParameterInfo/*!*/ info, Func<RubyOverloadResolver, ParameterInfo, Expression>/*!*/ value)
                 : base(info) {
+                _value = value;
             }
 
-            public override int Priority {
-                get { return -1; }
-            }
+            public override int Priority => -1;
 
-            public override int ConsumedArgumentCount {
-                get { return 0; }
-            }
+            public override int ConsumedArgumentCount => 0;
 
             protected override Expression ToExpression(OverloadResolver/*!*/ resolver, RestrictedArguments/*!*/ args, bool[]/*!*/ hasBeenUsed) {
-                return ((RubyOverloadResolver)resolver).ContextExpression;
-            }
-        }
-
-        internal sealed class RubyCallSiteStorageBuilder : ArgBuilder {
-            public RubyCallSiteStorageBuilder(ParameterInfo/*!*/ info)
-                : base(info) {
-            }
-
-            public override int Priority {
-                get { return -1; }
-            }
-
-            public override int ConsumedArgumentCount {
-                get { return 0; }
-            }
-
-            protected override Expression ToExpression(OverloadResolver/*!*/ resolver, RestrictedArguments/*!*/ args, bool[]/*!*/ hasBeenUsed) {
-                return AstUtils.Constant(RubyCallSiteStorage.Create(ParameterInfo.ParameterType, ((RubyOverloadResolver)resolver).Context));
-            }
-        }
-
-        internal sealed class RubyScopeArgBuilder : ArgBuilder {
-            public RubyScopeArgBuilder(ParameterInfo/*!*/ info)
-                : base(info) {
-            }
-
-            public override int Priority {
-                get { return -1; }
-            }
-
-            public override int ConsumedArgumentCount {
-                get { return 0; }
-            }
-
-            protected override Expression ToExpression(OverloadResolver/*!*/ resolver, RestrictedArguments/*!*/ args, bool[]/*!*/ hasBeenUsed) {
-                return ((RubyOverloadResolver)resolver).ScopeExpression;
-            }
-        }
-
-        internal sealed class RubyClassCtorArgBuilder : ArgBuilder {
-            public RubyClassCtorArgBuilder(ParameterInfo/*!*/ info)
-                : base(info) {
-            }
-
-            public override int Priority {
-                get { return -1; }
-            }
-
-            public override int ConsumedArgumentCount {
-                get { return 0; }
-            }
-
-            protected override Expression ToExpression(OverloadResolver/*!*/ resolver, RestrictedArguments/*!*/ args, bool[]/*!*/ hasBeenUsed) {
-                return ((RubyOverloadResolver)resolver)._args.TargetExpression;
+                return _value((RubyOverloadResolver)resolver, ParameterInfo);
             }
         }
 

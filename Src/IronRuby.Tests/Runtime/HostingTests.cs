@@ -242,6 +242,31 @@ puts method_missing(:bar) rescue p $!
 ");
         }
 
+        /// <summary>
+        /// A name the scope does not have goes on to the method_missing above main's, with the name and
+        /// the arguments - and a call signature that counts them right, which a define_method body checks.
+        /// </summary>
+        public void RubyHosting1G() {
+            var scope = Engine.CreateScope();
+            scope.SetVariable("bar", 1);
+
+            AssertOutput(() =>
+                Engine.Execute(@"
+class Object
+  define_method(:method_missing) { |name, arg| $stdout.write(name.to_s + ' ' + arg.to_s + ""\n"") }
+end
+begin
+  foo 2
+  p bar
+ensure
+  class Object; remove_method :method_missing; end
+end
+", scope), @"
+foo 2
+1
+");
+        }
+
         public void RubyHosting2() {
             Hashtable hash = new Hashtable();
             hash.Add("foo", "bar");

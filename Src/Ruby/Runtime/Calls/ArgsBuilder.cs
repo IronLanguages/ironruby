@@ -42,6 +42,7 @@ namespace IronRuby.Runtime.Calls {
         private readonly int _leadingMandatoryParamCount;
         private readonly int _optionalParamCount;
         private readonly bool _hasUnsplatParameter;
+        private readonly RubyParameterSignature _keywordSignature;
 
         private int _actualArgumentCount;
         private CallArguments _callArguments;
@@ -101,16 +102,22 @@ namespace IronRuby.Runtime.Calls {
         /// <param name="leadingMandatoryParamCount">Number of mandatory parameters that precede any optional parameters.</param>
         /// <param name="optionalParamCount">Number of optional parameters.</param>
         /// <param name="hasUnsplatParameter">Method has * parameter (accepts any number of additional parameters).</param>
-        public ArgsBuilder(int implicitParamCount, int mandatoryParamCount, int leadingMandatoryParamCount, int optionalParamCount, bool hasUnsplatParameter) {
+        /// <param name="keywordSignature">
+        /// The declared parameters of a method whose keywords (or **nil) were lowered onto the parameters above;
+        /// an arity error then describes the declared positionals rather than the lowered ones.
+        /// </param>
+        public ArgsBuilder(int implicitParamCount, int mandatoryParamCount, int leadingMandatoryParamCount, int optionalParamCount, bool hasUnsplatParameter,
+            RubyParameterSignature keywordSignature = null) {
             Debug.Assert(leadingMandatoryParamCount >= 0 && leadingMandatoryParamCount <= mandatoryParamCount);
             Debug.Assert(leadingMandatoryParamCount == mandatoryParamCount || optionalParamCount > 0 || hasUnsplatParameter);
-            
+
             _arguments = new Expression[implicitParamCount + mandatoryParamCount + optionalParamCount + (hasUnsplatParameter ? 1 : 0)];
             _implicitParamCount = implicitParamCount;
             _mandatoryParamCount = mandatoryParamCount;
             _leadingMandatoryParamCount = leadingMandatoryParamCount;
             _optionalParamCount = optionalParamCount;
             _hasUnsplatParameter = hasUnsplatParameter;
+            _keywordSignature = keywordSignature;
             _actualArgumentCount = -1;
         }
 
@@ -136,7 +143,21 @@ namespace IronRuby.Runtime.Calls {
         /// "2+" (mandatory + rest), "1..3" (mandatory + optionals), plain "2" otherwise.
         /// </summary>
         private void SetArityError(MetaObjectBuilder/*!*/ metaBuilder) {
-            if (_hasUnsplatParameter) {
+            if (_keywordSignature != null) {
+                // MRI counts the positional arguments alone: a trailing hash the call built out of keyword
+                // syntax is not one of them. Whether it is that hash is known only when the rule runs.
+                Expression given = AstUtils.Constant(_actualArgumentCount);
+                if (_actualArgumentCount > 0) {
+                    given = Ast.Condition(
+                        Methods.IsKeywordArgumentsHash.OpCall(AstUtils.Box(GetArgument(_actualArgumentCount - 1, out _))),
+                        AstUtils.Constant(_actualArgumentCount - 1),
+                        given
+                    );
+                }
+                metaBuilder.SetError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                    given, AstUtils.Constant(_keywordSignature.DescribeExpectedArguments())
+                ));
+            } else if (_hasUnsplatParameter) {
                 metaBuilder.SetError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
                     AstUtils.Constant(_actualArgumentCount),
                     AstUtils.Constant(_mandatoryParamCount.ToString(System.Globalization.CultureInfo.InvariantCulture) + "+")

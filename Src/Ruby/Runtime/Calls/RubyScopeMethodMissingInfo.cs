@@ -119,12 +119,13 @@ namespace IronRuby.Runtime.Calls {
                 if (name == "scope") {
                     fallbackExp = errorExpr ?? args.TargetExpression;
                 } else {
-                    // super(methodName, ...args...) - ignore argument error:
+                    // super(methodName, ...args...) - ignore argument error
+                    // (InsertMethodName counts the name in the signature):
                     args.InsertMethodName(name);
                     fallbackExp = AstUtils.LightDynamic(
                         context.MetaBinderFactory.Call(Symbols.MethodMissing, 
                             new RubyCallSignature(
-                                args.Signature.ArgumentCount + 1,
+                                args.Signature.ArgumentCount,
                                 args.Signature.Flags | RubyCallFlags.HasImplicitSelf | RubyCallFlags.IsSuperCall
                             )
                         ),
