@@ -3389,10 +3389,6 @@ namespace IronRuby.Runtime {
 
         private readonly List<FileDescriptor>/*!*/ _fileDescriptors = new List<FileDescriptor>(10);
 
-        public const int StandardInputDescriptor = 0;
-        public const int StandardOutputDescriptor = 1;
-        public const int StandardErrorOutputDescriptor = 2;
-
         public object StandardInput { get; set; }
         public object StandardOutput { get; set; }
         public object StandardErrorOutput { get; set; }
@@ -4080,7 +4076,7 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Creates a scope extension for a DLR scope unless it already exists for the given scope.
         /// </summary>
-        internal RubyGlobalScope/*!*/ InitializeGlobalScope(Scope/*!*/ globalScope, bool createHosted, bool bindGlobals) {
+        internal RubyGlobalScope/*!*/ InitializeGlobalScope(Scope/*!*/ globalScope, bool bindGlobals) {
             Assert.NotNull(globalScope);
 
             var scopeExtension = globalScope.GetExtension(ContextId);
@@ -4091,7 +4087,7 @@ namespace IronRuby.Runtime {
             RubyObject mainObject = new RubyObject(_objectClass);
             RubyClass mainSingleton = GetOrCreateMainSingleton(mainObject, null);
 
-            RubyGlobalScope result = new RubyGlobalScope(this, globalScope, mainObject, createHosted);
+            RubyGlobalScope result = new RubyGlobalScope(this, globalScope, mainObject);
             // Remember the first one as the fallback for frameless call sites (see MainGlobalScope);
             // the main script's scope replaces it in RubyTopLevelScope.CreateTopLevelScope.
             if (_mainGlobalScope == null) {

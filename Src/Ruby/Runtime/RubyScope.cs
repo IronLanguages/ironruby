@@ -1621,7 +1621,7 @@ namespace IronRuby.Runtime {
         #region Factories
 
         internal static RubyTopLevelScope/*!*/ CreateTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context, bool isMain) {
-            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false, false);
+            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false);
 
             RubyTopLevelScope scope = new RubyTopLevelScope(rubyGlobalScope, null, null, rubyGlobalScope.MainObject);
             scope.IsMain = isMain;
@@ -1672,7 +1672,7 @@ namespace IronRuby.Runtime {
         }
 
         internal static RubyTopLevelScope/*!*/ CreateHostedTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context, bool bindGlobals) {
-            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, true, bindGlobals);
+            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, bindGlobals);
 
             // Reuse existing top-level scope if available:
             RubyTopLevelScope scope = rubyGlobalScope.TopLocalScope;
@@ -1706,7 +1706,7 @@ namespace IronRuby.Runtime {
         }
 
         internal static RubyTopLevelScope/*!*/ CreateWrappedTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context) {
-            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false, false);
+            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false);
 
             // load(path, true) wraps the file in a fresh anonymous module; load(path, mod) wraps it
             // in that very module, so its constants and methods are reachable through it afterwards.

@@ -2739,9 +2739,6 @@ namespace IronRuby.Runtime {
 
         #endregion
 
-        public const char SuffixLiteral = 'L';       // Repr: literal string
-        public const char SuffixMutable = 'M';       // non-literal "...#{expr}..."
-
         /// <summary>
         /// Specialized signatures exist for upto the following number of string parts
         /// </summary>
