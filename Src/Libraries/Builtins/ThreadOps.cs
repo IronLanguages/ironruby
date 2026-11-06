@@ -950,9 +950,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-#pragma warning disable 162 // msc: unreachable code
             throw new ArgumentException("unknown thread status: " + state);
-#pragma warning restore 162
         }
 
         [RubyMethod("status")]

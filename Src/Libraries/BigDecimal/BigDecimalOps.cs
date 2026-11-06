@@ -190,11 +190,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return GetConfig(context).Limit;
         }
 
-        [RubyMethod("ver", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ Version(RubyClass/*!*/ self) {
-            return MutableString.CreateAscii("1.0.1");
-        }
-
         /// <summary>
         /// Parses as much of the string as looks like a number and answers zero when none of
         /// it does, where Kernel#BigDecimal would raise. This is what String#to_d uses.

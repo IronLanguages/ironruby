@@ -13191,19 +13191,9 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.CheckUntil)
             );
             
-            DefineLibraryMethod(module, "clear", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.StandardLibrary.StringScanner.StringScanner>(IronRuby.StandardLibrary.StringScanner.StringScanner.Clear)
-            );
-            
             DefineLibraryMethod(module, "concat", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.StringScanner.StringScanner>(IronRuby.StandardLibrary.StringScanner.StringScanner.Concat)
-            );
-            
-            DefineLibraryMethod(module, "empty?", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Boolean>(IronRuby.StandardLibrary.StringScanner.StringScanner.EndOfLine)
             );
             
             DefineLibraryMethod(module, "eos?", 0x11, 
@@ -13222,11 +13212,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
             );
             
             DefineLibraryMethod(module, "get_byte", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.GetByte)
-            );
-            
-            DefineLibraryMethod(module, "getbyte", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.GetByte)
             );
@@ -13271,11 +13256,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Boolean>(IronRuby.StandardLibrary.StringScanner.StringScanner.WasMatched)
             );
             
-            DefineLibraryMethod(module, "matchedsize", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.MatchedSize)
-            );
-            
             DefineLibraryMethod(module, "named_captures", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.Hash>(IronRuby.StandardLibrary.StringScanner.StringScanner.NamedCaptures)
@@ -13289,11 +13269,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
             DefineLibraryMethod(module, "peek_byte", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.PeekByte)
-            );
-            
-            DefineLibraryMethod(module, "peep", 0x11, 
-                0x00010000U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.Peek)
             );
             
             DefineLibraryMethod(module, "pointer", 0x11, 
@@ -13344,11 +13319,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
             DefineLibraryMethod(module, "rest?", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Boolean>(IronRuby.StandardLibrary.StringScanner.StringScanner.IsRestLeft)
-            );
-            
-            DefineLibraryMethod(module, "restsize", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Int32>(IronRuby.StandardLibrary.StringScanner.StringScanner.RestSize)
             );
             
             DefineLibraryMethod(module, "scan", 0x11, 
@@ -13936,11 +13906,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Int32, System.Int32>(IronRuby.StandardLibrary.BigDecimal.BigDecimalOps.Mode), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Int32, System.Object, System.Int32>(IronRuby.StandardLibrary.BigDecimal.BigDecimalOps.Mode)
-            );
-            
-            DefineLibraryMethod(module, "ver", 0x21, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.BigDecimal.BigDecimalOps.Version)
             );
             
         }

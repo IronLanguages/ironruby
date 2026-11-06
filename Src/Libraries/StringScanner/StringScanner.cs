@@ -550,7 +550,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
             return SearchFull(stringCast, self, pattern, false, true) as MutableString;
         }
 
-        [RubyMethod("empty?")]
         [RubyMethod("eos?")]
         public static bool EndOfLine(StringScanner/*!*/ self) {
             return self._position >= self.ByteLength;
@@ -565,7 +564,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
         }
 
         [RubyMethod("get_byte")]
-        [RubyMethod("getbyte")]
         public static MutableString GetByte(StringScanner/*!*/ self) {
             if (self._position >= self.ByteLength) {
                 self.ClearMatch();
@@ -639,7 +637,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
         }
 
         [RubyMethod("matched_size")]
-        [RubyMethod("matchedsize")]
         public static int? MatchedSize(StringScanner/*!*/ self) {
             if (!self._matched) {
                 return null;
@@ -648,7 +645,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
         }
 
         [RubyMethod("peek")]
-        [RubyMethod("peep")]
         public static MutableString/*!*/ Peek(StringScanner/*!*/ self, [DefaultProtocol]int len) {
             if (len < 0) {
                 throw RubyExceptions.CreateArgumentError("negative string size (or size too big)");
@@ -715,7 +711,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
         }
 
         [RubyMethod("rest_size")]
-        [RubyMethod("restsize")]
         public static int RestSize(StringScanner/*!*/ self) {
             return Math.Max(0, self.ByteLength - self._position);
         }
@@ -866,7 +861,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
             return str;
         }
 
-        [RubyMethod("clear")]
         [RubyMethod("terminate")]
         public static StringScanner Clear(StringScanner/*!*/ self) {
             self.ClearMatch();
