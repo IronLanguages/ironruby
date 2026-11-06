@@ -309,17 +309,23 @@ namespace IronRuby.Compiler.Generation {
 
             // TODO: can we merge this with #base#GetHashCode/Equals/ToString?
 
+            // The base calls below have to be non-virtual (OpCodes.Call, as C#'s base.M() is):
+            // ILGen.EmitCall picks callvirt for a virtual method, which dispatched to this type's
+            // own override - the Ruby #hash/#==/#to_s - so Kernel#equal? on an instance of such a
+            // class ran its #==, and a #== that calls equal? (Set's does) recursed until the stack
+            // overflowed.
+
             // int IRubyObject.BaseGetHashCode() { return base.GetHashCode(); }
             il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObject_BaseGetHashCode);
             il.EmitLoadArg(0);
-            il.EmitCall(_tb.BaseType.GetMethod("GetHashCode", Type.EmptyTypes));
+            il.Emit(OpCodes.Call, _tb.BaseType.GetMethod("GetHashCode", Type.EmptyTypes));
             il.Emit(OpCodes.Ret);
 
             // int IRubyObject.BaseEquals(object other) { return base.Equals(other); }
             il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObject_BaseEquals);
             il.EmitLoadArg(0);
             il.EmitLoadArg(1);
-            il.EmitCall(_tb.BaseType.GetMethod("Equals", new[] { typeof(object) }));
+            il.Emit(OpCodes.Call, _tb.BaseType.GetMethod("Equals", new[] { typeof(object) }));
             il.Emit(OpCodes.Ret);
 
             // string IRubyObject.BaseToString() { return base.ToString(); }
@@ -329,7 +335,7 @@ namespace IronRuby.Compiler.Generation {
             if (toString.DeclaringType == typeof(object)) {
                 il.EmitCall(Methods.ObjectToString);
             } else {
-                il.EmitCall(toString);
+                il.Emit(OpCodes.Call, toString);
             }
             il.Emit(OpCodes.Ret);
         }
