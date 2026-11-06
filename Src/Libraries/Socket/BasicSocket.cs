@@ -192,7 +192,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// </summary>
         [RubyMethod("do_not_reverse_lookup=", RubyMethodAttributes.PublicSingleton)]
         public static void SetDoNotReverseLookup(RubyClass/*!*/ self, bool value) {
-            Protocols.CheckSafeLevel(self.Context, 4);
             DoNotReverseLookup(self.Context).Value = value;
         }
 
@@ -211,7 +210,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// </summary>
         [RubyMethod("do_not_reverse_lookup=")]
         public static void SetDoNotReverseLookup(RubyBasicSocket/*!*/ self, bool value) {
-            Protocols.CheckSafeLevel(self.Context, 4);
             self._doNotReverseLookup = value;
         }
 
@@ -480,21 +478,18 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         [RubyMethod("close_read")]
         public static void CloseRead(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self) {
-            CheckSecurity(context, self, "can't close socket");
             // TODO: It would be nice to alter the SocketStream to be WriteOnly here
             self.Socket.Shutdown(SocketShutdown.Receive);
         }
 
         [RubyMethod("close_write")]
         public static void CloseWrite(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self) {
-            CheckSecurity(context, self, "can't close socket");
             // TODO: It would be nice to alter the SocketStream to be ReadOnly here
             self.Socket.Shutdown(SocketShutdown.Send);
         }
 
         [RubyMethod("shutdown")]
         public static int Shutdown(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self, [DefaultProtocol, DefaultParameterValue(2)]int how) {
-            CheckSecurity(context, self, "can't shutdown socket");
             if (how < 0 || 2 < how) {
                 throw RubyExceptions.CreateArgumentError("`how' should be either :SHUT_RD, :SHUT_WR, :SHUT_RDWR");
             }
@@ -514,8 +509,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("setsockopt")]
         public static void SetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context, 
             RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname, int value) {
-
-            Protocols.CheckSafeLevel(context, 2, "setsockopt");
             self.Socket.SetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, value);
         }
 
@@ -528,8 +521,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("setsockopt")]
         public static void SetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context, 
             RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname, bool value) {
-
-            Protocols.CheckSafeLevel(context, 2, "setsockopt");
             self.Socket.SetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, value);
         }
 
@@ -562,8 +553,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("setsockopt")]
         public static void SetSocketOption(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self, 
             [DefaultProtocol]int level, [DefaultProtocol]int optname, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
-
-            Protocols.CheckSafeLevel(context, 2, "setsockopt");
             self.Socket.SetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, value.ConvertToBytes());
         }
 
@@ -604,7 +593,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("getsockopt")]
         public static MutableString GetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context,
             RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname) {
-            Protocols.CheckSafeLevel(context, 2, "getsockopt");
             // struct linger is two ints; everything else the specs ask about is one.
             int size = (level == (int)SocketOptionLevel.Socket && optname == (int)SocketOptionName.Linger) ? 8 : 4;
             byte[] value = self.Socket.GetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, size);
@@ -649,7 +637,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("send")]
         public static int Send(ConversionStorage<int>/*!*/ fixnumCast, 
             RubyBasicSocket/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ message, object flags) {
-            Protocols.CheckSafeLevel(fixnumCast.Context, 4, "send");
             SocketFlags socketFlags = ConvertToSocketFlag(fixnumCast, flags);
             return Blocking(() => self.Socket.Send(message.ConvertToBytes(), socketFlags));
         }
@@ -657,7 +644,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("send")]
         public static int Send(ConversionStorage<int>/*!*/ fixnumCast, RubyBasicSocket/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ message, object flags, [DefaultProtocol, NotNull]MutableString/*!*/ to) {
-            Protocols.CheckSafeLevel(fixnumCast.Context, 4, "send");
             // Convert the parameters
             SocketFlags socketFlags = ConvertToSocketFlag(fixnumCast, flags);
             // Unpack the socket address information from the to parameter
@@ -676,7 +662,6 @@ namespace IronRuby.StandardLibrary.Sockets {
 
             MutableString str = MutableString.CreateBinary(received);
             str.Append(buffer, 0, received);
-            str.IsTainted = true;
             return str;
         }
 
@@ -930,12 +915,6 @@ namespace IronRuby.StandardLibrary.Sockets {
 #endregion
 
 #region Internal Helpers
-
-        internal static void CheckSecurity(RubyContext/*!*/ context, object self, string message) {
-            if (context.CurrentSafeLevel >= 4 && context.IsObjectTainted(self)) {
-                throw RubyExceptions.CreateSecurityError("Insecure: " + message);
-            }
-        }
 
         // TODO: handle other invalid addresses
         internal static IPHostEntry/*!*/ GetHostEntry(IPAddress/*!*/ address, bool doNotReverseLookup) {

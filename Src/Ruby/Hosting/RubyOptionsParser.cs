@@ -928,7 +928,6 @@ namespace IronRuby.Hosting {
                 { "-rlibrary",                   "require the library, before executing your script" },
              // { "-s",                          "enable some switch parsing for switches after script name" },
                 { "-S",                          "look for the script using PATH environment variable" },
-             // { "-T[level]",                   "turn on tainting checks" },
                 { "-v",                          "print version number, then turn on verbose mode" },
                 { "-w",                          "turn warnings on for your script" },
                 { "-W[level]",                   "set warning level; 0=silence, 1=medium (default), 2=verbose" },

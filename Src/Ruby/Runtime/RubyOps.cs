@@ -4479,28 +4479,8 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        public static bool IsObjectTainted(RubyInstanceData instanceData) {
-            return instanceData != null && instanceData.IsTainted;
-        }
-
-        [Emitted]
-        public static bool IsObjectUntrusted(RubyInstanceData instanceData) {
-            return instanceData != null && instanceData.IsUntrusted;
-        }
-
-        [Emitted]
         public static void FreezeObject(ref RubyInstanceData instanceData) {
             RubyOps.GetInstanceData(ref instanceData).Freeze();
-        }
-
-        [Emitted]
-        public static void SetObjectTaint(ref RubyInstanceData instanceData, bool value) {
-            RubyOps.GetInstanceData(ref instanceData).IsTainted = value;
-        }
-
-        [Emitted]
-        public static void SetObjectTrustiness(ref RubyInstanceData instanceData, bool untrusted) {
-            RubyOps.GetInstanceData(ref instanceData).IsUntrusted = untrusted;
         }
 
         [Emitted(UseReflection = true)] //RubyTypeBuilder

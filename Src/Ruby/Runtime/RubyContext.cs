@@ -2820,52 +2820,8 @@ namespace IronRuby.Runtime {
             return data != null ? data.IsFrozen : false;
         }
 
-        public bool IsObjectTainted(object obj) {
-            var state = TryGetObjectState(obj);
-            return state != null ? state.IsTainted : false;
-        }
-
-        public bool IsObjectUntrusted(object obj) {
-            var state = TryGetObjectState(obj);
-            return state != null ? state.IsUntrusted : false;
-        }
-
-        public void GetObjectTrust(object obj, out bool tainted, out bool untrusted) {
-            var state = TryGetObjectState(obj);
-            if (state != null) {
-                tainted = state.IsTainted;
-                untrusted = state.IsUntrusted;
-            } else {
-                tainted = false;
-                untrusted = false; // TODO: default?
-            }
-        }
-
         public void FreezeObject(object obj) {
             GetObjectState(obj).Freeze();
-        }
-
-        public void SetObjectTaint(object obj, bool taint) {
-            GetObjectState(obj).IsTainted = taint;
-        }
-
-        public void SetObjectTrustiness(object obj, bool untrusted) {
-            GetObjectState(obj).IsUntrusted = untrusted;
-        }
-
-        public object TaintObjectBy(object obj, object source) {
-            var sourceState = TryGetObjectState(source);
-            if (sourceState != null) {
-                bool tainted = sourceState.IsTainted;
-                bool untrusted = sourceState.IsUntrusted;
-                if (tainted || untrusted) {
-                    var state = GetObjectState(obj);
-                    state.IsTainted |= tainted;
-                    state.IsUntrusted |= untrusted;
-                }
-            }
-
-            return obj;
         }
 
         public object FreezeObjectBy(object obj, object source) {
@@ -3218,13 +3174,6 @@ namespace IronRuby.Runtime {
         }
 
         private CallSite<Func<CallSite, object, object, object>> _setBacktraceSite;
-        
-        /// <summary>
-        /// Always 0: $SAFE has been an ordinary global since Ruby 3.0.
-        /// </summary>
-        public int CurrentSafeLevel {
-            get { return 0; }
-        }
 
         #endregion
 

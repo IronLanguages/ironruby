@@ -49,8 +49,6 @@ namespace IronRuby.Builtins {
 
         private uint _flags;
         private const uint IsFrozenFlag = 1;
-        private const uint IsTaintedFlag = 2;
-        private const uint IsUntrustedFlag = 4;
         private const uint IsKeywordArgumentsFlag = 8;
         private const uint IsRuby2KeywordsHashFlag = 16;
         private const uint IsOmittedKeywordsFlag = 32;
@@ -312,26 +310,6 @@ namespace IronRuby.Builtins {
 
         public void EndIteration() {
             _iterationLevel--;
-        }
-
-        public bool IsTainted {
-            get {
-                return (_flags & IsTaintedFlag) != 0;
-            }
-            set {
-                Mutate();
-                _flags = (_flags & ~IsTaintedFlag) | (value ? IsTaintedFlag : 0);
-            }
-        }
-
-        public bool IsUntrusted {
-            get {
-                return (_flags & IsUntrustedFlag) != 0;
-            }
-            set {
-                Mutate();
-                _flags = (_flags & ~IsUntrustedFlag) | (value ? IsUntrustedFlag : 0);
-            }
         }
 
         public bool IsFrozen {

@@ -1177,7 +1177,7 @@ namespace IronRuby.Builtins {
             if (!RubyUtils.TryDuplicateObject(initializeCopyStorage, allocateStorage, self, freeze, out result)) {
                 return self;
             }
-            return context.TaintObjectBy(result, self);
+            return result;
         }
 
         [RubyMethod("dup")]
@@ -1203,7 +1203,7 @@ namespace IronRuby.Builtins {
                 // themselves in ruby4.rb) answer the receiver rather than TypeError("can't dup NilClass").
                 return self;
             }
-            return context.TaintObjectBy(result, self);
+            return result;
         }
 
         #endregion
@@ -1278,7 +1278,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region frozen?, freeze, tainted?, taint, untaint, trust, untrust, untrusted?
+        #region frozen?, freeze
 
         [RubyMethod("frozen?")]
         public static bool Frozen([NotNull]MutableString/*!*/ self) {

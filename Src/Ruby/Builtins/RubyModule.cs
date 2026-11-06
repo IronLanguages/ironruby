@@ -1126,18 +1126,6 @@ namespace IronRuby.Builtins {
             GetInstanceData().Freeze();
         }
 
-        // thread-safe:
-        public bool IsTainted {
-            get { return GetInstanceData().IsTainted; }
-            set { GetInstanceData().IsTainted = value; }
-        }
-
-        // thread-safe:
-        public bool IsUntrusted {
-            get { return GetInstanceData().IsUntrusted; }
-            set { GetInstanceData().IsUntrusted = value; }
-        }
-
         int IRubyObject.BaseGetHashCode() {
             return base.GetHashCode();
         }
@@ -3986,18 +3974,6 @@ namespace IronRuby.Builtins {
             [DebuggerDisplay("{GetModuleName(A),nq}", Name = "{GetClassKind(),nq}", Type = "")]
             public object A {
                 get { return _obj.ImmediateClass; }
-            }
-
-            [DebuggerDisplay("{B}", Name = "tainted?", Type = "")]
-            public bool B {
-                get { return _obj.IsTainted; }
-                set { _obj.IsTainted = value; }
-            }
-
-            [DebuggerDisplay("{C}", Name = "untrusted?", Type = "")]
-            public bool C {
-                get { return _obj.IsUntrusted; }
-                set { _obj.IsUntrusted = value; }
             }
 
             [DebuggerDisplay("{D}", Name = "frozen?", Type = "")]

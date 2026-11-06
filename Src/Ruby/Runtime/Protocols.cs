@@ -723,20 +723,5 @@ namespace IronRuby.Runtime {
         }
 
         #endregion
-
-        #region Security
-
-        public static void CheckSafeLevel(RubyContext/*!*/ context, int level) {
-            if (level <= context.CurrentSafeLevel) {
-                throw RubyExceptions.CreateSecurityError("Insecure operation at level " + context.CurrentSafeLevel);
-            }
-        }
-        public static void CheckSafeLevel(RubyContext/*!*/ context, int level, string/*!*/ method) {
-            if (level <= context.CurrentSafeLevel) {
-                throw RubyExceptions.CreateSecurityError(String.Format("Insecure operation {0} at level {1}", method, context.CurrentSafeLevel));
-            }
-        }
-
-        #endregion
     }
 }

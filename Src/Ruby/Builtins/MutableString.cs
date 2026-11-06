@@ -68,12 +68,6 @@ namespace IronRuby.Builtins {
         // true if NoHighCharacters flag is not up-to-date:
         private const uint SurrogatesUnknownFlag = 1 << 6;
 
-        // true if tainted:
-        private const uint IsTaintedFlag = 1 << 8;
-
-        // true if untrusted:
-        private const uint IsUntrustedFlag = 1 << 9;
-
         // true if the content should be copied on mutation:
         private const uint CopyOnWriteFlag = 1 << 10;
 
@@ -155,11 +149,9 @@ namespace IronRuby.Builtins {
             }
         }
 
-        // creates a copy including the taint flag:
+        // creates a copy:
         protected MutableString(MutableString/*!*/ str) 
             : this(str._content.Clone(), str._encoding) {
-            IsTainted = str.IsTainted;
-            IsUntrusted = str.IsUntrusted;
             // The same characters in the same encoding: what is known about them still holds, so
             // a copy - the frozen one each MatchData keeps, say - need not scan them again.
             const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
@@ -283,7 +275,7 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Creates an instance of MutableString with content and taint copied from a given string.
+        /// Creates an instance of MutableString with content copied from a given string.
         /// </summary>
         public static MutableString/*!*/ Create(MutableString/*!*/ str) {
             ContractUtils.RequiresNotNull(str, "str");
@@ -342,7 +334,7 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Creates a copy of this instance, including content and taint.
+        /// Creates a copy of this instance, including content.
         /// Doesn't copy frozen state and instance variables. 
         /// Preserves the class of the String.
         /// </summary>
@@ -351,7 +343,7 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// A frozen plain String with this one's content, encoding, taint and character flags,
+        /// A frozen plain String with this one's content, encoding and character flags,
         /// for a MatchData to keep: a later change to this string must not show through it.
         /// A char-based string keeps an immutable .NET string of its characters for the regex
         /// to run on (ConvertToString), and the copy wraps that very string rather than copying
@@ -364,15 +356,13 @@ namespace IronRuby.Builtins {
                 return new MutableString(this).Freeze();
             }
             var result = new MutableString(new StringContent(_content.ConvertToString(), null), _encoding);
-            result.IsTainted = IsTainted;
-            result.IsUntrusted = IsUntrusted;
             const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
             result._flags = (result._flags & ~CharacterFlags) | (_flags & CharacterFlags);
             return result.Freeze();
         }
 
         /// <summary>
-        /// Creates an empty copy of this instance, taint and instance variables. 
+        /// Creates an empty copy of this instance with its instance variables. 
         /// </summary>
         public MutableString/*!*/ Duplicate(RubyContext/*!*/ context, bool copySingletonMembers, MutableString/*!*/ result) {
             context.CopyInstanceData(this, result, copySingletonMembers);
@@ -982,34 +972,6 @@ namespace IronRuby.Builtins {
             return _content.ContainsInvalidCharacters();
         }
 
-        public bool IsTainted {
-            get {
-                return (_flags & IsTaintedFlag) != 0; 
-            }
-            set {
-                var flags = _flags;
-                if ((flags & IsFrozenFlag) != 0) {
-                    throw RubyExceptions.CreateStringFrozenError(this);
-                }
-
-                _flags = (flags & ~IsTaintedFlag) | (value ? IsTaintedFlag : 0);
-            }
-        }
-
-        public bool IsUntrusted {
-            get {
-                return (_flags & IsUntrustedFlag) != 0;
-            }
-            set {
-                var flags = _flags;
-                if ((flags & IsFrozenFlag) != 0) {
-                    throw RubyExceptions.CreateStringFrozenError(this);
-                }
-
-                _flags = (flags & ~IsUntrustedFlag) | (value ? IsUntrustedFlag : 0);
-            }
-        }
-
         public bool IsFrozen {
             get {
                 return (_flags & IsFrozenFlag) != 0;
@@ -1064,42 +1026,6 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ UnlockTemporarily() {
             _flags &= ~IsTemporarilyLockedFlag;
             return this;
-        }
-
-        /// <summary>
-        /// Makes this string tainted if the specified string is tainted.
-        /// </summary>
-        public MutableString/*!*/ TaintBy(MutableString/*!*/ str) {
-            IsTainted |= str.IsTainted;
-            IsUntrusted |= str.IsUntrusted;
-            return this;
-        }
-
-        /// <summary>
-        /// Makes this string tainted if the specified object is tainted.
-        /// </summary>
-        public MutableString/*!*/ TaintBy(IRubyObjectState/*!*/ obj) {
-            IsTainted |= obj.IsTainted;
-            IsUntrusted |= obj.IsUntrusted;
-            return this;
-        }
-
-        /// <summary>
-        /// Makes this string tainted if the specified object is tainted.
-        /// </summary>
-        public MutableString/*!*/ TaintBy(object/*!*/ obj, RubyContext/*!*/ context) {
-            bool tainted, untrusted;
-            context.GetObjectTrust(obj, out tainted, out untrusted);
-            IsTainted |= tainted;
-            IsUntrusted |= untrusted;
-            return this;
-        }
-
-        /// <summary>
-        /// Makes this string tainted if the specified object is tainted.
-        /// </summary>
-        public MutableString/*!*/ TaintBy(object/*!*/ obj, RubyScope/*!*/ scope) {
-            return TaintBy(obj, scope.RubyContext);
         }
 
         #endregion
