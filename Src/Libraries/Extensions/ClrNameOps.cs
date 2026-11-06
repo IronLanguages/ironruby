@@ -53,7 +53,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("to_sym")]
-        [RubyMethod("intern", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("intern")]
         public static RubySymbol/*!*/ ToSymbol(RubyContext/*!*/ context, ClrName/*!*/ self) {
             return context.EncodeIdentifier(self.MangledName);
         }
@@ -146,20 +146,20 @@ namespace IronRuby.Builtins {
         // []
 
         // encoding aware
-        [RubyMethod("empty?", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("empty?")]
         public static bool IsEmpty(ClrName/*!*/ self) {
             return self.MangledName.Length == 0;
         }
 
         // encoding aware
-        [RubyMethod("encoding", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("encoding")]
         public static RubyEncoding/*!*/ GetEncoding(ClrName/*!*/ self) {
             return RubyEncoding.UTF8;
         }
 
         // encoding aware
-        [RubyMethod("size", Compatibility = RubyCompatibility.Ruby19)]
-        [RubyMethod("length", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("size")]
+        [RubyMethod("length")]
         public static int GetLength(ClrName/*!*/ self) {
             return self.MangledName.Length;
         }

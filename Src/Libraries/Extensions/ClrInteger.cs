@@ -515,7 +515,7 @@ namespace IronRuby.Builtins {
 
         // A Fixnum is exactly a double, so its quotient is the division of the two, as MRI's
         // fix_fdiv_double does; without these the binder made both of them Bignums first.
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(int self, int other) {
             return (double)self / (double)other;
         }
@@ -524,22 +524,22 @@ namespace IronRuby.Builtins {
         // and fdiv(Bignum, Float) both took the long as a Float, which the binder could not choose
         // between - 1.fdiv(2**40), and with it 0.5 * 10**-15 and Rational#to_f, raised
         // AmbiguousMatchException.
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(int self, long other) {
             return FDivExact(self, other);
         }
 
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(long self, long other) {
             return FDivExact(self, other);
         }
 
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(long self, int other) {
             return FDivExact(self, other);
         }
 
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(long self, double other) {
             return (double)self / other;
         }
@@ -567,12 +567,12 @@ namespace IronRuby.Builtins {
             return FDiv(new BigInteger(self), new BigInteger(other));
         }
 
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(int self, double other) {
             return (double)self / other;
         }
 
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv([NotNull]BigInteger/*!*/ self, double other) {
             return Protocols.ToDouble(self) / other;
         }
@@ -587,7 +587,7 @@ namespace IronRuby.Builtins {
         /// that is not a number at all gets "String can't be coerced into Integer" rather than
         /// "no implicit conversion of String into Integer".
         /// </remarks>
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static object FDiv(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
             object/*!*/ self, object other) {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "fdiv", self, other);

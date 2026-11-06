@@ -22,30 +22,6 @@ using IronRuby.Builtins;
 namespace IronRuby.Runtime {
 
     public abstract class RubyAttribute : Attribute {
-        private string _buildConfig;
-        private RubyCompatibility _compatibility = RubyCompatibility.Default;
-
-        /// <summary>
-        /// If set, indicates what build configurations this module should be available under
-        /// Can be any string that is valid after a #if
-        /// Default is to be available under all configurations
-        /// 
-        /// typical usage: 
-        /// 
-        /// TODO: is there a better way to do this?
-        /// </summary>
-        public string BuildConfig {
-            get { return _buildConfig; }
-            set { _buildConfig = value; }
-        }
-
-        /// <summary>
-        /// Which language version supports the feature
-        /// </summary>
-        public RubyCompatibility Compatibility {
-            get { return _compatibility; }
-            set { _compatibility = value; }
-        }
     }
 
     /// <summary>

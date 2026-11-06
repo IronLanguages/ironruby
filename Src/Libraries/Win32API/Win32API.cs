@@ -182,7 +182,7 @@ namespace IronRuby.StandardLibrary.Win32API {
             return Reinitialize(new Win32API(self), libraryName, functionName, parameterTypes, returnType);
         }
 
-        [RubyConstructor(Compatibility=RubyCompatibility.Ruby19)]
+        [RubyConstructor]
         public static Win32API/*!*/ Create(RubyClass/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ libraryName,
             [DefaultProtocol, NotNull]MutableString/*!*/ functionName,

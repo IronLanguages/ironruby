@@ -161,7 +161,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("to_sym")]
-        [RubyMethod("intern", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("intern")]
         public static RubySymbol/*!*/ ToSymbol(RubySymbol/*!*/ self) {
             return self;
         }
@@ -242,28 +242,28 @@ namespace IronRuby.Builtins {
 
         #region =~, match
 
-        [RubyMethod("=~", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("=~")]
         public static object Match(RubyScope/*!*/ scope, RubySymbol/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
             return MutableStringOps.Match(scope, self.String.Clone(), regex);
         }
 
-        [RubyMethod("=~", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("=~")]
         public static object Match(ClrName/*!*/ self, [NotNull]RubySymbol/*!*/ str) {
             throw RubyExceptions.CreateTypeError("type mismatch: Symbol given");
         }
 
-        [RubyMethod("=~", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("=~")]
         public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, RubySymbol/*!*/ self, object obj) {
             return MutableStringOps.Match(storage, scope, self.String.Clone(), obj);
         }
 
-        [RubyMethod("match", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("match")]
         public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
             RubySymbol/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
             return MutableStringOps.Match(storage, scope, block, self.String.Clone(), regex);
         }
 
-        [RubyMethod("match", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("match")]
         public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
             RubySymbol/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern) {
             return MutableStringOps.Match(storage, scope, block, self.String.Clone(), pattern);
