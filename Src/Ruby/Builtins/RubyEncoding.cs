@@ -235,7 +235,7 @@ namespace IronRuby.Builtins {
             E("IBM037", 37, NameFlags.Dummy),
             A("ebcdic-cp-us", "IBM037"),
             // MRI has a converter for this one (through EUC-JP); IronRuby does not yet.
-            E("stateless-ISO-2022-JP", CodePageStatelessISO2022JP, NameFlags.NoTranscoder),
+            E("stateless-ISO-2022-JP", CodePageStatelessISO2022JP),
             A("eucJP", "EUC-JP"),
             E("eucJP-ms", CodePageEucJpMs),
             A("euc-jp-ms", "eucJP-ms"),
@@ -307,7 +307,7 @@ namespace IronRuby.Builtins {
             E("SJIS-KDDI", CodePageSJISKDDI),
             E("ISO-2022-JP-KDDI", CodePageISO2022JPKDDI, NameFlags.Dummy),
             // MRI has a converter for this one (through SJIS-KDDI); IronRuby does not yet.
-            E("stateless-ISO-2022-JP-KDDI", CodePageStatelessISO2022JPKDDI, NameFlags.NoTranscoder),
+            E("stateless-ISO-2022-JP-KDDI", CodePageStatelessISO2022JPKDDI),
             E("UTF8-SoftBank", CodePageUTF8SoftBank),
             E("SJIS-SoftBank", CodePageSJISSoftBank),
         };
@@ -618,6 +618,37 @@ namespace IronRuby.Builtins {
             get { return _strictEncoding; }
         }
 
+        private Encoding _transcodingEncoding;
+
+        /// <summary>
+        /// The encoding String#encode and Encoding::Converter read and write this one's bytes with:
+        /// StrictEncoding, but for stateless-ISO-2022-JP and its KDDI variant, whose strings are held
+        /// by their Emacs-Mule shape while MRI transcodes only their JIS X 0208 characters.
+        /// </summary>
+        public Encoding/*!*/ TranscodingEncoding {
+            get {
+                if (CodePage == CodePageStatelessISO2022JP || CodePage == CodePageStatelessISO2022JPKDDI) {
+                    return _transcodingEncoding ?? (_transcodingEncoding = new StatelessIso2022JpEncoding(CodePage, Name));
+                }
+                return _strictEncoding;
+            }
+        }
+
+        /// <summary>
+        /// The encoding MRI's converters to and from this one go through, or null when they go
+        /// through UTF-8 like any other: EUC-JP for stateless-ISO-2022-JP, UTF8-KDDI for its KDDI
+        /// variant.
+        /// </summary>
+        public RubyEncoding TranscodingIntermediate {
+            get {
+                switch (CodePage) {
+                    case CodePageStatelessISO2022JP: return EUCJP;
+                    case CodePageStatelessISO2022JPKDDI: return GetRubyEncoding(CodePageUTF8KDDI);
+                    default: return null;
+                }
+            }
+        }
+
         private Encoding _escapingEncoding;
 
         /// <summary>
@@ -841,6 +872,35 @@ namespace IronRuby.Builtins {
                     case CodePageUTF16LE:
                     case CodePageUTF32BE:
                     case CodePageUTF32LE:
+                        return true;
+                }
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Whether MRI case maps the encoding's characters by Unicode's rules, context and
+        /// all: the Unicode encodings, UTF-8's carrier variants and CESU-8.
+        /// </summary>
+        public bool HasUnicodeCaseMapping {
+            get {
+                return IsUnicodeEncoding || CodePage == CodePageCESU8 || CodePage == CodePageUTF8DoCoMo ||
+                    CodePage == CodePageUTF8KDDI || CodePage == CodePageUTF8SoftBank;
+            }
+        }
+
+        /// <summary>
+        /// Whether MRI case maps characters beyond ASCII one at a time, as Onigmo's tables do
+        /// for the ISO-8859 and Windows-125x encodings that have letters with case. Every other
+        /// encoding but the Unicode ones (KOI8-R, the IBM code pages, Shift_JIS, GB18030, ...)
+        /// maps ASCII letters only.
+        /// </summary>
+        public bool HasSingleByteCaseMapping {
+            get {
+                switch (CodePage) {
+                    case 28591: case 28592: case 28593: case 28594: case 28595: case 28597: case 28599:
+                    case CodePageISO8859_10: case 28603: case CodePageISO8859_14: case 28605: case CodePageISO8859_16:
+                    case 1250: case 1251: case 1252: case 1253: case 1254: case 1257:
                         return true;
                 }
                 return false;

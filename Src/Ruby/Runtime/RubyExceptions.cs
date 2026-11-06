@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using System.IO;
@@ -445,10 +446,35 @@ namespace IronRuby.Runtime {
         /// a pair with UTF-8 at one end is one hop and any other pair is two.
         /// </summary>
         public static RubyEncoding/*!*/[]/*!*/ ConversionPath(RubyEncoding/*!*/ source, RubyEncoding/*!*/ destination) {
-            if (source == RubyEncoding.UTF8 || destination == RubyEncoding.UTF8) {
+            RubyEncoding fromVia = source.TranscodingIntermediate, toVia = destination.TranscodingIntermediate;
+            if (fromVia == null && toVia == null) {
+                if (source == RubyEncoding.UTF8 || destination == RubyEncoding.UTF8) {
+                    return new[] { source, destination };
+                }
+                return new[] { source, RubyEncoding.UTF8, destination };
+            }
+
+            // stateless-ISO-2022-JP goes through EUC-JP (its KDDI variant through UTF8-KDDI), and
+            // from there through UTF-8 as anything else does
+            if (fromVia == destination || toVia == source) {
                 return new[] { source, destination };
             }
-            return new[] { source, RubyEncoding.UTF8, destination };
+            var path = new List<RubyEncoding> { source };
+            if (fromVia != null && fromVia != destination) {
+                path.Add(fromVia);
+            }
+            RubyEncoding last = path[path.Count - 1];
+            RubyEncoding next = toVia ?? destination;
+            if (next != last) {
+                if (last != RubyEncoding.UTF8 && next != RubyEncoding.UTF8) {
+                    path.Add(RubyEncoding.UTF8);
+                }
+                if (toVia != null) {
+                    path.Add(toVia);
+                }
+            }
+            path.Add(destination);
+            return path.ToArray();
         }
 
         /// <summary>
@@ -474,7 +500,7 @@ namespace IronRuby.Runtime {
             string stageSource = TranscoderName(path[stage]);
             string stageDestination = TranscoderName(path[stage + 1]);
 
-            if (stageSource == path[0].Name && stageDestination == path[path.Length - 1].Name) {
+            if (stage == 0 && stage + 2 == path.Length) {
                 return FormatMessage("{0} from {1} to {2}", dumped, stageSource, stageDestination);
             }
 

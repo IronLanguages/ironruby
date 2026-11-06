@@ -29,15 +29,6 @@ namespace IronRuby.Builtins {
         private Match/*!*/ _match;
         private MutableString/*!*/ _originalString;
 
-        // Set only when the regex ran against a k-coded (/u /e /s /n) decoding of the input.
-        // In that case _originalString is still in byte representation, while the CLR Match
-        // reports offsets into _encodedInput (UTF-16 code units), so the two index spaces
-        // disagree and every offset has to be translated. Null means the two agree.
-        private string _encodedInput;
-        private Encoding _encoding;
-        private int _startByteOffset;
-        private int _startCharOffset;
-
         // The text the CLR regex ran on, when it holds a surrogate pair - which makes its CLR
         // offsets differ from Ruby's character offsets. Null otherwise (nearly always), and then
         // the two agree. It is the regex's own immutable input, not _originalString, so the
@@ -126,24 +117,6 @@ namespace IronRuby.Builtins {
             _originalString = originalString;
         }
 
-        private MatchData(Match/*!*/ match, MutableString/*!*/ originalString, string encodedInput, Encoding encoding, int startByteOffset)
-            : this(match, originalString) {
-            _encodedInput = encodedInput;
-            _encoding = encoding;
-            _startByteOffset = startByteOffset;
-            if (startByteOffset > 0) {
-                int byteCount;
-                byte[] bytes = originalString.GetByteArray(out byteCount);
-                int prefixBytes = Math.Min(startByteOffset, byteCount);
-                if (encoding.IsSingleByte) {
-                    _startCharOffset = prefixBytes;
-                } else {
-                    // characters, not UTF-16 code units: a pair is one
-                    _startCharOffset = encoding.GetString(bytes, 0, prefixBytes).GetCharacterCount();
-                }
-            }
-        }
-
         public MatchData() {
             _originalString = MutableString.FrozenEmpty;
             _match = Match.Empty;
@@ -167,23 +140,17 @@ namespace IronRuby.Builtins {
             _match = other._match;
             _groupCount = 0;
             _originalString = other._originalString;
-            _encodedInput = other._encodedInput;
-            _encoding = other._encoding;
-            _startByteOffset = other._startByteOffset;
-            _startCharOffset = other._startCharOffset;
             _pairedText = other._pairedText;
             _regexp = other._regexp;
             _frozenInput = other._frozenInput;
         }
 
         /// <summary>
-        /// <paramref name="kcode"/> is non-null exactly when the regex was run against a k-coded
-        /// (/u /e /s /n) decoding of <paramref name="input"/> rather than against the input's own
-        /// character representation. The CLR offsets then index <paramref name="encodedInput"/>
-        /// while <paramref name="input"/> is still addressed by byte, so they must be translated.
+        /// <paramref name="text"/> is the input's character representation the regex ran on;
+        /// the match's CLR offsets index it.
         /// </summary>
-        internal static MatchData Create(Match/*!*/ match, MutableString/*!*/ input, bool freezeInput, string/*!*/ encodedInput,
-            RubyEncoding kcode, int startByteOffset, RubyRegex regexp, bool hasPairs) {
+        internal static MatchData Create(Match/*!*/ match, MutableString/*!*/ input, bool freezeInput, string/*!*/ text,
+            RubyRegex regexp, bool hasPairs) {
 
             if (!match.Success) {
                 return null;
@@ -193,12 +160,10 @@ namespace IronRuby.Builtins {
                 input = input.CreateFrozenSnapshot();
             }
 
-            MatchData result = (kcode == null || encodedInput == null)
-                ? new MatchData(match, input)
-                : new MatchData(match, input, encodedInput, kcode.Encoding, startByteOffset);
+            MatchData result = new MatchData(match, input);
             result._regexp = regexp;
             if (hasPairs) {
-                result._pairedText = encodedInput;
+                result._pairedText = text;
             }
             return result;
         }
@@ -208,60 +173,19 @@ namespace IronRuby.Builtins {
         #region Index translation
 
         /// <summary>
-        /// Maps a CLR offset (into the string the Regex actually ran on) onto the index space
-        /// _originalString is addressed by. Identity unless a k-code decoding took place.
-        /// </summary>
-        private int ToOriginalIndex(int clrIndex) {
-            if (_encodedInput == null) {
-                return clrIndex;
-            }
-            if (clrIndex <= 0) {
-                return _startByteOffset;
-            }
-            if (_encoding.IsSingleByte) {
-                // One byte per character, so the offsets already agree. Counting the bytes of the
-                // prefix instead would make every group offset a pass over everything before it.
-                return _startByteOffset + Math.Min(clrIndex, _encodedInput.Length);
-            }
-            if (clrIndex >= _encodedInput.Length) {
-                return _startByteOffset + _encoding.GetByteCount(_encodedInput);
-            }
-            return _startByteOffset + _encoding.GetByteCount(_encodedInput.AsSpan(0, clrIndex));
-        }
-
-        private int ToOriginalLength(int clrIndex, int clrLength) {
-            if (_encodedInput == null) {
-                return clrLength;
-            }
-            return ToOriginalIndex(clrIndex + clrLength) - ToOriginalIndex(clrIndex);
-        }
-
-        /// <summary>
-        /// The Ruby character offset a CLR offset stands for. Without a k-code decoding the regex
-        /// ran on the string's own character representation, and the string translates it (the
-        /// identity unless it holds a surrogate pair); with one, the CLR offset counts UTF-16
-        /// units of the decoded input, only from the position the match started at.
+        /// The Ruby character offset a CLR offset stands for: the regex ran on the string's own
+        /// character representation, and the string translates it (the identity unless it holds
+        /// a surrogate pair).
         /// </summary>
         private int ToCharIndex(int clrIndex) {
-            if (_encodedInput == null) {
-                return (_pairedText == null) ? clrIndex : MutableString.ToCharacterIndex(_pairedText, clrIndex);
-            }
-            int units = Math.Min(Math.Max(clrIndex, 0), _encodedInput.Length);
-            if (_pairedText != null) {
-                units = MutableString.ToCharacterIndex(_pairedText, units);
-            }
-            return _startCharOffset + units;
+            return (_pairedText == null) ? clrIndex : MutableString.ToCharacterIndex(_pairedText, clrIndex);
         }
 
         /// <summary>
-        /// The byte offset a CLR offset stands for. With a k-code decoding that is what
-        /// ToOriginalIndex already answers; without one the CLR offset counts characters, so the
-        /// bytes they occupy in the subject have to be counted out.
+        /// The byte offset a CLR offset stands for: the CLR offset counts characters, so the bytes
+        /// they occupy in the subject have to be counted out.
         /// </summary>
         private int ToByteIndex(int clrIndex) {
-            if (_encodedInput != null) {
-                return ToOriginalIndex(clrIndex);
-            }
             if (clrIndex <= 0) {
                 return 0;
             }
@@ -423,7 +347,7 @@ namespace IronRuby.Builtins {
 
         /// <summary>Character index where a named group matched, or -1.</summary>
         public int GetNamedGroupStart(string/*!*/ name) {
-            return NamedGroupSuccess(name) ? ToOriginalIndex(GetNamedGroup(name).Index) : -1;
+            return NamedGroupSuccess(name) ? GetNamedGroup(name).Index : -1;
         }
 
         public int GetNamedGroupLength(string/*!*/ name) {
@@ -431,7 +355,7 @@ namespace IronRuby.Builtins {
                 return -1;
             }
             var group = GetNamedGroup(name);
-            return ToOriginalLength(group.Index, group.Length);
+            return group.Length;
         }
 
         public MutableString GetNamedGroupValue(string/*!*/ name) {
@@ -442,13 +366,13 @@ namespace IronRuby.Builtins {
 
         public int GetGroupStart(int groupIndex) {
             ContractUtils.Requires(groupIndex >= 0);
-            return ToOriginalIndex(_match.Groups[groupIndex].Index);
+            return _match.Groups[groupIndex].Index;
         }
 
         public int GetGroupLength(int groupIndex) {
             ContractUtils.Requires(groupIndex >= 0);
             var group = _match.Groups[groupIndex];
-            return ToOriginalLength(group.Index, group.Length);
+            return group.Length;
         }
         
         public int GetGroupEnd(int groupIndex) {

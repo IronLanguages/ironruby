@@ -147,8 +147,8 @@ namespace IronRuby.Builtins {
                 _path = path;
                 _flags = flags;
                 _sourceUnitSize = GetUnitSize(path[0]);
-                _decoder = DecodeStageSource.StrictEncoding.GetDecoder();
-                _encoder = EncodeStageDestination.StrictEncoding.GetEncoder();
+                _decoder = DecodeStageSource.TranscodingEncoding.GetDecoder();
+                _encoder = EncodeStageDestination.TranscodingEncoding.GetEncoder();
                 _replacement = DefaultReplacement(EncodeStageDestination);
                 _replacementBytes = EncodeReplacement(_replacement);
             }
@@ -360,7 +360,7 @@ namespace IronRuby.Builtins {
             private byte[]/*!*/ EncodeReplacement(MutableString/*!*/ value) {
                 string chars = value.ToString();
                 try {
-                    return EncodeStageDestination.StrictEncoding.GetBytes(chars);
+                    return EncodeStageDestination.TranscodingEncoding.GetBytes(chars);
                 } catch (EncoderFallbackException) {
                     throw new UndefinedConversionError("replacement character setup failed");
                 }
@@ -417,9 +417,27 @@ namespace IronRuby.Builtins {
                 _readAgainBytes = EmptyBytes;
                 _errorAtEncodeStage = true;
 
-                var error = new UndefinedConversionError(UndefinedConversionMessage(codepoint));
+                // a leg out of EUC-JP (on the way to stateless-ISO-2022-JP) names the character by its bytes
+                var error = new UndefinedConversionError(EncodeStageSource == RubyEncoding.EUCJP
+                    ? RubyExceptions.UndefinedConversionMessage(RubyExceptions.InspectTranscodingBytes(errorBytes), _path, _path.Length - 2)
+                    : UndefinedConversionMessage(codepoint));
                 error.SourceEncoding = EncodeStageSource;
                 error.DestinationEncoding = EncodeStageDestination;
+                error.ErrorCharBytes = errorBytes;
+                _lastError = error;
+            }
+
+            /// <summary>An undefined conversion on the first leg, which MRI names by its bytes.</summary>
+            private void RecordUndefinedSourceCharacter(byte[]/*!*/ errorBytes) {
+                _status = "undefined_conversion";
+                _errorBytes = errorBytes;
+                _readAgainBytes = EmptyBytes;
+                _errorAtEncodeStage = false;
+
+                var error = new UndefinedConversionError(
+                    RubyExceptions.UndefinedConversionMessage(RubyExceptions.InspectTranscodingBytes(errorBytes), _path, 0));
+                error.SourceEncoding = DecodeStageSource;
+                error.DestinationEncoding = DecodeStageDestination;
                 error.ErrorCharBytes = errorBytes;
                 _lastError = error;
             }
@@ -439,8 +457,8 @@ namespace IronRuby.Builtins {
                 } else {
                     RubyEncoding from = _errorAtEncodeStage ? EncodeStageSource : DecodeStageSource;
                     RubyEncoding to = _errorAtEncodeStage ? EncodeStageDestination : DecodeStageDestination;
-                    result.Add(MutableString.CreateBinary(Encoding.ASCII.GetBytes(from.Name)));
-                    result.Add(MutableString.CreateBinary(Encoding.ASCII.GetBytes(to.Name)));
+                    result.Add(MutableString.CreateBinary(Encoding.ASCII.GetBytes(RubyExceptions.TranscoderName(from))));
+                    result.Add(MutableString.CreateBinary(Encoding.ASCII.GetBytes(RubyExceptions.TranscoderName(to))));
                     result.Add(MutableString.CreateBinary(_errorBytes));
                     result.Add(MutableString.CreateBinary(_readAgainBytes ?? EmptyBytes));
                 }
@@ -469,7 +487,7 @@ namespace IronRuby.Builtins {
                     bytes = str.ToByteArray();
                 } else {
                     try {
-                        bytes = DestinationEncoding.StrictEncoding.GetBytes(str.ToString());
+                        bytes = DestinationEncoding.TranscodingEncoding.GetBytes(str.ToString());
                     } catch (EncoderFallbackException e) {
                         int codepoint = e.CharUnknownHigh != '\0' ?
                             Char.ConvertToUtf32(e.CharUnknownHigh, e.CharUnknownLow) : e.CharUnknown;
@@ -565,6 +583,27 @@ namespace IronRuby.Builtins {
                             _decoder.Convert(input, consumed, unit, chars, 0, chars.Length, false,
                                 out bytesUsed, out charsUsed, out completed);
                         } catch (DecoderFallbackException) {
+                            // A character of the right shape that the table leaves out (0x81 in
+                            // Windows-1252, 0xA2AF in EUC-JP) is an undefined conversion on the
+                            // first leg, not an invalid byte sequence.
+                            var character = new byte[_incomplete.Count + unit];
+                            _incomplete.CopyTo(character, 0);
+                            Array.Copy(input, consumed, character, _incomplete.Count, unit);
+                            if (!MutableString.CreateBinary(character, DecodeStageSource).ContainsInvalidCharacters()) {
+                                consumed += unit;
+                                ResetDecoder();
+                                if ((_flags & UndefMaskFlag) == UndefReplaceFlag) {
+                                    if (!Emit(_replacementBytes, written, limit)) {
+                                        status = "destination_buffer_full";
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                RecordUndefinedSourceCharacter(character);
+                                status = "undefined_conversion";
+                                break;
+                            }
+
                             byte[] errorBytes, readAgain;
                             if (_incomplete.Count != 0) {
                                 errorBytes = _incomplete.ToArray();
@@ -606,6 +645,21 @@ namespace IronRuby.Builtins {
                         }
 
                         _incomplete.Clear();
+
+                        // ASCII-8BIT's bytes above 0x7F are characters that mean nothing in any
+                        // other encoding: MRI's first leg out of it refuses them as undefined.
+                        if (DecodeStageSource == RubyEncoding.Binary && !_noConversion && chars[0] > 0x7f) {
+                            if ((_flags & UndefMaskFlag) == UndefReplaceFlag) {
+                                if (!Emit(_replacementBytes, written, limit)) {
+                                    status = "destination_buffer_full";
+                                    break;
+                                }
+                                continue;
+                            }
+                            RecordUndefinedSourceCharacter(new[] { (byte)chars[0] });
+                            status = "undefined_conversion";
+                            break;
+                        }
 
                         string encodeStatus = EncodeChars(chars, charsUsed, written, limit);
                         if (encodeStatus != null) {
@@ -731,7 +785,7 @@ namespace IronRuby.Builtins {
             /// <summary>The offending character, expressed in the source encoding of the failing stage.</summary>
             private byte[]/*!*/ ErrorCharBytes(char[]/*!*/ chars, int index, int size) {
                 try {
-                    return EncodeStageSource.StrictEncoding.GetBytes(chars, index, size);
+                    return EncodeStageSource.TranscodingEncoding.GetBytes(chars, index, size);
                 } catch (EncoderFallbackException) {
                     return Encoding.UTF8.GetBytes(new String(chars, index, size));
                 }
@@ -777,11 +831,11 @@ namespace IronRuby.Builtins {
 
             private void ResetDecoder() {
                 _incomplete.Clear();
-                _decoder = DecodeStageSource.StrictEncoding.GetDecoder();
+                _decoder = DecodeStageSource.TranscodingEncoding.GetDecoder();
             }
 
             private void ResetEncoder() {
-                _encoder = EncodeStageDestination.StrictEncoding.GetEncoder();
+                _encoder = EncodeStageDestination.TranscodingEncoding.GetEncoder();
             }
 
             /// <summary>

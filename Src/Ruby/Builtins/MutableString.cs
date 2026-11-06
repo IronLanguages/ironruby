@@ -912,6 +912,11 @@ namespace IronRuby.Builtins {
                     flags = flags & ~SurrogatesUnknownFlag | NoSurrogatesFlag;
                 } else {
                     flags = _content.UpdateCharacterFlags(_flags);
+                    if (!_encoding.IsAsciiIdentity) {
+                        // the scan answers ASCII too, but no string in UTF-16 or UTF-32 is (see IsAscii):
+                        // HasSingleByteCharacters would take "abc" in UTF-16LE for its three bytes
+                        flags &= ~(AsciiUnknownFlag | IsAsciiFlag);
+                    }
                 }
                 _flags = flags;
             }
@@ -1236,12 +1241,14 @@ namespace IronRuby.Builtins {
 
             // TODO: How does MRI deal with invalid characters, surrogates?
             if (_encoding != other._encoding) {
+                // Characters only compare across encodings when both are ASCII in an ASCII
+                // compatible encoding; "abc" in UTF-16LE is the bytes "a\0b\0c\0".
                 bool bothAscii = true;
-                if (!IsAscii()) {
+                if (!_encoding.IsAsciiIdentity || !IsAscii()) {
                     SwitchToBytes();
                     bothAscii = false;
                 }
-                if (!other.IsAscii()) {
+                if (!other._encoding.IsAsciiIdentity || !other.IsAscii()) {
                     other.SwitchToBytes();
                     bothAscii = false;
                 }
@@ -2520,7 +2527,7 @@ namespace IronRuby.Builtins {
             }
 
             Debug.Assert(dstContent == dst._content && srcContent == src._content);
-            Debug.Assert(!dst.KnowsAscii);
+            Debug.Assert(!dst.KnowsAscii || !dst.Encoding.IsAsciiIdentity);
             return anyMaps;
         }
 
@@ -2554,7 +2561,7 @@ namespace IronRuby.Builtins {
             }
 
             Debug.Assert(dstContent == dst._content && srcContent == src._content);
-            Debug.Assert(!dst.KnowsAscii);
+            Debug.Assert(!dst.KnowsAscii || !dst.Encoding.IsAsciiIdentity);
             return anyMaps;
         }
 
@@ -2583,7 +2590,7 @@ namespace IronRuby.Builtins {
             }
 
             Debug.Assert(dstContent == dst._content && srcContent == src._content);
-            Debug.Assert(!dst.KnowsAscii);
+            Debug.Assert(!dst.KnowsAscii || !dst.Encoding.IsAsciiIdentity);
             return anyMaps;
         }
 

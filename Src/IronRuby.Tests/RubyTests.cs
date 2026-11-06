@@ -175,6 +175,7 @@ namespace IronRuby.Tests {
                 RegexEscape1,
                 RegexCondition1,
                 RegexCondition2,
+                Regex_ByteEscapes1,
                 
                 Scenario_RubyScopeParsing,
                 Scenario_RubyScopes1,
@@ -887,6 +888,10 @@ namespace IronRuby.Tests {
                 Encoding_List1,
                 Encoding_InvalidBytes1,
                 Encoding_Converter1,
+                Encoding_Converter2,
+                Encoding_StatelessIso2022Jp1,
+                Encoding_AsciiIncompatible1,
+                Encoding_AsciiIncompatibleLines1,
                 Marshal_Misc1,
                 Marshal_LoadFloat1,
                 Integer_SqrtPowDigits1,

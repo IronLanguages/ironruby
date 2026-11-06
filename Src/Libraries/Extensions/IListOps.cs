@@ -1979,7 +1979,9 @@ namespace IronRuby.Builtins {
             }
 
             // calculate length:
-            MutableString any = separator;
+            // The result starts out in the first string's encoding, and the separator is appended
+            // to that, as in MRI: an incompatible pair is reported in that order.
+            MutableString any = null;
             int length = (separator != null) ? (isBinary.HasValue && isBinary.Value ? separator.GetByteCount() : separator.GetCharCount()) * (parts.Count - 1) : 0;
             for (int i = 0, n = parts.Count; i < n; i++) {
                 var part = parts[i];
@@ -1990,6 +1992,7 @@ namespace IronRuby.Builtins {
                     }
                 }
             }
+            any ??= separator;
 
             if (any == null) {
                 return MutableString.CreateEmpty(RubyEncoding.Ascii);
