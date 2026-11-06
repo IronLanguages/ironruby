@@ -1006,6 +1006,7 @@ namespace IronRuby.Tests {
                 Integer_ToStringRadix1,
                 Pack_BerTruncated1,
                 Integer_Int64Shifts1,
+                BasicObject_EqualIdentity1,
             };
         }
     }

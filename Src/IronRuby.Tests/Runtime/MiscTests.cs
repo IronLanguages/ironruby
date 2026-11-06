@@ -4247,5 +4247,44 @@ autoload const: ""LoadError: cannot load such file -- /nonexistent/thing""
 tracepoint ctor: [[:call, :initialize], [:return, :initialize], [:call, :x], [:return, :x]]
 ");
         }
+
+        /// <summary>
+        /// BasicObject#equal? is identity, separate from #== - a class whose == calls equal?
+        /// (Set#==) must not recurse through BaseEquals into its own ==.
+        /// </summary>
+        public void BasicObject_EqualIdentity1() {
+            TestOutput(@"
+# Set#== in set.rb (not loadable here: no prelude) has this shape
+class MySet
+  attr_reader :h
+  def initialize(*a); @h = {}; a.each { |x| @h[x] = true }; end
+  def ==(other); if self.equal?(other) then true elsif other.instance_of?(self.class) then @h == other.h else false end; end
+end
+class Eq; def ==(o); equal?(o); end; end
+class Str < String; def ==(o); equal?(o); end; end
+p MySet.new(1).equal?(MySet.new(1)), (s = MySet.new(1)).equal?(s), s == MySet.new(1)
+e = Eq.new; p e.equal?(e), e.equal?(Eq.new), e == e, e == Eq.new
+t = Str.new('a'); p t.equal?(t), t.equal?(Str.new('a')), 'a'.equal?('a')
+p 1.equal?(1), 1.5.equal?(1.5), :a.equal?(:a), nil.equal?(nil), true.equal?(true)
+p BasicObject.new.equal?(BasicObject.new)
+", @"
+false
+true
+true
+true
+false
+true
+false
+true
+false
+false
+true
+true
+true
+true
+true
+false
+");
+        }
     }
 }
