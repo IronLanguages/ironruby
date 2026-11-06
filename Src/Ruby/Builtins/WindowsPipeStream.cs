@@ -91,6 +91,10 @@ namespace IronRuby.Builtins {
         // PeekNamedPipe to its ReadFile.
         private readonly object/*!*/ _readLock = new object();
 
+        /// <summary>
+        /// A stream over one end of a pipe. The handle is closed with the stream if the SafeFileHandle
+        /// owns it; standard output's does not.
+        /// </summary>
         public WindowsPipeStream(SafeFileHandle/*!*/ handle, FileAccess access)
             : base(handle, access, 1, false) {
         }
@@ -109,16 +113,35 @@ namespace IronRuby.Builtins {
             return type == FILE_TYPE_PIPE || (type == FILE_TYPE_UNKNOWN && Marshal.GetLastWin32Error() != 0);
         }
 
+        /// <summary>
+        /// The Windows pipe <paramref name="stream"/> reads and writes through: itself, or the one
+        /// behind standard output or standard error when that is redirected to a pipe. Null if
+        /// there is none.
+        /// </summary>
+        public static WindowsPipeStream Of(Stream stream) {
+            var pipe = stream as WindowsPipeStream;
+            if (pipe != null) {
+                return pipe;
+            }
+            var console = stream as ConsoleStream;
+            return (console != null) ? console.WindowsPipe : null;
+        }
+
         private static Exception/*!*/ ClosedInAnotherThread() {
             return RubyExceptions.CreateIOError("stream closed in another thread");
         }
 
         #region Reads
 
+        /// <summary>See <see cref="Read(Span{byte})"/>.</summary>
         public override int Read(byte[]/*!*/ buffer, int offset, int count) {
             return Read(new Span<byte>(buffer, offset, count));
         }
 
+        /// <summary>
+        /// Waits for at least one byte and returns what there is, up to the buffer's length; 0 at end
+        /// of file. Raises IOError when the stream is closed from another thread meanwhile.
+        /// </summary>
         public override int Read(Span<byte> buffer) {
             if (buffer.Length == 0) {
                 return 0;
@@ -169,11 +192,16 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>One byte, waiting for it as Read does; -1 at end of file.</summary>
         public override int ReadByte() {
             Span<byte> one = stackalloc byte[1];
             return Read(one) == 0 ? -1 : one[0];
         }
 
+        /// <summary>
+        /// A read that does not wait, as #read_nonblock makes it: the bytes read, 0 at end of file,
+        /// or -1 when there is nothing to read yet.
+        /// </summary>
         public int ReadNonBlocking(byte[]/*!*/ buffer, int offset, int count) {
             if (_closed) {
                 throw ClosedInAnotherThread();
@@ -211,10 +239,15 @@ namespace IronRuby.Builtins {
 
         #region Writes
 
+        /// <summary>See <see cref="Write(ReadOnlySpan{byte})"/>.</summary>
         public override void Write(byte[]/*!*/ buffer, int offset, int count) {
             Write(new ReadOnlySpan<byte>(buffer, offset, count));
         }
 
+        /// <summary>
+        /// Writes all of the buffer, waiting for room in the pipe as often as it takes. A reader that
+        /// has gone is an IOException carrying EPIPE.
+        /// </summary>
         public override void Write(ReadOnlySpan<byte> buffer) {
             while (buffer.Length > 0) {
                 int written = WriteFileOnce(buffer, true);
@@ -222,6 +255,7 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>One byte, written as Write does.</summary>
         public override void WriteByte(byte value) {
             ReadOnlySpan<byte> one = stackalloc byte[] { value };
             Write(one);
@@ -357,6 +391,7 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>Nothing to do: this stream holds no buffer of its own.</summary>
         public override void Flush() {
             // Nothing is buffered here; WriteFile has handed everything to the pipe already.
         }
@@ -414,6 +449,10 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Closes the stream. A read or write another thread has in progress is cancelled first and
+        /// raises IOError "stream closed in another thread", as Ruby's IO#close promises.
+        /// </summary>
         protected override void Dispose(bool disposing) {
             lock (_inProgress) {
                 _closed = true;

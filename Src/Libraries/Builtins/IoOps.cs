@@ -1716,13 +1716,15 @@ namespace IronRuby.Builtins {
             var pipe = (ISingleWriteStream)DescriptorStream.Of(baseStream) ?? baseStream as ISingleWriteStream;
             // Windows has no O_NONBLOCK on the handle for the write to go by; io/nonblock's
             // #nonblock= remembers the flag in the IO instead (see io/nonblock.rb). It is this IO's
-            // and this call's: another IO over the same pipe may be in the other mode.
-            var windowsPipe = baseStream as WindowsPipeStream;
+            // and this call's: another IO over the same pipe may be in the other mode. The pipe can
+            // also be the one behind STDOUT or STDERR, redirected; a blocking syswrite there keeps
+            // going through the standard stream as before.
             object nonblock;
-            bool nonBlocking = windowsPipe != null &&
-                context.TryGetInstanceVariable(self, "@__nonblock__", out nonblock) && nonblock is bool && (bool)nonblock;
+            var windowsPipe = context.TryGetInstanceVariable(self, "@__nonblock__", out nonblock) && nonblock is bool && (bool)nonblock
+                ? WindowsPipeStream.Of(baseStream) : null;
+            bool nonBlocking = windowsPipe != null;
             int count = val.GetByteCount();
-            if (pipe != null && count > 0) {
+            if ((pipe != null || nonBlocking) && count > 0) {
                 int written;
                 try {
                     written = nonBlocking

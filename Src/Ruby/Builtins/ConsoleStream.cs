@@ -157,13 +157,33 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// Forgets what was found out about descriptors 0, 1 and 2: a warm-start worker
-        /// (Hosting/WarmStart.cs) has just put different ones there.
+        /// (Hosting/WarmStart.cs) has just put different ones there - or, on Windows, different
+        /// standard handles, which decide between the console writer and a pipe stream.
         /// </summary>
         internal static void ResetStandardDescriptors() {
             _rawInput = null;
             _rawInputChecked = false;
             _rawOutput = null;
             _rawError = null;
+            _consoleOutput = null;
+            _consoleError = null;
+            _consoleOutputChecked = false;
+            _consoleErrorChecked = false;
+        }
+
+        /// <summary>
+        /// The pipe standard output or standard error writes to on Windows when it is redirected
+        /// to one, or null. IO#syswrite on a non-blocking STDOUT writes to it directly, as a
+        /// write(2) on descriptor 1 would.
+        /// </summary>
+        internal WindowsPipeStream WindowsPipe {
+            get {
+                if (_consoleType == ConsoleStreamType.Input) {
+                    return null;
+                }
+                bool output = _consoleType == ConsoleStreamType.Output;
+                return GetUnbufferedStream(output ? _io.OutputStream : _io.ErrorStream, output) as WindowsPipeStream;
+            }
         }
 
         /// <summary>

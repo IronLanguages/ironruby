@@ -3069,6 +3069,53 @@ reader gone: Errno::EPIPE
 ");
         }
 
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern bool SetStdHandle(int nStdHandle, IntPtr handle);
+
+        /// <summary>
+        /// STDOUT redirected to a pipe and put into non-blocking mode with io/nonblock: #syswrite on a
+        /// full pipe takes what fits and then raises IO::WaitWritable, as write(2) on an O_NONBLOCK
+        /// descriptor 1 does. It used to block, because STDOUT's stream is the console stream and
+        /// #syswrite did not look behind it for the pipe. The process's standard output handle is
+        /// pointed at a pipe nobody reads for the length of the test, and SharedIO is given what
+        /// .NET gives a redirected standard output it cannot write to (Stream.Null), so that STDOUT
+        /// goes to the handle. Windows only.
+        /// </summary>
+        public void Windows_StdoutPipeSysWrite1() {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
+                return;
+            }
+            const int STD_OUTPUT_HANDLE = -11;
+            using (var pipe = new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.In)) {
+                IntPtr saved = GetStdHandle(STD_OUTPUT_HANDLE);
+                SetStdHandle(STD_OUTPUT_HANDLE, pipe.ClientSafePipeHandle.DangerousGetHandle());
+                ConsoleStream.ResetStandardDescriptors();
+                Runtime.IO.SetOutput(System.IO.Stream.Null, System.IO.TextWriter.Null);
+                try {
+                    // Nothing may be printed here: standard output is the pipe being filled.
+                    var result = Engine.Execute<string>(@"
+require 'io/nonblock'
+STDOUT.nonblock = true
+begin
+  first = STDOUT.syswrite('a' * 2_000_000)
+  second = begin; STDOUT.syswrite('b' * 10); rescue IO::WaitWritable; 'wait_writable'; end
+  ""#{first > 0 && first < 2_000_000 ? 'short write' : first} then #{second}""
+ensure
+  STDOUT.nonblock = false
+end
+").ToString();
+                    Assert(result == "short write then wait_writable", result);
+                } finally {
+                    SetStdHandle(STD_OUTPUT_HANDLE, saved);
+                    ConsoleStream.ResetStandardDescriptors();
+                    Runtime.IO.RedirectToConsole();
+                }
+            }
+        }
+
         /// <summary>
         /// What MRI does on Windows with the functions win32/Makefile.sub leaves out, and with the ones
         /// win32.c supplies. Dir.fchdir, Dir.for_fd, Dir#fileno, Dir.chroot, File.lutime, File.mkfifo and the
