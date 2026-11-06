@@ -14,8 +14,10 @@
  * ***************************************************************************/
 
 using System;
+using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Generation;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
@@ -358,9 +360,11 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self ** exponent as Bignum/Fixnum if exponent &gt;= 0, Float otherwise</returns>
         [RubyMethod("**")]
-        public static object Power(RubyContext/*!*/ context, BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ exponent) {
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, RubyContext/*!*/ context,
+            BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ exponent) {
             if (exponent.Sign < 0) {
-                return Math.Pow(Protocols.ToDouble(self), Protocols.ToDouble(exponent));
+                return ClrInteger.PowerSlow(slow, Protocols.Normalize(self), exponent,
+                    () => Math.Pow(Protocols.ToDouble(self), Protocols.ToDouble(exponent)));
             }
             return PowerNonNegative(self, exponent);
         }
@@ -374,10 +378,10 @@ namespace IronRuby.Builtins {
         /// Returns Float if exponent &lt; 0
         /// </remarks>
         [RubyMethod("**")]
-        public static object Power(BigInteger/*!*/ self, int exponent) {
-            // BigInteger doesn't handle negative exponents.
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, BigInteger/*!*/ self, int exponent) {
+            // a negative exponent makes a Rational (rational.rb)
             if (exponent < 0) {
-                return Power(self, (double)exponent);
+                return ClrInteger.PowerSlow(slow, self, exponent, () => Math.Pow(Protocols.ToDouble(self), exponent));
             }
             return PowerNonNegative(self, exponent);
         }
@@ -439,7 +443,11 @@ namespace IronRuby.Builtins {
         /// <returns>self ** exponent as Float</returns>
         /// <remarks>Converts self to Float (directly) then calls System.Math.Pow</remarks>
         [RubyMethod("**")]
-        public static object Power(BigInteger/*!*/ self, double exponent) {
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, BigInteger/*!*/ self, double exponent) {
+            if (self.Sign < 0 && ClrInteger.IsFractional(exponent)) {
+                // a Complex (rational.rb)
+                return ClrInteger.PowerSlow(slow, self, exponent, () => Math.Pow(Protocols.ToDouble(self), exponent));
+            }
             return Math.Pow(Protocols.ToDouble(self), exponent);
         }
 
@@ -449,8 +457,11 @@ namespace IronRuby.Builtins {
         /// <returns>self ** exponent</returns>
         /// <remarks>Coerces self and other using other.coerce(self) then dynamically invokes **</remarks>
         [RubyMethod("**")]
-        public static object Power(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object exponent) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "**", self, exponent);
+        public static object Power(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, object/*!*/ self, object exponent) {
+            // coerced the way rational.rb's __ir_num_coerce_bin__ does it
+            return ClrInteger.PowerSlow(slow, self, exponent,
+                () => Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "**", self, exponent));
         }
 
         #endregion

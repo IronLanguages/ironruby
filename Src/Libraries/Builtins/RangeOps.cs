@@ -246,6 +246,20 @@ namespace IronRuby.Builtins {
                     return ScriptingRuntimeHelpers.BooleanToObject(v >= lo && (self.ExcludeEnd ? v < hi : v <= hi));
                 }
             }
+            // ('a'..'z').include?("m"): one-character ASCII endpoints walk "a".succ ... "z", so a
+            // one-character ASCII value is in it exactly when it lies between them (ruby4.rb's
+            // __string_include__ makes the same shortcut, after ~1 us of getting there).
+            var bs = b as MutableString;
+            var es = e as MutableString;
+            var vs = value as MutableString;
+            if (bs != null && es != null && vs != null && bs.GetByteCount() == 1 && es.GetByteCount() == 1 &&
+                bs.IsAscii() && es.IsAscii() && vs.IsAscii()) {
+                if (vs.GetByteCount() != 1) {
+                    return ScriptingRuntimeHelpers.False;
+                }
+                byte lo = bs.GetByte(0), hi = es.GetByte(0), v = vs.GetByte(0);
+                return ScriptingRuntimeHelpers.BooleanToObject(v >= lo && (v < hi || (!self.ExcludeEnd && v == hi)));
+            }
             var site = slow.GetCallSite("__include__", 1);
             return site.Target(site, self, value);
         }

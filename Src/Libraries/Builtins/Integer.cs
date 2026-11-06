@@ -989,7 +989,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("pow")]
         public static object Pow(BinaryOpStorage/*!*/ powStorage, int self, int other) {
             if (other >= 0) {
-                return ClrInteger.Power(self, other);
+                return ClrInteger.PowerNonNegativeFixnum(self, other);
             }
             var site = powStorage.GetCallSite("**");
             return site.Target(site, self, other);
