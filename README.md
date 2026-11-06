@@ -614,7 +614,7 @@ Running the conformance suite:
 $ git clone https://github.com/ruby/spec && git clone https://github.com/ruby/mspec
 $ RUBY_EXE=./ir.sh ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language
 $ Util/parallel-sweep.sh out            # all five suites, 8 at a time, ~8 minutes
-$ Util/run-tests.sh                     # IronRuby's own C# tests
+$ make test                            # IronRuby's own C# tests
 $ Util/bench/run.sh                     # benchmarks against CRuby
 $ Util/gems/run.sh                      # default/bundled gems, each with its own suite
 ```

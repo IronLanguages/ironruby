@@ -28,6 +28,8 @@ release:
 	$(MAKE) build CONFIG=Release
 
 test:
+	@Util/check-dlr-patches.sh $(or $(DLR),../dlr/src/core) || \
+	  echo "make test: WARNING: that DLR lacks Build/dlr-patches; the results are not CI's" >&2
 	dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj $(DOTNET_FLAGS)
 	cd $(TEST_DIR) && { ./IronRuby.Tests > results.txt 2>&1 || true; }
 	@tail -n 2 $(TEST_DIR)/results.txt
