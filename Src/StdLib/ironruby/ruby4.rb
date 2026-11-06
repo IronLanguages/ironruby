@@ -4170,7 +4170,7 @@ module Errno
 
   ERRNO_TABLE.freeze
   ERRNO_CLASSES.freeze
-  private_constant :ERRNO_TABLE, :ERRNO_ALIASES, :ERRNO_CLASSES
+  private_constant :ERRNO_TABLE, :ERRNO_CLASSES
 end
 
 # SystemCallError's constructor understood exactly one argument: either a message
