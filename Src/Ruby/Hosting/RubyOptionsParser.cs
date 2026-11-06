@@ -39,7 +39,7 @@ namespace IronRuby.Hosting {
         private string _internalEncodingName;
         private bool _disableRubyGems;
         private bool _disableRubyOpt;
-        private bool _enableDidYouMean;
+        private bool _disableDidYouMean;
         private readonly List<string>/*!*/ _stdLibPaths = new List<string>();
         private readonly List<string>/*!*/ _warningCategoryFlags = new List<string>();
 
@@ -105,16 +105,16 @@ namespace IronRuby.Hosting {
                     _disableRubyOpt = !enable;
                     break;
 
-                // did_you_mean is only loaded when asked for: it hooks every NameError message,
-                // which is more than the default startup should take on.
+                // did_you_mean is on by default, as in MRI, but loaded on first use (see
+                // ironruby/did_you_mean.rb): requiring it at startup costs half a second.
                 case "did_you_mean":
-                    _enableDidYouMean = enable;
+                    _disableDidYouMean = !enable;
                     break;
 
                 case "all":
                     _disableRubyGems = !enable;
                     _disableRubyOpt = !enable;
-                    _enableDidYouMean = enable;
+                    _disableDidYouMean = !enable;
                     LanguageSetup.Options["FrozenStringLiteral"] = enable ? 1 : -1;
                     break;
 
@@ -801,8 +801,8 @@ namespace IronRuby.Hosting {
             LanguageSetup.Options["SearchPaths"] = _loadPaths;
 
             if (!_disableRubyGems) {
-                if (_enableDidYouMean) {
-                    _requiredPaths.Insert(0, "did_you_mean");
+                if (!_disableDidYouMean) {
+                    _requiredPaths.Insert(0, "ironruby/did_you_mean");
                 }
                 _requiredPaths.Insert(0, "gem_prelude.rb");
             } else {

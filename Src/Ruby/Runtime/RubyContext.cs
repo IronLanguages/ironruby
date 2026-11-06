@@ -4508,29 +4508,61 @@ namespace IronRuby.Runtime {
             return data.Message;
         }
 
+        private CallSite<Func<CallSite, object, object, object, object, object>> _detailedMessageSite;
+
+        /// <summary>
+        /// MRI's error printer reports #detailed_message(highlight: false): the message with the
+        /// class after its first line, plus whatever an override or did_you_mean adds. It is asked
+        /// through the prelude's Exception.__detailed__; null when that is not loaded, or fails.
+        /// </summary>
+        private string GetDetailedMessage(Exception/*!*/ exception) {
+            if (_exceptionClass == null) {
+                return null;
+            }
+            try {
+                var site = RubyUtils.GetCallSite(ref _detailedMessageSite, this, "__detailed__", 3);
+                var detailed = site.Target(site, _exceptionClass, exception, ScriptingRuntimeHelpers.False, new Hash(this)) as MutableString;
+                if (detailed != null && !detailed.IsBinary && !detailed.ContainsInvalidCharacters()) {
+                    return detailed.ToString();
+                }
+            } catch (Exception) {
+                // no prelude, or a #detailed_message that raises: report #message
+            }
+            return null;
+        }
+
         private void AppendExceptionReport(StringBuilder/*!*/ sb, Exception/*!*/ exception) {
             var exceptionClass = GetClassOf(exception);
             RubyExceptionData data = RubyExceptionData.GetInstance(exception);
+
             // The message is written as it is: MRI does not escape control characters or
             // backslashes in it, so a message can color itself with "\e[31m". Only bytes that
             // are not characters are shown escaped.
-            object reported = GetReportedMessage(exception, data);
-            var rawMessage = reported as MutableString;
-            string message = (rawMessage != null && !rawMessage.IsBinary && !rawMessage.ContainsInvalidCharacters())
-                ? rawMessage.ToString()
-                : RubyExceptionData.GetClrMessage(this, reported);
+            string detailed = GetDetailedMessage(exception);
+            string message;
+            if (detailed != null) {
+                message = detailed;
+            } else {
+                object reported = GetReportedMessage(exception, data);
+                var rawMessage = reported as MutableString;
+                message = (rawMessage != null && !rawMessage.IsBinary && !rawMessage.ContainsInvalidCharacters())
+                    ? rawMessage.ToString()
+                    : RubyExceptionData.GetClrMessage(this, reported);
+            }
 
             // an exception that reached the host from a method with no Ruby frame to handle it:
             data.CaptureExceptionTrace(this);
             RubyArray backtrace = data.Backtrace;
 
-            // A message of several lines gets its "(Class)" after the first one, as MRI prints it.
+            // A message of several lines gets its "(Class)" after the first one, as MRI prints it;
+            // #detailed_message has put it there already.
             int newline = message.IndexOf('\n');
             string firstLine = (newline < 0) ? message : message.Substring(0, newline);
             string restLines = (newline < 0) ? "" : message.Substring(newline);
+            string reportedLines = (detailed != null) ? message : firstLine + " (" + exceptionClass.Name + ")" + restLines;
 
             if (backtrace != null && backtrace.Count > 0) {
-                sb.AppendFormat("{0}: {1} ({2}){3}", Protocols.ToClrStringNoThrow(this, backtrace[0]), firstLine, exceptionClass.Name, restLines);
+                sb.Append(Protocols.ToClrStringNoThrow(this, backtrace[0])).Append(": ").Append(reportedLines);
                 sb.AppendLine();
 
                 // --backtrace-limit=N keeps N "from" lines and says how many it left out - but only
@@ -4547,7 +4579,7 @@ namespace IronRuby.Runtime {
                     sb.Append("\t ... ").Append(backtrace.Count - count).Append(" levels...").AppendLine();
                 }
             } else {
-                sb.AppendFormat("unknown: {0} ({1})", message, exceptionClass.Name).AppendLine();
+                sb.Append("unknown: ").Append(reportedLines).AppendLine();
             }
         }
 

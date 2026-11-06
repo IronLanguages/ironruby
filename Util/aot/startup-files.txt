@@ -1,6 +1,7 @@
 # The Ruby files ir -e 1 loads at startup (strace of a run), compiled into IronRuby.Startup.dll by
 # IronRuby.Aot startup. Paths are relative to this file.
 ../../Src/StdLib/ironruby/argf.rb
+../../Src/StdLib/ironruby/ironruby/did_you_mean.rb
 ../../Src/StdLib/ironruby/ironruby/gem_compat.rb
 ../../Src/StdLib/ironruby/monitor.rb
 ../../Src/StdLib/ironruby/rbconfig.rb
