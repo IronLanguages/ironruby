@@ -151,6 +151,7 @@ namespace IronRuby.Tests {
                 Strings9,
                 String_CharacterBoundaries1,
                 String_NonCharacter1,
+                String_SuccSeparators1,
                 String_CountDeleteSqueeze1,
                 ToSConversion1,
                 ToSConversion2,

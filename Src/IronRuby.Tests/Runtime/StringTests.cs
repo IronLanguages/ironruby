@@ -361,6 +361,25 @@ p t.chars.map(&:ord)
         /// computes when it is parsed, negation and intersection included; anything else goes
         /// through the selector's sets and ranges as before.
         /// </summary>
+        /// <summary>
+        /// A carry out of a wrapped digit or letter skips over a separator to the next
+        /// alphanumeric only when the two are of the same kind (rb_str_succ).
+        /// </summary>
+        public void String_SuccSeparators1() {
+            TestOutput(@"
+p ""a-9"".succ, ""1.9"".succ, ""a.z"".succ, ""9-z"".succ, ""Az-9"".succ, ""Zz"".succ, ""zz-99"".succ, ""a-b-9"".succ
+", @"
+""a-10""
+""2.0""
+""b.a""
+""9-aa""
+""Az-10""
+""AAa""
+""zz-100""
+""a-b-10""
+");
+        }
+
         public void String_CountDeleteSqueeze1() {
             TestOutput(@"
 require 'ruby4'
