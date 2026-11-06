@@ -62,7 +62,6 @@ namespace IronRuby.Runtime {
         private readonly bool _osr;
 
 #if DEBUG
-        public static bool UseThreadAbortForSyncRaise;
         public static bool CompileRegexps;
         public static bool ShowRules;
 #endif

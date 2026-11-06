@@ -701,11 +701,6 @@ namespace IronRuby.Builtins {
 
             RubyContext context = scope.RubyContext;
             Exception exception = CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args);
-#if DEBUG && FEATURE_THREAD && FEATURE_EXCEPTION_STATE
-            if (RubyOptions.UseThreadAbortForSyncRaise) {
-                RubyUtils.RaiseAsyncException(Thread.CurrentThread, exception);
-            }
-#endif
             if ((TracePoint.ActiveEvents & (int)TraceEvents.Raise) != 0) {
                 TracePoint.OnException(TraceEvents.Raise, scope, context, exception);
             }
@@ -723,12 +718,6 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Builds the exception `raise` would throw, without throwing it. Fiber#raise is written
-        /// in Ruby (Src/StdLib/ironruby/ruby4.rb) and has to hand the exception to another fiber,
-        /// so it needs the argument handling - including `cause:`, which MRI resolves in the
-        /// *calling* context - without the throw. Private, and not part of MRI's Kernel.
-        /// </summary>
-        /// <summary>
         /// Where a source file that has run was when it started - see
         /// RubyContext.RegisterSourceFileLocation - or nil. Private, and not part of MRI's Kernel.
         /// </summary>
@@ -738,6 +727,12 @@ namespace IronRuby.Builtins {
             return (result != null) ? context.EncodePath(result) : null;
         }
 
+        /// <summary>
+        /// Builds the exception `raise` would throw, without throwing it. Fiber#raise is written
+        /// in Ruby (Src/StdLib/ironruby/ruby4.rb) and has to hand the exception to another fiber,
+        /// so it needs the argument handling - including `cause:`, which MRI resolves in the
+        /// *calling* context - without the throw. Private, and not part of MRI's Kernel.
+        /// </summary>
         [RubyMethod("__build_exception__", RubyMethodAttributes.PrivateInstance)]
         public static Exception/*!*/ BuildException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,

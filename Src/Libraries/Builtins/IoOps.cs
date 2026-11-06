@@ -1181,7 +1181,6 @@ namespace IronRuby.Builtins {
             }
         }
 
-        // TODO:
         [RubyMethod("close_read")]
         public static void CloseReader(RubyIO/*!*/ self) {
             if (self.Closed) {
@@ -1190,7 +1189,6 @@ namespace IronRuby.Builtins {
             self.CloseReader();
         }
 
-        // TODO:
         [RubyMethod("close_write")]
         public static void CloseWriter(RubyIO/*!*/ self) {
             if (self.Closed) {
@@ -1203,10 +1201,6 @@ namespace IronRuby.Builtins {
         public static bool Closed(RubyIO/*!*/ self) {
             return self.Closed;
         }
-
-        // TODO: 1.9 only
-        // close_on_exec=
-        // close_on_exec?
 
         #endregion
 
@@ -2730,9 +2724,6 @@ namespace IronRuby.Builtins {
             return site.Target(site, self, value);
         }
 
-        // TODO: 1.9 only
-        // getbyte
-
         #endregion
 
         #region foreach, each, each_byte, each_line
@@ -3036,10 +3027,6 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
-
-        // TODO: 1.9 only
-        // bytes -> Enumerable::Enumerator
-        // lines -> Enumerable::Enumerator
 
         public static IOWrapper/*!*/ CreateIOWrapper(RespondToStorage/*!*/ respondToStorage, object io, FileAccess access) {
             return CreateIOWrapper(respondToStorage, io, access, 0x1000);
