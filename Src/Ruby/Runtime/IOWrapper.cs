@@ -36,13 +36,12 @@ namespace IronRuby.Runtime {
         private readonly bool _canWrite;
         private readonly bool _canSeek;
         private readonly bool _canFlush;
-        private readonly bool _canBeClosed;
         private readonly byte[]/*!*/ _buffer;
         private int _writePos;
         private int _readPos;
         private int _readLen;
 
-        public IOWrapper(RubyContext/*!*/ context, object io, bool canRead, bool canWrite, bool canSeek, bool canFlush, bool canBeClosed, int bufferSize) {
+        public IOWrapper(RubyContext/*!*/ context, object io, bool canRead, bool canWrite, bool canSeek, bool canFlush, int bufferSize) {
             Assert.NotNull(context);
 
             _writeSite = CallSite<Func<CallSite, object, object, object>>.Create(
@@ -64,7 +63,6 @@ namespace IronRuby.Runtime {
             _canWrite = canWrite;
             _canSeek = canSeek;
             _canFlush = canFlush;
-            _canBeClosed = canBeClosed;
             _buffer = new byte[bufferSize];
             _writePos = 0;
             _readPos = 0;
@@ -77,10 +75,6 @@ namespace IronRuby.Runtime {
 
         public override bool CanSeek {
             get { return _canSeek; }
-        }
-
-        public bool CanBeClosed {
-            get { return _canBeClosed; }
         }
 
         public override bool CanWrite {
