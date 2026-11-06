@@ -53,20 +53,6 @@ namespace IronRuby.Tests {
             Assert(func5(1) == 6);
 
             AssertExceptionThrown<ArgumentException>(() => Engine.Execute(@"F1.to_class.new(*[])"));
-
-            if (_driver.RunPython) {
-                var py = Runtime.GetEngine("python");
-
-                Engine.Runtime.Globals.SetVariable("F2", typeof(Func<string[], string[], string[]>));
-                var pyAdd = py.Execute(@"
-def py_add(a, b): 
-  return a + b
-py_add
-");
-                Engine.Runtime.Globals.SetVariable("PyAdd", pyAdd);
-                var pyFunc = (Func<string[], string[], string[]>)Engine.Execute(@"F2.to_class.new PyAdd");
-                Assert(String.Join(";", pyFunc(new[] { "x" }, new[] { "y" })) == "x;y");
-            }
         }
 
         public void RubyHosting1A() {

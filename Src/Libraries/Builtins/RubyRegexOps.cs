@@ -634,7 +634,7 @@ namespace IronRuby.Builtins {
             regex = result as RubyRegex;
             if (regex == null) {
                 var context = respondToStorage.Context;
-                throw RubyExceptions.CreateTypeError("can't convert {0} into Regexp ({0}#to_regexp gives {1})",
+                throw RubyExceptions.CreateTypeError("can't convert {0} to Regexp ({0}#to_regexp gives {1})",
                     context.GetClassDisplayName(obj), context.GetClassDisplayName(result)
                 );
             }

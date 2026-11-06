@@ -177,6 +177,14 @@ namespace IronRuby.Runtime.Conversions {
             get { return Methods.CreateImplicitConversionError; }
         }
 
+        /// <summary>
+        /// True if a to_xxx the object defines is called without asking an overridden respond_to? first;
+        /// respond_to? is then only asked when there is no such method.
+        /// </summary>
+        internal virtual bool CallsDefinedMethodDirectly {
+            get { return false; }
+        }
+
         public override Type/*!*/ ReturnType {
             get { 
                 return (ConversionResultValidator != null) ? ConversionResultValidator.ReturnType : typeof(object); 
@@ -272,6 +280,13 @@ namespace IronRuby.Runtime.Conversions {
                             targetClass.ResolveMethodForSiteNoLock(Symbols.RespondToMissing, VisibilityContext.AllVisible).Info,
                             targetClass.Context.KernelModule
                         );
+                    }
+                } else if (conversions.Length == 1 && conversions[0].CallsDefinedMethodDirectly) {
+                    var method = targetClass.ResolveMethodForSiteNoLock(conversions[0].ToMethodName, VisibilityContext.AllVisible).Info;
+                    if (method != null) {
+                        respondToMethod = MethodResolutionResult.NotFound;
+                        selectedConversion = conversions[0];
+                        conversionMethod = method;
                     }
                 }
             }
@@ -651,6 +666,9 @@ namespace IronRuby.Runtime.Conversions {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToProc; } }
         protected override string/*!*/ TargetTypeName { get { return "Proc"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToProcValidator; } }
+
+        // &obj: MRI's vm_to_proc calls a #to_proc the object has without asking respond_to?.
+        internal override bool CallsDefinedMethodDirectly { get { return true; } }
     }
 
     #region String, Path, Symbol, Regex

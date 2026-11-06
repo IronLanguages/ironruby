@@ -1672,11 +1672,14 @@ foo(&nil)
             }, @"nil");
         }
 
+        /// <summary>
+        /// &amp;obj calls a #to_proc the object defines without asking respond_to? (MRI's vm_to_proc);
+        /// an overridden respond_to? is only asked when there is no #to_proc.
+        /// </summary>
         public void RubyProcArgConversion4() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
+            TestOutput(@"
 class C
-  def respond_to? name
+  def respond_to? name, include_all = false
     puts name
     $has_to_proc
   end
@@ -1686,19 +1689,27 @@ class C
   end
 end
 
+class D
+  def respond_to? name, include_all = false
+    puts name
+    false
+  end
+end
+
 c = C.new
 
 $has_to_proc = false
-1.times(&c) rescue puts 'error'
+1.times(&c)
 
 $has_to_proc = true
 1.times(&c)
-");
-            }, @"
-to_proc
-error
-to_proc
+
+1.times(&D.new) rescue p $!
+", @"
 ok
+ok
+to_proc
+#<TypeError: no implicit conversion of D into Proc>
 ");
         }
 

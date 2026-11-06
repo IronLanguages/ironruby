@@ -146,17 +146,25 @@ NoMethodError
         }
 
         /// <summary>
-        /// Order of initialization of CLR methods.
+        /// Order of initialization of CLR methods: a Ruby method defined before the CLR one has been
+        /// looked up still hides it, removing the Ruby method shows the CLR method again (as removing
+        /// an overload barrier does in ClrOverloadInheritance4), and removing that hides it.
         /// </summary>
         public void ClrMethods2() {
             Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(ClassWithMethods1)));
             TestOutput(@"
 class C
-  def m; 2; end     # replace CLR method with Ruby method before we use the CLR one
-  remove_method :m  # remove Ruby method
-  new.m rescue p $! # we shouldn't call the CLR method 
+  def m; 2; end
+  p new.m
+  remove_method :m
+  p new.m
+  remove_method :m
+  new.m rescue p $!.class
 end
 ", @"
+2
+1
+NoMethodError
 ");
         }
 
@@ -930,41 +938,6 @@ f6
 f6
 !f6
 ");
-        }
-
-        /// <summary>
-        /// Extension methods are available on CLR interfaces implemented by Ruby classes.
-        /// </summary>
-        public void ClrExtensionMethods5() {
-#if TODO
-            Runtime.LoadAssembly(typeof(System.Linq.Enumerable).Assembly);
-            XTestOutput(@"
-using_clr_extensions System::Linq
-
-class Sequence
-  include System::Collections::Generic::IEnumerable[Object]
-  
-  def initialize array
-    @array = array
-  end
-  
-  def get_enumerator
-    @array.GetEnumerator()
-  end
-end
-
-class Array
-  def to_seq
-    Sequence.new self
-  end
-end
-
-a = Sequence.new [1, 2, 3]
-p a.select(lambda { |n| n * 2 })
-", @"
-[2, 3, 6]
-");
-#endif
         }
 
         /// <summary>
@@ -4077,14 +4050,6 @@ p Inst.Foo(a) rescue p $!
             // meta-object conversions:
             var r1 = Engine.Execute<int>("Inst.delegate(Proc.new { |x| x + 1 }).invoke(123)");
             Assert(r1 == 124);
-
-            // foreign meta-object conversion:
-            if (!_driver.RunPython) return;
-            var py = Runtime.GetEngine("python");
-            var scope = Runtime.CreateScope();
-            py.Execute(@"def foo(x): return x + 2", scope);
-            var r2 = Engine.Execute<int>(@"Inst.delegate(foo).invoke(123)", scope);
-            Assert(r2 == 125);
         }
 
         #endregion

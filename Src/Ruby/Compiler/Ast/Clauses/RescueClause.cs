@@ -62,8 +62,8 @@ namespace IronRuby.Compiler.Ast {
 
         //
         // rescue stmts                     ... if (StandardError === $!) { stmts; } 
-        // rescue <types> stmts             ... temp1 = type1; ...; if (<temp1> === $! || ...) { stmts; }
-        // rescue <types> => <lvalue> stmts ... temp1 = type1; ...; if (<temp1> === $! || ...) { <lvalue> = $!; stmts; }
+        // rescue <types> stmts             ... if (type1 === $! || type2 === $! ...) { stmts; }
+        // rescue <types> => <lvalue> stmts ... if (type1 === $! || type2 === $! ...) { <lvalue> = $!; stmts; }
         // 
         internal IfStatementTest/*!*/ Transform(AstGenerator/*!*/ gen, ResultOperation resultOperation) {
             Assert.NotNull(gen);
@@ -72,29 +72,11 @@ namespace IronRuby.Compiler.Ast {
             if (_types.Length != 0) {
                 var comparisonSiteStorage = Ast.Constant(new BinaryOpStorage(gen.Context));
 
-                if (_types.Length == 1) {
-                    condition = MakeCompareException(gen, comparisonSiteStorage, _types[0].TransformRead(gen), _types[0] is SplattedArgument);
-                } else {
-                    // forall{i}: <temps[i]> = evaluate type[i]
-                    var temps = new MSA.Expression[_types.Length];
-                    var exprs = new BlockBuilder();
-
-                    for (int i = 0; i < _types.Length; i++) {
-                        var t = _types[i].TransformRead(gen);
-                        var tmp = gen.CurrentScope.DefineHiddenVariable("#type_" + i, t.Type);
-                        temps[i] = tmp;
-                        exprs.Add(Ast.Assign(tmp, t));
-                    }
-
-                    // CompareException(<temps[0]>) || ... CompareException(<temps[n]>) || CompareSplattedExceptions(<splatTypes>)
-                    condition = MakeCompareException(gen, comparisonSiteStorage, temps[0], _types[0] is SplattedArgument);
-                    for (int i = 1; i < _types.Length; i++) {
-                        condition = Ast.OrElse(condition, MakeCompareException(gen, comparisonSiteStorage, temps[i], _types[i] is SplattedArgument));
-                    }
-
-                    // (temps[0] = type[0], ..., temps[n] == type[n], condition)
-                    exprs.Add(condition);
-                    condition = exprs;
+                // CompareException(type[0]) || ... || CompareException(type[n]): as in MRI, each type is evaluated
+                // and compared before the next one is evaluated, and the ones after a match are not evaluated at all.
+                condition = MakeCompareException(gen, comparisonSiteStorage, _types[0].TransformRead(gen), _types[0] is SplattedArgument);
+                for (int i = 1; i < _types.Length; i++) {
+                    condition = Ast.OrElse(condition, MakeCompareException(gen, comparisonSiteStorage, _types[i].TransformRead(gen), _types[i] is SplattedArgument));
                 }
             } else {
                 condition = Methods.CompareDefaultException.OpCall(gen.CurrentScopeVariable);

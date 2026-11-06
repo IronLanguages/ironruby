@@ -284,9 +284,6 @@ namespace IronRuby.Tests {
             }
         }
 
-        public void OverloadResolution_ParamArrays1() {
-        }
-
         #endregion
 
         #region Failures
