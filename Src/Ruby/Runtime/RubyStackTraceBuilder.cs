@@ -30,7 +30,6 @@ using Microsoft.Scripting.Interpreter;
 namespace IronRuby.Runtime {
     public sealed class RubyStackTraceBuilder {
         private readonly RubyArray/*!*/ _trace;
-        private readonly bool _hasFileAccessPermission;
         private readonly bool _needsClrFileInfo;
         private readonly bool _exceptionDetail;
         private readonly RubyEncoding/*!*/ _encoding;
@@ -52,7 +51,6 @@ namespace IronRuby.Runtime {
         private RubyStackTraceBuilder(RubyContext/*!*/ context, RubyEncoding/*!*/ encoding) {
             _context = context;
             _needsClrFileInfo = NeedsClrFileInfo(context);
-            _hasFileAccessPermission = _needsClrFileInfo && DetectFileAccessPermissions();
             _exceptionDetail = context.Options.ExceptionDetail;
             _encoding = encoding;
             _trace = new RubyArray();
@@ -497,7 +495,7 @@ namespace IronRuby.Runtime {
             MethodBase method = frame.GetMethod();
             methodName = method.Name;
 
-            fileName = (_hasFileAccessPermission) ? GetFileName(frame) : null;
+            fileName = (_needsClrFileInfo) ? GetFileName(frame) : null;
             var sourceLine = line = frame.GetFileLineNumber();
 
             if (TryParseRubyMethodName(ref methodName, ref fileName, ref line)) {
@@ -534,7 +532,7 @@ namespace IronRuby.Runtime {
                     // Visible CLR method:
                     if (String.IsNullOrEmpty(fileName)) {
                         if (method.DeclaringType != null) {
-                            fileName = (_hasFileAccessPermission) ? GetAssemblyName(method.DeclaringType.Assembly) : null;
+                            fileName = (_needsClrFileInfo) ? GetAssemblyName(method.DeclaringType.Assembly) : null;
                             line = 0;
                         }
                     }
@@ -722,11 +720,6 @@ namespace IronRuby.Runtime {
             string ns = type.Namespace;
             return ns != null && (ns.StartsWith("System.Linq.Expressions", StringComparison.Ordinal) ||
                 ns == "System.Dynamic.Utils" || ns == "System.Reflection");
-        }
-
-        // TODO: partial trust
-        private static bool DetectFileAccessPermissions() {
-            return true;
         }
         private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb", "/ironruby/gem_compat.rb",
             "/ironruby/ironruby/rational.rb", "/ironruby/ironruby/complex.rb" };
