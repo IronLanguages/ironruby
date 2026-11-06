@@ -625,18 +625,72 @@ namespace IronRuby.Builtins {
             return site.Target(site, scope.RubyContext.KernelModule, numerator, denominator);
         }
 
+        // Kernel#Rational(x[, y], exception: true) (MRI's nurat_f_rational): Integers, and a Rational
+        // over an Integer, are answered here; anything else - Strings, Floats, objects with #to_r,
+        // the exception: keyword - is rational.rb's __ir_Rational_slow__. Its Ruby `*args,
+        // exception:' signature put every call on the slow path: Rational(1, 3) cost ~0.55 us.
+
+        [RubyMethod("Rational", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Rational", RubyMethodAttributes.PublicSingleton)]
+        public static object ToRational(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, RubyContext/*!*/ context,
+            object self, object value) {
+            RubyClass cls;
+            if (RubyRational.IsIntegerValue(value) && (cls = GetRationalClass(context)) != null) {
+                return new RubyRational(cls, value, ScriptingRuntimeHelpers.Int32ToObject(1));
+            }
+            if (value is RubyRational) {
+                return value;
+            }
+            var site = slow.GetCallSite("__ir_Rational_slow__", 1);
+            return site.Target(site, self, value);
+        }
+
+        [RubyMethod("Rational", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Rational", RubyMethodAttributes.PublicSingleton)]
+        public static object ToRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow, RubyContext/*!*/ context,
+            object self, object numerator, object denominator) {
+            RubyClass cls;
+            if (RubyRational.IsIntegerValue(numerator) && RubyRational.IsIntegerValue(denominator) &&
+                (cls = GetRationalClass(context)) != null) {
+                return RubyRational.Canonicalize(cls, numerator, denominator);
+            }
+            var site = slow.GetCallSite("__ir_Rational_slow__", 2);
+            return site.Target(site, self, numerator, denominator);
+        }
+
+        [RubyMethod("Rational", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Rational", RubyMethodAttributes.PublicSingleton)]
+        public static object ToRational(CallSiteStorage<Func<CallSite, object, object, object, object, object>>/*!*/ slow,
+            object self, object numerator, object denominator, object options) {
+            var site = slow.GetCallSite("__ir_Rational_slow__", 3);
+            return site.Target(site, self, numerator, denominator, options);
+        }
+
+        [RubyMethod("Rational", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Rational", RubyMethodAttributes.PublicSingleton)]
+        public static object ToRational(object self, object a, object b, object c, object d, params object[]/*!*/ more) {
+            throw ConversionArity(4 + more.Length, "1..2");
+        }
+
+        // MRI's Rational is a C function of any arity (-1), which reports a missing argument itself
+        [RubyMethod("Rational", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Rational", RubyMethodAttributes.PublicSingleton)]
+        public static object ToRational(object self) {
+            throw ConversionArity(0, "1..2");
+        }
+
         // The Rational class of the context that last asked (one per process in practice).
         private static RubyClass _rationalClass;
 
-        private static RubyClass GetRationalClass(RubyContext/*!*/ context) {
+        internal static RubyClass GetRationalClass(RubyContext/*!*/ context) {
             RubyClass cls = _rationalClass;
             if (cls != null && cls.Context == context) {
                 return cls;
             }
             object value;
             cls = context.ObjectClass.TryGetConstant(null, "Rational", out value) ? value as RubyClass : null;
-            // rational.rb's Rational: a Ruby subclass of Numeric whose instances are plain Numerics
-            if (cls == null || cls.IsSingletonClass || cls.Name != "Rational" || cls.GetUnderlyingSystemType() != typeof(Numeric)) {
+            // the Rational class, whose instances are RubyRationals
+            if (cls == null || cls.IsSingletonClass || cls.Name != "Rational" || cls.GetUnderlyingSystemType() != typeof(RubyRational)) {
                 return null;
             }
             _rationalClass = cls;
@@ -655,11 +709,7 @@ namespace IronRuby.Builtins {
             if (cls == null) {
                 return null;
             }
-            var result = new Numeric(cls);
-            context.SetInstanceVariable(result, "@numerator", Protocols.Normalize(numerator));
-            context.SetInstanceVariable(result, "@denominator", Protocols.Normalize(denominator));
-            result.Freeze();
-            return result;
+            return new RubyRational(cls, Protocols.Normalize(numerator), Protocols.Normalize(denominator));
         }
 
         #endregion

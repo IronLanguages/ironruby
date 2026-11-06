@@ -390,9 +390,20 @@ namespace IronRuby.Builtins {
                 return ClrInteger.PowerNonNegative(self, other);
             } else if (self == 1) {
                 return One;
-            } else {
-                return PowerSlow(slow, self, other, () => Math.Pow(self, other));
+            } else if (self == -1) {
+                return ScriptingRuntimeHelpers.Int32ToObject((other & 1) == 0 ? 1 : -1);
+            } else if (self != 0 && other != Int32.MinValue) {
+                // rb_int_pow's Rational: 1/(self ** -other), already in lowest terms, the sign moved
+                // onto the numerator (rational.rb's __ir_pow_slow__ makes the same one, slower)
+                RubyClass cls = KernelOps.GetRationalClass(slow.Context);
+                if (cls != null) {
+                    // PowerNonNegative refuses a result too large to make, as MRI does
+                    object power = PowerNonNegative(new BigInteger(Math.Abs((long)self)), new BigInteger(-(long)other));
+                    bool negative = self < 0 && (other & 1) != 0;
+                    return new RubyRational(cls, ScriptingRuntimeHelpers.Int32ToObject(negative ? -1 : 1), power);
+                }
             }
+            return PowerSlow(slow, self, other, () => Math.Pow(self, other));
         }
 
         // a Fixnum to a non-negative Fixnum power (Integer#pow)
