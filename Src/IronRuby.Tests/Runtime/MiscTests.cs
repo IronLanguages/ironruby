@@ -1549,6 +1549,7 @@ No such file or directory @ rb_sysopen - x
 x = 10**400
 p x * 1.0, x + 1.0, x - 1.0, x / 10.0, x.fdiv(10**399), x.fdiv(10**401) <= 1e309, (-x) * 1.0
 p x <=> 1e308, x > 1e308, x == 1.0 / 0
+p 1.0 / x, -1.0 / x, 1.0 * x, -1.0 * x
 ", @"
 Infinity
 Infinity
@@ -1560,7 +1561,11 @@ true
 1
 true
 false
-", 1);
+0.0
+-0.0
+Infinity
+-Infinity
+", 1, 4);
         }
 
         public void Numeric_BignumExponent1() {
