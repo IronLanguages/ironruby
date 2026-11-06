@@ -710,6 +710,18 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            // Validity is a matter of shape there, and a sequence of the right shape that names no
+            // character is held as escaped bytes, which no encoder takes: ask the bytes instead.
+            if (encoding is IStructuredEncoding) {
+                byte[] bytes;
+                try {
+                    bytes = RubyEncoding.GetRubyEncoding(encoding.CodePage).EscapingEncoding.GetBytes(chars.ToArray());
+                } catch (EncoderFallbackException) {
+                    return true;
+                }
+                return ContainsInvalidCharacters(bytes, 0, bytes.Length, encoding);
+            }
+
             var encoder = encoding.GetEncoder();
             var fallback = new CheckEncoderFallback();
             encoder.Fallback = fallback;

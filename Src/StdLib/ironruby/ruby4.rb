@@ -2078,191 +2078,6 @@ module Warning
 end
 
 # --------------------------------------------------------------------------
-# Encoding constants
-#
-# CRuby defines a constant for every encoding name and alias; the bundled core
-# only defines a handful. Reproduce CRuby's set_encoding_const() naming rules
-# over the names the runtime actually knows about.
-# --------------------------------------------------------------------------
-
-class Encoding
-  __seen__ = {}
-  constants(false).each { |__c__| __seen__[__c__.to_s] = true }
-
-  __add__ = lambda do |__name__|
-    next if __name__ =~ /\A[0-9]/
-    __enc__ = begin
-                Encoding.find(__name__)
-              rescue StandardError
-                nil
-              end
-    next unless __enc__.is_a?(Encoding)
-
-    __consts__ = []
-    __consts__ << __name__ if __name__ =~ /\A[A-Z][A-Za-z0-9_]*\z/
-    __custom__ = __name__.gsub(/[^A-Za-z0-9]/, '_')
-    # A constant cannot start with a lower case letter, so CRuby's set_encoding_const()
-    # capitalises the first character before it gives up on the name: "macCyrillic" becomes
-    # Encoding::MacCyrillic as well as Encoding::MACCYRILLIC, and "eucJP" becomes EucJP.
-    __custom__ = __custom__.sub(/\A[a-z]/) { |__ch__| __ch__.upcase }
-    if __consts__.empty? || __custom__ =~ /[a-z]/
-      __consts__ << __custom__ if __custom__ =~ /[A-Z]/
-      __consts__ << __custom__.upcase if __custom__ =~ /[a-z]/
-    end
-
-    __consts__.each do |__c__|
-      next unless __c__ =~ /\A[A-Z][A-Za-z0-9_]*\z/
-      next if __seen__[__c__]
-      __seen__[__c__] = true
-      begin
-        const_set(__c__, __enc__)
-      rescue StandardError
-      end
-    end
-  end
-
-  # What those loops make of the names depends on nothing but the names the runtime
-  # knows and the constants Encoding starts out with, yet working it out - a few
-  # regexp matches, a gsub and two blocks for each of some 300 names - is a tenth of a
-  # second of every start. So the outcome is written down here, as name=CONSTANT in
-  # the order the loops set them, for the runtime this file ships with; it was taken
-  # from the loops themselves. A runtime that knows other names, or starts out with
-  # other constants, takes the loops as before - a stale table costs time, nothing more.
-  __known__ = %i[
-    ANSI_X3_4_1968 ASCII ASCII_8BIT Big5 BIG5 BINARY CESU_8 CP50221 CP874 Emacs_Mule EMACS_MULE
-    EUC_JP ISO_2022_JP ISO_8859_15 ISO_8859_9 ISO2022_JP ISO8859_15 ISO8859_9 KOI8_R Shift_JIS
-    SHIFT_JIS TIS_620 US_ASCII UTF_16 UTF_16BE UTF_16LE UTF_32 UTF_32BE UTF_32LE UTF_7 UTF_8
-    Windows_874 WINDOWS_874 Converter CompatibilityError ConverterNotFoundError
-    InvalidByteSequenceError UndefinedConversionError
-  ]
-  __names__ = <<~'NAMES'.split
-    ASCII-8BIT UTF-8 US-ASCII Windows-31J EUC-JP UTF-16 UTF-32 UTF-16BE UTF-16LE UTF-32BE UTF-32LE
-    CESU-8 TIS-620 Emacs-Mule GB2312 EUC-KR GB18030 ISO-2022-JP CP50221 Shift_JIS UTF8-MAC CP51932
-    eucJP-ms stateless-ISO-2022-JP ISO-2022-JP-2 GB12345 EUC-TW GB1988 ISO-8859-10 ISO-8859-14
-    ISO-8859-16 IBM860 IBM861 ibm880 IBM862 IBM863 GBK IBM864 IBM865 IBM866 KOI8-U IBM037 IBM869
-    ibm500 macIceland ibm01140 ibm01141 ibm01142 ibm273 ibm01143 ibm01144 ibm01145 Windows-1250
-    ibm01146 Windows-1251 ibm01147 macRoman Windows-1252 IBM720 ibm277 ibm01148 MacJapanese
-    Windows-1253 IBM437 ibm278 ibm01149 x-mac-chinesetrad Windows-1254 Windows-1255 johab
-    Windows-1256 x-mac-arabic Windows-1257 x-mac-hebrew Windows-1258 macGreek macCyrillic ibm00924
-    ISO-8859-2 ISO-8859-3 ISO-8859-4 ISO-8859-5 ISO-8859-6 ibm870 ISO-8859-7 ISO-8859-8 ISO-8859-9
-    macTurkish macCroatian Windows-874 cp875 ibm420 CP949 ibm423 ibm424 ibm280 ibm01047 ibm284
-    ibm285 macRomania CP20932 macUkraine x-europa IBM737 x-ia5 Big5 x-cp20936 x-ia5-german
-    x-ia5-swedish x-ia5-norwegian KOI8-R IBM775 ISO-8859-13 ibm290 ISO-8859-15 x-chinese-cns
-    asmo-708 ibm297 macThai x-cp20001 ibm905 x-chinese-eten x-ebcdic-koreanextended x-cp20003
-    x-cp20004 x-cp20005 CP850 ibm-thai IBM852 ibm871 macCentEuro IBM855 cp1025 x-cp20949 IBM857
-    ibm00858 x-cp20261 ibm1026 x-cp20269 ISO-8859-1 UTF-7 646 ASCII ANSI_X3.4-1968 BINARY CP437
-    CP737 CP775 CP857 CP860 CP861 CP862 CP863 CP864 CP865 CP866 CP869 CP874 CP878 CP932 CP936 CP720
-    EUC-CN eucCN MacJapan ebcdic-cp-us CP950 CP951 CP1258 CP1252 CP1250 CP1256 CP1251 CP1253 CP1255
-    CP1254 CP1257 CP65000 CP65001 IBM850 eucJP eucKR eucTW ISO2022-JP ISO2022-JP2 ISO8859-1
-    ISO8859-2 ISO8859-3 ISO8859-4 ISO8859-5 ISO8859-6 ISO8859-7 ISO8859-8 ISO8859-9 ISO8859-10
-    ISO8859-11 ISO8859-13 ISO8859-14 ISO8859-15 ISO8859-16 SJIS PCK euc-jp-ms csWindows31J
-    UTF-8-MAC UTF-8-HFS UCS-2BE UCS-4BE UCS-4LE locale external filesystem
-  NAMES
-  __table__ = <<~'TABLE'.split
-    Windows-31J=Windows_31J Windows-31J=WINDOWS_31J GB2312=GB2312 EUC-KR=EUC_KR GB18030=GB18030
-    UTF8-MAC=UTF8_MAC CP51932=CP51932 eucJP-ms=EucJP_ms eucJP-ms=EUCJP_MS
-    stateless-ISO-2022-JP=Stateless_ISO_2022_JP stateless-ISO-2022-JP=STATELESS_ISO_2022_JP
-    ISO-2022-JP-2=ISO_2022_JP_2 GB12345=GB12345 EUC-TW=EUC_TW GB1988=GB1988 ISO-8859-10=ISO_8859_10
-    ISO-8859-14=ISO_8859_14 ISO-8859-16=ISO_8859_16 IBM860=IBM860 IBM861=IBM861 ibm880=Ibm880
-    ibm880=IBM880 IBM862=IBM862 IBM863=IBM863 GBK=GBK IBM864=IBM864 IBM865=IBM865 IBM866=IBM866
-    KOI8-U=KOI8_U IBM037=IBM037 IBM869=IBM869 ibm500=Ibm500 ibm500=IBM500 macIceland=MacIceland
-    macIceland=MACICELAND ibm01140=Ibm01140 ibm01140=IBM01140 ibm01141=Ibm01141 ibm01141=IBM01141
-    ibm01142=Ibm01142 ibm01142=IBM01142 ibm273=Ibm273 ibm273=IBM273 ibm01143=Ibm01143
-    ibm01143=IBM01143 ibm01144=Ibm01144 ibm01144=IBM01144 ibm01145=Ibm01145 ibm01145=IBM01145
-    Windows-1250=Windows_1250 Windows-1250=WINDOWS_1250 ibm01146=Ibm01146 ibm01146=IBM01146
-    Windows-1251=Windows_1251 Windows-1251=WINDOWS_1251 ibm01147=Ibm01147 ibm01147=IBM01147
-    macRoman=MacRoman macRoman=MACROMAN Windows-1252=Windows_1252 Windows-1252=WINDOWS_1252
-    IBM720=IBM720 ibm277=Ibm277 ibm277=IBM277 ibm01148=Ibm01148 ibm01148=IBM01148
-    MacJapanese=MacJapanese MacJapanese=MACJAPANESE Windows-1253=Windows_1253
-    Windows-1253=WINDOWS_1253 IBM437=IBM437 ibm278=Ibm278 ibm278=IBM278 ibm01149=Ibm01149
-    ibm01149=IBM01149 x-mac-chinesetrad=X_mac_chinesetrad x-mac-chinesetrad=X_MAC_CHINESETRAD
-    Windows-1254=Windows_1254 Windows-1254=WINDOWS_1254 Windows-1255=Windows_1255
-    Windows-1255=WINDOWS_1255 johab=Johab johab=JOHAB Windows-1256=Windows_1256
-    Windows-1256=WINDOWS_1256 x-mac-arabic=X_mac_arabic x-mac-arabic=X_MAC_ARABIC
-    Windows-1257=Windows_1257 Windows-1257=WINDOWS_1257 x-mac-hebrew=X_mac_hebrew
-    x-mac-hebrew=X_MAC_HEBREW Windows-1258=Windows_1258 Windows-1258=WINDOWS_1258 macGreek=MacGreek
-    macGreek=MACGREEK macCyrillic=MacCyrillic macCyrillic=MACCYRILLIC ibm00924=Ibm00924
-    ibm00924=IBM00924 ISO-8859-2=ISO_8859_2 ISO-8859-3=ISO_8859_3 ISO-8859-4=ISO_8859_4
-    ISO-8859-5=ISO_8859_5 ISO-8859-6=ISO_8859_6 ibm870=Ibm870 ibm870=IBM870 ISO-8859-7=ISO_8859_7
-    ISO-8859-8=ISO_8859_8 macTurkish=MacTurkish macTurkish=MACTURKISH macCroatian=MacCroatian
-    macCroatian=MACCROATIAN cp875=Cp875 cp875=CP875 ibm420=Ibm420 ibm420=IBM420 CP949=CP949
-    ibm423=Ibm423 ibm423=IBM423 ibm424=Ibm424 ibm424=IBM424 ibm280=Ibm280 ibm280=IBM280
-    ibm01047=Ibm01047 ibm01047=IBM01047 ibm284=Ibm284 ibm284=IBM284 ibm285=Ibm285 ibm285=IBM285
-    macRomania=MacRomania macRomania=MACROMANIA CP20932=CP20932 macUkraine=MacUkraine
-    macUkraine=MACUKRAINE x-europa=X_europa x-europa=X_EUROPA IBM737=IBM737 x-ia5=X_ia5 x-ia5=X_IA5
-    x-cp20936=X_cp20936 x-cp20936=X_CP20936 x-ia5-german=X_ia5_german x-ia5-german=X_IA5_GERMAN
-    x-ia5-swedish=X_ia5_swedish x-ia5-swedish=X_IA5_SWEDISH x-ia5-norwegian=X_ia5_norwegian
-    x-ia5-norwegian=X_IA5_NORWEGIAN IBM775=IBM775 ISO-8859-13=ISO_8859_13 ibm290=Ibm290
-    ibm290=IBM290 x-chinese-cns=X_chinese_cns x-chinese-cns=X_CHINESE_CNS asmo-708=Asmo_708
-    asmo-708=ASMO_708 ibm297=Ibm297 ibm297=IBM297 macThai=MacThai macThai=MACTHAI
-    x-cp20001=X_cp20001 x-cp20001=X_CP20001 ibm905=Ibm905 ibm905=IBM905
-    x-chinese-eten=X_chinese_eten x-chinese-eten=X_CHINESE_ETEN
-    x-ebcdic-koreanextended=X_ebcdic_koreanextended x-ebcdic-koreanextended=X_EBCDIC_KOREANEXTENDED
-    x-cp20003=X_cp20003 x-cp20003=X_CP20003 x-cp20004=X_cp20004 x-cp20004=X_CP20004
-    x-cp20005=X_cp20005 x-cp20005=X_CP20005 CP850=CP850 ibm-thai=Ibm_thai ibm-thai=IBM_THAI
-    IBM852=IBM852 ibm871=Ibm871 ibm871=IBM871 macCentEuro=MacCentEuro macCentEuro=MACCENTEURO
-    IBM855=IBM855 cp1025=Cp1025 cp1025=CP1025 x-cp20949=X_cp20949 x-cp20949=X_CP20949 IBM857=IBM857
-    ibm00858=Ibm00858 ibm00858=IBM00858 x-cp20261=X_cp20261 x-cp20261=X_CP20261 ibm1026=Ibm1026
-    ibm1026=IBM1026 x-cp20269=X_cp20269 x-cp20269=X_CP20269 ISO-8859-1=ISO_8859_1 CP437=CP437
-    CP737=CP737 CP775=CP775 CP857=CP857 CP860=CP860 CP861=CP861 CP862=CP862 CP863=CP863 CP864=CP864
-    CP865=CP865 CP866=CP866 CP869=CP869 CP878=CP878 CP932=CP932 CP936=CP936 CP720=CP720
-    EUC-CN=EUC_CN eucCN=EucCN eucCN=EUCCN MacJapan=MacJapan MacJapan=MACJAPAN
-    ebcdic-cp-us=Ebcdic_cp_us ebcdic-cp-us=EBCDIC_CP_US CP950=CP950 CP951=CP951 CP1258=CP1258
-    CP1252=CP1252 CP1250=CP1250 CP1256=CP1256 CP1251=CP1251 CP1253=CP1253 CP1255=CP1255
-    CP1254=CP1254 CP1257=CP1257 CP65000=CP65000 CP65001=CP65001 IBM850=IBM850 eucJP=EucJP
-    eucJP=EUCJP eucKR=EucKR eucKR=EUCKR eucTW=EucTW eucTW=EUCTW ISO2022-JP2=ISO2022_JP2
-    ISO8859-1=ISO8859_1 ISO8859-2=ISO8859_2 ISO8859-3=ISO8859_3 ISO8859-4=ISO8859_4
-    ISO8859-5=ISO8859_5 ISO8859-6=ISO8859_6 ISO8859-7=ISO8859_7 ISO8859-8=ISO8859_8
-    ISO8859-10=ISO8859_10 ISO8859-11=ISO8859_11 ISO8859-13=ISO8859_13 ISO8859-14=ISO8859_14
-    ISO8859-16=ISO8859_16 SJIS=SJIS PCK=PCK euc-jp-ms=Euc_jp_ms euc-jp-ms=EUC_JP_MS
-    csWindows31J=CsWindows31J csWindows31J=CSWINDOWS31J UTF-8-MAC=UTF_8_MAC UTF-8-HFS=UTF_8_HFS
-    UCS-2BE=UCS_2BE UCS-4BE=UCS_4BE UCS-4LE=UCS_4LE locale=Locale locale=LOCALE external=External
-    external=EXTERNAL filesystem=Filesystem filesystem=FILESYSTEM ISO-8859-11=ISO_8859_11
-    CP852=CP852 CP855=CP855
-  TABLE
-
-  if (begin; constants(false) == __known__ && Encoding.name_list == __names__; rescue StandardError; false; end)
-    __table__.each do |__entry__|
-      __name__, __c__ = __entry__.split("=", 2)
-      __enc__ = begin
-                  Encoding.find(__name__)
-                rescue StandardError
-                  nil
-                end
-      next unless __enc__.is_a?(Encoding)
-      begin
-        const_set(__c__, __enc__)
-      rescue StandardError
-      end
-    end
-  else
-    begin
-      Encoding.name_list.each { |__n__| __add__.call(__n__) }
-    rescue StandardError
-    end
-
-    # Names CRuby knows that are missing from (or spelled differently in) the
-    # runtime's own name list. Unsupported ones are silently skipped.
-    %w[
-      ISO-8859-1 ISO-8859-2 ISO-8859-3 ISO-8859-4 ISO-8859-5 ISO-8859-6
-      ISO-8859-7 ISO-8859-8 ISO-8859-9 ISO-8859-10 ISO-8859-11 ISO-8859-13
-      ISO-8859-14 ISO-8859-15 ISO-8859-16
-      Windows-31J Windows-874
-      Windows-1250 Windows-1251 Windows-1252 Windows-1253 Windows-1254
-      Windows-1255 Windows-1256 Windows-1257 Windows-1258
-      CP437 CP737 CP775 CP850 CP852 CP855 CP857 CP860 CP861 CP862 CP863
-      CP864 CP865 CP866 CP869 CP932 CP936 CP949 CP950 CP1252
-      IBM437 IBM737 IBM775 IBM852 IBM857 IBM861 IBM862 IBM866 IBM869
-      KOI8-R KOI8-U GB18030 GBK Big5 EUC-JP EUC-KR EUC-CN
-      macRoman macCentEuro macCroatian macCyrillic macGreek macIceland
-      macRomania macThai macTurkish macUkraine
-      ASCII-8BIT BINARY US-ASCII UTF-8 UTF-16 UTF-32 UTF-16BE UTF-16LE
-      UTF-32BE UTF-32LE Shift_JIS SJIS
-    ].each { |__n__| __add__.call(__n__) }
-  end
-end
-
-# --------------------------------------------------------------------------
 # $LOAD_PATH.resolve_feature_path (2.5)
 # --------------------------------------------------------------------------
 
@@ -3754,8 +3569,13 @@ class String
   end
   private :__normalization_form__
 
+  # The other encodings of Unicode, which MRI's unicode_normalize reads through UTF-8.
+  TRANSCODED_UNICODE_ENCODINGS__ = [
+    ::Encoding::UTF_16BE, ::Encoding::UTF_16LE, ::Encoding::UTF_32BE, ::Encoding::UTF_32LE, ::Encoding::GB18030
+  ]
+
   def __require_unicode__
-    unless [::Encoding::UTF_8, ::Encoding::US_ASCII].include?(encoding)
+    unless [::Encoding::UTF_8, ::Encoding::US_ASCII].include?(encoding) || TRANSCODED_UNICODE_ENCODINGS__.include?(encoding)
       ::Kernel.raise(::Encoding::CompatibilityError, "Unicode Normalization not appropriate for #{encoding}")
     end
     unless valid_encoding?
@@ -3766,6 +3586,9 @@ class String
 
   def unicode_normalize(form = :nfc)
     __require_unicode__
+    if TRANSCODED_UNICODE_ENCODINGS__.include?(encoding)
+      return encode(::Encoding::UTF_8).unicode_normalize(form).encode(encoding)
+    end
     result = to_clr_string.Normalize(__normalization_form__(form)).to_s
     result.force_encoding(encoding) if result.respond_to?(:force_encoding)
     result
@@ -3777,6 +3600,7 @@ class String
 
   def unicode_normalized?(form = :nfc)
     __require_unicode__
+    return encode(::Encoding::UTF_8).unicode_normalized?(form) if TRANSCODED_UNICODE_ENCODINGS__.include?(encoding)
     to_clr_string.IsNormalized(__normalization_form__(form))
   end unless method_defined?(:unicode_normalized?)
 
@@ -6402,7 +6226,9 @@ class String
 
     # A pair of decimal strings counts like Integer#upto, with the receiver's
     # width kept: "08".upto("11") answers "08", "09", "10", "11".
-    if self =~ /\A\d+\z/ && stop =~ /\A\d+\z/
+    # (Only ASCII can be decimal digits, and a string with bytes invalid in its encoding
+    # cannot be matched against a Regexp at all.)
+    if ascii_only? && stop.ascii_only? && self =~ /\A\d+\z/ && stop =~ /\A\d+\z/
       from = to_i
       to = exclusive ? stop.to_i - 1 : stop.to_i
       width = length
@@ -6417,7 +6243,7 @@ class String
     # Two single ASCII characters walk the codepoints between them: "9".upto("A")
     # answers 9 : ; < = > ? @ A. Any other pair walks #succ (MRI's str_upto_each
     # measures in bytes), so "\u0999".upto("\u9999") ends where #succ outgrows it.
-    if bytesize == 1 && stop.bytesize == 1
+    if bytesize == 1 && stop.bytesize == 1 && ascii_only? && stop.ascii_only?
       from = ord
       to = stop.ord
       to -= 1 if exclusive

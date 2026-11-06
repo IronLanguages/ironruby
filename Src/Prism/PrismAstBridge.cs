@@ -168,6 +168,15 @@ namespace IronRuby.Prism {
                 sourceUnit.Path != null && sourceUnit.Path == context.RubyOptions.MainFile) {
                 sourceEncoding = kcode;
                 encodingName = kcode.Name;
+            } else if (kcode == null && context != null && !isEval && declaredEncodingName == null &&
+                (sourceUnit.Path == "-e" || sourceUnit.Path == "-") && sourceUnit.Path == context.RubyOptions.MainFile) {
+                // Without -K, -e and a program read from stdin are in the locale's encoding (a file
+                // is UTF-8): under LANG=C their literals and __ENCODING__ are US-ASCII. Their bytes
+                // reach here as UTF-8 (with escapes for what is not), so only prism is told.
+                RubyEncoding locale = context.RubyOptions.LocaleEncoding;
+                if (locale != RubyEncoding.UTF8 && locale.IsAsciiIdentity) {
+                    encodingName = locale.Name;
+                }
             }
 
             // Method bodies are mapped when the method is first called (see Def) - most methods a file

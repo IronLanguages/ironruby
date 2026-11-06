@@ -269,26 +269,28 @@ namespace IronRuby.Compiler {
         // reads case insensitively, doesn't rewind the reader if the content doesn't match, doesn't read a line unless it starts with '#':
         // ([#][!].*(\r|\n|\r\n))?
         // [#].*?coding\s*[:=]\s*([a-z0-9_-]+).*(\r|\n|\r\n)
-        internal static bool TryParseEncodingHeader(TextReader/*!*/ reader, out string encodingName) {
+        internal static bool TryParseEncodingHeader(TextReader/*!*/ reader, out string encodingName, out int line) {
             Assert.NotNull(reader);
 
             encodingName = null;
+            line = 1;
 
             if (reader.Peek() != '#') {
                 return false;
             }
 
-            string line = reader.ReadLine();
+            string text = reader.ReadLine();
 
             // skip shebang:
-            if (line.Length > 1 && line[1] == '!') {
+            if (text.Length > 1 && text[1] == '!') {
                 if (reader.Peek() != '#') {
                     return false;
                 }
-                line = reader.ReadLine();
+                text = reader.ReadLine();
+                line = 2;
             }
 
-            encodingName = MatchCodingComment(line);
+            encodingName = MatchCodingComment(text);
             return encodingName != null;
         }
 

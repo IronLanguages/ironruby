@@ -33,7 +33,11 @@ namespace IronRuby.Runtime {
     /// the same tables as a real .NET encoding without ever colliding with one.
     /// </summary>
     internal static class RubyOnlyEncodings {
-        internal static Encoding/*!*/ Create(int codepage, bool throwOnError) {
+        /// <summary>
+        /// The encoding for a code page whose Ruby encoding System.Text does not supply as it is,
+        /// or null for one it does.
+        /// </summary>
+        internal static Encoding TryCreate(int codepage, bool throwOnError) {
             switch (codepage) {
                 case RubyEncoding.CodePageUTF16: return new BomEncoding(codepage, 2, throwOnError);
                 case RubyEncoding.CodePageUTF32: return new BomEncoding(codepage, 4, throwOnError);
@@ -43,49 +47,65 @@ namespace IronRuby.Runtime {
 
                 // Ruby's stateless-ISO-2022-JP is a replica of Emacs-Mule under another name.
                 case RubyEncoding.CodePageStatelessISO2022JP: return new EmacsMuleEncoding(codepage, "stateless-ISO-2022-JP", throwOnError);
+                case RubyEncoding.CodePageStatelessISO2022JPKDDI: return new EmacsMuleEncoding(codepage, "stateless-ISO-2022-JP-KDDI", throwOnError);
 
-                case RubyEncoding.CodePageShiftJIS: return new RenamedEncoding(codepage, "Shift_JIS", RubyEncoding.CodePageSJIS, throwOnError);
                 case RubyEncoding.CodePageUTF8Mac: return new RenamedEncoding(codepage, "UTF8-MAC", RubyEncoding.CodePageUTF8, throwOnError);
+                case RubyEncoding.CodePageUTF8DoCoMo: return new RenamedEncoding(codepage, "UTF8-DoCoMo", RubyEncoding.CodePageUTF8, throwOnError);
+                case RubyEncoding.CodePageUTF8KDDI: return new RenamedEncoding(codepage, "UTF8-KDDI", RubyEncoding.CodePageUTF8, throwOnError);
+                case RubyEncoding.CodePageUTF8SoftBank: return new RenamedEncoding(codepage, "UTF8-SoftBank", RubyEncoding.CodePageUTF8, throwOnError);
                 case RubyEncoding.CodePageCP51932: return new RenamedEncoding(codepage, "CP51932", RubyEncoding.CodePageEUCJP, throwOnError);
                 case RubyEncoding.CodePageISO2022JP2: return new RenamedEncoding(codepage, "ISO-2022-JP-2", 50220, throwOnError);
-                case RubyEncoding.CodePageGB12345: return new RenamedEncoding(codepage, "GB12345", 51936, throwOnError);
+                case RubyEncoding.CodePageCP50220: return new RenamedEncoding(codepage, "CP50220", 50220, throwOnError);
+                case RubyEncoding.CodePageISO2022JPKDDI: return new RenamedEncoding(codepage, "ISO-2022-JP-KDDI", 50220, throwOnError);
+                case RubyEncoding.CodePageCP852: return new RenamedEncoding(codepage, "CP852", 852, throwOnError);
+                case RubyEncoding.CodePageCP855: return new RenamedEncoding(codepage, "CP855", 855, throwOnError);
 
                 case RubyEncoding.CodePageEUCJP: return new EucJpEncoding(codepage, "EUC-JP", throwOnError);
                 case RubyEncoding.CodePageEucJpMs: return new EucJpEncoding(codepage, "eucJP-ms", throwOnError);
+                case RubyEncoding.CodePageEUCJIS2004: return new EucJpEncoding(codepage, "EUC-JIS-2004", throwOnError);
                 case RubyEncoding.CodePageEUCTW: return new EucTwEncoding(throwOnError);
 
-                case RubyEncoding.CodePageGB1988: return new SingleByteTableEncoding(codepage, "GB1988", null, throwOnError);
+                // .NET's code page 932 is Microsoft's Shift_JIS, which Ruby calls Windows-31J; it
+                // decodes 0x80, 0xA0 and 0xFD-0xFF as characters of their own, which in Ruby's
+                // Shift_JIS family begin nothing. Ruby's narrower Shift_JIS, the carriers' variants
+                // and MacJapanese are read with the same table.
+                case RubyEncoding.CodePageSJIS: return new DoubleByteEncoding(codepage, "Windows-31J", DoubleByteEncoding.ShiftJis, codepage, throwOnError);
+                case RubyEncoding.CodePageShiftJIS: return new DoubleByteEncoding(codepage, "Shift_JIS", DoubleByteEncoding.ShiftJis, RubyEncoding.CodePageSJIS, throwOnError);
+                case RubyEncoding.CodePageSJISDoCoMo: return new DoubleByteEncoding(codepage, "SJIS-DoCoMo", DoubleByteEncoding.ShiftJis, RubyEncoding.CodePageSJIS, throwOnError);
+                case RubyEncoding.CodePageSJISKDDI: return new DoubleByteEncoding(codepage, "SJIS-KDDI", DoubleByteEncoding.ShiftJis, RubyEncoding.CodePageSJIS, throwOnError);
+                case RubyEncoding.CodePageSJISSoftBank: return new DoubleByteEncoding(codepage, "SJIS-SoftBank", DoubleByteEncoding.ShiftJis, RubyEncoding.CodePageSJIS, throwOnError);
+                case RubyEncoding.CodePageMacJapanese: return new DoubleByteEncoding(codepage, "MacJapanese", DoubleByteEncoding.ShiftJis, codepage, throwOnError);
+
+                // GBK and CP949 read 0x80 as a character of its own (the euro sign), but no byte
+                // above it.
+                case 936: return new DoubleByteEncoding(codepage, "GBK", DoubleByteEncoding.Gbk, codepage, throwOnError);
+                case 949: return new DoubleByteEncoding(codepage, "CP949", DoubleByteEncoding.Cp949, codepage, throwOnError);
+
+                // .NET's Big5 (code page 950) is Microsoft's, which also reads a lead byte below 0xA1;
+                // Ruby's Big5 family does not, whatever their repertoires add.
+                case RubyEncoding.CodePageBig5: return new DoubleByteEncoding(codepage, "Big5", DoubleByteEncoding.Big5, RubyEncoding.CodePageBig5, throwOnError);
+                case RubyEncoding.CodePageBig5HKSCS: return new DoubleByteEncoding(codepage, "Big5-HKSCS", DoubleByteEncoding.Big5, RubyEncoding.CodePageBig5, throwOnError);
+                case RubyEncoding.CodePageBig5UAO: return new DoubleByteEncoding(codepage, "Big5-UAO", DoubleByteEncoding.Big5, RubyEncoding.CodePageBig5, throwOnError);
+                case RubyEncoding.CodePageCP950: return new DoubleByteEncoding(codepage, "CP950", DoubleByteEncoding.Big5, RubyEncoding.CodePageBig5, throwOnError);
+                case RubyEncoding.CodePageCP951: return new DoubleByteEncoding(codepage, "CP951", DoubleByteEncoding.Big5, RubyEncoding.CodePageBig5, throwOnError);
+
+                // EUC: two bytes of 0xA1-0xFE. .NET's code pages decode more than that.
+                case 51936: return new DoubleByteEncoding(codepage, "GB2312", DoubleByteEncoding.Euc, 51936, throwOnError);
+                case RubyEncoding.CodePageGB12345: return new DoubleByteEncoding(codepage, "GB12345", DoubleByteEncoding.Euc, 51936, throwOnError);
+                case 51949: return new DoubleByteEncoding(codepage, "EUC-KR", DoubleByteEncoding.Euc, 51949, throwOnError);
+
+                // Ruby has no converter for these, so it never reads their bytes above 0x7F as
+                // anything but bytes.
+                case RubyEncoding.CodePageGB1988: return new SingleByteTableEncoding(codepage, "GB1988", SingleByteTableEncoding.Undefined, throwOnError);
+                case RubyEncoding.CodePageMacCentEuro: return new SingleByteTableEncoding(codepage, "macCentEuro", SingleByteTableEncoding.Undefined, throwOnError);
+                case RubyEncoding.CodePageMacThai: return new SingleByteTableEncoding(codepage, "macThai", SingleByteTableEncoding.Undefined, throwOnError);
+                case RubyEncoding.CodePageWindows1258: return new SingleByteTableEncoding(codepage, "Windows-1258", SingleByteTableEncoding.Undefined, throwOnError);
+
                 case RubyEncoding.CodePageISO8859_10: return new SingleByteTableEncoding(codepage, "ISO-8859-10", SingleByteTableEncoding.Iso8859_10, throwOnError);
+                case RubyEncoding.CodePageISO8859_11: return new SingleByteTableEncoding(codepage, "ISO-8859-11", SingleByteTableEncoding.Iso8859_11, throwOnError);
                 case RubyEncoding.CodePageISO8859_14: return new SingleByteTableEncoding(codepage, "ISO-8859-14", SingleByteTableEncoding.Iso8859_14, throwOnError);
                 case RubyEncoding.CodePageISO8859_16: return new SingleByteTableEncoding(codepage, "ISO-8859-16", SingleByteTableEncoding.Iso8859_16, throwOnError);
-                default: throw new ArgumentOutOfRangeException("codepage");
-            }
-        }
-
-        internal static bool IsRubyOnly(int codepage) {
-            switch (codepage) {
-                case RubyEncoding.CodePageUTF16:
-                case RubyEncoding.CodePageUTF32:
-                case RubyEncoding.CodePageCESU8:
-                case RubyEncoding.CodePageTIS620:
-                case RubyEncoding.CodePageEmacsMule:
-                case RubyEncoding.CodePageStatelessISO2022JP:
-                case RubyEncoding.CodePageShiftJIS:
-                case RubyEncoding.CodePageUTF8Mac:
-                case RubyEncoding.CodePageCP51932:
-                case RubyEncoding.CodePageISO2022JP2:
-                case RubyEncoding.CodePageGB12345:
-                case RubyEncoding.CodePageEUCJP:
-                case RubyEncoding.CodePageEucJpMs:
-                case RubyEncoding.CodePageEUCTW:
-                case RubyEncoding.CodePageGB1988:
-                case RubyEncoding.CodePageISO8859_10:
-                case RubyEncoding.CodePageISO8859_14:
-                case RubyEncoding.CodePageISO8859_16:
-                    return true;
-
-                default:
-                    return false;
+                default: return null;
             }
         }
 
@@ -95,12 +115,30 @@ namespace IronRuby.Runtime {
         /// </summary>
         internal static int GetTableCodePage(int codepage) {
             switch (codepage) {
-                case RubyEncoding.CodePageShiftJIS: return RubyEncoding.CodePageSJIS;
-                case RubyEncoding.CodePageUTF8Mac: return RubyEncoding.CodePageUTF8;
-                case RubyEncoding.CodePageCP51932: return RubyEncoding.CodePageEUCJP;
-                case RubyEncoding.CodePageEucJpMs: return RubyEncoding.CodePageEUCJP;
+                case RubyEncoding.CodePageShiftJIS:
+                case RubyEncoding.CodePageSJISDoCoMo:
+                case RubyEncoding.CodePageSJISKDDI:
+                case RubyEncoding.CodePageSJISSoftBank:
+                    return RubyEncoding.CodePageSJIS;
+                case RubyEncoding.CodePageUTF8Mac:
+                case RubyEncoding.CodePageUTF8DoCoMo:
+                case RubyEncoding.CodePageUTF8KDDI:
+                case RubyEncoding.CodePageUTF8SoftBank:
+                    return RubyEncoding.CodePageUTF8;
+                case RubyEncoding.CodePageCP51932:
+                case RubyEncoding.CodePageEucJpMs:
+                case RubyEncoding.CodePageEUCJIS2004:
+                    return RubyEncoding.CodePageEUCJP;
+                case RubyEncoding.CodePageBig5HKSCS:
+                case RubyEncoding.CodePageBig5UAO:
+                case RubyEncoding.CodePageCP950:
+                case RubyEncoding.CodePageCP951:
+                    return RubyEncoding.CodePageBig5;
                 case RubyEncoding.CodePageGB12345: return 51936;
+                case RubyEncoding.CodePageCP852: return 852;
+                case RubyEncoding.CodePageCP855: return 855;
                 case RubyEncoding.CodePageISO8859_10:
+                case RubyEncoding.CodePageISO8859_11:
                 case RubyEncoding.CodePageISO8859_14:
                 case RubyEncoding.CodePageISO8859_16:
                 case RubyEncoding.CodePageGB1988:
@@ -121,12 +159,6 @@ namespace IronRuby.Runtime {
                 return structured.FindInvalid(bytes, index, count) < 0;
             }
 
-            // .NET's code page 932 decodes 0x80, 0xA0 and 0xFD-0xFF as characters of their own;
-            // in Ruby's Shift_JIS and Windows-31J they begin nothing.
-            if (encoding.CodePage == RubyEncoding.CodePageSJIS || encoding.CodePage == RubyEncoding.CodePageShiftJIS) {
-                return FindInvalidShiftJis(bytes, index, count) < 0;
-            }
-
             // Every byte of a single byte encoding is a character as far as Ruby is concerned,
             // even the ones its conversion table leaves undefined. US-ASCII is the exception: it
             // is seven bit.
@@ -134,29 +166,6 @@ namespace IronRuby.Runtime {
                 return true;
             }
             return null;
-        }
-
-        private static int FindInvalidShiftJis(byte[]/*!*/ bytes, int index, int count) {
-            int end = index + count;
-            int i = index;
-            while (i < end) {
-                byte b = bytes[i];
-                if (b < 0x80 || b >= 0xa1 && b <= 0xdf) {
-                    i++;
-                } else if (b >= 0x81 && b <= 0x9f || b >= 0xe0 && b <= 0xfc) {
-                    if (i + 1 >= end) {
-                        return i;
-                    }
-                    byte trail = bytes[i + 1];
-                    if (trail < 0x40 || trail == 0x7f || trail > 0xfc) {
-                        return i;
-                    }
-                    i += 2;
-                } else {
-                    return i;
-                }
-            }
-            return -1;
         }
     }
 
@@ -237,19 +246,18 @@ namespace IronRuby.Runtime {
 
     /// <summary>
     /// A single byte, ASCII compatible encoding .NET does not have, given as the characters of
-    /// bytes 0x80-0xFF (U+FFFF where the byte is undefined). A null table passes the high bytes
-    /// through as U+0080-U+00FF: that is for encodings Ruby ships no converter for, where only
-    /// the byte matters.
+    /// bytes 0x80-0xFF (U+FFFF where the byte is undefined, which Ruby still counts as a
+    /// character: it just has no counterpart in any other encoding).
     /// </summary>
     internal sealed class SingleByteTableEncoding : Encoding, IStructuredEncoding {
         private readonly bool _throwOnError;
         private readonly string/*!*/ _name;
-        private readonly char[] _table;
+        private readonly char[]/*!*/ _table;
         // built on first use: every Encoding constant makes one of these, and few are ever used to encode
         // (a Dictionary<char, byte> is also code ReadyToRun cannot precompile)
         private System.Collections.Generic.Dictionary<char, byte> _reverse;
 
-        internal SingleByteTableEncoding(int codepage, string/*!*/ name, char[] table, bool throwOnError)
+        internal SingleByteTableEncoding(int codepage, string/*!*/ name, char[]/*!*/ table, bool throwOnError)
             : base(codepage) {
             _name = name;
             _table = table;
@@ -278,15 +286,12 @@ namespace IronRuby.Runtime {
             if (c < 0x80) {
                 return c;
             }
-            if (_table == null) {
-                return c <= 0xff ? c : -1;
-            }
             byte b;
             return GetReverseTable().TryGetValue(c, out b) ? b : -1;
         }
 
         private bool TryGetChar(byte b, out char c) {
-            if (b < 0x80 || _table == null) {
+            if (b < 0x80) {
                 c = (char)b;
                 return true;
             }
@@ -380,6 +385,23 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// No byte above 0x7F stands for a character: for the encodings Ruby has no converter for,
+        /// where such a byte is valid, but only ever a byte.
+        /// </summary>
+        internal static readonly char[]/*!*/ Undefined = new string('￿', 128).ToCharArray();
+
+        /// <summary>ISO-8859-11: TIS-620 plus the C1 controls and NBSP.</summary>
+        internal static readonly char[]/*!*/ Iso8859_11 = CreateIso8859_11();
+
+        private static char[]/*!*/ CreateIso8859_11() {
+            var result = new char[128];
+            for (int b = 0x80; b <= 0xff; b++) {
+                result[b - 0x80] = b <= 0xa0 ? (char)b : (b <= 0xda || b >= 0xdf && b <= 0xfb) ? (char)(0x0e00 + b - 0xa0) : '￿';
+            }
+            return result;
+        }
+
         internal static readonly char[]/*!*/ Iso8859_10 = Latin(
             "A0 104 112 122 12A 128 136 A7 13B 110 160 166 17D AD 16A 14A " +
             "B0 105 113 123 12B 129 137 B7 13C 111 161 167 17E 2015 16B 14B " +
@@ -414,6 +436,22 @@ namespace IronRuby.Runtime {
     internal abstract class MultiByteEncoding : Encoding, IStructuredEncoding {
         private readonly bool _throwOnError;
         private readonly string/*!*/ _name;
+        private bool _lossless;
+
+        // A two byte sequence of the right shape that names no character - one the table leaves
+        // out - is still one character to Ruby. In the lossless form of an encoding, which the
+        // string representation decodes with (see RubyEncoding.EscapingEncoding), it reads as
+        // the code point in plane 15 that carries its two bytes, and writes back as those bytes;
+        // the strict form, the one transcoding uses, refuses it. Decoded bytes that are not
+        // well formed are escaped by the EscapingEncoding as usual, one character per byte.
+        private const int LosslessBase = 0xF0000;
+
+        /// <summary>See LosslessBase.</summary>
+        internal Encoding/*!*/ AsLossless() {
+            var result = (MultiByteEncoding)MemberwiseClone();
+            result._lossless = true;
+            return result;
+        }
 
         protected MultiByteEncoding(int codepage, string/*!*/ name, bool throwOnError)
             : base(codepage,
@@ -468,6 +506,9 @@ namespace IronRuby.Runtime {
             while (i < end) {
                 int used;
                 int length = EncodeCharacter(chars, i, end, buffer, 0, out used);
+                if (length < 0 && _lossless) {
+                    length = EncodeLossless(chars, i, end, buffer, out used);
+                }
                 if (length < 0) {
                     if (_throwOnError) {
                         throw new EncoderFallbackException();
@@ -482,6 +523,22 @@ namespace IronRuby.Runtime {
                 i += used;
             }
             return written;
+        }
+
+        private int EncodeLossless(char[]/*!*/ chars, int index, int end, byte[]/*!*/ bytes, out int used) {
+            used = 1;
+            if (index + 1 < end && Char.IsSurrogatePair(chars[index], chars[index + 1])) {
+                int codepoint = Char.ConvertToUtf32(chars[index], chars[index + 1]);
+                if (codepoint >= LosslessBase + 0x8000 && codepoint <= LosslessBase + 0xffff) {
+                    bytes[0] = (byte)(codepoint >> 8);
+                    bytes[1] = (byte)codepoint;
+                    if (Scan(bytes, 0, 2) == 2) {
+                        used = 2;
+                        return 2;
+                    }
+                }
+            }
+            return -1;
         }
 
         public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
@@ -567,6 +624,12 @@ namespace IronRuby.Runtime {
 
                     if (length > 0) {
                         int n = _encoding.DecodeSequence(input, i, length, decoded, 0);
+                        if (n < 0 && length == 2 && _encoding._lossless) {
+                            int codepoint = LosslessBase + (input[i] << 8 | input[i + 1]) - 0x10000;
+                            decoded[0] = (char)(0xD800 + (codepoint >> 10));
+                            decoded[1] = (char)(0xDC00 + (codepoint & 0x3ff));
+                            n = 2;
+                        }
                         if (n >= 0) {
                             if (chars != null) {
                                 Array.Copy(decoded, 0, chars, charIndex + written, n);
@@ -627,6 +690,155 @@ namespace IronRuby.Runtime {
 
         protected static bool IsGraphic(byte b) {
             return b >= 0xa1 && b <= 0xfe;
+        }
+    }
+
+    /// <summary>
+    /// A double byte encoding whose shape is Ruby's - which bytes lead a character, which follow
+    /// one, which high bytes stand alone - with the characters themselves taken from a .NET code
+    /// page. .NET's tables accept sequences Ruby calls invalid (Microsoft's Big5 has lead bytes
+    /// below 0xA1, its EUC code pages decode C1 bytes), and Ruby measures, splits and validates a
+    /// string by shape alone, so the shape cannot be left to .NET. A sequence of the right shape
+    /// that the table has no character for is still valid; it just cannot be transcoded.
+    /// </summary>
+    internal sealed class DoubleByteEncoding : MultiByteEncoding {
+        internal sealed class Layout {
+            internal readonly bool[]/*!*/ Lead = new bool[256];
+            internal readonly bool[]/*!*/ Trail = new bool[256];
+            internal readonly bool[]/*!*/ Single = new bool[256];
+
+            internal Layout(int[]/*!*/ lead, int[]/*!*/ trail, int[]/*!*/ single) {
+                Fill(Lead, lead);
+                Fill(Trail, trail);
+                Fill(Single, single);
+                for (int b = 0; b < 0x80; b++) {
+                    Single[b] = true;
+                }
+            }
+
+            // pairs of inclusive bounds
+            private static void Fill(bool[]/*!*/ set, int[]/*!*/ ranges) {
+                for (int i = 0; i < ranges.Length; i += 2) {
+                    for (int b = ranges[i]; b <= ranges[i + 1]; b++) {
+                        set[b] = true;
+                    }
+                }
+            }
+        }
+
+        internal static readonly Layout/*!*/ Big5 = new Layout(new[] { 0xa1, 0xfe }, new[] { 0x40, 0x7e, 0xa1, 0xfe }, new int[0]);
+        internal static readonly Layout/*!*/ Euc = new Layout(new[] { 0xa1, 0xfe }, new[] { 0xa1, 0xfe }, new int[0]);
+        internal static readonly Layout/*!*/ ShiftJis = new Layout(new[] { 0x81, 0x9f, 0xe0, 0xfc }, new[] { 0x40, 0x7e, 0x80, 0xfc }, new[] { 0xa1, 0xdf });
+        internal static readonly Layout/*!*/ Gbk = new Layout(new[] { 0x81, 0xfe }, new[] { 0x40, 0x7e, 0x80, 0xfe }, new[] { 0x80, 0x80 });
+        internal static readonly Layout/*!*/ Cp949 = new Layout(new[] { 0x81, 0xfe }, new[] { 0x41, 0x5a, 0x61, 0x7a, 0x81, 0xfe }, new[] { 0x80, 0x80 });
+
+        private readonly Layout/*!*/ _layout;
+        private readonly Encoding/*!*/ _table;
+
+        internal DoubleByteEncoding(int codepage, string/*!*/ name, Layout/*!*/ layout, int tableCodePage, bool throwOnError)
+            : base(codepage, name, throwOnError) {
+            _layout = layout;
+            _table = Encoding.GetEncoding(tableCodePage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+        }
+
+        protected override int MaxSequenceLength {
+            get { return 2; }
+        }
+
+        // The table reads a well formed run just as the sequence by sequence loop does, only much
+        // faster; the loop is for what it refuses (and for the lossless form's plane 15 stand-ins).
+
+        public override int GetCharCount(byte[]/*!*/ bytes, int index, int count) {
+            if (FindInvalid(bytes, index, count) < 0) {
+                try {
+                    return _table.GetCharCount(bytes, index, count);
+                } catch (DecoderFallbackException) {
+                    // a sequence the table has no character for
+                }
+            }
+            return base.GetCharCount(bytes, index, count);
+        }
+
+        public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex) {
+            if (FindInvalid(bytes, byteIndex, byteCount) < 0) {
+                try {
+                    return _table.GetChars(bytes, byteIndex, byteCount, chars, charIndex);
+                } catch (DecoderFallbackException) {
+                    // a sequence the table has no character for
+                }
+            }
+            return base.GetChars(bytes, byteIndex, byteCount, chars, charIndex);
+        }
+
+        /// <summary>The table's bytes for the characters, if all of them are in a shape of this encoding.</summary>
+        private byte[] TryEncodeWithTable(char[]/*!*/ chars, int index, int count) {
+            byte[] result;
+            try {
+                result = _table.GetBytes(chars, index, count);
+            } catch (EncoderFallbackException) {
+                return null;
+            }
+            return FindInvalid(result, 0, result.Length) < 0 ? result : null;
+        }
+
+        public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
+            byte[] bytes = TryEncodeWithTable(chars, index, count);
+            return bytes != null ? bytes.Length : base.GetByteCount(chars, index, count);
+        }
+
+        public override int GetBytes(char[]/*!*/ chars, int charIndex, int charCount, byte[]/*!*/ bytes, int byteIndex) {
+            byte[] encoded = TryEncodeWithTable(chars, charIndex, charCount);
+            if (encoded == null) {
+                return base.GetBytes(chars, charIndex, charCount, bytes, byteIndex);
+            }
+            Array.Copy(encoded, 0, bytes, byteIndex, encoded.Length);
+            return encoded.Length;
+        }
+
+        protected override int Scan(byte[]/*!*/ bytes, int index, int end) {
+            byte b = bytes[index];
+            if (_layout.Single[b]) {
+                return 1;
+            }
+            if (!_layout.Lead[b]) {
+                return -1;
+            }
+            if (index + 1 >= end) {
+                return 0;
+            }
+            return _layout.Trail[bytes[index + 1]] ? 2 : -1;
+        }
+
+        protected override int DecodeSequence(byte[]/*!*/ bytes, int index, int length, char[]/*!*/ chars, int charIndex) {
+            if (bytes[index] < 0x80) {
+                chars[charIndex] = (char)bytes[index];
+                return 1;
+            }
+            try {
+                return _table.GetChars(bytes, index, length, chars, charIndex);
+            } catch (DecoderFallbackException) {
+                return -1;
+            }
+        }
+
+        protected override int EncodeCharacter(char[]/*!*/ chars, int index, int end, byte[]/*!*/ bytes, int byteIndex, out int used) {
+            char c = chars[index];
+            used = (Char.IsHighSurrogate(c) && index + 1 < end && Char.IsLowSurrogate(chars[index + 1])) ? 2 : 1;
+            if (c < 0x80) {
+                bytes[byteIndex] = (byte)c;
+                return 1;
+            }
+            if (used == 2) {
+                return -1;
+            }
+            int length;
+            try {
+                length = _table.GetBytes(chars, index, 1, bytes, byteIndex);
+            } catch (EncoderFallbackException) {
+                return -1;
+            }
+            // what the table spells in a shape this encoding does not have is not one of its characters
+            return Scan(bytes, byteIndex, byteIndex + length) == length ? length : -1;
         }
     }
 

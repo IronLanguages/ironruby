@@ -754,6 +754,27 @@ namespace IronRuby.Builtins {
 
             var encoding = NegotiateUnionEncoding(parts);
 
+            // A string with bytes that are not valid in its encoding makes no pattern, and MRI says
+            // so about the whole source: Regexp.union("a", "\xFF") is "invalid multibyte character: /a|\xFF/".
+            foreach (var part in parts) {
+                var str = part as MutableString;
+                if (str != null && str.Encoding != RubyEncoding.Binary && str.ContainsInvalidCharacters()) {
+                    MutableString source = MutableString.CreateBinary(encoding);
+                    for (int i = 0; i < parts.Count; i++) {
+                        if (i > 0) {
+                            source.Append('|');
+                        }
+                        var regex = parts[i] as RubyRegex;
+                        if (regex != null) {
+                            regex.AppendTo(source);
+                        } else {
+                            source.Append(((MutableString)parts[i]).ToByteArray());
+                        }
+                    }
+                    RubyRegex.RequireValidPattern(source);
+                }
+            }
+
             MutableString result = MutableString.CreateMutable(encoding);
             for (int i = 0; i < parts.Count; i++) {
                 if (i > 0) {

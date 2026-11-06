@@ -459,7 +459,8 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static string/*!*/ TranscoderName(RubyEncoding/*!*/ encoding) {
             string name = encoding.Name;
-            return name.StartsWith("Windows-", StringComparison.Ordinal) || name.StartsWith("mac", StringComparison.Ordinal)
+            // Windows-31J's own tables (japanese_sjis) spell it as Encoding#name does
+            return (name.StartsWith("Windows-", StringComparison.Ordinal) && encoding != RubyEncoding.SJIS) || name.StartsWith("mac", StringComparison.Ordinal)
                 ? name.ToUpperInvariant() : name;
         }
 

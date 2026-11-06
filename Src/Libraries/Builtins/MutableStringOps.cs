@@ -1057,6 +1057,15 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Returns the first codepoint.
         /// </summary>
+        /// <summary>
+        /// Whether the character at the index is a byte that is not valid in the string's encoding,
+        /// which EscapingEncoding holds as a lone low surrogate, U+DC80 plus the byte.
+        /// </summary>
+        private static bool IsEscapedByte(MutableString/*!*/ str, int index) {
+            char c = str.GetChar(index);
+            return c >= '\uDC80' && c <= '\uDCFF' && (index == 0 || !Char.IsHighSurrogate(str.GetChar(index - 1)));
+        }
+
         [RubyMethod("ord")]
         public static int Ord(MutableString/*!*/ str) {
             if (str.IsEmpty) {
@@ -1066,6 +1075,13 @@ namespace IronRuby.Builtins {
             char c1 = str.GetChar(0);
             if (!Char.IsSurrogate(c1)) {
                 return NativeCode(str.Encoding, new[] { c1 }, c1);
+            }
+
+            // A byte with no Unicode counterpart is held as an escape (U+DC80 plus the byte, see
+            // EscapingEncoding). In a single byte encoding other than US-ASCII it is a character
+            // all the same - GB1988, macThai and the like have nothing but such bytes above 0x7F.
+            if (IsEscapedByte(str, 0) && str.Encoding.StrictEncoding.IsSingleByte && str.Encoding != RubyEncoding.Ascii) {
+                return c1 - '\uDC00';
             }
 
             char c2;
@@ -1096,7 +1112,9 @@ namespace IronRuby.Builtins {
                 return codepoint;
             }
             int code = 0;
-            foreach (byte b in encoding.StrictEncoding.GetBytes(character)) {
+            // not the strict encoding: a well formed sequence its table has no character for is
+            // still a character, held as one the escaping encoding writes back as its bytes
+            foreach (byte b in encoding.EscapingEncoding.GetBytes(character)) {
                 code = (code << 8) | b;
             }
             return code;
@@ -1358,7 +1376,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static string TryDecodeForCaseMapping(MutableString/*!*/ self) {
             RubyEncoding encoding = self.Encoding;
-            if (ReferenceEquals(encoding, RubyEncoding.Binary) || encoding.IsDummy) {
+            if (ReferenceEquals(encoding, RubyEncoding.Binary)) {
                 return null;
             }
             return self.ToString();
@@ -1387,16 +1405,26 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// MRI refuses to case map a dummy encoding at all - it has no characters to map, not
+        /// even ASCII ones - and, except for the ASCII-only mapping, bytes that are not valid in
+        /// the string's encoding. The copying and the in-place forms alike.
+        /// </summary>
+        private static void RequireCaseMappable(MutableString/*!*/ self, CaseMappingOptions flags) {
+            if (self.Encoding.IsDummy) {
+                throw new EncodingCompatibilityError("incompatible encoding with this operation: " + self.Encoding.Name);
+            }
+            if ((flags & CaseMappingOptions.Ascii) == 0 && !ReferenceEquals(self.Encoding, RubyEncoding.Binary)
+                && self.ContainsInvalidCharacters()) {
+                throw RubyExceptions.CreateArgumentError("input string invalid");
+            }
+        }
+
         private static MutableString/*!*/ CaseMap(MutableString/*!*/ self, CaseMappingKind kind,
             object[]/*!*/ options, bool foldingAllowed) {
 
             CaseMappingOptions flags = ParseCaseOptions(options, foldingAllowed);
-
-            // Only the ASCII-only mapping takes bytes that are not valid in the encoding.
-            if ((flags & CaseMappingOptions.Ascii) == 0 && !ReferenceEquals(self.Encoding, RubyEncoding.Binary)
-                && !self.Encoding.IsDummy && self.ContainsInvalidCharacters()) {
-                throw RubyExceptions.CreateArgumentError("input string invalid");
-            }
+            RequireCaseMappable(self, flags);
 
             string source = TryDecodeForCaseMapping(self);
             if (source != null) {
@@ -1414,6 +1442,7 @@ namespace IronRuby.Builtins {
             // ArgumentError in MRI, not a FrozenError.
             CaseMappingOptions flags = ParseCaseOptions(options, foldingAllowed);
             self.RequireNotFrozen();
+            RequireCaseMappable(self, flags);
 
             string source = TryDecodeForCaseMapping(self);
             if (source != null) {
@@ -1468,6 +1497,9 @@ namespace IronRuby.Builtins {
         /// true where #casecmp says they differ.
         /// </summary>
         private static string/*!*/ FoldForComparison(MutableString/*!*/ str) {
+            if (str.Encoding.IsDummy) {
+                throw new EncodingCompatibilityError("incompatible encoding with this operation: " + str.Encoding.Name);
+            }
             string source = TryDecodeForCaseMapping(str);
             if (source != null) {
                 return UnicodeCaseMapping.Fold(source);
@@ -2237,7 +2269,14 @@ namespace IronRuby.Builtins {
                 return self;
             }
 
-            var transcoded = Transcode(fallbackStorage, toStr, self, from, to, settings);
+            MutableString transcoded;
+            if (from == to && !settings.ReplaceInvalid && !from.IsDummy && self.ContainsInvalidCharacters()) {
+                // Only decorators to run, and MRI runs them over the bytes, which is why bytes that
+                // are not valid in the encoding go through untouched rather than raising.
+                transcoded = Decorate(self, to, settings);
+            } else {
+                transcoded = Transcode(fallbackStorage, toStr, self, from, to, settings);
+            }
 
             if (settings.XmlMode == 'a') {
                 // xml: :attr produces a quoted attribute value, quotes included.
@@ -2563,6 +2602,14 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // Most strings are valid, and a strict decoder reads those in one go; only one that is
+            // not needs the byte by byte walk below, which finds out where and how it went wrong.
+            try {
+                return strict.GetString(bytes);
+            } catch (DecoderFallbackException) {
+                // fall through
+            }
+
             var result = new StringBuilder(bytes.Length);
             var decoder = strict.GetDecoder();
             var chars = new char[8];
@@ -2574,6 +2621,23 @@ namespace IronRuby.Builtins {
                 try {
                     produced = decoder.GetChars(bytes, i, 1, chars, 0, false);
                 } catch (DecoderFallbackException) {
+                    // A character of the right shape that the table leaves out (0xDB in TIS-620,
+                    // 0xA2AF in EUC-JP) is still a character: it has no counterpart, which is an
+                    // undefined conversion on the first leg, not an invalid byte sequence.
+                    var character = new byte[pending + 1];
+                    Array.Copy(bytes, i - pending, character, 0, character.Length);
+                    if (!MutableString.CreateBinary(character, from).ContainsInvalidCharacters()) {
+                        i++;
+                        pending = 0;
+                        decoder = strict.GetDecoder();
+                        if (!settings.ReplaceUndefined) {
+                            throw RubyExceptions.CreateUndefinedConversionError(
+                                RubyExceptions.InspectTranscodingBytes(character), character, RubyExceptions.ConversionPath(from, to), 0);
+                        }
+                        result.Append(settings.GetReplacement(to).ConvertToString());
+                        continue;
+                    }
+
                     // bytes[i] cannot continue what the decoder is holding.
                     byte[] errorBytes, readAgain;
                     if (pending != 0) {
@@ -2588,6 +2652,7 @@ namespace IronRuby.Builtins {
                     }
                     pending = 0;
                     decoder = strict.GetDecoder();
+
 
                     if (replacement == null) {
                         throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, readAgain, false);
@@ -2627,6 +2692,23 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>xml: :text escapes &amp;, &lt; and &gt;; xml: :attr also escapes the quote.</summary>
+        /// <summary>The newline and XML decorators without a conversion, over the string as it is.</summary>
+        private static MutableString/*!*/ Decorate(MutableString/*!*/ self, RubyEncoding/*!*/ encoding, TranscodeSettings settings) {
+            // invalid bytes are held as escapes, which neither decorator touches
+            string text = self.ToString();
+            if (settings.Newline != 0) {
+                text = NormalizeNewlines(text, settings.Newline);
+            }
+            if (settings.XmlMode != 0) {
+                var escaped = new StringBuilder(text.Length);
+                foreach (char c in text) {
+                    escaped.Append(EscapeForXml(c.ToString(), settings.XmlMode) ?? c.ToString());
+                }
+                text = escaped.ToString();
+            }
+            return MutableString.Create(text, encoding);
+        }
+
         private static string EscapeForXml(string/*!*/ piece, int mode) {
             if (mode == 0 || piece.Length != 1) {
                 return null;
@@ -3577,8 +3659,17 @@ namespace IronRuby.Builtins {
 
         #region delete, delete!, clear
 
+        /// <summary>
+        /// Like #count, #squeeze and #tr, #delete reads characters, so MRI refuses a receiver or a
+        /// character set with bytes that are not valid in its encoding - the sets first. An empty
+        /// receiver has nothing to read and is not even looked at.
+        /// </summary>
         private static MutableString/*!*/ InternalDelete(MutableString/*!*/ self, MutableString[]/*!*/ ranges) {
+            if (self.IsEmpty) {
+                return self.CreateDerived();
+            }
             var map = CharacterSelectorSet.Parse(self, ranges);
+            RequireValidEncoding(self);
             self.PrepareForCharacterRead();
             MutableString result = self.CreateDerived();
             if (self.HasSurrogatePairs()) {
@@ -3630,7 +3721,6 @@ namespace IronRuby.Builtins {
             if (strs.Length == 0) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
             }
-            RequireValidEncoding(self);
             return InternalDelete(self, strs);
         }
 
@@ -3656,6 +3746,7 @@ namespace IronRuby.Builtins {
         
         private static object InternalCount(MutableString/*!*/ self, MutableString[]/*!*/ ranges) {
             var map = CharacterSelectorSet.Parse(self, ranges);
+            RequireValidEncoding(self);
             self.PrepareForCharacterRead();
             int count = 0;
             if (self.HasSurrogatePairs()) {
@@ -3815,6 +3906,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("scan")]
         public static RubyArray/*!*/ Scan(RubyScope/*!*/ scope, MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ regex) {
+            // Unlike #sub and #gsub, MRI's #scan refuses a broken receiver even for a String pattern.
+            RequireValidEncoding(self);
             // $~ is left at the last match, which has to keep the subject as it was
             IList<MatchData> matches = regex.Matches(self);
 
@@ -3836,6 +3929,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("scan")]
         public static object/*!*/ Scan(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block, MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex regex) {
+            RequireValidEncoding(self);
             var matchScope = scope.GetInnerMostClosureScope();
 
             IList<MatchData> matches = regex.Matches(self);
@@ -4024,7 +4118,17 @@ namespace IronRuby.Builtins {
             int last = self.GetCharCount() - 1;
             int index = GetIndexOfRightmostAlphaNumericCharacter(self, last);
             if (index == -1) {
-                IncrementCharacterOrByte(self, last);
+                // MRI passes over bytes that are not valid in the encoding (held as escapes, see
+                // EscapingEncoding) and steps the rightmost character; with none, "\x01" goes in
+                // front: "\xE3\x81".succ is "\x01\xE3\x81".
+                while (last >= 0 && IsEscapedByte(self, last)) {
+                    last--;
+                }
+                if (last >= 0) {
+                    IncrementCharacterOrByte(self, last);
+                } else {
+                    self.Insert(0, '\u0001');
+                }
             } else {
                 IncrementAlphaNumericChar(self, index);
             }
@@ -4520,6 +4624,7 @@ namespace IronRuby.Builtins {
             if (ranges.Length > 0) {
                 map = CharacterSelectorSet.Parse(str, ranges);
             }
+            RequireValidEncoding(str);
             str.PrepareForCharacterRead();
 
             if (str.HasSurrogatePairs()) {
@@ -4690,13 +4795,20 @@ namespace IronRuby.Builtins {
             Assert.NotNull(src, from, to);
 
             // MRI checks the receiver before looking at the character sets, so even
-            // "\xFF".tr("", "") is an ArgumentError.
+            // "\xFF".tr("", "") is an ArgumentError - but an empty receiver is not looked at, nor
+            // are the sets then.
+            if (src.IsEmpty) {
+                anyCharacterMaps = false;
+                return inplace ? src : src.CloneDerived();
+            }
             RequireValidEncoding(src);
 
             if (from.IsEmpty) {
                 anyCharacterMaps = false;
                 return inplace ? src : src.CloneDerived();
             }
+            RequireValidEncoding(from);
+            RequireValidEncoding(to);
 
             // MRI's tr_trans: the result is in the encoding the receiver shares with both character
             // sets, and an incompatible pair raises. It differs from the receiver's own only when the

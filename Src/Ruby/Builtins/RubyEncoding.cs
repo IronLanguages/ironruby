@@ -70,10 +70,380 @@ namespace IronRuby.Builtins {
         public const int CodePageEUCTW = 1000951;
         public const int CodePageGB1988 = 1001988;
         public const int CodePageISO8859_10 = 1028600;
+        public const int CodePageISO8859_11 = 1028601;
         public const int CodePageISO8859_14 = 1028604;
         public const int CodePageISO8859_16 = 1028606;
+        public const int CodePageBig5HKSCS = 1100950;
+        public const int CodePageBig5UAO = 1101950;
+        public const int CodePageCP950 = 1102950;
+        public const int CodePageCP951 = 1103950;
+        public const int CodePageCP852 = 1100852;
+        public const int CodePageCP855 = 1100855;
+        public const int CodePageEUCJIS2004 = 1052004;
+        public const int CodePageCP50220 = 1050220;
+        public const int CodePageISO2022JPKDDI = 1150220;
+        public const int CodePageStatelessISO2022JPKDDI = 1102024;
+        public const int CodePageUTF8DoCoMo = 1165001;
+        public const int CodePageUTF8KDDI = 1165002;
+        public const int CodePageUTF8SoftBank = 1165003;
+        public const int CodePageSJISDoCoMo = 1100932;
+        public const int CodePageSJISKDDI = 1101932;
+        public const int CodePageSJISSoftBank = 1102932;
 
-        // TODO: how does MRI sort encodings?
+        // Ruby encodings .NET has a code page for, but that Ruby knows only by their structure.
+        // Ruby ships no converter for these, so it never maps their bytes to characters: a byte
+        // above 0x7F is just a byte there, which case mapping leaves alone.
+        public const int CodePageMacJapanese = 10001;
+        public const int CodePageMacCentEuro = 10029;
+        public const int CodePageMacThai = 10021;
+        public const int CodePageWindows1258 = 1258;
+
+        #region Names
+
+        [Flags]
+        private enum NameFlags {
+            None = 0,
+            Alias = 1,
+            Dummy = 2,
+            // Ruby ships no converter to or from the encoding: only an all-ASCII string crosses.
+            NoTranscoder = 4,
+        }
+
+        private readonly struct NameEntry {
+            public readonly string/*!*/ Name;
+            public readonly string Target;
+            public readonly int CodePage;
+            public readonly NameFlags Flags;
+
+            public NameEntry(string/*!*/ name, string target, int codePage, NameFlags flags) {
+                Name = name;
+                Target = target;
+                CodePage = codePage;
+                Flags = flags;
+            }
+        }
+
+        private static NameEntry E(string/*!*/ name, int codePage, NameFlags flags = NameFlags.None) {
+            return new NameEntry(name, null, codePage, flags);
+        }
+
+        private static NameEntry A(string/*!*/ alias, string/*!*/ target) {
+            return new NameEntry(alias, target, 0, NameFlags.Alias);
+        }
+
+        /// <summary>
+        /// Every encoding name and alias MRI 4.0 knows, in the order MRI registers them, which is
+        /// the order Encoding.list, Encoding.name_list, Encoding.aliases and Encoding#names report.
+        /// An alias always follows the encoding it names.
+        /// </summary>
+        private static readonly NameEntry[]/*!*/ _nameTable = {
+            E("ASCII-8BIT", CodePageBinary),
+            E("UTF-8", CodePageUTF8),
+            E("US-ASCII", CodePageAscii),
+            E("UTF-16BE", CodePageUTF16BE),
+            E("UTF-16LE", CodePageUTF16LE),
+            E("UTF-32BE", CodePageUTF32BE),
+            E("UTF-32LE", CodePageUTF32LE),
+            E("UTF-16", CodePageUTF16, NameFlags.Dummy),
+            E("UTF-32", CodePageUTF32, NameFlags.Dummy),
+            E("UTF8-MAC", CodePageUTF8Mac),
+            E("EUC-JP", CodePageEUCJP),
+            E("Windows-31J", CodePageSJIS),
+            E("Big5", CodePageBig5),
+            E("Big5-HKSCS", CodePageBig5HKSCS),
+            E("Big5-UAO", CodePageBig5UAO),
+            E("CESU-8", CodePageCESU8),
+            E("CP949", 949),
+            E("Emacs-Mule", CodePageEmacsMule, NameFlags.NoTranscoder),
+            E("EUC-KR", 51949),
+            E("EUC-TW", CodePageEUCTW, NameFlags.NoTranscoder),
+            E("GB18030", 54936),
+            E("GBK", 936),
+            E("ISO-8859-1", 28591),
+            E("ISO-8859-2", 28592),
+            E("ISO-8859-3", 28593),
+            E("ISO-8859-4", 28594),
+            E("ISO-8859-5", 28595),
+            E("ISO-8859-6", 28596),
+            E("ISO-8859-7", 28597),
+            E("ISO-8859-8", 28598),
+            E("ISO-8859-9", 28599),
+            E("ISO-8859-10", CodePageISO8859_10),
+            E("ISO-8859-11", CodePageISO8859_11),
+            E("ISO-8859-13", 28603),
+            E("ISO-8859-14", CodePageISO8859_14),
+            E("ISO-8859-15", 28605),
+            E("ISO-8859-16", CodePageISO8859_16),
+            E("KOI8-R", 20866),
+            E("KOI8-U", 21866),
+            E("Shift_JIS", CodePageShiftJIS),
+            E("Windows-1250", 1250),
+            E("Windows-1251", 1251),
+            E("Windows-1252", 1252),
+            E("Windows-1253", 1253),
+            E("Windows-1254", 1254),
+            E("Windows-1257", 1257),
+            A("BINARY", "ASCII-8BIT"),
+            E("IBM437", 437),
+            A("CP437", "IBM437"),
+            E("IBM720", 720),
+            A("CP720", "IBM720"),
+            E("IBM737", 737),
+            A("CP737", "IBM737"),
+            E("IBM775", 775),
+            A("CP775", "IBM775"),
+            E("CP850", 850),
+            A("IBM850", "CP850"),
+            E("IBM852", 852),
+            E("CP852", CodePageCP852),
+            E("IBM855", 855),
+            E("CP855", CodePageCP855),
+            E("IBM857", 857),
+            A("CP857", "IBM857"),
+            E("IBM860", 860),
+            A("CP860", "IBM860"),
+            E("IBM861", 861),
+            A("CP861", "IBM861"),
+            E("IBM862", 862),
+            A("CP862", "IBM862"),
+            E("IBM863", 863),
+            A("CP863", "IBM863"),
+            E("IBM864", 864),
+            A("CP864", "IBM864"),
+            E("IBM865", 865),
+            A("CP865", "IBM865"),
+            E("IBM866", 866),
+            A("CP866", "IBM866"),
+            E("IBM869", 869),
+            A("CP869", "IBM869"),
+            E("Windows-1258", CodePageWindows1258, NameFlags.NoTranscoder),
+            A("CP1258", "Windows-1258"),
+            E("GB1988", CodePageGB1988, NameFlags.NoTranscoder),
+            E("macCentEuro", CodePageMacCentEuro, NameFlags.NoTranscoder),
+            E("macCroatian", 10082),
+            E("macCyrillic", 10007),
+            E("macGreek", 10006),
+            E("macIceland", 10079),
+            E("macRoman", 10000),
+            E("macRomania", 10010),
+            E("macThai", CodePageMacThai, NameFlags.NoTranscoder),
+            E("macTurkish", 10081),
+            E("macUkraine", 10017),
+            E("CP950", CodePageCP950),
+            A("Big5-HKSCS:2008", "Big5-HKSCS"),
+            E("CP951", CodePageCP951),
+            E("IBM037", 37, NameFlags.Dummy),
+            A("ebcdic-cp-us", "IBM037"),
+            // MRI has a converter for this one (through EUC-JP); IronRuby does not yet.
+            E("stateless-ISO-2022-JP", CodePageStatelessISO2022JP, NameFlags.NoTranscoder),
+            A("eucJP", "EUC-JP"),
+            E("eucJP-ms", CodePageEucJpMs),
+            A("euc-jp-ms", "eucJP-ms"),
+            E("CP51932", CodePageCP51932),
+            E("EUC-JIS-2004", CodePageEUCJIS2004),
+            A("EUC-JISX0213", "EUC-JIS-2004"),
+            A("eucKR", "EUC-KR"),
+            A("eucTW", "EUC-TW"),
+            E("GB2312", 51936),
+            A("EUC-CN", "GB2312"),
+            A("eucCN", "GB2312"),
+            E("GB12345", CodePageGB12345),
+            A("CP936", "GBK"),
+            E("ISO-2022-JP", 50220, NameFlags.Dummy),
+            A("ISO2022-JP", "ISO-2022-JP"),
+            E("ISO-2022-JP-2", CodePageISO2022JP2, NameFlags.Dummy | NameFlags.NoTranscoder),
+            A("ISO2022-JP2", "ISO-2022-JP-2"),
+            E("CP50220", CodePageCP50220, NameFlags.Dummy),
+            E("CP50221", 50221, NameFlags.Dummy),
+            A("ISO8859-1", "ISO-8859-1"),
+            A("ISO8859-2", "ISO-8859-2"),
+            A("ISO8859-3", "ISO-8859-3"),
+            A("ISO8859-4", "ISO-8859-4"),
+            A("ISO8859-5", "ISO-8859-5"),
+            A("ISO8859-6", "ISO-8859-6"),
+            E("Windows-1256", 1256),
+            A("CP1256", "Windows-1256"),
+            A("ISO8859-7", "ISO-8859-7"),
+            A("ISO8859-8", "ISO-8859-8"),
+            E("Windows-1255", 1255),
+            A("CP1255", "Windows-1255"),
+            A("ISO8859-9", "ISO-8859-9"),
+            A("ISO8859-10", "ISO-8859-10"),
+            A("ISO8859-11", "ISO-8859-11"),
+            E("TIS-620", CodePageTIS620),
+            E("Windows-874", 874),
+            A("CP874", "Windows-874"),
+            A("ISO8859-13", "ISO-8859-13"),
+            A("ISO8859-14", "ISO-8859-14"),
+            A("ISO8859-15", "ISO-8859-15"),
+            A("ISO8859-16", "ISO-8859-16"),
+            A("CP878", "KOI8-R"),
+            E("MacJapanese", CodePageMacJapanese, NameFlags.NoTranscoder),
+            A("MacJapan", "MacJapanese"),
+            A("ASCII", "US-ASCII"),
+            A("ANSI_X3.4-1968", "US-ASCII"),
+            A("646", "US-ASCII"),
+            E("UTF-7", CodePageUTF7, NameFlags.Dummy | NameFlags.NoTranscoder),
+            A("CP65000", "UTF-7"),
+            A("CP65001", "UTF-8"),
+            A("UTF-8-MAC", "UTF8-MAC"),
+            A("UTF-8-HFS", "UTF8-MAC"),
+            A("UCS-2BE", "UTF-16BE"),
+            A("UCS-4BE", "UTF-32BE"),
+            A("UCS-4LE", "UTF-32LE"),
+            A("CP932", "Windows-31J"),
+            A("csWindows31J", "Windows-31J"),
+            A("SJIS", "Windows-31J"),
+            A("PCK", "Windows-31J"),
+            A("CP1250", "Windows-1250"),
+            A("CP1251", "Windows-1251"),
+            A("CP1252", "Windows-1252"),
+            A("CP1253", "Windows-1253"),
+            A("CP1254", "Windows-1254"),
+            A("CP1257", "Windows-1257"),
+            E("UTF8-DoCoMo", CodePageUTF8DoCoMo),
+            E("SJIS-DoCoMo", CodePageSJISDoCoMo),
+            E("UTF8-KDDI", CodePageUTF8KDDI),
+            E("SJIS-KDDI", CodePageSJISKDDI),
+            E("ISO-2022-JP-KDDI", CodePageISO2022JPKDDI, NameFlags.Dummy),
+            // MRI has a converter for this one (through SJIS-KDDI); IronRuby does not yet.
+            E("stateless-ISO-2022-JP-KDDI", CodePageStatelessISO2022JPKDDI, NameFlags.NoTranscoder),
+            E("UTF8-SoftBank", CodePageUTF8SoftBank),
+            E("SJIS-SoftBank", CodePageSJISSoftBank),
+        };
+
+        // must precede the encoding fields below: static field initializers run in textual order,
+        // and Name needs these as soon as an encoding exists
+
+        // name or alias (case-insensitively, as MRI looks them up) -> code page
+        private static readonly Dictionary<string, int>/*!*/ _codePagesByName = BuildCodePagesByName();
+        private static readonly Dictionary<int, NameEntry>/*!*/ _encodingsByCodePage = BuildEncodingsByCodePage();
+
+        private static Dictionary<int, NameEntry>/*!*/ BuildEncodingsByCodePage() {
+            var result = new Dictionary<int, NameEntry>();
+            foreach (var entry in _nameTable) {
+                if (entry.Target == null) {
+                    result.Add(entry.CodePage, entry);
+                }
+            }
+            return result;
+        }
+
+        private static Dictionary<string, int>/*!*/ BuildCodePagesByName() {
+            var result = new Dictionary<string, int>(_nameTable.Length, StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in _nameTable) {
+                result.Add(entry.Name, entry.Target == null ? entry.CodePage : result[entry.Target]);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// The encoding MRI knows by this name or alias, matched case-insensitively; null for a
+        /// name that is not one of MRI's. The names of .NET's own code pages ("ibm500",
+        /// "x-mac-arabic", ...) are not Ruby encodings and are not found here.
+        /// </summary>
+        public static RubyEncoding FindByName(string/*!*/ name) {
+            int codepage;
+            return _codePagesByName.TryGetValue(name, out codepage) ? GetRubyEncoding(codepage) : null;
+        }
+
+        /// <summary>Every Ruby encoding, in MRI's order (Encoding.list).</summary>
+        public static IEnumerable<RubyEncoding>/*!*/ GetAll() {
+            foreach (var entry in _nameTable) {
+                if (entry.Target == null) {
+                    yield return GetRubyEncoding(entry.CodePage);
+                }
+            }
+        }
+
+        /// <summary>Every name and alias, in MRI's order (Encoding.name_list).</summary>
+        public static IEnumerable<string>/*!*/ GetAllNames() {
+            foreach (var entry in _nameTable) {
+                yield return entry.Name;
+            }
+        }
+
+        /// <summary>Every alias with the name of the encoding it stands for, in MRI's order (Encoding.aliases).</summary>
+        public static IEnumerable<KeyValuePair<string, string>>/*!*/ GetAliases() {
+            foreach (var entry in _nameTable) {
+                if (entry.Target != null) {
+                    yield return new KeyValuePair<string, string>(entry.Name, entry.Target);
+                }
+            }
+        }
+
+        /// <summary>The aliases of this encoding, in MRI's order.</summary>
+        public IEnumerable<string>/*!*/ GetAliasNames() {
+            string name = Name;
+            foreach (var entry in _nameTable) {
+                if (entry.Target == name) {
+                    yield return entry.Name;
+                }
+            }
+        }
+
+        private static string _localeCharmap;
+        private static bool _localeCharmapRead;
+
+        /// <summary>
+        /// The codeset of the locale the environment names (LC_ALL, LC_CTYPE, LANG), as the C
+        /// library spells it - what MRI's Encoding.locale_charmap answers and its locale encoding
+        /// is named by. A locale that is not installed is the C locale, "ANSI_X3.4-1968" on glibc,
+        /// just as for MRI, which reads it the same way. Null where there is no nl_langinfo.
+        /// </summary>
+        public static string LocaleCharmap {
+            get {
+                if (!_localeCharmapRead) {
+                    _localeCharmap = ReadLocaleCharmap();
+                    _localeCharmapRead = true;
+                }
+                return _localeCharmap;
+            }
+        }
+
+        private static string ReadLocaleCharmap() {
+            int category, codeset;
+            if (OperatingSystem.IsLinux()) {
+                category = 0;    // LC_CTYPE
+                codeset = 14;    // CODESET
+            } else if (OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD()) {
+                category = 2;
+                codeset = 0;
+            } else {
+                return null;
+            }
+
+            try {
+                // The process's own locale is put back afterwards: MRI sets LC_CTYPE for good, but
+                // .NET has its own idea of culture and nothing else here reads the C locale.
+                string saved = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(setlocale(category, null));
+                if (setlocale(category, "") == IntPtr.Zero) {
+                    setlocale(category, "C");
+                }
+                string result = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(nl_langinfo(codeset));
+                if (saved != null) {
+                    setlocale(category, saved);
+                }
+                return String.IsNullOrEmpty(result) ? null : result;
+            } catch (DllNotFoundException) {
+                return null;
+            } catch (EntryPointNotFoundException) {
+                return null;
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("libc")]
+        private static extern IntPtr setlocale(int category, string locale);
+
+        [System.Runtime.InteropServices.DllImport("libc")]
+        private static extern IntPtr nl_langinfo(int item);
+
+        private static NameFlags GetFlags(int codepage) {
+            NameEntry entry;
+            return _encodingsByCodePage.TryGetValue(codepage, out entry) ? entry.Flags : NameFlags.None;
+        }
+
+        #endregion
 
         // must precede the encoding fields below: field initializers run in textual order
         private static readonly bool _codePagesRegistered = RegisterCodePageProvider();
@@ -137,8 +507,9 @@ namespace IronRuby.Builtins {
         }
 
         private static Encoding/*!*/ CreateEncoding(int codepage, bool throwOnError) {
-            if (RubyOnlyEncodings.IsRubyOnly(codepage)) {
-                return RubyOnlyEncodings.Create(codepage, throwOnError);
+            var rubyOnly = RubyOnlyEncodings.TryCreate(codepage, throwOnError);
+            if (rubyOnly != null) {
+                return rubyOnly;
             }
             if (codepage == CodePageUTF7) {
                 return CreateUTF7Encoding(throwOnError);
@@ -263,7 +634,8 @@ namespace IronRuby.Builtins {
                     return BinaryEncoding.Instance;
                 }
 
-                return _escapingEncoding ?? (_escapingEncoding = new EscapingEncoding(_strictEncoding));
+                return _escapingEncoding ?? (_escapingEncoding = new EscapingEncoding(
+                    _strictEncoding is MultiByteEncoding multiByte ? multiByte.AsLossless() : _strictEncoding));
             }
         }
 
@@ -272,7 +644,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         public string/*!*/ Name {
             get {
-                return GetRubySpecificName(CodePage) ?? _encoding.WebName;
+                NameEntry entry;
+                return _encodingsByCodePage.TryGetValue(CodePage, out entry) ? entry.Name : _encoding.WebName;
             }
         }
 
@@ -282,119 +655,6 @@ namespace IronRuby.Builtins {
         /// </summary>
         public string/*!*/ InspectName {
             get { return this == Binary ? "BINARY (ASCII-8BIT)" : Name; }
-        }
-
-        public static string GetRubySpecificName(int codepage) {
-            switch (codepage) {
-                case RubyEncoding.CodePageUTF8: return "UTF-8";
-                case RubyEncoding.CodePageUTF7: return "UTF-7";
-                case RubyEncoding.CodePageUTF16BE: return "UTF-16BE";
-                case RubyEncoding.CodePageUTF16LE: return "UTF-16LE";
-                case RubyEncoding.CodePageUTF32BE: return "UTF-32BE";
-                case RubyEncoding.CodePageUTF32LE: return "UTF-32LE";
-
-                // no .NET counterpart, see RubyOnlyEncodings:
-                case RubyEncoding.CodePageUTF16: return "UTF-16";
-                case RubyEncoding.CodePageUTF32: return "UTF-32";
-                case RubyEncoding.CodePageCESU8: return "CESU-8";
-                case RubyEncoding.CodePageTIS620: return "TIS-620";
-                case RubyEncoding.CodePageEmacsMule: return "Emacs-Mule";
-                case RubyEncoding.CodePageShiftJIS: return "Shift_JIS";
-                case RubyEncoding.CodePageUTF8Mac: return "UTF8-MAC";
-                case RubyEncoding.CodePageCP51932: return "CP51932";
-                case RubyEncoding.CodePageEucJpMs: return "eucJP-ms";
-                case RubyEncoding.CodePageStatelessISO2022JP: return "stateless-ISO-2022-JP";
-                case RubyEncoding.CodePageISO2022JP2: return "ISO-2022-JP-2";
-                case RubyEncoding.CodePageGB12345: return "GB12345";
-                case RubyEncoding.CodePageEUCTW: return "EUC-TW";
-                case RubyEncoding.CodePageGB1988: return "GB1988";
-                case RubyEncoding.CodePageISO8859_10: return "ISO-8859-10";
-                case RubyEncoding.CodePageISO8859_14: return "ISO-8859-14";
-                case RubyEncoding.CodePageISO8859_16: return "ISO-8859-16";
-                // .NET's code page 932 is Microsoft's Shift_JIS, which Ruby calls Windows-31J (CP932, and
-                // the SJIS of -Ks and /s); Ruby's narrower Shift_JIS is a code page of its own.
-                case RubyEncoding.CodePageSJIS: return "Windows-31J";
-                case RubyEncoding.CodePageAscii: return "US-ASCII";
-
-                // disambiguates CP 20932 and CP 51932:
-                case RubyEncoding.CodePageEUCJP: return "EUC-JP";
-                case 20932: return "CP20932";
-
-                case 50220: return "ISO-2022-JP";
-                case 50221: return "CP50221";
-                case 50222: return "CP50222";
-
-                // .NET reports IANA "WebName"s, which are lower case. Ruby spells most of
-                // these differently; Encoding#name and every error message that embeds an
-                // encoding name have to match Ruby exactly.
-                case 28591: return "ISO-8859-1";
-                case 28592: return "ISO-8859-2";
-                case 28593: return "ISO-8859-3";
-                case 28594: return "ISO-8859-4";
-                case 28595: return "ISO-8859-5";
-                case 28596: return "ISO-8859-6";
-                case 28597: return "ISO-8859-7";
-                case 28598: return "ISO-8859-8";
-                case 28599: return "ISO-8859-9";
-                case 28603: return "ISO-8859-13";
-                case 28605: return "ISO-8859-15";
-
-                case RubyEncoding.CodePageBig5: return "Big5";
-
-                // .NET's "gb2312" at code page 936 is the GBK superset; Ruby's GB2312 is EUC-CN,
-                // which is code page 51936.
-                case 936: return "GBK";
-                case 51936: return "GB2312";
-                case 51949: return "EUC-KR";
-                case 54936: return "GB18030";
-                case 949: return "CP949";
-
-                // Ruby's names for the Mac code pages; .NET spells them "x-mac-*".
-                case 10000: return "macRoman";
-                case 10001: return "MacJapanese";
-                case 10006: return "macGreek";
-                case 10007: return "macCyrillic";
-                case 10010: return "macRomania";
-                case 10017: return "macUkraine";
-                case 10021: return "macThai";
-                case 10029: return "macCentEuro";
-                case 10079: return "macIceland";
-                case 10081: return "macTurkish";
-                case 10082: return "macCroatian";
-
-                case 20866: return "KOI8-R";
-                case 21866: return "KOI8-U";
-
-                case 1250: return "Windows-1250";
-                case 1251: return "Windows-1251";
-                case 1252: return "Windows-1252";
-                case 1253: return "Windows-1253";
-                case 1254: return "Windows-1254";
-                case 1255: return "Windows-1255";
-                case 1256: return "Windows-1256";
-                case 1257: return "Windows-1257";
-                case 1258: return "Windows-1258";
-                case 874: return "Windows-874";
-
-                case 37: return "IBM037";
-                case 437: return "IBM437";
-                case 720: return "IBM720";
-                case 862: return "IBM862";
-                case 737: return "IBM737";
-                case 775: return "IBM775";
-                case 850: return "CP850";
-                case 852: return "IBM852";
-                case 855: return "IBM855";
-                case 857: return "IBM857";
-                case 860: return "IBM860";
-                case 861: return "IBM861";
-                case 863: return "IBM863";
-                case 864: return "IBM864";
-                case 865: return "IBM865";
-                case 866: return "IBM866";
-                case 869: return "IBM869";
-                default: return null;
-            }
         }
 
         public int CodePage {
@@ -473,29 +733,22 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Ruby's "dummy" encodings: stateful encodings that Ruby knows the name of but cannot
         /// operate on character by character. They are never ASCII compatible, because an ASCII
-        /// byte in the middle of such a stream does not necessarily mean that character.
+        /// byte in the middle of such a stream does not necessarily mean that character. UTF-16
+        /// and UTF-32 without an endianness suffix are dummies too: they carry their byte order
+        /// in a BOM, so no character can be read out of them until that BOM has been seen.
         /// </summary>
         public static bool IsDummyEncoding(int codepage) {
             switch (codepage) {
-                case 50220: // ISO-2022-JP
-                case 50221: // CP50221 (ISO-2022-JP allowing 1-byte kana)
-                case 50222: // CP50222 (ISO-2022-JP, SO/SI)
-                case 50225: // ISO-2022-KR
-                case 50227: // ISO-2022-CN
-                case CodePageISO2022JP2:
-                case 52936: // HZ-GB-2312
-                case 37:    // IBM037, EBCDIC - no ASCII byte means itself
-                case CodePageUTF7:
-
-                // UTF-16 and UTF-32 without an endianness suffix carry their byte order in a BOM,
-                // so no character can be read out of them until that BOM has been seen. Ruby makes
-                // them dummy encodings; the suffixed UTF-16LE/BE and UTF-32LE/BE are not.
-                case CodePageUTF16:
-                case CodePageUTF32:
+                // .NET's stateful code pages that are not Ruby encodings, for a host that hands
+                // one in: ISO-2022-JP with SO/SI, ISO-2022-KR, ISO-2022-CN, HZ-GB-2312.
+                case 50222:
+                case 50225:
+                case 50227:
+                case 52936:
                     return true;
 
                 default:
-                    return false;
+                    return (GetFlags(codepage) & NameFlags.Dummy) != 0;
             }
         }
 
@@ -509,19 +762,7 @@ namespace IronRuby.Builtins {
         /// more is an Encoding::ConverterNotFoundError rather than an undefined conversion.
         /// </summary>
         public bool HasNoTranscoder {
-            get {
-                switch (CodePage) {
-                    case CodePageEmacsMule:
-                    case CodePageStatelessISO2022JP:
-                    case CodePageEUCTW:
-                    case CodePageGB1988:
-                    case CodePageUTF7:
-                        return true;
-
-                    default:
-                        return false;
-                }
-            }
+            get { return (GetFlags(CodePage) & NameFlags.NoTranscoder) != 0; }
         }
 
         private static bool IsAsciiIdentityFallback(Encoding/*!*/ encoding) {
@@ -604,87 +845,6 @@ namespace IronRuby.Builtins {
                 }
                 return false;
             }
-        }
-
-        private static ReadOnlyDictionary<string, string> _aliases;
-
-        public static ReadOnlyDictionary<string, string> Aliases {
-            get { return _aliases ?? (_aliases = CreateAliases()); } 
-        }
-
-        private static ReadOnlyDictionary<string, string> CreateAliases() {
-            return new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
-                { "646", "US-ASCII" }, 
-                { "ASCII", "US-ASCII" }, 
-                { "ANSI_X3.4-1968", "US-ASCII" }, 
-                { "BINARY", "ASCII-8BIT" }, 
-                { "CP437", "IBM437" }, 
-                { "CP737", "IBM737" }, 
-                { "CP775", "IBM775" }, 
-                { "CP857", "IBM857" }, 
-                { "CP860", "IBM860" }, 
-                { "CP861", "IBM861" }, 
-                { "CP862", "IBM862" }, 
-                { "CP863", "IBM863" }, 
-                { "CP864", "IBM864" },
-                { "CP865", "IBM865" }, 
-                { "CP866", "IBM866" }, 
-                { "CP869", "IBM869" }, 
-                { "CP874", "Windows-874" }, 
-                { "CP878", "KOI8-R" }, 
-                { "CP932", "Windows-31J" }, 
-                { "CP936", "GBK" }, 
-                { "CP720", "IBM720" }, 
-                { "EUC-CN", "GB2312" }, 
-                { "eucCN", "GB2312" }, 
-                { "MacJapan", "MacJapanese" }, 
-                { "ebcdic-cp-us", "IBM037" }, 
-                { "CP950", "Big5" }, 
-                { "CP951", "Big5-HKSCS" }, 
-                { "CP1258", "Windows-1258" },
-                { "CP1252", "Windows-1252" }, 
-                { "CP1250", "Windows-1250" }, 
-                { "CP1256", "Windows-1256" }, 
-                { "CP1251", "Windows-1251" },
-                { "CP1253", "Windows-1253" }, 
-                { "CP1255", "Windows-1255" }, 
-                { "CP1254", "Windows-1254" }, 
-                { "CP1257", "Windows-1257" }, 
-                { "CP65000", "UTF-7" }, 
-                { "CP65001", "UTF-8" }, 
-                { "IBM850", "CP850" }, 
-                { "eucJP", "EUC-JP" }, 
-                { "eucKR", "EUC-KR" }, 
-                { "eucTW", "EUC-TW" }, 
-                { "ISO2022-JP", "ISO-2022-JP" }, 
-                { "ISO2022-JP2", "ISO-2022-JP-2" }, 
-                { "ISO8859-1", "ISO-8859-1" }, 
-                { "ISO8859-2", "ISO-8859-2" }, 
-                { "ISO8859-3", "ISO-8859-3" }, 
-                { "ISO8859-4", "ISO-8859-4" }, 
-                { "ISO8859-5", "ISO-8859-5" }, 
-                { "ISO8859-6", "ISO-8859-6" }, 
-                { "ISO8859-7", "ISO-8859-7" }, 
-                { "ISO8859-8", "ISO-8859-8" }, 
-                { "ISO8859-9", "ISO-8859-9" }, 
-                { "ISO8859-10", "ISO-8859-10" }, 
-                { "ISO8859-11", "ISO-8859-11" }, 
-                { "ISO8859-13", "ISO-8859-13" }, 
-                { "ISO8859-14", "ISO-8859-14" }, 
-                { "ISO8859-15", "ISO-8859-15" }, 
-                { "ISO8859-16", "ISO-8859-16" }, 
-                // MRI's SJIS is Windows-31J, not Shift_JIS
-                { "SJIS", "Windows-31J" }, 
-                { "PCK", "Windows-31J" }, 
-                { "euc-jp-ms", "eucJP-ms" }, 
-                { "csWindows31J", "Windows-31J" }, 
-                // { "MacJapan", "MacJapanese" }, 
-                { "UTF-8-MAC", "UTF8-MAC" }, 
-                { "UTF-8-HFS", "UTF8-MAC" }, 
-                { "UCS-2BE", "UTF-16BE" }, 
-                { "UCS-4BE", "UTF-32BE" }, 
-                { "UCS-4LE", "UTF-32LE" },  
-            });
         }
 
         Expression/*!*/ IExpressionSerializable.CreateExpression() {

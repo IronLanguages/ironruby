@@ -105,6 +105,8 @@ namespace IronRuby.Builtins {
         }
 
         private const int FrozenFlag = 1;
+        // made by FromLiteralPattern
+        private const int LiteralPatternFlag = 2;
 
         // A regexp literal is frozen by MRI, so the state has to live on the object itself rather
         // than in the context's instance data, which the literal-construction path has no access to.
@@ -194,7 +196,7 @@ namespace IronRuby.Builtins {
         /// compatibility MutableString.RequireCompatibleEncoding applies.
         /// </summary>
         private void RequireMatchableEncoding(MutableString/*!*/ input) {
-            if (input.ContainsInvalidCharacters()) {
+            if ((_flags & LiteralPatternFlag) == 0 && input.ContainsInvalidCharacters()) {
                 throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", input.Encoding.Name);
             }
 
@@ -1554,11 +1556,15 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// A String used as a pattern by #sub, #gsub, #sub!, #gsub! and #scan: matched literally, and
-        /// refused first if it is not valid in its encoding, as MRI does.
+        /// refused first if it is not valid in its encoding, as MRI does. MRI searches for such a
+        /// pattern byte by byte, so unlike a Regexp it finds it in a string that holds bytes
+        /// invalid in its encoding: "\xFFabc".sub("a", "b") is "\xFFbbc".
         /// </summary>
         public static RubyRegex/*!*/ FromLiteralPattern(MutableString/*!*/ pattern) {
             RequireValidPattern(pattern);
-            return new RubyRegex(Escape(pattern), RubyRegexOptions.NONE);
+            var result = new RubyRegex(Escape(pattern), RubyRegexOptions.NONE);
+            result._flags |= LiteralPatternFlag;
+            return result;
         }
 
         private static int SkipNonSpecial(string/*!*/ pattern, int i, out char escaped) {
