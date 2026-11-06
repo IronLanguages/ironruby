@@ -87,6 +87,10 @@ namespace IronRuby.Builtins {
         // Serialises the non-blocking writes, so that two of them cannot both take the same room.
         private readonly object/*!*/ _writeLock = new object();
 
+        // Held by a read for as long as it is in ReadFile, and by a non-blocking read from its
+        // PeekNamedPipe to its ReadFile.
+        private readonly object/*!*/ _readLock = new object();
+
         public WindowsPipeStream(SafeFileHandle/*!*/ handle, FileAccess access)
             : base(handle, access, 1, false) {
         }
@@ -119,6 +123,14 @@ namespace IronRuby.Builtins {
             if (buffer.Length == 0) {
                 return 0;
             }
+            // One reader in ReadFile at a time, so that ReadNonBlocking can tell whether the bytes
+            // it has just seen are still there for it (see there).
+            lock (_readLock) {
+                return ReadLocked(buffer);
+            }
+        }
+
+        private int ReadLocked(Span<byte> buffer) {
             while (true) {
                 IntPtr thread = Enter();
                 bool wasBlocked = RubyUtils.EnterNativeWait();
@@ -169,18 +181,30 @@ namespace IronRuby.Builtins {
             if (count == 0) {
                 return 0;
             }
-            int available;
-            if (!PeekNamedPipe(SafeFileHandle, IntPtr.Zero, 0, IntPtr.Zero, out available, IntPtr.Zero)) {
-                if (Marshal.GetLastWin32Error() == ERROR_BROKEN_PIPE) {
-                    return 0;
-                }
-                throw new IOException("read failed", Marshal.GetHRForLastWin32Error());
-            }
-            if (available == 0) {
+            // Another thread reading - blocked in ReadFile, which takes whatever arrives first -
+            // means nothing here is for us now: would block. Holding the lock from the peek to the
+            // read keeps any other reader from taking the bytes the peek saw, which would leave
+            // this ReadFile waiting on an empty pipe.
+            if (!Monitor.TryEnter(_readLock)) {
                 return -1;
             }
-            // There are bytes in the pipe, so this read returns at once.
-            return Read(buffer, offset, Math.Min(count, available));
+            try {
+                int available;
+                if (!PeekNamedPipe(SafeFileHandle, IntPtr.Zero, 0, IntPtr.Zero, out available, IntPtr.Zero)) {
+                    int error = Marshal.GetLastWin32Error();
+                    if (error == ERROR_BROKEN_PIPE) {
+                        return 0;
+                    }
+                    throw new IOException("read failed (error " + error + ")", unchecked((int)0x80070000) | error);
+                }
+                if (available == 0) {
+                    return -1;
+                }
+                // There are bytes in the pipe and no other reader, so this read returns at once.
+                return ReadLocked(new Span<byte>(buffer, offset, Math.Min(count, available)));
+            } finally {
+                Monitor.Exit(_readLock);
+            }
         }
 
         #endregion
@@ -204,15 +228,11 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Whether IO#syswrite should write without waiting: io/nonblock's #nonblock= on a pipe
-        /// says so. Windows has no O_NONBLOCK to keep on the handle, so the stream carries it.
+        /// IO#syswrite on a pipe not in non-blocking mode: the whole buffer. Windows has no
+        /// O_NONBLOCK on the handle to decide it by; IO#syswrite asks the IO (io/nonblock's
+        /// #nonblock=) and calls WriteNonBlocking itself when it is set.
         /// </summary>
-        public bool NonBlocking { get; set; }
-
         public int WriteOnce(byte[]/*!*/ buffer, int offset, int count) {
-            if (NonBlocking) {
-                return WriteNonBlocking(buffer, offset, count);
-            }
             Write(buffer, offset, count);
             return count;
         }
