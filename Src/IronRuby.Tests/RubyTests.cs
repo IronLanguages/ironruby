@@ -712,6 +712,7 @@ namespace IronRuby.Tests {
                 SystemCallErrorSubclass1,
                 Errno_PlatformTable1,
                 Errno_SocketCalls1,
+                Errno_SocketCalls2,
                 Errno_FileCalls1,
                 Marshal_Undumpable1,
                 Zlib_GunzipErrors1,

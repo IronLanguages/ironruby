@@ -1487,6 +1487,8 @@ class BasicSocket
 
   # CRuby returns a Socket::Option, not the raw bytes.
   def getsockopt(level, optname)
+    # Before the arguments are looked at, as MRI's GetOpenFile does.
+    raise IOError, "closed stream" if closed?
     lvl = Socket.__ir_level_arg(__ir_afamily, level)
     opt = Socket.__ir_optname_arg(lvl, optname)
     Socket::Option.new(__ir_afamily, lvl, opt, __ir_getsockopt_data(lvl, opt))
@@ -1585,6 +1587,7 @@ class BasicSocket
   end
 
   def setsockopt(level, optname = nil, value = nil)
+    raise IOError, "closed stream" if closed?
     if level.kind_of?(Socket::Option)
       # A Socket::Option already carries level, optname and data, so it is the
       # *only* argument; CRuby checks the arity before it looks at the type,
@@ -1768,7 +1771,7 @@ class UDPSocket
 
   def recvfrom_nonblock(length, flags = nil, buffer = nil, exception: true)
     unless __ir_bound?
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "recvfrom(2) would block" if exception
       return :wait_readable
     end
     data, sender = flags.nil? ? __ir_raw_recvfrom_nonblock(length)
@@ -1783,7 +1786,7 @@ class UDPSocket
   rescue SocketError => e
     case Socket.__ir_socket_error_code(e)
     when "WouldBlock"
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "recvfrom(2) would block" if exception
       :wait_readable
     else
       raise
@@ -1901,7 +1904,7 @@ class BasicSocket
     __ir_into_buffer(data, buffer)
   rescue SocketError => e
     raise unless Socket.__ir_socket_error_code(e) == "WouldBlock"
-    raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+    raise IO::EAGAINWaitReadable, "recvfrom(2) would block" if exception
     :wait_readable
   end
 end
@@ -2058,7 +2061,7 @@ class Socket
   # once poll(2) has said the socket is readable.
   def recvfrom_nonblock(length, flags = nil, buffer = nil, exception: true)
     unless IO.select([self], nil, nil, 0)
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "recvfrom(2) would block" if exception
       return :wait_readable
     end
     result = flags.nil? ? recvfrom(length) : recvfrom(length, flags)
@@ -2387,6 +2390,25 @@ IronRubySocketErrors__.wrap(UDPSocket, :bind, :connect, :send, :recvfrom)
 # Name lookups through .NET's Dns, whose failure is a plain SocketError.
 IronRubySocketErrors__.wrap(IPSocket.singleton_class, :getaddress)
 IronRubySocketErrors__.wrap(Socket.singleton_class, :pack_sockaddr_in, :sockaddr_in)
+
+# MRI's Errno from Socket#connect and #bind names the address after the call:
+# "Connection refused - connect(2) for 127.0.0.1:1".
+class Socket
+  { connect: "connect(2)", bind: "bind(2)" }.each do |name, call|
+    raw = :"__ir_detail_#{name}"
+    alias_method raw, name
+    define_method(name) do |sockaddr|
+      __send__(raw, sockaddr)
+    rescue SystemCallError => error
+      raise error unless error.message == error.class.new.message
+      where = (Addrinfo.new(Addrinfo === sockaddr ? sockaddr.to_sockaddr : sockaddr).inspect_sockaddr rescue nil)
+      raise error unless where
+      detailed = error.class.new("#{call} for #{where}")
+      detailed.set_backtrace(error.backtrace)
+      raise detailed
+    end
+  end
+end
 
 class TCPServer
   class << self
@@ -2792,7 +2814,7 @@ class Socket
 
   def recvfrom_nonblock(length, flags = nil, buffer = nil, exception: true)
     unless IO.select([self], nil, nil, 0)
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "recvfrom(2) would block" if exception
       return :wait_readable
     end
     result = flags.nil? ? recvfrom(length) : recvfrom(length, flags)
@@ -3068,7 +3090,7 @@ class BasicSocket
     return sent if errno == 0
 
     if nonblocking && (errno == Errno::EAGAIN::Errno || errno == Errno::EWOULDBLOCK::Errno)
-      raise IO::EWOULDBLOCKWaitWritable, "Resource temporarily unavailable" if exception
+      raise IO::EWOULDBLOCKWaitWritable, "sendmsg(2) would block" if exception
       return :wait_writable
     end
     raise SystemCallError.new("sendmsg(2)", errno)
@@ -3084,7 +3106,7 @@ class BasicSocket
 
     if errno != 0
       if nonblocking && (errno == Errno::EAGAIN::Errno || errno == Errno::EWOULDBLOCK::Errno)
-        raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+        raise IO::EAGAINWaitReadable, "recvmsg(2) would block" if exception
         return :wait_readable
       end
       raise SystemCallError.new("recvmsg(2)", errno)

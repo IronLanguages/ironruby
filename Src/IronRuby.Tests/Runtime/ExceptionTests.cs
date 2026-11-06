@@ -963,6 +963,40 @@ Errno::ECONNREFUSED
         }
 
         /// <summary>
+        /// Socket#connect and #bind name the address, a would-block read names its call, and a socket
+        /// option on a closed socket is IOError before anything reaches the kernel (it was EBADF).
+        /// </summary>
+        public void Errno_SocketCalls2() {
+            TestOutput(@"
+require 'ruby4'
+require 'socket'
+s = TCPServer.new('127.0.0.1', 0)
+port = s.addr[1]
+def t(port)
+  yield
+rescue => e
+  puts ""#{e.class}#{e.message[/ - .*/]&.sub(port.to_s, 'PORT')}""
+end
+t(port) { Socket.new(:INET, :STREAM).bind(Socket.sockaddr_in(port, '127.0.0.1')) }
+c = TCPSocket.new('127.0.0.1', port)
+t(port) { c.recv_nonblock(1) }
+x = Socket.new(:INET, :STREAM)
+x.close
+t(port) { x.getsockopt(:SOCKET, :TYPE) }
+t(port) { x.setsockopt(:SOCKET, :REUSEADDR, true) }
+c.close
+s.close
+t(port) { Socket.new(:INET, :STREAM).connect(Socket.sockaddr_in(port, '127.0.0.1')) }
+", @"
+Errno::EADDRINUSE - bind(2) for 127.0.0.1:PORT
+IO::EAGAINWaitReadable - recvfrom(2) would block
+IOError
+IOError
+Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
+");
+        }
+
+        /// <summary>
         /// File.rename is rename(2): a directory renamed onto a file is ENOTDIR and a file onto a
         /// directory EISDIR - the emulation deleted the file at the target first, and lost it. A name
         /// too long for the file system is ENAMETOOLONG (Dir.mkdir said EEXIST, File.open ENOENT with
