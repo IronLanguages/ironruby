@@ -1183,8 +1183,10 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         #region each, each_line, each_byte, each_char (1.9)
 
-        [RubyMethod("each")]
+        // #each_line first: a backtrace names the frame by it, which makes it one frame with the Ruby
+        // #each_line that wraps it (stringio.rb)
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object EachLine(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self,

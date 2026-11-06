@@ -719,8 +719,9 @@ namespace IronRuby.Runtime {
             return ns != null && (ns.StartsWith("System.Linq.Expressions", StringComparison.Ordinal) ||
                 ns == "System.Dynamic.Utils" || ns == "System.Reflection");
         }
+        // stringio.rb: MRI's StringIO is a C extension, so a method written here has no frame of its own either.
         private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb", "/ironruby/gem_compat.rb",
-            "/ironruby/ironruby/rational.rb", "/ironruby/ironruby/complex.rb" };
+            "/ironruby/ironruby/rational.rb", "/ironruby/ironruby/complex.rb", "/ironruby/stringio.rb" };
 
         /// <summary>
         /// The Ruby half of the core library. MRI 3.4+ reports a frame of a core method written in

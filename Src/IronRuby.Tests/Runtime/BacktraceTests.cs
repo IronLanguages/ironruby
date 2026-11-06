@@ -433,5 +433,46 @@ p [1, 2].map!.with_index { |x, i| x * i }, [3, 4].collect.with_index(1).to_a, (1
 nil
 ");
         }
+
+        /// <summary>
+        /// StringIO's iterators without a block were Enumerators over a generator (#&lt;Enumerator:
+        /// #&lt;Enumerator::Generator:...&gt;:each&gt;) rather than of the method, as MRI's; under a block that
+        /// raised, StringIO#each_line had two frames - the Ruby wrapper's in stringio.rb and the built-in's, named
+        /// StringIO#each - where MRI's C extension has one, and IO#each_line was IO#each and IO#each_line.
+        /// </summary>
+        public void StringIO_IteratorNames1() {
+            TestOutput(@"
+require 'ruby4'
+require 'stringio'
+[StringIO.new(""a\nb"").each, StringIO.new('a').each_line, StringIO.new('ab').each_char, StringIO.new('ab').each_byte,
+ StringIO.new('ab').each_codepoint].each { |e| puts e.inspect.sub(/0x\h+/, 'X') }
+p StringIO.new(""a\nb"").each.to_a, StringIO.new(""a\nb"").each_line(chomp: true).to_a, StringIO.new('ab').each_char.size
+p StringIO.instance_method(:each_line).source_location
+# the frame after the method's is the block that called it, not a second one of the method
+def label(i); yield; rescue => e; e.backtrace[i][/'(.*)'/, 1].sub(/ in .*/, ''); end
+puts label(1) { StringIO.new('a').each_line { raise 'x' } }, label(2) { StringIO.new('a').each_line { raise 'x' } }
+puts label(1) { StringIO.new('a').each_byte { raise 'x' } }, label(2) { StringIO.new('a').each_byte { raise 'x' } }
+r, w = IO.pipe
+w.puts 'a', 'b'
+w.close
+puts label(1) { r.each_line { raise 'x' } }, label(2) { r.each_line { raise 'x' } }
+", @"
+#<Enumerator: #<StringIO:X>:each>
+#<Enumerator: #<StringIO:X>:each_line>
+#<Enumerator: #<StringIO:X>:each_char>
+#<Enumerator: #<StringIO:X>:each_byte>
+#<Enumerator: #<StringIO:X>:each_codepoint>
+[""a\n"", ""b""]
+[""a"", ""b""]
+nil
+nil
+StringIO#each_line
+block
+StringIO#each_byte
+block
+IO#each_line
+block
+");
+        }
     }
 }
