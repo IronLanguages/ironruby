@@ -367,6 +367,71 @@ namespace IronRuby.Builtins {
             return -(long)ndigits > digits;
         }
 
+        // ---- a Fixnum and a negative ndigits, in long arithmetic -------------------------------
+        //
+        // What RoundInteger and its siblings answer, without a BigInteger in sight: 12345.round(-2)
+        // cost ~0.5 us, nearly all of it BigInteger arithmetic on numbers that fit in a long. A
+        // power of ten past 10**18 does not fit, and the BigInteger versions take that.
+
+        internal enum IntegerRounding { Round, Floor, Ceil, Truncate }
+
+        private static readonly long[] _powersOf10 = BuildPowersOf10();
+
+        private static long[] BuildPowersOf10() {
+            var result = new long[19];
+            long p = 1;
+            for (int i = 0; i < result.Length; i++) {
+                result[i] = p;
+                p *= 10;
+            }
+            return result;
+        }
+
+        internal static bool TryRoundFixnum(int value, int ndigits, IntegerRounding kind, Half mode, out object result) {
+            if (ndigits >= 0) {
+                result = ScriptingRuntimeHelpers.Int32ToObject(value);
+                return true;
+            }
+            if (ndigits < -18) {
+                result = null;
+                return false;
+            }
+            long f = _powersOf10[-ndigits];
+            long v = value;
+            long r = v % f;                         // the sign of v, as C#'s % has it
+            long down = v - r;                      // towards zero
+            long rounded;
+            switch (kind) {
+                case IntegerRounding.Truncate:
+                    rounded = down;
+                    break;
+                case IntegerRounding.Floor:
+                    rounded = (r < 0) ? down - f : down;
+                    break;
+                case IntegerRounding.Ceil:
+                    rounded = (r > 0) ? down + f : down;
+                    break;
+                default:
+                    long twice = 2 * Math.Abs(r);
+                    bool away;
+                    if (twice != f) {
+                        away = twice > f;
+                    } else {
+                        switch (mode) {
+                            case Half.Down: away = false; break;
+                            case Half.Even: away = ((down / f) & 1) != 0; break;
+                            default: away = true; break;
+                        }
+                    }
+                    rounded = away ? (v < 0 ? down - f : down + f) : down;
+                    break;
+            }
+            result = (rounded >= Int32.MinValue && rounded <= Int32.MaxValue)
+                ? ScriptingRuntimeHelpers.Int32ToObject((int)rounded)
+                : (object)new BigInteger(rounded);
+            return true;
+        }
+
         private static BigInteger Pow10(int exponent) {
             return BigInteger.Pow(10, exponent);
         }

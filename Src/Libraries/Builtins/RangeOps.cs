@@ -98,15 +98,47 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Returns the first object in self
         /// </summary>
-        [RubyMethod("begin"), RubyMethod("first")]
+        [RubyMethod("begin")]
         public static object Begin([NotNull]Range/*!*/ self) {
             return self.Begin;
+        }
+
+        // #first and #last without a count answer the endpoint; with one, ruby4.rb counts
+        // (__first_n__, __last_n__). They were a Ruby `def first(*args)', whose rest parameter
+        // put every call on the slow path: (1..100).first cost ~0.2 us.
+
+        [RubyMethod("first")]
+        public static object First([NotNull]Range/*!*/ self) {
+            if (self.Begin == null) {
+                throw RubyExceptions.CreateRangeError("cannot get the first element of beginless range");
+            }
+            return self.Begin;
+        }
+
+        [RubyMethod("first")]
+        public static object First(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ firstN, [NotNull]Range/*!*/ self, object count) {
+            var site = firstN.GetCallSite("__first_n__", 1);
+            return site.Target(site, self, count);
+        }
+
+        [RubyMethod("last")]
+        public static object Last([NotNull]Range/*!*/ self) {
+            if (self.End == null) {
+                throw RubyExceptions.CreateRangeError("cannot get the last element of endless range");
+            }
+            return self.End;
+        }
+
+        [RubyMethod("last")]
+        public static object Last(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ lastN, [NotNull]Range/*!*/ self, object count) {
+            var site = lastN.GetCallSite("__last_n__", 1);
+            return site.Target(site, self, count);
         }
 
         /// <summary>
         /// Returns the object that defines the end of self
         /// </summary>
-        [RubyMethod("end"), RubyMethod("last")]
+        [RubyMethod("end")]
         public static object End([NotNull]Range/*!*/ self) {
             return self.End;
         }

@@ -3107,8 +3107,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "ceil", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger), 
+                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Integer.Ceil), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Ceil)
             );
             
@@ -3145,8 +3146,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "floor", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger), 
+                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Integer.Floor), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Floor)
             );
             
@@ -3229,8 +3231,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "round", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger), 
+                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Integer.Round), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Round)
             );
             
@@ -3268,8 +3271,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "truncate", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger), 
+                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Integer.Truncate), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Truncate)
             );
             
@@ -4733,6 +4737,17 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.KernelOps.CloneWithFreeze)
             );
             
+            DefineLibraryMethod(module, "__ir_Float__", 0x52, 
+                0x00000000U, 0x00000004U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Double>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToFloat)
+            );
+            
+            DefineLibraryMethod(module, "__ir_float_step__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, System.Object, System.Double, System.Double, System.Double, System.Double, System.Object>(IronRuby.Builtins.KernelOps.FloatStep)
+            );
+            
             DefineLibraryMethod(module, "__ir_hidden_ivar__", 0x52, 
                 0x00000004U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.KernelOps.GetHiddenInstanceVariable)
@@ -4741,6 +4756,13 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__ir_inspect__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.InspectForDisplay)
+            );
+            
+            DefineLibraryMethod(module, "__ir_Integer__", 0x52, 
+                0x00000002U, 0x00020002U, 0x00000000U, 
+                new Func<System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<System.Object, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger)
             );
             
             DefineLibraryMethod(module, "__ir_lazy_grep__", 0x52, 
@@ -4929,9 +4951,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "Float", 0x52, 
-                0x00000000U, 0x00000004U, 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Double>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat), 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToFloat)
+                0x00000000U, 0x00000000U, 0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<System.Double>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat), 
+                new Func<System.Object, System.Object, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.ToFloat)
             );
             
             DefineLibraryMethod(module, "fork", 0x52, 
@@ -5023,10 +5046,11 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "Integer", 0x52, 
-                0x00000002U, 0x00020002U, 0x00000000U, 
-                new Func<System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
-                new Func<System.Object, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger)
+                0x00000000U, 0x00000000U, 0x00000000U, 0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<System.Object, System.Object, System.Object, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.ToInteger)
             );
             
             DefineLibraryMethod(module, "is_a?", 0x51, 
@@ -5325,6 +5349,24 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentCalleeName)
             );
             
+            DefineLibraryMethod(module, "__ir_Float__", 0x61, 
+                0x00000000U, 0x00000004U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Double>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToFloat)
+            );
+            
+            DefineLibraryMethod(module, "__ir_float_step__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, System.Object, System.Double, System.Double, System.Double, System.Double, System.Object>(IronRuby.Builtins.KernelOps.FloatStep)
+            );
+            
+            DefineLibraryMethod(module, "__ir_Integer__", 0x61, 
+                0x00000002U, 0x00020002U, 0x00000000U, 
+                new Func<System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<System.Object, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger)
+            );
+            
             DefineLibraryMethod(module, "__ir_try_Float__", 0x61, 
                 0x00000002U, 
                 new Func<System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.TryToFloat)
@@ -5417,9 +5459,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "Float", 0x61, 
-                0x00000000U, 0x00000004U, 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Double>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat), 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToFloat)
+                0x00000000U, 0x00000000U, 0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<System.Double>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat), 
+                new Func<System.Object, System.Object, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.ToFloat)
             );
             
             DefineLibraryMethod(module, "fork", 0x61, 
@@ -5449,10 +5492,11 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "Integer", 0x61, 
-                0x00000002U, 0x00020002U, 0x00000000U, 
-                new Func<System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
-                new Func<System.Object, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger)
+                0x00000000U, 0x00000000U, 0x00000000U, 0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<System.Object, System.Object, System.Object, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.ToInteger)
             );
             
             DefineLibraryMethod(module, "iterator?", 0x61, 
@@ -7639,8 +7683,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "first", 0x51, 
-                0x00000001U, 
-                new Func<IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.RangeOps.Begin)
+                0x00000001U, 0x00000002U, 
+                new Func<IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.RangeOps.First), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.Range, System.Object, System.Object>(IronRuby.Builtins.RangeOps.First)
             );
             
             DefineLibraryMethod(module, "hash", 0x51, 
@@ -7669,8 +7714,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "last", 0x51, 
-                0x00000001U, 
-                new Func<IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.RangeOps.End)
+                0x00000001U, 0x00000002U, 
+                new Func<IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.RangeOps.Last), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.Range, System.Object, System.Object>(IronRuby.Builtins.RangeOps.Last)
             );
             
             DefineLibraryMethod(module, "member?", 0x51, 

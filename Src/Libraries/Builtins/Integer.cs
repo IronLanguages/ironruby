@@ -121,6 +121,36 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        // A Fixnum and an Integer ndigits: long arithmetic (NumericRounding.TryRoundFixnum).
+
+        [RubyMethod("round")]
+        public static object Round(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Round, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.RoundInteger(new BigInteger(self), ndigits, NumericRounding.Half.Up);
+        }
+
+        [RubyMethod("floor")]
+        public static object Floor(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Floor, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.FloorInteger(new BigInteger(self), ndigits);
+        }
+
+        [RubyMethod("ceil")]
+        public static object Ceil(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Ceil, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.CeilInteger(new BigInteger(self), ndigits);
+        }
+
+        [RubyMethod("truncate")]
+        public static object Truncate(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Truncate, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.TruncateInteger(new BigInteger(self), ndigits);
+        }
+
         /// <summary>
         /// Rounds self to a multiple of 10**(-ndigits). A non-negative ndigits returns self.
         /// Accepts the <c>half:</c> option (:up, :down or :even).
@@ -142,6 +172,10 @@ namespace IronRuby.Builtins {
             int nd = (ndigits == Missing.Value) ? 0 : NumericRounding.GetNDigits(integerCast, ndigits);
             if (nd >= 0) {
                 return self;
+            }
+            object fixnumResult;
+            if (self is int && NumericRounding.TryRoundFixnum((int)self, nd, NumericRounding.IntegerRounding.Round, half, out fixnumResult)) {
+                return fixnumResult;
             }
             return NumericRounding.RoundInteger(ToBigInteger(self), nd, half);
         }
