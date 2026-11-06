@@ -608,7 +608,7 @@ namespace IronRuby.Builtins {
                 if (!str.Encoding.IsAsciiIdentity) {
                     throw RubyExceptions.CreateAsciiIncompatibleEncodingError(str.Encoding);
                 }
-                object parsed = KernelOps.ToInteger(null, str);
+                object parsed = KernelOps.ParseInteger(str, 0);
                 return (parsed is BigInteger) ? (BigInteger)parsed : (parsed is long ? (BigInteger)(long)parsed : (BigInteger)(int)parsed);
             }
 

@@ -178,7 +178,7 @@ namespace IronRuby.Builtins {
             MutableString str = value as MutableString;
             if (str != null) {
                 // obj2subsecx: a String is converted like Integer(), so "1.5" and "x" are errors
-                return ExactNum.FromInteger(ToBigInteger(KernelOps.ToInteger((object)null, str, 10)));
+                return ExactNum.FromInteger(ToBigInteger(KernelOps.ParseInteger(str, 10)));
             }
             return ToExact(context, value);
         }
@@ -190,7 +190,7 @@ namespace IronRuby.Builtins {
             if (value is MutableString) {
                 // obj2int: a String component is converted like Integer(), so "1.5" and "x" are
                 // ArgumentErrors rather than 1 and 0.
-                return ToInt32(KernelOps.ToInteger((object)null, (MutableString)value, 10));
+                return ToInt32(KernelOps.ParseInteger((MutableString)value, 10));
             }
             ExactNum exact = ToExact(context, value);
             return ToInt32(exact.Floor());
@@ -758,7 +758,7 @@ namespace IronRuby.Builtins {
                         }
                     }
                 }
-                return ToInt32(KernelOps.ToInteger((object)null, str, 10));
+                return ToInt32(KernelOps.ParseInteger(str, 10));
             }
 
             return ToIntComponent(context, value);
