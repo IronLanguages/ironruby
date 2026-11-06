@@ -451,6 +451,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("entries")]
         [RubyMethod("to_a")]
+        [ReceivesKeywords]
         public static RubyArray/*!*/ ToArray(CallSiteStorage<EachSiteN>/*!*/ each, object self, params object[] args) {
             RubyArray data = new RubyArray();
 

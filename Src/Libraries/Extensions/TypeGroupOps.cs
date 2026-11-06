@@ -145,6 +145,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("new")]
+        [ReceivesKeywords]
         public static object/*!*/ New(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, 
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("new", storage, self, args);
@@ -152,6 +153,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("new")]
+        [ReceivesKeywords]
         public static object New(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage, BlockParam block, 
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("new", storage, block, self, args);
@@ -165,6 +167,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("clr_new")]
+        [ReceivesKeywords]
         public static object/*!*/ ClrNew(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage,
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("clr_new", storage, self, args);
@@ -172,6 +175,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("clr_new")]
+        [ReceivesKeywords]
         public static object ClrNew(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage, BlockParam block,
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("clr_new", storage, block, self, args);
@@ -204,6 +208,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object MethodMissing(RubyContext/*!*/ context, BlockParam block, TypeGroup/*!*/ self,
             [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
 

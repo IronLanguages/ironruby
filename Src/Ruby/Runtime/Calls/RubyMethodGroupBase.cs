@@ -471,6 +471,20 @@ namespace IronRuby.Runtime.Calls {
                     metaBuilder.Result = Ast.Field(null, Fields.ForwardToBase);
                 } else {
                     metaBuilder.Result = bindingTarget.MakeExpression();
+
+                    // A keyword Hash is a positional argument to a method that does not receive keywords, which may keep it:
+                    // it stops saying it is keyword arguments, as it does for a Ruby method (RubyMethodInfo.BuildCallNoFlow).
+                    // The rule's tests have read it already.
+                    if (!RubyOverloadResolver.ReceivesKeywordArguments(bindingTarget.Overload.ReflectionInfo)) {
+                        var last = resolver.GetLastArgumentExpression();
+                        if (last != null && last.Type.IsAssignableFrom(typeof(Hash))) {
+                            last = AstUtils.Box(last);
+                            metaBuilder.Result = Ast.Block(
+                                Ast.IfThen(Ast.TypeIs(last, typeof(Hash)), Methods.ClearKeywordArguments.OpCall(last)),
+                                metaBuilder.Result
+                            );
+                        }
+                    }
                 }
             } else {
                 metaBuilder.SetError(resolver.MakeInvalidParametersError(bindingTarget).Expression);

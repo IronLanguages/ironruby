@@ -501,6 +501,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyConstructor]
+        [ReceivesKeywords]
         public static RubyTime/*!*/ Create(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]params object[]/*!*/ args) {
             return CreateFromComponents(context, self, args);
         }
@@ -513,6 +514,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static RubyTime/*!*/ Reinitialize(RubyContext/*!*/ context, RubyTime/*!*/ self, [NotNull]params object[]/*!*/ args) {
             self.CopyFrom(CreateFromComponents(context, context.GetClassOf(self), args));
             return self;
@@ -863,6 +865,7 @@ namespace IronRuby.Builtins {
         #region at
 
         [RubyMethod("at", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static RubyTime/*!*/ At(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]params object[]/*!*/ args) {
             var options = ExtractOptions(ref args);
             object inZone = GetInOption(options);
@@ -934,6 +937,7 @@ namespace IronRuby.Builtins {
         #region now
 
         [RubyMethod("now", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static RubyTime/*!*/ Now(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]params object[]/*!*/ args) {
             var options = ExtractOptions(ref args);
             if (args.Length != 0) {

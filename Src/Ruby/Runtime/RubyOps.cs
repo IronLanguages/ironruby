@@ -2181,7 +2181,7 @@ namespace IronRuby.Runtime {
         /// <see cref="MakeKeywordArgumentsHash"/> and the copies the splat paths take), so it can
         /// be cleared in place.
         /// </summary>
-        [Emitted]
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object ClearKeywordArguments(object obj) {
             var hash = obj as Hash;
             if (hash != null && hash.IsKeywordArguments) {

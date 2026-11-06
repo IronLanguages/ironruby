@@ -42,6 +42,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyConstructor]
+        [ReceivesKeywords]
         public static Hash/*!*/ CreateHash(BlockParam block, RubyClass/*!*/ self, object defaultValue) {
             var result = new Hash(self.Context.EqualityComparer);
             return Initialize(self.Context, block, result, defaultValue);
@@ -169,6 +170,7 @@ namespace IronRuby.Builtins {
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static Hash/*!*/ Initialize(RubyContext/*!*/ context, BlockParam block, Hash/*!*/ self, object defaultValue) {
             Assert.NotNull(self);
             if (IsOptions(defaultValue)) {

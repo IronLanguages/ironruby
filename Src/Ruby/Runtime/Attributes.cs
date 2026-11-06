@@ -330,6 +330,19 @@ namespace IronRuby.Runtime {
     }
 
     /// <summary>
+    /// Marks a library method (an overload) that sees the keyword arguments of its call as keyword arguments: a trailing
+    /// Hash the call passed as keywords reaches it still marked (Hash.IsKeywordArguments), so that it can tell `f(a: 1)'
+    /// from `f({a: 1})' or pass them on as keywords - Kernel#send, Proc#call, Struct#initialize (MRI's rb_keyword_given_p
+    /// and RB_PASS_CALLED_KEYWORDS). An overload with a <see cref="KeywordsAttribute"/> parameter does too.
+    /// Every other library method gets the hash unmarked, as a Ruby method without keyword parameters does: for it the
+    /// hash is a positional argument, which it may keep (Array#push), and a kept hash that said it was keyword arguments
+    /// would turn into the keywords of whatever call it is passed to later.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method | AttributeTargets.Constructor, AllowMultiple = false)]
+    public sealed class ReceivesKeywordsAttribute : Attribute {
+    }
+
+    /// <summary>
     /// Marks a hidden string parameter of a library method that receives the name of the method being called - the
     /// name the method was defined with, which for an alias is the aliased method's (MRI's rb_frame_this_func, which
     /// is what <c>[1].collect</c> without a block names its Enumerator by). A method registered under several names

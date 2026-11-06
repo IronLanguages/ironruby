@@ -318,6 +318,7 @@ namespace IronRuby.Builtins {
         #region Ractor.new, current, main, count, select, receive
 
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static RubyRactor/*!*/ Create(CloneStorage/*!*/ cloneStorage, AllocateStorage/*!*/ allocateStorage,
             ConversionStorage<MutableString>/*!*/ toStr, BlockParam block, RubyClass/*!*/ self, params object[]/*!*/ args) {
 
@@ -470,6 +471,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("send")]
         [RubyMethod("<<")]
+        [ReceivesKeywords]
         public static RubyRactor/*!*/ Send(CloneStorage/*!*/ cloneStorage, AllocateStorage/*!*/ allocateStorage,
             RubyRactor/*!*/ self, object message, [Optional]Hash options) {
             self._defaultPort.Send(cloneStorage, allocateStorage, message, options);
@@ -630,7 +632,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("make_shareable", RubyMethodAttributes.PublicSingleton)]
         public static object MakeShareable(CloneStorage/*!*/ cloneStorage, AllocateStorage/*!*/ allocateStorage, UnaryStorage/*!*/ freezeStorage,
-            RubyClass/*!*/ self, object obj, [Optional]Hash options) {
+            RubyClass/*!*/ self, object obj, [Keywords, Optional]Hash options) {
 
             var context = self.Context;
             bool copy = false;
@@ -651,11 +653,13 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("shareable_proc", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static Proc/*!*/ ShareableProc(BlockParam block, RubyClass/*!*/ self, [Optional]Hash options) {
             return MakeShareableProc(block, self, options, false);
         }
 
         [RubyMethod("shareable_lambda", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static Proc/*!*/ ShareableLambda(BlockParam block, RubyClass/*!*/ self, [Optional]Hash options) {
             return MakeShareableProc(block, self, options, true);
         }
@@ -861,6 +865,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("send")]
         [RubyMethod("<<")]
+        [ReceivesKeywords]
         public static RactorPort/*!*/ Send(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ cloneStorage,
             CallSiteStorage<Func<CallSite, RubyClass, object>>/*!*/ allocateStorage,
             RactorPort/*!*/ self, object message, [Optional]Hash options) {

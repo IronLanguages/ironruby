@@ -850,6 +850,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("raise")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static void RaiseException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
             RubyContext/*!*/ context, Thread/*!*/ self, params object[]/*!*/ args) {
@@ -1019,6 +1020,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static Thread/*!*/ CreateThread(CallSiteStorage<Func<CallSite, object, Proc, RubyArray, object>>/*!*/ storage,
             BlockParam startRoutine, object self, params object[]/*!*/ args) {
 
@@ -1054,6 +1056,7 @@ namespace IronRuby.Builtins {
         // building a Proc without one does, not the way Thread.new does.
         [RubyMethod("start", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("fork", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static Thread/*!*/ StartThread(RubyContext/*!*/ context, BlockParam startRoutine, object self, params object[]/*!*/ args) {
             if (startRoutine == null) {
                 throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
@@ -1524,6 +1527,7 @@ namespace IronRuby.Builtins {
         /// initialization of a thread that is already running - which MRI refuses.
         /// </summary>
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static Thread/*!*/ Reinitialize(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, params object[]/*!*/ args) {
             // A thread of a Thread subclass, allocated by Thread.new and waiting for its block:
             RubyThreadInfo info = RubyThreadInfo.FromThread(self);

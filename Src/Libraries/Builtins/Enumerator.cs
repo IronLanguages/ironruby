@@ -131,6 +131,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyConstructor]
+        [ReceivesKeywords]
         public static Enumerator/*!*/ Create(RubyClass/*!*/ self, object targetObject, [DefaultProtocol, Optional]string targetName,
             params object[]/*!*/ targetArguments) {
 
@@ -153,6 +154,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static Enumerator/*!*/ Reinitialize(Enumerator/*!*/ self, object targetObject, [DefaultProtocol, Optional]string targetName,
             params object[] targetArguments) {
 
@@ -186,6 +188,7 @@ namespace IronRuby.Builtins {
         /// arguments, a generator, no block - is the prelude's __ir_each_impl__.
         /// </summary>
         [RubyMethod("each")]
+        [ReceivesKeywords]
         public static object EachFromCaller(CallSiteStorage<Func<CallSite, object, Proc, System.Collections.IList, object>>/*!*/ implStorage,
             RubyScope/*!*/ scope, BlockParam block, Enumerator/*!*/ self, params object[]/*!*/ args) {
 

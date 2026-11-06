@@ -1109,6 +1109,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("module_exec")]
         [MethodImpl(MethodImplOptions.NoInlining)]
+        [ReceivesKeywords]
         public static object ModuleExec(BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
             return Execute(block, self, args);
         }
@@ -1116,6 +1117,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("class_exec")]
         [SameRubyMethod("ModuleExec")]
         [MethodImpl(MethodImplOptions.NoInlining)]
+        [ReceivesKeywords]
         public static object ClassExec(BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
             return Execute(block, self, args);
         }
