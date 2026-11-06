@@ -449,8 +449,6 @@ namespace IronRuby.Compiler.Generation {
 
         private static ILGen/*!*/ DefinePrivateInterfaceMethodOverride(TypeBuilder/*!*/ tb, MethodInfo/*!*/ decl, out MethodBuilder/*!*/ impl) {
             string name = decl.DeclaringType.Name + "." + decl.Name;
-            //MethodAttributes attributes = decl.Attributes & ~(MethodAttributes.Abstract | MethodAttributes.ReservedMask | MethodAttributes.MemberAccessMask)
-            //    | MethodAttributes.Final | MethodAttributes.HideBySig | MethodAttributes.NewSlot | MethodAttributes.Private;
             MethodAttributes attributes = decl.Attributes & ~(MethodAttributes.Abstract | MethodAttributes.Public);
             attributes |= MethodAttributes.NewSlot | MethodAttributes.Final;
             impl = tb.DefineMethod(

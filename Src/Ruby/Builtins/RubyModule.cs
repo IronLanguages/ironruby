@@ -2150,9 +2150,6 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         public void AddMethodAlias(string/*!*/ newName, string/*!*/ oldName) {
-            // MRI 1.8: if (newName == oldName) return;
-            // MRI 1.9: no check
-
             RubyMemberInfo method;
             using (Context.ClassHierarchyLocker()) {
                 // MRI: aliases a super-forwarder not the real method.

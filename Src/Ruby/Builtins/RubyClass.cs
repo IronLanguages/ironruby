@@ -1523,24 +1523,6 @@ namespace IronRuby.Builtins {
                 new RubyOverloadGroupInfo(allMethods, this, null, _isSingletonClass);
         }
 
-        // TODO: Indexers can be overloaded:
-        //private bool TryGetClrProperty(Type/*!*/ type, BindingFlags bindingFlags, string/*!*/ name, bool isWrite, out RubyMemberInfo method) {
-        //    Assert.NotNull(type, name);
-
-        //    PropertyInfo propertyInfo = type.GetProperty(name, bindingFlags);
-        //    if (propertyInfo != null) {
-        //        MethodInfo accessor = isWrite ? propertyInfo.GetSetMethod(false) : propertyInfo.GetGetMethod(false);
-        //        if (accessor != null) {
-        //            // TODO: define RubyPropertyInfo class
-        //            method = new RubyMethodGroupInfo(new MethodBase[] { accessor }, this, _isSingletonClass);
-        //            return true;
-        //        }
-        //    }
-
-        //    method = null;
-        //    return false;
-        //}
-
         private bool TryGetClrProperty(Type/*!*/ type, BindingFlags bindingFlags, bool inherited, bool isWrite, 
             string/*!*/ name, string/*!*/ clrName, string altClrName, out RubyMemberInfo method) {
 

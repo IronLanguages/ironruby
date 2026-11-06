@@ -387,11 +387,6 @@ namespace IronRuby.Runtime.Conversions {
                 return fromType.IsValueType ? AstUtils.Constant(true) : Ast.NotEqual(expr, AstUtils.Constant(null));
             }
 
-            // TODO:
-            //if (TypeConverter...(fromType, toType)) {
-            //    return true;
-            //}
-
             return null;
         }
 
