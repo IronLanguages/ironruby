@@ -1614,8 +1614,7 @@ module Ruby
 end unless defined?(Ruby)
 
 class IO
-  # What a blocking read or write raises once IO#timeout runs out (3.2). IronRuby has no IO#timeout
-  # yet, but code that rescues this one needs the constant.
+  # What a blocking read or write raises once IO#timeout runs out (3.2); RubyIO creates it by name.
   class TimeoutError < IOError; end unless const_defined?(:TimeoutError, false)
 
   # Keyword arguments and a Hash in the last positional slot are different things,

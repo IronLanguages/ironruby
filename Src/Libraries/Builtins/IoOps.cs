@@ -261,6 +261,9 @@ namespace IronRuby.Builtins {
             self.Mode = source.Mode;
             self.CopyEncodingsFrom(source);
             self.ConversionOptions = source.ConversionOptions;
+            if (source.Timeout != null) {
+                ApplyTimeout(self.Context, self, source.Timeout, source.TimeoutMilliseconds);
+            }
 
             // The copy owns the descriptor dup(2) just made it, so it closes it and does not pass
             // it to a child, whatever the original had been set to. Kernel#dup copied those two
@@ -670,12 +673,65 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("select", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray Select(RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, UnaryOpStorage/*!*/ toFloatStorage,
             RubyContext/*!*/ context, object self,
             object read, [Optional]object write, [Optional]object error, [Optional]object timeout) {
 
-            return SelectInternal(respondToStorage, toIoStorage, context, read, write, error, ToTimeInterval(context, timeout));
+            return SelectInternal(respondToStorage, toIoStorage, context, read, write, error,
+                ToTimeInterval(context, ToTimeIntervalValue(respondToStorage, toFloatStorage, timeout)));
         }
+
+        /// <summary>
+        /// MRI's rb_time_interval takes any number that answers #divmod as well as Integer and
+        /// Float - a Rational, typically. The fractional ones go through #to_f here.
+        /// </summary>
+        private static object ToTimeIntervalValue(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ toFloatStorage, object timeout) {
+            if (timeout == null || timeout is Missing || timeout is int || timeout is double || timeout is long || timeout is BigInteger) {
+                return timeout;
+            }
+            if (Protocols.RespondTo(respondToStorage, timeout, "divmod") && Protocols.RespondTo(respondToStorage, timeout, "to_f")) {
+                var site = toFloatStorage.GetCallSite("to_f");
+                object converted = site.Target(site, timeout);
+                if (converted is double) {
+                    return converted;
+                }
+            }
+            return timeout;
+        }
+
+        #region timeout, timeout= (3.2)
+
+        [RubyMethod("timeout")]
+        public static object GetTimeout(RubyIO/*!*/ self) {
+            return self.Timeout;
+        }
+
+        /// <summary>
+        /// IO#timeout=: a read or a write that has to wait for the stream waits at most this long
+        /// and then raises IO::TimeoutError. A regular file is always ready, so it never times
+        /// out, as in MRI. Unlike MRI, #readpartial and #sysread honour the timeout too (MRI 4.0's
+        /// wait forever on a pipe).
+        /// </summary>
+        [RubyMethod("timeout=")]
+        public static object SetTimeout(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ toFloatStorage,
+            RubyContext/*!*/ context, RubyIO/*!*/ self, object timeout) {
+
+            if (timeout == null) {
+                self.SetTimeout(null, Timeout.Infinite, null);
+            } else {
+                ApplyTimeout(context, self, timeout, ToTimeInterval(context, ToTimeIntervalValue(respondToStorage, toFloatStorage, timeout)));
+            }
+            return timeout;
+        }
+
+        private static void ApplyTimeout(RubyContext/*!*/ context, RubyIO/*!*/ self, object timeout, int milliseconds) {
+            object seconds = (milliseconds == Timeout.Infinite) ? null : (object)(milliseconds / 1000.0);
+            self.SetTimeout(timeout, milliseconds, isRead =>
+                WaitForEvents(context, self, isRead ? Readable : Writable, seconds) != null
+            );
+        }
+
+        #endregion
 
         /// <summary>
         /// The timeout in milliseconds, or Timeout.Infinite for "wait as long as it takes". MRI
@@ -1694,6 +1750,8 @@ namespace IronRuby.Builtins {
             var pipe = DescriptorStream.Of(self.GetStream().BaseStream);
             int count = val.GetByteCount();
             if (pipe != null && count > 0) {
+                // the write(2) blocks on a full pipe, so IO#timeout is waited out before it
+                self.WaitForStream(false);
                 int written;
                 try {
                     written = pipe.WriteOnce(val.ToByteArray(), 0, count);
@@ -1720,7 +1778,7 @@ namespace IronRuby.Builtins {
         public static int WriteNoBlock(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
             self.RequireWritable();
             int result = -1;
-            self.NonBlockingOperation(() => result = WriteOnceWithoutWaiting(self, val), false);
+            self.RunNonBlocking(() => result = WriteOnceWithoutWaiting(self, val), false);
             return result;
         }
 
@@ -1905,7 +1963,7 @@ namespace IronRuby.Builtins {
         public static MutableString ReadNoBlock(RubyIO/*!*/ self, [DefaultProtocol]int bytes, [DefaultProtocol, Optional]MutableString buffer) {
             self.RequireReadable();
             MutableString result = null;
-            self.NonBlockingOperation(() => result = ReadOnceWithoutWaiting(self, bytes, buffer), true);
+            self.RunNonBlocking(() => result = ReadOnceWithoutWaiting(self, bytes, buffer), true);
             if (result == null) {
                 throw new EOFError("end of file reached");
             }

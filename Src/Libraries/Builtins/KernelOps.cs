@@ -2290,10 +2290,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("select", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("select", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray Select(RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, UnaryOpStorage/*!*/ toFloatStorage,
             RubyContext/*!*/ context, object self,
             object read, [Optional]object write, [Optional]object error, [Optional]object timeout) {
-            return RubyIOOps.Select(respondToStorage, toIoStorage, context, null, read, write, error, timeout);
+            return RubyIOOps.Select(respondToStorage, toIoStorage, toFloatStorage, context, null, read, write, error, timeout);
         }
 
         [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance)]
