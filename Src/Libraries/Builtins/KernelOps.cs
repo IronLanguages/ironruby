@@ -114,14 +114,246 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        #region Kernel#Integer, Kernel#Float
+
+        // Kernel#Integer(arg, base = nil, exception: true) and #Float(arg, exception: true). The
+        // cases a program spends its time in - an Integer, a finite Float, a String with or without
+        // a radix, the exception: keyword alone - are answered here. Everything else goes to the
+        // prelude (__ir_Integer_slow__, __ir_Float_slow__ in ruby4.rb), which knows the coercion
+        // protocol and the errors. A Ruby wrapper with an optional parameter and a keyword cost
+        // ~0.5 us a call: such a signature is lowered to a splat, which the JIT does not take.
+
+        private static readonly object NoException = new object();
+
+        // The exception: keyword of a trailing keyword hash: true or false, or NoException when the
+        // hash has anything else in it (another key, a value that is not true or false), which the
+        // prelude reports. Null when the argument is not a keyword hash at all.
+        private static object ExceptionOption(RubyContext/*!*/ context, object options) {
+            var hash = options as Hash;
+            if (hash == null || !hash.IsKeywordArguments) {
+                return null;
+            }
+            if (hash.Count == 0) {
+                return ScriptingRuntimeHelpers.True;
+            }
+            object value;
+            if (hash.Count == 1 && hash.TryGetValue(context.CreateAsciiSymbol("exception"), out value) && value is bool) {
+                return value;
+            }
+            return NoException;
+        }
+
+        // ruby4.rb is not loaded (an embedding that does without it, a test): the conversion
+        // protocol of the C# library is all there is.
+        private static bool HasPrelude(RubyContext/*!*/ context, string/*!*/ name) {
+            return context.KernelModule.ResolveMethod(name, VisibilityContext.AllVisible).Found;
+        }
+
+        private static Exception/*!*/ ConversionArity(int given, string/*!*/ expected) {
+            return RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected {1})", given, expected);
+        }
+
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        public static object ToInteger(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow,
+            ConversionStorage<IntegerValue>/*!*/ integerConversion, object self, object value) {
+            object result;
+            if (TryToIntegerFast(self, value, null, true, out result)) {
+                return result;
+            }
+            if (!HasPrelude(integerConversion.Context, "__ir_Integer_slow__")) {
+                return ToInteger(integerConversion, self, value);
+            }
+            var site = slow.GetCallSite("__ir_Integer_slow__", 2);
+            return site.Target(site, self, value, null);
+        }
+
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        public static object ToInteger(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow,
+            CallSiteStorage<Func<CallSite, object, object, object, object, object>>/*!*/ slowWithOptions,
+            RubyContext/*!*/ context, object self, object value, object radixOrOptions) {
+
+            object result;
+            object exception = ExceptionOption(context, radixOrOptions);
+            if (exception == null) {
+                // Integer(value, radix)
+                RequireRadix(radixOrOptions);
+                if (TryToIntegerFast(self, value, radixOrOptions, true, out result)) {
+                    return result;
+                }
+                var site = slow.GetCallSite("__ir_Integer_slow__", 2);
+                return site.Target(site, self, value, radixOrOptions);
+            }
+            if (exception != NoException && TryToIntegerFast(self, value, null, (bool)exception, out result)) {
+                return result;
+            }
+            var optionsSite = slowWithOptions.GetCallSite("__ir_Integer_slow__", 3);
+            return optionsSite.Target(optionsSite, self, value, null, radixOrOptions);
+        }
+
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        public static object ToInteger(CallSiteStorage<Func<CallSite, object, object, object, object, object>>/*!*/ slowWithOptions,
+            RubyContext/*!*/ context, object self, object value, object radix, object options) {
+
+            object exception = ExceptionOption(context, options);
+            if (exception == null) {
+                throw ConversionArity(3, "1..2");
+            }
+            RequireRadix(radix);
+            object result;
+            if (exception != NoException && TryToIntegerFast(self, value, radix, (bool)exception, out result)) {
+                return result;
+            }
+            var site = slowWithOptions.GetCallSite("__ir_Integer_slow__", 3);
+            return site.Target(site, self, value, radix, options);
+        }
+
+        // A radix given as nil is not a radix left out (MRI's NUM2INT), whatever exception: says.
+        private static void RequireRadix(object radix) {
+            if (radix == null) {
+                throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+            }
+        }
+
+        // Any other number of arguments: the error MRI words, which the binder would not (it
+        // counts the keyword hash as one more parameter).
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        public static object ToInteger(object self, object value, object radix, object options, object extra, params object[]/*!*/ more) {
+            throw ConversionArity(4 + more.Length, "1..2");
+        }
+
+        private static bool TryToIntegerFast(object self, object value, object radix, bool exception, out object result) {
+            if (radix == null) {
+                if (value is int || value is BigInteger) {
+                    result = value;
+                    return true;
+                }
+                if (value is double) {
+                    double d = (double)value;
+                    if (Double.IsNaN(d) || Double.IsInfinity(d)) {
+                        // FloatDomainError, which the prelude raises - or nil
+                        result = null;
+                        return !exception;
+                    }
+                    result = ClrFloat.ToInt(d);
+                    return true;
+                }
+            }
+            var str = value as MutableString;
+            if (str != null && (radix == null || radix is int)) {
+                int r = (radix == null) ? 0 : (int)radix;
+                result = exception ? ToInteger(self, str, r) : TryToInteger(self, str, r);
+                return true;
+            }
+            result = null;
+            return false;
+        }
+
+        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
+        public static object ToFloat(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow,
+            ConversionStorage<double>/*!*/ floatConversion, RubyContext/*!*/ context, object self, object value) {
+
+            object result;
+            if (TryToFloatFast(context, self, value, true, out result)) {
+                return result;
+            }
+            if (!HasPrelude(context, "__ir_Float_slow__")) {
+                return ToFloat(floatConversion, self, value);
+            }
+            var site = slow.GetCallSite("__ir_Float_slow__", 1);
+            return site.Target(site, self, value);
+        }
+
+        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
+        public static object ToFloat(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slowWithOptions,
+            RubyContext/*!*/ context, object self, object value, object options) {
+
+            object exception = ExceptionOption(context, options);
+            if (exception == null) {
+                throw ConversionArity(2, "1");
+            }
+            object result;
+            if (exception != NoException && TryToFloatFast(context, self, value, (bool)exception, out result)) {
+                return result;
+            }
+            var site = slowWithOptions.GetCallSite("__ir_Float_slow__", 2);
+            return site.Target(site, self, value, options);
+        }
+
+        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
+        public static object ToFloat(object self, object value, object options, object extra, params object[]/*!*/ more) {
+            throw ConversionArity(3 + more.Length, "1");
+        }
+
+        private static bool TryToFloatFast(RubyContext/*!*/ context, object self, object value, bool exception, out object result) {
+            if (value is double) {
+                // the very same object, see below
+                result = value;
+                return true;
+            }
+            if (value is int) {
+                result = (double)(int)value;
+                return true;
+            }
+            var str = value as MutableString;
+            if (str != null) {
+                result = exception ? ToFloat(context, self, str) : TryToFloat(self, str);
+                return true;
+            }
+            result = null;
+            return false;
+        }
+
+        #endregion
+
+        // The Float loop of Numeric#step and Range#step (ArithmeticSequence.__step_each__ in
+        // ruby4.rb, after MRI's ruby_float_step): n values beg, beg + step, ..., the last one held
+        // to stop. A method that yields is not one the method JIT takes, so the loop cost ~0.25 us
+        // a value in Ruby.
+        [RubyMethod("__ir_float_step__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__ir_float_step__", RubyMethodAttributes.PublicSingleton)]
+        public static object FloatStep(BlockParam/*!*/ block, object self, double beg, double stop, double step, double n) {
+            object result;
+            if (Double.IsInfinity(step)) {
+                if (n > 0 && block.Yield(beg, out result)) {
+                    return result;
+                }
+            } else if (step == 0) {
+                while (true) {
+                    if (block.Yield(beg, out result)) {
+                        return result;
+                    }
+                }
+            } else {
+                // n may be NaN (Infinity.step(Infinity, 1)); 0 < NaN is false, so nothing is
+                // yielded, which is what MRI's for(;i<n;) loop does.
+                for (double i = 0; i < n; i++) {
+                    double d = i * step + beg;
+                    if (step >= 0 ? stop < d : d < stop) {
+                        d = stop;
+                    }
+                    if (block.Yield(d, out result)) {
+                        return result;
+                    }
+                }
+            }
+            return null;
+        }
+
         /// <summary>
         /// A Float given to Float() comes back as the very same object. Taking it as a double and
         /// handing it back boxes it afresh, and #equal? on a boxed double compares the boxes - so
         /// Float(f).equal?(f) was false, including for the NaN and the Infinity that have no
         /// other way of being told apart from any other NaN or Infinity.
         /// </summary>
-        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("__ir_Float__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__ir_Float__", RubyMethodAttributes.PublicSingleton)]
         public static object ToFloat(ConversionStorage<double>/*!*/ floatConversion, object self, object value) {
             if (value is double) {
                 return value;
@@ -132,8 +364,8 @@ namespace IronRuby.Builtins {
         // A String has to be readable as a number at all: in an ASCII-compatible encoding - MRI
         // checks that before anything else, and exception: false does not change it - and, for
         // Float, without a NUL, which MRI names rather than calling the value invalid.
-        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("__ir_Float__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__ir_Float__", RubyMethodAttributes.PublicSingleton)]
         public static object ToFloat(RubyContext/*!*/ context, object self, [NotNull]MutableString/*!*/ value) {
             RequireAsciiCompatible(value);
             if (value.IndexOf('\0') >= 0) {
@@ -148,14 +380,14 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("__ir_Integer__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__ir_Integer__", RubyMethodAttributes.PublicSingleton)]
         public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value) {
             return ToInteger(self, value, 0);
         }
 
-        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("__ir_Integer__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__ir_Integer__", RubyMethodAttributes.PublicSingleton)]
         public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value, [DefaultProtocol]int radix) {
             RequireAsciiCompatible(value);
             var str = value.ConvertToString();
@@ -370,8 +602,8 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("__ir_Integer__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__ir_Integer__", RubyMethodAttributes.PublicSingleton)]
         public static object/*!*/ ToInteger(ConversionStorage<IntegerValue>/*!*/ integerConversion, object self, object value) {
             var integer = Protocols.ConvertToInteger(integerConversion, value);
             return integer.IsFixnum ? ScriptingRuntimeHelpers.Int32ToObject(integer.Fixnum) : integer.Bignum;

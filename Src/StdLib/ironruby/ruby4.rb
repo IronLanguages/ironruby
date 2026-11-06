@@ -933,20 +933,13 @@ class Range
   end
   private :__reverse_each_size__
 
-  # The built-in #first/#last only answer the no-argument form, and because they
-  # are defined on Range they hide Enumerable#first(n) rather than falling
-  # through to it - so `(0..Float::INFINITY).first(3)` was an ArgumentError.
-  unless method_defined?(:first_without_count)
-    alias :first_without_count :first
-    alias :last_without_count :last
-
-    def first(*args)
-      if args.empty?
-        raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
-        return first_without_count
-      end
+  # #first(n) and #last(n): the C# #first and #last (RangeOps) answer the form without a
+  # count and hand the count here - an Enumerable#first(n) they would otherwise hide, so
+  # `(0..Float::INFINITY).first(3)` was an ArgumentError.
+  unless private_method_defined?(:__first_n__)
+    def __first_n__(count)
       raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
-      n = __to_count__(args[0])
+      n = __to_count__(count)
       raise ArgumentError, "negative array size (or size too big)" if n < 0
       b = self.begin
       e = self.end
@@ -969,23 +962,20 @@ class Range
       result
     end
 
-    def last(*args)
-      if args.empty?
-        raise RangeError, "cannot get the last element of endless range" if self.end.nil?
-        return last_without_count
-      end
+    def __last_n__(count)
       raise RangeError, "cannot get the last element of endless range" if self.end.nil?
-      n = __to_count__(args[0])
+      n = __to_count__(count)
       raise ArgumentError, "negative array size" if n < 0
       b = self.begin
       e = self.end
       # MRI's rb_int_range_last: the last n of an Integer range, without building all of it
       # first (to_a.last(n) made (1..10**6).last(3) a million-element Array). MRI takes this
       # path for a subclass too, whatever its #each.
-      if ::Integer === b && ::Integer === e
+      # (..5).last(2) too: a beginless Integer range counts down from its end.
+      if (b.nil? || ::Integer === b) && ::Integer === e
         top = exclude_end? ? e - 1 : e
         first_value = top - n + 1
-        first_value = b if first_value < b
+        first_value = b if !b.nil? && first_value < b
         return __int_run__(first_value, top)
       end
       to_a.last(n)
@@ -1004,6 +994,7 @@ class Range
       result
     end
     private :__int_run__
+    private :__first_n__, :__last_n__
 
     # #first and #last take a count, not an arbitrary object: anything that is
     # not an Integer has to offer #to_int and have it answer one.
@@ -3147,130 +3138,102 @@ module Kernel
   private :__opts_exception__
   module_function :__opts_exception__
 
-  # Kernel#Integer and #Float: the C# side parses the string grammar (and, since
-  # this branch, an explicit radix); the arity, the exception: keyword and the
-  # coercion protocol are easier to get exactly right here.
+  # Kernel#Integer and #Float are C# (KernelOps.ToInteger, ToFloat): an Integer, a finite
+  # Float, a String with or without a radix, and the exception: keyword alone are answered
+  # there. Everything else comes here - the coercion protocol, the errors, exception: false
+  # around an object's own conversion - by way of these two, which the C# side calls with
+  # the base as given (nil when there was none) and the keywords as given.
   #
   # MRI's order for Integer(): an Integer or Float is converted directly, a
   # String is parsed, and anything else is asked for #to_int, then #to_i, with
   # #to_str consulted first when the object offers one.
-  if private_method_defined?(:Integer) || method_defined?(:Integer)
-    alias :__ir_Integer__ :Integer
-    private :__ir_Integer__
-
-    def Integer(arg, base = nil, exception: true)
-      # The common case - a String, no base, failures raised - is what the block below
-      # does first anyway; going straight there skips the block and its rescue frame,
-      # which cost many times the parse itself.
-      if base.nil? && true.equal?(exception) && !arg.nil? && arg.is_a?(::String)
-        return __ir_Integer__(arg)
+  def __ir_Integer_slow__(arg, base, exception: true)
+    exception = ::Kernel.__opts_exception__(exception)
+    # The radix is converted first, and outside the rescue: exception: false does not
+    # turn a radix that is not a number into nil (MRI's NUM2INT in rb_f_integer).
+    unless base.nil? || ::Integer === base
+      radix = base.respond_to?(:to_int) ? base.to_int : nil
+      unless ::Integer === radix
+        raise ::TypeError, "no implicit conversion of #{true.equal?(base) || false.equal?(base) ? base : base.class} into Integer"
       end
-      # and an Integer is answered as it is, as the block below would
-      return arg if base.nil? && ::Integer === arg && true.equal?(exception)
-      # a finite Float is truncated, as below, without the block
-      return arg.to_i if base.nil? && ::Float === arg && true.equal?(exception) && arg.finite?
-      # exception: false on a String: the C# parser answers nil for what it cannot read,
-      # where raising and rescuing cost ~55 us a call
-      if false.equal?(exception) && ::String === arg
-        return base.nil? ? __ir_try_Integer__(arg) : __ir_try_Integer__(arg, base)
-      end
-      exception = ::Kernel.__opts_exception__(exception)
-      __numeric_conversion__(exception) do
-        # a base goes with a String, and that is checked before anything else - Integer(nil, 8)
-        # is this error, not the nil one
-        if base && !arg.is_a?(::String) && !arg.respond_to?(:to_str)
-          raise ::ArgumentError, "base specified for non string value"
-        end
-
-        if arg.nil?
-          raise ::TypeError, "can't convert nil into Integer"
-        end
-
-        if arg.is_a?(::String)
-          __ir_check_numeric_string__(arg)
-          next base ? __ir_Integer__(arg, base) : __ir_Integer__(arg)
-        end
-
-        if arg.is_a?(::Integer)
-          next arg
-        end
-
-        if arg.is_a?(::Float)
-          if arg.nan? || arg.infinite?
-            raise ::FloatDomainError, arg.to_s
-          end
-          next arg.to_i
-        end
-
-        # #to_int first, then #to_str, then #to_i; a non-Integer from #to_int is
-        # not an error by itself, it just falls through to the next candidate.
-        if arg.respond_to?(:to_int)
-          value = arg.to_int
-          next value if value.is_a?(::Integer)
-        end
-
-        if arg.respond_to?(:to_str)
-          text = arg.to_str
-          unless text.is_a?(::String)
-            raise ::TypeError, "can't convert #{arg.class} into Integer"
-          end
-          __ir_check_numeric_string__(text)
-          next base ? __ir_Integer__(text, base) : __ir_Integer__(text)
-        end
-
-        unless arg.respond_to?(:to_i)
-          raise ::TypeError, "can't convert #{__conversion_class_name__(arg)} into Integer"
-        end
-
-        value = arg.to_i
-        unless value.is_a?(::Integer)
-          raise ::TypeError,
-                "can't convert #{__conversion_class_name__(arg)} into Integer " \
-                "(#{arg.class}#to_i gives #{__ir_conversion_result_name__(value)})"
-        end
-        value
-      end
+      base = radix
     end
-    module_function :Integer
-  end
+    __numeric_conversion__(exception) do
+      # a base goes with a String, and that is checked before anything else - Integer(nil, 8)
+      # is this error, not the nil one
+      if base && !arg.is_a?(::String) && !arg.respond_to?(:to_str)
+        raise ::ArgumentError, "base specified for non string value"
+      end
 
-  if private_method_defined?(:Float) || method_defined?(:Float)
-    alias :__ir_Float__ :Float
-    private :__ir_Float__
+      if arg.nil?
+        raise ::TypeError, "can't convert nil into Integer"
+      end
 
-    def Float(arg, exception: true)
-      # A String with failures raised goes to the C# parser below in any case; see Integer.
-      if true.equal?(exception) && !arg.nil? && ::String === arg
-        return __ir_Float__(arg)
+      if arg.is_a?(::String)
+        __ir_check_numeric_string__(arg)
+        next base ? __ir_Integer__(arg, base) : __ir_Integer__(arg)
       end
-      # A Float is its own answer and an Integer is the C# conversion, as below, without the
-      # block, its rescue frame or the class tests.
-      if true.equal?(exception)
-        return arg if ::Float === arg
-        return __ir_Float__(arg) if ::Integer === arg
+
+      if arg.is_a?(::Integer)
+        next arg
       end
-      # exception: false on a String, as Integer does above
-      if false.equal?(exception) && ::String === arg
-        return __ir_try_Float__(arg)
-      end
-      exception = ::Kernel.__opts_exception__(exception)
-      __numeric_conversion__(exception) do
-        raise ::TypeError, "can't convert nil into Float" if arg.nil?
-        __ir_check_numeric_string__(arg, "Float") if ::String === arg
-        if ::Kernel === arg && !(::Integer === arg || ::Float === arg || ::Rational === arg ||
-            ::String === arg || true.equal?(arg) || false.equal?(arg)) && arg.respond_to?(:to_f, true)
-          # MRI hands back the very Float #to_f returned (the same NaN, say), so the
-          # result must not go through the C# conversion, which reboxes it.
-          result = arg.__send__(:to_f)
-          return result if ::Float === result
-          name = arg.class.to_s
-          raise ::TypeError, "can't convert #{name} to Float (#{name}#to_f gives #{result.class})"
+
+      if arg.is_a?(::Float)
+        if arg.nan? || arg.infinite?
+          raise ::FloatDomainError, arg.to_s
         end
-        __ir_Float__(arg)
+        next arg.to_i
       end
+
+      # #to_int first, then #to_str, then #to_i; a non-Integer from #to_int is
+      # not an error by itself, it just falls through to the next candidate.
+      if arg.respond_to?(:to_int)
+        value = arg.to_int
+        next value if value.is_a?(::Integer)
+      end
+
+      if arg.respond_to?(:to_str)
+        text = arg.to_str
+        unless text.is_a?(::String)
+          raise ::TypeError, "can't convert #{arg.class} into Integer"
+        end
+        __ir_check_numeric_string__(text)
+        next base ? __ir_Integer__(text, base) : __ir_Integer__(text)
+      end
+
+      unless arg.respond_to?(:to_i)
+        raise ::TypeError, "can't convert #{__conversion_class_name__(arg)} into Integer"
+      end
+
+      value = arg.to_i
+      unless value.is_a?(::Integer)
+        raise ::TypeError,
+              "can't convert #{__conversion_class_name__(arg)} into Integer " \
+              "(#{arg.class}#to_i gives #{__ir_conversion_result_name__(value)})"
+      end
+      value
     end
-    module_function :Float
   end
+  module_function :__ir_Integer_slow__
+
+  def __ir_Float_slow__(arg, exception: true)
+    exception = ::Kernel.__opts_exception__(exception)
+    __numeric_conversion__(exception) do
+      raise ::TypeError, "can't convert nil into Float" if arg.nil?
+      __ir_check_numeric_string__(arg, "Float") if ::String === arg
+      if ::Kernel === arg && !(::Integer === arg || ::Float === arg || ::Rational === arg ||
+          ::String === arg || true.equal?(arg) || false.equal?(arg)) && arg.respond_to?(:to_f, true)
+        # MRI hands back the very Float #to_f returned (the same NaN, say), so the
+        # result must not go through the C# conversion, which reboxes it.
+        result = arg.__send__(:to_f)
+        return result if ::Float === result
+        name = arg.class.to_s
+        raise ::TypeError, "can't convert #{name} to Float (#{name}#to_f gives #{result.class})"
+      end
+      __ir_Float__(arg)
+    end
+  end
+  module_function :__ir_Float_slow__
 
   # A String has to be readable as a number at all: ASCII-compatible, no NUL.
   def __ir_check_numeric_string__(text, what = "Integer")
@@ -4409,9 +4372,7 @@ class Numeric
       unit = 1 if unit.nil?
       ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
       if (to.nil? || to.is_a?(::Numeric)) && unit.is_a?(::Numeric)
-        shown = args.empty? && (kw.nil? || kw.empty?) ? "" : "(#{(args.map(&:inspect) + (kw || {}).map { |k, v| "#{k}: #{v.inspect}" }).join(', ')})"
-        return ::Enumerator::ArithmeticSequence.__build__(
-          self, to, unit, false, self, "(#{inspect}.step#{shown})")
+        return ::Enumerator::ArithmeticSequence.__build__(self, to, unit, false, self, [:num, args, kw])
       end
       recv = self
       e = ::Enumerator.new { |y| recv.step(*args, **kw) { |v| y << v } }
@@ -7375,21 +7336,8 @@ class Enumerator
         stop = fin.to_f
         step = unit.to_f
         n = __float_step_size__(beg, stop, step, excl)
-        if step.infinite?
-          block.call(beg) if n > 0
-        elsif step == 0
-          loop { block.call(beg) }
-        else
-          i = 0
-          # n may be NaN (Infinity.step(Infinity, 1)); 0 < NaN is false, so
-          # nothing is yielded, which is what MRI's for(;i<n;) loop does.
-          while i < n
-            d = i * step + beg
-            d = stop if step >= 0 ? stop < d : d < stop
-            block.call(d)
-            i += 1
-          end
-        end
+        # the loop is C# (KernelOps.FloatStep)
+        ::Kernel.__ir_float_step__(beg, stop, step, n.to_f, &block)
         return
       end
 
@@ -7397,7 +7345,7 @@ class Enumerator
       cmp = desc ? :< : :>
       loop do
         break if excl ? (i == fin || i.__send__(cmp, fin)) : i.__send__(cmp, fin)
-        block.call(i)
+        yield(i)
         i += unit
       end
     end
@@ -7492,9 +7440,27 @@ class Enumerator
       [self.begin, self.end, step, exclude_end?].hash
     end
 
+    # @inspect_str is the text, or how the sequence was written - worked out only when asked
+    # for, since building it was a good part of what making a sequence cost
     def inspect
-      return @inspect_str if @inspect_str
-      "((#{@source.inspect}).%(#{@step.inspect}))"
+      form = @inspect_str
+      case form
+      when ::String then form
+      when :step then "((#{@source.inspect}).step)"
+      when ::Array
+        case form[0]
+        when :step then "((#{@source.inspect}).step(#{form[1].inspect}))"
+        when :% then "((#{@source.inspect}).%(#{form[1].inspect}))"
+        else
+          # Numeric#step: [:num, args, kw]
+          args = form[1]
+          kw = form[2]
+          shown = args.empty? && (kw.nil? || kw.empty?) ? "" : "(#{(args.map(&:inspect) + (kw || {}).map { |k, v| "#{k}: #{v.inspect}" }).join(', ')})"
+          "(#{@source.inspect}.step#{shown})"
+        end
+      else
+        "((#{@source.inspect}).%(#{@step.inspect}))"
+      end
     end
     alias :to_s :inspect
   end
@@ -12797,8 +12763,7 @@ class Range
       if block
         ::Kernel.raise(::ArgumentError, "#step iteration for beginless ranges is meaningless")
       end
-      written = n.nil? ? "((#{inspect}).step)" : "((#{inspect}).step(#{n.inspect}))"
-      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, written)
+      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, n.nil? ? :step : [:step, n])
     end
 
     ::Kernel.raise(::ArgumentError, "step can't be 0") if numeric && unit == 0
@@ -12806,8 +12771,7 @@ class Range
     unless block
       if numeric
         # inspected the way it was written: ((1..10).step) or ((1..10).step(2))
-        written = n.nil? ? "((#{inspect}).step)" : "((#{inspect}).step(#{n.inspect}))"
-        return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, written)
+        return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, n.nil? ? :step : [:step, n])
       end
       range = self
       return ::Enumerator.new { |y| range.step(*args) { |x| y << x } }.__set_inspect__(self, :step, args)
@@ -12831,7 +12795,7 @@ class Range
 
   def %(n)
     seq = step(n)
-    seq.instance_variable_set(:@inspect_str, "((#{inspect}).%(#{n.inspect}))") if seq.is_a?(::Enumerator::ArithmeticSequence)
+    seq.instance_variable_set(:@inspect_str, [:%, n]) if seq.is_a?(::Enumerator::ArithmeticSequence)
     seq
   end
 

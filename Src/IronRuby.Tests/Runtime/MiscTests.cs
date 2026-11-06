@@ -3148,6 +3148,192 @@ symlink existing: Errno::EEXIST
         }
 
         /// <summary>
+        /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
+        /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
+        /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the
+        /// end runs the methods specialized). Arity errors name the positionals and required keywords as
+        /// MRI does, and #parameters lists required keywords first. The expected output is CRuby's.
+        /// </summary>
+        public void Method_OptionalAndKeywordParameters1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+def m1(a, b = 2, k: 3) = [a, b, k]
+def m2(a, b = 2, c = a + b, k: 3, j:) = [a, b, c, k, j]
+def m3(a, b = {x: 1}, **kw) = [a, b, kw]
+def m4(b = 1, k: 2) = [b, k]
+def m5(a, b = nil, exception: true) = [a, b, exception]
+t(1) { [m1(1), m1(1, 5), m1(1, k: 9), m1(1, 5, k: 9)] }
+t(2) { m1(1, {k: 9}) }
+t(3) { m1(1, 5, {k: 9}) }
+t(4) { m1(1, 5, 6) }
+t(5) { m1(k: 1) }
+t(6) { m1() }
+t(7) { m1(1, z: 2) }
+t(8) { [m2(1, j: 0), m2(1, 4, j: 0), m2(1, 4, 5, j: 0, k: 7)] }
+t(9) { m2(1, 4) }
+t(10) { m2(1, 4, 5, 6, j: 0) }
+t(11) { [m3(1), m3(1, z: 2), m3(1, {y: 2}), m3(1, {y: 2}, z: 3), m3(1, **{})] }
+t(12) { h = {k: 7}; [m1(1, **h), m1(1, 2, **h), m4, m4(5), m4(k: 6), m4(5, k: 6), m4({k: 6})] }
+t(13) { [m5(1), m5(""1"", 16), m5(1, exception: false), m5(1, 2, exception: false)] }
+t(14) { [method(:m1).arity, method(:m2).arity, method(:m3).arity, method(:m4).arity, method(:m1).parameters, method(:m2).parameters] }
+class P; def s(a, b = 2, k: 3) = [:p, a, b, k]; end
+class C < P; def s(a, b = 5, k: 4); super; end; end
+class D < P; def s(a, b = 5, k: 4); b = 9; k = 8; super; end; end
+t(15) { [C.new.s(1), C.new.s(1, 2), C.new.s(1, k: 0), D.new.s(1)] }
+def nil_kw(a, b = 1, k: 2) = [a, b, k]
+t(16) { [nil_kw(1, nil), nil_kw(nil), nil_kw(1, nil, k: nil)] }
+t(18) { send(:m1, 1, k: 4) }
+t(19) { method(:m1).call(1, k: 4) }
+t(20) { pr = method(:m1).to_proc; [pr.(1), pr.(1, k: 2)] }
+o = Object.new
+def o.each_pair(x = 1, sep: "",""); ""#{x}#{sep}""; end
+t(21) { [o.each_pair, o.each_pair(2), o.each_pair(sep: "";""), o.each_pair(3, sep: ""|"")] }
+def opt_hash_default(a, b = {}, k: 1) = [a, b, k]
+t(22) { [opt_hash_default(1), opt_hash_default(1, {z: 1}), opt_hash_default(1, k: 2)] }
+1000.times { m1(1, k: 2); m1(1); m1(1, 2) }
+t(23) { [m1(1), m1(1, 5), m1(1, k: 9), m1(1, 5, k: 9)] }
+# every case again after the JIT has specialized the methods
+def n1(a, b = 2, k: 3) = [a, b, k]
+def n2(a, b = 2, c = 7, k: 3, j:) = [a, b, c, k, j]
+def n4(b = 1, k: 2) = [b, k]
+def m6(a, b = 1.5, k: :x) = [a, b, k]
+def mi(a, b = 2, k: 3) = a + b + k
+r = nil
+3000.times do |i|
+  r = [n1(1), n1(1, 5), n1(1, k: 9), n1(1, 5, k: 9), n2(1, j: 0), n2(1, 4, j: 0), n2(1, 4, 5, j: 0, k: 7),
+       m4, n4(5), n4(k: 6), n4(5, k: 6), n4({k: 6}), m6(1), m6(1, 2.5), m6(1, k: :y), mi(1), mi(1, 2, k: 4), mi(i, k: i)]
+end
+p r
+t(1) { n1(k: 1) }
+t(2) { n1(1, {k: 9}) }
+t(3) { n1(1, 5, 6) }
+t(4) { n1(1, z: 2) }
+t(5) { n2(1, 4) }
+t(6) { mi(1, ""x"") }
+t(7) { mi(""a"", k: 1) }
+t(8) { n1({k: 1}) }
+t(9) { n4({k: 6}, k: 1) }
+def kwreq_order(a, k: 1, j:) = 1
+t(24) { method(:kwreq_order).parameters }
+def mand_only(a, k: 1) = 1
+t(25) { [(mand_only rescue $!.message), (mand_only(1, 2) rescue $!.message)] }
+", @"
+1: [[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9]]
+2: [1, {k: 9}, 3]
+3: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+4: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+5: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+6: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+7: [ArgumentError, ""unknown keyword: :z""]
+8: [[1, 2, 3, 3, 0], [1, 4, 5, 3, 0], [1, 4, 5, 7, 0]]
+9: [ArgumentError, ""missing keyword: :j""]
+10: [ArgumentError, ""wrong number of arguments (given 4, expected 1..3; required keyword: j)""]
+11: [[1, {x: 1}, {}], [1, {x: 1}, {z: 2}], [1, {y: 2}, {}], [1, {y: 2}, {z: 3}], [1, {x: 1}, {}]]
+12: [[1, 2, 7], [1, 2, 7], [1, 2], [5, 2], [1, 6], [5, 6], [{k: 6}, 2]]
+13: [[1, nil, true], [""1"", 16, true], [1, nil, false], [1, 2, false]]
+14: [-2, -3, -2, -1, [[:req, :a], [:opt, :b], [:key, :k]], [[:req, :a], [:opt, :b], [:opt, :c], [:keyreq, :j], [:key, :k]]]
+15: [[:p, 1, 5, 4], [:p, 1, 2, 4], [:p, 1, 5, 0], [:p, 1, 9, 8]]
+16: [[1, nil, 2], [nil, 1, 2], [1, nil, nil]]
+18: [1, 2, 4]
+19: [1, 2, 4]
+20: [[1, 2, 3], [1, 2, 2]]
+21: [""1,"", ""2,"", ""1;"", ""3|""]
+22: [[1, {}, 1], [1, {z: 1}, 1], [1, {}, 2]]
+23: [[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9]]
+[[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9], [1, 2, 7, 3, 0], [1, 4, 7, 3, 0], [1, 4, 5, 7, 0], [1, 2], [5, 2], [1, 6], [5, 6], [{k: 6}, 2], [1, 1.5, :x], [1, 2.5, :x], [1, 1.5, :y], 6, 7, 6000]
+1: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+2: [1, {k: 9}, 3]
+3: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+4: [ArgumentError, ""unknown keyword: :z""]
+5: [ArgumentError, ""missing keyword: :j""]
+6: [TypeError, ""String can't be coerced into Integer""]
+7: [TypeError, ""no implicit conversion of Integer into String""]
+8: [{k: 1}, 2, 3]
+9: [{k: 6}, 1]
+24: [[:req, :a], [:keyreq, :j], [:key, :k]]
+25: [""wrong number of arguments (given 0, expected 1)"", ""wrong number of arguments (given 2, expected 1)""]
+");
+        }
+
+        /// <summary>
+        /// Kernel#Integer and #Float in C# (the cases they answer themselves and the ones they hand to
+        /// the prelude), Integer#round/floor/ceil/truncate of a Fixnum in long arithmetic, Range#first
+        /// and #last without a count, the lazily inspected ArithmeticSequence, and the Float loop of
+        /// #step in C#, break and return included. The expected output is CRuby's.
+        /// </summary>
+        public void Kernel_ConversionsRoundingStep1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+t('Integer nil radix') { Integer(""10"", nil) }
+t('Integer float radix') { [Integer(""10"", 8.9), Integer(""z"", 8.9, exception: false)] }
+o = Object.new; def o.to_int; 16; end
+t('Integer to_int radix') { Integer(""ff"", o) }
+t('Integer radix non-string') { [Integer(12, 16, exception: false), (Integer(12, 16) rescue $!.message)] }
+t('Integer nil') { [Integer(nil, exception: false), (Integer(nil) rescue $!.message)] }
+t('Integer 3 args') { Integer(""1"", 2, 3) }
+t('Integer 4 args') { Integer(""1"", 2, 3, 4) }
+t('Float 2 args') { Float(1, 2) }
+t('Integer unknown keyword') { Integer(""1"", foo: 1) }
+t('Float unknown keyword') { Float(""1"", foo: 1) }
+t('Integer braced hash') { Integer(""1"", {exception: false}) }
+t('arity') { [method(:Integer).arity, method(:Float).arity] }
+t('Integer values') { [Integer(4.7), Integer(-4.7), Integer(1e30), Integer(2**70), Integer(""0x1f""), Integer(""1_000""), Integer("" 42 "")] }
+t('Integer failures') { [Integer(Float::NAN, exception: false), (Integer(Float::NAN) rescue $!.class), Integer(""zz"", exception: false), Integer(""zz"", 36)] }
+t('Float values') { [Float(1), Float(2**70), Float(""1.5""), Float(""x"", exception: false), Float(nil, exception: false), (Float(nil) rescue $!.class), Float(""1e3""), (Float("""") rescue $!.class)] }
+f = 1.5
+t('Float identity') { Float(f).equal?(f) }
+t('Kernel.') { [Kernel.Integer(""7""), Kernel.Float(""1"")] }
+t('bad exception') { Integer(""1"", exception: 1) }
+t('true radix') { Integer(""1"", true) }
+t('utf16') { Integer(""12"".encode(""UTF-16LE""), exception: false) }
+t('to_i') { r = Object.new; def r.to_i; 3; end; [Integer(r), Integer(Rational(7, 2)), Float(Rational(7, 2))] }
+t('round') { [12345.round(-2), 12350.round(-2), -12350.round(-2), 12350.round(-2, half: :even), 12350.round(-2, half: :down), 25.round(-1, half: :even), 2147483647.round(-9), -2147483648.floor(-9), 5.ceil(-18), 5.ceil(-19), -5.floor(-19), 5.round(-25), 12345.truncate(-3), -12345.truncate(-3), 7.round(2)] }
+t('round as a hash key') { {-3000000000 => :hit}[-2147483648.floor(-9)] }
+t('first/last') { [(1..10).first, (1...10).last, (1..10).first(3), (1..10).last(3), (..5).last(2), (...5).last(3), ('a'..'e').last(2)] }
+t('beginless first') { (..5).first }
+t('endless last') { (1..).last }
+t('step inspect') { r = (1..10); [(r % 3).inspect, r.step(3).inspect, r.step.inspect, 1.step(10, 3).inspect, 1.step(by: 2, to: 5).inspect, 1.0.step(2.0, 0.5).inspect, (r % 3).to_a] }
+t('float step') { a = []; 1.0.step(2.0, 0.3) { |x| a << x }; 2.0.step(1.0, -0.5) { |x| a << x }; (1.0...2.0).step(0.5) { |x| a << x }; a }
+t('float step break') { [1.0.step(2.0, 0.5) { |x| break x * 10 if x > 1.2 }, 1.0.step(2.0, 0.5) { }, (1.0..2.0).step(0.5).map { |x| x * 2 }] }
+def float_step_return; 1.0.step(5.0, 1.0) { |x| return x if x == 3.0 }; :no; end
+t('float step return') { float_step_return }
+", @"
+Integer nil radix: [TypeError, ""no implicit conversion from nil to integer""]
+Integer float radix: [8, nil]
+Integer to_int radix: 255
+Integer radix non-string: [nil, ""base specified for non string value""]
+Integer nil: [nil, ""can't convert nil into Integer""]
+Integer 3 args: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+Integer 4 args: [ArgumentError, ""wrong number of arguments (given 4, expected 1..2)""]
+Float 2 args: [ArgumentError, ""wrong number of arguments (given 2, expected 1)""]
+Integer unknown keyword: [ArgumentError, ""unknown keyword: :foo""]
+Float unknown keyword: [ArgumentError, ""unknown keyword: :foo""]
+Integer braced hash: [TypeError, ""no implicit conversion of Hash into Integer""]
+arity: [-2, -2]
+Integer values: [4, -4, 1000000000000000019884624838656, 1180591620717411303424, 31, 1000, 42]
+Integer failures: [nil, FloatDomainError, nil, 1295]
+Float values: [1.0, 1.1805916207174113e+21, 1.5, nil, nil, TypeError, 1000.0, ArgumentError]
+Float identity: true
+Kernel.: [7, 1.0]
+bad exception: [ArgumentError, ""expected true or false as exception: 1""]
+true radix: [TypeError, ""no implicit conversion of true into Integer""]
+utf16: [Encoding::CompatibilityError, ""ASCII incompatible encoding: UTF-16LE""]
+to_i: [3, 3, 3.5]
+round: [12300, 12400, -12400, 12400, 12300, 20, 2000000000, -3000000000, 1000000000000000000, 10000000000000000000, -10000000000000000000, 0, 12000, -12000, 7]
+round as a hash key: :hit
+first/last: [1, 10, [1, 2, 3], [8, 9, 10], [4, 5], [2, 3, 4], [""d"", ""e""]]
+beginless first: [RangeError, ""cannot get the first element of beginless range""]
+endless last: [RangeError, ""cannot get the last element of endless range""]
+step inspect: [""((1..10).%(3))"", ""((1..10).step(3))"", ""((1..10).step)"", ""(1.step(10, 3))"", ""(1.step(by: 2, to: 5))"", ""(1.0.step(2.0, 0.5))"", [1, 4, 7, 10]]
+float step: [1.0, 1.3, 1.6, 1.9, 2.0, 1.5, 1.0, 1.0, 1.5]
+float step break: [15.0, 1.0, [2.0, 3.0, 4.0]]
+float step return: 3.0
+");
+        }
+
+        /// <summary>
         /// Kernel#Integer and #Float with exception: false answer nil from the C# parser instead of
         /// raising and rescuing; a String in an ASCII-incompatible encoding is refused either way,
         /// and Float names a NUL. Array#inject over Fixnums, Array#minmax as [min, max], and
@@ -3584,7 +3770,7 @@ last ""a""..""e"" 2: [""d"", ""e""]
 first 1..3.5 2: [1, 2]
 last 1..3.5 2: [2, 3]
 first ..5 2: ""RangeError: cannot get the first element of beginless range""
-last ..5 2: ""TypeError: can't iterate from NilClass""
+last ..5 2: [4, 5]
 sub first: [:x]
 sub last: [9, 10]
 big last: [999999998, 999999999, 1000000000]

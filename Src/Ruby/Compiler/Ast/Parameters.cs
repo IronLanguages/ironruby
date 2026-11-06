@@ -73,6 +73,17 @@ namespace IronRuby.Compiler.Ast {
             set { _superSplat = value; }
         }
 
+        // Set for a method whose keywords were lowered onto a trailing optional parameter after
+        // optional positional ones (`def m(a, b = 1, k: 2)' => `def m(a, b = 1, ?kw? = {})'). A
+        // keyword call that leaves b out passes its keyword hash where b is: before any default
+        // is evaluated, the hash is moved to the last parameter (TransformOptionalsInitialization).
+        private bool _keywordsAfterOptionals;
+
+        internal bool KeywordsAfterOptionals {
+            get { return _keywordsAfterOptionals; }
+            set { _keywordsAfterOptionals = value; }
+        }
+
         public LeftValue/*!*/[]/*!*/ Mandatory {
             get { return _mandatory; }
         }
@@ -120,6 +131,55 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression singleton = gen.CurrentScope.DefineHiddenVariable("#default", typeof(object));
 
             MSA.Expression result = AstUtils.Empty();
+
+            // The keyword hash in an optional positional: the arguments a call passes fill the
+            // parameters from the left, and the ones it leaves out get the default, so when the
+            // keyword parameter got the default the call's last argument is in the rightmost
+            // optional that did not. If that is the hash a keyword call made, it is the keywords:
+            //   if kw == #default
+            //     if b != #default then (kw, b = b, #default) if keyword_hash?(b)
+            //     elsif a != #default then ...
+            MSA.Expression shift = null;
+            if (_keywordsAfterOptionals && _optional.Length > 1) {
+                var keywords = _optional[_optional.Length - 1].Left;
+                MSA.Expression chain = AstUtils.Empty();
+                for (int i = 0; i < _optional.Length - 1; i++) {
+                    var positional = _optional[i].Left;
+                    chain = Ast.IfThenElse(
+                        Ast.NotEqual(positional.TransformRead(gen), singleton),
+                        Ast.IfThen(
+                            Methods.IsKeywordArgumentsHash.OpCall(AstUtils.Box(positional.TransformRead(gen))),
+                            Ast.Block(
+                                keywords.TransformWrite(gen, positional.TransformRead(gen)),
+                                positional.TransformWrite(gen, singleton),
+                                AstUtils.Empty()
+                            )
+                        ),
+                        chain
+                    );
+                }
+                shift = Ast.IfThen(Ast.Equal(keywords.TransformRead(gen), singleton), chain);
+            }
+            // Once the keywords have been moved out of a positional, the parameters that got their
+            // default are no longer a suffix of the list, which the nesting below relies on: test
+            // each one in turn instead, still left to right.
+            if (shift != null) {
+                var defaults = new List<MSA.Expression>();
+                defaults.Add(Ast.Assign(singleton, Ast.Field(null, Fields.DefaultArgument)));
+                defaults.Add(shift);
+                for (int i = 0; i < _optional.Length; i++) {
+                    defaults.Add(AstUtils.IfThen(
+                        Ast.Equal(_optional[i].Left.TransformRead(gen), singleton),
+                        Ast.Block(
+                            _optional[i].Left.TransformWrite(gen, AstUtils.Constant(null, typeof(object))),
+                            _optional[i].TransformRead(gen) // assignment
+                        )
+                    ));
+                }
+                defaults.Add(AstUtils.Empty());
+                return Ast.Block(defaults);
+            }
+
             for (int i = 0; i < _optional.Length; i++) {
                 result = AstUtils.IfThen(
                     Ast.Equal(_optional[i].Left.TransformRead(gen), singleton),
@@ -136,6 +196,7 @@ namespace IronRuby.Compiler.Ast {
             
             return Ast.Block(
                 Ast.Assign(singleton, Ast.Field(null, Fields.DefaultArgument)),
+                shift ?? AstUtils.Empty(),
                 result,
                 AstUtils.Empty()
             );

@@ -870,6 +870,8 @@ namespace IronRuby.Tests {
                 Io_LineReaders3,
                 StringIO_LineReaders1,
                 Kernel_ConversionsInjectZip1,
+                Kernel_ConversionsRoundingStep1,
+                Method_OptionalAndKeywordParameters1,
                 Method_LightFrame1,
                 Method_LightFrame2,
                 Hash_SelfKey1,
