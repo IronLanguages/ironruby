@@ -322,23 +322,6 @@ namespace IronRuby.Builtins {
             return IDictionaryOps.ReplaceData(self, other);
         }
 
-        [RubyMethod("shift")]
-        public static object Shift(CallSiteStorage<Func<CallSite, Hash, object, object>>/*!*/ storage, Hash/*!*/ self) {
-            self.RequireNotFrozen();
-            
-            if (self.Count == 0) {
-                var site = storage.GetCallSite("default", 1);
-                return site.Target(site, self, null);
-            }
-
-            IEnumerator<KeyValuePair<object, object>> e = self.GetEnumerator();
-            e.MoveNext();
-            KeyValuePair<object, object> pair = e.Current;
-            self.Remove(pair.Key);
-
-            return IDictionaryOps.MakeArray(pair);
-        }
-
         #endregion
 
         #region key, slice, except

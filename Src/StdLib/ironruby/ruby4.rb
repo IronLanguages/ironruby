@@ -5070,10 +5070,6 @@ class Hash
     # pair array instead of a key and a value.
   end unless instance_methods(false).include?(:to_h)
 
-  def keep_if
-    delete_if { |k, v| !yield(k, v) }
-  end unless method_defined?(:keep_if)
-
   def fetch_values(*keys)
     keys.map { |k| block_given? ? (key?(k) ? self[k] : yield(k)) : fetch(k) }
   end unless method_defined?(:fetch_values)
@@ -11453,14 +11449,6 @@ class Hash
     reject! { |_, v| v.nil? }
   end unless method_defined?(:compact!)
 
-  def select!(&block)
-    return to_enum(:select!) unless block
-    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    before = size
-    keep_if(&block)
-    size == before ? nil : self
-  end unless method_defined?(:select!)
-
   def default_proc=(proc)
     raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     self.DefaultValue = nil
@@ -11485,68 +11473,6 @@ class Hash
     self.DefaultProc = proc
     proc
   end unless method_defined?(:default_proc=)
-
-  # Hash#merge/#merge! take any number of hashes since 2.6 (zero included).
-  alias :__merge_one__ :merge
-  alias :__update_one__ :merge!
-
-  def merge(*others, &block)
-    result = dup
-    others.each { |other| result.__update_one__(other, &block) }
-    result
-  end
-
-  def merge!(*others, &block)
-    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    others.each { |other| __update_one__(other, &block) }
-    self
-  end
-  alias :update :merge!
-
-  # CRuby's #filter/#filter! are genuine aliases of #select/#select!, and
-  # Hash#select is not Enumerable#select, so re-alias them here.
-  alias :filter :select
-  alias :filter! :select!
-
-  # #delete_if / #keep_if / #reject / #reject! return an Enumerator when called
-  # without a block; the 1.9 core raised LocalJumpError instead.
-  alias :__delete_if_block__ :delete_if
-  def delete_if(&block)
-    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen? && block
-    return to_enum(:delete_if) unless block
-    __delete_if_block__(&block)
-  end
-
-  def keep_if(&block)
-    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen? && block
-    return to_enum(:keep_if) unless block
-    delete_if { |k, v| !block.call(k, v) }
-  end
-
-  alias :__reject_bang_block__ :reject!
-  def reject!(&block)
-    return to_enum(:reject!) unless block
-    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    __reject_bang_block__(&block)
-  end
-
-  # CRuby's #reject returns a plain Hash: neither the default value nor the
-  # default proc carries over.
-  def reject(&block)
-    return to_enum(:reject) unless block
-    result = __result_hash__
-    each { |k, v| result[k] = v unless block.call(k, v) }
-    result
-  end
-
-  # Hash#shift returns nil on an empty hash since 3.0 - it no longer consults
-  # the default value or the default proc.
-  def shift
-    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    return nil if empty?
-    key = keys.first
-    [key, delete(key)]
-  end
 
   # #assoc / #rassoc compare with ==, and stop at the first match (which matters
   # for an identity hash holding several equal-but-distinct keys).
