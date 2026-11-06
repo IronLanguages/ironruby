@@ -1039,16 +1039,6 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// What Object#clone(freeze:) in the prelude calls once it knows a freeze: value was
-        /// given. MRI passes that value on to #initialize_clone, and freezes the copy - or leaves
-        /// it alone - according to it rather than according to the original.
-        /// </summary>
-        /// <summary>
-        /// `pattern === value' for the prelude's Enumerator::Lazy#grep/grep_v. A Regexp pattern
-        /// stores its match (or nil) as $~ of <paramref name="target"/>'s scope, the frame MRI's
-        /// C implementation would have set it in, rather than in the prelude method's own.
-        /// </summary>
-        /// <summary>
         /// MRI's rb_inspect for the prelude: #inspect, escaped when its result is in an
         /// encoding the output cannot take (see RubyContext.Inspect).
         /// </summary>
