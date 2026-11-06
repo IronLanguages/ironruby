@@ -1909,8 +1909,8 @@ m
 n
 inner
 ruby
-backtrace must be Array of String
-backtrace must be Array of String
+backtrace must be an Array of String or an Array of Thread::Backtrace::Location
+backtrace must be an Array of String or an Array of Thread::Backtrace::Location
 :t
 uncaught throw :zz
 :zz
@@ -2211,7 +2211,7 @@ unnumbered(1) mixed with numbered
 too few arguments
 ASCII incompatible encoding: UTF-16LE
 12354 out of char range
-incompatible character encodings: UTF-8 and ASCII-8BIT
+incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
 invalid value for Float(): ""\xC2\xBD.5""
 ");
         }

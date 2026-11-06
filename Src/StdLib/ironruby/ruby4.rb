@@ -14,7 +14,7 @@ module Kernel
     return nil if converted.nil?
     return converted if klass === converted
     ::Kernel.raise(::TypeError,
-      "can't convert #{obj.class} into #{name} (#{obj.class}##{method} gives #{__ir_conversion_result_name__(converted)})")
+      "can't convert #{obj.class} to #{name} (#{obj.class}##{method} gives #{__ir_conversion_result_name__(converted)})")
   end
 
   # __ir_responds_to__(obj, method) is KernelOps.RespondsTo: it asks the class obj has
@@ -1011,7 +1011,7 @@ class Range
       end
       converted = n.to_int
       unless converted.is_a?(::Integer)
-        raise TypeError, "can't convert #{n.class} into Integer (#{n.class}#to_int gives #{__ir_conversion_result_name__(converted)})"
+        raise TypeError, "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{__ir_conversion_result_name__(converted)})"
       end
       converted
     end
@@ -1364,7 +1364,7 @@ class Array
     end
     converted = value.to_int
     unless converted.is_a?(Integer)
-      raise TypeError, "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})"
+      raise TypeError, "can't convert #{value.class} to Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})"
     end
     converted
   end
@@ -2222,7 +2222,7 @@ class Array
         end
         count = count.to_int
         unless count.is_a?(Integer)
-          raise TypeError, "can't convert #{args[0].class} into Integer (#{args[0].class}#to_int gives #{__ir_conversion_result_name__(count)})"
+          raise TypeError, "can't convert #{args[0].class} to Integer (#{args[0].class}#to_int gives #{__ir_conversion_result_name__(count)})"
         end
       end
       raise ArgumentError, "negative array size" if count < 0
@@ -3226,7 +3226,7 @@ module Kernel
         value = arg.to_i
         unless value.is_a?(::Integer)
           raise ::TypeError,
-                "can't convert #{__conversion_class_name__(arg)} into Integer " \
+                "can't convert #{__conversion_class_name__(arg)} to Integer " \
                 "(#{arg.class}#to_i gives #{__ir_conversion_result_name__(value)})"
         end
         value
@@ -3792,7 +3792,7 @@ class String
         target_encoding = str.encoding
       elsif !str.ascii_only?
         ::Kernel.raise(::Encoding::CompatibilityError,
-          "incompatible character encodings: #{encoding} and #{str.encoding}")
+          "incompatible character encodings: #{encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : encoding} and #{str.encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : str.encoding}")
       end
     end
 
@@ -4112,7 +4112,7 @@ class String
     end
     if ::Encoding.compatible?(self, replacement).nil? && replacement.encoding != encoding
       ::Kernel.raise(::Encoding::CompatibilityError,
-                     "incompatible character encodings: #{encoding} and #{replacement.encoding}")
+                     "incompatible character encodings: #{encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : encoding} and #{replacement.encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : replacement.encoding}")
     end
     replacement
   end
@@ -7128,7 +7128,7 @@ end
       converted = value.to_int
       unless converted.is_a?(::Integer)
         ::Kernel.raise(::TypeError,
-          "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})")
+          "can't convert #{value.class} to Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})")
       end
       converted
     end
@@ -7223,7 +7223,7 @@ class String
 
     unless encoding == stop.encoding || ascii_only? && stop.ascii_only?
       ::Kernel.raise(::Encoding::CompatibilityError,
-        "incompatible character encodings: #{encoding} and #{stop.encoding}")
+        "incompatible character encodings: #{encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : encoding} and #{stop.encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : stop.encoding}")
     end
 
     return to_enum(:upto, stop, exclusive) unless block
@@ -7816,7 +7816,7 @@ class Data
     converted = key.to_str
     unless ::String === converted
       ::Kernel.raise(::TypeError,
-        "can't convert #{key.class} into String (#{key.class}#to_str gives #{__ir_conversion_result_name__(converted)})")
+        "can't convert #{key.class} to String (#{key.class}#to_str gives #{__ir_conversion_result_name__(converted)})")
     end
     converted
   end
@@ -8597,7 +8597,7 @@ module Process
     end
     result = value.to_int
     unless result.is_a?(Integer)
-      raise TypeError, "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(result)})"
+      raise TypeError, "can't convert #{value.class} to Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(result)})"
     end
     result
   end
@@ -11869,7 +11869,7 @@ class Struct
       end
       i = name.to_int
       unless i.is_a?(Integer)
-        raise TypeError, "can't convert #{name.class} into Integer (#{name.class}#to_int gives #{__ir_conversion_result_name__(i)})"
+        raise TypeError, "can't convert #{name.class} to Integer (#{name.class}#to_int gives #{__ir_conversion_result_name__(i)})"
       end
       i += size if i < 0
       (i >= 0 && i < size) ? i : nil
@@ -12176,7 +12176,7 @@ class Exception
     # rb_get_backtrace: whatever #backtrace answers, which has to be nil or an Array of Strings
     backtrace = exc.backtrace
     unless backtrace.nil? || (backtrace.is_a?(::Array) && backtrace.all? { |line| line.is_a?(::String) })
-      ::Kernel.raise(::TypeError, "backtrace must be Array of String")
+      ::Kernel.raise(::TypeError, "backtrace must be an Array of String or an Array of Thread::Backtrace::Location")
     end
     backtrace = fallback if backtrace.nil? || backtrace.empty?
     backtrace = [] if backtrace.nil?
@@ -12885,7 +12885,7 @@ module Kernel
     end
     unless converted.is_a?(::String)
       ::Kernel.raise(::TypeError,
-        "can't convert #{object.class} into String (#{object.class}#to_s gives #{__ir_conversion_result_name__(converted)})")
+        "can't convert #{object.class} to String (#{object.class}#to_s gives #{__ir_conversion_result_name__(converted)})")
     end
     converted
   end
@@ -12908,7 +12908,7 @@ module Kernel
     end
     converted = object.to_hash
     unless converted.is_a?(::Hash)
-      ::Kernel.raise(::TypeError, "can't convert #{object.class} into Hash (#{object.class}#to_hash gives #{__ir_conversion_result_name__(converted)})")
+      ::Kernel.raise(::TypeError, "can't convert #{object.class} to Hash (#{object.class}#to_hash gives #{__ir_conversion_result_name__(converted)})")
     end
     converted
   end

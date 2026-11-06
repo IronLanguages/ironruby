@@ -679,7 +679,7 @@ class Rational < Numeric
     unless ::Rational === result
       name = nil.equal?(value) ? 'nil' : __ir_class_of__(value)
       ::Kernel.raise(::TypeError,
-        "can't convert #{name} into Rational (#{name}#to_r gives #{__ir_conversion_result_name__(result)})")
+        "can't convert #{name} to Rational (#{name}#to_r gives #{__ir_conversion_result_name__(result)})")
     end
     result
   end
