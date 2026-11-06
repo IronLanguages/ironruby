@@ -910,6 +910,10 @@ namespace IronRuby.Tests {
                 Io_BuiltinReaders1,
                 Io_LineReaders2,
                 Io_LineReaders3,
+                Io_Timeout1,
+                Io_Timeout2,
+                Core_Ruby4Surface1,
+                DidYouMean_Lazy1,
                 StringIO_LineReaders1,
                 Kernel_ConversionsInjectZip1,
                 Method_LightFrame1,
@@ -926,6 +930,7 @@ namespace IronRuby.Tests {
                 ManyLocals1,
                 ManyLocals2,
                 Block_ReturnTraceFrameCleanup1,
+                Thread_SetTraceFunc1,
                 Fiber_ReclamationClrBoundary1,
                 DeepNesting1,
 
