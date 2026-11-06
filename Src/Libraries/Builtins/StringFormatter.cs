@@ -134,8 +134,6 @@ namespace IronRuby.Builtins {
 
         // The options for formatting the current formatting specifier in the format string
         private FormatSettings _opts;
-        // Should ddd.0 be displayed as "ddd" or "ddd.0". "'%g' % ddd.0" needs "ddd", but str(ddd.0) needs "ddd.0"
-        private bool _TrailingZeroAfterWholeFloat;
 
         private StringBuilder _buf;
 
@@ -169,11 +167,6 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region Public API Surface
-
-        public bool TrailingZeroAfterWholeFloat {
-            get { return _TrailingZeroAfterWholeFloat; }
-            set { _TrailingZeroAfterWholeFloat = value; }
-        }
 
         public MutableString/*!*/ Format() {
             _index = 0;
@@ -1266,9 +1259,6 @@ namespace IronRuby.Builtins {
                     if (precision == 0 && _opts.AltForm) {
                         body += ".";
                     }
-                    if (_TrailingZeroAfterWholeFloat && precision == 0 && body.IndexOf('.') < 0) {
-                        body += ".0";
-                    }
                     break;
 
                 case 'e':
@@ -1279,12 +1269,6 @@ namespace IronRuby.Builtins {
                 case 'g':
                 case 'G':
                     body = FormatGeneral(magnitude, precision, upperCase, _opts.AltForm);
-                    // Float#to_s is built on "%.15g" and wants the decorative ".0" that marks
-                    // the result as a float: 123.0.to_s is "123.0", not "123". "%g" itself
-                    // never adds it, so only the internal Float#to_s caller sets the flag.
-                    if (_TrailingZeroAfterWholeFloat && body.IndexOfAny(_FloatMarkers) < 0) {
-                        body += ".0";
-                    }
                     break;
 
                 default: // 'a', 'A'
@@ -1295,9 +1279,6 @@ namespace IronRuby.Builtins {
 
             AppendPadded(SignFor(isNegative), prefix, body, true);
         }
-
-        /// <summary>Characters whose presence already marks a rendered number as a float.</summary>
-        private static readonly char[] _FloatMarkers = new char[] { '.', 'e', 'E', 'n', 'N' };
 
         private bool IsRational(object value) {
             return value != null && !(value is int) && !(value is long) && !(value is BigInteger) && !(value is double) &&
@@ -1340,14 +1321,12 @@ namespace IronRuby.Builtins {
                 body = numerator.ToString(CultureInfo.InvariantCulture);
                 if (precision > 0) {
                     body += "." + new string('0', precision);
-                } else if (_opts.AltForm) {
-                    body += ".";
                 }
             } else {
                 BigInteger scaled = (numerator * BigInteger.Pow(10, precision) + denominator / 2) / denominator;
                 string digits = scaled.ToString(CultureInfo.InvariantCulture);
                 if (precision <= 0) {
-                    body = digits + (_opts.AltForm ? "." : "");
+                    body = digits;
                 } else {
                     if (digits.Length <= precision) {
                         digits = digits.PadLeft(precision + 1, '0');
@@ -1377,8 +1356,6 @@ namespace IronRuby.Builtins {
             string body = BigInteger.Abs(value).ToString(CultureInfo.InvariantCulture);
             if (precision > 0) {
                 body += "." + new string('0', precision);
-            } else if (_opts.AltForm || _TrailingZeroAfterWholeFloat) {
-                body += _TrailingZeroAfterWholeFloat ? ".0" : ".";
             }
 
             AppendPadded(SignFor(value.Sign < 0), "", body, true);
