@@ -23,7 +23,6 @@ using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime {
 
-    [Serializable]
     public sealed class RubyOptions : LanguageOptions {
         private readonly ReadOnlyCollection<string>/*!*/ _arguments;
         private readonly RubyEncoding/*!*/ _localeEncoding;

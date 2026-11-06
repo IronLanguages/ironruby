@@ -57,7 +57,6 @@ namespace IronRuby.Compiler {
         WrappedFile,
     }
 
-    [Serializable]
     public sealed class RubyCompilerOptions : CompilerOptions {
         /// <summary>
         /// Embedded code. The code being compiled is embedded into an already compiled code.
