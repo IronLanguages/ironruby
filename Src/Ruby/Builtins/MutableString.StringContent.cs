@@ -55,15 +55,35 @@ namespace IronRuby.Builtins {
                 return SwitchToMutable();
             }
 
+            // ASCII text in an ASCII-compatible encoding is its own bytes. Narrowing it is one
+            // vectorized pass; the escaping encoder, which has to be ready for characters that are
+            // not valid, costs a few hundred nanoseconds even on a short literal - and a literal
+            // written to an IO, or asked for its bytesize, is switched to bytes this way first.
+            private bool IsAsciiData() {
+                return _owner._encoding.IsAsciiIdentity && _owner.IsAscii();
+            }
+
             internal byte[]/*!*/ DataToBytes() {
-                return _data.Length > 0 ? _owner._encoding.EscapingEncoding.GetBytes(_data) : Utils.EmptyBytes;
+                if (_data.Length == 0) {
+                    return Utils.EmptyBytes;
+                }
+                if (IsAsciiData()) {
+                    var bytes = new byte[_data.Length];
+                    System.Text.Ascii.FromUtf16(_data, bytes, out _);
+                    return bytes;
+                }
+                return _owner._encoding.EscapingEncoding.GetBytes(_data);
             }
 
             internal int GetDataByteCount() {
-                return _owner._encoding.EscapingEncoding.GetByteCount(_data);
+                return IsAsciiData() ? _data.Length : _owner._encoding.EscapingEncoding.GetByteCount(_data);
             }
 
             internal void GetDataBytes(byte[]/*!*/ bytes, int start) {
+                if (IsAsciiData()) {
+                    System.Text.Ascii.FromUtf16(_data, new Span<byte>(bytes, start, _data.Length), out _);
+                    return;
+                }
                 _owner._encoding.EscapingEncoding.GetBytes(_data, 0, _data.Length, bytes, start);
             }
 
@@ -100,7 +120,9 @@ namespace IronRuby.Builtins {
             }
 
             public override int GetByteCount() {
-                if (_data.Length == 0 || _owner.HasSingleByteCharacters && !_owner.HasSurrogates()) {
+                // A fresh string has not been looked at yet; finding out that it is ASCII (or in a
+                // single-byte encoding) is cheaper than switching it to bytes to count them.
+                if (_data.Length == 0 || _owner.DetectSingleByteCharacters() && !_owner.HasSurrogates()) {
                     return _data.Length;
                 }
                 return SwitchToBinary().GetByteCount();
@@ -217,7 +239,7 @@ namespace IronRuby.Builtins {
             }
 
             public override byte GetByte(int index) {
-                if (index == 0 || _owner.HasSingleByteCharacters && !_owner.HasSurrogates()) {
+                if (index == 0 || _owner.DetectSingleByteCharacters() && !_owner.HasSurrogates()) {
                     if (index >= _data.Length) {
                         throw new IndexOutOfRangeException();
                     }

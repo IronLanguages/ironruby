@@ -1010,8 +1010,16 @@ namespace IronRuby.StandardLibrary.StringIO {
             }
 
             int separatorLength = separator.GetByteCount();
-            if (separatorLength == 0 || length < separatorLength || !line.EndsWith(separator)) {
+            if (separatorLength == 0 || length < separatorLength) {
                 return line;
+            }
+            // The separator is compared as bytes - the line is a slice of the content and its
+            // separator was found as bytes - and the line, which nothing else holds yet, is cut
+            // where it is rather than sliced into another string.
+            for (int i = 0; i < separatorLength; i++) {
+                if (line.GetByte(length - separatorLength + i) != separator.GetByte(i)) {
+                    return line;
+                }
             }
 
             int cut = length - separatorLength;
@@ -1020,7 +1028,33 @@ namespace IronRuby.StandardLibrary.StringIO {
             if (separatorLength == 1 && separator.GetByte(0) == (byte)'\n' && cut > 0 && line.GetByte(cut - 1) == (byte)'\r') {
                 cut--;
             }
-            return line.GetSlice(0, cut);
+            line.SetByteCount(cut);
+            return line;
+        }
+
+        // The bare call - nearly every gets - binds without the optional arguments' conversions.
+        [RubyMethod("gets")]
+        public static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self) {
+            return Gets(scope, self, scope.RubyContext.InputSeparator, -1, false);
+        }
+
+        private static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self, MutableString separator, int limit, bool chomp) {
+            var content = self.GetReadableContent();
+
+            int position = self._position;
+            MutableString result = Chomp(ReadLine(content, separator, limit, ref position), separator, chomp);
+            self._position = position;
+
+            // $_ is frame local, and the frame it belongs in is the caller's - which is why this
+            // is not wrapped in Ruby the way the chomp: option once was.
+            scope.GetInnerMostClosureScope().LastInputLine = result;
+            // Every read that answers a line counts, cut short by a limit or not - but the nil at
+            // the end is not a line, and neither is the "" of gets(0) (MRI's strio_gets).
+            if (result != null && limit != 0) {
+                self._lineNumber++;
+            }
+
+            return result;
         }
 
         [RubyMethod("gets")]
@@ -1035,21 +1069,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             bool chomp;
             ParseLineArguments(toHash, toStr, toInt, scope.RubyContext, separatorOrLimit, limitOrOptions, options,
                 out separator, out limit, out chomp);
-
-            var content = self.GetReadableContent();
-
-            int position = self._position;
-            MutableString result = Chomp(ReadLine(content, separator, limit, ref position), separator, chomp);
-            self._position = position;
-
-            // $_ is frame local, and the frame it belongs in is the caller's - which is why this
-            // is not wrapped in Ruby the way the chomp: option once was.
-            scope.GetInnerMostClosureScope().LastInputLine = result;
-            if (result != null && limit != 0) {
-                self._lineNumber++;
-            }
-
-            return result;
+            return Gets(scope, self, separator, limit, chomp);
         }
 
         [RubyMethod("readline")]
@@ -1138,6 +1158,10 @@ namespace IronRuby.StandardLibrary.StringIO {
                         position++;
                     }
                 }
+            } else if (separator.GetByteCount() == 1) {
+                // the usual "\n": one byte to look for, and no copy of the separator to look with
+                position = content.IndexOf(separator.GetByte(0), oldPosition);
+                position = (position != -1) ? position + 1 : length;
             } else {
                 // Positions are byte offsets, so the separator is looked for as bytes too: searching
                 // for it as a string switched a non-ASCII content to characters, giving a character

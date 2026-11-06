@@ -786,11 +786,32 @@ module Enumerable
   unless method_defined?(:zip_without_conversion)
     alias :zip_without_conversion :zip
 
+    # An Integer Range whose #each is the built-in one yields begin, begin + 1, ... so the
+    # element a row wants is worked out from its index. Going through Enumerator#next for
+    # every element cost ~15 us each: (1..100).zip(1..100) was ~40x MRI.
+    ZipIntegerRange__ = ::Struct.new(:first, :last) do
+      def at(index)
+        value = first + index
+        last.nil? || value <= last ? value : nil
+      end
+    end
+    RANGE_EACH__ = ::Range.instance_method(:each)
+    # the readers the indexed path asks; Range#each itself uses the stored endpoints, so a
+    # Range that overrides one of them - (1..3).dup can - has to be enumerated instead
+    RANGE_READERS__ = [:begin, :end, :exclude_end?].map { |name| [name, ::Range.instance_method(name)] }.freeze
+
     def __zip_source__(other)
       return other if other.is_a?(Array)
       if other.respond_to?(:to_ary)
         converted = other.to_ary
         return converted if converted.is_a?(Array)
+      end
+      if other.instance_of?(::Range) && other.method(:each).unbind == RANGE_EACH__ &&
+          RANGE_READERS__.all? { |name, method| other.method(name).unbind == method } &&
+          ::Integer === other.begin && (other.end.nil? || ::Integer === other.end)
+        last = other.end
+        last -= 1 if last && other.exclude_end?
+        return ZipIntegerRange__.new(other.begin, last)
       end
       unless other.respond_to?(:each)
         raise TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)"
@@ -808,6 +829,8 @@ module Enumerable
         sources.each do |source|
           row << if source.is_a?(Array)
                    source[index]
+                 elsif ZipIntegerRange__ === source
+                   source.at(index)
                  else
                    begin
                      source.next
@@ -3144,6 +3167,13 @@ module Kernel
       end
       # and an Integer is answered as it is, as the block below would
       return arg if base.nil? && ::Integer === arg && true.equal?(exception)
+      # a finite Float is truncated, as below, without the block
+      return arg.to_i if base.nil? && ::Float === arg && true.equal?(exception) && arg.finite?
+      # exception: false on a String: the C# parser answers nil for what it cannot read,
+      # where raising and rescuing cost ~55 us a call
+      if false.equal?(exception) && ::String === arg
+        return base.nil? ? __ir_try_Integer__(arg) : __ir_try_Integer__(arg, base)
+      end
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
         # a base goes with a String, and that is checked before anything else - Integer(nil, 8)
@@ -3218,6 +3248,10 @@ module Kernel
       if true.equal?(exception)
         return arg if ::Float === arg
         return __ir_Float__(arg) if ::Integer === arg
+      end
+      # exception: false on a String, as Integer does above
+      if false.equal?(exception) && ::String === arg
+        return __ir_try_Float__(arg)
       end
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do

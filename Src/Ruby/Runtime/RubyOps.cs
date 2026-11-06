@@ -4111,7 +4111,7 @@ namespace IronRuby.Runtime {
             return true;
         }
 
-        internal static bool TryParseRubyFloat(string/*!*/ str, out double result) {
+        public static bool TryParseRubyFloat(string/*!*/ str, out double result) {
             result = 0.0;
 
             int index = 0;

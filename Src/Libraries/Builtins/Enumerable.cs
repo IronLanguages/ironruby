@@ -591,6 +591,11 @@ namespace IronRuby.Builtins {
                 operatorName, new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
             );
 
+            var list = self as RubyArray;
+            if (list != null && IsPlainList(each.Context, self)) {
+                return InjectList(list, operation, scope, operatorName, site, initial);
+            }
+
             object result = initial;
             Each(each, self, Proc.Create(each.Context, 0, delegate(BlockParam/*!*/ selfBlock, object _, object[] __, RubyArray/*!*/ args) {
                 Debug.Assert(__.Length == 0);
@@ -614,6 +619,42 @@ namespace IronRuby.Builtins {
             }));
 
             return result != Missing.Value ? result : null;
+        }
+
+        /// <summary>
+        /// #inject over a plain list (see IsPlainList): the elements are taken from the list,
+        /// with no #each call, Proc or argument array for each one. inject(:+) over Fixnums adds
+        /// them here while Integer#+ is the built-in, as MRI's ary_inject_op does, and goes back to
+        /// calling #+ at the first element that is not a Fixnum.
+        /// </summary>
+        private static object InjectList(RubyArray/*!*/ list, BlockParam operation, RubyScope scope, string operatorName,
+            CallSite<Func<CallSite, RubyScope, object, object, object>> site, object initial) {
+
+            object result = initial;
+            int i = 0;
+            if (result == Missing.Value) {
+                if (list.Count == 0) {
+                    return null;
+                }
+                result = list[0];
+                i = 1;
+            }
+
+            if (site != null && operatorName == "+" && IListOps.IsBuiltinMethod(scope.RubyContext.IntegerClass, "+")) {
+                for (; i < list.Count && result is int && list[i] is int; i++) {
+                    result = ClrInteger.Add((int)result, (int)list[i]);
+                }
+            }
+
+            for (; i < list.Count; i++) {
+                object value = list[i];
+                if (site != null) {
+                    result = site.Target(site, scope, result, value);
+                } else if (operation.Yield(result, value, out result)) {
+                    return result;
+                }
+            }
+            return result;
         }
 
         #endregion

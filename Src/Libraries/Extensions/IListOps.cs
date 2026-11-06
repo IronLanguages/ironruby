@@ -2771,6 +2771,22 @@ namespace IronRuby.Builtins {
             return GetExtremes(fixnumCast, comparisonStorage, comparer, self, count, +1);
         }
 
+        /// <summary>
+        /// Array#minmax is [min, max] - MRI's ary_minmax calls the two, so a custom &lt;=&gt; sees
+        /// the same comparisons - and gets their Fixnum fast paths. With a block it is
+        /// Enumerable#minmax, as MRI hands it to super.
+        /// </summary>
+        [RubyMethod("minmax")]
+        public static object/*!*/ GetMinMax(CallSiteStorage<Func<CallSite, object, Proc, object>>/*!*/ each,
+            ComparisonStorage/*!*/ comparisonStorage, BlockParam comparer, IList/*!*/ self) {
+            if (comparer != null) {
+                return Enumerable.GetExtremes(each, comparisonStorage, comparer, self);
+            }
+            object min = GetExtreme(comparisonStorage, null, self, -1);
+            object max = GetExtreme(comparisonStorage, null, self, +1);
+            return new RubyArray(2) { min, max };
+        }
+
         private static bool IsBuiltinIntegerComparison(RubyContext/*!*/ context) {
             return IsBuiltinMethod(context.IntegerClass, "<=>");
         }
