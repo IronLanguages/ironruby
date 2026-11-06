@@ -3767,6 +3767,61 @@ Integer
 ");
         }
 
+        /// <summary>
+        /// A CLR member only an Int64's or a BigInteger's own type has is reachable on such an Integer, by its CLR or its
+        /// snake_case name. The CLR instance methods of Integer and Float (Int32's, Double's) take snake_case names too,
+        /// though, as Ruby built-ins, they stay out of the method lists.
+        /// </summary>
+        public void ClrIntegerClrMembers1() {
+            TestOutput(@"
+big = 2**70
+p big.IsEven, big.is_even, (big + 1).IsEven, big.Sign, (-big).sign
+p((2**40).IsEven) rescue p $!.class
+p 5.to_string, 255.to_string('X'), (2**40).to_string, big.to_string, 5.compare_to(3), 1.5.to_string, 1.5.compare_to(2.0)
+p 5.respond_to?(:to_string), 5.methods.include?(:to_string), Integer.instance_methods.include?(:compare_to)
+p((5.foo_bar rescue $!.class), (big.foo_bar rescue $!.class))
+", @"
+true
+true
+false
+1
+-1
+NoMethodError
+'5'
+'FF'
+'1099511627776'
+'1180591620717411303424'
+1
+'1.5'
+-1
+true
+false
+false
+NoMethodError
+NoMethodError
+");
+        }
+
+        /// <summary>
+        /// Nullable&lt;T&gt; is constructed like other value types: with a value it is that value, without one nil.
+        /// Type#to_class of an interface is a TypeError.
+        /// </summary>
+        public void ClrNullable1() {
+            TestOutput(@"
+p System::Nullable[Integer].new(3), System::Nullable[Integer].new
+p System::Nullable[System::DateTime].new(System::DateTime.new(2020, 1, 2)).Day
+p System::Collections::Generic::List[System::Nullable[Integer]].new([1, nil]).to_a
+p((System::IComparable.to_clr_type.to_class rescue $!.class), System::IComparable.to_clr_type.to_module)
+", @"
+3
+nil
+2
+[1, nil]
+TypeError
+System::IComparable
+");
+        }
+
         public void ClrArrays1() {
             Runtime.Globals.SetVariable("A2", Context.GetClass(typeof(int[,])));
             TestOutput(@"

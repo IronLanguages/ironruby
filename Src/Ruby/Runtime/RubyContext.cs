@@ -2306,8 +2306,10 @@ namespace IronRuby.Runtime {
                         result.Append(", ");
                     }
                     
+                    // (Int64 and BigInteger map to Integer, but List<long> is List[System::Int64], see GetClrTypeModule)
                     RubyModule module;
-                    if (context != null && context.TryGetModuleNoLock(genericArgs[i], out module)) {
+                    if (context != null && genericArgs[i] != typeof(long) && genericArgs[i] != typeof(BigInteger) &&
+                        context.TryGetModuleNoLock(genericArgs[i], out module)) {
                         result.Append(module.Name);
                     } else {
                         AppendQualifiedNameNoLock(result, genericArgs[i], context, noGenericArgs);

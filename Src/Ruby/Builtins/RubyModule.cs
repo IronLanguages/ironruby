@@ -3010,7 +3010,7 @@ namespace IronRuby.Builtins {
                 // Note: Do not allow mangling for CLR virtual lookups - we want to match the overridden name exactly as is, 
                 // so that it corresponds to the base method call the override stub performs.
                 bool mapNames = (Restrictions & ModuleRestrictions.NoNameMapping) == 0;
-                bool unmangleNames = !virtualLookup && mapNames;
+                bool unmangleNames = !virtualLookup && (mapNames || IsUnmangledBuiltin());
 
                 if (IsModuleType(_typeTracker.Type) ?
                     TryGetDefaultInterfaceMember(name, unmangleNames, out method) :
@@ -3022,6 +3022,15 @@ namespace IronRuby.Builtins {
 
             method = null;
             return false;
+        }
+
+        /// <summary>
+        /// Integer and Float map no names (<see cref="ModuleRestrictions.NoNameMapping"/>), yet the CLR instance methods of
+        /// their Int32 and Double take snake_case names as any CLR type's do: 5.to_string("X"), 1.5.compare_to(2.0). Such a
+        /// member is still left out of the method lists (<see cref="IsUnlisted"/>), and an operator or indexer is not mapped.
+        /// </summary>
+        private bool IsUnmangledBuiltin() {
+            return _typeTracker.Type.IsPrimitive && this is RubyClass cls && !cls.IsSingletonClass;
         }
 
         // The public instance members of an interface and its base interfaces that have a default implementation (C# 8),

@@ -4502,9 +4502,10 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// The constructor of a value type that declares no parameterless one: T.new is default(T).
         /// Instantiated for the type, it returns T, so keywords passed to new can set the new value's
-        /// fields and properties like those passed to a real constructor.
+        /// fields and properties like those passed to a real constructor. (Not constrained to struct: Nullable&lt;T&gt;
+        /// is a value type that does not satisfy that constraint, and System::Nullable[Integer].new is nil.)
         /// </summary>
-        public static T CreateDefaultValue<T>() where T : struct {
+        public static T CreateDefaultValue<T>() {
             return default(T);
         }
 
@@ -4653,6 +4654,30 @@ namespace IronRuby.Runtime {
             return (str != null) ? str.ConvertToString() : value;
         }
 
+        /// <summary>
+        /// The test of a rule whose overload was chosen by the items of a Ruby Array argument (see
+        /// RubyOverloadResolver.SelectBestItemConversion): whether <paramref name="itemTypes"/> are the distinct CLR types of
+        /// the items, typeof(DynamicNull) for nil - each item has one of them, and each is some item's. Linear in the items,
+        /// as is the conversion of the Array that follows.
+        /// </summary>
+        public static bool HasItemTypes(IList/*!*/ list, Type/*!*/[]/*!*/ itemTypes) {
+            Span<bool> seen = itemTypes.Length <= 32 ? stackalloc bool[itemTypes.Length] : new bool[itemTypes.Length];
+            int seenCount = 0;
+            for (int i = 0; i < list.Count; i++) {
+                object item = list[i];
+                int index = Array.IndexOf(itemTypes, (item != null) ? item.GetType() : typeof(DynamicNull));
+                if (index < 0) {
+                    return false;
+                }
+                if (!seen[index]) {
+                    seen[index] = true;
+                    seenCount++;
+                }
+            }
+            return seenCount == itemTypes.Length;
+        }
+
+        internal static readonly MethodInfo/*!*/ HasItemTypesMethod = typeof(RubyOps).GetMethod(nameof(HasItemTypes));
         internal static readonly MethodInfo/*!*/ ToClrArgumentMethod = typeof(RubyOps).GetMethod(nameof(ToClrArgument));
         internal static readonly MethodInfo/*!*/ AllocateUnconstructedMethod = typeof(RubyOps).GetMethod(nameof(AllocateUnconstructed));
         internal static readonly MethodInfo/*!*/ EnsureConstructedMethod = typeof(RubyOps).GetMethod(nameof(EnsureConstructed));

@@ -27,7 +27,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_class")]
         public static RubyClass/*!*/ ToClass(RubyContext/*!*/ context, Type/*!*/ self) {
             if (self.IsInterface) {
-                RubyExceptions.CreateTypeError("Cannot convert a CLR interface to a Ruby class");
+                throw RubyExceptions.CreateTypeError("Cannot convert a CLR interface to a Ruby class");
             }
             return context.GetClrTypeModule(self) as RubyClass ?? context.GetClass(self);
         }

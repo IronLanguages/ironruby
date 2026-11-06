@@ -21,6 +21,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
+using System.Numerics;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
@@ -59,6 +60,7 @@ namespace IronRuby.Runtime.Calls {
 
         // Arguments whose class the rule tests, because the protocol conversions their class implements decided the binding.
         private List<DynamicMetaObject> _classTestedArguments;
+        private List<DynamicMetaObject> _itemTestedArguments;
 
         // Keywords of a call to a CLR method that bind by name: to its parameters, and for a constructor
         // also to the properties and fields of the new object. Null when the call passes no keywords or
@@ -984,6 +986,20 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
+            if (actualType == typeof(BigInteger)) {
+                Candidate bignum = PreferBignumParameter(typeOne, typeTwo);
+                if (IsChosen(bignum)) {
+                    return bignum;
+                }
+            }
+
+            if (arg.HasValue && arg.Value is RubyArray array) {
+                Candidate items = SelectBestItemConversion(arg, array, typeOne, typeTwo);
+                if (IsChosen(items)) {
+                    return items;
+                }
+            }
+
             // prefer integer type over enum:
             if (typeOne.IsEnum && Enum.GetUnderlyingType(typeOne) == typeTwo) {
                 return Candidate.Two;
@@ -1006,6 +1022,188 @@ namespace IronRuby.Runtime.Calls {
 
             return base.SelectBestConversionFor(arg, candidateOne, candidateTwo, level);
         }
+
+        /// <summary>
+        /// An Integer held in a BigInteger is beyond the Int64 range, which every other integral CLR type is narrower than
+        /// or barely wider than, so of numeric parameters it converts to (all explicitly) the floating-point ones are better:
+        /// Double first - Integer#to_f, the conversion Ruby itself makes for a Float operation - then Decimal, then Single.
+        /// System::Math.Abs(2**70) is Abs(Double).
+        /// </summary>
+        private static Candidate PreferBignumParameter(Type/*!*/ typeOne, Type/*!*/ typeTwo) {
+            int rankOne = GetBignumParameterRank(typeOne), rankTwo = GetBignumParameterRank(typeTwo);
+            return rankOne == rankTwo || rankOne < 0 || rankTwo < 0 ? Candidate.Equivalent : rankOne > rankTwo ? Candidate.One : Candidate.Two;
+        }
+
+        private static bool IsChosen(Candidate candidate) {
+            return candidate == Candidate.One || candidate == Candidate.Two;
+        }
+
+        private static Candidate Other(Candidate candidate) {
+            return candidate == Candidate.One ? Candidate.Two : candidate == Candidate.Two ? Candidate.One : candidate;
+        }
+
+        private static int GetBignumParameterRank(Type/*!*/ type) {
+            switch (Type.GetTypeCode(type)) {
+                case TypeCode.Double: return 3;
+                case TypeCode.Decimal: return 2;
+                case TypeCode.Single: return 1;
+                case TypeCode.SByte: case TypeCode.Byte: case TypeCode.Int16: case TypeCode.UInt16:
+                case TypeCode.Int32: case TypeCode.UInt32: case TypeCode.Int64: case TypeCode.UInt64:
+                    return 0;
+                default:
+                    return (type == typeof(IntPtr) || type == typeof(UIntPtr)) ? 0 : -1;
+            }
+        }
+
+        #region Ruby Array to typed collection
+
+        /// <summary>
+        /// Of two collection parameters a Ruby Array converts to with different item types (String.Join's String[] and
+        /// Object[], LINQ Sum's IEnumerable&lt;int&gt;, IEnumerable&lt;double&gt;, ...), the better is decided by the items
+        /// the Array holds, as C# decides by the static type of a collection: first the one each item converts to without
+        /// narrowing (an Integer to an Object, not to a String), then the one whose item type is the better parameter for
+        /// every item (Int32 over Int64 and Double for [1, 2, 3], Double for [1.5, 2]). The rule then tests that the items
+        /// are of the CLR types seen now (<see cref="RubyOps.HasItemTypes"/>), which costs a pass over the items, as does the
+        /// conversion of the Array that follows; other items bind again. Only the binding of a CLR call with such overloads
+        /// does any of this. An item of a splatted list is left to the other rules, as its test could not precede the splat's.
+        /// </summary>
+        private Candidate SelectBestItemConversion(DynamicMetaObject/*!*/ arg, RubyArray/*!*/ array, Type/*!*/ typeOne, Type/*!*/ typeTwo) {
+            Type itemOne = GetArrayItemType(typeOne), itemTwo = GetArrayItemType(typeTwo);
+            if (itemOne == null || itemTwo == null || itemOne == itemTwo) {
+                return Candidate.Equivalent;
+            }
+
+            if (IsSplatted(arg)) {
+                return Candidate.Equivalent;
+            }
+
+            Type[] elementTypes = GetElementTypes(array);
+            bool fitsOne = true, fitsTwo = true;
+            foreach (Type elementType in elementTypes) {
+                fitsOne &= ItemFits(elementType, itemOne);
+                fitsTwo &= ItemFits(elementType, itemTwo);
+            }
+
+            Candidate result = Candidate.Equivalent;
+            if (fitsOne != fitsTwo) {
+                result = fitsOne ? Candidate.One : Candidate.Two;
+            } else {
+                foreach (Type elementType in elementTypes) {
+                    Candidate preferred = CompareItemTypes(elementType, itemOne, itemTwo);
+                    if (!IsChosen(preferred)) {
+                        continue;
+                    }
+                    if (result != Candidate.Equivalent && result != preferred) {
+                        result = Candidate.Equivalent;
+                        break;
+                    }
+                    result = preferred;
+                }
+            }
+
+            // The outcome depends on the items, whichever it is: an ambiguity found for ["a"] must not stand for [1] either.
+            AddItemTypesTest(arg, elementTypes);
+            return result;
+        }
+
+        /// <summary>
+        /// The item type of a collection parameter a Ruby Array is passed for: T of T[], IEnumerable&lt;T&gt; and the like,
+        /// Object of a non-generic IEnumerable or IList - or null if the parameter is not a collection.
+        /// </summary>
+        private static Type GetArrayItemType(Type/*!*/ type) {
+            Type itemType = Converter.GetListItemType(type);
+            if (itemType == null && type != typeof(object) && type.IsAssignableFrom(typeof(RubyArray)) && typeof(IEnumerable).IsAssignableFrom(type)) {
+                itemType = typeof(object);
+            }
+            return itemType;
+        }
+
+        // The distinct CLR types of the items, typeof(DynamicNull) for nil.
+        private static Type/*!*/[]/*!*/ GetElementTypes(RubyArray/*!*/ array) {
+            var types = new List<Type>();
+            for (int i = 0; i < array.Count; i++) {
+                object item = array[i];
+                Type type = (item != null) ? item.GetType() : typeof(DynamicNull);
+                if (!types.Contains(type)) {
+                    types.Add(type);
+                }
+            }
+            return types.ToArray();
+        }
+
+        private static bool IsStringItem(Type/*!*/ elementType) {
+            return elementType == typeof(MutableString) || elementType == typeof(RubySymbol);
+        }
+
+        // An item converts to the item type without narrowing (a Ruby String or Symbol to a String counts as such):
+        private static bool ItemFits(Type/*!*/ elementType, Type/*!*/ itemType) {
+            if (itemType == typeof(object) || elementType == itemType) {
+                return true;
+            }
+
+            Type underlying = Nullable.GetUnderlyingType(itemType);
+            if (elementType == typeof(DynamicNull)) {
+                return underlying != null || !itemType.IsValueType;
+            }
+
+            if (IsStringItem(elementType) && (underlying ?? itemType) == typeof(string)) {
+                return true;
+            }
+
+            return Converter.CanConvertFrom(null, elementType, itemType, false, NarrowingLevel.None, false, false).IsConvertible;
+        }
+
+        private Candidate CompareItemTypes(Type/*!*/ elementType, Type/*!*/ itemOne, Type/*!*/ itemTwo) {
+            bool exactOne = elementType == itemOne || IsStringItem(elementType) && itemOne == typeof(string);
+            bool exactTwo = elementType == itemTwo || IsStringItem(elementType) && itemTwo == typeof(string);
+            if (exactOne != exactTwo) {
+                return exactOne ? Candidate.One : Candidate.Two;
+            }
+
+            if (elementType == typeof(BigInteger)) {
+                Candidate bignum = PreferBignumParameter(itemOne, itemTwo);
+                if (IsChosen(bignum)) {
+                    return bignum;
+                }
+            }
+
+            // T over T? for an item that is not nil, T? over T for nil (which only T? takes):
+            Type underlyingOne = Nullable.GetUnderlyingType(itemOne), underlyingTwo = Nullable.GetUnderlyingType(itemTwo);
+            if (underlyingOne == itemTwo || underlyingTwo == itemOne) {
+                return (elementType == typeof(DynamicNull)) == (underlyingOne != null) ? Candidate.One : Candidate.Two;
+            }
+
+            // the more specific item type, the one that converts to the other implicitly (Int64 to Double, String to Object):
+            bool oneToTwo = Converter.CanConvertFrom(null, itemOne, itemTwo, false, NarrowingLevel.None, false, false).IsConvertible;
+            bool twoToOne = Converter.CanConvertFrom(null, itemTwo, itemOne, false, NarrowingLevel.None, false, false).IsConvertible;
+            if (oneToTwo != twoToOne) {
+                return oneToTwo ? Candidate.One : Candidate.Two;
+            }
+
+            Candidate preferred = PreferConvert(itemOne, itemTwo);
+            return IsChosen(preferred) ? preferred : Other(PreferConvert(itemTwo, itemOne));
+        }
+
+        // Whether the argument is an item of a splatted list (or a keyword), whose test has to follow that of the splat:
+        private bool IsSplatted(DynamicMetaObject/*!*/ arg) {
+            var args = GetActualArguments();
+            int index = args.Arguments.IndexOf(arg);
+            return index < 0 || index >= args.FirstSplattedArg && index <= _lastSplattedArg;
+        }
+
+        private void AddItemTypesTest(DynamicMetaObject/*!*/ arg, Type/*!*/[]/*!*/ elementTypes) {
+            _itemTestedArguments ??= new List<DynamicMetaObject>();
+            if (_itemTestedArguments.Contains(arg)) {
+                return;
+            }
+            _itemTestedArguments.Add(arg);
+
+            _metaBuilder.AddCondition(Expression.Call(
+                RubyOps.HasItemTypesMethod, AstUtils.Convert(arg.Expression, typeof(IList)), AstUtils.Constant(elementTypes)
+            ));
+        }
+
+        #endregion
 
         /// <summary>
         /// True if the argument converts to the parameter only by one of Ruby's conversion protocols and its class does not
@@ -1474,9 +1672,13 @@ namespace IronRuby.Runtime.Calls {
                 sb.Append(target.Name);
                 sb.Append('(');
                 foreach (var param in parameters) {
-                    if (!param.IsHidden) {
+                    // (an extension method called as a static method takes its hidden this parameter as an argument too)
+                    if (!param.IsHidden || param.ParameterInfo != null && _callConvention != SelfCallConvention.SelfIsInstance) {
                         sb.Append(innerComma);
-                        sb.Append(Binder.GetTypeName(param.Type));
+                        // Int64 and BigInteger values are Integers, but as parameter types they differ from Int32's:
+                        // Abs(System::Int64), not a second Abs(Integer) (see RubyContext.GetClrTypeModule).
+                        sb.Append(param.Type == typeof(long) || param.Type == typeof(BigInteger) ?
+                            Context.GetClrTypeModule(param.Type).Name : Binder.GetTypeName(param.Type));
                         if (param.ProhibitNull) {
                             sb.Append('!');
                         }
