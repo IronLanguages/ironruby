@@ -4502,9 +4502,10 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// The constructor of a value type that declares no parameterless one: T.new is default(T).
         /// Instantiated for the type, it returns T, so keywords passed to new can set the new value's
-        /// fields and properties like those passed to a real constructor.
+        /// fields and properties like those passed to a real constructor. (Not constrained to struct: Nullable&lt;T&gt;
+        /// is a value type that does not satisfy that constraint, and System::Nullable[Integer].new is nil.)
         /// </summary>
-        public static T CreateDefaultValue<T>() where T : struct {
+        public static T CreateDefaultValue<T>() {
             return default(T);
         }
 

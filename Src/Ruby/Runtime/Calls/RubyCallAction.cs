@@ -21,6 +21,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
+using System.Numerics;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
@@ -723,6 +724,30 @@ namespace IronRuby.Runtime.Calls {
                 new VisibilityContext(scope.SelfImmediateClass);
         }
 
+        /// <summary>
+        /// Integer's CLR members are those of Int32, its CLR type. An Int64 or BigInteger receiver is an Integer too, and a
+        /// member only its own type has - (2**70).IsEven, .Sign, (2**40).is_even - is looked up there before the call goes to
+        /// method_missing. The rule already tests the receiver's CLR type, so an Int32 never gets here; the test of the class
+        /// version covers extension methods activated for the type later.
+        /// </summary>
+        private static MethodResolutionResult ResolveOwnClrMember(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args,
+            RubyClass/*!*/ targetClass, string/*!*/ methodName, MethodResolutionResult notFound) {
+
+            object target = args.Target;
+            var context = targetClass.Context;
+            if (!(target is long || target is BigInteger) || targetClass != context.IntegerClass ||
+                !(context.GetClrTypeModule(target.GetType()) is RubyClass ownClass) || ownClass == targetClass) {
+                return notFound;
+            }
+
+            metaBuilder.AddVersionTest(ownClass);
+            RubyMemberInfo member;
+            if (ownClass.TryGetClrMember(methodName, null, out member) && member.Visibility == RubyMethodVisibility.Public) {
+                return new MethodResolutionResult(member, ownClass, true);
+            }
+            return notFound;
+        }
+
         internal static MethodResolutionResult Resolve(MetaObjectBuilder/*!*/ metaBuilder, string/*!*/ methodName, CallArguments/*!*/ args,
             out RubyMemberInfo methodMissing) {
 
@@ -753,6 +778,10 @@ namespace IronRuby.Runtime.Calls {
                 } else {
                     var options = args.Signature.IsVirtualCall ? MethodLookup.Virtual : MethodLookup.Default;
                     method = targetClass.ResolveMethodNoLock(methodName, visibilityContext, options, refinements).InvalidateSitesOnOverride();
+                }
+
+                if (!method.Found && method.Info == null && !args.Signature.IsVirtualCall) {
+                    method = ResolveOwnClrMember(metaBuilder, args, targetClass, methodName, method);
                 }
 
                 if (!method.Found) {
