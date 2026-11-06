@@ -367,7 +367,7 @@ Build with `-c Release` and run with `IR_CONFIG=Release ./ir.sh`: the optimized 
 `IRONRUBY_STARTUP_TRACE=1` prints, when the process exits, where its startup went: milestones
 since the process started, and for the Ruby files it loaded the time spent parsing them
 (prism), transforming them to the DLR tree, compiling them for the interpreter and running
-their own code, slowest files first.
+their own code, the 15 slowest files first (`IRONRUBY_STARTUP_TRACE=all`: every file).
 
 ## Packaging an application (`irubyc`)
 

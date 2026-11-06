@@ -5847,33 +5847,6 @@ module Kernel
   end
 end
 
-# Comparable#== calls <=>, and the default Kernel#<=> is defined in terms of
-# ==, so two objects that define neither recurse forever and overflow the
-# stack. CRuby breaks the cycle with rb_exec_recursive_paired; do the same.
-module Comparable
-  def ==(other)
-    return true if equal?(other)
-
-    stack = (Thread.current[:__comparable_eq__] ||= [])
-    pair = [object_id, other.object_id]
-    return false if stack.include?(pair)
-
-    stack.push(pair)
-    begin
-      # Ruby 2.3 stopped rescuing StandardError here: whatever <=> raises goes
-      # through, and a result that is not a number raises ArgumentError.
-      result = (self <=> other)
-      return false if result.nil?
-      unless result.is_a?(Numeric)
-        raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
-      end
-      result == 0
-    ensure
-      stack.pop
-    end
-  end
-end
-
 # String#each_line / String#lines.
 #
 # The C# implementation is frozen at Ruby 1.8: it has no `chomp:` keyword, its

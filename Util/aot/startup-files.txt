@@ -1,7 +1,9 @@
 # The Ruby files ir -e 1 loads at startup (strace of a run), compiled into IronRuby.Startup.dll by
 # IronRuby.Aot startup. Paths are relative to this file.
 ../../Src/StdLib/ironruby/argf.rb
+../../Src/StdLib/ironruby/ironruby/complex.rb
 ../../Src/StdLib/ironruby/ironruby/gem_compat.rb
+../../Src/StdLib/ironruby/ironruby/rational.rb
 ../../Src/StdLib/ironruby/monitor.rb
 ../../Src/StdLib/ironruby/rbconfig.rb
 ../../Src/StdLib/ironruby/ruby4.rb
@@ -38,11 +40,11 @@
 ../../Src/StdLib/ironruby/io/console.rb
 ../../Src/StdLib/ironruby/date.rb
 ../../Src/StdLib/ironruby/date/format.rb
-../../Src/StdLib/ruby/4.0/fileutils.rb
 ../../Src/StdLib/ruby/4.0/optparse.rb
 ../../Src/StdLib/ruby/4.0/pp.rb
 ../../Src/StdLib/ruby/4.0/prettyprint.rb
 ../../Src/StdLib/ruby/4.0/tempfile.rb
 ../../Src/StdLib/ruby/4.0/delegate.rb
-../../Src/StdLib/ruby/4.0/tmpdir.rb
 ../../Src/StdLib/ruby/4.0/time.rb
+# Not fileutils.rb and tmpdir.rb: an exception re-raised through one of their rescue clauses (FileUtils.mkdir_p,
+# Dir::Tmpname.create) loses a frame in compiled code that the interpreter keeps (Util/aot/check-startup.sh)

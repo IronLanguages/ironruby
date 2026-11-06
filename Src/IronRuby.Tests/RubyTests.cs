@@ -481,6 +481,7 @@ namespace IronRuby.Tests {
                 Require_UnreadableExtensions2,
                 CaseEquals1,
                 CaseEquals2,
+                ComparableEqual1,
                 Hooks1,
                 Hooks2,
                 Hooks3,
@@ -1026,6 +1027,7 @@ namespace IronRuby.Tests {
                 Backtrace_CalledNameLabels1,
                 Enumerator_CalledName1,
                 StringIO_IteratorNames1,
+                Backtrace9,
 
                 Dlr_RubySnippet,
                 Dlr_ClrSubtype,

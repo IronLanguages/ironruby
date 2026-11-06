@@ -669,6 +669,10 @@ namespace IronRuby.Runtime {
                 method.Name.StartsWith("Thunk", StringComparison.Ordinal)) {
                 return false;
             }
+            // the stub MethodInfo.Invoke makes for a method it calls often (see MethodBaseInvoker below)
+            if (type == null && method.Name.StartsWith("InvokeStub_", StringComparison.Ordinal)) {
+                return false;
+            }
             if (type != null) {
                 if (type.Assembly == typeof(RubyOps).Assembly || type.Namespace != null && 
                     (type.Namespace.StartsWith("IronRuby.StandardLibrary", StringComparison.Ordinal) ||
@@ -696,6 +700,13 @@ namespace IronRuby.Runtime {
                 // IronLanguages/dlr #371), which put ":0:in 'Throw'" on top of every backtrace of an exception
                 // leaving an interpreted frame. Ruby code calling ExceptionDispatchInfo.Throw gets the same.
                 if (type == typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo)) {
+                    return false;
+                }
+
+                // MethodInfo.Invoke's own frames (RuntimeMethodHandle.InvokeMethod, MethodBaseInvoker): the interpreter
+                // calls a delegate with more parameters than it has call instructions for (a Ruby method with more than
+                // a dozen) through reflection, and rethrows what it raised from where it was raised.
+                if (type == typeof(RuntimeMethodHandle) || type.Namespace == "System.Reflection" && type.Assembly == typeof(object).Assembly) {
                     return false;
                 }
 

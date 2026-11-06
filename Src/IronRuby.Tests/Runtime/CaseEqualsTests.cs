@@ -73,5 +73,43 @@ p events
 [:===, :===, :===]
 ");
         }
+
+        /// <summary>
+        /// Comparable#== as MRI's cmp_equal: a <=> result that is not nil is compared with 0 by asking it (rb_cmpint), and
+        /// a <=> that compares the same pair again inside itself, or the default Kernel#<=> (which asks ==), gets false
+        /// there rather than recursing until the stack runs out.
+        /// </summary>
+        public void ComparableEqual1() {
+            TestOutput(@"
+class Zero; def >(x) = false; def <(x) = false; end
+class O; include Comparable; def <=>(o) = Zero.new; end
+class S; include Comparable; def <=>(o) = 'x'; end
+class Rec
+  include Comparable
+  attr_accessor :other
+  def <=>(o) = (other == o.other) ? 0 : 1
+end
+a = Rec.new; b = Rec.new; a.other = a; b.other = b
+p O.new == O.new
+begin
+  S.new == S.new
+rescue ArgumentError => e
+  p e.message
+end
+p a == b
+c = Class.new { include Comparable }
+p c.new == c.new
+x = c.new
+p x == x
+p Comparable.instance_method(:==).parameters
+", @"
+true
+""comparison of String with 0 failed""
+false
+false
+true
+[[:req]]
+");
+        }
     }
 }
