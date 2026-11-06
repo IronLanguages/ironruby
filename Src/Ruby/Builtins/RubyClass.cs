@@ -411,7 +411,7 @@ namespace IronRuby.Builtins {
             _isSingletonClass = isSingletonClass;
             _isRubyClass = isRubyClass;
             _singletonClassOf = singletonClassOf;
-            _factories = factories ?? Utils.EmptyDelegates;
+            _factories = factories ?? Array.Empty<Delegate>();
 
             if (superClass != null) {
                 _level = superClass.Level + 1;

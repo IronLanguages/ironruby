@@ -1068,7 +1068,7 @@ namespace IronRuby.Runtime {
             // name too: MRI appends .rb and .so to it just the same.
             bool bareName = extension.Length == 0 ||
                 (!IsKnownExtension(extension, sourceFileExtensions ?? ArrayUtils.EmptyStrings) &&
-                 _LibraryExtensions.IndexOf(extension, DlrConfiguration.FileExtensionComparer) == -1);
+                 !_LibraryExtensions.Contains(extension, DlrConfiguration.FileExtensionComparer));
             if (appendExtensions && bareName && result.Count > 1 && result[0].SourceUnit == null) {
                 result = result.Where((f) => f.SourceUnit != null).Concat(result.Where((f) => f.SourceUnit == null)).ToList();
             }
@@ -1157,7 +1157,7 @@ namespace IronRuby.Runtime {
                 return GetSourceUnit(path, expandedPath, extension, false);
             } 
             
-            if (_LibraryExtensions.IndexOf(extension, DlrConfiguration.FileExtensionComparer) != -1) {
+            if (_LibraryExtensions.Contains(extension, DlrConfiguration.FileExtensionComparer)) {
                 if (Platform.FileExists(expandedPath)) {
                     return new ResolvedFile(expandedPath, null);
                 }
@@ -1188,7 +1188,7 @@ namespace IronRuby.Runtime {
         private static readonly string[] _LibraryExtensions = new string[] { ".dll", ".so", ".exe" };
 
         private static bool IsKnownExtension(string/*!*/ extension, string[]/*!*/ knownExtensions) {
-            return extension.Length > 0 && knownExtensions.IndexOf(extension, DlrConfiguration.FileExtensionComparer) >= 0;
+            return extension.Length > 0 && knownExtensions.Contains(extension, DlrConfiguration.FileExtensionComparer);
         }
 
         private ResolvedFile GetSourceUnit(string/*!*/ path, string/*!*/ fullPath, string/*!*/ extension, bool extensionAppended) {

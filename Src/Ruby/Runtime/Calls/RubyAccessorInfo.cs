@@ -64,7 +64,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
-            return Utils.EmptyMemberInfos;
+            return Array.Empty<MemberInfo>();
         }
     }
 
