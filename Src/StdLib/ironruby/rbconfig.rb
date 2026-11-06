@@ -77,10 +77,11 @@ module RbConfig
   CONFIG["sitearch"] = arch.dup
 
   # std lib
-  # Still 1.9.1: the version names the site directory (site_ruby/1.9.1, first on $LOAD_PATH
-  # and empty as shipped). The standard library itself is ruby/4.0
-  # (rubylibdir below) and gems go under gems/4.0.0 (rubygems/defaults/ironruby.rb).
-  CONFIG["ruby_version"] = stdlib_version = "1.9.1"
+  # The API version, "4.0.0" as in CRuby 4.0. It names the site and vendor directories
+  # (site_ruby/4.0.0 is first on $LOAD_PATH - Loader.cs - and empty as shipped) and the
+  # gem trees (gems/4.0.0, ~/.gem/ironruby/4.0.0). The standard library itself is
+  # ruby/4.0 (rubylibdir below).
+  CONFIG["ruby_version"] = stdlib_version = "#{CONFIG["MAJOR"]}.#{CONFIG["MINOR"]}.0"
   CONFIG["RUBY_BASE_NAME"] = ruby_base_name = "ruby"              # directory name
   CONFIG["datadir"] = datadir = "#{prefix}/share"
   CONFIG["rubylibprefix"] = rubylibprefix = "#{libdir}/#{ruby_base_name}"

@@ -8,34 +8,9 @@
 # lives here rather than in a patched copy of the vendored files.
 
 module Gem
-  ##
-  # IronRuby ships the Ruby 4.0 standard library, so its gems live under
-  # <libdir>/ruby/gems/4.0.0 - not under RbConfig's "ruby_version", which is
-  # still the 1.9.1 that names the site_ruby directory.
-
-  def self.default_dir
-    @default_dir ||= File.join(RbConfig::CONFIG["rubylibprefix"], "gems", ruby_api_version)
-  end
-
-  ##
-  # The API version gems are installed under.  RbConfig::CONFIG["ruby_version"]
-  # is "1.9.1" for the site_ruby directory; the gem tree follows RUBY_VERSION
-  # instead, as it does on CRuby.
-
-  def self.ruby_api_version
-    @ruby_api_version ||= RUBY_VERSION.split(".").first(2).push(0).join(".")
-  end
-
-  ##
-  # Path for gems in the user's home directory.  Same layout as CRuby, but
-  # keyed by engine ("ironruby") and the 4.0.0 API version, so IronRuby's
-  # user gems never collide with the host Ruby's.
-
-  def self.user_dir
-    gem_dir = File.join(Gem.user_home, ".gem")
-    gem_dir = File.join(Gem.data_home, "gem") unless File.exist?(gem_dir)
-    File.join(gem_dir, ruby_engine, ruby_api_version)
-  end
+  # default_dir (<libdir>/ruby/gems/4.0.0), ruby_api_version and user_dir
+  # (~/.gem/ironruby/4.0.0, apart from the host Ruby's) are upstream's: they
+  # follow RbConfig's ruby_version, which is "4.0.0" as on CRuby 4.0.
 
   ##
   # No host CRuby's gems.
