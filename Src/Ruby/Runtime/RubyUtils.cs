@@ -224,10 +224,6 @@ namespace IronRuby.Runtime {
 
             var context = tosConversion.Context;
             using (IDisposable handle = RubyUtils.InfiniteInspectTracker.TrackObject(obj)) {
-                if (handle == null) {
-                    return MutableString.CreateAscii("...");
-                }
-
                 MutableString str = MutableString.CreateMutable(context.GetIdentifierEncoding());
                 str.Append("#<");
                 str.Append(context.GetClassDisplayName(obj));
@@ -235,6 +231,11 @@ namespace IronRuby.Runtime {
                 // Ruby prints 2*object_id for objects
                 str.Append(':');
                 AppendFormatHexObjectId(str, GetObjectId(context, obj));
+
+                // an object met again inside its own inspect: MRI's rb_obj_inspect gives "#<Foo:0x... ...>"
+                if (handle == null) {
+                    return str.Append(" ...>");
+                }
 
                 RubyInstanceData data = context.TryGetInstanceData(obj);
                 if (data != null) {
