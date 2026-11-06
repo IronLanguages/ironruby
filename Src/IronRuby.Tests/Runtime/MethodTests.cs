@@ -1480,6 +1480,119 @@ p Foo.method(:new).arity, Foo.method(:new).parameters, 1.method(:send).arity, Fo
         }
 
         /// <summary>
+        /// A core method reports what MRI's does. One MRI writes in C has the arity of its C function and no parameter
+        /// names: the number it takes if that is fixed, else -1 and [[:rest]] (Integer#round was -1 less one per mandatory
+        /// parameter, BasicObject#method_missing -2). One MRI writes in Ruby has MRI's parameters (Kernel#Integer).
+        /// </summary>
+        public void MethodArity_CoreMethods1() {
+            TestOutput(@"
+p 1.method(:round).arity, 1.method(:round).parameters, 1.method(:+).arity, 1.method(:+).parameters
+p [].method(:push).arity, Kernel.instance_method(:respond_to?).arity, BasicObject.instance_method(:method_missing).arity
+p method(:Integer).arity, method(:Integer).parameters
+puts method(:Integer).inspect.sub(/ \S+:\d+>/, '>'), Process.method(:clock_gettime).inspect, method(:define_singleton_method).inspect
+p Array.instance_method(:first).arity, Array.instance_method(:first).parameters, ''.method(:unpack).parameters
+", @"
+-1
+[[:rest]]
+1
+[[:req]]
+-1
+-1
+-1
+-2
+[[:req, :arg], [:opt, :base], [:key, :exception]]
+#<Method: Object(Kernel)#Integer(arg, base=..., exception: ...)>
+#<Method: Process.clock_gettime(*)>
+#<Method: Object(Kernel)#define_singleton_method(*)>
+-1
+[[:opt, :n]]
+[[:req, :fmt], [:key, :offset]]
+");
+        }
+
+        /// <summary>
+        /// Arguments library methods took fewer of than MRI's: Numeric#round and friends a number of digits, Symbol#match a
+        /// position, Kernel#autoload? the inherit flag; printf prints nothing for none, method_missing wants a name.
+        /// Thread.exit takes no thread (that is Thread.kill).
+        /// </summary>
+        public void MethodArity_LibraryArguments1() {
+            TestOutput(@"
+class N < Numeric; def to_f; 12.3456; end; end
+n = N.new
+p n.round(2), n.round(-1), n.round(1, half: :even), n.floor(2), n.ceil(2), n.truncate(2)
+p :abcb.match(/b/, 2).begin(0), :abcb.match('b', 2) { |m| m.begin(0) }
+p autoload?(:Foo, false), Object.autoload?(:Foo, false)
+p printf
+[-> { autoload?(:Foo, false, 1) }, -> { :a.match(/a/, 1, 2) }, -> { n.round(1, 2) }, -> { method_missing },
+ -> { Thread.exit(1) }].each { |l| p((l.call rescue $!)) }
+", @"
+12.35
+10
+12.3
+12.34
+12.35
+12.34
+3
+3
+nil
+nil
+nil
+#<ArgumentError: wrong number of arguments (given 3, expected 1..2)>
+#<ArgumentError: wrong number of arguments (given 3, expected 1..2)>
+#<ArgumentError: wrong number of arguments (given 2, expected 0..1)>
+#<ArgumentError: no method name given>
+#<ArgumentError: wrong number of arguments (given 1, expected 0)>
+");
+        }
+
+        /// <summary>
+        /// A core method the prelude writes in Ruby reports what MRI's C function takes, no Ruby parameters of its own: the
+        /// private copies of Process's module functions have the singleton's arity and no source location; Range#first is
+        /// (*). Arguments counted as MRI counts them: Kernel#warn knows only uplevel: and category:, IO.read takes 1..4,
+        /// Kernel#open converts the path first, ARGF#readlines counts at the end of input too.
+        /// </summary>
+        public void MethodArity_PreludeMethods1() {
+            TestOutput(@"
+require 'ruby4'
+p Process.instance_method(:egid).arity, Process.instance_method(:initgroups).parameters, Process.instance_method(:egid).source_location
+p (1..2).method(:first).arity, (1..2).method(:first).parameters, method(:warn).parameters
+puts (1..2).method(:first).inspect
+class E; include Enumerable; def each(*a); yield a.size; yield 9; end; end
+r = []; E.new.reverse_each(1, 2) { |x| r << x }; p r
+p Encoding::UTF_8._dump
+[-> { warn('x', a: 1) }, -> { warn('x', a: 1, b: 2) }, -> { (1..3).first(1, 2) }, -> { (1..3).last(1, 2) },
+ -> { (1..3).min(1, 2) }, -> { (1..3).max(1, 2) }, -> { (1..3).count(1, 2) }, -> { IO.read },
+ -> { IO.read(__FILE__, 1, 2, 3, 4) }, -> { IO.read(__FILE__, 1, 2, 3) }, -> { open(1, 2, 3, 4) },
+ -> { Process.clock_getres }, -> { ARGF.readlines(1, 2, 3) }, -> { Thread.each_caller_location(1, 2, 3) {} },
+].each { |l| p((l.call rescue $!)) }
+", @"
+0
+[[:req], [:req]]
+nil
+-1
+[[:rest]]
+[[:rest, :msgs], [:key, :uplevel], [:key, :category]]
+#<Method: Range#first(*)>
+[9, 2]
+""UTF-8""
+#<ArgumentError: unknown keyword: :a>
+#<ArgumentError: unknown keywords: :a, :b>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1..4)>
+#<ArgumentError: wrong number of arguments (given 5, expected 1..4)>
+#<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
+#<TypeError: no implicit conversion of Integer into String>
+#<ArgumentError: wrong number of arguments (given 0, expected 1..2)>
+#<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
+#<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
+");
+        }
+
+        /// <summary>
         /// A method body is skimmed past at load time and bridged when first called. Since prism cd76b0d1
         /// a SymbolNode's content location is no longer optional; the skimmer still read it as optional,
         /// so every node after a symbol in a method body was read from the wrong offset ("Unknown prism

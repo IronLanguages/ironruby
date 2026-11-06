@@ -1714,6 +1714,13 @@ namespace IronRuby.Builtins {
             return ModuleOps.GetAutoloadedConstantPath(GetAutoloadOwner(scope), constantName);
         }
 
+        [RubyMethod("autoload?", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("autoload?", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString GetAutoloadedConstantPath(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ constantName,
+            bool inherit) {
+            return ModuleOps.GetAutoloadedConstantPath(GetAutoloadOwner(scope), constantName, inherit);
+        }
+
         #endregion
 
         #region respond_to?
@@ -2782,6 +2789,12 @@ namespace IronRuby.Builtins {
         public static void Print(BinaryOpStorage/*!*/ writeStorage, object self, params object[]/*!*/ args) {
             // no dynamic dispatch to "print":
             PrintOps.Print(writeStorage, writeStorage.Context.StandardOutput, args);
+        }
+
+        // MRI's rb_f_printf prints nothing for no arguments
+        [RubyMethod("printf", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("printf", RubyMethodAttributes.PublicSingleton)]
+        public static void PrintFormatted(object self) {
         }
 
         // this overload is called only if the first parameter is string:
