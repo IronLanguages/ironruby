@@ -385,10 +385,6 @@ namespace IronRuby.Builtins {
             return Create(context, 1, BlockDispatcher.MakeAttributes(BlockSignatureAttributes.None, -1), clrMethod);
         }
 
-        public static Proc/*!*/ CreateSimple(RubyContext/*!*/ context, BlockCallTarget1/*!*/ clrMethod) {
-            return Create(context, 1, BlockSignatureAttributes.None, clrMethod);
-        }
-
         public static Proc/*!*/ Create(RubyContext/*!*/ context, BlockCallTarget2/*!*/ clrMethod) {
             return Create(context, 2, BlockSignatureAttributes.None, clrMethod);
         }

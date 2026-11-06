@@ -117,11 +117,6 @@ namespace IronRuby.Builtins {
             get { return ToCharIndex(_match.Index); }
         }
 
-        /// <summary>Where the match ends, in characters.</summary>
-        public int CharacterEnd {
-            get { return ToCharIndex(_match.Index + _match.Length); }
-        }
-
         #region Construction
 
         private MatchData(Match/*!*/ match, MutableString/*!*/ originalString) {

@@ -382,21 +382,6 @@ namespace IronRuby.Builtins {
             if (Has(flags, Binary)) result |= IOMode.PreserveEndOfLines;
             return result;
         }
-
-        /// <summary>The inverse: the platform flags an IOMode stands for.</summary>
-        public static int ToNativeFlags(IOMode mode) {
-            int result = (int)mode & AccessMask;
-            if ((mode & IOMode.WriteAppends) != 0) result |= Append;
-            if ((mode & IOMode.NonBlocking) != 0) result |= NonBlocking;
-            if ((mode & IOMode.NoControllingTerminal) != 0) result |= NoControllingTerminal;
-            if ((mode & IOMode.Synchronized) != 0) result |= Synchronized;
-            if ((mode & IOMode.ShareDelete) != 0) result |= ShareDelete;
-            if ((mode & IOMode.CreateIfNotExists) != 0) result |= CreateIfNotExists;
-            if ((mode & IOMode.Truncate) != 0) result |= Truncate;
-            if ((mode & IOMode.ErrorIfExists) != 0) result |= ErrorIfExists;
-            if ((mode & IOMode.PreserveEndOfLines) != 0) result |= Binary;
-            return result;
-        }
     }
 
     public static class IOModeEnum {

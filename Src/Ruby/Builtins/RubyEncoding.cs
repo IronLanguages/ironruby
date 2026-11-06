@@ -392,24 +392,6 @@ namespace IronRuby.Builtins {
             return _ordinal - other._ordinal;
         }
 
-        public static RubyRegexOptions ToRegexOption(RubyEncoding encoding) {
-            if (encoding == RubyEncoding.Binary) {
-                return RubyRegexOptions.FIXED;
-            }
-            
-            if (encoding == null) {
-                return RubyRegexOptions.NONE;
-            }
-
-            switch (encoding.CodePage) {
-                case RubyEncoding.CodePageSJIS: return RubyRegexOptions.SJIS;
-                case RubyEncoding.CodePageEUCJP: return RubyRegexOptions.EUC;
-                case RubyEncoding.CodePageUTF8: return RubyRegexOptions.UTF8;
-            }
-
-            throw Assert.Unreachable;
-        }
-
         public static RubyEncoding GetRegexEncoding(RubyRegexOptions options) {
             switch (options & RubyRegexOptions.EncodingMask) {
                 case RubyRegexOptions.EUC: return RubyEncoding.EUCJP;
@@ -436,12 +418,6 @@ namespace IronRuby.Builtins {
         public static RubyEncoding GetEncodingByNameInitial(int initial) {
             int codepage = GetCodePage(initial);
             return codepage > 0 ? GetRubyEncoding(codepage) : null;
-        }
-
-        public void RequireAsciiIdentity() {
-            if (!_isAsciiIdentity) {
-                throw new NotSupportedException(String.Format("Encoding {0} (code page {1}) is not supported", Name, CodePage));
-            }
         }
 
         private static Dictionary<int, RubyEncoding> _Encodings;
