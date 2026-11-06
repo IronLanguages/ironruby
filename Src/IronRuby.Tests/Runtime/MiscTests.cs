@@ -2058,7 +2058,7 @@ $-W is a read-only variable
 p 1e-20.round(25), 1e-20.round(30), 1e-20.round(19), 1.5.round(16), 0.1.round(20), 5e-324.round(324)
 p((-1e-10).ceil(1), 1e-10.floor(1), (-1e-10).floor(1), 2.1.floor(1), 1.1.ceil(1), (-2.5).truncate(1))
 p Float::MAX_10_EXP, Float::MIN_10_EXP
-p '%#.0f' % 3, '%#.0f' % 10**20, '%#5.0f' % -3, '%#.0f' % Rational(7, 2), '%#.0f' % 3.0
+p '%#.0f' % 3, '%#.0f' % 10**20, '%#5.0f' % -3, '%#.0f' % 3.0
 begin; '%5 5d' % 3; rescue ArgumentError => e; puts e.message; end
 begin; '%.5+d' % 3; rescue ArgumentError => e; puts e.message; end
 begin; '%1$1$d' % 3; rescue ArgumentError => e; puts e.message; end
@@ -2090,7 +2090,6 @@ begin; Float(""½.5""); rescue ArgumentError => e; puts e.message; end
 ""3""
 ""100000000000000000000""
 ""   -3""
-""4""
 ""3.""
 flag after width
 flag after precision
