@@ -804,6 +804,24 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// MRI's rb_check_inheritable: what `class X &lt; S` and Class.new(S) accept as S.
+        /// </summary>
+        internal static RubyClass/*!*/ CheckInheritable(RubyContext/*!*/ context, object superClassObject) {
+            RubyClass superClass = superClassObject as RubyClass;
+            if (superClass == null) {
+                throw RubyExceptions.CreateTypeError("superclass must be an instance of Class (given an instance of {0})",
+                    context.GetClassDisplayName(superClassObject));
+            }
+            if (superClass.IsSingletonClass) {
+                throw RubyExceptions.CreateTypeError("can't make subclass of singleton class");
+            }
+            if (superClass == context.ClassClass) {
+                throw RubyExceptions.CreateTypeError("can't make subclass of Class");
+            }
+            return superClass;
+        }
+
         // implements Class#new
         public static object CreateAnonymousClass(RubyScope/*!*/ scope, BlockParam body, RubyClass/*!*/ self,
             [Optional]object superClassObject) {
@@ -813,17 +831,7 @@ namespace IronRuby.Builtins {
             // The argument is checked here rather than by the binder so that what it is wrong
             // about can be said the way MRI says it - and so that nil, which is a perfectly good
             // conversion to "no class", is refused rather than taken as Object.
-            RubyClass superClass = null;
-            if (superClassObject != Missing.Value) {
-                superClass = superClassObject as RubyClass;
-                if (superClass == null) {
-                    throw RubyExceptions.CreateTypeError("superclass must be an instance of Class (given an instance of {0})",
-                        context.GetClassDisplayName(superClassObject));
-                }
-                if (superClass.IsSingletonClass) {
-                    throw RubyExceptions.CreateTypeError("can't make subclass of singleton class");
-                }
-            }
+            RubyClass superClass = (superClassObject != Missing.Value) ? CheckInheritable(context, superClassObject) : null;
 
             RubyModule owner = scope.GetInnerMostModuleForConstantLookup();
             
@@ -1629,6 +1637,18 @@ namespace IronRuby.Builtins {
         #region Dynamic operations
 
         /// <summary>
+        /// A Ruby subclass of a class whose CLR type is sealed (Integer, Symbol, Float) has no CLR type of its own
+        /// to allocate - nor, in MRI, an allocator.
+        /// </summary>
+        private bool HasSealedClrBase() {
+            RubyClass c = this;
+            while (c.IsRubyClass && c._underlyingSystemType == null && c._superClass != null) {
+                c = c._superClass;
+            }
+            return c != this && c.GetUnderlyingSystemType().IsSealed;
+        }
+
+        /// <summary>
         /// Implements Class#allocate feature.
         /// </summary>  
         public void BuildObjectAllocation(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ methodName) {
@@ -1639,7 +1659,7 @@ namespace IronRuby.Builtins {
             if (!metaBuilder.Error) {
                 if (_isUninitializedAllocation) {
                     metaBuilder.SetError(Methods.MakeUninitializedClassInstantiatedError.OpCall());
-                } else if (!BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name))) {
+                } else if (HasSealedClrBase() || !BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name))) {
                     metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));
                 }
             }

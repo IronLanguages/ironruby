@@ -1303,21 +1303,7 @@ namespace IronRuby.Runtime {
         }
 
         private static RubyClass/*!*/ ToSuperClass(RubyContext/*!*/ ec, object superClassObject) {
-            if (superClassObject != null) {
-                RubyClass superClass = superClassObject as RubyClass;
-                if (superClass == null) {
-                    throw RubyExceptions.CreateTypeError("superclass must be an instance of Class (given an instance of {0})",
-                        ec.GetClassDisplayName(superClassObject));
-                }
-
-                if (superClass.IsSingletonClass) {
-                    throw RubyExceptions.CreateTypeError("can't make subclass of singleton class");
-                }
-
-                return superClass;
-            } else {
-                return ec.ObjectClass;
-            }
+            return (superClassObject != null) ? RubyClass.CheckInheritable(ec, superClassObject) : ec.ObjectClass;
         }
 
         #endregion

@@ -970,6 +970,7 @@ namespace IronRuby.Tests {
                 ModuleInstanceEvalProc3,
                 ModuleClassNew1,
                 ModuleClassNew2,
+                ModuleClassNew3,
                 ModuleEvalString1,
                 InstanceEvalString1,
                 ModuleEvalString2,

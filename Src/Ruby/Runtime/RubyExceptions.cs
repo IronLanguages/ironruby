@@ -200,7 +200,7 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateAllocatorUndefinedError(RubyClass/*!*/ rubyClass) {
-            return CreateTypeError("allocator undefined for {0}", rubyClass.Name);
+            return CreateTypeError("allocator undefined for {0}", rubyClass.GetNonNullName(rubyClass.Context));
         }
 
         public static Exception/*!*/ CreateNotClrTypeError(RubyClass/*!*/ rubyClass) {
