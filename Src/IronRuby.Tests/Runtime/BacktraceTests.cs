@@ -298,6 +298,41 @@ p here
 ");
         }
 
+        /// <summary>
+        /// An exception a library method throws whose class has an initialize written in Ruby - SystemCallError's, in the
+        /// prelude - is replaced by a new one when it is rescued; the backtrace went with the thrown one, and Dir.mkdir's
+        /// Errno::ENOENT had none - a re-raise of it (FileUtils.mkdir_p) got one from the `raise' instead. A LoadError of
+        /// require_relative starts at its caller's line under 'Kernel#require_relative', with no frame of the
+        /// Kernel#require it calls.
+        /// </summary>
+        public void Backtrace_LibraryErrors1() {
+            TestOutput(@"
+require 'ruby4'
+def mk
+  Dir.mkdir('/nonexistent_dir_zz/x')
+end
+def mk_again
+  mk
+rescue SystemCallError
+  raise
+end
+def req
+  require_relative 'nonexistent_file_zz'
+end
+[-> { mk }, -> { mk_again }, -> { req }].each do |l|
+  begin
+    l.call
+  rescue SystemCallError, LoadError => e
+    p e.backtrace.first(3).map { |f| f.sub(/\A.*?\.rb:/, '') }
+  end
+end
+", @"
+[""4:in 'Dir.mkdir'"", ""4:in 'mk'"", ""14:in 'block in #'""]
+[""4:in 'Dir.mkdir'"", ""4:in 'mk'"", ""7:in 'mk_again'""]
+[""12:in 'Kernel#require_relative'"", ""12:in 'req'"", ""14:in 'block in #'""]
+");
+        }
+
         public void Backtrace7() {
             // TODO: start name by \0 -> bug in reflection?
             StringBuilder sb = new StringBuilder();
