@@ -402,6 +402,7 @@ namespace IronRuby.Tests {
                 EqualityComparer1,
                 HashIteration_InPlace1,
                 Hash_SliceExceptKey1,
+                Hash_Inspect1,
                 Scenario_RubyArgSplatting1,
                 Scenario_RubyArgSplatting2,
                 Scenario_RubyArgSplatting3,

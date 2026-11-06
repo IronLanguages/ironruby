@@ -300,6 +300,31 @@ nil
         }
 
         /// <summary>
+        /// Hash#inspect and #to_s in Ruby 3.4's format: a Symbol key as a label, quoted when it would not
+        /// read back as one (MRI's symbol_key_needs_quote), any other key with a spaced rocket; a recursive
+        /// Hash as {...}; US-ASCII until an element brings another encoding.
+        /// </summary>
+        public void Hash_Inspect1() {
+            TestOutput(@"
+p({1 => :a, foo: 1, ""a b"": 2, :""a="" => 3, :+ => 4, :@iv => 5, :$g => 6, :! => 7, :a? => 8, :b! => 9, :[] => 10, :A => 11, :""9x"" => 12, :"""" => 13, nil => nil, [1] => {x: 1}})
+r = {}; r[:self] = r; r[r] = 1
+puts r.to_s
+k = Object.new; def k.inspect = ""K!""
+p({k => k}, {}, Class.new(Hash).new.update(x: 1))
+p [{a: 1}.inspect.encoding, {""a"" => 1}.to_s.encoding]
+p Hash.instance_method(:to_s) == Hash.instance_method(:inspect)
+", @"
+{1 => :a, foo: 1, ""a b"": 2, ""a="": 3, ""+"": 4, ""@iv"": 5, ""$g"": 6, ""!"": 7, a?: 8, b!: 9, ""[]"": 10, A: 11, ""9x"": 12, """": 13, nil => nil, [1] => {x: 1}}
+{self: {...}, {...} => 1}
+{K! => K!}
+{}
+{x: 1}
+[#<Encoding:US-ASCII>, #<Encoding:UTF-8>]
+true
+");
+        }
+
+        /// <summary>
         /// Hash#slice, #except and #key are HashOps' own: #slice and #except read the table itself (an
         /// overridden #[] or #key? takes no part, and neither does the default), keep the
         /// compare_by_identity flag and nothing else, and #key compares with the value as the receiver

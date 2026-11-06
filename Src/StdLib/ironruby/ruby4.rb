@@ -6938,38 +6938,6 @@ class String
   public
 end
 
-# Ruby 3.4 changed Hash#inspect from {:a=>1} to {a: 1}, quoting symbol keys
-# that are not simple identifiers, and spacing the rocket for other keys.
-class Hash
-  def inspect
-    return "{}" if empty?
-    stack = (Thread.current[:__hash_inspect__] ||= [])
-    return "{...}" if stack.any? { |seen| seen.equal?(self) }
-    stack.push(self)
-    begin
-      body = map { |k, v|
-        if k.is_a?(Symbol)
-          name = k.to_s
-          # MRI's symbol_key_needs_quote: the key is bare when the symbol inspects bare (which
-          # also decides whether a non-ASCII name can be shown in the default external
-          # encoding), except for the names that would not read back as a label - `a=`, `+`,
-          # `@a`, `$a`, `!`.
-          bare = !k.inspect.start_with?(':"') && !name.empty? &&
-            !%w[@ $ !].include?(name[0]) && !%w(+ - * / ` % ^ & | ] < = > ~ @).include?(name[-1])
-          key = bare ? name : name.inspect
-          "#{key}: #{__ir_inspect__(v)}"
-        else
-          "#{__ir_inspect__(k)} => #{__ir_inspect__(v)}"
-        end
-      }
-      "{" + body.join(", ") + "}"
-    ensure
-      stack.pop
-    end
-  end
-  alias :to_s :inspect
-end
-
 # Mutex/Queue/SizedQueue/ConditionVariable needed `require "thread"` in 1.9; they
 # have been built in since 2.0. Ruby 2.x also re-homed them under Thread: the
 # library defines them there (Thread::Mutex is their name, as in MRI), and the
