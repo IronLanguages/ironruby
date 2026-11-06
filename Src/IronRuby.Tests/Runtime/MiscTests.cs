@@ -38,6 +38,28 @@ namespace IronRuby.Tests {
             AssertEquals(z, 123);
         }
 
+        /// <summary>
+        /// $KCODE, $-K and $SAFE lost their special meaning (1.9 and 3.0): they are plain globals.
+        /// </summary>
+        public void Scenario_Globals2() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+p $KCODE, $-K, $SAFE
+$KCODE = 'u'
+$-K = 1
+$SAFE = 'x'
+p $KCODE, $-K, $SAFE
+");
+            }, @"
+nil
+nil
+nil
+""u""
+1
+""x""
+");
+        }
+
         public void Scenario_RubyLocals1() {
             AssertOutput(delegate() {
                 CompilerTest(@"

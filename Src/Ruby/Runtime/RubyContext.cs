@@ -703,7 +703,6 @@ namespace IronRuby.Runtime {
             _loader = new Loader(this);
             _emptyScope = new RubyTopLevelScope(this);            
             _currentException = null;
-            _currentSafeLevel = 0;
             _childProcessExitStatus = null;
             // -0<octal> names the record separator; -l then copies it to $\ so that puts and
             // print put back what the loop chomped off.
@@ -840,9 +839,6 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("-W", Runtime.GlobalVariables.WarningLevel);
             DefineGlobalVariableNoLock("DEBUG", debug);
             DefineGlobalVariableNoLock("-d", debug);
-
-            DefineGlobalVariableNoLock("KCODE", Runtime.GlobalVariables.KCode);
-            DefineGlobalVariableNoLock("-K", Runtime.GlobalVariables.KCode);
 
             // $=: removed from Ruby long ago, but still defined so that reading or writing it
             // produces the deprecation warning rather than an unknown-global nil.
@@ -3227,22 +3223,10 @@ namespace IronRuby.Runtime {
         private CallSite<Func<CallSite, object, object, object>> _setBacktraceSite;
         
         /// <summary>
-        /// $SAFE
+        /// Always 0: $SAFE has been an ordinary global since Ruby 3.0.
         /// </summary>
-        [ThreadStatic]
-        private static int _currentSafeLevel;
-
         public int CurrentSafeLevel {
-            get { return _currentSafeLevel; }
-        }
-
-        public void SetSafeLevel(int value) {
-            if (_currentSafeLevel <= value) {
-                _currentSafeLevel = value;
-            } else {
-                throw RubyExceptions.CreateSecurityError(String.Format("tried to downgrade safe level from {0} to {1}",
-                    _currentSafeLevel, value));
-            }
+            get { return 0; }
         }
 
         #endregion
