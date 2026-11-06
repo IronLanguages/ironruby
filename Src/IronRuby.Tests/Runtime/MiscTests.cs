@@ -2357,6 +2357,36 @@ true
 ");
         }
 
+        /// <summary>
+        /// stateless-ISO-2022-JP transcodes its JIS X 0208 characters (0x92 and the EUC-JP bytes) by way of EUC-JP.
+        /// </summary>
+        public void Encoding_StatelessIso2022Jp1() {
+            TestOutput(@"
+def t
+  r = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+  p r
+end
+t { ""\x92\xa4\xa2a"".force_encoding(""stateless-ISO-2022-JP"").encode(""UTF-8"") }
+t { ""あa"".encode(""stateless-ISO-2022-JP"").bytes }
+t { ""\xa4\xa2"".force_encoding(""EUC-JP"").encode(""stateless-ISO-2022-JP"").bytes }
+t { ""é"".encode(""stateless-ISO-2022-JP"") }
+t { ""\x92\xa4"".force_encoding(""stateless-ISO-2022-JP"").encode(""UTF-8"") }
+t { Encoding::Converter.search_convpath(""stateless-ISO-2022-JP"", ""UTF-8"") }
+t { Encoding::Converter.new(""UTF-8"", ""stateless-ISO-2022-JP"").convert(""あ"").bytes }
+t { ""あ"".encode(""stateless-ISO-2022-JP-KDDI"").bytes }
+", @"
+""あa""
+[146, 164, 162, 97]
+[146, 164, 162]
+""Encoding::UndefinedConversionError: \""\\x8F\\xAB\\xB1\"" to stateless-ISO-2022-JP in conversion from UTF-8 to EUC-JP to stateless-ISO-2022-JP""
+""Encoding::InvalidByteSequenceError: incomplete \""\\x92\\xA4\"" on stateless-ISO-2022-JP""
+[[#<Encoding:stateless-ISO-2022-JP>, #<Encoding:EUC-JP>], [#<Encoding:EUC-JP>, #<Encoding:UTF-8>]]
+[146, 164, 162]
+[146, 164, 162]
+");
+        }
+
+
 
         /// <summary>
         /// UTF-16/32 strings against ASCII arguments (MRI pads with 0x20 bytes, compares bytes, refuses

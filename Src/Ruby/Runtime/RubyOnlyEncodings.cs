@@ -1170,6 +1170,79 @@ namespace IronRuby.Runtime {
     }
 
     /// <summary>
+    /// What MRI's stateless-ISO-2022-JP transcoders read and write: ASCII, and JIS X 0208 as 0x92
+    /// followed by the character's two EUC-JP bytes - nothing else, so a JIS X 0212 or half width
+    /// kana character, which EUC-JP has, is undefined. (A string in the encoding is still held by
+    /// EmacsMuleEncoding, whose shape Ruby gives it; this is RubyEncoding.TranscodingEncoding.)
+    /// </summary>
+    internal sealed class StatelessIso2022JpEncoding : MultiByteEncoding {
+        internal StatelessIso2022JpEncoding(int codepage, string/*!*/ name)
+            : base(codepage, name, true) {
+        }
+
+        private static Encoding/*!*/ EucJp {
+            get { return RubyEncoding.EUCJP.StrictEncoding; }
+        }
+
+        protected override int MaxSequenceLength {
+            get { return 3; }
+        }
+
+        protected override int Scan(byte[]/*!*/ bytes, int index, int end) {
+            byte b = bytes[index];
+            if (b < 0x80) {
+                return 1;
+            }
+            if (b != 0x92) {
+                return -1;
+            }
+            for (int i = 1; i < 3; i++) {
+                if (index + i >= end) {
+                    return 0;
+                }
+                if (!IsGraphic(bytes[index + i])) {
+                    return -i;
+                }
+            }
+            return 3;
+        }
+
+        protected override int DecodeSequence(byte[]/*!*/ bytes, int index, int length, char[]/*!*/ chars, int charIndex) {
+            if (length == 1) {
+                chars[charIndex] = (char)bytes[index];
+                return 1;
+            }
+            try {
+                return EucJp.GetChars(bytes, index + 1, 2, chars, charIndex);
+            } catch (DecoderFallbackException) {
+                return -1;
+            }
+        }
+
+        protected override int EncodeCharacter(char[]/*!*/ chars, int index, int end, byte[]/*!*/ bytes, int byteIndex, out int used) {
+            char c = chars[index];
+            used = (Char.IsHighSurrogate(c) && index + 1 < end && Char.IsLowSurrogate(chars[index + 1])) ? 2 : 1;
+            if (c < 0x80) {
+                bytes[byteIndex] = (byte)c;
+                return 1;
+            }
+            byte[] euc;
+            try {
+                euc = EucJp.GetBytes(chars, index, used);
+            } catch (EncoderFallbackException) {
+                return -1;
+            }
+            if (euc.Length != 2 || !IsGraphic(euc[0]) || !IsGraphic(euc[1])) {
+                return -1;
+            }
+            bytes[byteIndex] = 0x92;
+            bytes[byteIndex + 1] = euc[0];
+            bytes[byteIndex + 2] = euc[1];
+            return 3;
+        }
+    }
+
+    /// <summary>
     /// Ruby's "UTF-16" and "UTF-32": the byte order is carried by a BOM instead of by the encoding
     /// name.  Both are dummy encodings in Ruby - a string tagged with one of them is a byte string,
     /// because nothing can be said about a character until the BOM has been read.

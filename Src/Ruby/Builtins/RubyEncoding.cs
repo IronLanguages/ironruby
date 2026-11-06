@@ -235,7 +235,7 @@ namespace IronRuby.Builtins {
             E("IBM037", 37, NameFlags.Dummy),
             A("ebcdic-cp-us", "IBM037"),
             // MRI has a converter for this one (through EUC-JP); IronRuby does not yet.
-            E("stateless-ISO-2022-JP", CodePageStatelessISO2022JP, NameFlags.NoTranscoder),
+            E("stateless-ISO-2022-JP", CodePageStatelessISO2022JP),
             A("eucJP", "EUC-JP"),
             E("eucJP-ms", CodePageEucJpMs),
             A("euc-jp-ms", "eucJP-ms"),
@@ -307,7 +307,7 @@ namespace IronRuby.Builtins {
             E("SJIS-KDDI", CodePageSJISKDDI),
             E("ISO-2022-JP-KDDI", CodePageISO2022JPKDDI, NameFlags.Dummy),
             // MRI has a converter for this one (through SJIS-KDDI); IronRuby does not yet.
-            E("stateless-ISO-2022-JP-KDDI", CodePageStatelessISO2022JPKDDI, NameFlags.NoTranscoder),
+            E("stateless-ISO-2022-JP-KDDI", CodePageStatelessISO2022JPKDDI),
             E("UTF8-SoftBank", CodePageUTF8SoftBank),
             E("SJIS-SoftBank", CodePageSJISSoftBank),
         };
@@ -616,6 +616,37 @@ namespace IronRuby.Builtins {
 
         public Encoding/*!*/ StrictEncoding {
             get { return _strictEncoding; }
+        }
+
+        private Encoding _transcodingEncoding;
+
+        /// <summary>
+        /// The encoding String#encode and Encoding::Converter read and write this one's bytes with:
+        /// StrictEncoding, but for stateless-ISO-2022-JP and its KDDI variant, whose strings are held
+        /// by their Emacs-Mule shape while MRI transcodes only their JIS X 0208 characters.
+        /// </summary>
+        public Encoding/*!*/ TranscodingEncoding {
+            get {
+                if (CodePage == CodePageStatelessISO2022JP || CodePage == CodePageStatelessISO2022JPKDDI) {
+                    return _transcodingEncoding ?? (_transcodingEncoding = new StatelessIso2022JpEncoding(CodePage, Name));
+                }
+                return _strictEncoding;
+            }
+        }
+
+        /// <summary>
+        /// The encoding MRI's converters to and from this one go through, or null when they go
+        /// through UTF-8 like any other: EUC-JP for stateless-ISO-2022-JP, UTF8-KDDI for its KDDI
+        /// variant.
+        /// </summary>
+        public RubyEncoding TranscodingIntermediate {
+            get {
+                switch (CodePage) {
+                    case CodePageStatelessISO2022JP: return EUCJP;
+                    case CodePageStatelessISO2022JPKDDI: return GetRubyEncoding(CodePageUTF8KDDI);
+                    default: return null;
+                }
+            }
         }
 
         private Encoding _escapingEncoding;

@@ -2554,12 +2554,14 @@ namespace IronRuby.Builtins {
 
             // A dummy encoding keeps whatever bytes it is given, so a string tagged with one
             // cannot hold the characters while they are being collected. Gather them as UTF-8
-            // and let the real encoder spell them out at the end.
-            var result = MutableString.CreateMutable(to.IsDummy ? RubyEncoding.UTF8 : to);
+            // and let the real encoder spell them out at the end. So do the encodings whose
+            // strings are held otherwise than they transcode (stateless-ISO-2022-JP).
+            bool spellAtEnd = to.IsDummy || to.TranscodingEncoding != to.StrictEncoding;
+            var result = MutableString.CreateMutable(spellAtEnd ? RubyEncoding.UTF8 : to);
             // ASCII-8BIT as a *target* takes only ASCII: MRI has no converter from a character
             // encoding to a byte string, so "\u00e9".encode("BINARY") is an undefined conversion
             // even though the code point would fit in one byte.
-            var encoder = to.StrictEncoding;
+            var encoder = to.TranscodingEncoding;
             var buffer = new char[2];
 
             for (int i = 0; i < text.Length; i++) {
@@ -2615,12 +2617,12 @@ namespace IronRuby.Builtins {
                 result.Append(settings.GetReplacement(to).ConvertToString());
             }
 
-            if (to.IsDummy) {
+            if (spellAtEnd) {
                 // an empty string gets no byte order mark
                 if (result.IsEmpty) {
                     return MutableString.CreateBinary(to);
                 }
-                return MutableString.CreateBinary(to.StrictEncoding.GetBytes(result.ConvertToString()), to);
+                return MutableString.CreateBinary(to.TranscodingEncoding.GetBytes(result.ConvertToString()), to);
             }
 
             return result;
@@ -2645,9 +2647,23 @@ namespace IronRuby.Builtins {
                     RubyExceptions.InspectTranscodingBytes(raw), raw, path, 0);
             }
 
+            int stage = path.Length - 2;
+            if (path[stage] != RubyEncoding.UTF8 && !path[stage].IsUnicodeEncoding) {
+                // a leg out of an encoding other than UTF-8 on the way (EUC-JP, on the way to
+                // stateless-ISO-2022-JP): the character fails there if it got that far, and MRI
+                // names it by its bytes in that encoding; otherwise the leg into it failed
+                try {
+                    byte[] bytes = path[stage].TranscodingEncoding.GetBytes(piece);
+                    return RubyExceptions.CreateUndefinedConversionError(
+                        RubyExceptions.InspectTranscodingBytes(bytes), bytes, path, stage);
+                } catch (EncoderFallbackException) {
+                    stage = Math.Max(stage - 1, 0);
+                }
+            }
+
             byte[] charBytes = null;
             try {
-                charBytes = from.StrictEncoding.GetBytes(piece);
+                charBytes = from.TranscodingEncoding.GetBytes(piece);
             } catch (EncoderFallbackException) {
                 // The character came out of the receiver's own bytes, so this should not happen;
                 // if the source encoding cannot spell it again, #error_char has nothing to show.
@@ -2656,7 +2672,7 @@ namespace IronRuby.Builtins {
             int codepoint = Char.ConvertToUtf32(piece, 0);
             return RubyExceptions.CreateUndefinedConversionError(
                 "U+" + codepoint.ToString(codepoint > 0xffff ? "X" : "X4", CultureInfo.InvariantCulture),
-                charBytes, path, path.Length - 2);
+                charBytes, path, stage);
         }
 
         /// <summary>
@@ -2673,7 +2689,7 @@ namespace IronRuby.Builtins {
             RubyEncoding/*!*/ to, TranscodeSettings settings) {
 
             byte[] bytes = self.ToByteArray();
-            var strict = from.StrictEncoding;
+            var strict = from.TranscodingEncoding;
 
             // ASCII-8BIT has no invalid bytes at all - every byte is a character of it - so the
             // decoder dance below would be both pointless and wrong for it.

@@ -24,8 +24,7 @@ using System.Collections.Generic;
 
 namespace IronRuby.Builtins {
     public partial class RubyRegex : IEquatable<RubyRegex>, IDuplicable, IRubyObjectState {
-        // 1.9: correctly encoded, switched to characters 
-        // 1.8: k-coded binary data, if _options specify encoding, or raw binary data otherwise.
+        // The source, frozen; in the encoding an encoding option (/e /s /u /n) names, if there is one.
         private MutableString/*!*/ _pattern;
         // HasNonAsciiEscape(_pattern) - the pattern is frozen, so it is worked out once: -1 not yet,
         // 0 none, 1 a byte escape, 2 a \u escape. Encoding and IsFixedEncoding ask on every match.
