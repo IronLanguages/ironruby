@@ -324,7 +324,7 @@ namespace IronRuby.Builtins {
     }
 
     public class ExistError : ExternalException {
-        private const string/*!*/ M = "File exists";
+        private static readonly string/*!*/ M = RubyErrno.GetMessage("EEXIST");
 
         public ExistError() : this(null, null) { }
         public ExistError(string message) : this(message, null) { }
@@ -333,7 +333,7 @@ namespace IronRuby.Builtins {
     }
 
     public class BadFileDescriptorError : ExternalException {
-        private const string/*!*/ M = "Bad file descriptor";
+        private static readonly string/*!*/ M = RubyErrno.GetMessage("EBADF");
 
         public BadFileDescriptorError() : this(null, null) { }
         public BadFileDescriptorError(string message) : this(message, null) { }
@@ -347,7 +347,7 @@ namespace IronRuby.Builtins {
     /// runtime needs a type of its own to raise. Registered in Errno.cs.
     /// </summary>
     public class DirectoryIsError : ExternalException {
-        private const string/*!*/ M = "Is a directory";
+        private static readonly string/*!*/ M = RubyErrno.GetMessage("EISDIR");
 
         public DirectoryIsError() : this(null, null) { }
         public DirectoryIsError(string message) : this(message, null) { }
@@ -356,7 +356,7 @@ namespace IronRuby.Builtins {
     }
 
     public class ExecFormatError : ExternalException {
-        private const string/*!*/ M = "Exec format error";
+        private static readonly string/*!*/ M = RubyErrno.GetMessage("ENOEXEC");
 
         public ExecFormatError() : this(null, null) { }
         public ExecFormatError(string message) : this(message, null) { }
@@ -370,7 +370,7 @@ namespace IronRuby.Builtins {
     /// would otherwise surface as IOError. Registered in Errno.cs.
     /// </summary>
     public class NoSuchDeviceOrAddressError : ExternalException {
-        private const string/*!*/ M = "No such device or address";
+        private static readonly string/*!*/ M = RubyErrno.GetMessage("ENXIO");
 
         public NoSuchDeviceOrAddressError() : this(null, null) { }
         public NoSuchDeviceOrAddressError(string message) : this(message, null) { }
@@ -385,7 +385,7 @@ namespace IronRuby.Builtins {
     /// A bare IOException would surface as IOError instead. Registered in Errno.cs.
     /// </summary>
     public class InputOutputError : ExternalException {
-        private const string/*!*/ M = "Input/output error";
+        private static readonly string/*!*/ M = RubyErrno.GetMessage("EIO");
 
         public InputOutputError() : this(null, null) { }
         public InputOutputError(string message) : this(message, null) { }
@@ -394,7 +394,7 @@ namespace IronRuby.Builtins {
     }
 
     public class InvalidError : ExternalException {
-        private const string/*!*/ M = "Invalid argument";
+        private static readonly string/*!*/ M = RubyErrno.GetMessage("EINVAL");
 
         public InvalidError() : this(null, null) { }
         public InvalidError(string message) : this(message, null) { }

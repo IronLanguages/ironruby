@@ -77,7 +77,7 @@ namespace IronRuby.Builtins {
             // Skipped primitive: BasicObject
             IronRuby.Builtins.RubyModule def69 = DefineGlobalModule("Comparable", typeof(IronRuby.Builtins.Comparable), 0x0000000F, LoadComparable_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyModule def63 = DefineGlobalModule("Enumerable", typeof(IronRuby.Builtins.Enumerable), 0x0000000F, LoadEnumerable_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Errno", typeof(IronRuby.Builtins.Errno), 0x0000000F, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Errno", typeof(IronRuby.Builtins.Errno), 0x0000000F, null, LoadErrno_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyModule def43 = DefineModule("File::Constants", typeof(IronRuby.Builtins.RubyFileOps.Constants), 0x0000000F, null, null, LoadFile__Constants_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalModule("FileTest", typeof(IronRuby.Builtins.FileTest), 0x0000000F, LoadFileTest_Instance, LoadFileTest_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalModule("GC", typeof(IronRuby.Builtins.RubyGC), 0x0000000F, LoadGC_Instance, LoadGC_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
@@ -347,7 +347,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.IO.FileNotFoundException>(IronRuby.Builtins.Errno.FileNotFoundExceptionOps.Create)
             );
             IronRuby.Builtins.RubyClass def31 = DefineClass("Errno::ENOEXEC", typeof(IronRuby.Builtins.ExecFormatError), 0x00000007, def59, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.BadFileDescriptorError>(IronRuby.Builtins.Errno.ExecFormatErrorOps.Create)
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.ExecFormatError>(IronRuby.Builtins.Errno.ExecFormatErrorOps.Create)
             );
             IronRuby.Builtins.RubyClass def25 = DefineClass("Errno::ENOTCONN", typeof(IronRuby.Builtins.Errno.NotConnectedError), 0x0000000F, def59, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyClass def54 = DefineClass("Errno::ENOTDIR", typeof(System.IO.DirectoryNotFoundException), 0x00000007, def59, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
@@ -1689,6 +1689,14 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "values_at", 0x51, 
                 0x80020004U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.EnvironmentSingletonOps.ValuesAt)
+            );
+            
+        }
+        
+        private static void LoadErrno_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_errno_table__", 0x62, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.Errno.GetErrnoTable)
             );
             
         }
@@ -11212,6 +11220,11 @@ namespace IronRuby.StandardLibrary.Threading {
                 new Func<IronRuby.StandardLibrary.Threading.RubyQueue, System.Int32>(IronRuby.StandardLibrary.Threading.RubyQueue.GetCount)
             );
             
+            DefineLibraryMethod(module, "marshal_dump", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Threading.RubyQueue, System.Object>(IronRuby.StandardLibrary.Threading.RubyQueue.MarshalDump)
+            );
+            
             DefineLibraryMethod(module, "num_waiting", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.Threading.RubyQueue, System.Int32>(IronRuby.StandardLibrary.Threading.RubyQueue.GetNumberOfWaitingThreads)
@@ -12552,11 +12565,6 @@ namespace IronRuby.StandardLibrary.Zlib {
             DefineLibraryMethod(module, "deflate", 0x21, 
                 0x00040008U, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.DeflateString)
-            );
-            
-            DefineLibraryMethod(module, "gunzip", 0x21, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zlib.Zlib.Gunzip)
             );
             
             DefineLibraryMethod(module, "gzip", 0x21, 

@@ -268,6 +268,9 @@ namespace IronRuby.Builtins {
         [DllImport("libc", EntryPoint = "mkdir", SetLastError = true)]
         private static extern int sys_mkdir(byte[] path, int mode);
 
+        [DllImport("libc", EntryPoint = "rename", SetLastError = true)]
+        private static extern int sys_rename(byte[] oldPath, byte[] newPath);
+
         [DllImport("libc", EntryPoint = "chmod", SetLastError = true)]
         private static extern int sys_chmod(byte[] path, int mode);
 
@@ -355,6 +358,10 @@ namespace IronRuby.Builtins {
 
         internal static int MkFifo(string path, int mode, out int errno) {
             return Run(() => sys_mkfifo(ToPath(path), mode), out errno);
+        }
+
+        internal static int Rename(string oldPath, string newPath, out int errno) {
+            return Run(() => sys_rename(ToPath(oldPath), ToPath(newPath)), out errno);
         }
 
         internal static int MkDir(string path, int mode, out int errno) {
@@ -591,25 +598,6 @@ namespace IronRuby.Builtins {
 
         #region errors
 
-        internal static string ErrorMessage(int errno) {
-            switch (errno) {
-                case EPERM: return "Operation not permitted";
-                case ENOENT: return "No such file or directory";
-                case EBADF: return "Bad file descriptor";
-                case EACCES: return "Permission denied";
-                case EEXIST: return "File exists";
-                case EXDEV: return "Invalid cross-device link";
-                case ENOTDIR: return "Not a directory";
-                case EISDIR: return "Is a directory";
-                case EINVAL: return "Invalid argument";
-                case ENAMETOOLONG: return "File name too long";
-                case ENOTEMPTY: return "Directory not empty";
-                case ELOOP: return "Too many levels of symbolic links";
-                case EOPNOTSUPP: return "Operation not supported";
-                default: return "Unknown error " + errno;
-            }
-        }
-
         /// <summary>
         /// Turns an errno into the matching Ruby exception. Only the errnos
         /// that have a CLR-backed Errno class get their own type; the rest come
@@ -633,7 +621,7 @@ namespace IronRuby.Builtins {
                 case ENOTEMPTY: return new Errno.DirectoryNotEmptyError(path);
                 case ENAMETOOLONG: return new Errno.NameTooLongError(path);
                 default:
-                    return IronRuby.Runtime.RubyExceptions.CreateSystemCallError("{0}", ErrorMessage(errno) + suffix);
+                    return IronRuby.Runtime.RubyExceptions.CreateSystemCallError("{0}", IronRuby.Runtime.RubyErrno.GetMessage(errno) + suffix);
             }
         }
 

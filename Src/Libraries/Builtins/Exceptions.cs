@@ -479,8 +479,18 @@ namespace IronRuby.Builtins {
             // Errno constant (see Src/StdLib/ironruby/ruby4.rb), so prefer that. A plain
             // SystemCallError has no number, and MRI answers nil there.
             object number;
-            if (context.GetClassOf(self).TryGetConstant(null, "Errno", out number) && number is int) {
+            RubyClass cls = context.GetClassOf(self);
+            if (cls.TryGetConstant(null, "Errno", out number) && number is int) {
                 return number;
+            }
+            // Without the prelude the constant is missing; the class still says which error it is.
+            for (RubyClass c = cls; c != null; c = c.SuperClass) {
+                if (c.Name != null && c.Name.StartsWith("Errno::", StringComparison.Ordinal)) {
+                    int errno = RubyErrno.GetNumber(c.Name.Substring("Errno::".Length));
+                    if (errno != 0) {
+                        return errno;
+                    }
+                }
             }
             var external = self as ExternalException;
             if (external != null && external.ErrorCode != unchecked((int)0x80004005)) {

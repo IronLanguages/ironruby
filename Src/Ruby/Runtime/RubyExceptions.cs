@@ -730,8 +730,6 @@ namespace IronRuby.Runtime {
 
         #region Errno
 
-        // TODO: initialize errno property
-
         public static string/*!*/ MakeMessage(string message, string/*!*/ baseMessage) {
             Assert.NotNull(baseMessage);
             if (message == null) {
@@ -753,6 +751,27 @@ namespace IronRuby.Runtime {
             string result = MakeMessage(message != null ? message.ConvertToString() : null, baseMessage);
             message = MutableString.Create(result, message != null ? message.Encoding : RubyEncoding.UTF8);
             return result;
+        }
+
+        /// <summary>
+        /// The Errno exception MRI raises for <paramref name="errno"/>: an instance of the Errno class
+        /// for the number (most of them exist only once the prelude has made them), with
+        /// <paramref name="detail"/> after the strerror text. A plain SystemCallError if there is none.
+        /// </summary>
+        public static Exception/*!*/ CreateErrno(RubyContext/*!*/ context, int errno, string detail) {
+            string name = RubyErrno.GetName(errno);
+            object errnoModule, errnoClass;
+            if (name != null &&
+                context.ObjectClass.TryGetConstant(null, "Errno", out errnoModule) &&
+                errnoModule is RubyModule module && module.TryGetConstant(null, name, out errnoClass) &&
+                errnoClass is RubyClass cls) {
+
+                var site = cls.NewSite;
+                if (site.Target(site, cls, detail != null ? MutableString.Create(detail, RubyEncoding.UTF8) : null) is Exception result) {
+                    return result;
+                }
+            }
+            return new ExternalException(MakeMessage(detail, RubyErrno.GetMessage(errno)), errno);
         }
 
         public static Exception/*!*/ CreateEEXIST() {
@@ -780,7 +799,7 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateENOENT() {
-            return new FileNotFoundException("No such file or directory");
+            return new FileNotFoundException(RubyErrno.GetMessage("ENOENT"));
         }
 
         public static Exception/*!*/ CreateENOENT(string/*!*/ message, params object[] args) {

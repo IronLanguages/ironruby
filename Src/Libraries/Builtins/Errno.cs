@@ -22,7 +22,25 @@ using System.IO;
 namespace IronRuby.Builtins {
     [RubyModule("Errno")]
     public static class Errno {
-        // Errno.constants.sort
+        /// <summary>
+        /// [name, errno, strerror] for NOERROR and every name MRI's Errno module has, with this platform's
+        /// numbers and texts (nil, nil where the platform lacks the error). The prelude
+        /// (Src/StdLib/ironruby/ruby4.rb) makes the classes from it.
+        /// </summary>
+        [RubyMethod("__ir_errno_table__", RubyMethodAttributes.PrivateSingleton)]
+        public static RubyArray/*!*/ GetErrnoTable(RubyModule/*!*/ self) {
+            var result = new RubyArray();
+            result.Add(new RubyArray(new object[] { MutableString.CreateAscii("NOERROR"), 0, MutableString.Create(RubyErrno.GetMessage(0), RubyEncoding.UTF8) }));
+            foreach (string name in RubyErrno.Names) {
+                int errno = RubyErrno.GetNumber(name);
+                result.Add(new RubyArray(new object[] {
+                    MutableString.CreateAscii(name),
+                    errno != 0 ? (object)errno : null,
+                    errno != 0 ? MutableString.Create(RubyErrno.GetMessage(errno), RubyEncoding.UTF8) : null,
+                }));
+            }
+            return result;
+        }
 
         internal static UnauthorizedAccessException/*!*/ CreateEACCES() {
             return new UnauthorizedAccessException();
@@ -38,7 +56,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("EAGAIN")]
         public class ResourceTemporarilyUnavailableError : ExternalException {
-            private const string/*!*/ M = "Resource temporarily unavailable";
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("EAGAIN");
 
             public ResourceTemporarilyUnavailableError() : this(null, null) { }
             public ResourceTemporarilyUnavailableError(string message) : this(message, null) { }
@@ -48,7 +66,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("EINTR")]
         public class InterruptedError : ExternalException {
-            private const string/*!*/ M = "Interrupted function call";
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("EINTR");
 
             public InterruptedError() : this(null, null) { }
             public InterruptedError(string message) : this(message, null) { }
@@ -58,7 +76,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("EDOM")]
         public class DomainError : ExternalException {
-            private const string/*!*/ M = "Domain error";
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("EDOM");
 
             public DomainError() : this(null, null) { }
             public DomainError(string message) : this(message, null) { }
@@ -70,7 +88,7 @@ namespace IronRuby.Builtins {
         public class InvalidErrorOps {
             [RubyConstructor]
             public static InvalidError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
-                InvalidError result = new InvalidError(RubyExceptions.MakeMessage(ref message, "Invalid Argument"));
+                InvalidError result = new InvalidError(RubyExceptions.MakeMessage(ref message, RubyErrno.GetMessage("EINVAL")));
                 RubyExceptionData.InitializeException(result, message);
                 return result;
             }
@@ -80,7 +98,7 @@ namespace IronRuby.Builtins {
         public class FileNotFoundExceptionOps {
             [RubyConstructor]
             public static FileNotFoundException/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
-                FileNotFoundException result = new FileNotFoundException(RubyExceptions.MakeMessage(ref message, "No such file or directory"));
+                FileNotFoundException result = new FileNotFoundException(RubyExceptions.MakeMessage(ref message, RubyErrno.GetMessage("ENOENT")));
                 RubyExceptionData.InitializeException(result, message);
                 return result;
             }
@@ -90,7 +108,7 @@ namespace IronRuby.Builtins {
         public class DirectoryNotFoundExceptionOps {
             [RubyConstructor]
             public static DirectoryNotFoundException/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
-                DirectoryNotFoundException result = new DirectoryNotFoundException(RubyExceptions.MakeMessage(ref message, "Not a directory"));
+                DirectoryNotFoundException result = new DirectoryNotFoundException(RubyExceptions.MakeMessage(ref message, RubyErrno.GetMessage("ENOTDIR")));
                 RubyExceptionData.InitializeException(result, message);
                 return result;
             }
@@ -99,7 +117,7 @@ namespace IronRuby.Builtins {
         public class UnauthorizedAccessExceptionOps {
             [RubyConstructor]
             public static UnauthorizedAccessException/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
-                UnauthorizedAccessException result = new UnauthorizedAccessException(RubyExceptions.MakeMessage(ref message, "Permission denied"));
+                UnauthorizedAccessException result = new UnauthorizedAccessException(RubyExceptions.MakeMessage(ref message, RubyErrno.GetMessage("EACCES")));
                 RubyExceptionData.InitializeException(result, message);
                 return result;
             }
@@ -107,7 +125,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("ECHILD")]
         public class ChildError : ExternalException {
-            private const string/*!*/ M = "No child processes";
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("ECHILD");
 
             public ChildError() : this(null, null) { }
             public ChildError(string message) : this(message, null) { }
@@ -119,7 +137,7 @@ namespace IronRuby.Builtins {
         public class DirectoryIsErrorOps {
             [RubyConstructor]
             public static DirectoryIsError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
-                var result = new DirectoryIsError(RubyExceptions.MakeMessage(ref message, "Is a directory"));
+                var result = new DirectoryIsError(RubyExceptions.MakeMessage(ref message, RubyErrno.GetMessage("EISDIR")));
                 RubyExceptionData.InitializeException(result, message);
                 return result;
             }
@@ -129,7 +147,7 @@ namespace IronRuby.Builtins {
         public class ExistErrorOps {
             [RubyConstructor]
             public static ExistError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
-                var result = new ExistError(RubyExceptions.MakeMessage(ref message, "File exists"));
+                var result = new ExistError(RubyExceptions.MakeMessage(ref message, RubyErrno.GetMessage("EEXIST")));
                 RubyExceptionData.InitializeException(result, message);
                 return result;
             }
@@ -139,7 +157,7 @@ namespace IronRuby.Builtins {
         public class NoSuchDeviceOrAddressErrorOps {
             [RubyConstructor]
             public static NoSuchDeviceOrAddressError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
-                var result = new NoSuchDeviceOrAddressError(RubyExceptions.MakeMessage(ref message, "No such device or address"));
+                var result = new NoSuchDeviceOrAddressError(RubyExceptions.MakeMessage(ref message, RubyErrno.GetMessage("ENXIO")));
                 RubyExceptionData.InitializeException(result, message);
                 return result;
             }
@@ -149,7 +167,7 @@ namespace IronRuby.Builtins {
         public class InputOutputErrorOps {
             [RubyConstructor]
             public static InputOutputError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
-                var result = new InputOutputError(RubyExceptions.MakeMessage(ref message, "Input/output error"));
+                var result = new InputOutputError(RubyExceptions.MakeMessage(ref message, RubyErrno.GetMessage("EIO")));
                 RubyExceptionData.InitializeException(result, message);
                 return result;
             }
@@ -159,7 +177,7 @@ namespace IronRuby.Builtins {
         public class BadFileDescriptorErrorOps {
             [RubyConstructor]
             public static BadFileDescriptorError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
-                var result = new BadFileDescriptorError(RubyExceptions.MakeMessage(ref message, "Bad file descriptor"));
+                var result = new BadFileDescriptorError(RubyExceptions.MakeMessage(ref message, RubyErrno.GetMessage("EBADF")));
                 RubyExceptionData.InitializeException(result, message);
                 return result;
             }
@@ -168,8 +186,8 @@ namespace IronRuby.Builtins {
         [RubyClass("ENOEXEC", Extends = typeof(ExecFormatError), Inherits = typeof(ExternalException))]
         public class ExecFormatErrorOps {
             [RubyConstructor]
-            public static BadFileDescriptorError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
-                var result = new BadFileDescriptorError(RubyExceptions.MakeMessage(ref message, "Exec format error"));
+            public static ExecFormatError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
+                var result = new ExecFormatError(RubyExceptions.MakeMessage(ref message, RubyErrno.GetMessage("ENOEXEC")));
                 RubyExceptionData.InitializeException(result, message);
                 return result;
             }
@@ -177,7 +195,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("EPERM")]
         public class OperationNotPermittedError : ExternalException {
-            private const string/*!*/ M = "Operation not permitted";
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("EPERM");
 
             public OperationNotPermittedError() : this(null, null) { }
             public OperationNotPermittedError(string message) : this(message, null) { }
@@ -187,7 +205,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("ELOOP")]
         public class TooManySymbolicLinksError : ExternalException {
-            private const string/*!*/ M = "Too many levels of symbolic links";
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("ELOOP");
 
             public TooManySymbolicLinksError() : this(null, null) { }
             public TooManySymbolicLinksError(string message) : this(message, null) { }
@@ -197,7 +215,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("ENOTEMPTY")]
         public class DirectoryNotEmptyError : ExternalException {
-            private const string/*!*/ M = "Directory not empty";
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("ENOTEMPTY");
 
             public DirectoryNotEmptyError() : this(null, null) { }
             public DirectoryNotEmptyError(string message) : this(message, null) { }
@@ -207,7 +225,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("ENAMETOOLONG")]
         public class NameTooLongError : ExternalException {
-            private const string/*!*/ M = "File name too long";
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("ENAMETOOLONG");
 
             public NameTooLongError() : this(null, null) { }
             public NameTooLongError(string message) : this(message, null) { }
@@ -217,7 +235,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("EPIPE")]
         public class PipeError : ExternalException {
-            private const string/*!*/ M = "Broken pipe";
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("EPIPE");
 
             public PipeError() : this(null, null) { }
             public PipeError(string message) : this(message, null) { }
@@ -228,7 +246,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("EXDEV")]
         public class ImproperLinkError : ExternalException {
-            private const string/*!*/ M = "Improper link";
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("EXDEV");
 
             public ImproperLinkError() : this(null, null) { }
             public ImproperLinkError(string message) : this(message, null) { }
@@ -238,7 +256,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("ESPIPE")]
         public class InvalidSeekError : ExternalException {
-            private const string/*!*/ M = "Invalid seek";
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("ESPIPE");
 
             public InvalidSeekError() : this(null, null) { }
             public InvalidSeekError(string message) : this(message, null) { }
@@ -248,12 +266,9 @@ namespace IronRuby.Builtins {
 
         #region Socket Errors
 
-        // TODO: generate 
-
         [RubyClass("EWOULDBLOCK")]
         public class WouldBlockError : ExternalException {
-            private const string/*!*/ M = "A non-blocking socket operation could not be completed immediately.";
-            public override int ErrorCode { get { return 10035; } }
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("EWOULDBLOCK");
 
             public WouldBlockError() : this(null, null) { }
             public WouldBlockError(string message) : this(message, null) { }
@@ -263,8 +278,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("EADDRINUSE")]
         public class AddressInUseError : ExternalException {
-            private const string/*!*/ M = "Only one usage of each socket address (protocol/network address/port) is normally permitted.";
-            public override int ErrorCode { get { return 10048; } }
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("EADDRINUSE");
 
             public AddressInUseError() : this(null, null) { }
             public AddressInUseError(string message) : this(message, null) { }
@@ -274,8 +288,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("ECONNABORTED")]
         public class ConnectionAbortedError : ExternalException {
-            private const string/*!*/ M = "An established connection was aborted by the software in your host machine.";
-            public override int ErrorCode { get { return 10053; } }
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("ECONNABORTED");
 
             public ConnectionAbortedError() : this(null, null) { }
             public ConnectionAbortedError(string message) : this(message, null) { }
@@ -285,8 +298,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("ECONNRESET")]
         public class ConnectionResetError : ExternalException {
-            private const string/*!*/ M = "An existing connection was forcibly closed by the remote host.";
-            public override int ErrorCode { get { return 10054; } }
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("ECONNRESET");
 
             public ConnectionResetError() : this(null, null) { }
             public ConnectionResetError(string message) : this(message, null) { }
@@ -296,8 +308,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("ENOTCONN")]
         public class NotConnectedError : ExternalException {
-            private const string/*!*/ M = "A request to send or receive data was disallowed because the socket is not connected and (when sending on a datagram socket using a sendto call) no address was supplied.";
-            public override int ErrorCode { get { return 10057; } }
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("ENOTCONN");
 
             public NotConnectedError() : this(null, null) { }
             public NotConnectedError(string message) : this(message, null) { }
@@ -307,8 +318,7 @@ namespace IronRuby.Builtins {
 
         [RubyClass("ECONNREFUSED")]
         public class ConnectionRefusedError : ExternalException {
-            private const string/*!*/ M = "No connection could be made because the target machine actively refused it.";
-            public override int ErrorCode { get { return 10061; } }
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("ECONNREFUSED");
 
             public ConnectionRefusedError() : this(null, null) { }
             public ConnectionRefusedError(string message) : this(message, null) { }
@@ -318,8 +328,7 @@ namespace IronRuby.Builtins {
         
         [RubyClass("EHOSTDOWN")]
         public class HostDownError : ExternalException {
-            private const string/*!*/ M = "A socket operation failed because the destination host was down.";
-            public override int ErrorCode { get { return 10064; } }
+            private static readonly string/*!*/ M = RubyErrno.GetMessage("EHOSTDOWN");
 
             public HostDownError() : this(null, null) { }
             public HostDownError(string message) : this(message, null) { }

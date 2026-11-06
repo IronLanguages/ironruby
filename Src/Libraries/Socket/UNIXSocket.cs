@@ -74,9 +74,9 @@ namespace IronRuby.StandardLibrary.Sockets {
         internal static Exception/*!*/ ToConnectException(Exception/*!*/ e, string/*!*/ path) {
             SocketException se = e as SocketException;
             if (se != null && se.SocketErrorCode == SocketError.AddressNotAvailable) {
-                return RubyExceptions.CreateENOENT("{0}", path);
+                return RubyExceptions.CreateENOENT("connect(2) for {0}", path);
             }
-            return SocketErrorOps.ToRubyException(e);
+            return SocketErrorOps.ToRubyException(e, "connect(2) for " + path);
         }
 
         internal static Socket/*!*/ NewUnixSocket(SocketType type) {
@@ -289,7 +289,8 @@ namespace IronRuby.StandardLibrary.Sockets {
                 socket.Listen(128);
             } catch (Exception e) {
                 socket.Close();
-                throw SocketErrorOps.ToRubyException(e);
+                // MRI's init_unixsock says "connect(2)" for the server's bind(2) too.
+                throw SocketErrorOps.ToRubyException(e, "connect(2) for " + pathStr);
             }
             return socket;
         }

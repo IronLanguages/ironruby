@@ -82,8 +82,10 @@ namespace IronRuby.StandardLibrary.Sockets {
                 Blocking(() => self.Socket.Connect(ep));
                 return 0;
             }
-            string strHostname = ConvertToHostString(stringCast, hostname);
-            Blocking(() => self.Socket.Connect(strHostname, iPort));
+            // Resolved here rather than by Socket.Connect(string, int), so that a name that does not
+            // resolve fails the way every other lookup does ("getaddrinfo: ...").
+            IPAddress address = GetHostAddress(ConvertToHostString(stringCast, hostname), self.Socket.AddressFamily);
+            Blocking(() => self.Socket.Connect(address, iPort));
             return 0;
         }
 

@@ -1322,7 +1322,8 @@ true
         /// </summary>
         public void Zlib_Streams1() {
             TestOutput(@"
-load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Zlib'
+require 'ruby4'
+require 'zlib'
 
 hex = lambda { |s| [s].pack('H*') }
 text = 'hello hello hello hello'

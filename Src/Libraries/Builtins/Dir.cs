@@ -876,6 +876,13 @@ namespace IronRuby.Builtins {
                     if (ex is ArgumentException) {
                         return RubyExceptions.CreateEINVAL(path);
                     }
+                    // A name too long for the file system is not one that exists: mkdir(2) says
+                    // ENAMETOOLONG, win32.c maps ERROR_FILENAME_EXCED_RANGE to ENOENT.
+                    if (ex is PathTooLongException) {
+                        return Path.DirectorySeparatorChar == '/'
+                            ? new Errno.NameTooLongError(path)
+                            : RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
+                    }
                     if (ex is IOException) {
                         return RubyExceptions.CreateEEXIST(path);
                     }

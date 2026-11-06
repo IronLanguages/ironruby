@@ -199,6 +199,8 @@ class Addrinfo
     return host if host.empty?
     begin
       IPSocket.getaddress(host)
+    rescue Socket::ResolutionError
+      raise
     rescue StandardError
       host
     end
@@ -307,6 +309,8 @@ class Addrinfo
 
     addresses = begin
       Socket.getaddrinfo(nodename.to_s, nil).map { |entry| entry[3] }
+    rescue Socket::ResolutionError
+      raise
     rescue StandardError
       [__resolve(nodename)]
     end
@@ -870,11 +874,20 @@ class Socket
     "TCP_INFO"        => 11,
     "TCP_MAXSEG"      => 2,
     "UDP_CORK"        => 1,
-    "EAI_ADDRFAMILY"  => -9,
     # A Linux-only socket type with no SocketType member; it exists here only so
     # that Addrinfo can reject it the way getaddrinfo(3) does.
     "SOCK_PACKET"     => 10,
-  }.each do |name, value|
+  }.merge(
+    # The getaddrinfo(3) codes only some platforms have (the common ones are in Socket.cs).
+    case RUBY_PLATFORM
+    when /mswin|mingw|cygwin/ then {}
+    when /darwin|bsd|dragonfly/
+      { "EAI_ADDRFAMILY" => 1, "EAI_SYSTEM" => 11, "EAI_BADHINTS" => 12, "EAI_PROTOCOL" => 13,
+        "EAI_OVERFLOW" => 14, "EAI_MAX" => 15 }
+    else
+      { "EAI_ADDRFAMILY" => -9, "EAI_SYSTEM" => -11, "EAI_OVERFLOW" => -12 }
+    end
+  ).each do |name, value|
     # Socket copies Socket::Constants at class-definition time (Includes(Copy
     # = true) in Socket.cs), so a late addition has to be set on both.
     Constants.const_set(name, value) unless Constants.const_defined?(name, false)
@@ -1474,6 +1487,8 @@ class BasicSocket
 
   # CRuby returns a Socket::Option, not the raw bytes.
   def getsockopt(level, optname)
+    # Before the arguments are looked at, as MRI's GetOpenFile does.
+    raise IOError, "closed stream" if closed?
     lvl = Socket.__ir_level_arg(__ir_afamily, level)
     opt = Socket.__ir_optname_arg(lvl, optname)
     Socket::Option.new(__ir_afamily, lvl, opt, __ir_getsockopt_data(lvl, opt))
@@ -1572,6 +1587,7 @@ class BasicSocket
   end
 
   def setsockopt(level, optname = nil, value = nil)
+    raise IOError, "closed stream" if closed?
     if level.kind_of?(Socket::Option)
       # A Socket::Option already carries level, optname and data, so it is the
       # *only* argument; CRuby checks the arity before it looks at the type,
@@ -1755,7 +1771,7 @@ class UDPSocket
 
   def recvfrom_nonblock(length, flags = nil, buffer = nil, exception: true)
     unless __ir_bound?
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "recvfrom(2) would block" if exception
       return :wait_readable
     end
     data, sender = flags.nil? ? __ir_raw_recvfrom_nonblock(length)
@@ -1770,7 +1786,7 @@ class UDPSocket
   rescue SocketError => e
     case Socket.__ir_socket_error_code(e)
     when "WouldBlock"
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "recvfrom(2) would block" if exception
       :wait_readable
     else
       raise
@@ -1888,7 +1904,7 @@ class BasicSocket
     __ir_into_buffer(data, buffer)
   rescue SocketError => e
     raise unless Socket.__ir_socket_error_code(e) == "WouldBlock"
-    raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+    raise IO::EAGAINWaitReadable, "recvfrom(2) would block" if exception
     :wait_readable
   end
 end
@@ -2045,7 +2061,7 @@ class Socket
   # once poll(2) has said the socket is readable.
   def recvfrom_nonblock(length, flags = nil, buffer = nil, exception: true)
     unless IO.select([self], nil, nil, 0)
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "recvfrom(2) would block" if exception
       return :wait_readable
     end
     result = flags.nil? ? recvfrom(length) : recvfrom(length, flags)
@@ -2310,9 +2326,16 @@ module IronRubySocketErrors__ # :nodoc: all
   KEEP = %w[WouldBlock InProgress Success HostNotFound NoData TryAgain NoRecovery
             TypeNotFound SystemNotReady VersionNotSupported].freeze
 
+  # The resolver's failures are Socket::ResolutionError in CRuby, with the EAI_* code.
+  RESOLVER = { "HostNotFound" => :EAI_NONAME, "NoData" => :EAI_NONAME,
+               "TryAgain" => :EAI_AGAIN, "NoRecovery" => :EAI_FAIL }.freeze
+
   def self.translate(error)
     if error.kind_of?(SocketError)
       code = Socket.__ir_socket_error_code(error)
+      if (eai = RESOLVER[code]) && !error.kind_of?(Socket::ResolutionError)
+        return Socket.__ir_resolution_error(error.message, Socket.const_get(eai))
+      end
       return error if KEEP.include?(code)
       name = BY_CODE[code]
       return error if name.nil? || !Errno.const_defined?(name)
@@ -2363,7 +2386,29 @@ IronRubySocketErrors__.wrap(BasicSocket,
 IronRubySocketErrors__.wrap(Socket, :bind, :connect, :listen, :accept, :sysaccept, :recvfrom)
 IronRubySocketErrors__.wrap(TCPServer, :accept, :listen, :sysaccept)
 IronRubySocketErrors__.wrap(TCPSocket, :recvfrom)
-IronRubySocketErrors__.wrap(UDPSocket, :bind, :connect, :recvfrom)
+IronRubySocketErrors__.wrap(UDPSocket, :bind, :connect, :send, :recvfrom)
+# Name lookups through .NET's Dns, whose failure is a plain SocketError.
+IronRubySocketErrors__.wrap(IPSocket.singleton_class, :getaddress)
+IronRubySocketErrors__.wrap(Socket.singleton_class, :pack_sockaddr_in, :sockaddr_in)
+
+# MRI's Errno from Socket#connect and #bind names the address after the call:
+# "Connection refused - connect(2) for 127.0.0.1:1".
+class Socket
+  { connect: "connect(2)", bind: "bind(2)" }.each do |name, call|
+    raw = :"__ir_detail_#{name}"
+    alias_method raw, name
+    define_method(name) do |sockaddr|
+      __send__(raw, sockaddr)
+    rescue SystemCallError => error
+      raise error unless error.message == error.class.new.message
+      where = (Addrinfo.new(Addrinfo === sockaddr ? sockaddr.to_sockaddr : sockaddr).inspect_sockaddr rescue nil)
+      raise error unless where
+      detailed = error.class.new("#{call} for #{where}")
+      detailed.set_backtrace(error.backtrace)
+      raise detailed
+    end
+  end
+end
 
 class TCPServer
   class << self
@@ -2769,7 +2814,7 @@ class Socket
 
   def recvfrom_nonblock(length, flags = nil, buffer = nil, exception: true)
     unless IO.select([self], nil, nil, 0)
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "recvfrom(2) would block" if exception
       return :wait_readable
     end
     result = flags.nil? ? recvfrom(length) : recvfrom(length, flags)
@@ -3045,7 +3090,7 @@ class BasicSocket
     return sent if errno == 0
 
     if nonblocking && (errno == Errno::EAGAIN::Errno || errno == Errno::EWOULDBLOCK::Errno)
-      raise IO::EWOULDBLOCKWaitWritable, "Resource temporarily unavailable" if exception
+      raise IO::EWOULDBLOCKWaitWritable, "sendmsg(2) would block" if exception
       return :wait_writable
     end
     raise SystemCallError.new("sendmsg(2)", errno)
@@ -3061,7 +3106,7 @@ class BasicSocket
 
     if errno != 0
       if nonblocking && (errno == Errno::EAGAIN::Errno || errno == Errno::EWOULDBLOCK::Errno)
-        raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+        raise IO::EAGAINWaitReadable, "recvmsg(2) would block" if exception
         return :wait_readable
       end
       raise SystemCallError.new("recvmsg(2)", errno)

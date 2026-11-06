@@ -496,13 +496,7 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
         }
 
-        [RubyMethod("gunzip", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ Gunzip(RubyModule/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
-            using (var z = new Inflate(MAX_WBITS + 16)) {
-                z.Run(str.ToByteArray(), LibZ.Z_FINISH, null);
-                return z.TakeBuffer();
-            }
-        }
+        // Zlib.gunzip is in Src/StdLib/ironruby/zlib.rb, next to the GzipFile errors it raises.
 
         #endregion
 
@@ -1204,6 +1198,12 @@ namespace IronRuby.StandardLibrary.Zlib {
                 using (var z = new Inflate(MAX_WBITS)) {
                     bool broke;
                     object result = z.Run(str.ToByteArray(), LibZ.Z_SYNC_FLUSH, block, out broke);
+                    if (broke) {
+                        return result;
+                    }
+                    // MRI finishes the stream "for checking errors": input that stops short of
+                    // the end of the stream is a BufError, not the part that did inflate.
+                    result = z.Run(new byte[0], LibZ.Z_FINISH, block, out broke);
                     if (broke) {
                         return result;
                     }
