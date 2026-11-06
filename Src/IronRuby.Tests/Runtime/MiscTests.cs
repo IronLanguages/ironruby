@@ -2470,6 +2470,153 @@ true
         }
 
         /// <summary>
+        /// Data.new reports a missing member before an unknown keyword, as MRI's rb_data_initialize_m does, and Data.define
+        /// and Struct.new refuse only setter names (rb_is_attrset_id) as members, so `[]=` is allowed. All in the prelude.
+        /// </summary>
+        public void Prelude_DataStructErrors1() {
+            TestOutput(@"
+require 'ruby4'
+D = Data.define(:a)
+E = Data.define(:a, :b)
+[
+  -> { D.new(b: 1) }, -> { D.new(a: 1, b: 2) }, -> { D.new(b: 1, c: 2) }, -> { E.new(a: 1, c: 2) },
+  -> { E.new(c: 1, d: 2) }, -> { E.new(a: 1, b: 2, c: 3) }, -> { E.new(1) }, -> { D.new(1, 2) },
+  -> { E.new(1, b: 2) }, -> { D.new(1).with(b: 2, c: 3) }, -> { Data.define(1) }, -> { Data.define(:a=) },
+  -> { Data.define(:[]=).members }, -> { Data.define(:x, :x) }, -> { E.new(b: 1, a: 2) },
+  -> { Struct.new(:a=) }, -> { Struct.new(:b=, :a, :a) }, -> { Struct.new(:a, :a, :b=) }, -> { Struct.new(:[]=, :a?).members },
+].each { |l| p((l.call rescue $!)) }
+", @"
+#<ArgumentError: missing keyword: :a>
+#<ArgumentError: unknown keyword: :b>
+#<ArgumentError: missing keyword: :a>
+#<ArgumentError: missing keyword: :b>
+#<ArgumentError: missing keywords: :a, :b>
+#<ArgumentError: unknown keyword: :c>
+#<ArgumentError: missing keyword: :b>
+#<ArgumentError: wrong number of arguments (given 2, expected 0..1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 0)>
+#<ArgumentError: unknown keywords: :b, :c>
+#<TypeError: 1 is not a symbol nor a string>
+#<ArgumentError: invalid data member: a=>
+[:[]=]
+#<ArgumentError: duplicate member: x>
+#<data E a=2, b=1>
+#<ArgumentError: invalid struct member: a=>
+#<ArgumentError: invalid struct member: b=>
+#<ArgumentError: duplicate member: a>
+[:[]=, :a?]
+");
+        }
+
+        /// <summary>
+        /// #yield_self is an alias of #then, as in MRI, so the Enumerator and Method#original_name say :then; the prelude's
+        /// aliases (collect_concat, Lazy#filter/collect, select!/filter!, ENV#filter/each_pair) name the Enumerator after the
+        /// name they were called by, Array#rfind shows its argument only when given one, and String#each_line and
+        /// #each_grapheme_cluster answer to_enum Enumerators.
+        /// </summary>
+        public void Prelude_AliasNames1() {
+            TestOutput(@"
+require 'ruby4'
+p 1.then, 1.yield_self, 1.method(:yield_self).name, 1.method(:yield_self).original_name
+p Kernel.instance_method(:then) == Kernel.instance_method(:yield_self), Kernel.instance_method(:then).parameters
+p [1, 2, 3].rfind, [1, 2, 3].rfind(nil), [1, 2, 3].rfind(1, 2), [1, 2, 3].rfind(-> { 9 }) { false }
+p (1..2).collect_concat, (1..2).flat_map
+p [3].lazy.filter { 1 }, [3].lazy.find_all { 1 }, [3].lazy.select { 1 }
+p [3].lazy.collect { 1 }, [3].lazy.map { 1 }, [3].lazy.collect_concat { [1] }
+p [1].filter!, [1].select!, ENV.filter.inspect.end_with?(':filter>'), ENV.each_pair.inspect.end_with?(':each_pair>')
+p ""ab\ncd"".each_line, ""ab\ncd"".each_line('b'), ""ab\ncd"".each_line(chomp: true).to_a, 'ab'.each_grapheme_cluster, 'ab'.each_grapheme_cluster.size
+", @"
+#<Enumerator: 1:then>
+#<Enumerator: 1:then>
+:yield_self
+:then
+true
+[]
+#<Enumerator: [1, 2, 3]:rfind>
+#<Enumerator: [1, 2, 3]:rfind(nil)>
+#<Enumerator: [1, 2, 3]:rfind(1, 2)>
+9
+#<Enumerator: 1..2:collect_concat>
+#<Enumerator: 1..2:flat_map>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:filter>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:find_all>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:select>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:collect>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:map>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:collect_concat>
+#<Enumerator: [1]:filter!>
+#<Enumerator: [1]:select!>
+true
+true
+#<Enumerator: ""ab\ncd"":each_line>
+#<Enumerator: ""ab\ncd"":each_line(""b"")>
+[""ab"", ""cd""]
+#<Enumerator: ""ab"":each_grapheme_cluster>
+2
+");
+        }
+
+        /// <summary>
+        /// The prelude's helpers stay out of the core's public surface (no Integer::MAX, SPAWN_*, ERRNO_TABLE, *_without_*
+        /// wrappers), the definitions removed as dead are still answered by the C# core, and sleep and the Kernel conversion
+        /// functions fail with MRI's messages.
+        /// </summary>
+        public void Prelude_HiddenHelpers1() {
+            TestOutput(@"
+require 'ruby4'
+p Integer.const_defined?(:MAX), Process.constants.grep(/SPAWN|NOT_IMPL|LOCKS/), Errno.constants.reject { |c| Errno.const_get(c).is_a?(Class) }
+p Enumerable.constants, Fiber.constants.grep(/KILL|SCHEDULER/), GC.singleton_methods.include?(:major_count), Warning.constants
+p Enumerable.public_instance_methods.grep(/without/), Kernel.public_instance_methods.grep(/without/), Range.public_instance_methods.grep(/without/), String.public_instance_methods.grep(/lines_enum/)
+p((Process.getrlimit(:LOCKS) rescue $!))
+p KeyError.ancestors.include?(IndexError), KeyError.new('x', receiver: 1, key: 2).key
+p(({a: 1}.fetch_values(:a, :b) rescue $!))
+p SystemCallError.new('x', 2).class, SystemCallError.new('x', 99999).message
+p (1..3).first(2), [1, 2].all?(Integer), [1, 2].inject(:+), [1, 2].min(1), [1, 2].zip(3..4), [1, 2, 3].shift(2), Object.new.clone(freeze: false).frozen?
+[-1, -0.5, -1r, '1', :a, true].each { |d| p((sleep(d) rescue $!)) }
+p sleep(0), sleep(0.001r).class
+o = Object.new; def o.to_hash = 1; def o.to_s = 1; def o.to_c = 1; def o.to_r = 1
+[-> { Hash(o) }, -> { String(o) }, -> { Complex(o) }, -> { Rational(o) }].each { |l| p((l.call rescue $!)) }
+", @"
+false
+[]
+[]
+[]
+[]
+false
+[]
+[]
+[]
+[]
+[]
+#<ArgumentError: invalid resource name: LOCKS>
+true
+2
+#<KeyError: key not found: :b>
+Errno::ENOENT
+""Unknown error 99999 - x""
+[1, 2]
+true
+3
+[1]
+[[1, 3], [2, 4]]
+[1, 2]
+false
+#<ArgumentError: time interval must not be negative>
+#<ArgumentError: time interval must not be negative>
+#<ArgumentError: time interval must not be negative>
+#<TypeError: can't convert String into time interval>
+#<TypeError: can't convert Symbol into time interval>
+#<TypeError: can't convert TrueClass into time interval>
+0
+Integer
+#<TypeError: can't convert Object to Hash (Object#to_hash gives Integer)>
+#<TypeError: can't convert Object to String (Object#to_s gives Integer)>
+#<TypeError: can't convert Object to Complex (Object#to_c gives Integer)>
+#<TypeError: can't convert Object to Rational (Object#to_r gives Integer)>
+");
+        }
+
+        /// <summary>
         /// Integer.sqrt, #pow, #digits and #fdiv are C# (Integer.cs, ClrInteger.cs) rather than the
         /// prelude's Ruby: the same answers, with MRI's checks in MRI's order - #pow(b, 1) is 0, a
         /// non-Integer exponent is "unless a 1st argument is integer", #digits refuses a negative
