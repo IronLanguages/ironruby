@@ -41,7 +41,7 @@ not kept.
   arguments, `...` forwarding — the syntax CRuby 4.0 accepts, read by CRuby's own parser.
 - **[ruby/spec](#status)**: `spec/library` (6,011 examples), `spec/command_line` and
   `spec/security` pass with **0 failures**, `spec/language` has 1 of 2,935 and `spec/core`
-  51 of 23,130 - 20 of them `ObjectSpace.each_object`, 24 a newer error wording than CRuby 4.0's.
+  44 of 23,130 - 20 of them `ObjectSpace.each_object`, 24 a newer error wording than CRuby 4.0's.
 - **[A method JIT and OSR](#performance)**, on by default: integer and float loops, `fib`
   and `mandelbrot` run in **0.27–0.74×** CRuby's time. Over all 50 benchmarks the geomean
   is 3.25×; calls, strings and arrays are where the work is.
@@ -258,7 +258,7 @@ Measured on 2026-11-06 with [ruby/spec](https://github.com/ruby/spec) `dda28d04`
 | `spec/command_line` | 175 | **0** |
 | `spec/security` | 34 | **0** |
 | `spec/library` | 6011 | **0** |
-| `spec/core` | 23130 | **51** — 20 `ObjectSpace.each_object`, 24 error wording, 7 backtraces (below) |
+| `spec/core` | 23130 | **44** — 20 `ObjectSpace.each_object`, 24 error wording (below) |
 | IronRuby's own C# test suite | ~1000 | **0** |
 
 What the failing examples are:
@@ -270,9 +270,6 @@ What the failing examples are:
   convert X **into** Y (X#to_y gives Z)". CRuby 4.0 says "can't convert X **to** Y" and so
   does IronRuby; mspec's `raise_consistent_error` checks the message only on
   implementations other than CRuby.
-- **Backtraces (7)**: `Thread#backtrace_locations`, `Thread.each_caller_location`,
-  `Binding#eval`'s default file name and `Thread::Backtrace::Location#label` of a top-level
-  block - the location of a library method's own frame. These are IronRuby bugs.
 - `Mutex#lock` "does not raise deadlock if a fiber's attempt to lock was interrupted" fails in
   some runs: a `Thread#raise` that arrives just as a thread resumes a fiber can land in the
   resuming thread instead of the fiber.
