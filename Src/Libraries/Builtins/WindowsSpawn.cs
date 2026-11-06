@@ -795,8 +795,11 @@ namespace IronRuby.Builtins {
             SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0);
             SetHandleInformation(write, HANDLE_FLAG_INHERIT, 0);
 
-            var reader = new FileStream(new SafeFileHandle(read, true), FileAccess.Read, 1, false);
-            var writer = new FileStream(new SafeFileHandle(write, true), FileAccess.Write, 1, false);
+            // Not plain FileStreams: a blocked read has to look blocked to Thread#status and give
+            // way to a close from another thread, and #read_nonblock / #write_nonblock must not
+            // wait - see WindowsPipeStream.
+            var reader = new WindowsPipeStream(new SafeFileHandle(read, true), FileAccess.Read);
+            var writer = new WindowsPipeStream(new SafeFileHandle(write, true), FileAccess.Write);
 
             var reading = new RubyIO(context, reader, context.AllocateFileDescriptor(reader), IOMode.ReadOnly);
             var writing = new RubyIO(context, writer, context.AllocateFileDescriptor(writer), IOMode.WriteOnly);

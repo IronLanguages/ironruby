@@ -36,7 +36,7 @@ namespace IronRuby.Builtins {
         int WriteNonBlocking(byte[]/*!*/ buffer, int offset, int count);
     }
 
-    public sealed class DescriptorStream : Stream, IDescriptorStream, INonBlockingWriteStream {
+    public sealed class DescriptorStream : Stream, IDescriptorStream, INonBlockingWriteStream, INonBlockingReadStream, ISingleWriteStream {
         [StructLayout(LayoutKind.Sequential)]
         private struct PollFd {
             public int fd;

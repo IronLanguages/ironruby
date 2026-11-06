@@ -1712,7 +1712,16 @@ namespace IronRuby.Builtins {
 
             // MRI's syswrite is one write(2), so a pipe that only had room for part of the string
             // reports what it took rather than waiting for the rest to fit.
-            var pipe = DescriptorStream.Of(self.GetStream().BaseStream);
+            var baseStream = self.GetStream().BaseStream;
+            var pipe = (ISingleWriteStream)DescriptorStream.Of(baseStream) ?? baseStream as ISingleWriteStream;
+            var windowsPipe = baseStream as WindowsPipeStream;
+            if (windowsPipe != null) {
+                // Windows has no O_NONBLOCK on the handle for the write to go by; io/nonblock's
+                // #nonblock= remembers the flag in the IO instead (see io/nonblock.rb).
+                object nonblock;
+                windowsPipe.NonBlocking = context.TryGetInstanceVariable(self, "@__nonblock__", out nonblock) &&
+                    nonblock is bool && (bool)nonblock;
+            }
             int count = val.GetByteCount();
             if (pipe != null && count > 0) {
                 int written;
@@ -1998,7 +2007,7 @@ namespace IronRuby.Builtins {
                 return (queued == 0 && buffered == 0) ? null : buffer;
             }
 
-            var pipe = DescriptorStream.Of(stream.BaseStream);
+            var pipe = (INonBlockingReadStream)DescriptorStream.Of(stream.BaseStream) ?? stream.BaseStream as INonBlockingReadStream;
             if (pipe == null) {
                 // No non-blocking read primitive for this stream - a socket, or something with no
                 // descriptor at all.  With bytes already in hand, poll(2) decides whether to ask

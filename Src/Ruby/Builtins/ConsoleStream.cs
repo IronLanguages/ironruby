@@ -174,6 +174,15 @@ namespace IronRuby.Builtins {
         /// .NET opened (an embedder that redirected SharedIO keeps its own stream) and is redirected.
         /// </summary>
         private static Stream GetUnbufferedStream(Stream/*!*/ stream, bool output) {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT && stream == Stream.Null) {
+                // .NET checks the handle with a zero-byte WriteFile when it opens standard output,
+                // and hands out Stream.Null when that fails - which it does on a pipe whose reader
+                // has already gone. Everything written was then thrown away without an error, and
+                // a child that IO.popen(...).close had abandoned before it wrote its first line
+                // ran `loop { puts }` for ever. The handle itself still says EPIPE.
+                return GetWindowsConsole(output);
+            }
+
             var name = stream.GetType().FullName;
             if (name == null || !name.EndsWith("ConsoleStream", StringComparison.Ordinal)) {
                 return null;
@@ -214,7 +223,8 @@ namespace IronRuby.Builtins {
         /// "ÔóÇÔí"). MRI writes to a console with WriteConsoleW instead, as UTF-16, which shows
         /// the text whatever the code page; this does the same, decoding the bytes as UTF-8,
         /// Ruby's default external encoding on Windows. A stream that is redirected to a file
-        /// or a pipe is not a console and keeps getting the bytes unchanged.
+        /// or a pipe is not a console and keeps getting the bytes unchanged; a pipe through a
+        /// WindowsPipeStream, which reports a reader that has gone.
         /// </summary>
         private static Stream GetWindowsConsole(bool output) {
             ref bool isChecked = ref (output ? ref _consoleOutputChecked : ref _consoleErrorChecked);
@@ -225,6 +235,12 @@ namespace IronRuby.Builtins {
                     IntPtr handle = Win32Console.GetStdHandle(output ? Win32Console.STD_OUTPUT_HANDLE : Win32Console.STD_ERROR_HANDLE);
                     if (Win32Console.GetConsoleMode(handle, out _)) {
                         cache = new Win32ConsoleWriter(handle);
+                    } else if (WindowsPipeStream.IsPipe(handle)) {
+                        // .NET's stream ignores ERROR_NO_DATA, so a child writing to a pipe
+                        // whose reader has gone - IO.popen(cmd).close - never learnt of it and
+                        // `loop { puts }` ran for ever. This one reports EPIPE, as on Unix.
+                        // The handle stays open: it is the process's, not this stream's.
+                        cache = new WindowsPipeStream(new Microsoft.Win32.SafeHandles.SafeFileHandle(handle, false), FileAccess.Write);
                     }
                 } catch (Exception) {
                     cache = null;
