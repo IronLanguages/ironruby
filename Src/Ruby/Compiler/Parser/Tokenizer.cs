@@ -14,18 +14,10 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
-using System.Text;
-using System.Text.RegularExpressions;
-using IronRuby.Builtins;
-using IronRuby.Compiler.Ast;
 using IronRuby.Runtime;
-using Microsoft.Scripting;
 using System.Numerics;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Compiler {
@@ -65,80 +57,8 @@ namespace IronRuby.Compiler {
             return unchecked((uint)c - 0xd800 <= (uint)0xdfff - 0xd800);
         }
 
-        public sealed class BignumParser : UnsignedBigIntegerParser {
-            private char[] _buffer;
-            private int _position;
-
-            public int Position { get { return _position; } set { _position = value; } }
-            public char[] Buffer { get { return _buffer; } set { _buffer = value; } }
-
-            public BignumParser() {
-            }
-
-            protected override int ReadDigit() {
-                Debug.Assert('0' < 'A' && 'A' < '_' && '_' < 'a');
-
-                while (true) {
-                    char c = _buffer[_position++];
-
-                    if (c <= '9') {
-                        Debug.Assert(c >= '0');
-                        return c - '0';
-                    } else if (c >= 'a') {
-                        Debug.Assert(c <= 'z');
-                        return c - 'a' + 10;
-                    } else if (c != '_') {
-                        Debug.Assert(c >= 'A' && c <= 'Z');
-                        return c - 'A' + 10;
-                    }
-                }
-            }
-        }
-
-        private static bool TryDecodeDouble(char[]/*!*/ str, int first, int end, out double result) {
-            StringBuilder sb = new StringBuilder(end - first);
-            sb.Length = end - first;
-
-            int j = 0;
-            for (int i = first; i < end; i++) {
-                if (str[i] != '_') {
-                    sb[j++] = str[i];
-                }
-            }
-
-            sb.Length = j;
-            return Double.TryParse(sb.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out result);
-        }
-
-        private static bool TryDecodeDouble(string/*!*/ str, int first, int end, out double result) {
-            StringBuilder sb = new StringBuilder(end - first);
-            sb.Length = end - first;
-
-            int j = 0;
-            for (int i = first; i < end; i++) {
-                if (str[i] != '_') {
-                    sb[j++] = str[i];
-                }
-            }
-
-            sb.Length = j;
-            return Double.TryParse(sb.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out result);
-        }
-
         public static bool IsDecimalDigit(int c) {
             return unchecked((uint)c - '0' <= (uint)'9' - '0');
-        }
-
-        public static bool IsOctalDigit(int c) {
-            return unchecked((uint)c - '0' <= (uint)'7' - '0');
-        }
-
-        public static bool IsHexadecimalDigit(int c) {
-            unchecked {
-                return IsDecimalDigit(c) ||
-                    (uint)c - 'a' <= (uint)'f' - 'a' ||
-                    (uint)c - 'A' <= (uint)'F' - 'A';
-            }
         }
 
         public static int ToDigit(int c) {
@@ -171,10 +91,6 @@ namespace IronRuby.Compiler {
 
         public static bool IsLetter(int c) {
             return IsUpperLetter(c) || IsLowerLetter(c);
-        }
-
-        public static bool IsLetterOrDigit(int c) {
-            return IsLetter(c) || IsDecimalDigit(c);
         }
 
         /// <summary>
@@ -309,87 +225,43 @@ namespace IronRuby.Compiler {
                     return new BigInteger(value);
                 }
             } else {
-                var parser = new BignumParser();
-                parser.Position = start;
-                parser.Buffer = str.ToCharArray();
-                
-                return parser.Parse(digitCount, @base) * sign;
+                return ParseBigInteger(str, start, digitCount, @base) * sign;
             }
         }
 
-        private static int Read(string/*!*/ str, ref int i) {
-            i++;
-            return (i < str.Length) ? str[i] : -1;
+        /// <summary>
+        /// The value of the <paramref name="digitCount"/> digits of <paramref name="str"/> from <paramref name="start"/> on,
+        /// in the given base; underscores between them are skipped.
+        /// </summary>
+        internal static BigInteger ParseBigInteger(string/*!*/ str, int start, int digitCount, int @base) {
+            var digits = new byte[digitCount];
+            for (int i = 0, j = start; i < digitCount; j++) {
+                if (str[j] != '_') {
+                    digits[i++] = (byte)ToDigit(str[j]);
+                }
+            }
+
+            int digitsPerUInt64 = 0;
+            for (ulong power = 1, limit = UInt64.MaxValue / (ulong)@base; power <= limit; power *= (ulong)@base) {
+                digitsPerUInt64++;
+            }
+            return ParseBigInteger(digits, @base, digitsPerUInt64);
         }
 
-        // subsequent _ are not considered error
-        public static bool TryParseDouble(string/*!*/ str, out double result, out bool complete) {
-            double sign;
-            int i = -1;
-
-            int c;
-            do { c = Read(str, ref i); } while (IsWhiteSpace(c));
-            
-            if (c == '-') {
-                c = Read(str, ref i);
-                if (c == '_') {
-                    result = 0.0;
-                    complete = false;
-                    return false;
+        // high * base^|low| + low: halving keeps the multiplications balanced, which BigInteger does in
+        // subquadratic time, where adding one digit (or word) at a time is quadratic in the length.
+        private static BigInteger ParseBigInteger(ReadOnlySpan<byte> digits, int @base, int digitsPerUInt64) {
+            if (digits.Length <= digitsPerUInt64) {
+                ulong value = 0;
+                foreach (byte digit in digits) {
+                    value = value * (ulong)@base + digit;
                 }
-                sign = -1;
-            } else if (c == '+') {
-                c = Read(str, ref i);
-                if (c == '_') {
-                    result = 0.0;
-                    complete = false;
-                    return false;
-                }
-                sign = +1;
-            } else {
-                sign = +1;
+                return value;
             }
 
-            int start = i;
-
-            while (c == '_' || IsDecimalDigit(c)) {
-                c = Read(str, ref i);
-            }
-
-            if (c == '.') {
-                c = Read(str, ref i);
-                while (c == '_' || IsDecimalDigit(c)) {
-                    c = Read(str, ref i);
-                }
-            }
-
-            // just before the current character:
-            int end = i;
-
-            if (c == 'e' || c == 'E') {
-                c = Read(str, ref i);
-                if (c == '+' || c == '-') {
-                    c = Read(str, ref i);
-                }
-
-                int expEnd = end;
-
-                while (true) {
-                    if (IsDecimalDigit(c)) {
-                        expEnd = i + 1;
-                    } else if (c != '_') {
-                        break;
-                    }
-                    c = Read(str, ref i);
-                }
-
-                end = expEnd;
-            }
-
-            bool success = TryDecodeDouble(str, start, end, out result);
-            result *= sign;
-            complete = end == str.Length;
-            return success;
+            int lowLength = digits.Length / 2;
+            return ParseBigInteger(digits[..^lowLength], @base, digitsPerUInt64) * BigInteger.Pow(@base, lowLength)
+                + ParseBigInteger(digits[^lowLength..], @base, digitsPerUInt64);
         }
 
         // The header is matched by hand rather than with the regex ^[#].*?coding\s*[:=]\s*(?<encoding>[a-z0-9_-]+)

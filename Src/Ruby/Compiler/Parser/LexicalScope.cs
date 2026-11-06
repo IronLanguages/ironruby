@@ -12,11 +12,7 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
     
 using System;
 using System.Collections.Generic;
@@ -289,10 +285,6 @@ namespace IronRuby.Compiler {
         private Dictionary<string, TValue> _dict;
         private KeyValuePair<string, TValue>[] _list;
         private int _listSize;
-
-        public int Count {
-            get { return _listSize + (_dict != null ? _dict.Count : 0); }
-        }
 
         public bool TryGetValue(string key, out TValue value) {
             for (int i = 0; i < _listSize; i++) {

@@ -12,13 +12,8 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_REFEMIT
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Reflection;
@@ -57,14 +52,6 @@ namespace IronRuby.Compiler.Generation {
 
         internal FieldBuilder InstanceDataField {
             get { return _instanceDataField; }
-        }
-
-        public static void AddRemoveEventHelper(object method, object instance, object dt, object eventValue, string name) {
-            throw new NotImplementedException();
-        }
-
-        protected override MethodInfo EventHelper() {
-            return typeof(RubyTypeEmitter).GetMethod("AddRemoveEventHelper");
         }
 
         [Emitted]
@@ -163,4 +150,3 @@ namespace IronRuby.Compiler.Generation {
         }
     }
 }
-#endif

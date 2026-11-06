@@ -236,7 +236,7 @@ namespace IronRuby.Runtime.Precompiled {
             }
             try {
                 var unit = context.CreateSnippet(source, path, SourceCodeKind.File);
-                var options = new RubyCompilerOptions(context.RubyOptions) {
+                var options = new RubyCompilerOptions() {
                     FactoryKind = TopScopeFactoryKind.File,
                     InitialLocation = new SourceLocation(0, line, 1)
                 };

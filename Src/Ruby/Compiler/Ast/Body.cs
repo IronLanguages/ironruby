@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -235,13 +231,9 @@ namespace IronRuby.Compiler.Ast {
                     AstUtils.Empty()
                 ).FinallyWithJumps(
                     AstUtils.Unless(retryingVariable,
-#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
                         // Reclaiming a discarded fiber drops Ruby ensure bodies, just as freeing
                         // a native fiber stack does. CLR cleanup finally blocks still execute.
                         AstUtils.Unless(Ast.Property(null, typeof(RubyUtils), "IsReclaimingFiber"), transformedEnsure)
-#else
-                        transformedEnsure
-#endif
                     )
                 )
             );

@@ -21,11 +21,7 @@ using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
 using IronRuby.Builtins;
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using AstUtils = Microsoft.Scripting.Ast.Utils;
     

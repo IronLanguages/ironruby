@@ -12,12 +12,7 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_REFEMIT
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -37,9 +32,7 @@ using IronRuby.Runtime.Calls;
 namespace IronRuby.Compiler.Generation {
 
     public abstract class ClsTypeEmitter {
-        public const string VtableNamesField = "#VTableNames#";
         public const string BaseMethodPrefix = "#base#";
-        public const string FieldGetterPrefix = "#field_get#", FieldSetterPrefix = "#field_set#";
 
         private ILGen _cctor;
         private readonly TypeBuilder _tb;
@@ -57,7 +50,6 @@ namespace IronRuby.Compiler.Generation {
             return true;
         }
 
-        protected abstract MethodInfo EventHelper();
         protected abstract MethodInfo MissingInvokeMethodException();
 
         protected abstract void EmitImplicitContext(ILGen il);
@@ -312,8 +304,6 @@ namespace IronRuby.Compiler.Generation {
             return new ILGen(il);
         }
 
-        protected const MethodAttributes MethodAttributesToEraseInOveride = MethodAttributes.Abstract | MethodAttributes.ReservedMask;
-
         protected ILGen DefineMethodOverride(MethodAttributes extra, MethodInfo decl, out MethodBuilder impl) {
             impl = ReflectionUtils.DefineMethodOverride(_tb, extra, decl);
             return CreateILGen(impl.GetILGenerator());
@@ -455,4 +445,3 @@ namespace IronRuby.Compiler.Generation {
         }
     }
 }
-#endif

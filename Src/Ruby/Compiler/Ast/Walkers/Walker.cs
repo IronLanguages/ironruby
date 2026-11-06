@@ -156,7 +156,6 @@ namespace IronRuby.Compiler.Ast {
 
         internal protected virtual void Walk(SourceUnitTree/*!*/ node) {
             if (Enter(node)) {
-                VisitOptionalList(node.Initializers);
                 VisitOptionalList(node.Statements);
             }
 
@@ -169,7 +168,6 @@ namespace IronRuby.Compiler.Ast {
             }
             Exit(node);
         }
-
 
         internal protected virtual void Walk(MemberAssignmentExpression/*!*/ node) {
             if (Enter(node)) {
@@ -186,7 +184,6 @@ namespace IronRuby.Compiler.Ast {
             }
             Exit(node);
         }
-
 
         internal protected virtual void Walk(ElseIfClause/*!*/ node) {
             if (Enter(node)) {
@@ -333,22 +330,6 @@ namespace IronRuby.Compiler.Ast {
             Exit(node);
         }
 
-        internal protected virtual void Walk(ConditionalJumpExpression/*!*/ node) {
-            if (Enter(node)) {
-                node.Condition.Walk(this);
-                node.JumpStatement.Walk(this);
-                if (node.Value != null) {
-                    node.Value.Walk(this);
-                }
-            }
-            Exit(node);
-        }
-
-        internal protected virtual void Walk(ErrorExpression/*!*/ node) {
-            Enter(node);
-            Exit(node);
-        }
-
         internal protected virtual void Walk(ForLoopExpression/*!*/ node) {
             if (Enter(node)) {
                 if (node.Block != null) {
@@ -389,11 +370,6 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal protected virtual void Walk(SymbolLiteral/*!*/ node) {
-            Enter(node);
-            Exit(node);
-        }
-
-        internal protected virtual void Walk(FileLiteral/*!*/ node) {
             Enter(node);
             Exit(node);
         }
@@ -634,26 +610,8 @@ namespace IronRuby.Compiler.Ast {
             Exit(node);
         }
 
-        internal protected virtual void Walk(ConditionalStatement/*!*/ node) {
-            if (Enter(node)) {
-                node.Condition.Walk(this);
-                node.Body.Walk(this);
-                if (node.ElseStatement != null) {
-                    node.ElseStatement.Walk(this);
-                }
-            }
-            Exit(node);
-        }
-
         internal protected virtual void Walk(AliasStatement/*!*/ node) {
             Enter(node);
-            Exit(node);
-        }
-
-        internal protected virtual void Walk(FileInitializerStatement/*!*/ node) {
-            if (Enter(node)) {
-                VisitOptionalList(node.Statements);
-            }
             Exit(node);
         }
 

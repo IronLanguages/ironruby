@@ -384,7 +384,7 @@ namespace IronRuby.Prism {
             _scopes.Push(scope);
             var statements = BuildStatements(HoistPreExecution(node.Statements));
             _scopes.Pop();
-            return new SourceUnitTree(scope, statements, null, _encoding, dataOffset);
+            return new SourceUnitTree(scope, statements, _encoding, dataOffset);
         }
 
         /// <summary>

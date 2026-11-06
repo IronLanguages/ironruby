@@ -92,10 +92,8 @@ namespace IronRuby.Compiler.Generation {
             return true;
         }
 
-#if FEATURE_REFEMIT
         public IFeatureBuilder/*!*/ MakeBuilder(TypeBuilder/*!*/ tb) {
             return new InterfacesBuilder(tb, _interfaces);
         }
-#endif
     }
 }

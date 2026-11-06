@@ -128,7 +128,7 @@ namespace IronRuby.Tests {
             string name = _driver.TestRuntime.TestName;
             SourceUnit source = _driver.TestRuntime.Context.CreateSnippet(code, name + ".rb", SourceCodeKind.File);
 
-            ScriptCode compiledCode = source.Compile(new RubyCompilerOptions(Context.RubyOptions), sink);
+            ScriptCode compiledCode = source.Compile(new RubyCompilerOptions(), sink);
             if (compiledCode != null) {
                 compiledCode.Run(new Scope());
             }

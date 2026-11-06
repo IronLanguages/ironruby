@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using Microsoft.Scripting;
@@ -117,7 +113,6 @@ namespace IronRuby.Compiler.Ast {
                 scope,
                 selfParameter, 
                 scopeVariable, 
-                IsSingletonDeclaration,
                 frameLabel
             );
             gen.GetEnclosingModuleFrame().OuterLocals = outerLocals;

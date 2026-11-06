@@ -976,7 +976,7 @@ namespace IronRuby.Runtime {
             }
 #endif
 
-            RubyCompilerOptions options = new RubyCompilerOptions(_context.RubyOptions) {
+            RubyCompilerOptions options = new RubyCompilerOptions() {
                 FactoryKind = (flags & LoadFlags.LoadIsolated) != 0 ? TopScopeFactoryKind.WrappedFile : TopScopeFactoryKind.File
             };
 
