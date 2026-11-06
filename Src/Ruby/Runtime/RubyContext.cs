@@ -3334,47 +3334,9 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// TODO
-        /// Ruby 1.9 allows arbitrarily encoded identifiers. We could use a RubySymbol in internal tables, however that would also require
-        /// dynamic sites to use RubySymbols and CLR methods cached in the tables to be represented by RubySymbols. Seems like too much overhead.
-        /// 
-        /// For now we take the same approach as with file system paths. We represent the identifiers as CLR strings and whenever we convert 
-        /// them to RubySymbol or MutableString we use either the current KCODE or (K)UTF8 encoding. This doesn't guarantee a correct roundtrip 
-        /// in the case that a method is defined under K-UTF8, its name is retrieved under K-SJIS, converted to a string and the bytes are examined. 
-        /// The conversion might blow up if it contains a character that is not available in SJIS.
-        /// 
-        /// <para>
-        /// Note that the way how 1.9 works makes non-ascii identifiers encoded by non-UTF-8 encoding almost useless. 
-        /// Libraries written in such encoding are only usable from code written in the same encoding. 
-        /// Thus the common case would probably be that all scripts use UTF-8. For example,
-        /// <code>
-        /// lib1.rb:
-        /// #encoding: UTF-8
-        /// class C; def S; end; end
-        /// 
-        /// lib2.rb:
-        /// #encoding: SJIS
-        /// class D; def S; end; end
-        /// 
-        /// c.rb:
-        /// #encoding: UTF-8
-        /// require 'lib1'
-        /// require 'lib2'
-        /// C.new.S             # works
-        /// D.new.S             # error: no method S
-        /// </code>
-        /// </para>
-        /// 
-        /// <para>
-        /// Ruby 1.9 also allows incorrectly encoded method names (not identifiers in source code though):
-        /// <code>
-        /// #encoding: UTF-8
-        /// class C
-        ///   define_method(:"foo\xce") { }
-        /// end
-        /// </code>
-        /// There seems to be no reason why we should support this.
-        /// </para>
+        /// Method, constant and variable names are kept as CLR strings and always converted to UTF-8 symbols and strings.
+        /// Ruby allows identifiers in any source encoding, but a name defined in a non-UTF-8 file is only reachable from
+        /// files of that same encoding, so the common case is all-UTF-8 and IronRuby does not track per-name encodings.
         /// </summary>
         public RubyEncoding/*!*/ GetIdentifierEncoding() {
             // TODO:
@@ -3386,14 +3348,14 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// Returns an identifier encoded as MutableStrings (Ruby 1.8) or Symbols (Ruby 1.9).
+        /// Returns an identifier as a Symbol.
         /// </summary>
         public object/*!*/ StringifyIdentifier(string/*!*/ identifier) {
             return CreateSymbol(identifier, RubyEncoding.UTF8);
         }
 
         /// <summary>
-        /// Returns an array of identifiers encoded as MutableStrings (Ruby 1.8) or Symbols (Ruby 1.9).
+        /// Returns an array of identifiers as Symbols.
         /// </summary>
         public RubyArray/*!*/ StringifyIdentifiers(IList<string>/*!*/ identifiers) {
             var result = new RubyArray(identifiers.Count);
