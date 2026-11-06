@@ -19,7 +19,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Diagnostics;
-using System.Threading;
+using System.Collections.Concurrent;
 using System.Runtime.Serialization;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Runtime;
@@ -85,6 +85,9 @@ namespace IronRuby.Builtins {
             AppContext.SetSwitch("System.Text.Encoding.EnableUnsafeUTF7Encoding", true);
             return true;
         }
+
+        // the encodings other than the singletons below, created on first use (initialized before them, in textual order)
+        private static readonly ConcurrentDictionary<int, RubyEncoding>/*!*/ _encodings = new ConcurrentDictionary<int, RubyEncoding>();
 
         public static readonly RubyEncoding/*!*/ Binary = new RubyEncoding(BinaryEncoding.Instance, BinaryEncoding.Instance, -4);
         public static readonly RubyEncoding/*!*/ UTF8 = new RubyEncoding(CreateEncoding(CodePageUTF8, false), CreateEncoding(CodePageUTF8, true), -3);
@@ -381,7 +384,7 @@ namespace IronRuby.Builtins {
         }
 
         public int CodePage {
-            get { return GetCodePage(_encoding); }
+            get { return _encoding.CodePage; }
         }
 
         public override string/*!*/ ToString() {
@@ -402,37 +405,22 @@ namespace IronRuby.Builtins {
             }
         }
 
-        internal static int GetCodePage(int nameInitial) {
-            switch (nameInitial) {
+        /// <summary>The encoding a -K switch names by its initial (-Ke, -Ks, -Ku).</summary>
+        public static RubyEncoding GetEncodingByNameInitial(int initial) {
+            switch (initial) {
                 case 'E':
-                case 'e': return CodePageEUCJP;
+                case 'e': return EUCJP;
                 case 'S':
-                case 's': return CodePageSJIS;
+                case 's': return SJIS;
                 case 'U':
-                case 'u': return CodePageUTF8;
-                default:
-                    return -1;
+                case 'u': return UTF8;
+                default: return null;
             }
         }
 
-        public static RubyEncoding GetEncodingByNameInitial(int initial) {
-            int codepage = GetCodePage(initial);
-            return codepage > 0 ? GetRubyEncoding(codepage) : null;
-        }
-
-        private static Dictionary<int, RubyEncoding> _Encodings;
-        
         public static RubyEncoding/*!*/ GetRubyEncoding(Encoding/*!*/ encoding) {
             ContractUtils.RequiresNotNull(encoding, "encoding");
-            
-            if (encoding.CodePage == 0) {
-                if (encoding == BinaryEncoding.Instance) {
-                    return Binary;
-                }
-
-                // TODO: allow custom encodings (without codepage)
-            }
-
+            // TODO: allow custom encodings (without codepage); code page 0 is Binary's
             return GetRubyEncoding(encoding.CodePage);
         }
 
@@ -445,30 +433,14 @@ namespace IronRuby.Builtins {
                 case CodePageEUCJP: return EUCJP;
             }
 
-            if (_Encodings == null) {
-                Interlocked.CompareExchange(ref _Encodings, new Dictionary<int, RubyEncoding>(), null); 
-            }
-
-            RubyEncoding result;
-            lock (_Encodings) {
-                if (!_Encodings.TryGetValue(codepage, out result)) {
-                    result = new RubyEncoding(
-                        CreateEncoding(codepage, false),
-                        CreateEncoding(codepage, true),
-                        codepage
-                    );
-
-                    _Encodings.Add(codepage, result);
-                }
-            }
-
-            return result;
+            // two threads may race to create an encoding, but GetOrAdd hands both the instance it stored
+            return _encodings.GetOrAdd(codepage, cp => new RubyEncoding(CreateEncoding(cp, false), CreateEncoding(cp, true), cp));
         }
 
-        private static int GetCodePage(Encoding/*!*/ encoding) {
-            return encoding.CodePage;
-        }
-
+        /// <summary>
+        /// Whether the encoding maps each ASCII character to the byte of the same value. It encodes
+        /// the ASCII repertoire to find out; that runs once per encoding, as RubyEncoding caches it.
+        /// </summary>
         public static bool AsciiIdentity(Encoding/*!*/ encoding) {
             if (encoding == BinaryEncoding.Instance) {
                 return true;
@@ -481,103 +453,15 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
-            switch (encoding.CodePage) {
-                case 437: // OEM United States
-                case 708: // Arabic (ASMO 708)
-                case 720: // Arabic (DOS)
-                case 737: // Greek (DOS)
-                case 775: // Baltic (DOS)
-                case 850: // Western European (DOS)
-                case 852: // Central European (DOS)
-                case 855: // OEM Cyrillic
-                case 857: // Turkish (DOS)
-                case 858: // OEM Multilingual Latin I
-                case 860: // Portuguese (DOS)
-                case 861: // Icelandic (DOS)
-                case 862: // Hebrew (DOS)
-                case 863: // French Canadian (DOS)
-                case 864: // Arabic (864)
-                case 865: // Nordic (DOS)
-                case 866: // Cyrillic (DOS)
-                case 869: // Greek, Modern (DOS)
-                case 874: // Thai (Windows)
-                case 932: // Japanese (Shift-JIS)
-                case 936: // Chinese Simplified (GB2312)
-                case 949: // Korean
-                case 950: // Chinese Traditional (Big5)
-                case 1250: // Central European (Windows)
-                case 1251: // Cyrillic (Windows)
-                case 1252: // Western European (Windows)
-                case 1253: // Greek (Windows)
-                case 1254: // Turkish (Windows)
-                case 1255: // Hebrew (Windows)
-                case 1256: // Arabic (Windows)
-                case 1257: // Baltic (Windows)
-                case 1258: // Vietnamese (Windows)
-                case 1361: // Korean (Johab)
-                case 10000: // Western European (Mac)
-                case 10001: // Japanese (Mac)
-                case 10002: // Chinese Traditional (Mac)
-                case 10003: // Korean (Mac)
-                case 10004: // Arabic (Mac)
-                case 10005: // Hebrew (Mac)
-                case 10006: // Greek (Mac)
-                case 10007: // Cyrillic (Mac)
-                case 10008: // Chinese Simplified (Mac)
-                case 10010: // Romanian (Mac)
-                case 10017: // Ukrainian (Mac)
-                case 10029: // Central European (Mac)
-                case 10079: // Icelandic (Mac)
-                case 10081: // Turkish (Mac)
-                case 10082: // Croatian (Mac)
-                case 20000: // Chinese Traditional (CNS)
-                case 20001: // TCA Taiwan
-                case 20002: // Chinese Traditional (Eten)
-                case 20003: // IBM5550 Taiwan
-                case 20004: // TeleText Taiwan
-                case 20005: // Wang Taiwan
-                case 20127: // US-ASCII
-                case 20866: // Cyrillic (KOI8-R)
-                case 20932: // Japanese (JIS 0208-1990 and 0212-1990)
-                case 20936: // Chinese Simplified (GB2312-80)
-                case 20949: // Korean Wansung
-                case 21866: // Cyrillic (KOI8-U)
-                case 28591: // Western European (ISO)
-                case 28592: // Central European (ISO)
-                case 28593: // Latin 3 (ISO)
-                case 28594: // Baltic (ISO)
-                case 28595: // Cyrillic (ISO)
-                case 28596: // Arabic (ISO)
-                case 28597: // Greek (ISO)
-                case 28598: // Hebrew (ISO-Visual)
-                case 28599: // Turkish (ISO)
-                case 28603: // Estonian (ISO)
-                case 28605: // Latin 9 (ISO)
-                case 38598: // Hebrew (ISO-Logical)
-                case 51932: // Japanese (EUC)
-                case 51936: // Chinese Simplified (EUC)
-                case 51949: // Korean (EUC)
-                case 54936: // Chinese Simplified (GB18030)
-                case 57002: // ISCII Devanagari
-                case 57003: // ISCII Bengali
-                case 57004: // ISCII Tamil
-                case 57005: // ISCII Telugu
-                case 57006: // ISCII Assamese
-                case 57007: // ISCII Oriya
-                case 57008: // ISCII Kannada
-                case 57009: // ISCII Malayalam
-                case 57010: // ISCII Gujarati
-                case 57011: // ISCII Punjabi
-                case 65001: // Unicode (UTF-8)
-                    Debug.Assert(IsAsciiIdentityFallback(encoding));
-                    return true;
-
-                default: 
-                    return IsAsciiIdentityFallback(encoding);
-            }
+            return IsAsciiIdentityFallback(encoding);
         }
 
-        private static string _AllAscii;
+        // all ASCII characters, U+0000 to U+007F:
+        private static readonly string/*!*/ _allAscii = string.Create(0x80, 0, (chars, _) => {
+            for (int i = 0; i < chars.Length; i++) {
+                chars[i] = (char)i;
+            }
+        });
 
         /// <summary>
         /// Ruby's "dummy" encodings: stateful encodings that Ruby knows the name of but cannot
@@ -634,22 +518,13 @@ namespace IronRuby.Builtins {
         }
 
         private static bool IsAsciiIdentityFallback(Encoding/*!*/ encoding) {
-            if (_AllAscii == null) {
-                // all ASCII characters:
-                var sb = new StringBuilder(0x80);
-                for (int i = 0; i < 0x80; i++) {
-                    sb.Append((char)i);
-                }
-                _AllAscii = sb.ToString();
-            }
-
-            var bytes = encoding.GetBytes(_AllAscii);
-            if (bytes.Length != _AllAscii.Length) {
+            var bytes = encoding.GetBytes(_allAscii);
+            if (bytes.Length != _allAscii.Length) {
                 return false;
             }
 
-            for (int i = 0; i < _AllAscii.Length; i++) {
-                if ((int)_AllAscii[i] != (int)bytes[i]) {
+            for (int i = 0; i < bytes.Length; i++) {
+                if (bytes[i] != i) {
                     return false;
                 }
             }
@@ -680,32 +555,25 @@ namespace IronRuby.Builtins {
             }
         }
         
-        private static int[] _sbsc;
-        private static int[] _dbsc; 
+        private static readonly int[]/*!*/ _sbcs = new int[] {
+            0, 37, 437, 500, 708, 720, 737, 775, 850, 852, 855, 857, 858, 860, 861, 862, 863, 864, 865, 866, 869, 870, 874, 875, 1026,
+            1047, 1140, 1141, 1142, 1143, 1144, 1145, 1146, 1147, 1148, 1149, 1250, 1251, 1252, 1253, 1254, 1255, 1256, 1257, 1258,
+            10000, 10004, 10005, 10006, 10007, 10010, 10017, 10021, 10029, 10079, 10081, 10082, 20105, 20106, 20107, 20108, 20127,
+            20269, 20273, 20277, 20278, 20280, 20284, 20285, 20290, 20297, 20420, 20423, 20424, 20833, 20838, 20866, 20871, 20880,
+            20905, 20924, 21025, 21866, 28592, 28593, 28594, 28595, 28596, 28597, 28598, 28599, 28603, 28605, 29001, 38598
+        };
+
+        private static readonly int[]/*!*/ _dbcs = new int[] {
+            932, 936, 949, 950, 1361, 10001, 10002, 10003, 10008, 20000, 20001, 20002, 20003, 20004, 20005, 20261, 20932, 20936,
+            20949, 50227, 51936, 51949
+        };
 
         private static bool IsSBCS(int codepage) {
-            if (_sbsc == null) {
-                _sbsc = new int[] {
-                    0, 37, 437, 500, 708, 720, 737, 775, 850, 852, 855, 857, 858, 860, 861, 862, 863, 864, 865, 866, 869, 870, 874, 875, 1026, 
-                    1047, 1140, 1141, 1142, 1143, 1144, 1145, 1146, 1147, 1148, 1149, 1250, 1251, 1252, 1253, 1254, 1255, 1256, 1257, 1258, 
-                    10000, 10004, 10005, 10006, 10007, 10010, 10017, 10021, 10029, 10079, 10081, 10082, 20105, 20106, 20107, 20108, 20127, 
-                    20269, 20273, 20277, 20278, 20280, 20284, 20285, 20290, 20297, 20420, 20423, 20424, 20833, 20838, 20866, 20871, 20880, 
-                    20905, 20924, 21025, 21866, 28592, 28593, 28594, 28595, 28596, 28597, 28598, 28599, 28603, 28605, 29001, 38598
-                };
-            }
-
-            return Array.BinarySearch(_sbsc, codepage) >= 0;
+            return Array.BinarySearch(_sbcs, codepage) >= 0;
         }
 
         private static bool IsDBCS(int codepage) {
-            if (_dbsc == null) {
-                _dbsc = new int[] {
-                    932, 936, 949, 950, 1361, 10001, 10002, 10003, 10008, 20000, 20001, 20002, 20003, 20004, 20005, 20261, 20932, 20936, 
-                    20949, 50227, 51936, 51949
-                };
-            }
-
-            return Array.BinarySearch(_dbsc, codepage) >= 0;
+            return Array.BinarySearch(_dbcs, codepage) >= 0;
         }
 
         public bool InUnicodeBasicPlane {
