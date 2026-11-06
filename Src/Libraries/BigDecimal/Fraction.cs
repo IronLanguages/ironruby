@@ -294,70 +294,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return z;
         }
 
-        public static Fraction/*!*/ Divide(Fraction/*!*/ a, Fraction/*!*/ b, int minPrecision, out Fraction/*!*/ r, out int cOffset, out int rOffset) {
-            int precision = Math.Max(a.MaxPrecision + b.MaxPrecision+1, minPrecision);
-            Fraction c = new Fraction(precision);
-            r = new Fraction(precision * 2);
-
-            uint[] aWords = a._words;
-            uint[] bWords = b._words;
-            uint[] cWords = c._words;
-            uint[] rWords = r._words;
-
-            int aSize = a.Precision;
-            int bSize = b.Precision;
-            int cSize = c.MaxPrecision;
-            int rSize = r.MaxPrecision;
-
-            // Initialize remainder (we add an extra word at the front to catch the overflow
-            Array.Copy(aWords, 0, rWords, 1, Math.Min(aSize, rSize-1));
-
-            // Setup basic values
-            ulong b1        = bWords[0];
-            ulong b1plus1   = bSize <= 1 ? b1               : b1 + 1;
-            ulong b1b2      = bSize <= 1 ? (ulong)bWords[0] * BASE : GetDoubleWord(bWords, 0, b.Precision);
-            ulong b1b2plus1 = bSize <= 2 ? b1b2             : b1b2 + 1;
-
-            // Main loop
-            int index = 1;
-            int size = Math.Min(cSize, rSize);
-            while (index < size) {
-                if (rWords[index] == 0) {
-                    ++index;
-                    continue;
-                }
-
-                ulong r1r2 = GetDoubleWord(rWords, index, rSize);
-                if (r1r2 == b1b2) {
-                    // Iterate through the rest of b comparing words of r and b until they are not equal
-                    int bIndex = 2;
-                    int rIndex = index + 2;
-                    FindNextNonEqual(rWords, bWords, bSize, ref rIndex, ref bIndex);
-                    if (rIndex < rSize && bIndex < bSize && rWords[rIndex] < bWords[bIndex]) {
-                        if (index + 1 > rSize) {
-                            break;
-                        }
-                        InternalDivide(rWords, rSize, r1r2 / b1plus1, bWords, bSize, index, cWords);
-                    } else {
-                        // Quotient is 1, just subtract b from r
-                        SubtractInPlace(rWords, bWords, bSize, index);
-                        cWords[index-1]++;
-                        Carry(cWords, index);
-                    }
-                } else if (r1r2 >= b1b2plus1) {
-                    InternalDivide(rWords, rSize, r1r2 / b1b2plus1, bWords, bSize, index - 1, cWords);
-                } else {
-                    InternalDivide(rWords, rSize, r1r2 / b1plus1, bWords, bSize, index, cWords);
-                }
-            }
-            c = Normalize(c, out cOffset);
-            r = Normalize(r, out rOffset);
-            // We added artificially an extra word onto r and c to cope with carry overflow (so take away again now)
-            cOffset += BASE_FIG;
-            rOffset += BASE_FIG;
-            return c;
-        }
-
         public static int Compare(Fraction/*!*/ x, Fraction/*!*/ y, int exponentDiff) {
             if (exponentDiff != 0) {
                 return exponentDiff > 0 ? 1 : -1;
@@ -561,62 +497,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         /// <summary>
-        /// Divide r[index, ...] by q
-        /// </summary>
-        private static void InternalDivide(uint[] rWords, int rSize, ulong q, uint[] bWords, int bSize, int index, uint[] cWords) {
-            cWords[index] += (uint)q;
-            SubtractMultiple(rWords, rSize, q, bWords, bSize, index, bSize+index);
-        }
-
-        // r = r - q * b
-        private static void SubtractMultiple(uint[] rWords, int rSize, ulong q, uint[] bWords, int bSize, int index, int rIndex) {
-            int bIndex = bSize - 1;
-            uint borrow1 = 0;
-            uint borrow2 = 0;
-
-            while (bIndex >= 0) {
-                ulong qb = q * bWords[bIndex];
-                if (qb < BASE) {
-                    borrow1 = 0;
-                } else {
-                    borrow1 = (uint)(qb / BASE);
-                    qb -= (ulong)borrow1 * BASE;
-                }
-
-                if (rWords[rIndex] < qb) {
-                    rWords[rIndex] += (uint)(BASE - qb);
-                    borrow2 += borrow1 + 1;
-                } else{ 
-				    rWords[rIndex] -= (uint)qb;
-                    borrow2 += borrow1;
-                }
-
-                if (borrow2 != 0) {
-                    if (rWords[rIndex - 1] < borrow2) {
-                        rWords[rIndex - 1] += (BASE - borrow2);
-                        borrow2 = 1;
-                    } else {
-                        rWords[rIndex - 1] -= borrow2;
-                        borrow2 = 0;
-                    }
-                }
-
-                --rIndex;
-                --bIndex;
-            }
-        }
-
-        private static void FindNextNonEqual(uint[] i, uint[] j, int iSize, ref int iIndex, ref int jIndex) {
-            while (iIndex < iSize) {
-                if (i[iIndex] != j[jIndex]) {
-                    break;
-                }
-                ++iIndex;
-                ++jIndex;
-            }
-        }
-
-        /// <summary>
         /// Subtract y from x in place.
         /// </summary>
         /// <param name="x"></param>
@@ -646,22 +526,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 					borrow = 0;
                 }
 				--xIndex;
-            }
-        }
-
-        private static ulong GetDoubleWord(uint[] a, int i, int precision) {
-            if (i+1 == precision) {
-                return (ulong)a[i] * BASE;
-            } else {
-                return (ulong)a[i] * BASE + a[i + 1];
-            }
-        }
-
-        private static void Carry(uint[] a, int i) {
-            while (a[i] >= BASE) {
-                a[i] -= BASE;
-                --i;
-                ++a[i];
             }
         }
 

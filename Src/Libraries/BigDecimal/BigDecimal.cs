@@ -501,54 +501,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return result;
         }
 
-        public static BigDecimal Divide(Config config, BigDecimal x, BigDecimal y, int limit, out BigDecimal remainder) {
-            BigDecimal result = CheckSpecialResult(config, x, y, BasicOperations.Divide);
-            if (result != null) {
-                remainder = BigDecimal.PositiveZero;
-                return result;
-            }
-
-            // Default to global limit if not specified
-            if (limit == 0) {
-                limit = config.Limit;
-            }
-
-            // Sign
-            int sign = x._sign * y._sign;
-
-            if (IsOne(y)) {
-                remainder = BigDecimal.PositiveZero;
-                return new BigDecimal(sign, x._fraction, x._exponent);
-            }
-
-            // Fraction
-            int xOffset, rOffset, limitOffset;
-            int minPrecision = (int)Math.Ceiling((double)limit / BASE_FIG) + 1;
-            Fraction rFraction;
-            Fraction fraction = Fraction.Divide(x._fraction, y._fraction, minPrecision, out rFraction, out xOffset, out rOffset);
-            if (limit == 0) {
-                limitOffset = 0;
-            } else {
-                fraction = Fraction.LimitPrecision(sign, fraction, limit, config.RoundingMode, out limitOffset);
-            }
-
-            // Exponent
-            int exponent, rExponent;
-            try {
-                checked {
-                    exponent = x._exponent - y._exponent + xOffset + limitOffset;
-                    rExponent = x._exponent - y._exponent + rOffset;
-                }
-            } catch (OverflowException) {
-                remainder = BigDecimal.PositiveZero;
-                return ExponentOverflow(config, sign, x._exponent);
-            }
-
-            remainder = new BigDecimal(sign, rFraction, rExponent, rFraction.MaxPrecision);
-            result = new BigDecimal(sign, fraction, exponent, fraction.MaxPrecision);
-            return result;
-        }
-
         /// <summary>A finite x as unscaled * 10**scale, the unscaled value carrying the sign.</summary>
         // The fraction's words hold its digits left-aligned (0.w0 w1 ... * 10**exponent, w0's first digit
         // non-zero), so the unscaled value is the words read as one base 10**9 number, 9 digits a word.
@@ -653,9 +605,9 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             div = BigDecimal.NaN;
             mod = BigDecimal.NaN;
 
-            // Exactly, at the exponent of the finer of the two: the quotient of an 18-digit division,
-            // floored, was wrong whenever the true quotient needed more digits - BigDecimal("1e100") % 3
-            // was 0.1e83.
+            // Exactly, at the exponent of the finer of the two, however many digits that takes (as in MRI):
+            // the quotient of an 18-digit division, floored, was wrong whenever the true quotient needed
+            // more digits - BigDecimal("1e100") % 3 was 0.1e83.
             if (BigDecimal.IsFinite(x) && BigDecimal.IsFinite(y) && !IsZero(y)) {
                 if (IsZero(x)) {
                     div = PositiveZero;
@@ -666,30 +618,17 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 long ea, eb;
                 ToUnscaled(x, out a, out ea);
                 ToUnscaled(y, out b, out eb);
-                if (Math.Abs(ea - eb) <= 100000) {
-                    long e = Math.Min(ea, eb);
-                    a *= System.Numerics.BigInteger.Pow(10, (int)(ea - e));
-                    b *= System.Numerics.BigInteger.Pow(10, (int)(eb - e));
-                    System.Numerics.BigInteger r;
-                    System.Numerics.BigInteger q = System.Numerics.BigInteger.DivRem(a, b, out r);
-                    if (!r.IsZero && (r.Sign < 0) != (b.Sign < 0)) {
-                        q -= 1;
-                        r += b;
-                    }
-                    div = FromUnscaled(config, q, 0);
-                    mod = FromUnscaled(config, r, e);
-                    return;
+                long e = Math.Min(ea, eb);
+                a *= System.Numerics.BigInteger.Pow(10, checked((int)(ea - e)));
+                b *= System.Numerics.BigInteger.Pow(10, checked((int)(eb - e)));
+                System.Numerics.BigInteger r;
+                System.Numerics.BigInteger q = System.Numerics.BigInteger.DivRem(a, b, out r);
+                if (!r.IsZero && (r.Sign < 0) != (b.Sign < 0)) {
+                    q -= 1;
+                    r += b;
                 }
-            }
-            if (BigDecimal.IsFinite(x) && BigDecimal.IsFinite(y)) {
-                BigDecimal remainder;
-                BigDecimal quotient = Divide(config, x, y, 0, out remainder);
-                if (BigDecimal.IsFinite(quotient)) {
-                    // Calculate the div: floor(quotient)
-                    div = LimitPrecision(config, quotient, 0, BigDecimal.RoundingModes.Floor);
-                    // Calculate the mod: x - (div * y)
-                    mod = Subtract(config, x, Multiply(config, div, y));
-                }
+                div = FromUnscaled(config, q, 0);
+                mod = FromUnscaled(config, r, e);
             }
         }
 
