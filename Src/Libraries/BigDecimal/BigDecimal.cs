@@ -49,7 +49,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         private readonly int _sign;
         private readonly Fraction _fraction;
         private readonly int _exponent;
-        private readonly int _maxPrecision;
         #endregion
 
         #region Private Constants
@@ -135,8 +134,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal One = new BigDecimal(1, Fraction.One, 1);
         [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
-        public static readonly BigDecimal Half = new BigDecimal(1, Fraction.Five, 0);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal NaN = new BigDecimal(NumberTypes.NaN, 0);
         [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal PositiveInfinity = new BigDecimal(NumberTypes.Infinite, 1);
@@ -153,50 +150,23 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #region Private Constructors
 
-        public BigDecimal() : this(0, NaN) {
+        public BigDecimal() : this(NumberTypes.NaN, 0) {
         }
 
-        private BigDecimal(int sign, Fraction/*!*/ fraction, int exponent)
-            : this(sign, fraction, exponent, fraction.Precision) {
-        }
-
-        private BigDecimal(int sign, Fraction/*!*/ fraction, int exponent, int maxPrecision) {
+        private BigDecimal(int sign, Fraction/*!*/ fraction, int exponent) {
             Debug.Assert(sign == 1 || sign == -1);
             _type = NumberTypes.Finite;
             _sign = sign;
             _fraction = fraction;
             _exponent = exponent;
-            // If maxPrecision is 0 then default to the precision of the fraction
-            _maxPrecision = maxPrecision == 0 ? fraction.Precision : maxPrecision;
         }
 
-        private BigDecimal(int sign, BigDecimal/*!*/ copyFrom) {
-            _type = copyFrom._type;
-            _sign = sign;
-            _fraction = copyFrom._fraction;
-            _exponent = copyFrom._exponent;
-            _maxPrecision = copyFrom._maxPrecision;
-        }
-
-        private BigDecimal(int sign, BigDecimal/*!*/ copyFrom, int maxPrecision) {
-            _type = copyFrom._type;
-            _sign = sign;
-            _fraction = new Fraction(copyFrom._fraction, maxPrecision);
-            _exponent = copyFrom._exponent;
-            _maxPrecision = maxPrecision;
-        }
-
-        private BigDecimal(NumberTypes type, int sign)
-            : this(type, sign, 1) {
-        }
-
-        private BigDecimal(NumberTypes type, int sign, int maxPrecision) {
+        private BigDecimal(NumberTypes type, int sign) {
             Debug.Assert(type != NumberTypes.Finite);
             _type = type;
             _sign = sign;
             _fraction = Fraction.Zero;
             _exponent = 0;
-            _maxPrecision = maxPrecision;
         }
 
         #endregion
@@ -206,7 +176,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public int Sign { get { return _sign; } }
         public int Exponent { get { return _exponent; } }
         public int Precision { get { return _fraction.Precision; } }
-        public int MaxPrecision { get { return _maxPrecision; } }
         public int Digits { get { return _fraction.DigitCount; } }
         #endregion
 
@@ -224,18 +193,14 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         public static BigDecimal Create(Config/*!*/config, object value) {
             Debug.Assert(!(value is double) && !(value is float)); // Need to use CultureInfo.InvariantCulture for double
-            return Create(config, value.ToString(), 0);
+            return Create(config, value.ToString());
         }
 
         public static BigDecimal Create(Config/*!*/config, double value) {
-            return Create(config, value.ToString(CultureInfo.InvariantCulture), 0);
+            return Create(config, value.ToString(CultureInfo.InvariantCulture));
         }
 
         public static BigDecimal Create(Config/*!*/config, string value) {
-            return Create(config, value, 0);
-        }
-
-        public static BigDecimal Create(Config/*!*/config, string value, int maxPrecision) {
             value = value.Trim();
             BigDecimal result = CheckSpecialCases(value);
 
@@ -273,7 +238,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                     // Normalize exponent where mantissa < 1.0
                     exponent -= (fractionStr.Length - strippedFractionStr.Length);
                 }
-                result = new BigDecimal(sign, fraction, exponent, maxPrecision);
+                result = new BigDecimal(sign, fraction, exponent);
             }
             return CheckOverflowExceptions(config, result);
         }
@@ -461,44 +426,12 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 return result;
             }
 
-            // Default to the global limit
-            if (limit == 0) {
-                limit = config.Limit;
-            }
-
-            // Calculate the number of digits if not specified
-            if (limit == 0) {
-                limit = x.Digits + y.Digits;
-            }
-
-            int sign = y._sign * x._sign;
-            // #mult's limit counts significant digits, but LimitPrecision's counts decimal
-            // places, so the multiply-by-one short cut has to convert between the two -
-            // otherwise BigDecimal("1.234").mult(1, 2) keeps three digits instead of two.
-            if (IsOne(x)) {
-                BigDecimal scaled = new BigDecimal(sign, y._fraction, y._exponent);
-                return LimitPrecision(config, scaled, limit - scaled.Exponent, config.RoundingMode);
-            }
-            if (IsOne(y)) {
-                BigDecimal scaled = new BigDecimal(sign, x._fraction, x._exponent);
-                return LimitPrecision(config, scaled, limit - scaled.Exponent, config.RoundingMode);
-            }
-
-            int exponent;
-            Fraction fraction;
-            try {
-                checked {
-                    int diffDigits1, diffDigits2;
-                    fraction = Fraction.Multiply(x._fraction, y._fraction, out diffDigits1);
-                    fraction = Fraction.LimitPrecision(sign, fraction, limit, config.RoundingMode, out diffDigits2);
-                    exponent = x._exponent + y._exponent + diffDigits1 + diffDigits2;
-                }
-            } catch (OverflowException) {
-                return ExponentOverflow(config, sign, x._exponent);
-            }
-
-            result = new BigDecimal(sign, fraction, exponent, limit);
-            return result;
+            // The exact product, rounded to #mult's limit of significant digits, or to the global one.
+            System.Numerics.BigInteger a, b;
+            long ea, eb;
+            ToUnscaled(x, out a, out ea);
+            ToUnscaled(y, out b, out eb);
+            return RoundExact(config, a * b, ea + eb, limit != 0 ? limit : config.Limit);
         }
 
         /// <summary>A finite x as unscaled * 10**scale, the unscaled value carrying the sign.</summary>
@@ -759,9 +692,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             if (limit < 0) {
                 throw new ArgumentException("limit must be positive");
             }
-            if (limit == 0) {
-                limit = config.Limit;
-            }
 
             // This method is used for both adding and subtracting, but the special cases are the same.
             BigDecimal result = CheckSpecialResult(config, x, y, BasicOperations.Add);
@@ -769,55 +699,38 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 return result;
             }
 
-            if (IsZero(x)) {
-                if (limit == 0) {
-                    return y;
-                } else {
-                    return LimitPrecision(config, y, limit, config.RoundingMode);
-                }
-            }
-            if (IsZero(y)) {
-                if (limit == 0) {
-                    return x;
-                } else {
-                    return LimitPrecision(config, x, limit, config.RoundingMode);
-                }
-            }
+            // The exact sum, aligned at the finer of the two exponents, rounded to the limit if there is one.
+            System.Numerics.BigInteger a, b;
+            long ea, eb;
+            ToUnscaled(x, out a, out ea);
+            ToUnscaled(y, out b, out eb);
+            long e = Math.Min(ea, eb);
+            System.Numerics.BigInteger sum =
+                a * System.Numerics.BigInteger.Pow(10, checked((int)(ea - e))) +
+                b * System.Numerics.BigInteger.Pow(10, checked((int)(eb - e)));
+            return RoundExact(config, sum, e, limit != 0 ? limit : config.Limit);
+        }
 
-            int exponent = Math.Max(x._exponent, y._exponent);
-            int sign = x._sign;
-            Fraction fraction;
-            int exponentDiff;
-
-            try {
-                checked {
-                    exponentDiff = checked(x._exponent - y._exponent);
-                    int diffDigits;
-                    if (x._sign == y._sign) {
-                        fraction = Fraction.Add(x._fraction, y._fraction, exponentDiff, out diffDigits);
-                        exponent = exponent + diffDigits;
-                        sign = x._sign;
-                    } else {
-                        // Signs are different then we have to do a subtraction instead
-                        fraction = Fraction.Subtract(x._fraction, y._fraction, exponentDiff, out diffDigits, out sign);
-                        exponent = exponent + diffDigits;
-                        if (sign == 0) {
-                            return PositiveZero;
-                        }
-                        sign = x._sign * sign;
-                    }
-                    if (limit == 0) {
-                        limit = fraction.DigitCount;
-                    }
-                    fraction = Fraction.LimitPrecision(sign, fraction, limit, config.RoundingMode, out diffDigits);
-                    exponent = exponent + diffDigits;
-                }
-            } catch (OverflowException) {
-                return ExponentOverflow(config, sign, x._exponent);
+        /// <summary>
+        /// unscaled * 10**scale rounded to <paramref name="limit"/> significant digits in the current mode, or
+        /// exactly for a limit of 0. Zero is +0, and an exponent beyond our Int32 one overflows.
+        /// </summary>
+        private static BigDecimal/*!*/ RoundExact(Config/*!*/ config, System.Numerics.BigInteger unscaled, long scale, int limit) {
+            if (unscaled.IsZero) {
+                return PositiveZero;
             }
-
-            result = new BigDecimal(sign, fraction, exponent);
-            return result;
+            int sign = unscaled.Sign;
+            long exponent = scale + System.Numerics.BigInteger.Abs(unscaled).ToString(CultureInfo.InvariantCulture).Length;
+            if (exponent > Int32.MaxValue || exponent < Int32.MinValue) {
+                return ExponentOverflow(config, sign, exponent > 0 ? 1 : -1);
+            }
+            BigDecimal exact = FromUnscaled(config, unscaled, scale);
+            if (limit == 0) {
+                return exact;
+            }
+            int offset;
+            Fraction fraction = Fraction.LimitPrecision(sign, exact._fraction, limit, config.RoundingMode, out offset);
+            return new BigDecimal(sign, fraction, exact._exponent + offset);
         }
 
         private static BigDecimal ExponentOverflow(Config config, int sign, int exponent) {

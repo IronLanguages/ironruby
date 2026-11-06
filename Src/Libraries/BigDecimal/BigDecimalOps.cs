@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -46,12 +46,12 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         #region Construction
 
         [RubyConstructor]
-        public static BigDecimal/*!*/ CreateBigDecimal(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol]MutableString/*!*/ value, [Optional]int n) {
+        public static BigDecimal/*!*/ CreateBigDecimal(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol]MutableString/*!*/ value) {
             string str = value.ConvertToString();
             if (!BigDecimal.IsValidNumericString(str)) {
                 throw RubyExceptions.CreateArgumentError("invalid value for BigDecimal(): \"{0}\"", str);
             }
-            return BigDecimal.Create(GetConfig(context), str, n);
+            return BigDecimal.Create(GetConfig(context), str);
         }
 
         #endregion
@@ -106,28 +106,20 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #region Singleton Methods
 
+        /// <summary>
+        /// "&lt;digits&gt;:&lt;value&gt;" as #_dump writes it. The digit count sizes MRI's storage and is only
+        /// checked here; the value is read as Kernel#BigDecimal reads a String.
+        /// </summary>
         [RubyMethod("_load", RubyMethodAttributes.PublicSingleton)]
         public static BigDecimal/*!*/ Load(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol]MutableString/*!*/ str) {
-            try {
-                MutableString[] components = str.Split(new char[] { ':' }, 2, StringSplitOptions.None);
-                int maxDigits = 0;
-                int maxPrecision = 1;
-                string digits = "";
-
-                if (!(components[0] == null) || components[0].IsEmpty) {
-                    maxDigits = int.Parse(components[0].ToString(), CultureInfo.InvariantCulture);
+            string text = str.ToString();
+            int colon = text.IndexOf(':');
+            for (int i = 0; i < (colon < 0 ? text.Length + 1 : colon); i++) {
+                if (i == text.Length || text[i] < '0' || text[i] > '9') {
+                    throw RubyExceptions.CreateTypeError("load failed: invalid character in the marshaled string");
                 }
-                if (maxDigits != 0) {
-                    maxPrecision = maxDigits / BigDecimal.BASE_FIG + (maxDigits % BigDecimal.BASE_FIG == 0 ? 0 : 1);
-                }
-                if (components.Length == 2 && components[1] != null) {
-                    digits = components[1].ToString();
-                }
-
-                return BigDecimal.Create(GetConfig(context), digits, maxPrecision);
-            } catch {
-                throw RubyExceptions.CreateTypeError("load failed: invalid character in the marshaled string.");
             }
+            return CreateBigDecimal(context, self, MutableString.Create(text.Substring(colon + 1), str.Encoding));
         }
 
         [RubyMethod("double_fig", RubyMethodAttributes.PublicSingleton)]
@@ -197,7 +189,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         /// </summary>
         [RubyMethod("interpret_loosely", RubyMethodAttributes.PublicSingleton)]
         public static BigDecimal/*!*/ InterpretLoosely(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol]MutableString/*!*/ value) {
-            return BigDecimal.Create(GetConfig(context), value.ConvertToString(), 0);
+            return BigDecimal.Create(GetConfig(context), value.ConvertToString());
         }
 
         #endregion

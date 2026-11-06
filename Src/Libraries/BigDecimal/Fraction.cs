@@ -34,7 +34,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         #region Special Values
         public static readonly Fraction Zero = new Fraction(new uint[] { 0 });
         public static readonly Fraction One = new Fraction(new uint[] { BASE_DIV_10 });
-        public static readonly Fraction Five = new Fraction(new uint[] { 5 * BASE_DIV_10 });
         #endregion
 
         #region Private Fields
@@ -65,13 +64,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         public Fraction(int maxPrecision)
             : this(maxPrecision, maxPrecision) {
-        }
-
-        public Fraction(Fraction/*!*/ copyFrom, int maxPrecision)
-            : this(maxPrecision, maxPrecision) {
-            // Copy the fraction
-            int length = Math.Min(maxPrecision, copyFrom.MaxPrecision);
-            Array.Copy(copyFrom._words, _words, length);
         }
 
         public Fraction(int maxPrecision, int precision) {
@@ -214,83 +206,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             // the carry overflowed into the top word.
             z = Fraction.Normalize(z, out exponentOffset);
             exponentOffset += BASE_FIG;
-            return z;
-        }
-
-        public static Fraction/*!*/ Subtract(Fraction/*!*/ x, Fraction/*!*/ y, int exponentDiff, out int exponentOffset, out int sign) {
-            Fraction upper = x;
-            Fraction lower = y;
-
-            sign = Compare(x, y, exponentDiff);
-            if (sign== 0) {
-                exponentOffset = 0;
-                return new Fraction(1);
-            } else if (sign < 0) {
-                exponentDiff = -exponentDiff;
-                upper = y;
-                lower = x;
-            }
-
-            // Calculate the word and digit offsets between upper and lower
-            int wordOffset = exponentDiff / BASE_FIG;
-            int digitOffset = exponentDiff % BASE_FIG;
-
-            // If necessary we need to scroll one of the arrays
-            if (digitOffset != 0) {
-                lower = ScrollRight(lower, digitOffset);
-            }
-
-            int lowerStart = wordOffset;
-
-            // We should now have something like:
-            // UUU UUU UU0 000 000 000 (upperStart=0, upperLength=8)
-            // 000 0LL LLL LLL LLL LL0 (lowerStart=4, lowerLength=13)
-            // assuming that exponentDiff is 4 (or -4) and BASE_FIG is 3
-            // where each character above is a decimal digit and a space indicates a word boundary
-            // Also, upper should be larger than lower
-
-            int zPrecision = Math.Max(upper.Precision, lower.Precision + lowerStart);
-            Fraction z = new Fraction(zPrecision);
-
-            uint[] upperWords = upper._words;
-            uint[] lowerWords = lower._words;
-            uint[] zWords = z._words;
-
-            // Copy words of upper straight into z
-            Array.Copy(upperWords, 0, zWords, 0, upper.Precision);
-
-            //// Subtract words of lower from z, borrowing as necessary
-            SubtractInPlace(zWords, lowerWords, lower.Precision, lowerStart);
-
-            z = Fraction.Normalize(z, out exponentOffset);
-            return z;
-        }
-
-        public static Fraction/*!*/ Multiply(Fraction/*!*/ x, Fraction/*!*/ y, out int offset) {
-            int xPrecision = x.Precision;
-            int yPrecision = y.Precision;
-            int zPrecision = xPrecision + yPrecision;
-            uint[] xData = x._words;
-            uint[] yData = y._words;
-            uint[] zData = new uint[zPrecision];
-            Fraction z = new Fraction(zData);
-
-            for (int xIndex = xPrecision-1; xIndex >= 0; xIndex--) {
-                uint xValue = xData[xIndex];
-                int zIndex = zPrecision - (xPrecision - xIndex);
-                ulong carry = 0;
-                for (int yIndex = yPrecision-1; yIndex >= 0; yIndex--) {
-                    carry = carry + ((ulong)xValue) * yData[yIndex] + zData[zIndex];
-                    zData[zIndex--] = (uint)(carry%BASE);
-                    carry /= BASE;
-                }
-                while (carry != 0) {
-                    carry += zData[zIndex];
-                    zData[zIndex--] = (uint)carry;
-                    carry /= BASE;
-                }
-            }
-            z = Fraction.Normalize(z, out offset);
             return z;
         }
 
@@ -494,39 +409,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                     break;
             }
             return result;
-        }
-
-        /// <summary>
-        /// Subtract y from x in place.
-        /// </summary>
-        /// <param name="x"></param>
-        /// <param name="y"></param>
-        private static void SubtractInPlace(uint[] x, uint[] y, int count, int offset) {
-            uint borrow = 0;
-            int yIndex = count - 1;
-            int xIndex = offset + yIndex;
-			while(yIndex >= 0) {
-				if(x[xIndex] < y[yIndex] + borrow) {
-					x[xIndex] = x[xIndex] + (BASE -(y[yIndex] + borrow));
-					borrow = 1;
-                } else {
-                    x[xIndex] = x[xIndex] - (y[yIndex] + borrow);
-					borrow = 0;
-                }
-				--yIndex;
-				--xIndex;
-            }
-            // Continue to borrow as necessary
-            while (borrow != 0) {
-				if(x[xIndex] < borrow) {
-					x[xIndex] = x[xIndex] + (BASE - borrow);
-					borrow = 1;
-                } else {
-                    x[xIndex] = x[xIndex] - borrow;
-					borrow = 0;
-                }
-				--xIndex;
-            }
         }
 
         // Note: Scrolling left is just the same as scrolling right by (BASE_FIG-offset)
