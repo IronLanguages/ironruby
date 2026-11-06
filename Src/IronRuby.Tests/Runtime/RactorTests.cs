@@ -274,6 +274,10 @@ p Ractor::Error.superclass, Ractor::IsolationError.superclass, Ractor::RemoteErr
   Ractor::MovedError.superclass, Ractor::ClosedError.superclass, Ractor::UnsafeError.superclass,
   Ractor::MovedObject.superclass
 p Ractor.constants.sort
+r = Ractor.new { Thread.new { exit }.join }
+begin; r.value; rescue Ractor::RemoteError => e; p e.cause.class; end
+r = Ractor.new(Ractor.current) { |m| Thread.new { begin; sleep; ensure; m << :killed; end }; sleep 0.1; :done }
+p r.value, Ractor.receive
 Warning[:experimental] = true
 ", @"
 ""thrown by remote Ractor.""
@@ -291,6 +295,9 @@ StopIteration
 Ractor::Error
 BasicObject
 [:ClosedError, :Error, :IsolationError, :MovedError, :MovedObject, :Port, :RemoteError, :UnsafeError]
+SystemExit
+:done
+:killed
 ");
         }
 

@@ -1082,6 +1082,7 @@ namespace IronRuby.Builtins {
             info.Ractor = ractor;
             info.Location = null;
             info.Group = starter.Group = new ThreadGroup();
+            ractor.MainThread = result;
             starter.Body = body;
             result.Start();
             return result;
@@ -1295,7 +1296,8 @@ namespace IronRuby.Builtins {
                         // whole process down. Park it for the main thread instead - it is delivered
                         // at the main thread's next blocking point, and #join still re-raises it
                         // because info.Exception is set.
-                        Thread mainThread = context.MainThread;
+                        // in a Ractor, to the Ractor's main thread
+                        Thread mainThread = info.Ractor != null ? info.Ractor.MainThread : context.MainThread;
                         if (mainThread != null && mainThread != Thread.CurrentThread) {
                             RubyUtils.RaiseAsyncException(mainThread, e);
                         }

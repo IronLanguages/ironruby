@@ -339,11 +339,16 @@ for every block; `make_shareable` and `shareable_proc` check those variables' va
 What is not enforced is the isolation of the Ractors from each other.  A non-main Ractor can
 read and write global variables, class variables, instance variables of classes and modules,
 and constants that refer to unshareable objects, all of which raise `Ractor::IsolationError`
-in CRuby; `require` in a non-main Ractor loads the file itself rather than asking the main
-Ractor to.  A block that reaches an outer variable without naming it - through `binding`,
-`eval` of a string, or `local_variable_get` - is not caught by the `Ractor.new` check, and
-a shareable Proc reads its outer variables live instead of from a copy taken when it was
-made (so CRuby's "may be reassigned" error is not raised either).
+in CRuby; `$stdin`, `$stdout`, `$stderr`, `$DEBUG` and `$VERBOSE` are not Ractor-local;
+`trap` and `define_method` take any block in any Ractor; and `require` in a non-main Ractor
+loads the file itself rather than asking the main Ractor to (there is no `Ractor._require`).
+A block that reaches an outer variable without naming it - through `binding`, `eval` of a
+string, or `local_variable_get` - is not caught by the `Ractor.new` check, and a shareable
+Proc reads its outer variables live instead of from a copy taken when it was made (so
+CRuby's "may be reassigned" error is not raised either).  A moved String, Array or Hash
+raises `Ractor::MovedError` when it is sent a method, but a built-in method that is handed
+it as an argument (`[].concat(moved)`) still reads it.  With those exceptions, CRuby's own
+`bootstraptest/test_ractor.rb` passes: 125 of its 153 output checks.
 
 ### Rails
 

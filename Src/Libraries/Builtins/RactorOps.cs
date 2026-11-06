@@ -121,6 +121,12 @@ namespace IronRuby.Builtins {
 
         internal RubyContext/*!*/ Context { get { return _context; } }
 
+        /// <summary>
+        /// The thread that runs the Ractor's block; an exception that ends another thread of the
+        /// Ractor with abort_on_exception (or a SystemExit) is re-raised in it. Null for the main Ractor.
+        /// </summary>
+        internal Thread MainThread { get; set; }
+
         internal int Id { get { return _id; } }
 
         internal int NextPortId() {
@@ -195,9 +201,11 @@ namespace IronRuby.Builtins {
                 result = RubyUtils.EvaluateInSingleton(this, block, args);
             } catch (Exception e) {
                 if (RubyUtils.IsRubyThreadExit(e) || e is ThreadInterruptedException) {
+                    KillOtherThreads();
                     Terminate(null, null);
                     throw;
                 }
+                KillOtherThreads();
                 Exception visible = RubyUtils.GetVisibleException(e);
                 RubyExceptionData.GetInstance(visible).CaptureExceptionTrace(_context);
                 // reported before the Ractor counts as terminated, so that the report comes first
@@ -208,8 +216,25 @@ namespace IronRuby.Builtins {
                 Terminate(null, visible);
                 return null;
             }
+            // killed while finishing: the kill had not reached a safe point yet, but it still wins
+            if (ThreadOps.RubyThreadInfo.Current.ExitRequested) {
+                result = null;
+            }
+            KillOtherThreads();
             Terminate(result, null);
             return result;
+        }
+
+        /// <summary>
+        /// The other threads of a Ractor are killed when its block ends, as MRI does.
+        /// </summary>
+        private void KillOtherThreads() {
+            foreach (var info in ThreadOps.RubyThreadInfo.GetRubyThreads(_context)) {
+                Thread thread = info.Thread;
+                if (info.Ractor == this && thread != null && thread != Thread.CurrentThread && thread.IsAlive) {
+                    ThreadOps.Kill(thread);
+                }
+            }
         }
 
         private void Terminate(object value, Exception exception) {
