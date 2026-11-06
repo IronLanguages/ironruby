@@ -199,6 +199,29 @@ module Kernel
   private :require_relative
 end
 
+class Ractor
+  class << self
+    private
+
+    # CRuby 4.0's ractor.rb: called when the first Ractor is created. A non-main Ractor's
+    # #require goes to Ractor._require, which has the main Ractor load the file - ahead of
+    # RubyGems' Kernel#require, whose own state a non-main Ractor may not touch.
+    def _activated
+      Kernel.prepend Module.new { |m|
+        m.set_temporary_name '<RactorRequire>'
+
+        def require(feature)
+          if Ractor.main?
+            super
+          else
+            Ractor._require feature
+          end
+        end
+      }
+    end
+  end
+end
+
 module Enumerable
   def filter_map(&block)
     return to_enum(:filter_map) { size if respond_to?(:size) } unless block

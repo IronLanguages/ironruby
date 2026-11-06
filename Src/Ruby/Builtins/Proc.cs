@@ -71,6 +71,7 @@ namespace IronRuby.Builtins {
             public RubyLambdaMethodInfo Method;
             public RefinementActivation RefinementOverride;
             public string SymbolName;
+            public bool IsIsolated;
         }
 
         private RareState _rare;
@@ -149,6 +150,15 @@ namespace IronRuby.Builtins {
             internal set { if (value != null || _rare != null) { Rare.SymbolName = value; } }
         }
 
+        /// <summary>
+        /// The proc is isolated from the scopes around it, as CRuby isolates the block of Ractor.new
+        /// and a shareable proc: code it evals cannot reach their locals, and it has no binding.
+        /// </summary>
+        public bool IsIsolated {
+            get { var r = _rare; return r != null && r.IsIsolated; }
+            set { if (value || _rare != null) { Rare.IsIsolated = value; } }
+        }
+
         public string SourcePath {
             get { return _dispatcher.SourcePath; }
         }
@@ -173,6 +183,7 @@ namespace IronRuby.Builtins {
         protected Proc(Proc/*!*/ proc)
             : this(proc.Kind, proc.Self, proc.LocalScope, proc.Dispatcher) {
             Converter = proc.Converter;
+            IsIsolated = proc.IsIsolated;
             SymbolName = proc.SymbolName;
         }
 
@@ -184,6 +195,7 @@ namespace IronRuby.Builtins {
             var result = new Proc(lambda ? ProcKind.Lambda : Kind, self, _scope, _dispatcher);
             result.Converter = Converter;
             result.SymbolName = SymbolName;
+            result.IsIsolated = true;
             return result;
         }
 

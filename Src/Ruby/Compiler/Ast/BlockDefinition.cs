@@ -170,12 +170,17 @@ namespace IronRuby.Compiler.Ast {
             );
             gen.CurrentBlock.LexicalDepth = _definedScope.Depth;
 
+            // the binding of the parameters is one assignment of each, whatever it takes to make it
+            gen.BindingParameters = true;
             MSA.Expression paramInit = MakeParametersInitialization(gen, parameters);
+            gen.BindingParameters = false;
+            gen.CountParameterAssignments(_parameters);
             MSA.ParameterExpression blockUnwinder;
 
             MSA.Expression statements = gen.TransformStatements(_body, ResultOperation.Return);
             bool hasNestedReturn = gen.CurrentBlock.HasNestedReturn;
             var outerVariables = gen.CurrentBlock.OuterVariables;
+            var outerVariableAssignments = gen.CurrentBlock.OuterVariableAssignments;
             var assignedOuterVariables = gen.CurrentBlock.AssignedOuterVariables;
 
             // A body that never uses its scope - { }, { |x| x } - has no use for the RubyBlockScope
@@ -299,6 +304,7 @@ namespace IronRuby.Compiler.Ast {
             if (outerVariables != null) {
                 blockDispatcher.OuterVariableNames = outerVariables.ToArray();
                 blockDispatcher.AssignedOuterVariableNames = assignedOuterVariables?.ToArray();
+                blockDispatcher.OuterVariableAssignments = outerVariableAssignments.ToArray();
             }
             if (!isLambda && gen.CanReplaceLoops) {
                 // -X:OSR: `n.times { }', `a.each { }' and the like run their loop in C#; a block that

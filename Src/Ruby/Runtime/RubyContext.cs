@@ -300,6 +300,29 @@ namespace IronRuby.Runtime {
             ConstantAccessVersion++;
         }
 
+        // Set when the runtime starts its first non-main Ractor, and never cleared: from then on
+        // the accesses CRuby keeps a non-main Ractor from (RactorIsolation) ask which Ractor the
+        // thread is in. Until then each of them is a test of this field.
+        private volatile bool _ractorsStarted;
+
+        public bool RactorsStarted {
+            get { return _ractorsStarted; }
+        }
+
+        /// <summary>
+        /// Turns Ractor isolation on (RactorIsolation), before the first non-main Ractor starts.
+        /// The constant sites cached values a non-main Ractor may not read as they are: they
+        /// refill from now on with such values wrapped (RactorCheckedConstant).
+        /// </summary>
+        public void StartRactors() {
+            if (!_ractorsStarted) {
+                using (ClassHierarchyLocker()) {
+                    _ractorsStarted = true;
+                    ConstantAccessVersion++;
+                }
+            }
+        }
+
 
         #region Refinements
 
@@ -616,7 +639,30 @@ namespace IronRuby.Runtime {
             get { return _namespaces; }
         }
 
-        public object Verbose { get; set; }
+        private object _verbose;
+
+        /// <summary>$VERBOSE, which each Ractor has its own of.</summary>
+        public object Verbose {
+            get {
+                if (_ractorsStarted) {
+                    var ractor = RactorIsolation.GetNonMain(this);
+                    if (ractor != null) {
+                        return ractor.Verbose;
+                    }
+                }
+                return _verbose;
+            }
+            set {
+                if (_ractorsStarted) {
+                    var ractor = RactorIsolation.GetNonMain(this);
+                    if (ractor != null) {
+                        ractor.Verbose = value;
+                        return;
+                    }
+                }
+                _verbose = value;
+            }
+        }
 
         private RubyEncoding/*!*/ _defaultExternalEncoding;
 
@@ -994,6 +1040,9 @@ namespace IronRuby.Runtime {
             foreach (var stdio in new[] { StandardInput, StandardOutput, StandardErrorOutput }) {
                 ((RubyIO)stdio).SetEncodings(null, null);
             }
+            InitialStandardInput = (RubyIO)StandardInput;
+            InitialStandardOutput = (RubyIO)StandardOutput;
+            InitialStandardErrorOutput = (RubyIO)StandardErrorOutput;
         }
 
         // TODO: internal
@@ -3382,9 +3431,49 @@ namespace IronRuby.Runtime {
 
         private readonly List<FileDescriptor>/*!*/ _fileDescriptors = new List<FileDescriptor>(10);
 
-        public object StandardInput { get; set; }
-        public object StandardOutput { get; set; }
-        public object StandardErrorOutput { get; set; }
+        // $stdin, $stdout and $stderr of the main Ractor; every other Ractor has its own (RactorLocals)
+        private object _standardInput, _standardOutput, _standardErrorOutput;
+
+        public object StandardInput {
+            get {
+                var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
+                return (ractor != null) ? ractor.StandardInput : _standardInput;
+            }
+            set {
+                var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
+                if (ractor != null) { ractor.StandardInput = value; } else { _standardInput = value; }
+            }
+        }
+
+        public object StandardOutput {
+            get {
+                var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
+                return (ractor != null) ? ractor.StandardOutput : _standardOutput;
+            }
+            set {
+                var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
+                if (ractor != null) { ractor.StandardOutput = value; } else { _standardOutput = value; }
+            }
+        }
+
+        public object StandardErrorOutput {
+            get {
+                var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
+                return (ractor != null) ? ractor.StandardErrorOutput : _standardErrorOutput;
+            }
+            set {
+                var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
+                if (ractor != null) { ractor.StandardErrorOutput = value; } else { _standardErrorOutput = value; }
+            }
+        }
+
+        /// <summary>
+        /// STDIN, STDOUT and STDERR as the runtime made them: a new Ractor's $stdin, $stdout and
+        /// $stderr are IO objects of its own over the same streams (CRuby's rb_io_prep_stdio).
+        /// </summary>
+        public RubyIO InitialStandardInput { get; private set; }
+        public RubyIO InitialStandardOutput { get; private set; }
+        public RubyIO InitialStandardErrorOutput { get; private set; }
 
         private FileDescriptor TryGetFileDescriptorNoLock(int descriptor) {
             return (descriptor < 0 || descriptor >= _fileDescriptors.Count) ? null : _fileDescriptors[descriptor];

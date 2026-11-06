@@ -37,7 +37,7 @@ namespace IronRuby.Compiler.Ast {
                 return (tryRead ? Methods.GetGlobalVariable : Methods.ReadGlobalVariable).OpCall(gen.CurrentScopeVariable, TransformName(gen));
             }
             return (tryRead ? Methods.GetCachedGlobalVariable : Methods.ReadCachedGlobalVariable).OpCall(
-                gen.CurrentScopeVariable, AstUtils.Constant(new IronRuby.Runtime.GlobalVariableSite(Name))
+                gen.CurrentScopeVariable, AstUtils.Constant(new IronRuby.Runtime.GlobalVariableSite(Name, gen.IsCoreLibrary))
             );
         }
 
@@ -46,7 +46,7 @@ namespace IronRuby.Compiler.Ast {
                 return Methods.SetGlobalVariable.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, TransformName(gen));
             }
             return Methods.SetCachedGlobalVariable.OpCall(
-                AstUtils.Box(rightValue), gen.CurrentScopeVariable, AstUtils.Constant(new IronRuby.Runtime.GlobalVariableSite(Name))
+                AstUtils.Box(rightValue), gen.CurrentScopeVariable, AstUtils.Constant(new IronRuby.Runtime.GlobalVariableSite(Name, gen.IsCoreLibrary))
             );
         }
 

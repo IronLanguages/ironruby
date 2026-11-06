@@ -342,19 +342,40 @@ or assigns a local variable of an enclosing scope raises `ArgumentError` ("can n
 Proc because it accesses outer variables (a)."), from the variables the compiler records
 for every block; `make_shareable` and `shareable_proc` check those variables' values.
 
-What is not enforced is the isolation of the Ractors from each other.  A non-main Ractor can
-read and write global variables, class variables, instance variables of classes and modules,
-and constants that refer to unshareable objects, all of which raise `Ractor::IsolationError`
-in CRuby; `$stdin`, `$stdout`, `$stderr`, `$DEBUG` and `$VERBOSE` are not Ractor-local;
-`trap` and `define_method` take any block in any Ractor; and `require` in a non-main Ractor
-loads the file itself rather than asking the main Ractor to (there is no `Ractor._require`).
-A block that reaches an outer variable without naming it - through `binding`, `eval` of a
-string, or `local_variable_get` - is not caught by the `Ractor.new` check, and a shareable
-Proc reads its outer variables live instead of from a copy taken when it was made (so
-CRuby's "may be reassigned" error is not raised either).  A moved String, Array or Hash
-raises `Ractor::MovedError` when it is sent a method, but a built-in method that is handed
-it as an argument (`[].concat(moved)`) still reads it.  With those exceptions, CRuby's own
-`bootstraptest/test_ractor.rb` passes: 125 of its 153 output checks.
+The Ractors are isolated from each other as in CRuby ([`RactorIsolation.cs`](Src/Ruby/Runtime/RactorIsolation.cs)).
+A non-main Ractor gets `Ractor::IsolationError` for a global variable other than the
+Ractor-local ones (`$stdin`, `$stdout`, `$stderr` - IO objects of its own over the standard
+streams - `$VERBOSE`, `$DEBUG` and their aliases, which it inherits from its creator, and the
+per-thread or per-scope ones such as `$~`, `$_` and `$!`), for `global_variables` and
+`alias $a $b`, for any class variable, for an unshareable value of an instance variable of a
+class or module or any write to one, for the instance variables of a shareable object such as a
+Ractor, and for a constant that holds an unshareable value, read or set.  The block of
+`Ractor.new` and a shareable Proc are isolated: `eval` in them cannot use the locals around
+them (`SyntaxError`), `Proc#binding` refuses, and `Ractor.shareable_proc`/`make_shareable`
+refuse an outer variable the code assigns more than once ("may be reassigned").  A method
+`define_method` made of an unshareable block runs only in the Ractor that defined it, `trap` in
+a non-main Ractor isolates its block, and `require` there has the main Ractor load the file
+(`Ractor._require`; the prelude prepends Kernel with the delegating `#require` when the first
+Ractor starts, as CRuby does).  The core library written in Ruby (`ruby4.rb` and the other
+files `RubyStackTraceBuilder.IsInternalFile` names) stands in for CRuby's C code and is exempt.
+
+None of this costs the main Ractor anything until a Ractor is started: each check is a test of
+one field of the runtime (`RubyContext.RactorsStarted`), and a constant site's cached read of an
+object is unchanged.  Once a Ractor has run, a global variable or class-level instance variable
+access first asks which Ractor the thread is in, and a cached read of a constant holding an
+unshareable object does too (about 20 ns more per access in the main Ractor, measured on a loop
+of them).
+
+Not enforced: a shareable Proc still reads its outer variables live rather than from a copy
+taken when it was made (the "may be reassigned" check makes the difference unobservable for
+the variables it lets through); a moved String, Array or Hash raises `Ractor::MovedError` when
+it is sent a method, but a built-in method handed it as an argument (`[].concat(moved)`) still
+reads it; `ObjectSpace.each_object` without a module still needs `-X:ObjectSpace` (CRuby's
+non-main Ractor sees only the shareable objects) and `ObjectSpace._id2ref` cannot tell an
+unshareable object's id.  CRuby's own `bootstraptest/test_ractor.rb` passes 146 of its 153
+output checks: the misses are those, the 1000-Ractor `define_method` check that is correct but
+slower than the harness's 40 seconds (each of its million calls raises), and a `make_shareable`
+of a `Rational` with a `Numeric` subclass numerator.
 
 ### Rails
 

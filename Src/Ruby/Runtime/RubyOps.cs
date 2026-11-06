@@ -1286,6 +1286,7 @@ namespace IronRuby.Runtime {
         public static object GetUnqualifiedConstant(RubyScope/*!*/ scope, ConstantSiteCache/*!*/ cache, string/*!*/ name, bool isGlobal) {
             object result = null;
             RubyModule missingConstantOwner;
+            RubyModule owner = null;
             var context = scope.RubyContext;
             using (context.ClassHierarchyLocker()) {
                 // Thread safety:
@@ -1309,7 +1310,6 @@ namespace IronRuby.Runtime {
                 int newVersion = context.ConstantAccessVersion;
 
                 ConstantStorage storage;
-                RubyModule owner = null;
                 bool isPrivateGlobal = false;
                 if (!isGlobal) {
                     missingConstantOwner = scope.TryResolveConstantNoLock(scope.GlobalScope, name, out storage, out owner);
@@ -1332,12 +1332,8 @@ namespace IronRuby.Runtime {
                 object newCacheValue;
                 bool deprecated = false;
                 if (missingConstantOwner == null) {
-                    if (storage.WeakValue != null) {
-                        result = storage.Value;
-                        newCacheValue = storage.WeakValue;
-                    } else {
-                        result = newCacheValue = storage.Value;
-                    }
+                    result = storage.Value;
+                    newCacheValue = MakeConstantCacheValue(context, storage, owner, name, cache.IsCoreLibrary);
                     deprecated = ReportConstantDeprecation(context, owner, name);
                 } else {
                     newCacheValue = ConstantSiteCache.WeakMissingConstant;
@@ -1350,9 +1346,37 @@ namespace IronRuby.Runtime {
 
             if (missingConstantOwner != null) {
                 result = missingConstantOwner.ConstantMissing(name);
+            } else if (context.RactorsStarted && !cache.IsCoreLibrary) {
+                RactorIsolation.CheckConstantRead(context, owner, name, result);
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// What a constant site caches for a constant's value: its weak reference if it has one.
+        /// Once the runtime has started Ractors, a value a non-main Ractor might not be allowed
+        /// to see is wrapped, so that a cached read checks (<see cref="ReadRactorCheckedConstant"/>).
+        /// </summary>
+        private static object/*!*/ MakeConstantCacheValue(RubyContext/*!*/ context, ConstantStorage storage, RubyModule owner, string/*!*/ name,
+            bool isCoreLibrary) {
+            object cached = storage.WeakValue ?? storage.Value;
+            if (context.RactorsStarted && !isCoreLibrary && !RactorIsolation.IsTriviallyShareable(storage.Value)) {
+                return new RactorCheckedConstant(context, cached, owner, name);
+            }
+            return cached;
+        }
+
+        /// <summary>
+        /// A cached constant read of a value <see cref="MakeConstantCacheValue"/> wrapped: the value,
+        /// if the current Ractor may see it.
+        /// </summary>
+        [Emitted]
+        public static object ReadRactorCheckedConstant(object/*!*/ cached) {
+            var constant = (RactorCheckedConstant)cached;
+            var weak = constant.Value as WeakReference;
+            object value = (weak != null) ? weak.Target : constant.Value;
+            return RactorIsolation.CheckConstantRead(constant.Context, constant.Owner, constant.Name, value);
         }
 
         /// <summary>
@@ -1370,15 +1394,17 @@ namespace IronRuby.Runtime {
                 ConstantStorage storage;
                 bool anyMissing;
                 RubyModule topModule = isGlobal ? context.ObjectClass : null;
-                object result = ResolveQualifiedConstant(scope, qualifiedName, topModule, true, out storage, out anyMissing);
+                RubyModule owner;
+                object result = ResolveQualifiedConstant(scope, qualifiedName, topModule, true, out storage, out anyMissing, out owner);
+                string name = qualifiedName[qualifiedName.Length - 1];
 
                 // cache result only if no constant was missing:
                 if (!anyMissing && !context.IsAutoloadInProgress && (isGlobal || !IsLexicallyInObjectSingleton(scope))) {
                     Debug.Assert(result == storage.Value);
-                    cache.Update(storage.WeakValue ?? result, newVersion);
+                    cache.Update(MakeConstantCacheValue(context, storage, owner, name, cache.IsCoreLibrary), newVersion);
                 }
 
-                return result;
+                return (context.RactorsStarted && !cache.IsCoreLibrary) ? RactorIsolation.CheckConstantRead(context, owner, name, result) : result;
             }
         }
 
@@ -1401,6 +1427,8 @@ namespace IronRuby.Runtime {
                 object value = cache.Value;
                 if (value.GetType() == typeof(WeakReference)) {
                     return ((WeakReference)value).Target;
+                } else if (value.GetType() == typeof(RactorCheckedConstant)) {
+                    return ReadRactorCheckedConstant(value);
                 } else {
                     return value;
                 }
@@ -1411,15 +1439,17 @@ namespace IronRuby.Runtime {
                 
                 ConstantStorage storage;
                 bool anyMissing;
-                object result = ResolveQualifiedConstant(scope, qualifiedName, module, true, out storage, out anyMissing);
+                RubyModule owner;
+                object result = ResolveQualifiedConstant(scope, qualifiedName, module, true, out storage, out anyMissing, out owner);
+                string name = qualifiedName[qualifiedName.Length - 1];
 
                 // cache result only if no constant was missing:
                 if (!anyMissing && !context.IsAutoloadInProgress) {
                     Debug.Assert(result == storage.Value);
-                    cache.Update(storage.WeakValue ?? result, newVersion, module);
+                    cache.Update(MakeConstantCacheValue(context, storage, owner, name, cache.IsCoreLibrary), newVersion, module);
                 }
 
-                return result;
+                return (context.RactorsStarted && !cache.IsCoreLibrary) ? RactorIsolation.CheckConstantRead(context, owner, name, result) : result;
             }
         }
 
@@ -1493,7 +1523,7 @@ namespace IronRuby.Runtime {
                 RubyModule topModule = isGlobal ? context.ObjectClass : null;
                 RubyModule owner;
                 try {
-                    owner = ResolveQualifiedConstant(scope, qualifiedName, topModule, false, out storage, out anyMissing) as RubyModule;
+                    owner = ResolveQualifiedConstant(scope, qualifiedName, topModule, false, out storage, out anyMissing, out _) as RubyModule;
                 } catch {
                     // autoload can raise an exception
                     scope.RubyContext.SetCurrentException(null);
@@ -1545,7 +1575,7 @@ namespace IronRuby.Runtime {
                     bool anyMissing;
                     RubyModule owner;
                     try {
-                        owner = ResolveQualifiedConstant(scope, qualifiedName, module, false, out storage, out anyMissing) as RubyModule;
+                        owner = ResolveQualifiedConstant(scope, qualifiedName, module, false, out storage, out anyMissing, out _) as RubyModule;
                     } catch {
                         // autoload can raise an exception:
                         return false;
@@ -1568,7 +1598,7 @@ namespace IronRuby.Runtime {
         }
 
         private static object ResolveQualifiedConstant(RubyScope/*!*/ scope, string/*!*/[]/*!*/ qualifiedName, RubyModule topModule, bool isGet,
-            out ConstantStorage storage, out bool anyMissing) {
+            out ConstantStorage storage, out bool anyMissing, out RubyModule resultOwner) {
 
             Debug.Assert(qualifiedName.Length >= 2 || qualifiedName.Length == 1 && isGet);
             RubyContext context = scope.RubyContext;
@@ -1594,6 +1624,7 @@ namespace IronRuby.Runtime {
             // defined?(A::B::C) never calls const_missing (MRI): a name that is not there makes the
             // whole path undefined. Only the get does what evaluating A::B would.
             object result;
+            resultOwner = firstOwner ?? missingConstantOwner;
             if (missingConstantOwner == null) {
                 result = storage.Value;
                 anyMissing = ReportConstantDeprecation(context, firstOwner, name);
@@ -1610,6 +1641,7 @@ namespace IronRuby.Runtime {
 
             for (int i = 1; i < nameCount; i++) {
                 RubyModule owner = RubyUtils.GetModuleFromObject(scope, result);
+                resultOwner = owner;
                 // Note that the owner could be another runtime's module:
                 name = qualifiedName[i];
                 if (TryResolveVisibleConstant(owner, context, globalScope, name, out storage)) {
@@ -2458,8 +2490,12 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object GetGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             object value;
+            var context = scope.RubyContext;
+            if (context.RactorsStarted && TryGetRactorLocalGlobal(context, name, out value)) {
+                return value;
+            }
             // no error reported if the variable doesn't exist:
-            scope.RubyContext.TryGetGlobalVariable(scope, name, out value);
+            context.TryGetGlobalVariable(scope, name, out value);
             return value;
         }
 
@@ -2471,6 +2507,9 @@ namespace IronRuby.Runtime {
         public static object ReadGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             object value;
             var context = scope.RubyContext;
+            if (context.RactorsStarted && TryGetRactorLocalGlobal(context, name, out value)) {
+                return value;
+            }
             if (!context.TryGetGlobalVariable(scope, name, out value) && context.Verbose is bool && (bool)context.Verbose) {
                 context.ReportWarning(String.Format("global variable '${0}' not initialized", name), true);
             }
@@ -2484,6 +2523,9 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object GetCachedGlobalVariable(RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
             var context = scope.RubyContext;
+            if (context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
+                return GetGlobalVariable(scope, site.Name);
+            }
             var variable = site.GetVariable(context);
             var plain = variable as GlobalVariableInfo;
             if (plain != null) {
@@ -2496,6 +2538,9 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object ReadCachedGlobalVariable(RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
             var context = scope.RubyContext;
+            if (context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
+                return ReadGlobalVariable(scope, site.Name);
+            }
             var variable = site.GetVariable(context);
             var plain = variable as GlobalVariableInfo;
             if (plain != null) {
@@ -2518,6 +2563,9 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object SetCachedGlobalVariable(object value, RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
             var context = scope.RubyContext;
+            if (context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
+                return SetGlobalVariable(value, scope, site.Name);
+            }
             var plain = site.GetVariable(context) as GlobalVariableInfo;
             if (plain != null) {
                 plain.Assign(value);
@@ -2531,18 +2579,48 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static bool IsDefinedGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             GlobalVariable variable;
-            return scope.RubyContext.TryGetGlobalVariable(name, out variable) && variable.IsDefined;
+            var context = scope.RubyContext;
+            if (context.RactorsStarted) {
+                RactorIsolation.CheckGlobalVariable(context, name);
+            }
+            return context.TryGetGlobalVariable(name, out variable) && variable.IsDefined;
         }
 
         [Emitted]
         public static object SetGlobalVariable(object value, RubyScope/*!*/ scope, string/*!*/ name) {
-            scope.RubyContext.SetGlobalVariable(scope, name, value);
+            var context = scope.RubyContext;
+            if (context.RactorsStarted) {
+                var ractor = RactorIsolation.CheckGlobalVariable(context, name);
+                if (ractor != null && RactorIsolation.IsDebugVariable(name)) {
+                    ractor.Debug = value;
+                    return value;
+                }
+            }
+            context.SetGlobalVariable(scope, name, value);
             return value;
         }
 
         [Emitted]
         public static void AliasGlobalVariable(RubyScope/*!*/ scope, string/*!*/ newName, string/*!*/ oldName) {
-            scope.RubyContext.AliasGlobalVariable(newName, oldName);
+            var context = scope.RubyContext;
+            if (context.RactorsStarted) {
+                RactorIsolation.CheckGlobalVariables(context);
+            }
+            context.AliasGlobalVariable(newName, oldName);
+        }
+
+        /// <summary>
+        /// A global read in a runtime that has started Ractors: one a non-main Ractor may not
+        /// use raises, and $DEBUG is the Ractor's own. False for the rest, which read as usual.
+        /// </summary>
+        private static bool TryGetRactorLocalGlobal(RubyContext/*!*/ context, string/*!*/ name, out object value) {
+            var ractor = RactorIsolation.CheckGlobalVariable(context, name);
+            if (ractor != null && RactorIsolation.IsDebugVariable(name)) {
+                value = ractor.Debug;
+                return true;
+            }
+            value = null;
+            return false;
         }
 
         #endregion
@@ -4222,6 +4300,9 @@ namespace IronRuby.Runtime {
                 if (module == null) {
                     return GetInstanceVariableSlow(scope.RubyContext, self, site);
                 }
+                if (module.Context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(module.Context)) {
+                    return GetModuleInstanceVariableChecked(module, site);
+                }
                 data = module._instanceData;
             }
 
@@ -4247,6 +4328,9 @@ namespace IronRuby.Runtime {
                 if (module == null) {
                     return GetInstanceVariableSlow(context, self, site);
                 }
+                if (module.Context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(module.Context)) {
+                    return GetModuleInstanceVariableChecked(module, site);
+                }
                 data = module._instanceData;
             }
 
@@ -4261,7 +4345,20 @@ namespace IronRuby.Runtime {
             return data.GetInstanceVariable(site);
         }
 
+        /// <summary>
+        /// A class-level `@x` once the runtime has started Ractors: a non-main Ractor may only
+        /// read a shareable value (RactorIsolation).
+        /// </summary>
+        private static object GetModuleInstanceVariableChecked(RubyModule/*!*/ module, InstanceVariableSite/*!*/ site) {
+            RubyInstanceData data = module._instanceData;
+            object value = (data != null) ? data.GetInstanceVariable(site) : null;
+            return RactorIsolation.CheckInstanceVariableRead(module.Context, module, site.Name, value);
+        }
+
         private static object GetInstanceVariableSlow(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            if (context.RactorsStarted && !site.IsCoreLibrary) {
+                RactorIsolation.CheckInstanceVariableRead(context, self, site.Name, null);
+            }
             var owner = self as IRubyInstanceDataOwner;
             RubyInstanceData data;
             if (owner == null || !owner.TryGetInstanceData(context, out data)) {
@@ -4296,8 +4393,14 @@ namespace IronRuby.Runtime {
                 if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
                     return value;
                 }
-            } else if (TrySetOwnedInstanceVariable(scope.RubyContext, self, value, site)) {
-                return value;
+            } else {
+                var context = scope.RubyContext;
+                if (context.RactorsStarted && !site.IsCoreLibrary) {
+                    RactorIsolation.CheckInstanceVariableWrite(context, self);
+                }
+                if (TrySetOwnedInstanceVariable(context, self, value, site)) {
+                    return value;
+                }
             }
             scope.RubyContext.SetInstanceVariable(self, value, site);
             return value;
@@ -4321,8 +4424,13 @@ namespace IronRuby.Runtime {
                 if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
                     return value;
                 }
-            } else if (TrySetOwnedInstanceVariable(context, self, value, site)) {
-                return value;
+            } else {
+                if (context.RactorsStarted && !site.IsCoreLibrary) {
+                    RactorIsolation.CheckInstanceVariableWrite(context, self);
+                }
+                if (TrySetOwnedInstanceVariable(context, self, value, site)) {
+                    return value;
+                }
             }
             context.SetInstanceVariable(self, value, site);
             return value;
@@ -4336,10 +4444,13 @@ namespace IronRuby.Runtime {
         /// The module whose class variables @@x names: the innermost class or module body. MRI
         /// refuses the access where there is none - the top level, a method or block defined there.
         /// </summary>
-        private static RubyModule/*!*/ GetClassVariableOwner(RubyScope/*!*/ scope) {
+        private static RubyModule/*!*/ GetClassVariableOwner(RubyScope/*!*/ scope, string/*!*/ name) {
             RubyModule owner = scope.GetInnerMostModuleForClassVariableAccess();
             if (owner == null) {
                 throw new RuntimeError("class variable access from toplevel");
+            }
+            if (owner.Context.RactorsStarted) {
+                RactorIsolation.CheckClassVariable(owner, name);
             }
             return owner;
         }
@@ -4347,7 +4458,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object GetClassVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             // owner is the first module in scope:
-            RubyModule owner = GetClassVariableOwner(scope);
+            RubyModule owner = GetClassVariableOwner(scope, name);
             return GetClassVariableInternal(owner, name);
         }
 
@@ -4365,7 +4476,7 @@ namespace IronRuby.Runtime {
         public static object TryGetClassVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             object value;
             // owner is the first module in scope:
-            GetClassVariableOwner(scope).TryResolveClassVariable(name, out value);
+            GetClassVariableOwner(scope, name).TryResolveClassVariable(name, out value);
             return value;
         }
 
@@ -4373,13 +4484,16 @@ namespace IronRuby.Runtime {
         public static bool IsDefinedClassVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             // owner is the first module in scope:
             RubyModule owner = scope.GetInnerMostModuleForClassVariableLookup();
+            if (owner.Context.RactorsStarted) {
+                RactorIsolation.CheckClassVariable(owner, name);
+            }
             object value;
             return owner.TryResolveClassVariable(name, out value) != null;
         }
 
         [Emitted]
         public static object SetClassVariable(object value, RubyScope/*!*/ scope, string/*!*/ name) {
-            return SetClassVariableInternal(GetClassVariableOwner(scope), name, value);
+            return SetClassVariableInternal(GetClassVariableOwner(scope, name), name, value);
         }
 
         private static object SetClassVariableInternal(RubyModule/*!*/ lexicalOwner, string/*!*/ name, object value) {

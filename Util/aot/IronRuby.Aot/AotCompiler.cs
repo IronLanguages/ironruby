@@ -630,6 +630,7 @@ namespace IronRuby.Aot {
                     if (dispatcher.OuterVariableNames != null) {
                         args.Add(Strings(dispatcher.OuterVariableNames));
                         args.Add(Strings(dispatcher.AssignedOuterVariableNames));
+                        args.Add(Strings(dispatcher.ReassignedOuterVariableNames));
                     }
                     return Expression.Call(typeof(PrecompiledCode).GetMethods()
                         .Single(m => m.Name == "CreateBlockDispatcher" && m.GetParameters().Length == args.Count), args);
@@ -677,11 +678,21 @@ namespace IronRuby.Aot {
 
                 case InstanceVariableSite ivar:
                     hint = "ivar";
-                    return Expression.New(typeof(InstanceVariableSite).GetConstructor(new[] { typeof(string) }), Expression.Constant(ivar.Name));
+                    return Expression.New(typeof(InstanceVariableSite).GetConstructor(new[] { typeof(string), typeof(bool) }),
+                        Expression.Constant(ivar.Name), Expression.Constant(ivar.IsCoreLibrary));
 
                 case GlobalVariableSite gvar:
                     hint = "gvar";
-                    return Expression.New(typeof(GlobalVariableSite).GetConstructor(new[] { typeof(string) }), Expression.Constant(gvar.Name));
+                    return Expression.New(typeof(GlobalVariableSite).GetConstructor(new[] { typeof(string), typeof(bool) }),
+                        Expression.Constant(gvar.Name), Expression.Constant(gvar.IsCoreLibrary));
+
+                case ConstantSiteCache cache when cache.IsCoreLibrary:
+                    hint = "constcache";
+                    return Expression.New(typeof(ConstantSiteCache).GetConstructor(new[] { typeof(bool) }), Expression.Constant(true));
+
+                case ExpressionQualifiedConstantSiteCache cache when cache.IsCoreLibrary:
+                    hint = "constcache";
+                    return Expression.New(typeof(ExpressionQualifiedConstantSiteCache).GetConstructor(new[] { typeof(bool) }), Expression.Constant(true));
 
                 case ExpressionQualifiedConstantSiteCache:
                 case ExpressionQualifiedIsDefinedConstantSiteCache:

@@ -766,6 +766,13 @@ namespace IronRuby.Runtime {
                 if (deprecatedOwner != null) {
                     context.ReportConstantDeprecation(deprecatedOwner, name);
                 }
+                if (context.RactorsStarted && !RactorIsolation.IsTriviallyShareable(value)) {
+                    RubyModule constantOwner;
+                    using (context.ClassHierarchyLocker()) {
+                        constantOwner = owner.GetConstantOwnerNoLock(name) ?? context.ObjectClass;
+                    }
+                    RactorIsolation.CheckConstantRead(context, constantOwner, name, value);
+                }
                 return value;
             }
 
@@ -858,6 +865,10 @@ namespace IronRuby.Runtime {
         public static void SetConstant(RubyModule/*!*/ owner, string/*!*/ name, object value, string sourcePath, int sourceLine,
             RubyEncoding/*!*/ encoding) {
             Assert.NotNull(owner, name);
+
+            if (owner.Context.RactorsStarted) {
+                RactorIsolation.CheckConstantWrite(owner.Context, value);
+            }
 
             bool hadLocation = owner.TryGetConstantLocation(name, out string previousPath, out int previousLine);
             owner.SetConstantLocation(name, sourcePath, sourceLine);
@@ -1236,6 +1247,7 @@ namespace IronRuby.Runtime {
                 EvalFrameBlockLevels = blockLevels,
                 FactoryKind = isModuleEval ? TopScopeFactoryKind.ModuleEval : TopScopeFactoryKind.None,
                 LocalNames = targetScope.GetVisibleLocalNames(),
+                IsolatedLocalNames = targetScope.GetIsolatedLocalNames(),
                 TopLevelMethodName = (methodScope != null) ? methodScope.DefinitionName : null,
                 TopLevelParameterNames = (methodScope != null) ? methodScope.GetVisibleParameterNames() : null,
                 TopLevelHasUnsplatParameter = (methodScope != null) ? methodScope.HasUnsplatParameter : false,

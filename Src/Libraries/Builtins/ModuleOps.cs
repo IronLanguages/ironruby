@@ -1166,6 +1166,9 @@ namespace IronRuby.Builtins {
         // not thread-safe:
         [RubyMethod("class_variable_defined?")]
         public static bool IsClassVariableDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName) {
+            if (self.Context.RactorsStarted) {
+                RactorIsolation.CheckClassVariable(self, variableName);
+            }
             object value;
             if (self.TryResolveClassVariable(variableName, out value) == null) {
                 RubyUtils.CheckClassVariableName(variableName);
@@ -1178,6 +1181,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("class_variable_get")]
         public static object GetClassVariable(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object nameArg) {
             string variableName = Protocols.CastToSymbol(stringCast, nameArg);
+            if (self.Context.RactorsStarted) {
+                RactorIsolation.CheckClassVariable(self, variableName);
+            }
             object value;
             if (self.TryResolveClassVariable(variableName, out value) == null) {
                 RubyUtils.CheckClassVariableName(self.Context, self, variableName, nameArg);
@@ -1192,6 +1198,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("class_variable_set")]
         public static object ClassVariableSet(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName, object value) {
             RubyUtils.CheckClassVariableName(variableName);
+            if (self.Context.RactorsStarted) {
+                RactorIsolation.CheckClassVariable(self, variableName);
+            }
             // an ancestor that already has the variable keeps it, as for @@x = value
             object oldValue;
             (self.TryResolveClassVariable(variableName, out oldValue) ?? self).SetClassVariable(variableName, value);

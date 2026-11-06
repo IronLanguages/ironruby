@@ -112,6 +112,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("binding")]
         public static Binding/*!*/ GetLocalScope(Proc/*!*/ self) {
+            if (self.IsIsolated) {
+                throw RubyExceptions.CreateArgumentError("Can't create Binding from isolated Proc");
+            }
             // a curried or composed proc has no Ruby scope of its own to hand out
             if (self.LocalScope.IsEmpty) {
                 throw RubyExceptions.CreateArgumentError("Can't create Binding from C level Proc");

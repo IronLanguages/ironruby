@@ -505,6 +505,45 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Those of <see cref="GetVisibleLocalNames"/> that belong to the scopes around an isolated
+        /// proc this scope is in (Ractor.new's block, a shareable proc), which code the proc evals
+        /// may not use; null if the scope is in no isolated proc.
+        /// </summary>
+        public HashSet<string> GetIsolatedLocalNames() {
+            HashSet<string> inside = null, outside = null;
+            bool isolated = false;
+            RubyScope scope = this;
+            while (true) {
+                if (isolated) {
+                    foreach (string name in scope.GetDeclaredLocalSymbols()) {
+                        if (!inside.Contains(name)) {
+                            (outside ??= new HashSet<string>()).Add(name);
+                        }
+                    }
+                }
+                if (!scope.InheritsLocalVariables) {
+                    return outside;
+                }
+                if (!isolated) {
+                    var block = scope as RubyBlockScope;
+                    if (block != null && block.BlockFlowControl.Proc != null && block.BlockFlowControl.Proc.IsIsolated) {
+                        isolated = true;
+                        inside = new HashSet<string>();
+                        for (RubyScope s = this; ; s = s.Parent) {
+                            foreach (string name in s.GetDeclaredLocalSymbols()) {
+                                inside.Add(name);
+                            }
+                            if (s == scope) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                scope = scope.Parent;
+            }
+        }
+
         public object ResolveLocalVariable(string/*!*/ name) {
             RubyScope scope = this;
             while (true) {
@@ -918,8 +957,9 @@ namespace IronRuby.Runtime {
 
         // thread-safe:
         // As above, and on success also reports the module the constant was found in - null unless
-        // the runtime has seen Module#deprecate_constant, since finding it can cost an extra
-        // ancestor walk and only the deprecation warning needs it.
+        // the runtime has seen Module#deprecate_constant or started a Ractor, since finding it can
+        // cost an extra ancestor walk and only the deprecation warning and the Ractor isolation
+        // error need it.
         internal RubyModule TryResolveConstantNoLock(RubyGlobalScope autoloadScope, string/*!*/ name, out ConstantStorage result,
             out RubyModule owner) {
 
@@ -955,7 +995,7 @@ namespace IronRuby.Runtime {
             // check the inner most module and it's base classes/mixins:
             if (innerMostModule != null) {
                 if (innerMostModule.TryResolveConstantNoLock(autoloadScope, name, out result)) {
-                    if (context.HasDeprecatedConstants) {
+                    if (context.HasDeprecatedConstants || context.RactorsStarted) {
                         owner = innerMostModule.GetConstantOwnerNoLock(name);
                     }
                     return null;
@@ -973,7 +1013,7 @@ namespace IronRuby.Runtime {
             }
 
             if (context.ObjectClass.TryResolveConstantNoLock(autoloadScope, name, out result)) {
-                if (context.HasDeprecatedConstants) {
+                if (context.HasDeprecatedConstants || context.RactorsStarted) {
                     owner = context.ObjectClass.GetConstantOwnerNoLock(name);
                 }
                 return null;

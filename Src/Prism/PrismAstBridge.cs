@@ -72,6 +72,9 @@ namespace IronRuby.Prism {
         // IR_EAGER_DEF_BODIES=1 maps every method body at parse time, as before lazy mapping (for measuring it)
         private static readonly bool _EagerDefBodies = Environment.GetEnvironmentVariable("IR_EAGER_DEF_BODIES") == "1";
 
+        // eval in an isolated proc: the outer locals it may not use (RubyCompilerOptions.IsolatedLocalNames)
+        private ICollection<string> _isolatedLocalNames;
+
         public static SourceUnitTree Parse(SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options, ErrorSink/*!*/ errorSink) {
             // eval("...", binding, file, line) reports __LINE__ and backtraces from `line`, which is
             // what RubyCompilerOptions.InitialLocation carries. Only the old parser ever read it, so
@@ -95,7 +98,7 @@ namespace IronRuby.Prism {
                 }
                 return ParseText(code, sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
                     options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval,
-                    options.EvalSourceEncoding, commandLine, mainScript);
+                    options.EvalSourceEncoding, commandLine, mainScript, options.IsolatedLocalNames);
             } finally {
                 PhaseTimer.Exit(timed);
             }
@@ -130,7 +133,8 @@ namespace IronRuby.Prism {
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
             SourceUnit sourceUnit, ErrorSink errorSink, int startLine, bool evalOutsideMethod = false, bool isEval = false,
-            RubyEncoding evalSourceEncoding = null, byte commandLine = 0, bool mainScript = false) {
+            RubyEncoding evalSourceEncoding = null, byte commandLine = 0, bool mainScript = false,
+            ICollection<string> isolatedLocalNames = null) {
 
             // --enable/--disable=frozen-string-literal only sets the default; the magic comment
             // in a file still wins, and prism applies that rule itself.
@@ -203,6 +207,7 @@ namespace IronRuby.Prism {
             bridge._errorSink = errorSink;
             bridge._evalOutsideMethod = evalOutsideMethod;
             bridge._isEval = isEval;
+            bridge._isolatedLocalNames = isolatedLocalNames;
 
             if (result.Errors.Count > 0) {
                 if (errorSink != null && sourceUnit != null) {
@@ -389,7 +394,7 @@ namespace IronRuby.Prism {
 
         private SourceUnitTree/*!*/ Program(Pm.ProgramNode/*!*/ node, List<string> outerLocalNames, int dataOffset) {
             var scope = new TopStaticLexicalScope(
-                outerLocalNames != null ? new RuntimeLexicalScope(outerLocalNames) : null);
+                outerLocalNames != null ? new RuntimeLexicalScope(outerLocalNames, _isolatedLocalNames) : null);
             _scopes.Push(scope);
             var statements = BuildStatements(HoistPreExecution(node.Statements));
             _scopes.Pop();

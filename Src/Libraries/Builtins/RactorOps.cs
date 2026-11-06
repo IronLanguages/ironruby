@@ -72,9 +72,11 @@ namespace IronRuby.Builtins {
     /// <summary>
     /// Ruby 4.0's Ractor on CLR threads. A Ractor is a Ruby thread (with its own ThreadGroup) whose
     /// threads all know the Ractor they belong to; messages travel through Ractor::Port queues and
-    /// are copied (or moved, or shared when shareable) on the way, as MRI does it. What is not
-    /// enforced is the isolation itself: a Ractor can still reach global variables, class
-    /// variables, and unshareable constants of the main Ractor (see README, "Ractor").
+    /// are copied (or moved, or shared when shareable) on the way, as MRI does it. The runtime
+    /// keeps a non-main Ractor from what CRuby keeps it from - global and class variables,
+    /// unshareable constants and class-level instance variables (RactorIsolation) - once the first
+    /// Ractor has started; until then the main Ractor pays nothing for it. What is still not
+    /// enforced is listed in the README ("Ractor").
     /// </summary>
     [RubyClass("Ractor", Inherits = typeof(object))]
     public sealed class RubyRactor {
@@ -93,6 +95,9 @@ namespace IronRuby.Builtins {
         private readonly Dictionary<RubySymbol, object>/*!*/ _locals = new Dictionary<RubySymbol, object>();
         private int _lastPortId;
 
+        // the globals the Ractor has its own of; null for the main Ractor
+        private readonly RactorLocals _globals;
+
         private bool _terminated;
         private object _value;
         private Exception _exception;
@@ -105,12 +110,15 @@ namespace IronRuby.Builtins {
             internal RubyRactor Main;
             internal int LastId;
             internal int Alive = 1;
+            internal int Activated;
         }
 
         private static readonly object RegistryKey = new object();
 
-        private RubyRactor(RubyContext/*!*/ context, Registry/*!*/ registry, int id, MutableString name, string location) {
+        private RubyRactor(RubyContext/*!*/ context, Registry/*!*/ registry, int id, MutableString name, string location,
+            RactorLocals globals) {
             _context = context;
+            _globals = globals;
             _registry = registry;
             _id = id;
             _name = name;
@@ -136,7 +144,7 @@ namespace IronRuby.Builtins {
         private static Registry/*!*/ GetRegistry(RubyContext/*!*/ context) {
             return (Registry)context.GetOrCreateLibraryData(RegistryKey, () => {
                 var registry = new Registry();
-                registry.Main = new RubyRactor(context, registry, ++registry.LastId, null, null);
+                registry.Main = new RubyRactor(context, registry, ++registry.LastId, null, null, null);
                 return registry;
             });
         }
@@ -148,6 +156,86 @@ namespace IronRuby.Builtins {
         internal static RubyRactor/*!*/ GetCurrent(RubyContext/*!*/ context) {
             return ThreadOps.RubyThreadInfo.Current.Ractor ?? GetMain(context);
         }
+
+        #region Isolation
+
+        private static readonly Func<RactorLocals> _currentGlobals = () => {
+            var ractor = ThreadOps.RubyThreadInfo.Current.Ractor;
+            return (ractor != null) ? ractor._globals : null;
+        };
+
+        /// <summary>
+        /// Turns on the isolation checks of the runtime (RactorIsolation) before its first non-main
+        /// Ractor starts, and gives the Ractor its own $stdin, $stdout, $stderr (new IO objects over
+        /// the standard streams, as CRuby makes them), and its creator's $VERBOSE and $DEBUG.
+        /// </summary>
+        private static RactorLocals/*!*/ StartIsolation(RubyContext/*!*/ context) {
+            RactorIsolation.CurrentLocals = _currentGlobals;
+            RactorIsolation.IsShareableObject = Shareability.IsShareable;
+            RactorIsolation.CreateIsolationError = (message) => new RactorIsolationError(message);
+
+            var creator = RactorIsolation.GetNonMain(context);
+            object debug;
+            if (creator != null) {
+                debug = creator.Debug;
+            } else {
+                context.TryGetGlobalVariable(null, "DEBUG", out debug);
+            }
+            var globals = new RactorLocals(context) {
+                StandardInput = StandardStream(context.InitialStandardInput, context.StandardInput),
+                StandardOutput = StandardStream(context.InitialStandardOutput, context.StandardOutput),
+                StandardErrorOutput = StandardStream(context.InitialStandardErrorOutput, context.StandardErrorOutput),
+                Verbose = context.Verbose,
+                Debug = debug,
+            };
+            context.StartRactors();
+            return globals;
+        }
+
+        private static object StandardStream(RubyIO initial, object current) {
+            return (initial != null) ? initial.CreateSharedView() : current;
+        }
+
+        /// <summary>
+        /// Runs <paramref name="body"/> as the main Ractor would, on the current thread: what
+        /// Ractor._require (and so #require in a non-main Ractor) has the main Ractor do for it.
+        /// </summary>
+        internal static T RunAsMain<T>(Func<T>/*!*/ body) {
+            var info = ThreadOps.RubyThreadInfo.Current;
+            var ractor = info.Ractor;
+            if (ractor == null) {
+                return body();
+            }
+            info.Ractor = null;
+            try {
+                return body();
+            } finally {
+                info.Ractor = ractor;
+            }
+        }
+
+        /// <summary>
+        /// CRuby 4.0's Ractor._require: a non-main Ractor has the main Ractor load a feature, so
+        /// that the file runs free of the isolation checks, as a require in the main Ractor would.
+        /// </summary>
+        [RubyMethod("_require", RubyMethodAttributes.PublicSingleton)]
+        public static object RequireInMain(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ requireStorage,
+            RubyClass/*!*/ self, object feature) {
+            var site = requireStorage.GetCallSite("require", RubyCallSignature.WithImplicitSelf(1));
+            return RunAsMain(() => site.Target(site, null, feature));
+        }
+
+        /// <summary>
+        /// Called when the first Ractor of a runtime is created, as CRuby calls it: the prelude
+        /// (ruby4.rb) redefines it to prepend Kernel with a #require that sends a non-main Ractor's
+        /// requires to Ractor._require, ahead of RubyGems' own.
+        /// </summary>
+        [RubyMethod("_activated", RubyMethodAttributes.PrivateSingleton)]
+        public static object Activated(RubyClass/*!*/ self) {
+            return null;
+        }
+
+        #endregion
 
         #region Ports
 
@@ -320,7 +408,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         [ReceivesKeywords]
         public static RubyRactor/*!*/ Create(CloneStorage/*!*/ cloneStorage, AllocateStorage/*!*/ allocateStorage,
-            ConversionStorage<MutableString>/*!*/ toStr, BlockParam block, RubyClass/*!*/ self, params object[]/*!*/ args) {
+            ConversionStorage<MutableString>/*!*/ toStr, UnaryStorage/*!*/ activateStorage, BlockParam block, RubyClass/*!*/ self,
+            params object[]/*!*/ args) {
 
             var context = self.Context;
             MutableString name = null;
@@ -352,10 +441,14 @@ namespace IronRuby.Builtins {
             if (Volatile.Read(ref registry.Alive) == 1) {
                 context.ReportCategoryWarning("experimental", "Ractor API is experimental and may change in future versions of Ruby.");
             }
+            if (Interlocked.Exchange(ref registry.Activated, 1) == 0) {
+                var activate = activateStorage.GetCallSite("_activated", RubyCallSignature.WithImplicitSelf(0));
+                activate.Target(activate, self);
+            }
 
             // MRI has made the Ractor (and used up its id) by the time it finds the block is not isolated
             int id = Interlocked.Increment(ref registry.LastId);
-            CheckIsolated(block.Proc);
+            Isolate(block.Proc);
 
             // the arguments are a message: copied unless they are shareable
             var copier = new Copier(context, cloneStorage, allocateStorage, false);
@@ -364,7 +457,7 @@ namespace IronRuby.Builtins {
             }
 
             var ractor = new RubyRactor(context, registry, id, name,
-                ThreadOps.GetCallerLocation(context));
+                ThreadOps.GetCallerLocation(context), StartIsolation(context));
             Interlocked.Increment(ref registry.Alive);
 
             block.IsThreadRoot = true;
@@ -376,12 +469,13 @@ namespace IronRuby.Builtins {
         /// MRI isolates the block of Ractor.new: one that uses a local variable of an enclosing scope
         /// cannot run in another Ractor. The compiler records which ones a block uses.
         /// </summary>
-        private static void CheckIsolated(Proc/*!*/ proc) {
+        internal static void Isolate(Proc/*!*/ proc) {
             var names = proc.Dispatcher.OuterVariableNames;
             if (names != null && names.Length > 0) {
                 throw RubyExceptions.CreateArgumentError("{0}",
                     "can not isolate a Proc because it accesses outer variables (" + String.Join(", ", names) + ").");
             }
+            proc.IsIsolated = true;
         }
 
         [RubyMethod("allocate", RubyMethodAttributes.PublicSingleton)]
@@ -959,6 +1053,9 @@ namespace IronRuby.Builtins {
             if (_shareable.TryGetValue(obj, out dummy) || IsEnv(context, obj)) {
                 return true;
             }
+            if (!context.IsObjectFrozen(obj)) {
+                return false;
+            }
             var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
             if (!IsShareable(context, obj, visited)) {
                 return false;
@@ -1058,7 +1155,11 @@ namespace IronRuby.Builtins {
             }
             var names = proc.Dispatcher.OuterVariableNames;
             if (names != null) {
+                var reassigned = proc.Dispatcher.ReassignedOuterVariableNames;
                 foreach (var name in names) {
+                    if (reassigned != null && Array.IndexOf(reassigned, name) >= 0) {
+                        throw new RactorIsolationError("cannot make a shareable Proc because the outer variable '" + name + "' may be reassigned.");
+                    }
                     object value = proc.LocalScope.ResolveLocalVariable(name);
                     if (!IsShareable(context, value)) {
                         throw new RactorIsolationError("cannot make a shareable Proc because it can refer unshareable object " +
@@ -1095,6 +1196,7 @@ namespace IronRuby.Builtins {
                         throw new RactorIsolationError("Proc's self is not shareable: " + _context.Inspect(proc).ToString());
                     }
                     CheckProc(_context, proc, "make a Proc shareable");
+                    proc.IsIsolated = true;
                 }
                 _context.FreezeObject(proc);
                 return;

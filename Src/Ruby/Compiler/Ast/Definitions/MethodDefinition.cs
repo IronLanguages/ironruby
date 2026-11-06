@@ -262,7 +262,10 @@ namespace IronRuby.Compiler.Ast {
                 countCall = AstUtils.Empty();
             }
 
+            gen.BindingParameters = true;
             MSA.Expression optionalsInitialization = _parameters.TransformOptionalsInitialization(gen);
+            gen.BindingParameters = false;
+            gen.CountParameterAssignments(_parameters);
             MSA.Expression statements = methodBody.TransformResult(gen, ResultOperation.Return);
 
             // A body that never needs its scope makes none (see TransformLightFrame).

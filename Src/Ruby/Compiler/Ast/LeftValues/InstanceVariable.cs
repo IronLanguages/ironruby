@@ -30,11 +30,11 @@ namespace IronRuby.Compiler.Ast {
 
         internal override MSA.Expression/*!*/ TransformReadVariable(AstGenerator/*!*/ gen, bool tryRead) {
             // each read and each write gets an inline cache of its own (IronRuby.Runtime.InstanceVariableSite)
-            return Methods.GetInstanceVariable.OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, AstUtils.Constant(new InstanceVariableSite(Name)));
+            return Methods.GetInstanceVariable.OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, AstUtils.Constant(new InstanceVariableSite(Name, gen.IsCoreLibrary)));
         }
 
         internal override MSA.Expression/*!*/ TransformWriteVariable(AstGenerator/*!*/ gen, MSA.Expression/*!*/ rightValue) {
-            return Methods.SetInstanceVariable.OpCall(gen.CurrentSelfVariable, AstUtils.Box(rightValue), gen.CurrentScopeVariable, AstUtils.Constant(new InstanceVariableSite(Name)));
+            return Methods.SetInstanceVariable.OpCall(gen.CurrentSelfVariable, AstUtils.Box(rightValue), gen.CurrentScopeVariable, AstUtils.Constant(new InstanceVariableSite(Name, gen.IsCoreLibrary)));
         }
 
         internal override MSA.Expression TransformDefinedCondition(AstGenerator/*!*/ gen) {

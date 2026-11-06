@@ -7421,6 +7421,16 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadRactor_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "_activated", 0x62, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object>(IronRuby.Builtins.RubyRactor.Activated)
+            );
+            
+            DefineLibraryMethod(module, "_require", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.RubyClass, System.Object, System.Object>(IronRuby.Builtins.RubyRactor.RequireInMain)
+            );
+            
             DefineLibraryMethod(module, "[]", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyClass, System.Object, System.Object>(IronRuby.Builtins.RubyRactor.GetCurrentLocal)
@@ -7463,7 +7473,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "new", 0x61, 
                 0x80000000U, 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyRactor>(IronRuby.Builtins.RubyRactor.Create)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyRactor>(IronRuby.Builtins.RubyRactor.Create)
             );
             
             DefineLibraryMethod(module, "receive", 0x61, 

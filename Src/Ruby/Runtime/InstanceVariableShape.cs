@@ -371,9 +371,18 @@ namespace IronRuby.Runtime {
         internal readonly string/*!*/ Name;
         internal Entry/*!*/ Cache = EmptyEntry;
 
-        public InstanceVariableSite(string/*!*/ name) {
+        // In the core library written in Ruby (RubyStackTraceBuilder.IsInternalFile), which stands
+        // in for CRuby's C code: Ractor isolation does not apply to it (RactorIsolation).
+        internal readonly bool IsCoreLibrary;
+
+        public InstanceVariableSite(string/*!*/ name)
+            : this(name, false) {
+        }
+
+        public InstanceVariableSite(string/*!*/ name, bool isCoreLibrary) {
             Debug.Assert(name != null);
             Name = name;
+            IsCoreLibrary = isCoreLibrary;
         }
 
         // A release: a thread that reads the new entry sees it fully constructed (its reads of

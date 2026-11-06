@@ -101,6 +101,22 @@ namespace IronRuby.Builtins {
             _fileDescriptor = descriptor;
         }
 
+        /// <summary>
+        /// Another IO object over this one's stream, buffer and descriptor: a non-main Ractor's
+        /// $stdin, $stdout and $stderr, which CRuby makes anew for the same descriptors.
+        /// </summary>
+        public RubyIO/*!*/ CreateSharedView() {
+            var result = new RubyIO(_context);
+            result._stream = _stream;
+            result._fileDescriptor = _fileDescriptor;
+            result._mode = _mode;
+            result._enc = _enc;
+            result._enc2 = _enc2;
+            result._conversionOptions = _conversionOptions;
+            result._autoFlush = _autoFlush;
+            return result;
+        }
+
         public void Reset(Stream/*!*/ stream, IOMode mode) {
             _mode = mode;
             SetStream(stream);

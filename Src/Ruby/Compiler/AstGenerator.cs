@@ -111,6 +111,22 @@ namespace IronRuby.Compiler.Ast {
             get { return _savingToDisk; }
         }
 
+        private int _isCoreLibrary;
+
+        /// <summary>
+        /// The code is the core library written in Ruby (RubyStackTraceBuilder.IsInternalFile): it
+        /// stands in for CRuby's C code, which Ractor isolation does not apply to, so its variable
+        /// and constant sites are marked to go unchecked (RactorIsolation).
+        /// </summary>
+        internal bool IsCoreLibrary {
+            get {
+                if (_isCoreLibrary == 0) {
+                    _isCoreLibrary = RubyStackTraceBuilder.IsInternalFile(SourcePath) ? 1 : -1;
+                }
+                return _isCoreLibrary > 0;
+            }
+        }
+
         public string SourcePath {
             get {
                 if (_document == null) {
@@ -321,8 +337,10 @@ namespace IronRuby.Compiler.Ast {
             // smaller depth belongs to an enclosing scope.
             internal int LexicalDepth;
 
-            // The enclosing scopes' locals the block uses (BlockDispatcher.OuterVariableNames).
+            // The enclosing scopes' locals the block uses (BlockDispatcher.OuterVariableNames), and
+            // for each how often its scope assigns it.
             internal List<string> OuterVariables;
+            internal List<LocalAssignmentCount> OuterVariableAssignments;
             internal List<string> AssignedOuterVariables;
 
             // The module body the block is in, if any: a module body starts a new local scope
@@ -608,7 +626,7 @@ namespace IronRuby.Compiler.Ast {
         /// current frame the local is from outside of (-1, a local of the eval's runtime scope, is
         /// outside of all of them). The block chain ends at a method or module body.
         /// </summary>
-        internal void NoteLocalVariableUse(string/*!*/ name, int definitionDepth, bool isAssignment) {
+        internal void NoteLocalVariableUse(string/*!*/ name, int definitionDepth, bool isAssignment, LocalAssignmentCount assignments) {
             if (_currentVariableScope is ModuleScope) {
                 return;
             }
@@ -618,6 +636,7 @@ namespace IronRuby.Compiler.Ast {
                 var names = block.OuterVariables ??= new List<string>();
                 if (!names.Contains(name)) {
                     names.Add(name);
+                    (block.OuterVariableAssignments ??= new List<LocalAssignmentCount>()).Add(assignments);
                 }
                 if (isAssignment) {
                     var assigned = block.AssignedOuterVariables ??= new List<string>();
@@ -625,6 +644,50 @@ namespace IronRuby.Compiler.Ast {
                         assigned.Add(name);
                     }
                 }
+            }
+        }
+
+        // Set while parameters are bound, which the scope counts as one assignment each (CountParameterAssignments).
+        internal bool BindingParameters;
+
+        /// <summary>
+        /// The assignments the code makes of the local in slot <paramref name="closureIndex"/> of the
+        /// scope at <paramref name="definitionDepth"/>, counted as they are compiled: CRuby's lvar_states,
+        /// by which a shareable proc refuses an outer variable that "may be reassigned". Null for a
+        /// local of the eval's runtime scope.
+        /// </summary>
+        internal LocalAssignmentCount GetLocalAssignments(int definitionDepth, int closureIndex) {
+            if (definitionDepth < 0 || closureIndex < 0) {
+                return null;
+            }
+            var scope = CurrentScope;
+            while (scope != null && scope.LexicalDepth > definitionDepth) {
+                scope = scope.Parent;
+            }
+            return (scope != null && scope.LexicalDepth == definitionDepth) ? scope.GetLocalAssignments(closureIndex) : null;
+        }
+
+        internal void NoteLocalAssignment(LocalAssignmentCount assignments) {
+            if (assignments != null && !BindingParameters) {
+                assignments.Count++;
+            }
+        }
+
+        /// <summary>Each parameter of <paramref name="parameters"/> is assigned once, by the call.</summary>
+        internal void CountParameterAssignments(Parameters/*!*/ parameters) {
+            foreach (var lvalue in parameters.Mandatory) {
+                CountParameterAssignment(lvalue as LocalVariable);
+            }
+            foreach (var optional in parameters.Optional) {
+                CountParameterAssignment(optional.Left as LocalVariable);
+            }
+            CountParameterAssignment(parameters.Unsplat as LocalVariable);
+            CountParameterAssignment(parameters.Block);
+        }
+
+        private void CountParameterAssignment(LocalVariable parameter) {
+            if (parameter != null) {
+                NoteLocalAssignment(GetLocalAssignments(parameter.DefinitionLexicalDepth, parameter.ClosureIndex));
             }
         }
 
