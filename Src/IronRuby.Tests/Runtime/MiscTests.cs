@@ -2862,6 +2862,44 @@ true
         }
 
         /// <summary>
+        /// A SyntaxError's message starts with the file and line, as MRI's does, whichever of load, require or
+        /// eval parsed the code; the report of one that a method raised names that method's caller, as for any
+        /// other error, and says the location once. An error found reading a file (an unknown magic-comment
+        /// encoding) has no parser frame in its backtrace.
+        /// </summary>
+        public void SyntaxError_MessageLocation1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+Dir.mktmpdir do |d|
+  bad = File.join(d, 'bad.rb')
+  File.write(bad, ""x = 1\n"" * 49 + ""x = )\n"")
+  begin; load bad; rescue SyntaxError => e; p e.message.start_with?(""#{bad}:50: ""), e.path == bad; end
+  File.write(bad, ""# encoding: bogus\np 1\n"")
+  begin; load bad; rescue ArgumentError => e; p e.message == ""#{bad}:1: unknown or invalid encoding in the magic comment"", e.backtrace.grep(/Parse/); end
+end
+begin; eval(""1\n1 +"", nil, 'q.rb', 3); rescue SyntaxError => e; p e.message, e.path; end
+begin; eval(""1 +"", nil, 'z.rb', -5); rescue SyntaxError => e; p e.message; end
+", @"
+true
+true
+true
+[]
+""q.rb:4: unexpected end-of-input; expected an expression after the operator""
+""q.rb""
+""z.rb:-5: unexpected end-of-input; expected an expression after the operator""
+");
+            try {
+                Engine.Execute("def syntax_error_location1; eval('x = )', nil, 'q.rb', 3); end; syntax_error_location1");
+                Assert(false);
+            } catch (SyntaxError e) {
+                string report = Context.FormatException(e);
+                Assert(report.Contains("in 'Kernel#eval': q.rb:3: expected an expression after `=` (SyntaxError)"));
+                Assert(!report.Contains("q.rb:3: q.rb:3:"));
+            }
+        }
+
+        /// <summary>
         /// Integer.sqrt, #pow, #digits and #fdiv are C# (Integer.cs, ClrInteger.cs) rather than the
         /// prelude's Ruby: the same answers, with MRI's checks in MRI's order - #pow(b, 1) is 0, a
         /// non-Integer exponent is "unless a 1st argument is integer", #digits refuses a negative

@@ -4485,9 +4485,15 @@ namespace IronRuby.Runtime {
         public override string/*!*/ FormatException(Exception/*!*/ exception) {
             var syntaxError = exception as SyntaxError;
             if (syntaxError != null && syntaxError.HasLineInfo) {
-                // "-e:1: expected a `}' ... (SyntaxError)": MRI names the class, as for any other error
-                return FormatErrorMessage(syntaxError.Message + " (" + GetClassOf(exception).Name + ")", null,
-                    syntaxError.File, syntaxError.Line, syntaxError.Column, syntaxError.LineSourceCode);
+                // The main script: "-e:1: expected a `}' ... (SyntaxError)" and the line, pointed
+                // at. One that require, load or eval raised is reported as any other error, at
+                // the frame that called it, with the location in its message.
+                RubyExceptionData data = RubyExceptionData.GetInstance(exception);
+                data.CaptureExceptionTrace(this);
+                if (data.Backtrace == null || data.Backtrace.Count == 0) {
+                    return FormatErrorMessage(syntaxError.Description + " (" + GetClassOf(exception).Name + ")", null,
+                        syntaxError.File, syntaxError.Line, syntaxError.Column, syntaxError.LineSourceCode);
+                }
             }
 
             StringBuilder sb = new StringBuilder();
@@ -4571,7 +4577,10 @@ namespace IronRuby.Runtime {
                     sb.Append("\t ... ").Append(backtrace.Count - count).Append(" levels...").AppendLine();
                 }
             } else {
-                sb.AppendFormat("unknown: {0} ({1})", message, exceptionClass.Name).AppendLine();
+                // Raised before any Ruby frame ran - reading the main script, say, which has a magic
+                // comment naming an unknown encoding: MRI's error_pos names the script.
+                string where = (CommandLineProgramPath != null) ? CommandLineProgramPath.ToString() : "unknown";
+                sb.AppendFormat("{0}: {1} ({2})", where, message, exceptionClass.Name).AppendLine();
             }
         }
 

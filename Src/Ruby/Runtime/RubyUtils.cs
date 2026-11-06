@@ -1323,7 +1323,8 @@ namespace IronRuby.Runtime {
                 Utils.Log(new String('-', 50), "EVAL_ERROR");
 
                 // MRI names the file and the line the error is on in front of the message, so
-                // that code which evaluated a string knows which string and where in it.
+                // that code which evaluated a string knows which string and where in it: the
+                // line the parser saw is not the one to name when eval started below line 1.
                 if (e.HasLineInfo && e.File != null) {
                     // A SourceLocation cannot start before line 1, so a zero or negative starting
                     // line was compiled from 1 and is put back here: eval with a line of -100
@@ -1331,10 +1332,7 @@ namespace IronRuby.Runtime {
                     int reportedLine = (line <= 0) ? e.Line - 1 + line : e.Line;
                     string errorFile = e.File;
                     DecodeEvalLineOffset(ref errorFile);
-                    throw new SyntaxError(
-                        String.Format("{0}:{1}: {2}", errorFile, reportedLine, e.Message),
-                        errorFile, reportedLine, e.Column, e.LineSourceCode
-                    );
+                    throw new SyntaxError(e.Description, errorFile, reportedLine, e.Column, e.LineSourceCode);
                 }
                 throw;
             }

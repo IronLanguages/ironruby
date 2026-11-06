@@ -282,6 +282,7 @@ namespace IronRuby.Builtins {
     public class SyntaxError : ScriptError {
         private readonly string _file;
         private readonly string _lineSourceCode;
+        private readonly string _description;
         private readonly int _line;
         private readonly int _column;
         private readonly bool _hasLineInfo;
@@ -313,8 +314,16 @@ namespace IronRuby.Builtins {
             get { return _hasLineInfo; }
         }
 
-        internal SyntaxError(string/*!*/ message, string file, int line, int column, string lineSourceCode) 
-            : base(message) {
+        /// <summary>
+        /// What is wrong, without the "file:line: " that MRI puts in front of it in the message.
+        /// </summary>
+        internal string Description {
+            get { return _description ?? Message; }
+        }
+
+        internal SyntaxError(string/*!*/ description, string file, int line, int column, string lineSourceCode) 
+            : base(file != null ? String.Format("{0}:{1}: {2}", file, line, description) : description) {
+            _description = description;
             _file = file;
             _line = line;
             _column = column;
