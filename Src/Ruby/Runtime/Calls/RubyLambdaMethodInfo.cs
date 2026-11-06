@@ -27,16 +27,25 @@ namespace IronRuby.Runtime.Calls {
     public class RubyLambdaMethodInfo : RubyMemberInfo {
         private static int _Id = 1;
 
+        // _id names this entry for super call sites (RubyOps.GetSuperCallTarget), so every copy
+        // gets its own; _bodyId is shared by the copies `alias' and visibility changes make, which
+        // are the same method to Method#==.
         private readonly int _id;
+        private readonly int _bodyId;
         private readonly Proc/*!*/ _lambda;
         private readonly string/*!*/ _definitionName;
 
         internal RubyLambdaMethodInfo(Proc/*!*/ block, string/*!*/ definitionName, RubyMemberFlags flags, RubyModule/*!*/ declaringModule) 
+            : this(block, definitionName, flags, declaringModule, 0) {
+        }
+
+        private RubyLambdaMethodInfo(Proc/*!*/ block, string/*!*/ definitionName, RubyMemberFlags flags, RubyModule/*!*/ declaringModule, int bodyId)
             : base(flags, declaringModule) {
             Assert.NotNull(block, definitionName, declaringModule);
             _lambda = block.ToLambda(this);
             _definitionName = definitionName;
             _id = Interlocked.Increment(ref _Id);
+            _bodyId = bodyId != 0 ? bodyId : _id;
         }
 
         public override RubyParameterSignature GetParameterSignature() {
@@ -82,11 +91,11 @@ namespace IronRuby.Runtime.Calls {
                 return true;
             }
             var info = other as RubyLambdaMethodInfo;
-            return info != null && info._id == _id;
+            return info != null && info._bodyId == _bodyId;
         }
 
         public override int GetEquivalenceHashCode() {
-            return _id;
+            return _bodyId;
         }
 
         public string/*!*/ DefinitionName {
@@ -98,7 +107,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
-            return new RubyLambdaMethodInfo(_lambda, _definitionName, flags, module);
+            return new RubyLambdaMethodInfo(_lambda, _definitionName, flags, module, _bodyId);
         }
 
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
