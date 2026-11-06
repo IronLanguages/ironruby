@@ -231,7 +231,7 @@ namespace IronRuby.Runtime {
             Backtrace = null;
             try {
                 DynamicSetBacktrace(context, raised);
-            } catch (Exception e) when (!(e is StackUnwinder || e is ThreadAbortException || e is ThreadInterruptedException)) {
+            } catch (Exception e) when (!(e is StackUnwinder || e is ThreadInterruptedException)) {
                 // MRI drops it too; #backtrace stays as the method left it
             }
         }
@@ -293,25 +293,7 @@ namespace IronRuby.Runtime {
         }
 
         internal static RubyExceptionData/*!*/ AssociateInstance(Exception/*!*/ e) {
-            RubyExceptionData result;
-
-            Exception visibleException = RubyUtils.GetVisibleException(e);
-            if (e == visibleException || visibleException == null) {
-                result = new RubyExceptionData(e);
-            } else {
-                // Async exception
-
-                Debug.Assert(e is ThreadAbortException);
-                result = GetInstance(visibleException);
-
-                if (result._exception == visibleException) {
-                    // A different instance of ThreadAbortException is thrown at the end of every catch block (as long as
-                    // Thread.ResetAbort is not called). However, we only want to remember the first one 
-                    // as it will have the most complete stack trace.
-                    result._exception = e;
-                }
-            }
-
+            var result = new RubyExceptionData(e);
             e.SetData(_DataKey, result);
             return result;
         }
@@ -577,11 +559,5 @@ namespace IronRuby.Runtime {
             }
             return message;
         }
-
-        // A handled exception used to leave a pending Thread.Abort behind when Thread#raise had delivered it
-        // that way, and Thread.ResetAbort cancelled it here. Thread#raise no longer aborts the target thread
-        // (see RubyUtils.RaiseAsyncException) and Thread.ResetAbort only throws on .NET Core, so there is
-        // nothing left to do.
-        public static void ActiveExceptionHandled(Exception visibleException) {}
     }
 }

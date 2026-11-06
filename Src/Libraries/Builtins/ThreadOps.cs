@@ -1286,7 +1286,6 @@ namespace IronRuby.Builtins {
                     }
                 } else {
                     e = RubyUtils.GetVisibleException(e);
-                    RubyExceptionData.ActiveExceptionHandled(e);
                     // a start routine that is a method (Thread.new(&method(:m))) has no Ruby frame that captured the backtrace:
                     RubyExceptionData.GetInstance(e).CaptureExceptionTrace(context);
                     info.Exception = e;

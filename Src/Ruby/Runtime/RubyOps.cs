@@ -3270,7 +3270,6 @@ namespace IronRuby.Runtime {
             var site = comparisonStorage.GetCallSite("===");
             bool result = IsTrue(site.Target(site, classObject, context.CurrentException));
             if (result) {
-                RubyExceptionData.ActiveExceptionHandled(context.CurrentException);
                 TraceRescue(scope, context.CurrentException);
             }
             return result;
@@ -3293,7 +3292,6 @@ namespace IronRuby.Runtime {
             // MRI doesn't call === here;
             bool result = ec.IsInstanceOf(ec.CurrentException, ec.StandardErrorClass);
             if (result) {
-                RubyExceptionData.ActiveExceptionHandled(ec.CurrentException);
                 TraceRescue(scope, ec.CurrentException);
             }
             return result;

@@ -951,10 +951,7 @@ namespace IronRuby.Runtime {
         }
 
         internal static string MakeRuntimeDesriptionString() {
-            Type mono = typeof(object).Assembly.GetType("Mono.Runtime");
-            return mono != null ?
-                (string)mono.GetMethod("GetDisplayName", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, null)
-                : String.Format(CultureInfo.InvariantCulture, ".NET {0}", Environment.Version);
+            return String.Format(CultureInfo.InvariantCulture, ".NET {0}", Environment.Version);
         }
 
         private static MutableString/*!*/ MakePlatformString() {
@@ -4910,7 +4907,6 @@ namespace IronRuby.Runtime {
                 case "FILESYSTEM": return GetPathEncoding().StrictEncoding;
                 case "LOCALE": return _options.LocaleEncoding.StrictEncoding;
                 case "EXTERNAL": return _defaultExternalEncoding.StrictEncoding;
-                // Mono doesn't recognize 'SJIS' encoding name:
                 case "WINDOWS-31J": return Encoding.GetEncoding(RubyEncoding.CodePageSJIS);
                 case "MACCYRILLIC": return Encoding.GetEncoding(10007);
 
