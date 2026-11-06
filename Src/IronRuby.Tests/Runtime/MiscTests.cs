@@ -2035,7 +2035,7 @@ no implicit conversion of nil into Integer
             TestOutput(@"
 e = [1, 2].each
 p e.dup.to_a, e.clone.to_a, [1, 2, 3].each_slice(2).dup.to_a
-p Float.ancestors.include?(Precision), Float.ancestors[0, 3].map(&:to_s)
+p defined?(Precision), Float.ancestors[0, 3].map(&:to_s)
 $VERBOSE = nil; p $-W
 $VERBOSE = false; p $-W
 $VERBOSE = true; p $-W
@@ -2044,7 +2044,7 @@ begin; $-W = 1; rescue NameError => x; puts x.message; end
 [1, 2]
 [1, 2]
 [[1, 2], [3]]
-false
+nil
 [""Float"", ""Numeric"", ""Comparable""]
 0
 1

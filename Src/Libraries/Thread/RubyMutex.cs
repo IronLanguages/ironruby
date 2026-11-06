@@ -413,17 +413,5 @@ namespace IronRuby.StandardLibrary.Threading {
                 DoLock(self);
             }
         }
-
-        [RubyMethod("exclusive_unlock")]
-        public static object ExclusiveUnlock(BlockParam criticalSection, RubyMutex/*!*/ self) {
-            Unlock(self);
-            try {
-                object result;
-                criticalSection.Yield(out result);
-                return result;
-            } finally {
-                DoLock(self);
-            }
-        }
     }
 }

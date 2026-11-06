@@ -204,30 +204,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return BigDecimal.Create(GetConfig(context), value.ConvertToString(), 0);
         }
 
-        #region induced_from
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static BigDecimal InducedFrom(RubyClass/*!*/ self, [NotNull]BigDecimal/*!*/ value) {
-            return value;
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static BigDecimal InducedFrom(RubyContext/*!*/ context, RubyClass/*!*/ self, int value) {
-            return BigDecimal.Create(GetConfig(context), value.ToString(CultureInfo.InvariantCulture));
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static BigDecimal InducedFrom(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ value) {
-            return BigDecimal.Create(GetConfig(context), value.ToString(CultureInfo.InvariantCulture));
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static BigDecimal InducedFrom(RubyClass/*!*/ self, object value) {
-            throw RubyExceptions.CreateImplicitConversionError(self.Context.GetClassDisplayName(value), self.Name);
-        }
-
-        #endregion
-
         #endregion
 
         #region Instance Methods
@@ -267,11 +243,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return self.Exponent > 0
                 ? Math.Max(self.Digits, self.Exponent)
                 : self.Digits - self.Exponent;
-        }
-
-        [RubyMethod("precs")]
-        public static RubyArray/*!*/ Precs(BigDecimal/*!*/ self) {
-            return RubyOps.MakeArray2(self.Precision * BigDecimal.BASE_FIG, self.MaxPrecision * BigDecimal.BASE_FIG);
         }
 
         [RubyMethod("split")]

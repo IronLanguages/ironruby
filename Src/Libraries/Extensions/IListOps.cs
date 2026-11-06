@@ -1848,32 +1848,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region indexes, indices, values_at
-
-        [RubyMethod("indexes")]
-        [RubyMethod("indices")]
-        public static object Indexes(ConversionStorage<int>/*!*/ fixnumCast,
-            UnaryOpStorage/*!*/ allocateStorage,
-            IList/*!*/ self, params object[]/*!*/ values) {
-            fixnumCast.Context.ReportWarning("Array#indexes and Array#indices are deprecated; use Array#values_at");
-
-            RubyArray result = new RubyArray();
-
-            for (int i = 0; i < values.Length; ++i) {
-                Range range = values[i] as Range;
-                if (range != null) {
-                    IList fragment = GetElements(fixnumCast, allocateStorage, self, range);
-                    if (fragment != null) {
-                        result.Add(fragment);
-                    }
-                } else {
-                    result.Add(GetElement(self, Protocols.CastToFixnum(fixnumCast, values[i])));
-                }
-            }
-
-            return result;
-
-        }
+        #region values_at
 
         [RubyMethod("values_at")]
         public static RubyArray/*!*/ ValuesAt(ConversionStorage<int>/*!*/ fixnumCast,
@@ -2076,7 +2051,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region length, size, empty?, nitems
+        #region length, size, count, empty?
 
         [RubyMethod("length")]
         [RubyMethod("size")]
@@ -2129,17 +2104,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("empty?")]
         public static bool Empty(IList/*!*/ self) {
             return self.Count == 0;
-        }
-
-        [RubyMethod("nitems")]
-        public static int NumberOfNonNilItems(IList/*!*/ self) {
-            int count = 0;
-            foreach (object obj in self) {
-                if (obj != null) {
-                    count++;
-                }
-            }
-            return count;
         }
 
         #endregion

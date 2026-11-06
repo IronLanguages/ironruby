@@ -2321,8 +2321,8 @@ namespace IronRuby.Builtins {
 
             #endregion
 
-            [RubyMethod("identical?")]
-            public static bool AreIdentical(RubyContext/*!*/ context, FileSystemInfo/*!*/ self, [NotNull]FileSystemInfo/*!*/ other) {
+            // File.identical? / FileTest.identical?; File::Stat has no #identical? of its own.
+            internal static bool AreIdentical(RubyContext/*!*/ context, FileSystemInfo/*!*/ self, [NotNull]FileSystemInfo/*!*/ other) {
                 var a = D(self);
                 var b = D(other);
                 if (a != null && b != null) {

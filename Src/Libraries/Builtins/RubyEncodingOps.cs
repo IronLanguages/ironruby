@@ -232,11 +232,6 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        [RubyMethod("based_encoding")]
-        public static RubyEncoding BasedEncoding(RubyEncoding/*!*/ self) {
-            return null;
-        }
-
         [RubyMethod("dummy?")]
         public static bool IsDummy(RubyEncoding/*!*/ self) {
             return self.IsDummy;

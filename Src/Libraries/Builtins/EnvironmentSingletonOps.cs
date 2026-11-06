@@ -223,20 +223,6 @@ namespace IronRuby.Builtins {
             return null;
         }
 
-        [RubyMethod("indices")]
-        public static RubyArray/*!*/ Indices(RubyContext/*!*/ context, object/*!*/ self,
-            [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ keys) {
-            context.ReportWarning("ENV.indices is deprecated; use ENV.values_at");
-            return ValuesAt(context, self, keys);
-        }
-
-        [RubyMethod("indexes")]
-        public static RubyArray/*!*/ Index(RubyContext/*!*/ context, object/*!*/ self,
-            [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ keys) {
-            context.ReportWarning("ENV.indexes is deprecated; use ENV.values_at");
-            return ValuesAt(context, self, keys);
-        }
-
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, object/*!*/ self) {
             return IDictionaryOps.ToMutableString(context, ToHash(context, self));

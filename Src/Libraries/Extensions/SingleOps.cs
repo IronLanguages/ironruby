@@ -21,7 +21,7 @@ using Microsoft.Scripting.Generation;
 
 namespace IronRuby.Builtins {
     [RubyClass(Extends = typeof(float), Inherits = typeof(Numeric), Restrictions = ModuleRestrictions.None)]
-    [Includes(typeof(ClrFloat), Copy = true), Includes(typeof(Precision))]
+    [Includes(typeof(ClrFloat), Copy = true)]
     public static class SingleOps {
         // TODO: add constants as defined in FloatOps
 
