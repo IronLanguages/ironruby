@@ -16,13 +16,18 @@
 # - Each run gets a TMPDIR of its own: the tests name some temp files and directories after the
 #   test (Driver.MakeTempDir), so two runs of the same test would otherwise share them.
 IR_ROOT="$(dirname "$(dirname "$(readlink -f "$0")")")"
-export DOTNET_ROOT=/usr/local/dotnet
-export PATH=/usr/local/dotnet:$PATH
+# The test host is an apphost: as in ./ironruby, it needs DOTNET_ROOT when the SDK is not where
+# it looks by default.
+if [ -z "$DOTNET_ROOT" ] && [ -x /usr/local/dotnet/dotnet ]; then
+  export DOTNET_ROOT=/usr/local/dotnet
+  export PATH=/usr/local/dotnet:$PATH
+fi
 : "${IR_CONFIG:=Debug}"
 # IR_TFM=net10.0 runs the suite on the .NET 10 runtime; see ir.sh.  The logs carry both
 # so a net10.0 run does not clobber the net8.0 one.
 : "${IR_TFM:=net8.0}"
-: "${DLR_SOURCE_DIR:=/root/workspace/dlr/src/core}"
+# The DLR checkout the build uses by default (DlrSourceDir in Directory.Build.props).
+: "${DLR_SOURCE_DIR:=$IR_ROOT/../dlr/src/core}"
 # Absolute, as the caller meant it: the check below runs from $IR_ROOT and MSBuild resolves a
 # relative DlrSourceDir from Src/IronRuby.Tests, so a relative path would name two other places.
 dlr_dir=$(cd "$DLR_SOURCE_DIR" 2>/dev/null && pwd) || {
