@@ -65,6 +65,7 @@ namespace IronRuby.Builtins {
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Iconv.Iconv.OutOfRange), typeof(IronRuby_StandardLibrary_Iconv_Iconv_OutOfRange_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Json.JsonError), typeof(IronRuby_StandardLibrary_Json_JsonError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Json.JsonGeneratorError), typeof(IronRuby_StandardLibrary_Json_JsonGeneratorError_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Json.JsonNestingError), typeof(IronRuby_StandardLibrary_Json_JsonNestingError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Json.JsonParserError), typeof(IronRuby_StandardLibrary_Json_JsonParserError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Markly.MarklyOps.MarklyError), typeof(IronRuby_StandardLibrary_Markly_MarklyOps_MarklyError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.MessagePack.MessagePackOps.MalformedFormatError), typeof(IronRuby_StandardLibrary_MessagePack_MessagePackOps_MalformedFormatError_Subclass));
@@ -1067,8 +1068,8 @@ namespace IronRuby.Builtins {
         public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
         public RubyInstanceData TryGetInstanceData() { return _instanceData; }
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
-        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
-        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        bool IRubyObjectState.IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        void IRubyObjectState.Freeze() { RubyOps.FreezeObject(ref _instanceData); }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1535,6 +1536,31 @@ namespace IronRuby.Builtins {
         }
 
         public IronRuby_StandardLibrary_Json_JsonGeneratorError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_StandardLibrary_Json_JsonNestingError_Subclass : global::IronRuby.StandardLibrary.Json.JsonNestingError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_StandardLibrary_Json_JsonNestingError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_StandardLibrary_Json_JsonNestingError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
             : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
             _immediateClass = rubyClass;
         }
