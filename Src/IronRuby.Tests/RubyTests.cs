@@ -349,7 +349,18 @@ namespace IronRuby.Tests {
                 RangeCondition1B,
                 RangeCondition1C,
                 RangeCondition2,
-                
+
+                Compat_BlockControlFlow_Normal,
+                Compat_BlockControlFlow_Raise,
+                Compat_BlockControlFlow_Return,
+                Compat_BlockControlFlow_ReturnValue,
+                Compat_BlockControlFlow_Break,
+                Compat_BlockControlFlow_BreakValue,
+                Compat_BlockControlFlow_Next,
+                Compat_BlockControlFlow_Redo,
+                Compat_Assignment,
+                Compat_ArgumentSplatting,
+
                 Scenario_RubyClosures1,
                 Scenario_RubyParams1,
                 Scenario_RubyParams2,
