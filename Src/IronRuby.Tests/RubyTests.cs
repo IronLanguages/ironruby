@@ -610,6 +610,8 @@ namespace IronRuby.Tests {
                 ClrOverloadGenericTieBreak3,
                 ClrOverloadProtocolConversions1,
                 ClrOverloadProtocolConversions2,
+                ClrOverloadArrayItems1,
+                ClrOverloadBignum1,
                 ClrRangeIndexArguments1,
                 ClrConstantFields1,
                 ClrStringObjectArguments1,

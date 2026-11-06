@@ -181,7 +181,11 @@ that includes `Comparable` or `Enumerable` is an `IComparable` or `IEnumerable` 
 Ruby implementations, `include System::IComparable` works although the name is also a generic,
 and `Method#parameters` names a CLR method's parameters. An Int32, Int64 or BigInteger value is an
 `Integer`, yet `System::Int64` and `System::Numerics::BigInteger` still name their CLR types
-(`List[System::Int64]` is a `List<long>`, `System::Int64.MaxValue` is 2**63-1). See
+(`List[System::Int64]` is a `List<long>`, `System::Int64.MaxValue` is 2**63-1), and such an
+Integer has its own type's CLR members (`(2**70).is_even`, `5.to_string("X")`). An Array passed
+where overloads take different collections goes to the one its items fit, as a C# collection's
+static type would: `String.Join(",", [1, 2])` takes the `object[]`, `Enumerable.Sum([1.5, 2])`
+the `IEnumerable<double>`; a bignum takes a `double` parameter over narrower ones. See
 [`Src/IronRuby.Tests/Runtime/ClrBinderTests.cs`](Src/IronRuby.Tests/Runtime/ClrBinderTests.cs),
 [`ClrProtocolTests.cs`](Src/IronRuby.Tests/Runtime/ClrProtocolTests.cs) and
 [`ClrRuntimeInteropTests.cs`](Src/IronRuby.Tests/Runtime/ClrRuntimeInteropTests.cs) for the
