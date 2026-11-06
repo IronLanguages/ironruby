@@ -849,5 +849,140 @@ nil
 ""NameError: constant C::q not defined""
 ");
         }
+
+        /// <summary>
+        /// Module#__hide_constant__ (IronRuby's own Ruby code keeps state MRI keeps in C in such constants): the
+        /// code nested in the module reads the constant by name, as it reads a private one, while constant
+        /// reflection - const_defined?, const_get, const_source_location, remove_const, the visibility setters,
+        /// a qualified reference - finds nothing there. The helper itself is left out of the method lists.
+        /// </summary>
+        public void HiddenConstants1() {
+            TestOutput(@"
+module M
+  A = 1; class K; end
+  __hide_constant__ :A, :K
+  def self.read = [A, K.name]
+  class Inner; def read = A; end
+end
+module N; include M; end
+def t; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+p M.read, M::Inner.new.read, M.constants.sort
+p M.const_defined?(:A), M.const_defined?(:A, false), Object.const_defined?(""M::A""), N.const_defined?(:A)
+p t { M::A }, t { M.const_get(:A) }, t { M.const_get(:A, false) }, t { N.const_get(:A) }, M.const_source_location(:A)
+p t { M.send(:remove_const, :A) }, t { M.public_constant(:A) }, t { M.private_constant(:K) }, t { M.deprecate_constant(:A) }
+p defined?(M::A), M.send(:__hide_constant__, :A).equal?(M), M.read
+p M.private_methods.include?(:__hide_constant__), Module.private_instance_methods(false).include?(:__hide_constant__)
+", @"
+[1, ""M::K""]
+1
+[:Inner]
+false
+false
+false
+false
+""NameError: uninitialized constant M::A""
+""NameError: uninitialized constant M::A""
+""NameError: uninitialized constant M::A""
+""NameError: uninitialized constant N::A""
+nil
+""NameError: constant M::A not defined""
+""NameError: constant M::A not defined""
+""NameError: constant M::K not defined""
+""NameError: constant M::A not defined""
+nil
+true
+[1, ""M::K""]
+false
+false
+");
+        }
+
+        /// <summary>
+        /// What the prelude keeps for itself stays out of reflection, as MRI's C state does: its own constants
+        /// are hidden (Process::SPAWN_*, GC::LATEST_GC_INFO, Random::MT, IO::BOMS__, an Errno class's Message),
+        /// its instance variables use the hidden @__name__ form (Enumerator.new's generator, an
+        /// ArithmeticSequence, Set, Random, KeyError, SignalException, StopIteration, Fiber, WeakKeyMap), the
+        /// Enumerators without a block name their method (String#gsub, #upto, ObjectSpace.each_object), and
+        /// methods are owned where MRI owns them (Rational/Complex#dup and #clone are Numeric's, Float has its
+        /// #fdiv, #positive? and #negative?, Integer has Numeric's; nil, true and false have #===). Marshal
+        /// still writes a Set's table as "@hash" and a KeyError's receiver and key, as MRI does, and reads them back.
+        /// </summary>
+        public void PreludeHiddenState1() {
+            TestOutput(@"
+require 'ruby4'
+p Process.const_defined?(:SPAWN_DUP2), GC.const_defined?(:LATEST_GC_INFO), Enumerator.const_defined?(:SIZE_SAME_METHODS)
+p Random.const_defined?(:MT), IO.constants.include?(:BOMS__), String.constants, Binding.constants, Errno::ENOENT.constants
+p Errno::ENOENT.new.message, Class.new(Errno::EACCES).new('x').message
+p Enumerator.new {}.instance_variables, (1..10).step(2).instance_variables, 1.step(10, 3).instance_variables
+p Set[1].instance_variables, Set[1].dup.instance_variables, Random.new(1).instance_variables, Random.new(1).rand(100) == Random.new(1).rand(100)
+p KeyError.new('x', receiver: nil).instance_variables, KeyError.new('x', receiver: nil).receiver, (KeyError.new('x').key rescue $!)
+p SignalException.new('INT').instance_variables, SignalException.new('INT').signo, Interrupt.new.instance_variables
+p (begin; [].each.next; rescue StopIteration => e; e.instance_variables; end), Fiber.new {}.instance_variables
+p ObjectSpace::WeakKeyMap.new.instance_variables
+p 'abc'.gsub(/b/), 'abc'.gsub('b').each { 'X' }, 'a'.upto('c'), 'a'.upto('c', true), ObjectSpace.each_object(Class).inspect
+p Rational.instance_method(:dup).owner, Complex.instance_method(:clone).owner, (1r.clone(freeze: false) rescue $!), (1r.clone(freeze: 1) rescue $!)
+p Float.instance_method(:fdiv).owner, Float.instance_method(:positive?).owner, Integer.instance_method(:positive?).owner, 1.5.fdiv(2), -0.0.negative?
+p NilClass.instance_method(:===).owner, TrueClass.instance_method(:===).owner, nil === nil, false === nil, true === 1
+p (1..10).step(3).begin, 1.step(10, 3).end, ((1..10) % 3).inspect, ((1..10) % 3).to_a
+p Marshal.dump(Set[1]), Marshal.load(Marshal.dump(Set[1, 2])), Marshal.dump(KeyError.new('x', receiver: 1, key: 2))
+k = Marshal.load(Marshal.dump(KeyError.new('x', receiver: 1, key: 2))); p k.receiver, k.key, k.instance_variables
+", @"
+false
+false
+false
+false
+false
+[]
+[]
+[:Errno]
+""No such file or directory""
+""Permission denied - x""
+[]
+[]
+[]
+[]
+[]
+[]
+true
+[]
+nil
+#<ArgumentError: no key is available>
+[]
+2
+[]
+[]
+[]
+[]
+#<Enumerator: ""abc"":gsub(/b/)>
+""aXc""
+#<Enumerator: ""a"":upto(""c"")>
+#<Enumerator: ""a"":upto(""c"", true)>
+""#<Enumerator: ObjectSpace:each_object(Class)>""
+Numeric
+Numeric
+#<ArgumentError: can't unfreeze Rational>
+#<ArgumentError: unexpected value for freeze: Integer>
+Float
+Float
+Numeric
+0.75
+false
+NilClass
+TrueClass
+true
+false
+false
+1
+10
+""((1..10).%(3))""
+[1, 4, 7, 10]
+""\x04\bo:\bSet\x06:\n@hash}\x06i\x06TF""
+Set[1, 2]
+""\x04\bo:\rKeyError\t:\tmesgI\""\x06x\x06:\x06ET:\abt0:\rreceiveri\x06:\bkeyi\a""
+1
+2
+[]
+");
+        }
     }
 }

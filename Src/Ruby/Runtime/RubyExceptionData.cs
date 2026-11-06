@@ -511,7 +511,7 @@ namespace IronRuby.Runtime {
         /// (RubyExceptions.MakeMessage). The Ruby-level initialize it is about to be handed to -
         /// the prelude's SystemCallError#initialize - builds that same form from the detail, so it
         /// gets the detail alone, or the error would name itself twice: "No such file or directory
-        /// - No such file or directory - path". The class's strerror text is its Message constant.
+        /// - No such file or directory - path". The class's strerror text is its hidden @__message__ (see the prelude's Errno).
         /// </summary>
         private static object StripSystemCallErrorPrefix(RubyClass/*!*/ exceptionClass, object message) {
             var text = message as MutableString;
@@ -520,7 +520,7 @@ namespace IronRuby.Runtime {
             }
             for (RubyClass c = exceptionClass; c != null; c = c.SuperClass) {
                 object constant;
-                if (c.TryGetConstant(null, "Message", out constant)) {
+                if (c.Context.TryGetInstanceVariable(c, "@__message__", out constant)) {
                     var prefix = constant as MutableString;
                     if (prefix == null) {
                         return message;

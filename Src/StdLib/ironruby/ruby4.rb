@@ -53,18 +53,18 @@ class NoMatchingPatternKeyError < NoMatchingPatternError
   # KeyError's shape: the pattern's hash and the key it lacked, both optional.
   def initialize(message = nil, matchee: (no_matchee = true; nil), key: (no_key = true; nil))
     message.nil? ? super() : super(message)
-    @matchee = matchee unless no_matchee
-    @key = key unless no_key
+    @__matchee__ = matchee unless no_matchee
+    @__key__ = key unless no_key
   end
 
   def matchee
-    ::Kernel.raise ::ArgumentError, "no matchee is available" unless defined?(@matchee)
-    @matchee
+    ::Kernel.raise ::ArgumentError, "no matchee is available" unless defined?(@__matchee__)
+    @__matchee__
   end
 
   def key
-    ::Kernel.raise ::ArgumentError, "no key is available" unless defined?(@key)
-    @key
+    ::Kernel.raise ::ArgumentError, "no key is available" unless defined?(@__key__)
+    @__key__
   end
 
   # What a `case/in` or `=>` raises when the last thing that failed was a hash pattern's key.
@@ -803,7 +803,7 @@ module Enumerable
     # the readers the indexed path asks; Range#each itself uses the stored endpoints, so a
     # Range that overrides one of them - (1..3).dup can - has to be enumerated instead
     RANGE_READERS__ = [:begin, :end, :exclude_end?].map { |name| [name, ::Range.instance_method(name)] }.freeze
-    private_constant :ZipIntegerRange__, :RANGE_EACH__, :RANGE_READERS__
+    __hide_constant__ :ZipIntegerRange__, :RANGE_EACH__, :RANGE_READERS__
 
     def __zip_source__(other)
       return other if other.is_a?(Array)
@@ -1575,16 +1575,6 @@ module Math
 
 end
 
-class Integer
-  def positive?
-    self > 0
-  end unless method_defined?(:positive?)
-
-  def negative?
-    self < 0
-  end unless method_defined?(:negative?)
-end
-
 module Kernel
   private
 
@@ -1892,6 +1882,9 @@ class IO
       result
     end
   end
+  __hide_constant__ :PopenChild
+  def self.__popen_child__ = PopenChild
+  private_class_method :__popen_child__
 end
 
 class << IO
@@ -2029,7 +2022,7 @@ class << IO
     end
 
     io.instance_variable_set(:@__popen_pid__, pid)
-    io.extend(IO::PopenChild)
+    io.extend(::IO.__send__(:__popen_child__))
     # As for IO.pipe, MRI's popen IO is sync: what is written goes to the child rather
     # than sitting in a buffer until the IO is closed.
     io.sync = true
@@ -2196,11 +2189,11 @@ unless defined?(Fiber)
     MSG_RAISE = 4
     MSG_ERROR = 5
     MSG_KILL = 6
-    private_constant :MSG_RESUME, :MSG_TRANSFER, :MSG_YIELD, :MSG_RETURN,
+    __hide_constant__ :MSG_RESUME, :MSG_TRANSFER, :MSG_YIELD, :MSG_RETURN,
                      :MSG_RAISE, :MSG_ERROR, :MSG_KILL
 
     SCHEDULER_METHODS = [:block, :unblock, :kernel_sleep, :io_wait]
-    private_constant :KILL_TAG, :SCHEDULER_METHODS
+    __hide_constant__ :KILL_TAG, :SCHEDULER_METHODS
 
     # ---- helpers ---------------------------------------------------------
 
@@ -2283,27 +2276,27 @@ unless defined?(Fiber)
     end
 
     def __init_root__
-      @state = State.allocate
-      @state.__init_root__(self)
+      @__state__ = State.allocate
+      @__state__.__init_root__(self)
       self
     end
 
     def initialize(blocking: false, storage: true, &block)
       # what fiber_t_alloc raises; the handle is registered with its FiberCore only once
-      Fiber.__err__(::RuntimeError, "cannot initialize twice") if @state
-      @state = State.new(self, blocking: blocking, storage: storage, &block)
+      Fiber.__err__(::RuntimeError, "cannot initialize twice") if @__state__
+      @__state__ = State.new(self, blocking: blocking, storage: storage, &block)
     end
 
     def initialize_copy(other)
       # MRI copies a Fiber as an uninitialized handle, never as another owner of
       # the same execution stack or weak-handle registration.
-      @state = nil
+      @__state__ = nil
       self
     end
     private :initialize_copy
 
     def __state__
-      @state || Fiber.__err__(::FiberError, "uninitialized fiber")
+      @__state__ || Fiber.__err__(::FiberError, "uninitialized fiber")
     end
     def __storage_raw__; __state__.__storage_raw__; end
     def alive?; __state__.alive?; end
@@ -2736,7 +2729,7 @@ unless defined?(Fiber)
         target.__post__(kind, payload)
       end
     end
-    private_constant :State
+    __hide_constant__ :State
   end
 end
 
@@ -2851,11 +2844,13 @@ class Numeric
     end
   end
 
-  # A number is already what a copy of it would be.
+  # A number is already what a copy of it would be - Rational and Complex included, which
+  # MRI counts among its special objects too.
   def clone(freeze: nil)
-    unless freeze.nil? || freeze == true
-      ::Kernel.raise(::ArgumentError, "can't unfreeze #{self.class}")
+    unless freeze.nil? || freeze == true || freeze == false
+      ::Kernel.raise(::ArgumentError, "unexpected value for freeze: #{freeze.class}")
     end
+    ::Kernel.raise(::ArgumentError, "can't unfreeze #{self.class}") if freeze == false
     self
   end
 
@@ -3587,6 +3582,7 @@ class String
   NORMALIZATION_FORMS__ = {
     nfc: :FormC, nfd: :FormD, nfkc: :FormKC, nfkd: :FormKD
   }
+  __hide_constant__ :NORMALIZATION_FORMS__
 
   def __normalization_form__(form)
     name = NORMALIZATION_FORMS__[form]
@@ -3599,6 +3595,7 @@ class String
   TRANSCODED_UNICODE_ENCODINGS__ = [
     ::Encoding::UTF_16BE, ::Encoding::UTF_16LE, ::Encoding::UTF_32BE, ::Encoding::UTF_32LE, ::Encoding::GB18030
   ]
+  __hide_constant__ :TRANSCODED_UNICODE_ENCODINGS__
 
   def __require_unicode__
     unless [::Encoding::UTF_8, ::Encoding::US_ASCII].include?(encoding) || TRANSCODED_UNICODE_ENCODINGS__.include?(encoding)
@@ -3648,6 +3645,7 @@ class String
     ::Encoding::UTF_8, ::Encoding::US_ASCII, ::Encoding::UTF_16LE, ::Encoding::UTF_16BE,
     ::Encoding::UTF_32LE, ::Encoding::UTF_32BE
   ]
+  __hide_constant__ :UNICODE_ENCODINGS__
 
   # Segmentation is the CLR's, which speaks UTF-16. Anything that is not a
   # Unicode encoding - BINARY, the dummy encodings, the legacy code pages -
@@ -3781,8 +3779,21 @@ class Numeric
   alias :imaginary :imag if method_defined?(:imag)
 end
 
+# Float has its own #fdiv (one method with #quo) and sign predicates in MRI; Integer has
+# Numeric's.
 class Float
+  def fdiv(other)
+    self / other
+  end
   alias :quo :fdiv
+
+  def positive?
+    self > 0
+  end
+
+  def negative?
+    self < 0
+  end
 end
 
 class Float
@@ -3969,10 +3980,11 @@ module Errno
   # IronRuby::Runtime::RubyErrno (C#), which the CLR-backed classes read their messages
   # from too, so a number and its text are the ones MRI has on the same platform. This
   # binds the names the C# side registers no class for, gives the C#-registered classes
-  # their Errno and Message constants -- they are CLR-backed and carry no number, so
-  # without the constant Errno::ENOENT::Errno would resolve up to the Errno module
-  # itself -- and supplies the default message for SystemCallError#initialize below.
-  # MRI has no such constants, so they are hidden ivars of the module, read through
+  # their Errno constant -- they are CLR-backed and carry no number, so without the
+  # constant Errno::ENOENT::Errno would resolve up to the Errno module itself -- and
+  # supplies the default message for SystemCallError#initialize below. Each class keeps
+  # its strerror text in a hidden @__message__ (RubyExceptionData reads it too). MRI has
+  # no such constants, so the tables are hidden ivars of the module, read through
   # Errno.__errno_table__ and Errno.__errno_classes__.
   @__errno_table__ = {}
   @__errno_classes__ = {}
@@ -3986,6 +3998,7 @@ module Errno
   # them on these classes yet: this runs before any program code.
   const_set_on = ::Module.instance_method(:const_set)
   const_defined_on = ::Module.instance_method(:const_defined?)
+  ivar_set_on = ::Kernel.instance_method(:instance_variable_set)
 
   missing = []
   __ir_errno_table__.each do |name, errno, message|
@@ -4006,7 +4019,7 @@ module Errno
       # const_defined? without the second argument would find the enclosing Errno
       # module through the lexical scope, so restrict the lookup to the class.
       const_set_on.bind_call(klass, :Errno, errno) unless const_defined_on.bind_call(klass, :Errno, false)
-      const_set_on.bind_call(klass, :Message, message) unless const_defined_on.bind_call(klass, :Message, false)
+      ivar_set_on.bind_call(klass, :@__message__, message)
     else
       klass = Class.new(SystemCallError)
       const_set(name, klass)
@@ -4015,7 +4028,7 @@ module Errno
       # sites, so each question binds a rule of its own. So would const_set; constant
       # assignment is no method call, and binds nothing.
       klass::Errno = errno
-      klass::Message = message
+      ivar_set_on.bind_call(klass, :@__message__, message)
     end
     @__errno_classes__[errno] = klass
   end
@@ -4058,7 +4071,8 @@ class SystemCallError
   # one that sets Errno itself - says what strerror says for it.
   def self.__default_message__(klass, errno)
     while klass && klass < ::SystemCallError
-      return klass.const_get(:Message) if klass.const_defined?(:Message, false)
+      message = klass.instance_variable_get(:@__message__)
+      return message if message
       klass = klass.superclass
     end
     return "unknown error" if errno.nil?
@@ -4556,7 +4570,7 @@ class Enumerator
       if args.size > 1
         ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
       end
-      @generator = block
+      @__generator__ = block
       @__size__ = ::Enumerator.__feasible_size__(args[0]) unless args.empty?
       @__initialized__ = true
       self
@@ -4580,10 +4594,10 @@ class Enumerator
     # with the caller's frame - String#scan sets $~ there - and hands the rest to this.
     def __ir_each_impl__(*args, &block)
       unless args.empty?
-        if @generator
+        if @__generator__
           # Enumerator.new { |y, *extra| }: the arguments follow the yielder.  (Such an
           # enumerator still carries an empty built-in target, so this comes first.)
-          generator = @generator
+          generator = @__generator__
           size = @__size__
           unless block
             return ::Enumerator.new(size) { |y| generator.call(y, *args) }
@@ -4601,10 +4615,10 @@ class Enumerator
       end
 
       return self unless block
-      if @generator
+      if @__generator__
         # The generator block's value is what #each answers, and so what a finished
         # #next reports as StopIteration#result.
-        @generator.call(Yielder.new(&block))
+        @__generator__.call(Yielder.new(&block))
       else
         __each_without_generator__(&block)
       end
@@ -4696,7 +4710,7 @@ class Enumerator
     info = __enum_size_info__
     return __size_from_info__(info[0], info[1], info[2]) if info
     target = __enum_target__
-    return __size_from_target__(target[0], target[1], target[2]) if target && !@generator
+    return __size_from_target__(target[0], target[1], target[2]) if target && !@__generator__
     nil
   end
 
@@ -4784,7 +4798,7 @@ class Enumerator
     :each_with_index, :each_with_object, :each_char, :each_byte, :each_codepoint,
     :filter_map
   ].freeze
-  private_constant :SIZE_SAME_METHODS
+  __hide_constant__ :SIZE_SAME_METHODS
   # Not in the list, and so of unknown size, as in MRI: #each_line (the lines are
   # not counted until they are read), and the searches - #find_index, #find,
   # #detect, #take_while, #drop_while - which answer one result, not one per element.
@@ -4859,10 +4873,10 @@ class Enumerator
     if (info = @__inspect__)
       return "#<#{self.class}: #{__inspect_detail__(*info)}>"
     end
-    target = (@generator ? nil : __enum_target__)
+    target = (@__generator__ ? nil : __enum_target__)
     unless target
-      if @generator
-        return "#<#{self.class}: #<Enumerator::Generator:#{'0x%016x' % (@generator.object_id * 2)}>:each>"
+      if @__generator__
+        return "#<#{self.class}: #<Enumerator::Generator:#{'0x%016x' % (@__generator__.object_id * 2)}>:each>"
       end
       # A C#-built enumerator over a delegate keeps only its size descriptor,
       # which for these names the method it came from.
@@ -5046,7 +5060,7 @@ class Enumerator
     @__has_feed__ = false
     # Unwind the abandoned fiber so its ensure blocks run and its thread exits.
     fiber.kill if fiber && fiber.alive?
-    target = (@generator ? nil : __enum_target__)
+    target = (@__generator__ ? nil : __enum_target__)
     receiver = target && target[0]
     receiver.rewind if receiver && receiver.respond_to?(:rewind)
     self
@@ -5064,7 +5078,7 @@ class Enumerator
       unless block
         ::Kernel.raise(::ArgumentError, "tried to call lazy new without a block")
       end
-      @generator = lambda { |y, *args| obj.each(*args) { |*values| block.call(y, *values) } }
+      @__generator__ = lambda { |y, *args| obj.each(*args) { |*values| block.call(y, *values) } }
       @__size__ = size
       __set_inspect__(obj, :each)
       self
@@ -5078,7 +5092,7 @@ class Enumerator
         return @__deferred__.call(block)
       end
       return super(&block) if args.empty?
-      generator = @generator
+      generator = @__generator__
       lazy = Lazy.__raw__(@__size__) { |y| generator.call(y, *args) }
       block ? lazy.each(&block) : lazy
     end
@@ -5097,7 +5111,7 @@ class Enumerator
     end
 
     def __lazy_init__(size, &generator)
-      @generator = generator
+      @__generator__ = generator
       @__size__ = size
       self
     end
@@ -5133,7 +5147,7 @@ class Enumerator
       if (info = @__inspect__)
         return "#<#{self.class}: #{__inspect_detail__(*info)}>"
       end
-      return "#<#{self.class}: uninitialized>" if @generator.nil?
+      return "#<#{self.class}: uninitialized>" if @__generator__.nil?
       "#<#{self.class}: ...>"
     end
     alias :to_s :inspect
@@ -5602,7 +5616,7 @@ class Enumerator
       end
     end
   end
-  private_constant :LazyInspect
+  __hide_constant__ :LazyInspect
   Lazy.prepend(LazyInspect)
 
   # --- Enumerator::Chain -------------------------------------------------
@@ -5790,7 +5804,7 @@ class Enumerator
   # the block, until the block raises StopIteration.
   class Producer
     STATES = ::ObjectSpace::WeakMap.new
-    private_constant :STATES
+    __hide_constant__ :STATES
 
     def self.__states__
       STATES
@@ -5855,12 +5869,12 @@ end
 
 class StopIteration
   def __set_result__(value)
-    @result = value
+    @__result__ = value
     self
   end
 
   def result
-    @result
+    @__result__
   end
 end
 
@@ -6262,7 +6276,8 @@ class String
   alias :__ir_upto__ :upto
   private :__ir_upto__
 
-  def upto(stop, exclusive = false, &block)
+  def upto(stop, exclusive = (no_exclusive = true; false), &block)
+    given = stop
     unless stop.is_a?(::String)
       converted = (!stop.is_a?(::Symbol) && stop.respond_to?(:to_str)) ? stop.to_str : nil
       unless converted.is_a?(::String)
@@ -6276,7 +6291,8 @@ class String
         "incompatible character encodings: #{encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : encoding} and #{stop.encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : stop.encoding}")
     end
 
-    return to_enum(:upto, stop, exclusive) unless block
+    # the Enumerator names the arguments as given, as MRI's RETURN_ENUMERATOR does
+    return (no_exclusive ? to_enum(:upto, given) : to_enum(:upto, given, exclusive)) unless block
 
     # A pair of decimal strings counts like Integer#upto, with the receiver's
     # width kept: "08".upto("11") answers "08", "09", "10", "11".
@@ -6333,7 +6349,9 @@ class Enumerator
   # at exactly 12.7), and because the infinity and NaN corners have answers a
   # naive loop does not reach.
   class ArithmeticSequence < ::Enumerator
-    attr_reader :begin, :end, :step
+    def begin = @__begin__
+    def end = @__end__
+    def step = @__step__
 
     # floor that leaves NaN and Infinity alone, the way C's floor() does.
     # Float#floor raises FloatDomainError for them.
@@ -6488,12 +6506,12 @@ class Enumerator
     end
 
     def __arith_init__(from, to, by, exclude_end, source, inspect_str = nil)
-      @begin = from
-      @end = to
-      @step = by
-      @exclude_end = exclude_end
-      @source = source
-      @inspect_str = inspect_str
+      @__begin__ = from
+      @__end__ = to
+      @__step__ = by
+      @__exclude_end__ = exclude_end
+      @__source__ = source
+      @__inspect_str__ = inspect_str
       initialize(nil) do |y|
         __arith_each__ { |v| y << v }
       end
@@ -6501,7 +6519,7 @@ class Enumerator
     private :__arith_init__
 
     def exclude_end?
-      @exclude_end
+      @__exclude_end__
     end
 
     def first(n = nil)
@@ -6523,7 +6541,7 @@ class Enumerator
     end
 
     def __arith_each__(&block)
-      ArithmeticSequence.__step_each__(@begin, @end, @step, @exclude_end, &block)
+      ArithmeticSequence.__step_each__(@__begin__, @__end__, @__step__, @__exclude_end__, &block)
       self
     end
     private :__arith_each__
@@ -6537,12 +6555,12 @@ class Enumerator
     alias :force :to_a
 
     def size
-      return ::Float::INFINITY if @end.nil? && @step != 0
-      ArithmeticSequence.__interval_step_size__(@begin, @end, @step, @exclude_end)
+      return ::Float::INFINITY if @__end__.nil? && @__step__ != 0
+      ArithmeticSequence.__interval_step_size__(@__begin__, @__end__, @__step__, @__exclude_end__)
     end
 
     def last(n = nil)
-      if @end.nil?
+      if @__end__.nil?
         ::Kernel.raise(::RangeError, "cannot get the last element of endless arithmetic sequence")
       end
       values = to_a
@@ -6561,8 +6579,8 @@ class Enumerator
     end
 
     def inspect
-      return @inspect_str if @inspect_str
-      "((#{@source.inspect}).%(#{@step.inspect}))"
+      return @__inspect_str__ if @__inspect_str__
+      "((#{@__source__.inspect}).%(#{@__step__.inspect}))"
     end
     alias :to_s :inspect
   end
@@ -7724,7 +7742,7 @@ module Process
     ftype goto if md mkdir mklink move path pause popd prompt pushd rd rem ren rename
     rmdir set setlocal shift start time title type ver verify vol
   ].freeze
-  private_constant :SPAWN_OPTION_KEYS, :SPAWN_DUP2, :SPAWN_CLOSE, :SPAWN_OPEN, :SPAWN_CHDIR,
+  __hide_constant__ :SPAWN_OPTION_KEYS, :SPAWN_DUP2, :SPAWN_CLOSE, :SPAWN_OPEN, :SPAWN_CHDIR,
     :SPAWN_O_RDONLY, :SPAWN_O_WRONLY, :SPAWN_O_RDWR, :SPAWN_O_CREAT, :SPAWN_O_TRUNC, :SPAWN_O_APPEND,
     :SPAWN_SHELL_META, :SPAWN_SHELL_BUILTINS, :SPAWN_WINDOWS, :SPAWN_CMD_BUILTINS
 
@@ -8350,12 +8368,12 @@ module Process
   WINDOWS_NOT_IMPLEMENTED_METHODS__ = [:getrlimit, :setrlimit, :getpriority, :setpriority,
     :getpgid, :setpgid, :getsid, :setsid, :getpgrp, :setpgrp,
     :groups, :groups=, :initgroups, :maxgroups, :maxgroups=,
-    :uid=, :gid=, :euid=, :egid=].freeze unless const_defined?(:WINDOWS_NOT_IMPLEMENTED_METHODS__)
-  unless const_defined?(:NOT_IMPLEMENTED_METHODS)
+    :uid=, :gid=, :euid=, :egid=].freeze unless defined?(WINDOWS_NOT_IMPLEMENTED_METHODS__)
+  unless defined?(NOT_IMPLEMENTED_METHODS)
     NOT_IMPLEMENTED_METHODS = (::File::ALT_SEPARATOR == "\\" ?
       [:daemon, :fork, :_fork] + WINDOWS_NOT_IMPLEMENTED_METHODS__ : [:daemon, :fork, :_fork]).freeze
   end
-  private_constant :WINDOWS_NOT_IMPLEMENTED_METHODS__, :NOT_IMPLEMENTED_METHODS
+  __hide_constant__ :WINDOWS_NOT_IMPLEMENTED_METHODS__, :NOT_IMPLEMENTED_METHODS
 
   if ::File::ALT_SEPARATOR == "\\"
     WINDOWS_NOT_IMPLEMENTED_METHODS__.each do |name|
@@ -8395,9 +8413,9 @@ module Process
     "TIMES_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1.0e-2,
     "TIMES_BASED_CLOCK_MONOTONIC" => 1.0e-2,
     "MACH_ABSOLUTE_TIME_BASED_CLOCK_MONOTONIC" => 1.0e-9,
-  }.freeze unless const_defined?(:CLOCK_RESOLUTIONS__)
+  }.freeze unless defined?(CLOCK_RESOLUTIONS__)
   # not a clock: kept out of Process.constants, which ruby/spec feeds to clock_gettime one by one
-  private_constant :CLOCK_RESOLUTIONS__
+  __hide_constant__ :CLOCK_RESOLUTIONS__
 
   def self.respond_to?(name, include_all = false)
     return false if NOT_IMPLEMENTED_METHODS.include?(name.to_sym)
@@ -8501,8 +8519,8 @@ class SignalException
       unless name
         ::Kernel.raise(::ArgumentError, "invalid signal number (#{signal})")
       end
-      @signo = signal
-      @signm = no_message ? "SIG#{name}" : message.to_s
+      @__signo__ = signal
+      @__signm__ = no_message ? "SIG#{name}" : message.to_s
     when ::String, ::Symbol
       unless no_message
         ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 2, expected 1)")
@@ -8512,24 +8530,24 @@ class SignalException
       unless number
         ::Kernel.raise(::ArgumentError, "unsupported signal 'SIG#{name}'")
       end
-      @signo = number
-      @signm = "SIG#{name}"
+      @__signo__ = number
+      @__signm__ = "SIG#{name}"
     else
       ::Kernel.raise(::ArgumentError, "bad signal type #{signal.class}")
     end
 
-    super(@signm)
+    super(@__signm__)
   end
 
   # MRI names the signal both ways round: #signm is "SIGTERM" and #signo is 15.
   # A SignalException the runtime raises itself is built from its message alone,
   # so both still answer from the message when #initialize did not run.
   def signm
-    defined?(@signm) ? @signm : message
+    defined?(@__signm__) ? @__signm__ : message
   end
 
   def signo
-    return @signo if defined?(@signo)
+    return @__signo__ if defined?(@__signo__)
     ::Signal.list[message.to_s.sub(/\ASIG/, "")]
   end
 end
@@ -8538,9 +8556,9 @@ class Interrupt
   # Interrupt is always SIGINT, and unlike its superclass it takes a plain
   # optional message.
   def initialize(message = nil)
-    @signo = ::Signal.list["INT"]
-    @signm = message.nil? ? "Interrupt" : message.to_s
-    __signal_exception_super__(@signm)
+    @__signo__ = ::Signal.list["INT"]
+    @__signm__ = message.nil? ? "Interrupt" : message.to_s
+    __signal_exception_super__(@__signm__)
   end
 
   private def __signal_exception_super__(message)
@@ -8549,7 +8567,7 @@ class Interrupt
 
   # also for one the runtime raised for a SIGINT without going through #initialize
   def signo
-    defined?(@signo) ? @signo : ::Signal.list["INT"]
+    defined?(@__signo__) ? @__signo__ : ::Signal.list["INT"]
   end
 end
 
@@ -8558,8 +8576,9 @@ unless defined?(Random)
   class Random
     # MRI's generator is MT19937 (see MersenneTwister.cs), seeded and consumed exactly as
     # random.c does, so a given seed produces the same numbers, bytes and marshal data here.
-    MT = System::Type.get_type("IronRuby.Builtins.MersenneTwister, IronRuby.Libraries").to_class
-    private_constant :MT
+    @__mt_class__ = System::Type.get_type("IronRuby.Builtins.MersenneTwister, IronRuby.Libraries").to_class
+    def self.__mt_class__ = @__mt_class__
+    private_class_method :__mt_class__
 
     def initialize(seed = Random.new_seed)
       # A seed is an Integer however it was given: Random.new(42.5) and Random.new(42)
@@ -8567,44 +8586,44 @@ unless defined?(Random)
       unless seed.respond_to?(:to_int)
         ::Kernel.raise(::TypeError, "no implicit conversion of #{seed.class} into Integer")
       end
-      @seed = seed.to_int
-      @mt = MT.new(@seed)
+      @__seed__ = seed.to_int
+      @__mt__ = ::Random.__send__(:__mt_class__).new(@__seed__)
     end
 
     def initialize_copy(other)
       super
-      @mt = other.instance_variable_get(:@mt).copy
+      @__mt__ = other.instance_variable_get(:@__mt__).copy
       self
     end
 
-    attr_reader :seed
+    def seed = @__seed__
 
     # rand_mt_state / rand_mt_left: the state vector as one Integer, and how many words
     # of it are still to be handed out.
     def state
-      @mt.get_state
+      @__mt__.get_state
     end
     private :state
 
     def left
-      @mt.left
+      @__mt__.left
     end
     private :left
 
     def ==(other)
       other.is_a?(::Random) && self.class == other.class &&
-        @mt.state_equals(other.instance_variable_get(:@mt)) && seed == other.seed
+        @__mt__.state_equals(other.instance_variable_get(:@__mt__)) && seed == other.seed
     end
 
     def rand(limit = nil)
       case limit
-      when nil then @mt.genrand_real(true)
+      when nil then @__mt__.genrand_real(true)
       when ::Range then __rand_in_range__(limit)
       when ::Float
         unless limit > 0
           ::Kernel.raise(::ArgumentError, "invalid argument - #{limit}")
         end
-        @mt.genrand_real(true) * limit
+        @__mt__.genrand_real(true) * limit
       else
         n = limit.to_int
         unless n > 0
@@ -8616,7 +8635,7 @@ unless defined?(Random)
 
     # An Integer uniformly in 0...n: limited_rand on n - 1.
     def __rand_below__(n)
-      @mt.limited_rand(n - 1)
+      @__mt__.limited_rand(n - 1)
     end
     private :__rand_below__
 
@@ -8638,26 +8657,26 @@ unless defined?(Random)
         width = span.to_f
         return nil if width < 0 || (width == 0 && range.exclude_end?)
         # random_real: [0, 1) for an exclusive range, [0, 1] for an inclusive one.
-        first + @mt.genrand_real(range.exclude_end?) * width
+        first + @__mt__.genrand_real(range.exclude_end?) * width
       end
     end
     private :__rand_in_range__
 
     def bytes(count)
-      @mt.genrand_bytes(count.to_int).to_a.pack("C*")
+      @__mt__.genrand_bytes(count.to_int).to_a.pack("C*")
     end
 
     # rand_mt_dump: [state, left, seed], which is what MRI writes and reads back.
     def marshal_dump
-      [state, left, @seed]
+      [state, left, @__seed__]
     end
     private :marshal_dump
 
     def marshal_load(data)
       state, left, seed = data
-      @seed = seed
-      @mt = MT.new(0)
-      @mt.set_state(state, left)
+      @__seed__ = seed
+      @__mt__ = ::Random.__send__(:__mt_class__).new(0)
+      @__mt__.set_state(state, left)
       self
     end
     private :marshal_load
@@ -8798,14 +8817,14 @@ module ObjectSpace
         @object.equal?(other.object) || @object.eql?(other.object)
       end
     end
-    private_constant :Key
+    __hide_constant__ :Key
 
     def initialize
-      @table = {}
+      @__table__ = {}
     end
 
     def [](key)
-      entry = @table[Key.new(key)]
+      entry = @__table__[Key.new(key)]
       entry && entry[1]
     end
 
@@ -8817,13 +8836,13 @@ module ObjectSpace
       end
       # an equal key already there is replaced by this one, as in MRI
       k = Key.new(key)
-      @table.delete(k)
-      @table[k] = [key, value]
+      @__table__.delete(k)
+      @__table__[k] = [key, value]
       value
     end
 
     def delete(key)
-      entry = @table.delete(Key.new(key))
+      entry = @__table__.delete(Key.new(key))
       if entry
         entry[1]
       elsif block_given?
@@ -8833,21 +8852,21 @@ module ObjectSpace
 
     # The key already in the map that is equal to the one given.
     def getkey(key)
-      entry = @table[Key.new(key)]
+      entry = @__table__[Key.new(key)]
       entry && entry[0]
     end
 
     def key?(key)
-      @table.key?(Key.new(key))
+      @__table__.key?(Key.new(key))
     end
 
     def clear
-      @table.clear
+      @__table__.clear
       self
     end
 
     def inspect
-      "#<ObjectSpace::WeakKeyMap:0x#{(object_id << 1).to_s(16).rjust(16, '0')} size=#{@table.size}>"
+      "#<ObjectSpace::WeakKeyMap:0x#{(object_id << 1).to_s(16).rjust(16, '0')} size=#{@__table__.size}>"
     end
   end unless const_defined?(:WeakKeyMap)
 end
@@ -8894,6 +8913,7 @@ class Binding
   KEYWORD_LOCAL_NAMES__ = %w[BEGIN END alias and begin break case class def defined? do else
     elsif end ensure for if in module next not or redo rescue retry return super then undef
     unless until when while yield].freeze # :nodoc:
+  __hide_constant__ :KEYWORD_LOCAL_NAMES__
 
   def local_variable_defined?(name)
     name = __check_lvar_name__(name)
@@ -9856,6 +9876,7 @@ class IO
   # rest of IO.open's own options, which #encode would reject.
   DECORATOR_OPTIONS__ = [:universal_newline, :cr_newline, :crlf_newline, :lf_newline, :newline].freeze
   ENCODE_OPTIONS__ = ([:invalid, :undef, :replace, :fallback, :xml] + DECORATOR_OPTIONS__).freeze
+  __hide_constant__ :DECORATOR_OPTIONS__, :ENCODE_OPTIONS__
 
   def __encode_options__
     given = (__conversion_options__ rescue nil)
@@ -10020,7 +10041,7 @@ class IO
         ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 1..3)")
       end
       unless block
-        return ::Enumerator.new { |y| foreach(name, *args, **options) { |l| y << l } }
+        return to_enum(:foreach, name, *args, **options) { nil }
       end
       chomp = options.key?(:chomp) ? { chomp: options[:chomp] } : {}
       ::File.open(name, **options.reject { |k, _| k == :chomp }) do |io|
@@ -10114,6 +10135,7 @@ class IO
     ["\xFE\xFF".b, "UTF-16BE"],
     ["\xFF\xFE".b, "UTF-16LE"],
   ]
+  __hide_constant__ :BOMS__
 
   def set_encoding_by_bom
     unless binmode?
@@ -10156,6 +10178,7 @@ class IO
 
   # seek and sysseek take the whence as a symbol as well as an Integer.
   SEEK_WHENCE__ = { CUR: 1, SET: 0, END: 2, DATA: 3, HOLE: 4 }.freeze
+  __hide_constant__ :SEEK_WHENCE__
 
   def __seek_whence__(whence)
     return whence unless whence.is_a?(::Symbol)
@@ -10221,7 +10244,7 @@ class IO
   end unless method_defined?(:ungetbyte)
 
   def each_codepoint
-    return ::Enumerator.new { |y| each_codepoint { |c| y << c } } unless block_given?
+    return to_enum(:each_codepoint) { nil } unless block_given?
     each_char { |c| yield c.ord }
     self
   end unless method_defined?(:each_codepoint)
@@ -10723,20 +10746,21 @@ end
 
 # KeyError gained #receiver and #key in 2.5; Hash#fetch and friends set them.
 class KeyError
-  def initialize(message = nil, receiver: nil, key: nil)
-    @__receiver = receiver
-    @__key = key
+  # Either one given, nil included, is answered; one not given is an ArgumentError.
+  def initialize(message = nil, receiver: (no_receiver = true; nil), key: (no_key = true; nil))
+    @__receiver__ = receiver unless no_receiver
+    @__key__ = key unless no_key
     super(message)
   end
 
   def receiver
-    raise ArgumentError, "no receiver is available" if @__receiver.nil?
-    @__receiver
+    raise ArgumentError, "no receiver is available" unless defined?(@__receiver__)
+    @__receiver__
   end
 
   def key
-    raise ArgumentError, "no key is available" if @__key.nil?
-    @__key
+    raise ArgumentError, "no key is available" unless defined?(@__key__)
+    @__key__
   end
 end
 
@@ -11348,7 +11372,7 @@ class Range
   # instead of converging near it - the difference between answering -0.2 and
   # answering -0.19999999999999998 - and reaches infinity in 64 steps.
   DOUBLE_MIN_INT64 = -9223372036854775808
-  private_constant :DOUBLE_MIN_INT64 rescue nil
+  __hide_constant__ :DOUBLE_MIN_INT64 rescue nil
 
   def __double_as_int64__(d)
     i = ::System::BitConverter.DoubleToInt64Bits(d)
@@ -11479,7 +11503,7 @@ class Range
 
   def %(n)
     seq = step(n)
-    seq.instance_variable_set(:@inspect_str, "((#{inspect}).%(#{n.inspect}))") if seq.is_a?(::Enumerator::ArithmeticSequence)
+    seq.instance_variable_set(:@__inspect_str__, "((#{inspect}).%(#{n.inspect}))") if seq.is_a?(::Enumerator::ArithmeticSequence)
     seq
   end
 
@@ -11679,7 +11703,7 @@ module GC
     immediate_sweep: false, state: :none, weak_references_count: 0,
     retained_weak_references_count: 0
   }.freeze
-  private_constant :LATEST_GC_INFO
+  __hide_constant__ :LATEST_GC_INFO
 
   # gc.c's layout constants and compile options. The object sizes are MRI's on a 64-bit
   # build, the sizes ObjectSpace.memsize_of counts in; the CLR collector is generational
@@ -11721,7 +11745,7 @@ module GC
                       heap_eden_slots total_allocated_pages force_major_gc_count
                       force_incremental_marking_finish_count total_allocated_objects
                       total_freed_objects].freeze
-  private_constant :STAT_HEAP_KEYS
+  __hide_constant__ :STAT_HEAP_KEYS
 
   def self.__stat_heap_values__(index, sizes)
     slot_size = 40 << index
@@ -12069,7 +12093,7 @@ end
 module Ruby
   class Box < ::Module
     DISABLED = "Ruby Box is disabled. Set RUBY_BOX=1 environment variable to use Ruby::Box."
-    private_constant :DISABLED
+    __hide_constant__ :DISABLED
 
     class Entry
     end

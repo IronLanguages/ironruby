@@ -849,6 +849,8 @@ namespace IronRuby.Tests {
                 InstanceMethods_NotInherited1,
                 MethodLists_Unlisted1,
                 ConstantPaths1,
+                HiddenConstants1,
+                PreludeHiddenState1,
                 Scenario_MainSingleton,
                 Time_LoadZone1,
                 Time_DumpLoadedZone1,

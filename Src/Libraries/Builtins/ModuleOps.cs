@@ -1291,9 +1291,10 @@ namespace IronRuby.Builtins {
                 bool found = inherit
                     ? owner.TryResolveConstant(null, name, out value) && (i == 0 || IsVisibleFromScope(owner, name))
                     : owner.TryGetConstant(null, name, out value);
+                found = found && !IsHiddenConstant(owner, name, inherit);
 
                 if (!found && lookupObject && !owner.IsObjectClass) {
-                    found = context.ObjectClass.TryResolveConstant(null, name, out value);
+                    found = context.ObjectClass.TryResolveConstant(null, name, out value) && !IsHiddenConstant(context.ObjectClass, name, true);
                 }
                 lookupObject = false;
 
@@ -1328,7 +1329,9 @@ namespace IronRuby.Builtins {
                 owner = path.Enter(i, owner, value);
                 string name = path[i];
 
-                if (inherit && (i == 0 || IsVisibleFromScope(owner, name))) {
+                if (IsHiddenConstant(owner, name, inherit)) {
+                    value = ConstantMissing(owner, name);
+                } else if (inherit && (i == 0 || IsVisibleFromScope(owner, name))) {
                     value = RubyUtils.GetConstant(scope.GlobalScope, owner, name, lookupObject);
                 } else if (!inherit && owner.TryGetConstant(scope.GlobalScope, name, out value)) {
                     if (owner.IsDeprecatedConstant(name)) {
@@ -1359,7 +1362,7 @@ namespace IronRuby.Builtins {
             bool deprecated = self.IsDeprecatedConstant(constantName);
 
             object value;
-            if (!self.TryRemoveConstant(constantName, out value)) {
+            if (self.IsHiddenConstant(constantName) || !self.TryRemoveConstant(constantName, out value)) {
                 if (!Tokenizer.IsConstantName(constantName)) {
                     throw RubyExceptions.CreateNameError("'{0}' is not allowed as a constant variable name", constantName);
                 }
@@ -1381,6 +1384,29 @@ namespace IronRuby.Builtins {
                 self.SetConstantVisibility(name, true);
             }
             return self;
+        }
+
+        /// <summary>
+        /// IronRuby's Ruby code (the prelude, and the libraries it implements in Ruby) keeps state MRI keeps in C in
+        /// constants of its own: this makes them private and hides them from constant reflection, so that
+        /// const_defined?, const_get and the rest answer as MRI's do. See <see cref="RubyModule.HideConstant"/>.
+        /// </summary>
+        [RubyMethod("__hide_constant__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyModule/*!*/ HideConstant(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
+            [NotNull]params object[]/*!*/ constantNames) {
+            foreach (var name in ConstantNamesToChange(stringCast, self, "__hide_constant__", constantNames)) {
+                self.HideConstant(name);
+            }
+            return self;
+        }
+
+        private static bool IsHiddenConstant(RubyModule/*!*/ owner, string/*!*/ name, bool inherit) {
+            if (!inherit) {
+                return owner.IsHiddenConstant(name);
+            }
+            using (owner.Context.ClassHierarchyLocker()) {
+                return owner.IsHiddenConstantInAncestors(name);
+            }
         }
 
         // public since Ruby 3.0
@@ -1418,6 +1444,11 @@ namespace IronRuby.Builtins {
             var names = new string[constantNames.Length];
             for (int i = 0; i < names.Length; i++) {
                 names[i] = Protocols.CastToSymbol(stringCast, constantNames[i]);
+                // a hidden constant is not there, except to __hide_constant__ itself (a prelude loaded again)
+                if (methodName != "__hide_constant__" && self.IsHiddenConstant(names[i])) {
+                    throw RubyExceptions.CreateNameError(String.Format("constant {0}::{1} not defined",
+                        self.Name, names[i]));
+                }
             }
             return names;
         }
@@ -1566,7 +1597,7 @@ namespace IronRuby.Builtins {
                 return null;
             }
             RubyModule definingModule = FindConstantOwner(context, scope, owner, lastName, inherit, lookupObject);
-            if (definingModule == null) {
+            if (definingModule == null || definingModule.IsHiddenConstant(lastName)) {
                 return null;
             }
 

@@ -3454,8 +3454,9 @@ namespace IronRuby.Builtins {
             if (block != null) {
                 return BlockReplaceAll(tosConversion, scope, block, self, ToPattern(stringTryCast, pattern));
             }
-            scope.MarkCaptured();
-            return new Enumerator((_, b) => BlockReplaceAll(tosConversion, scope, b, self, ToPattern(stringTryCast, pattern)));
+            // named by the call, as MRI's is: #each calls #gsub again, from the frame that called #each,
+            // which is where the $~ of each match goes
+            return new Enumerator(self, "gsub", pattern);
         }
 
         [RubyMethod("gsub!")]
@@ -3466,8 +3467,7 @@ namespace IronRuby.Builtins {
             if (block != null) {
                 return BlockReplaceInPlace(tosConversion, scope, block, self, ToPattern(stringTryCast, pattern), true);
             }
-            scope.MarkCaptured();
-            return new Enumerator((_, b) => BlockReplaceInPlace(tosConversion, scope, b, self, ToPattern(stringTryCast, pattern), true));
+            return new Enumerator(self, "gsub!", pattern);
         }
 
         // MRI's get_pat_quoted: a Regexp as it is, a String (or what #to_str makes one) as a
@@ -4884,7 +4884,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("upto")]
         public static Enumerator/*!*/ UpTo(RangeOps.EachStorage/*!*/ storage, MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ endString) {
-            return new Enumerator((_, block) => UpTo(storage, block, self, endString));
+            return new Enumerator(self, "upto", endString);
         }
 
         [RubyMethod("upto")]

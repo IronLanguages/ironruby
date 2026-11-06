@@ -292,7 +292,7 @@ namespace IronRuby.Builtins {
         // without -X:ObjectSpace - is asked for with an error rather than an empty walk, as in JRuby.
         [RubyMethod("each_object", RubyMethodAttributes.PublicSingleton)]
         public static Enumerator/*!*/ GetEachObjectEnumerator(RubyModule/*!*/ self, [Optional]RubyModule theModule) {
-            return new Enumerator((_, block) => EachObject(block, self, theModule));
+            return theModule != null ? new Enumerator(self, "each_object", theModule) : new Enumerator(self, "each_object");
         }
 
         [RubyMethod("each_object", RubyMethodAttributes.PublicSingleton)]

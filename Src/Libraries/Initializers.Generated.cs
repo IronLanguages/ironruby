@@ -1777,6 +1777,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Boolean, System.Boolean, System.Boolean>(IronRuby.Builtins.FalseClass.Or)
             );
             
+            DefineLibraryMethod(module, "===", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BinaryOpStorage, System.Boolean, System.Object, System.Boolean>(IronRuby.Builtins.FalseClass.CaseEquals)
+            );
+            
             DefineLibraryMethod(module, "|", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<System.Boolean, System.Object, System.Boolean>(IronRuby.Builtins.FalseClass.Or), 
@@ -6024,6 +6029,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadModule_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__hide_constant__", 0x52, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.HideConstant)
+            );
+            
             DefineLibraryMethod(module, "__ir_mark_ruby2_keywords__", 0x52, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.MarkRuby2Keywords)
@@ -6522,6 +6532,11 @@ namespace IronRuby.Builtins {
                 0x00000000U, 0x00000000U, 
                 new Func<System.Object, System.Object, System.Boolean>(IronRuby.Builtins.NilClassOps.Or), 
                 new Func<System.Object, System.Boolean, System.Boolean>(IronRuby.Builtins.NilClassOps.Or)
+            );
+            
+            DefineLibraryMethod(module, "===", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.NilClassOps.CaseEquals)
             );
             
             DefineLibraryMethod(module, "|", 0x51, 
@@ -10980,6 +10995,11 @@ namespace IronRuby.Builtins {
                 0x00000000U, 0x00000000U, 
                 new Func<System.Boolean, System.Object, System.Boolean>(IronRuby.Builtins.TrueClass.Xor), 
                 new Func<System.Boolean, System.Boolean, System.Boolean>(IronRuby.Builtins.TrueClass.Xor)
+            );
+            
+            DefineLibraryMethod(module, "===", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BinaryOpStorage, System.Boolean, System.Object, System.Boolean>(IronRuby.Builtins.TrueClass.CaseEquals)
             );
             
             DefineLibraryMethod(module, "|", 0x51, 
