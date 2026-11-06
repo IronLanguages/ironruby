@@ -54,15 +54,6 @@ namespace IronRuby.Builtins {
         public const int SEEK_CUR = 1;
         public const int SEEK_END = 2;
 
-        public static SeekOrigin ToSeekOrigin(int rubySeekOrigin) {
-            switch (rubySeekOrigin) {
-                case SEEK_SET: return SeekOrigin.Begin;
-                case SEEK_END: return SeekOrigin.End;
-                case SEEK_CUR: return SeekOrigin.Current;
-                default: throw RubyExceptions.CreateArgumentError("Invalid argument");
-            }
-        }
-
         public static long GetSeekPosition(long length, long position, long seekOffset, SeekOrigin origin) {
             switch (origin) {
                 case SeekOrigin.Begin: return seekOffset;
@@ -128,15 +119,6 @@ namespace IronRuby.Builtins {
         /// </summary>
         public RubyEncoding Enc2 {
             get { return _enc2; }
-        }
-
-        /// <summary>
-        /// Whether an encoding was actually pinned onto this stream - in the mode string, in
-        /// the options hash, or through #set_encoding - as opposed to being left to follow
-        /// the context defaults.
-        /// </summary>
-        public bool EncodingSpecified {
-            get { return _enc != null || _enc2 != null; }
         }
 
         /// <summary>
@@ -291,7 +273,7 @@ namespace IronRuby.Builtins {
 
         public void SetStream(Stream/*!*/ stream) {
             ContractUtils.RequiresNotNull(stream, "stream");
-            _stream = new RubyBufferedStream(stream, _context.RubyOptions.Compatibility >= RubyCompatibility.Ruby19);
+            _stream = new RubyBufferedStream(stream, true);
         }
 
         public void RequireInitialized() {

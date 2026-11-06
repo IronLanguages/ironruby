@@ -168,7 +168,6 @@ namespace IronRuby.Builtins {
 
         #region Serialization
 
-#if FEATURE_SERIALIZATION
         protected RubyObject(SerializationInfo/*!*/ info, StreamingContext context) {
             RubyOps.DeserializeObject(out _instanceData, out _immediateClass, info);
         }
@@ -176,7 +175,6 @@ namespace IronRuby.Builtins {
         public virtual void GetObjectData(SerializationInfo/*!*/ info, StreamingContext context) {
             RubyOps.SerializeObject(_instanceData, _immediateClass, info);
         }
-#endif
 
         #endregion
     }

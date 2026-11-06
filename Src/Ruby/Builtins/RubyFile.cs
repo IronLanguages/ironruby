@@ -85,7 +85,6 @@ namespace IronRuby.Builtins {
                     stream = context.DomainManager.Platform.OpenInputFileStream(path, fileMode, access, FileShare.ReadWrite);
                 } catch (FileNotFoundException) {
                     throw RubyExceptions.CreateENOENT(String.Format("No such file or directory - {0}", path));
-#if FEATURE_FILESYSTEM
                 } catch (DirectoryNotFoundException e) {
                     // The CLR says this for a missing directory on the way to the file and for a
                     // file standing where a directory should be alike; MRI names the path, and
@@ -102,7 +101,6 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateENOENT(e, "No such file or directory - {0}", path);
                 } catch (PathTooLongException e) {
                     throw RubyExceptions.CreateENOENT(e.Message, e);
-#endif
                 } catch (IOException e) {
                     if ((mode & IOMode.ErrorIfExists) != 0) {
                         throw RubyExceptions.CreateEEXIST(path);

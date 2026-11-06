@@ -131,10 +131,6 @@ namespace IronRuby.Builtins {
 
         internal static int MaxOverloads = 4;
 
-        private static bool SkipDefinition(RubyModule/*!*/ module, int attributes) {
-            return ((RubyCompatibility)(attributes >> RubyMethodAttribute.CompatibilityEncodingShift) > module.Context.RubyOptions.Compatibility);
-        }
-
         // thread-safe:
         internal static void DefineLibraryMethod(RubyModule/*!*/ module, string/*!*/ name, int attributes, LibraryOverload/*!*/[]/*!*/ overloads) {
             var flags = (RubyMemberFlags)(attributes & (int)RubyMethodAttributes.MemberFlagsMask);
@@ -147,13 +143,11 @@ namespace IronRuby.Builtins {
         public static void DefineLibraryMethod(RubyModule/*!*/ module, string/*!*/ name, int attributes, 
             uint[]/*!*/ overloadAttributes, params Delegate[]/*!*/ overloads) {
 
-            if (!SkipDefinition(module, attributes)) {
-                var infos = new LibraryOverload[overloads.Length];
-                for (int i = 0; i < overloads.Length; i++) {
-                    infos[i] = LibraryOverload.Create(overloads[i], overloadAttributes[i]);
-                }
-                DefineLibraryMethod(module, name, attributes, infos);
+            var infos = new LibraryOverload[overloads.Length];
+            for (int i = 0; i < overloads.Length; i++) {
+                infos[i] = LibraryOverload.Create(overloads[i], overloadAttributes[i]);
             }
+            DefineLibraryMethod(module, name, attributes, infos);
         }
 
         // thread-safe:
@@ -161,11 +155,9 @@ namespace IronRuby.Builtins {
         public static void DefineLibraryMethod(RubyModule/*!*/ module, string/*!*/ name, int attributes, 
             uint overloadAttributes1, Delegate/*!*/ overload1) {
 
-            if (!SkipDefinition(module, attributes)) {
-                DefineLibraryMethod(module, name, attributes, new[] { 
-                    LibraryOverload.Create(overload1, overloadAttributes1)
-                });
-            }
+            DefineLibraryMethod(module, name, attributes, new[] { 
+                LibraryOverload.Create(overload1, overloadAttributes1)
+            });
         }
 
         // thread-safe:
@@ -174,12 +166,10 @@ namespace IronRuby.Builtins {
             uint overloadAttributes1, uint overloadAttributes2, 
             Delegate/*!*/ overload1, Delegate/*!*/ overload2) {
 
-            if (!SkipDefinition(module, attributes)) {
-                DefineLibraryMethod(module, name, attributes, new[] { 
-                    LibraryOverload.Create(overload1, overloadAttributes1),
-                    LibraryOverload.Create(overload2, overloadAttributes2),
-                });
-            }
+            DefineLibraryMethod(module, name, attributes, new[] { 
+                LibraryOverload.Create(overload1, overloadAttributes1),
+                LibraryOverload.Create(overload2, overloadAttributes2),
+            });
         }
 
         // thread-safe:
@@ -188,13 +178,11 @@ namespace IronRuby.Builtins {
             uint overloadAttributes1, uint overloadAttributes2, uint overloadAttributes3, 
             Delegate/*!*/ overload1, Delegate/*!*/ overload2, Delegate/*!*/ overload3) {
 
-            if (!SkipDefinition(module, attributes)) {
-                DefineLibraryMethod(module, name, attributes, new[] { 
-                    LibraryOverload.Create(overload1, overloadAttributes1),
-                    LibraryOverload.Create(overload2, overloadAttributes2),
-                    LibraryOverload.Create(overload3, overloadAttributes3),
-                });
-            }
+            DefineLibraryMethod(module, name, attributes, new[] { 
+                LibraryOverload.Create(overload1, overloadAttributes1),
+                LibraryOverload.Create(overload2, overloadAttributes2),
+                LibraryOverload.Create(overload3, overloadAttributes3),
+            });
         }
 
         // thread-safe:
@@ -203,14 +191,12 @@ namespace IronRuby.Builtins {
             uint overloadAttributes1, uint overloadAttributes2, uint overloadAttributes3, uint overloadAttributes4,
             Delegate/*!*/ overload1, Delegate/*!*/ overload2, Delegate/*!*/ overload3, Delegate/*!*/ overload4) {
 
-            if (!SkipDefinition(module, attributes)) {
-                DefineLibraryMethod(module, name, attributes, new[] { 
-                    LibraryOverload.Create(overload1, overloadAttributes1),
-                    LibraryOverload.Create(overload2, overloadAttributes2),
-                    LibraryOverload.Create(overload3, overloadAttributes3),
-                    LibraryOverload.Create(overload4, overloadAttributes4),
-                });
-            }
+            DefineLibraryMethod(module, name, attributes, new[] { 
+                LibraryOverload.Create(overload1, overloadAttributes1),
+                LibraryOverload.Create(overload2, overloadAttributes2),
+                LibraryOverload.Create(overload3, overloadAttributes3),
+                LibraryOverload.Create(overload4, overloadAttributes4),
+            });
         }
 
         // thread-safe:

@@ -89,10 +89,6 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        internal static string/*!*/ GetTableName(int table) {
-            return _tableNames[table];
-        }
-
         private static int[]/*!*/ Decode(int table) {
             byte[] bytes = _bytes;
             if (bytes == null) {

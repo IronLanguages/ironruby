@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Diagnostics;
@@ -387,10 +383,6 @@ namespace IronRuby.Builtins {
 
         public static Proc/*!*/ Create(RubyContext/*!*/ context, BlockCallTarget1/*!*/ clrMethod) {
             return Create(context, 1, BlockDispatcher.MakeAttributes(BlockSignatureAttributes.None, -1), clrMethod);
-        }
-
-        public static Proc/*!*/ CreateSimple(RubyContext/*!*/ context, BlockCallTarget1/*!*/ clrMethod) {
-            return Create(context, 1, BlockSignatureAttributes.None, clrMethod);
         }
 
         public static Proc/*!*/ Create(RubyContext/*!*/ context, BlockCallTarget2/*!*/ clrMethod) {

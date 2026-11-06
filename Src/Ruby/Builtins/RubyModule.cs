@@ -212,10 +212,6 @@ namespace IronRuby.Builtins {
             get { return ReferenceEquals(this, Context.BasicObjectClass); }
         }
 
-        public bool IsComClass {
-            get { return ReferenceEquals(this, Context.ComObjectClass); }
-        }
-
         internal virtual RubyClass GetSuperClass() {
             return null;
         }
@@ -2473,13 +2469,6 @@ namespace IronRuby.Builtins {
         // thread-safe:
         public void HideMethod(string/*!*/ name) {
             SetMethodNoEvent(Context, name, RubyMethodInfo.HiddenMethod);
-        }
-
-        // thread-safe:
-        public MethodResolutionResult ResolveMethodForSite(string/*!*/ name, VisibilityContext visibility) {
-            using (Context.ClassHierarchyLocker()) {
-                return ResolveMethodForSiteNoLock(name, visibility);
-            }
         }
 
         // thread-safe:

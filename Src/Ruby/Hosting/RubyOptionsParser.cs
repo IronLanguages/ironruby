@@ -17,7 +17,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Security;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
@@ -678,7 +677,7 @@ namespace IronRuby.Hosting {
                 case "-1.8.7":
                 case "-1.9":
                 case "-2.0":
-                    throw new InvalidOptionException(String.Format("Option '{0}' is no longer supported. The compatible Ruby version is 1.9.", optionName));
+                    throw new InvalidOptionException(String.Format("Option '{0}' is no longer supported: IronRuby targets Ruby 4.0 only.", optionName));
 
                 case "-X":
                     switch (optionValue) {
@@ -782,13 +781,9 @@ namespace IronRuby.Hosting {
 
         protected override void AfterParse() {
             if (!_disableRubyOpt) {
-                try {
-                    string rubyopt = Environment.GetEnvironmentVariable("RUBYOPT");
-                    if (rubyopt != null) {
-                        ProcessRubyOpt(rubyopt);
-                    }
-                } catch (SecurityException) {
-                    // nop
+                string rubyopt = Environment.GetEnvironmentVariable("RUBYOPT");
+                if (rubyopt != null) {
+                    ProcessRubyOpt(rubyopt);
                 }
             }
 
@@ -800,13 +795,9 @@ namespace IronRuby.Hosting {
                 _loadPaths.InsertRange(0, existingSearchPaths);
             }
 
-            try {
-                string rubylib = Environment.GetEnvironmentVariable("RUBYLIB");
-                if (rubylib != null) {
-                    _loadPaths.AddRange(GetPaths(rubylib));
-                }
-            } catch (SecurityException) {
-                // nop
+            string rubylib = Environment.GetEnvironmentVariable("RUBYLIB");
+            if (rubylib != null) {
+                _loadPaths.AddRange(GetPaths(rubylib));
             }
             _loadPaths.AddRange(_stdLibPaths);
             LanguageSetup.Options["SearchPaths"] = _loadPaths;
