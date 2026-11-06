@@ -688,7 +688,7 @@ end
 ", @"
 ?to_a
 to_a
-#<TypeError: can't convert C into Array (C#to_a gives Integer)>
+#<TypeError: can't convert C to Array (C#to_a gives Integer)>
 ");
         }
 

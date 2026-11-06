@@ -1568,7 +1568,7 @@ end
 baz { |a,b| p b }
 ", @"
 nil
-#<TypeError: can't convert C into Array (C#to_ary gives Integer)>
+#<TypeError: can't convert C to Array (C#to_ary gives Integer)>
 4
 ");
         }
@@ -1655,7 +1655,7 @@ end
 ");
             }, @"
 ok1
-can't convert C into Proc (C#to_proc gives Integer)
+can't convert C to Proc (C#to_proc gives Integer)
 ok2
 ");
         }

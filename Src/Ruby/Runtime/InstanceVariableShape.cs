@@ -96,10 +96,6 @@ namespace IronRuby.Runtime {
             get { return _parent; }
         }
 
-        internal string LastName {
-            get { return _name; }
-        }
-
         internal bool IsSentinel {
             get { return _count < 0; }
         }
@@ -226,10 +222,6 @@ namespace IronRuby.Runtime {
                 }
             }
             return result;
-        }
-
-        internal static int ShapeCount {
-            get { return _ShapeCount; }
         }
 
         public override string/*!*/ ToString() {
