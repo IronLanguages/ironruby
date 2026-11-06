@@ -1,4 +1,0 @@
-This file stands in for an extension library: the loader experiments next to it only need
-a file called fcntl.so to be there, to see which of fcntl.rb and fcntl.so require picks.
-It was CRuby 1.8's fcntl extension, a 32-bit Windows DLL that cannot be built from this
-repository - and that IronRuby, which has no native extensions, never loads.
