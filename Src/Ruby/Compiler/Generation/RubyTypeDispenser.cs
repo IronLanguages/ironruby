@@ -84,6 +84,12 @@ namespace IronRuby.Compiler.Generation {
             if (interfaces.Count == 0) {
                 features = _defaultFeatures;
             } else {
+                // RubyObject is what a plain Ruby class's instances are, not a base for generated types: one derived from it
+                // would implement IRubyObject a second time, over fields of its own, and override its CreateInstance.
+                // The type of a subclass that adds interfaces derives from Object, as RubyObject itself does.
+                if (baseType == typeof(RubyObject)) {
+                    baseType = typeof(object);
+                }
                 features = new ITypeFeature[] {
                     RubyTypeFeature.Instance,
                     InterfaceImplFeature.Create(interfaces)

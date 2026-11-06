@@ -643,6 +643,7 @@ namespace IronRuby.Tests {
                 ClrGenericComparable2,
                 ClrRubyComparable1,
                 ClrRubyEnumerable1,
+                ClrRubyImpliedInterfaces2,
                 ClrTaskValue1,
                 ClrTaskValue2,
                 ClrBclArrays1,
