@@ -471,7 +471,7 @@ namespace IronRuby.StandardLibrary.Zlib {
 
         [RubyMethod("gzip", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ Gzip(ConversionStorage<int>/*!*/ fixnumCast, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ str, [Optional]object options) {
+            [DefaultProtocol, NotNull]MutableString/*!*/ str, [Keywords, Optional]object options) {
 
             RubyContext context = fixnumCast.Context;
 

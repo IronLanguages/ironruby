@@ -74,31 +74,34 @@ namespace IronRuby.Builtins {
             return new RubyRegex(other);
         }
 
+        // Regexp.new(source, options = nil, timeout: nil). Ruby 3.3 dropped the third positional argument (an encoding
+        // "n"), so Regexp.new("a", nil, "n") is "given 3, expected 1..2".
         [RubyConstructor]
         public static RubyRegex/*!*/ Create(RubyClass/*!*/ self,
-            [NotNull]RubyRegex/*!*/ other, int options, [Optional]object encoding) {
-            return Create(self, other, (object)options, encoding);
+            [NotNull]RubyRegex/*!*/ other, int options, [Keywords, Optional]object keywords) {
+            return Create(self, other, (object)options, keywords);
         }
 
         [RubyConstructor]
         public static RubyRegex/*!*/ Create(RubyClass/*!*/ self,
-            [NotNull]RubyRegex/*!*/ other, [DefaultParameterValue(null)]object options, [Optional]object encoding) {
+            [NotNull]RubyRegex/*!*/ other, [Optional]object options, [Keywords, Optional]object keywords) {
 
-            ReportParametersIgnoredWarning(self.Context, encoding);
-            return new RubyRegex(other);
+            double? timeout = TakeTimeout(self.Context, ref options, keywords);
+            ReportFlagsIgnoredWarning(self.Context, options);
+            return new RubyRegex(other) { Timeout = timeout };
         }
                 
         [RubyConstructor]
         public static RubyRegex/*!*/ Create(RubyClass/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [DefaultProtocol, Optional]MutableString encoding) {
+            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [Keywords, Optional]object keywords) {
 
             RubyRegex.RequireValidPattern(pattern);
-            double? timeout = TakeTimeout(self.Context, ref options);
-            return new RubyRegex(pattern, MakeOptions(self.Context, options, encoding)) { Timeout = timeout };
+            double? timeout = TakeTimeout(self.Context, ref options, keywords);
+            return new RubyRegex(pattern, MakeOptions(self.Context, options, null)) { Timeout = timeout };
         }
 
         [RubyConstructor]
-        public static RubyRegex/*!*/ Create(RubyClass/*!*/ self, DynamicNull pattern, [Optional]object options, [Optional]object encoding) {
+        public static RubyRegex/*!*/ Create(RubyClass/*!*/ self, DynamicNull pattern, [Optional]object options, [Keywords, Optional]object keywords) {
             throw RubyExceptions.CreateImplicitConversionError("nil", "String");
         }
 
@@ -166,26 +169,35 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Regexp.new's `timeout:' keyword. IronRuby has no keyword-argument slot, so it arrives
-        /// as a trailing Hash in the place the flags go; only one written as keywords counts,
-        /// because `Regexp.new(src, {})' is a positional argument MRI warns about instead.
+        /// Regexp.new's `timeout:' keyword, its only one. The keywords arrive in their own parameter, or in the place the
+        /// flags go when they are the only argument after the source; there only a Hash written as keywords counts, because
+        /// `Regexp.new(src, {})' is a positional argument MRI warns about instead.
         /// </summary>
-        private static double? TakeTimeout(RubyContext/*!*/ context, ref object options) {
-            var hash = options as Hash;
-            if (hash == null || !hash.IsKeywordArguments) {
+        private static double? TakeTimeout(RubyContext/*!*/ context, ref object options, object keywords) {
+            if (keywords == Missing.Value && RubyOps.IsKeywordArgumentsHash(options)) {
+                keywords = options;
+                options = Missing.Value;
+            }
+
+            var hash = keywords as Hash;
+            if (hash == null) {
                 return null;
             }
 
             object timeout = null;
+            var unknown = new List<string>();
             foreach (var entry in hash) {
                 var key = entry.Key as RubySymbol;
-                if (key == null || key.ToString() != "timeout") {
-                    return null;
+                if (key != null && key.ToString() == "timeout") {
+                    timeout = entry.Value;
+                } else {
+                    unknown.Add(context.Inspect(entry.Key).ToString());
                 }
-                timeout = entry.Value;
+            }
+            if (unknown.Count > 0) {
+                throw RubyExceptions.CreateArgumentError("unknown keyword{0}: {1}", unknown.Count > 1 ? "s" : "", String.Join(", ", unknown));
             }
 
-            options = Missing.Value;
             return ToTimeout(context, timeout);
         }
 
@@ -213,33 +225,38 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static RubyRegex/*!*/ Reinitialize(RubyContext/*!*/ context, RubyRegex/*!*/ self,
-            [NotNull]RubyRegex/*!*/ regex, int options, [Optional]object encoding) {
+            [NotNull]RubyRegex/*!*/ regex, int options, [Keywords, Optional]object keywords) {
 
-            ReportParametersIgnoredWarning(context, encoding);
-            return Reinitialize(context, self, regex);
+            return Reinitialize(context, self, regex, (object)options, keywords);
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static RubyRegex/*!*/ Reinitialize(RubyContext/*!*/ context, RubyRegex/*!*/ self,
-            [NotNull]RubyRegex/*!*/ regex, [DefaultParameterValue(null)]object ignoreCase, [Optional]object encoding) {
+            [NotNull]RubyRegex/*!*/ regex, [Optional]object ignoreCase, [Keywords, Optional]object keywords) {
 
-            ReportParametersIgnoredWarning(context, encoding);
-            return Reinitialize(context, self, regex);
-        }
-
-        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static RubyRegex/*!*/ Reinitialize(RubyContext/*!*/ context, RubyRegex/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [DefaultProtocol, Optional]MutableString encoding) {
-
-            RequireUninitialized(context, self);
-            double? timeout = TakeTimeout(context, ref options);
-            self.Set(pattern, MakeOptions(context, options, encoding));
+            double? timeout = TakeTimeout(context, ref ignoreCase, keywords);
+            ReportFlagsIgnoredWarning(context, ignoreCase);
+            Reinitialize(context, self, regex);
             self.Timeout = timeout;
             return self;
         }
 
-        private static void ReportParametersIgnoredWarning(RubyContext/*!*/ context, object encoding) {
-            context.ReportWarning((encoding != Missing.Value) ? "flags and encoding ignored" : "flags ignored");
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static RubyRegex/*!*/ Reinitialize(RubyContext/*!*/ context, RubyRegex/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [Keywords, Optional]object keywords) {
+
+            RequireUninitialized(context, self);
+            double? timeout = TakeTimeout(context, ref options, keywords);
+            self.Set(pattern, MakeOptions(context, options, null));
+            self.Timeout = timeout;
+            return self;
+        }
+
+        // Flags given with a Regexp, which has its own: MRI warns for any but false, for nil only in verbose mode.
+        private static void ReportFlagsIgnoredWarning(RubyContext/*!*/ context, object options) {
+            if (options != Missing.Value && !(options is bool && !(bool)options)) {
+                context.ReportWarning("flags ignored", options == null);
+            }
         }
 
         internal static RubyRegexOptions MakeOptions(bool ignoreCase, MutableString encoding) {
@@ -265,7 +282,7 @@ namespace IronRuby.Builtins {
                 if (str != null) {
                     result = ParseOptionString(str);
                 } else {
-                    context.ReportWarning("expected true or false as ignorecase: " + context.Inspect(options));
+                    context.ReportWarning("expected true or false as ignorecase: " + context.Inspect(options), true);
                     result = RubyRegexOptions.IgnoreCase;
                 }
             }
@@ -644,7 +661,10 @@ namespace IronRuby.Builtins {
         /// handled by a bounded automaton walk.
         /// </summary>
         [RubyMethod("linear_time?", RubyMethodAttributes.PublicSingleton)]
-        public static bool IsLinearTime(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [Optional]object options) {
+        public static bool IsLinearTime(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [Optional]object options,
+            [Keywords, Optional]object keywords) {
+
+            TakeTimeout(context, ref options, keywords);
             if (options != Missing.Value && options != null) {
                 context.ReportWarning("flags ignored");
             }
@@ -652,9 +672,10 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("linear_time?", RubyMethodAttributes.PublicSingleton)]
-        public static bool IsLinearTime(RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern,
-            [Optional]object options) {
+        public static bool IsLinearTime(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern,
+            [Optional]object options, [Keywords, Optional]object keywords) {
 
+            TakeTimeout(context, ref options, keywords);
             return !RubyRegex.HasBackReference(pattern);
         }
 

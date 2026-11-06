@@ -771,7 +771,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
         /// </summary>
         [RubyMethod("scan_integer")]
         public static object ScanInteger(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, StringScanner/*!*/ self,
-            [Optional]object options) {
+            [Keywords, Optional]object options) {
 
             int numericBase = 10;
             var hash = options as IDictionary<object, object>;

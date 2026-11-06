@@ -937,6 +937,7 @@ namespace IronRuby.Tests {
                 MethodDef_SymbolInBody1,
                 ToIntegerConversion1,
                 Kernel_IntegerFloat1,
+                LibraryKeywordsArity1,
                 ToIntToStrConversion1,
                 ConvertToFixnum1,
                 ProtocolCaching1,

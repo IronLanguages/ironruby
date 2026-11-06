@@ -48,7 +48,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyConstructor]
-        public static Hash/*!*/ CreateHash(BlockParam block, RubyClass/*!*/ self, object defaultValue, object options) {
+        public static Hash/*!*/ CreateHash(BlockParam block, RubyClass/*!*/ self, object defaultValue, [Keywords]object options) {
             var result = new Hash(self.Context.EqualityComparer);
             return Initialize(self.Context, block, result, defaultValue, options);
         }
@@ -186,7 +186,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static Hash/*!*/ Initialize(RubyContext/*!*/ context, BlockParam block, Hash/*!*/ self, object defaultValue, object options) {
+        public static Hash/*!*/ Initialize(RubyContext/*!*/ context, BlockParam block, Hash/*!*/ self, object defaultValue, [Keywords]object options) {
             // a second argument is only allowed as keywords
             if (!IsOptions(options)) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 2, expected 0..1)");

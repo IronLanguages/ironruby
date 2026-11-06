@@ -519,7 +519,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("round")]
         public static object Round(ConversionStorage<IntegerValue>/*!*/ integerCast, double self,
-            object ndigits, [Optional]object options) {
+            object ndigits, [Keywords, Optional]object options) {
 
             var opts = options as IDictionary<object, object>;
             // round(ndigits, half: mode): the options only ever come as keywords

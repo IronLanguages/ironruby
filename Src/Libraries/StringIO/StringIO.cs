@@ -135,7 +135,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<int?>/*!*/ toInt, ConversionStorage<MutableString>/*!*/ toStr,
             BlockParam block, RubyClass/*!*/ self,
             [Optional]object content, [Optional]object mode,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             // MRI does not yield to a block here and says so rather than swallowing it.
             if (block != null) {
@@ -152,7 +152,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<int?>/*!*/ toInt, ConversionStorage<MutableString>/*!*/ toStr,
             RubyContext/*!*/ context, StringIO/*!*/ self,
             [Optional]object content, [Optional]object mode,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             Initialize(toHash, toInt, toStr, context, self, content, mode, options);
             return self;
@@ -1054,7 +1054,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyScope/*!*/ scope, StringIO/*!*/ self,
             [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             MutableString separator;
             int limit;
@@ -1069,7 +1069,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyScope/*!*/ scope, StringIO/*!*/ self,
             [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             // no dynamic call, modifies $_ scope variable:
             MutableString result = Gets(toHash, toStr, toInt, scope, self, separatorOrLimit, limitOrOptions, options);
@@ -1085,7 +1085,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyContext/*!*/ context, StringIO/*!*/ self,
             [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             MutableString separator;
             int limit;
@@ -1189,7 +1189,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self,
             [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             MutableString separator;
             int limit;
@@ -1317,7 +1317,7 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyMethod("set_encoding")]
         public static StringIO/*!*/ SetEncoding(ConversionStorage<MutableString>/*!*/ toStr, StringIO/*!*/ self,
-            object external, object @internal, object options) {
+            object external, object @internal, [Keywords]object options) {
             return SetExternalEncoding(toStr, self, external);
         }
 

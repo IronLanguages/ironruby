@@ -1618,9 +1618,8 @@ class IO
   # yet, but code that rescues this one needs the constant.
   class TimeoutError < IOError; end unless const_defined?(:TimeoutError, false)
 
-  # Keyword arguments and a Hash in the last positional slot are different things,
-  # and only a Ruby-level signature can tell them apart: the library method behind
-  # this one takes options as an ordinary parameter and so sees them as the same.
+  # The library method behind this one takes its options as keywords ([Keywords]): a Hash
+  # in the last positional slot is an argument too many.
   alias :__ir_initialize__ :initialize
   private :__ir_initialize__
 
@@ -1629,7 +1628,7 @@ class IO
       ::Kernel.raise(::ArgumentError,
                      "wrong number of arguments (given #{args.size}, expected 1..2)")
     end
-    opts.empty? ? __ir_initialize__(*args) : __ir_initialize__(*args, opts)
+    __ir_initialize__(*args, **opts)
   end
 
   class << self
@@ -1655,7 +1654,7 @@ class File
       ::Kernel.raise(::ArgumentError,
                      "wrong number of arguments (given #{args.size}, expected 1..3)")
     end
-    opts.empty? ? __ir_initialize__(*args) : __ir_initialize__(*args, opts)
+    __ir_initialize__(*args, **opts)
   end
 end
 
@@ -3878,14 +3877,15 @@ class << Dir
     pw.dir.dup
   end unless respond_to?(:home)
 
-  def children(path, *args)
-    entries(path, *args) - %w[. ..]
+  # encoding: is their only option, a keyword: Dir.children("a", "b") is "given 2, expected 1"
+  def children(path, **opts)
+    entries(path, **opts) - %w[. ..]
   end unless respond_to?(:children)
 
   # MRI's Dir.each_child / Dir.foreach enumerators do not know their size.
-  def each_child(path, *args, &block)
-    return to_enum(:each_child, path, *args) { nil } unless block
-    children(path, *args).each(&block)
+  def each_child(path, *args, **opts, &block)
+    return to_enum(:each_child, path, *args, **opts) { nil } unless block
+    children(path, *args, **opts).each(&block)
     nil
   end
 
@@ -3893,9 +3893,9 @@ class << Dir
     alias :__clr_foreach__ :foreach
     private :__clr_foreach__
 
-    def foreach(path, *args, &block)
-      return to_enum(:foreach, path, *args) { nil } unless block
-      __clr_foreach__(path, *args, &block)
+    def foreach(path, *args, **opts, &block)
+      return to_enum(:foreach, path, *args, **opts) { nil } unless block
+      __clr_foreach__(path, *args, **opts, &block)
       nil
     end
   end
@@ -9667,11 +9667,11 @@ class IO
   # "unknown encoding name - utf-8:ISO-8859-1".
   alias :__ir_set_encoding__ :set_encoding
 
+  # The options are keywords: a Hash passed positionally is a third argument too many.
   def set_encoding(*args, **opts)
-    args = args + [opts] unless opts.empty?
-    if args.size > 3 || (args.size == 3 && !args[2].is_a?(::Hash))
+    if args.empty? || args.size > 2
       ::Kernel.raise(::ArgumentError,
-                     "wrong number of arguments (given #{args.size}, expected 0..2)")
+                     "wrong number of arguments (given #{args.size}, expected 1..2)")
     end
     # An encoding name that is not itself ASCII compatible cannot name anything.
     args.first(2).each do |name|
@@ -9703,13 +9703,12 @@ class IO
       args = args.dup
       args[0] = args[0].sub(/\ABOM\|/i, "")
     end
-    __check_set_encoding_options__(args)
+    __check_set_encoding_options__(opts.empty? ? args : args + [opts])
     if args.size >= 1 && args[0].is_a?(::String) && args[0].include?(":")
       external, internal = args[0].split(":", 2)
-      rest = args[1..-1] || []
-      return __ir_set_encoding__(external, internal, *rest)
+      return __ir_set_encoding__(external, internal, **opts)
     end
-    __ir_set_encoding__(*args)
+    __ir_set_encoding__(*args, **opts)
   end
 
   # MRI validates the pair before it takes it: an encoding that is not ASCII
