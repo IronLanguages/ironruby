@@ -3643,6 +3643,12 @@ class String
 
 end
 
+# MRI defines the module at startup and fills it in from unicode_normalize/normalize.rb the
+# first time a string is normalized; IronRuby normalizes with the CLR, so it stays empty
+# unless that file is required.
+module UnicodeNormalize
+end
+
 # Numeric#step: MRI's num_step, which the builtin only ever implemented as the
 # two-positional-argument block form. Missing were the keyword form
 # (`1.step(by: 2, to: 7)`), the endless form (`1.step`), the
@@ -4325,7 +4331,7 @@ module GC
       total_allocated_objects: live / 40,
       total_freed_objects: 0,
       malloc_increase_bytes: 0,
-      compact_count: 0
+      compact_count: defined?(@compact_count) ? @compact_count : 0
     }
   end
 
@@ -4364,10 +4370,6 @@ module GC
     nil
   end
 
-  class << self
-    alias :garbage_collect :start
-  end
-
   def self.total_time
     ::System::GC.get_total_pause_duration.total_milliseconds.to_i * 1_000_000
   rescue ::Exception
@@ -4398,9 +4400,12 @@ module GC
     @stress = value
   end
 
+  # The CLR compacts on its own; asking is a full collection. MRI answers what it moved,
+  # which here is nothing it could tell apart.
   def self.compact
     ::System::GC.collect
-    nil
+    @compact_count = (defined?(@compact_count) ? @compact_count : 0) + 1
+    latest_compact_info
   end
 
   # 3.4's pluggable-GC configuration. :implementation is read-only and global;
@@ -5736,23 +5741,49 @@ class Enumerator
     unless unknown.empty?
       ::Kernel.raise(::ArgumentError, "unknown keyword#{'s' if unknown.size > 1}: #{unknown.map { |k| k.inspect }.join(', ')}")
     end
-    has_initial = !args.empty?
-    initial = args[0]
     size = options.key?(:size) ? options[:size] : ::Float::INFINITY
-    enum = Enumerator.new(size) do |y|
+    producer = Producer.allocate
+    state = [!args.empty?, args[0], block].freeze
+    Producer.__send__(:__states__)[producer] = state
+    # The enumerator keeps both the producer (as its receiver) and the state alive; the map
+    # holds them weakly.
+    ::Enumerator.new(size) { |y| producer.__send__(:__each__, state) { |v| y << v } }
+                .__set_inspect__(producer, :each)
+  end unless respond_to?(:produce)
+
+  # What Enumerator.produce enumerates (MRI's producer.c): #each feeds every value back into
+  # the block, until the block raises StopIteration.
+  class Producer
+    STATES = ::ObjectSpace::WeakMap.new
+    private_constant :STATES
+
+    def self.__states__
+      STATES
+    end
+    private_class_method :__states__
+
+    def each(&block)
+      state = STATES[self]
+      ::Kernel.raise(::ArgumentError, "uninitialized producer") unless state
+      __each__(state, &block)
+    end
+
+    private
+
+    def __each__(state)
+      has_initial, initial, block = state
       begin
         value = has_initial ? initial : block.call(nil)
-      rescue ::StopIteration
+      rescue ::StopIteration => e
         # the block may refuse to produce even a first value
-        next
+        return e.result
       end
       loop do
-        y << value
+        yield value
         value = block.call(value)
       end
     end
-    enum.__set_inspect__(nil, :each, [], "#<Enumerator::Producer:#{'0x%016x' % (block.object_id * 2)}>")
-  end unless respond_to?(:produce)
+  end unless const_defined?(:Producer, false)
 end
 
 module Enumerable
@@ -7461,25 +7492,22 @@ module Process
 
   # NB SignalException#signo / #signm are defined just below this module.
   #
-  # Process.exit / .exit! / .abort are module functions in MRI and behave exactly
-  # like their Kernel namesakes.  Without them Process.exit raised NoMethodError,
+  # Process.exit / .exit! / .abort behave exactly like their Kernel namesakes (MRI
+  # defines them as singleton methods only).  Without them Process.exit raised NoMethodError,
   # and in spec/core/process/exit_spec.rb that NoMethodError escaped a thread whose
   # main thread was waiting in a bare sleep for the SystemExit - so the file hung.
   unless respond_to?(:exit)
-    def exit(*args)
+    def self.exit(*args)
       ::Kernel.exit(*args)
     end
-    module_function :exit
 
-    def exit!(*args)
+    def self.exit!(*args)
       ::Kernel.exit!(*args)
     end
-    module_function :exit!
 
-    def abort(*args)
+    def self.abort(*args)
       ::Kernel.abort(*args)
     end
-    module_function :abort
   end
 
   unless respond_to?(:clock_getres)
@@ -7565,13 +7593,25 @@ module Process
     entry.gid
   end
 
+  # The thread Process.detach answers: it reaps the child, its #value is the exit status, and
+  # #pid reads the :pid thread-local MRI puts on it. Only Process.detach makes one.
+  class Waiter < ::Thread
+    class << self
+      alias_method :__create__, :new
+      private :__create__
+      undef_method :new
+    end
+
+    def pid
+      self[:pid]
+    end
+  end unless const_defined?(:Waiter, false)
+
   unless respond_to?(:detach)
-    # A thread that reaps the child and whose #value is the exit status, plus the #pid
-    # reader and the :pid thread-local MRI puts on it. A pid that is not ours is not an
-    # error here: MRI's detach thread just ends with no status.
+    # A pid that is not ours is not an error here: MRI's detach thread just ends with no status.
     def detach(pid)
       pid = __integer_value__(pid)
-      thread = Thread.new(pid) do |p|
+      thread = Waiter.__send__(:__create__, pid) do |p|
         begin
           Process.wait2(p)[1]
         rescue SystemCallError
@@ -7579,7 +7619,6 @@ module Process
         end
       end
       thread[:pid] = pid
-      thread.define_singleton_method(:pid) { pid }
       thread
     end
     module_function :detach
@@ -8303,15 +8342,13 @@ module Process
   # them everywhere and lets respond_to? be the portable answer. Kernel#fork is private
   # and so was never reachable as Process.fork.
   unless singleton_class.method_defined?(:fork)
-    def fork(&block)
+    def self.fork(&block)
       raise NotImplementedError, "fork() function is unimplemented on this machine"
     end
-    module_function :fork
 
-    def _fork
+    def self._fork
       raise NotImplementedError, "fork() function is unimplemented on this machine"
     end
-    module_function :_fork
   end
 
   # The resolution of the clock we would actually read, per clock. The two named after
@@ -11599,6 +11636,98 @@ module GC
     else raise TypeError, "non-hash or symbol given"
     end
   end
+
+  def self.latest_compact_info
+    { considered: {}, moved: {}, moved_up: {}, moved_down: {} }
+  end
+
+  # MRI checks its heap's invariants; the CLR's are not Ruby's to check.
+  def self.verify_internal_consistency
+    nil
+  end
+
+  def self.verify_compaction_references(toward: nil, double_heap: false, expand_heap: false)
+    compact
+  end
+
+  # MRI's five size pools (slots of 40 to 640 bytes) stand in for the CLR's five heaps: gen0,
+  # gen1, gen2, the large and the pinned object heap. The slot counts are the bytes each heap
+  # holds after the last collection divided by the pool's slot size - an estimate, since a
+  # CLR heap is not made of slots - and the counters MRI keeps per pool are 0.
+  STAT_HEAP_KEYS = %i[slot_size heap_live_slots heap_free_slots heap_final_slots heap_eden_pages
+                      heap_eden_slots total_allocated_pages force_major_gc_count
+                      force_incremental_marking_finish_count total_allocated_objects
+                      total_freed_objects].freeze
+  private_constant :STAT_HEAP_KEYS
+
+  def self.__stat_heap_values__(index, sizes)
+    slot_size = 40 << index
+    used, free = sizes || [0, 0]
+    live = used / slot_size
+    free_slots = free / slot_size
+    pages = (used + free + 65_535) / 65_536
+    {
+      slot_size: slot_size, heap_live_slots: live, heap_free_slots: free_slots,
+      heap_final_slots: 0, heap_eden_pages: pages, heap_eden_slots: live + free_slots,
+      total_allocated_pages: pages, force_major_gc_count: 0,
+      force_incremental_marking_finish_count: 0, total_allocated_objects: live,
+      total_freed_objects: 0
+    }
+  end
+  private_class_method :__stat_heap_values__
+
+  def self.stat_heap(heap_name = nil, hash_or_key = nil)
+    sizes = __heap_sizes__
+    if heap_name.nil?
+      unless hash_or_key.nil? || hash_or_key.is_a?(Hash)
+        raise TypeError, "non-hash given"
+      end
+      result = hash_or_key || {}
+      5.times { |i| result[i] = __stat_heap_values__(i, sizes[i]) }
+      return result
+    end
+    raise TypeError, "heap_name must be nil or an Integer" unless heap_name.is_a?(Integer)
+    raise ArgumentError, "size pool index out of range" unless (0...5).cover?(heap_name)
+
+    values = __stat_heap_values__(heap_name, sizes[heap_name])
+    case hash_or_key
+    when nil then values
+    when Symbol
+      raise ArgumentError, "unknown key: #{hash_or_key}" unless values.key?(hash_or_key)
+      values[hash_or_key]
+    when Hash then hash_or_key.merge!(values)
+    else raise TypeError, "non-hash or symbol given"
+    end
+  end
+end
+
+module ObjectSpace
+  # MRI counts the slots of its heap by type. The CLR cannot walk its heap, so this is an
+  # estimate: TOTAL is the bytes in use over MRI's 40-byte slot and FREE the fragmented bytes
+  # likewise; classes, modules and symbols are counted exactly; everything else is T_OBJECT.
+  # As in MRI, a type with nothing counted is left out.
+  def count_objects(result = nil)
+    raise TypeError, "non-hash given" unless result.nil? || result.is_a?(Hash)
+    sizes = ::GC.__send__(:__heap_sizes__)
+    used = sizes.sum { |s| s[0] }
+    free = sizes.sum { |s| s[1] }
+    classes = modules = 0
+    ::ObjectSpace.each_object(Module) { |m| m.is_a?(Class) ? classes += 1 : modules += 1 }
+    symbols = Symbol.all_symbols.size
+    total = (used + free) / 40
+    free_slots = free / 40
+    objects = total - free_slots - classes - modules - symbols
+    counts = { TOTAL: total, FREE: free_slots, T_OBJECT: objects, T_CLASS: classes,
+               T_MODULE: modules, T_SYMBOL: symbols }
+    if result
+      result.each_key { |k| result[k] = 0 }
+    else
+      result = {}
+    end
+    counts.each { |k, v| result[k] = v if v > 0 || k == :TOTAL || k == :FREE }
+    result
+  end
+  module_function :count_objects
 end
 
 # An Encoding marshals by name, as in MRI: Marshal.dump(Encoding::UTF_8) loads
@@ -11795,14 +11924,14 @@ class IO
 end
 
 # MRI's prelude: Kernel#pp is there from the start and loads the pp library the
-# first time it is called; the library then replaces it with its own.
+# first time it is called; the library then replaces it with its own (a module
+# function: Kernel.pp is only public from then on).
 module Kernel
-  def pp(*objs)
+  private def pp(*objs)
     require "pp"
     objs.each { |obj| ::PP.pp(obj) }
     objs.size <= 1 ? objs.first : objs
   end
-  module_function :pp
 end unless Kernel.private_method_defined?(:pp) || Kernel.method_defined?(:pp)
 
 # MRI's prelude again: Binding#irb starts an IRB session on the binding.  The
@@ -11867,6 +11996,90 @@ end
 # A Method comes from #method, an UnboundMethod from #instance_method or #unbind.
 [::Method, ::UnboundMethod].each do |klass|
   klass.singleton_class.send(:undef_method, :new) if klass.respond_to?(:new)
+end
+
+# Ruby::Box (4.0) runs code with classes and loaded files of its own. MRI ships it disabled -
+# RUBY_BOX=1 at startup turns it on - and IronRuby does not implement it, so what is here is
+# Ruby::Box as a disabled one looks: no box is current, none can be made, and every method is
+# in the main box (Method#box is nil).
+module Ruby
+  class Box < ::Module
+    DISABLED = "Ruby Box is disabled. Set RUBY_BOX=1 environment variable to use Ruby::Box."
+    private_constant :DISABLED
+
+    class Entry
+    end
+
+    module Loader
+    end
+
+    class << self
+      def enabled?
+        false
+      end
+
+      def current
+        nil
+      end
+    end
+
+    def initialize(*)
+      ::Kernel.raise(::RuntimeError, DISABLED)
+    end
+    private :initialize
+
+    def eval(code)
+      ::Kernel.raise(::RuntimeError, DISABLED)
+    end
+
+    def load(*args)
+      ::Kernel.raise(::RuntimeError, DISABLED)
+    end
+
+    def require(path)
+      ::Kernel.raise(::RuntimeError, DISABLED)
+    end
+
+    def require_relative(path)
+      ::Kernel.raise(::RuntimeError, DISABLED)
+    end
+
+    def load_path
+      ::Kernel.raise(::RuntimeError, DISABLED)
+    end
+
+    def inspect
+      super
+    end
+  end
+end unless defined?(::Ruby::Box)
+
+class Method
+  # The Ruby::Box the method was defined in; nil while boxes are disabled.
+  def box
+    nil
+  end unless method_defined?(:box)
+end
+
+# MRI defines these with rb_define_module_function, which also gives each a private instance
+# method, for a class that includes the module. IronRuby's are singleton methods; the instance
+# copy calls the singleton.
+{
+  ::Process => %i[argv0 clock_getres clock_gettime daemon detach egid egid= euid euid= getpgid
+                  getpgrp getpriority getrlimit getsid gid gid= groups groups= initgroups kill
+                  maxgroups maxgroups= pid ppid setpgid setpgrp setpriority setproctitle setrlimit
+                  setsid times uid uid= wait wait2 waitall waitpid waitpid2 warmup],
+  ::Signal => %i[list signame trap],
+  ::ObjectSpace => %i[_id2ref count_objects define_finalizer each_object garbage_collect undefine_finalizer],
+  ::Marshal => %i[dump],
+}.each do |mod, names|
+  names.each do |name|
+    next if !mod.respond_to?(name) || mod.private_method_defined?(name, false) || mod.method_defined?(name, false)
+    mod.module_eval do
+      define_method(name) { |*args, **opts, &block| mod.__send__(name, *args, **opts, &block) }
+      private name
+    end
+  end
 end
 
 # Gem compatibility patches (see the file for the policy on adding one).

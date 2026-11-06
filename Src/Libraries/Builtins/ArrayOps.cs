@@ -37,6 +37,13 @@ namespace IronRuby.Builtins {
 
         #region Constructors
 
+        // MRI defines new on the class itself (String.singleton_methods(false) includes it); it
+        // does exactly what Class#new does.
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
+        public static RuleGenerator/*!*/ New() {
+            return new RuleGenerator(RuleGenerators.InstanceConstructor);
+        }
+
         [RubyConstructor]
         public static RubyArray/*!*/ CreateArray(BlockParam block, RubyClass/*!*/ self) {
             WarnUnusedBlock(block, self.Context);

@@ -184,7 +184,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex>(IronRuby.Builtins.RegexpOps.Create), 
                 new Func<IronRuby.Builtins.RubyClass, Microsoft.Scripting.Runtime.DynamicNull, System.Object, System.Object, IronRuby.Builtins.RubyRegex>(IronRuby.Builtins.RegexpOps.Create)
             );
-            DefineGlobalClass("String", typeof(IronRuby.Builtins.MutableString), 0x00000007, Context.ObjectClass, LoadString_Instance, null, null, new IronRuby.Builtins.RubyModule[] {def69}, 
+            DefineGlobalClass("String", typeof(IronRuby.Builtins.MutableString), 0x00000007, Context.ObjectClass, LoadString_Instance, LoadString_Class, null, new IronRuby.Builtins.RubyModule[] {def69}, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Create), 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Create), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Create), 
@@ -538,6 +538,8 @@ namespace IronRuby.Builtins {
                 0x80000000U, 
                 new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ArrayOps.MakeArray)
             );
+            
+            DefineRuleGenerator(module, "new", 0x61, IronRuby.Builtins.ArrayOps.New());
             
             DefineLibraryMethod(module, "try_convert", 0x61, 
                 0x00000000U, 
@@ -2725,6 +2727,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadGC_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__heap_sizes__", 0x62, 
+                0x00000000U, 
+                new Func<System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyGC.GetHeapSizes)
+            );
+            
             DefineLibraryMethod(module, "disable", 0x61, 
                 0x00000000U, 
                 new Func<System.Object, System.Boolean>(IronRuby.Builtins.RubyGC.Disable)
@@ -8296,6 +8303,11 @@ namespace IronRuby.Builtins {
                 0x00000000U, 
                 new Func<IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.Builtins.MutableStringOps.ValidEncoding)
             );
+            
+        }
+        
+        private static void LoadString_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineRuleGenerator(module, "new", 0x61, IronRuby.Builtins.MutableStringOps.New());
             
         }
         

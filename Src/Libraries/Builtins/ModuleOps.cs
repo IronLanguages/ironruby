@@ -1202,6 +1202,11 @@ namespace IronRuby.Builtins {
         // thread-safe:
         [RubyMethod("constants", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ GetGlobalConstants(RubyModule/*!*/ self) {
+            // MRI's rb_mod_s_constants: only Module itself lists the lexical scope; a subclass of
+            // Module (Ruby::Box, say) lists its own constants, as Module#constants does.
+            if (self != self.Context.ModuleClass) {
+                return GetDefinedConstants(self, true);
+            }
             return GetDefinedConstants(self.Context.ObjectClass, true);
         }
 
