@@ -3873,6 +3873,9 @@ t('new') { BigDecimal.new('1') }
 t('allocate') { BigDecimal.allocate }
 t('_dump') { BigDecimal('1.5')._dump }
 t('BASE') { BigDecimal::BASE.class }
+z = %w[-0 0 NaN Infinity -Infinity 1.5].map { |s| BigDecimal(s) }
+t('specials') { z.product(z).map { |x, y| [x + y, x * y, x / y, x <=> y].map { |v| v.is_a?(BigDecimal) && v.zero? ? v.sign : v.to_s } }.flatten.join(',') }
+t('x/inf raises') { BigDecimal.save_exception_mode { BigDecimal.mode(BigDecimal::EXCEPTION_INFINITY, true); BigDecimal('1') / BigDecimal('Infinity') } }
 ", @"
 ==: true
 <=>: 1
@@ -3888,6 +3891,8 @@ new: NoMethodError: undefined method 'new' for class BigDecimal
 allocate: TypeError: allocator undefined for BigDecimal
 _dump: ""18:0.15e1""
 BASE: Integer
+specials: ""-1,1,NaN,0,1,-1,NaN,0,NaN,NaN,NaN,,Infinity,NaN,-1,-1,-Infinity,NaN,1,1,0.15e1,-1,-1,-1,1,-1,NaN,0,1,1,NaN,0,NaN,NaN,NaN,,Infinity,NaN,1,-1,-Infinity,NaN,-1,1,0.15e1,1,1,-1,NaN,NaN,NaN,,NaN,NaN,NaN,,NaN,NaN,NaN,,NaN,NaN,NaN,,NaN,NaN,NaN,,NaN,NaN,NaN,,Infinity,NaN,-Infinity,1,Infinity,NaN,Infinity,1,NaN,NaN,NaN,,Infinity,Infinity,NaN,0,NaN,-Infinity,NaN,1,Infinity,Infinity,Infinity,1,-Infinity,NaN,Infinity,-1,-Infinity,NaN,-Infinity,-1,NaN,NaN,NaN,,NaN,-Infinity,NaN,-1,-Infinity,Infinity,NaN,0,-Infinity,-Infinity,-Infinity,-1,0.15e1,-1,-Infinity,1,0.15e1,1,Infinity,1,NaN,NaN,NaN,,Infinity,Infinity,1,-1,-Infinity,-Infinity,-1,1,0.3e1,0.225e1,0.1e1,0""
+x/inf raises: FloatDomainError: Computation results in 'Infinity'
 ");
         }
     }
