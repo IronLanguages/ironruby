@@ -461,7 +461,10 @@ namespace IronRuby.Builtins {
                     // read until the stream really ends: a short read is normal on a pipe,
                     // where the child may not have written the rest yet
                 } while (bytesRead > 0);
-            } else {
+            } else if (remaining > 0) {
+                // Only for bytes the buffer did not have: a read of none from a socket still waits for
+                // it to become readable, which kept `gets' then `read(n)' of what gets had already
+                // buffered waiting for more data that might never come.
                 AppendFromStream(buffer, remaining);
             }
         }

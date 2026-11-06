@@ -167,6 +167,7 @@ namespace IronRuby.Tests {
                 File_LoadBufferOffset1,
                 File_ReadLineSeparator1,
                 File_AppendBytesToEnd1,
+                File_AppendBytesFromBuffer1,
                 Dir2,
                 
                 Regex1,
