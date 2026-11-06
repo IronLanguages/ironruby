@@ -64,5 +64,6 @@ Gem::Specification.new do |s|
     "lib/puma/util.rb".freeze,
     "lib/rack/handler/puma.rb".freeze,
   ]
-  s.add_runtime_dependency "nio4r".freeze, ["~> 2.0".freeze]
+
+  s.add_runtime_dependency("nio4r".freeze, ["~> 2.0".freeze])
 end
