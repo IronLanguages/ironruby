@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -80,7 +76,6 @@ namespace IronRuby.Builtins {
 
         // TODO: how does MRI sort encodings?
 
-#if !NETFRAMEWORK
         // must precede the encoding fields below: field initializers run in textual order
         private static readonly bool _codePagesRegistered = RegisterCodePageProvider();
 
@@ -90,18 +85,13 @@ namespace IronRuby.Builtins {
             AppContext.SetSwitch("System.Text.Encoding.EnableUnsafeUTF7Encoding", true);
             return true;
         }
-#endif
 
         public static readonly RubyEncoding/*!*/ Binary = new RubyEncoding(BinaryEncoding.Instance, BinaryEncoding.Instance, -4);
         public static readonly RubyEncoding/*!*/ UTF8 = new RubyEncoding(CreateEncoding(CodePageUTF8, false), CreateEncoding(CodePageUTF8, true), -3);
 
-#if FEATURE_ENCODING
         public static readonly RubyEncoding/*!*/ Ascii = new RubyEncoding(CreateEncoding(CodePageAscii, false), CreateEncoding(CodePageAscii, true), -2);
         public static readonly RubyEncoding/*!*/ EUCJP = new RubyEncoding(CreateEncoding(CodePageEUCJP, false), CreateEncoding(CodePageEUCJP, true), -1);
         public static readonly RubyEncoding/*!*/ SJIS = new RubyEncoding(CreateEncoding(CodePageSJIS, false), CreateEncoding(CodePageSJIS, true), 0);
-#else
-        public static readonly RubyEncoding/*!*/ Ascii = UTF8;
-#endif
 
         #endregion
 
@@ -113,10 +103,8 @@ namespace IronRuby.Builtins {
         // TODO: combine into a single integer (tables could be merged)
         private readonly int _maxBytesPerChar;
         private readonly bool _isAsciiIdentity;
-#if FEATURE_ENCODING
         private bool? _isSingleByteCharacterSet;
         private bool? _isDoubleByteCharacterSet;
-#endif
 
         private RubyEncoding(Encoding/*!*/ encoding, Encoding/*!*/ strictEncoding, int ordinal) {
             Assert.NotNull(encoding, strictEncoding);
@@ -140,7 +128,6 @@ namespace IronRuby.Builtins {
         }
 
         private static Encoding/*!*/ CreateEncoding(int codepage, bool throwOnError) {
-#if FEATURE_ENCODING
             if (RubyOnlyEncodings.IsRubyOnly(codepage)) {
                 return RubyOnlyEncodings.Create(codepage, throwOnError);
             }
@@ -152,12 +139,8 @@ namespace IronRuby.Builtins {
             } else {
                 return Encoding.GetEncoding(codepage, EncoderFallback.ReplacementFallback, BinaryDecoderFallback.Instance);
             }
-#else
-            return new UTF8Encoding(false, throwOnError);
-#endif
         }
 
-#if FEATURE_ENCODING
         /// <summary>
         /// UTF-7 without System.Text.Encoding.EnableUnsafeUTF7Encoding. .NET 5+ refuses
         /// Encoding.GetEncoding(65000) unless that switch is on, and it reads the switch only once
@@ -182,10 +165,8 @@ namespace IronRuby.Builtins {
             }
             return encoding;
         }
-#endif
 
         #region Serialization
-#if FEATURE_SERIALIZATION
         private RubyEncoding(SerializationInfo/*!*/ info, StreamingContext context) {
             throw Assert.Unreachable;
         }
@@ -213,7 +194,6 @@ namespace IronRuby.Builtins {
             info.AddValue("CodePage", CodePage);
             info.SetType(typeof(Deserializer));
         }
-#endif
         #endregion
 
         public int MaxBytesPerChar {
@@ -258,7 +238,6 @@ namespace IronRuby.Builtins {
             get { return _strictEncoding; }
         }
 
-#if FEATURE_ENCODING
         private Encoding _escapingEncoding;
 
         /// <summary>
@@ -278,11 +257,6 @@ namespace IronRuby.Builtins {
                 return _escapingEncoding ?? (_escapingEncoding = new EscapingEncoding(_strictEncoding));
             }
         }
-#else
-        public Encoding/*!*/ EscapingEncoding {
-            get { return _strictEncoding; }
-        }
-#endif
 
         /// <summary>
         /// Name as displayed by MRI.
@@ -296,7 +270,6 @@ namespace IronRuby.Builtins {
         public static string GetRubySpecificName(int codepage) {
             switch (codepage) {
                 case RubyEncoding.CodePageUTF8: return "UTF-8";
-#if FEATURE_ENCODING
                 case RubyEncoding.CodePageUTF7: return "UTF-7";
                 case RubyEncoding.CodePageUTF16BE: return "UTF-16BE";
                 case RubyEncoding.CodePageUTF16LE: return "UTF-16LE";
@@ -403,7 +376,6 @@ namespace IronRuby.Builtins {
                 case 865: return "IBM865";
                 case 866: return "IBM866";
                 case 869: return "IBM869";
-#endif
                 default: return null;
             }
         }
@@ -430,10 +402,8 @@ namespace IronRuby.Builtins {
             }
 
             switch (encoding.CodePage) {
-#if FEATURE_ENCODING
                 case RubyEncoding.CodePageSJIS: return RubyRegexOptions.SJIS;
                 case RubyEncoding.CodePageEUCJP: return RubyRegexOptions.EUC;
-#endif
                 case RubyEncoding.CodePageUTF8: return RubyRegexOptions.UTF8;
             }
 
@@ -442,10 +412,8 @@ namespace IronRuby.Builtins {
 
         public static RubyEncoding GetRegexEncoding(RubyRegexOptions options) {
             switch (options & RubyRegexOptions.EncodingMask) {
-#if FEATURE_ENCODING
                 case RubyRegexOptions.EUC: return RubyEncoding.EUCJP;
                 case RubyRegexOptions.SJIS: return RubyEncoding.SJIS;
-#endif
                 case RubyRegexOptions.UTF8: return RubyEncoding.UTF8;
                 case RubyRegexOptions.FIXED: return RubyEncoding.Binary;
                 default: return null;
@@ -454,12 +422,10 @@ namespace IronRuby.Builtins {
 
         internal static int GetCodePage(int nameInitial) {
             switch (nameInitial) {
-#if FEATURE_ENCODING
                 case 'E':
                 case 'e': return CodePageEUCJP;
                 case 'S':
                 case 's': return CodePageSJIS;
-#endif
                 case 'U':
                 case 'u': return CodePageUTF8;
                 default:
@@ -478,7 +444,6 @@ namespace IronRuby.Builtins {
             }
         }
 
-#if FEATURE_ENCODING
         private static Dictionary<int, RubyEncoding> _Encodings;
         
         public static RubyEncoding/*!*/ GetRubyEncoding(Encoding/*!*/ encoding) {
@@ -875,75 +840,6 @@ namespace IronRuby.Builtins {
             // TODO: use static fields
             return Methods.CreateEncoding.OpCall(Expression.Constant(CodePage));
         }
-#else
-        public static bool AsciiIdentity(Encoding/*!*/ encoding) {
-            switch (GetCodePage(encoding)) {
-                case CodePageBinary:
-                case CodePageUTF8: 
-                    return true;
-            }
-
-            return false;
-        }
-
-        public bool IsSingleByteCharacterSet {
-            get {
-                return this == Binary;
-            }
-        }
-
-        public bool IsDoubleByteCharacterSet {
-            get {
-                return false;
-            }
-        }
-
-        public bool InUnicodeBasicPlane {
-            get {
-                return this == Binary;
-            }
-        }
-
-        public static RubyEncoding/*!*/ GetRubyEncoding(Encoding/*!*/ encoding) {
-            ContractUtils.RequiresNotNull(encoding, "encoding");
-            if (encoding == BinaryEncoding.Instance) {
-                return Binary;
-            } else if (encoding.ToString() == Encoding.UTF8.ToString()) {
-                return UTF8;
-            } else {
-                throw new ArgumentException(String.Format("Unknown encoding: '{0}'", encoding));
-            }
-        }
-
-        internal static RubyEncoding/*!*/ GetRubyEncoding(int codepage) {
-            switch (codepage) {
-                case CodePageBinary: return Binary;
-                case CodePageUTF8: return UTF8;
-                default: throw new ArgumentException(String.Format("Unknown encoding codepage: {0}", codepage));
-            }
-        }
-
-        private static int GetCodePage(Encoding/*!*/ encoding) {
-            Debug.Assert(encoding != null);
-
-            if (encoding == BinaryEncoding.Instance) {
-                return CodePageBinary;
-            }
-
-            switch (encoding.WebName.ToUpperInvariant()) {
-                case "UTF-8": return CodePageUTF8;
-                case "UTF-16": return CodePageUTF16LE;
-                case "UTF-16BE": return CodePageUTF16BE;
-            }
-            
-            throw new ArgumentException(String.Format("Unknown encoding: {0}", encoding));
-        }
-
-        Expression/*!*/ IExpressionSerializable.CreateExpression() {
-            // TODO: use a static fields, deal with KCODEs
-            return Expression.Constant(UTF8);
-        }
-#endif
     }
 
 }

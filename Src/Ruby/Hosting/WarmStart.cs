@@ -6,7 +6,6 @@
  * copy of the license can be found in the License.html file at the root of this distribution.
  *
  * ***************************************************************************/
-#if FEATURE_FULL_CONSOLE
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -1272,4 +1271,3 @@ namespace IronRuby.Hosting {
         }
     }
 }
-#endif

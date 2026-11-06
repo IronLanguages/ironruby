@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -88,7 +84,6 @@ namespace IronRuby.Builtins {
 
         #region Construction
 
-#if FEATURE_SERIALIZATION
         public RubyStruct(SerializationInfo/*!*/ info, StreamingContext context) 
             : base(info, context) {
             // TODO: deserialize _data
@@ -98,7 +93,6 @@ namespace IronRuby.Builtins {
             base.GetObjectData(info, context);
             // TODO: serialize _data
         }
-#endif
 
         // This class should not have a default constructor (or one that takes RubyClass or RubyContext)!
         // Struct class provides its own allocator (Struct#new), 

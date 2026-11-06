@@ -50,7 +50,6 @@ namespace IronRuby.Builtins {
             }
 
             private void Decode(out char[] chars, out List<byte[]> invalidCharacters) {
-#if FEATURE_ENCODING
                 Decoder decoder = _owner.Encoding.Encoding.GetDecoder();
                 var fallback = new LosslessDecoderFallback();
                 decoder.Fallback = fallback;
@@ -62,10 +61,6 @@ namespace IronRuby.Builtins {
                 decoder.GetChars(_data, 0, _count, chars, 0, true);
 
                 invalidCharacters = fallback.InvalidCharacters;
-#else
-                chars = _owner.Encoding.Encoding.GetChars(_data, 0, _count);
-                invalidCharacters = null;
-#endif
             }
 
             // TODO: we can remember both representations until a mutable operation is performed

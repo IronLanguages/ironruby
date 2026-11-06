@@ -1642,7 +1642,6 @@ namespace IronRuby.Builtins {
                 if (Tokenizer.IsHighSurrogate(c = _data[index]) && index + 1 < _data.Length && Tokenizer.IsLowSurrogate(d = _data[index + 1])) {
                     _current = new Character(c, d);
                     _index = index + 2;
-#if FEATURE_ENCODING
                 } else if (EscapingEncoding.IsEscapedByte(c)) {
                     // A byte that is not valid in the string's encoding, carried through the
                     // character representation as a lone low surrogate. It is a character for
@@ -1650,7 +1649,6 @@ namespace IronRuby.Builtins {
                     // anything else that needs a code point has to say so.
                     _current = new Character(new byte[] { (byte)(c - EscapingEncoding.EscapeBase) });
                     _index = index + 1;
-#endif
                 } else {
                     _current = new Character(c);
                     _index = index + 1;
@@ -1700,9 +1698,7 @@ namespace IronRuby.Builtins {
             private readonly char[]/*!*/ _data;
             private readonly int _count;
             private readonly List<byte[]> _invalid;
-#if FEATURE_ENCODING
             private int _invalidIndex;
-#endif
 
             internal CompositeCharacterEnumerator(RubyEncoding/*!*/ encoding, char[]/*!*/ data, int count, List<byte[]> invalid) 
                 : base(encoding) {
@@ -1716,7 +1712,6 @@ namespace IronRuby.Builtins {
             }
 
             internal override void AppendDataTo(MutableString/*!*/ str) {
-#if FEATURE_ENCODING
                 int i;
                 while (_index < _count && _invalidIndex < InvalidCount) {
                     i = Array.IndexOf(_data, LosslessDecoderFallback.InvalidCharacterPlaceholder, _index);
@@ -1724,7 +1719,6 @@ namespace IronRuby.Builtins {
                     _index = i + 1;
                     str.Append(_invalid[_invalidIndex++]);
                 }
-#endif
                 str.Append(_data, _index, _count - _index);
             }
 
@@ -1744,25 +1738,20 @@ namespace IronRuby.Builtins {
                 }
 
                 char c = _data[index];
-#if FEATURE_ENCODING
                 if (c != LosslessDecoderFallback.InvalidCharacterPlaceholder) {
-#endif
                 char d;
                     if (Tokenizer.IsHighSurrogate(c) && index + 1 < _data.Length && Tokenizer.IsLowSurrogate(d = _data[index + 1])) {
                         _current = new Character(c, d);
                         _index = index + 2;
-#if FEATURE_ENCODING
                     } else if (EscapingEncoding.IsEscapedByte(c)) {
                         // See StringCharacterEnumerator: a byte that is not valid in the string's
                         // encoding is a character, but not a valid one.
                         _current = new Character(new byte[] { (byte)(c - EscapingEncoding.EscapeBase) });
                         _index = index + 1;
-#endif
                     } else {
                         _current = new Character(c);
                         _index = index + 1;
                     }
-#if FEATURE_ENCODING
                 } else if (_invalidIndex < InvalidCount) {
                     _current = new Character(_invalid[_invalidIndex++]);
                     _index = index + 1;
@@ -1770,20 +1759,16 @@ namespace IronRuby.Builtins {
                     // this can only happen if the decoder produces invalid characters \uFFFF, which it should not:
                     throw new InvalidOperationException("Decoder produced an invalid chracter \uFFFF.");
                 }
-#endif
                 return true;
             }
 
             public override void Reset() {
                 base.Reset();
-#if FEATURE_ENCODING
                 _invalidIndex = -1;
-#endif
             }
         }
 
         internal static CharacterEnumerator/*!*/ EnumerateAsCharacters(byte[]/*!*/ data, int count, RubyEncoding/*!*/ encoding, out char[] allValid) {
-#if FEATURE_ENCODING
             Decoder decoder = encoding.Encoding.GetDecoder();
             var fallback = new LosslessDecoderFallback();
             decoder.Fallback = fallback;
@@ -1798,11 +1783,6 @@ namespace IronRuby.Builtins {
 
             allValid = (fallback.InvalidCharacters == null) ? chars : null;
             return new CompositeCharacterEnumerator(encoding, chars, chars.Length, fallback.InvalidCharacters);
-#else
-            char[] chars = encoding.Encoding.GetChars(data, 0, count);
-            allValid = null;
-            return new CompositeCharacterEnumerator(encoding, chars, chars.Length, null);
-#endif
         }
         
         /// <summary>
@@ -2756,7 +2736,6 @@ namespace IronRuby.Builtins {
 
         #region Quoted Representation (read-only)
 
-#if FEATURE_ENCODING
         private sealed class DumpDecoderFallback : DecoderFallback {
             // \xXX
             // \000
@@ -2852,13 +2831,6 @@ namespace IronRuby.Builtins {
             escapePlaceholder = ((DumpDecoderFallback.Buffer)decoder.FallbackBuffer).HasInvalidCharacters ? DumpDecoderFallback.EscapePlaceholder : -1;
             return new String(chars);
         }
-#else
-        private static string/*!*/ ToStringWithEscapedInvalidCharacters(byte[]/*!*/ bytes, Encoding/*!*/ encoding, bool octalEscapes, out int escapePlaceholder) {
-            // fallback not supported, just replace invalid characters with the default replacement:
-            escapePlaceholder = -1;
-            return new String(encoding.GetChars(bytes));
-        }
-#endif
 
         // TODO: make struct and include quote character
         [Flags]
