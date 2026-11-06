@@ -48,10 +48,8 @@ namespace IronRuby.Compiler.Generation {
             return Object.ReferenceEquals(obj, Instance);
         }
 
-#if FEATURE_REFEMIT
         public IFeatureBuilder/*!*/ MakeBuilder(TypeBuilder/*!*/ tb) {
             return new RubyTypeBuilder(tb);
         }
-#endif
     }
 }
