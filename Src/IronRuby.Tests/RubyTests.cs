@@ -438,6 +438,7 @@ namespace IronRuby.Tests {
                 RubyHosting1D,
                 RubyHosting1E,
                 RubyHosting1F,
+                RubyHosting1G,
                 RubyHosting2,
                 RubyHosting3,
                 RubyHosting4,
