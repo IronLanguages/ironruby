@@ -804,5 +804,27 @@ Caught LoadError
 ");
         }
 
+        /// <summary>
+        /// A subclass of SystemCallError reads its errno from its Errno constant, which for a class outside
+        /// Errno is the Errno module (a TypeError, as in MRI). The location is shown only with a message.
+        /// </summary>
+        public void SystemCallErrorSubclass1() {
+            TestOutput(@"
+class MyErr < SystemCallError; end
+class MyErr2 < SystemCallError; Errno = 7; end
+class E2 < Errno::ENOENT; end
+[
+  -> { MyErr.new('a', 10054) }, -> { MyErr.new }, -> { MyErr.new(1, 2, 3) },
+  -> { MyErr2.new('q', 'f') }, -> { E2.new('x', 3) }, -> { SystemCallError.new(nil, 2, 'fn') },
+].each { |l| p((l.call rescue $!)) }
+", @"
+#<TypeError: no implicit conversion of Module into Integer>
+#<TypeError: no implicit conversion of Module into Integer>
+#<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
+#<MyErr2: Argument list too long @ f - q>
+#<E2: No such file or directory @ 3 - x>
+#<Errno::ENOENT: No such file or directory>
+");
+        }
     }
 }
