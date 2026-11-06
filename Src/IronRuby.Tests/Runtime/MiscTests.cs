@@ -3829,6 +3829,29 @@ broken mid: nil
         }
 
         /// <summary>
+        /// A thread Ruby has just started is "run" (or already done), as in MRI: the CLR reports it as WaitSleepJoin while
+        /// the OS brings it up, which made Thread#status say "sleep" right after Thread.new most of the time - and
+        /// ruby/spec's block_caller matcher decide that Mutex#lock on a free mutex blocked.
+        /// </summary>
+        public void Thread_StatusAtStart1() {
+            TestOutput(@"
+statuses = Array.new(200) { t = Thread.new { 1 }; s = t.status; t.join; s }
+p statuses.include?(""sleep""), (statuses - [""run"", false])
+t = Thread.new { sleep }
+deadline = Time.now + 10
+Thread.pass until t.status == ""sleep"" || Time.now > deadline
+p t.status
+t.kill; t.join
+p t.status
+", @"
+false
+[]
+""sleep""
+false
+");
+        }
+
+        /// <summary>
         /// Thread.stop with no other thread alive is MRI's ThreadError "stopping only thread" (rb_thread_stop),
         /// where it slept forever. A fiber runs on a CLR thread of its own here but is part of the thread that
         /// owns it, so neither it nor its thread counts as another thread - for Thread.stop, nor for Thread.list

@@ -167,6 +167,7 @@ namespace IronRuby.Tests {
                 File_LoadBufferOffset1,
                 File_ReadLineSeparator1,
                 File_AppendBytesToEnd1,
+                File_AppendBytesFromBuffer1,
                 Dir2,
                 
                 Regex1,
@@ -488,6 +489,7 @@ namespace IronRuby.Tests {
                 ComparableEqual1,
                 Hooks1,
                 Hooks2,
+                Hooks2b,
                 Hooks3,
                 MethodLookupCacheFull1,
                 Hooks4,
@@ -927,6 +929,7 @@ namespace IronRuby.Tests {
                 IO_SysOpenPermission1,
                 String_BrokenPattern1,
                 Thread_StopAlone1,
+                Thread_StatusAtStart1,
                 Thread_HostMainThread1,
                 Thread_HostMainThread2,
                 Windows_NotImplementedAndLinks1,

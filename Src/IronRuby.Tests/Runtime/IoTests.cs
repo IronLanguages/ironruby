@@ -284,6 +284,39 @@ end
             }
         }
 
+        // A stream that, like a socket's, must not be read once its data is all in the buffer: a
+        // socket's Read waits for the socket to become readable even when asked for no bytes.
+        private sealed class NoReadStream : TestStream {
+            public bool Forbidden;
+
+            public NoReadStream(byte[] data)
+                : base(data) {
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) {
+                if (Forbidden) {
+                    throw new InvalidOperationException("read from a stream whose data is all buffered");
+                }
+                return base.Read(buffer, offset, count);
+            }
+        }
+
+        [Options(NoRuntime = true)]
+        public void File_AppendBytesFromBuffer1() {
+            // `gets' then `read(n)' of bytes gets has already buffered (Net::HTTP's test server reads a
+            // request body that way): the read is answered from the buffer alone.
+            foreach (bool preserveEndOfLines in new[] { true, false }) {
+                var stream = new NoReadStream(B("POST /\r\n\r\ntest=test"));
+                var io = new RubyBufferedStream(stream, false, 64);
+                Assert(io.ReadLineOrParagraph(MutableString.CreateAscii("\r\n\r\n"), RubyEncoding.Binary, true, Int32.MaxValue).ToString() == "POST /\r\n\r\n");
+                stream.Forbidden = true;
+                var buffer = MutableString.CreateBinary();
+                Assert(io.AppendBytes(buffer, 9, preserveEndOfLines) == 9);
+                Assert(buffer.ToString() == "test=test");
+                Assert(!io.DataBuffered);
+            }
+        }
+
         public class Pal1 : PlatformAdaptationLayer {
             // case sensitive
             public readonly Dictionary<string, bool> Entries = new Dictionary<string, bool>();

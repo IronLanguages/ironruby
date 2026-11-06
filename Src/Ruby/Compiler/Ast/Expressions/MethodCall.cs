@@ -68,7 +68,8 @@ namespace IronRuby.Compiler.Ast {
             var array = _target as ArrayConstructor;
             if (array != null && (_methodName == "min" || _methodName == "max") && (Arguments == null || Arguments.IsEmpty) && Block == null) {
                 int splattedCount;
-                if (array.Arguments.Expressions.Length == 2 && array.Arguments.IndexOfSplatted(out splattedCount) < 0) {
+                if (array.Arguments.Expressions.Length == 2 && array.Arguments.IndexOfSplatted(out splattedCount) < 0 &&
+                    !(IsStaticLiteral(array.Arguments.Expressions[0]) && IsStaticLiteral(array.Arguments.Expressions[1]))) {
                     return TransformArrayLiteralExtreme(gen, array.Arguments.Expressions[0], array.Arguments.Expressions[1]);
                 }
             }
@@ -84,6 +85,12 @@ namespace IronRuby.Compiler.Ast {
                 hasImplicitSelf = true;
             }
             return TransformRead(this, gen, hasImplicitSelf, _methodName, transformedTarget, Arguments, Block, null, null);
+        }
+
+        // CRuby makes an array of numbers, symbols, nil, true and false once (duparray) and calls #min (#max)
+        // on it - a call a :c_call TracePoint sees - and answers only the other arrays without the call.
+        private static bool IsStaticLiteral(Expression/*!*/ expression) {
+            return expression is Literal || expression is SymbolLiteral;
         }
 
         // `[a, b].min' and `[a, b].max', the commonest way Ruby spells the smaller (larger) of two
