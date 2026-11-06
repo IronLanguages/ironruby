@@ -12866,6 +12866,11 @@ module Kernel
     if !basic && object.respond_to?(:to_str)
       converted = object.to_str
       return converted if converted.is_a?(::String)
+      # rb_check_string_type: nil means "no conversion" and #to_s is tried; anything else is wrong
+      unless converted.nil?
+        ::Kernel.raise(::TypeError,
+          "can't convert #{object.class} to String (#{object.class}#to_str gives #{__ir_conversion_result_name__(converted)})")
+      end
     end
     # rb_check_funcall: a user-defined respond_to? can veto the call; otherwise a missing
     # #to_s still goes to method_missing, and only a NoMethodError for it means "cannot".

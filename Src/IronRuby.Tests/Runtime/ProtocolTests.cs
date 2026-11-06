@@ -346,5 +346,78 @@ puts ""(#{c})""
                 Assert(!ReferenceEquals(action, shared));
             }
         }
+
+        /// <summary>
+        /// Error and warning wording checked against CRuby 4.0.
+        /// </summary>
+        public void ErrorMessages_Ruby40() {
+            AssertOutput(delegate() {
+                Engine.CreateScriptSourceFromString(@"
+def t
+  r = yield
+  puts ""=> #{r.inspect}""
+rescue Exception => e
+  puts ""#{e.class}: #{e.message}""
+end
+class BadInt; def to_int; 'x'; end; end
+class BadIO; def to_io; 1; end; end
+t { [1, 2][BadInt.new] }
+t { 'a'.split(1) }
+t { 'a'.scan(1) }
+t { IO.select([BadIO.new]) }
+t { IO.select([1]) }
+t { sleep('a') }
+t { sleep(-1) }
+t { 'abc'.sub }
+t { 'abc'.sub { } }
+t { 'abc'.dup.sub!('a') }
+t { 'abc'.dup.sub!('a', 'b') { } }
+t { 'abc'.sub('a', 'b', 'c') }
+t { 1.round(1, 2) }
+t { ""\xff"".force_encoding(""BINARY"") + ""é"" }
+t { /é/ =~ ""\xff"".force_encoding(""BINARY"") }
+def f1(a, k:); end
+def f2(a, b = 1, k:, j:); end
+t { f1(1, 2) }
+t { f1(k: 1) }
+t { f2(k: 1, j: 2) }
+t { Module.new.class_eval { raise 'x' } rescue $!.backtrace.grep(/Module#/) }
+t { Module.new.class_exec { raise 'x' } rescue $!.backtrace.grep(/Module#/) }
+$stderr = $stdout
+X = 1
+X = 2
+$VERBOSE = true
+t { Float('1e400') }
+t { '-1e-400'.to_f }
+", "ErrorMessages.rb", Microsoft.Scripting.SourceCodeKind.File).Execute();
+            }, @"
+TypeError: can't convert BadInt to Integer (BadInt#to_int gives String)
+TypeError: wrong argument type Integer (expected Regexp)
+TypeError: wrong argument type Integer (expected Regexp)
+TypeError: can't convert BadIO to IO (BadIO#to_io gives Integer)
+TypeError: no implicit conversion of Integer into IO
+TypeError: can't convert String into time interval
+ArgumentError: time interval must not be negative
+ArgumentError: wrong number of arguments (given 0, expected 2)
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+ArgumentError: wrong number of arguments (given 1, expected 2)
+=> ""bbc""
+ArgumentError: wrong number of arguments (given 3, expected 2)
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+Encoding::CompatibilityError: incompatible encoding regexp match (UTF-8 regexp with BINARY (ASCII-8BIT) string)
+ArgumentError: wrong number of arguments (given 2, expected 1; required keyword: k)
+ArgumentError: wrong number of arguments (given 0, expected 1; required keyword: k)
+ArgumentError: wrong number of arguments (given 0, expected 1..2; required keywords: k, j)
+=> [""ErrorMessages.rb:30:in 'Module#class_eval'""]
+=> [""ErrorMessages.rb:31:in 'Module#class_exec'""]
+ErrorMessages.rb:*: warning: already initialized constant X
+ErrorMessages.rb:33: warning: previous definition of X was here
+ErrorMessages.rb:36: warning: Float 1e400 out of range
+=> Infinity
+ErrorMessages.rb:37: warning: Float -1e-400 out of range
+=> -0.0
+", OutputFlags.Match);
+        }
     }
 }
