@@ -3148,6 +3148,30 @@ symlink existing: Errno::EEXIST
         }
 
         /// <summary>
+        /// Keyword calls that leave optional positionals out go straight into the JIT's specialized body
+        /// (JitKeywordCall): the call site fills in the literal defaults of the positionals it does not
+        /// pass. The loop runs long enough for the methods to be specialized. The expected output is CRuby's.
+        /// </summary>
+        public void Method_OptionalAndKeywordParameters2() {
+            TestOutput(@"
+require 'ruby4'
+def d1(a, b = 2, k: 3) = [a, b, k]
+def d4(b = 1, k: 2) = [b, k]
+def d5(b = 1, c = 2.5, k: 2, j: nil) = [b, c, k, j]
+def di(a, b = 2, k: 3) = a + b + k
+class DC; def m(a, b = :d, k: 1) = [a, b, k]; end
+o = DC.new
+r = nil
+3000.times do |i|
+  r = [d1(1, k: 9), d1(1, 5, k: 9), d4(k: 6), d4(5, k: 6), d5(k: 1), d5(3, k: 1, j: 2), d5(3, 4, j: 1), di(i, k: 1), di(i, 1, k: 1), o.m(1, k: 2), o.m(1, 2, k: 3)]
+end
+p r
+", @"
+[[1, 2, 9], [1, 5, 9], [1, 6], [5, 6], [1, 2.5, 1, nil], [3, 2.5, 1, 2], [3, 4, 2, 1], 3002, 3001, [1, :d, 2], [1, 2, 3]]
+");
+        }
+
+        /// <summary>
         /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
         /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
         /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the
