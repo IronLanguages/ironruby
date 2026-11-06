@@ -158,10 +158,20 @@ namespace IronRuby.Hosting {
         /// one is an error ("-Eascii:ascii -U").
         /// </summary>
         private static void SetEncodingOnce(string/*!*/ type, ref string name, string/*!*/ value) {
+            // The name is resolved once the runtime exists (the locale and its kin depend on it),
+            // but one that names nothing is an error of the command line, reported as MRI does.
+            if (RubyEncoding.FindByName(value) == null && !IsRuntimeEncodingName(value)) {
+                throw new InvalidOptionException(String.Format("ir: unknown encoding name - {0} (RuntimeError)", value));
+            }
             if (name != null && !String.Equals(name, value, StringComparison.OrdinalIgnoreCase)) {
                 throw new InvalidOptionException(String.Format("ir: {0} already set to {1} (RuntimeError)", type, name));
             }
             name = value;
+        }
+
+        private static bool IsRuntimeEncodingName(string/*!*/ name) {
+            return name.Equals("locale", StringComparison.OrdinalIgnoreCase) || name.Equals("external", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("filesystem", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
