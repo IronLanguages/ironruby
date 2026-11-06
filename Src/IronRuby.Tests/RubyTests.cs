@@ -481,6 +481,7 @@ namespace IronRuby.Tests {
                 Require_UnreadableExtensions2,
                 CaseEquals1,
                 CaseEquals2,
+                ComparableEqual1,
                 Hooks1,
                 Hooks2,
                 Hooks3,
