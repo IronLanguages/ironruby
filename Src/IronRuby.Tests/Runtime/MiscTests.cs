@@ -3202,6 +3202,7 @@ t('Complex()') { [Complex(1, 2), Complex(""3""), Complex(nil, exception: false),
 t('cerr') { Complex(nil) }
 t('hypot') { [Math.hypot(3.5, 1), Math.hypot(3, 4), Math.hypot(1e300, 1e300), Math.hypot(1e-300, 1e-300), Math.hypot(-0.0, 0), Math.hypot(Float::INFINITY, Float::NAN), Math.hypot(5e-324, 5e-324)] }
 t('undef') { [Complex.instance_method(:==).owner, (Complex(1) < 2 rescue $!.class)] }
+t('int32 edge') { m = -2147483648; x = 2147483647; [Complex(m, m) * Complex(m, m), Complex(x, x) * Complex(x, -x), Complex(m, x) * Complex(x, m), Complex(m, 0) * m + Complex(m, 0) * m, Complex(x, x) + Complex(x, x), Complex(m, m) - Complex(x, x)] }
 ", @"
 basic: [(1+2i), 1, 2, 2, true, [], Numeric, (1+0i), (1.5+0i), (1+2i)]
 add: [(4.5+1i), (2+2i), (3.5+2i), ((3/2)+5i), (-2.5+3i), (0+2i), ((4/3)+2i), (-1-2i), (1+2i)]
@@ -3223,6 +3224,7 @@ Complex(): [(1+2i), (3+0i), nil, nil, (1+2.0i)]
 cerr: [TypeError, ""can't convert nil into Complex""]
 hypot: [3.640054944640259, 5.0, 1.4142135623730952e+300, 1.414213562373095e-300, 0.0, Infinity, 5.0e-324]
 undef: [Complex, NoMethodError]
+int32 edge: [(0+9223372036854775808i), (9223372028264841218+0i), (0+9223372032559808513i), (9223372036854775808+0i), (4294967294+4294967294i), (-4294967295-4294967295i)]
 ");
         }
 
@@ -3266,6 +3268,7 @@ t('kw') { [Rational(1, 2, exception: false), Rational(""1/2"", exception: true)]
 t('badkw') { Rational(1, exception: 1) }
 t('Kernel.') { Kernel.Rational(3, 9) }
 t('arity') { method(:Rational).arity }
+t('int32 edge') { [Rational(2**31 - 1, 2**31 - 2) + Rational(-2**31, 2**31 - 1), Rational(-2**31, 1) * Rational(-2**31, 1), Rational(2**31, 3) / Rational(-2**31, 7), Rational(-2**31, 2**31 - 1) <=> Rational(2**31 - 1, 2**31 - 2), Rational(2**31 - 1) + (2**31 - 1), Rational(2**31, 1) + 1, Rational(-2**31, 3) - Rational(2**31 - 1, 5), Rational(2**31 - 1, -(2**31)), (-2**31) ** -1, (-2**31) ** -2] }
 t('class') { [Rational(1, 3).class, Rational(4, 2).denominator.class] }
 ", @"
 add: [(-1/15), (4/3), (3541774862152233910273/3), 0.8333333333333333, (1180591620717411303425/3), (2361183241434822606848/3), (11/15), (-8/3), (-11/15), (0/1)]
@@ -3297,6 +3300,7 @@ kw: [(1/2), (1/2)]
 badkw: [ArgumentError, ""expected true or false as exception: 1""]
 Kernel.: (1/3)
 arity: -1
+int32 edge: [(1/4611686011984936962), (4611686018427387904/1), (-7/3), -1, (4294967294/1), (2147483649/1), (-17179869181/15), (-2147483647/2147483648), (-1/2147483648), (1/4611686018427387904)]
 class: [Rational, Integer]
 ");
         }

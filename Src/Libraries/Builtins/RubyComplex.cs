@@ -101,15 +101,25 @@ namespace IronRuby.Builtins {
             return v;
         }
 
+        // The operands can be products of two Int32-sized parts (comp_mul), so a sum or difference of
+        // two of them can pass a long: Complex(-2**31, -2**31) ** 2 has 2**63 for its imaginary part.
         private static object Plus(object x, object y) {
             long a, b;
-            if (TryLong(x, out a) && TryLong(y, out b)) { return Protocols.Normalize(a + b); }
+            if (TryLong(x, out a) && TryLong(y, out b)) {
+                long r = unchecked(a + b);
+                if (((a ^ r) & (b ^ r)) < 0) { return Protocols.Normalize((BigInteger)a + b); }
+                return Protocols.Normalize(r);
+            }
             return D(x) + D(y);
         }
 
         private static object Minus(object x, object y) {
             long a, b;
-            if (TryLong(x, out a) && TryLong(y, out b)) { return Protocols.Normalize(a - b); }
+            if (TryLong(x, out a) && TryLong(y, out b)) {
+                long r = unchecked(a - b);
+                if (((a ^ b) & (a ^ r)) < 0) { return Protocols.Normalize((BigInteger)a - b); }
+                return Protocols.Normalize(r);
+            }
             return D(x) - D(y);
         }
 
