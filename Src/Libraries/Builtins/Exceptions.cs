@@ -210,6 +210,33 @@ namespace IronRuby.Builtins {
         public static MutableString GetPath(RubyContext/*!*/ context, SyntaxError/*!*/ self) {
             return self.File == null ? null : context.EncodePath(self.File);
         }
+
+        /// <summary>
+        /// A SyntaxError made with no message at all says "compile error" (an explicit nil still
+        /// gives the class name, as for any exception). SyntaxError.new is the constructor, a
+        /// subclass's #new is #allocate and #initialize.
+        /// </summary>
+        [RubyConstructor]
+        public static SyntaxError/*!*/ Create(RubyClass/*!*/ self) {
+            return Create(self, MutableString.CreateAscii("compile error"));
+        }
+
+        [RubyConstructor]
+        public static SyntaxError/*!*/ Create(RubyClass/*!*/ self, object message) {
+            var result = new SyntaxError(RubyExceptionData.GetClrMessage(self, message));
+            RubyExceptionData.InitializeException(result, message);
+            return result;
+        }
+
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static Exception/*!*/ Initialize(RubyContext/*!*/ context, SyntaxError/*!*/ self) {
+            return ExceptionOps.ReinitializeException(context, self, MutableString.CreateAscii("compile error"));
+        }
+
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static Exception/*!*/ Initialize(RubyContext/*!*/ context, SyntaxError/*!*/ self, object message) {
+            return ExceptionOps.ReinitializeException(context, self, message);
+        }
     }
 
     [RubyException("SystemStackError", Extends = typeof(SystemStackError), Inherits = typeof(Exception))]
@@ -252,7 +279,7 @@ namespace IronRuby.Builtins {
         /// :receiver. NoMethodError inherits this parsing through NoMethodErrorOps.Factory.
         /// </summary>
         [RubyConstructor]
-        public static MemberAccessException/*!*/ Factory(RubyClass/*!*/ self, params object[]/*!*/ args) {
+        public static MemberAccessException/*!*/ Factory(RubyScope/*!*/ scope, RubyClass/*!*/ self, params object[]/*!*/ args) {
             object receiver;
             bool hasReceiver = TryTakeReceiverKeyword(ref args, out receiver);
             if (args.Length > 2) {
@@ -268,6 +295,7 @@ namespace IronRuby.Builtins {
             if (hasReceiver) {
                 data.SetReceiver(receiver);
             }
+            data.LocalVariables = scope.GetLocalVariableSymbols();
             return result;
         }
 
@@ -283,6 +311,17 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("no receiver is available");
             }
             return data.Receiver;
+        }
+
+        /// <summary>
+        /// The local variables of the scope the error was made in - where an undefined local
+        /// variable or method was named, or NameError.new was called - which did_you_mean offers
+        /// as corrections.
+        /// </summary>
+        [RubyMethod("local_variables")]
+        public static RubyArray/*!*/ GetLocalVariables(Exception/*!*/ self) {
+            var data = RubyExceptionData.GetInstance(self);
+            return data.LocalVariables ?? (data.LocalVariables = new RubyArray());
         }
 
         /// <summary>
@@ -322,7 +361,7 @@ namespace IronRuby.Builtins {
         /// NoMethodError.new([message [, name [, args [, priv]]]] [, receiver: obj]).
         /// </summary>
         [RubyConstructor]
-        public static MissingMethodException/*!*/ Factory(RubyClass/*!*/ self, params object[]/*!*/ allArgs) {
+        public static MissingMethodException/*!*/ Factory(RubyScope/*!*/ scope, RubyClass/*!*/ self, params object[]/*!*/ allArgs) {
             object receiver;
             bool hasReceiver = NameErrorOps.TryTakeReceiverKeyword(ref allArgs, out receiver);
             if (allArgs.Length > 4) {
@@ -344,6 +383,7 @@ namespace IronRuby.Builtins {
             }
             data.Arguments = args;
             data.PrivateCall = privateCall;
+            data.LocalVariables = scope.GetLocalVariableSymbols();
             return result;
         }
 

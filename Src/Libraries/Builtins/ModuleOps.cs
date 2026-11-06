@@ -1476,7 +1476,9 @@ namespace IronRuby.Builtins {
             return names;
         }
 
+        // MRI's rb_mod_const_missing pops its own frame: the NameError is raised where the constant was named
         [RubyMethod("const_missing")]
+        [RubyStackTraceHidden]
         public static object ConstantMissing(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
             return self.Context.ResolveMissingConstant(self, name);
         }

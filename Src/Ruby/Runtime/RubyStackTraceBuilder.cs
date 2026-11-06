@@ -613,6 +613,24 @@ namespace IronRuby.Runtime {
             return file != null && (file.StartsWith("<internal:", StringComparison.Ordinal) || IsInternalFile(file));
         }
 
+        /// <summary>
+        /// A frame put on top of <paramref name="backtrace"/> for the method an arity error was raised for:
+        /// at the method's definition, or with no <paramref name="file"/> (a library method) where the
+        /// backtrace's top frame is, as MRI reports a C method.
+        /// </summary>
+        internal static MutableString/*!*/ FormatCalleeFrame(RubyArray/*!*/ backtrace, string file, int line, string/*!*/ label) {
+            if (file != null) {
+                return MutableString.Create(FormatFrame(file, line, label), RubyEncoding.UTF8);
+            }
+            var top = (backtrace.Count > 0) ? backtrace[0] as MutableString : null;
+            if (top == null) {
+                return MutableString.Create("in '" + label + "'", RubyEncoding.UTF8);
+            }
+            string text = top.ToString();
+            int at = text.IndexOf(":in '", StringComparison.Ordinal);
+            return MutableString.Create((at < 0 ? text : text.Substring(0, at)) + ":in '" + label + "'", top.Encoding);
+        }
+
         private static string/*!*/ FormatFrame(string file, int line, string methodName) {
             // an eval with a starting line below 1 (see RubyUtils.EncodeEvalLineOffset):
             line += RubyUtils.DecodeEvalLineOffset(ref file);

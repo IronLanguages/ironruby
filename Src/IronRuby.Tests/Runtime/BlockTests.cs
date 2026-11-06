@@ -125,7 +125,8 @@ end
         }
 
         public void RubyBlocks2() {
-            AssertExceptionThrown<MissingMethodException>(delegate() {
+            // NameError: undefined local variable or method 'z'
+            AssertExceptionThrown<MemberAccessException>(delegate() {
                 CompilerTest(@"
 3.times { |x| z = 1 }
 puts z # undef z

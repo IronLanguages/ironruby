@@ -3405,19 +3405,29 @@ namespace IronRuby.Runtime {
         }
 
         // MRI's method_missing_reason: whether the call that is about to reach a user-defined
-        // method_missing had an implicit receiver, read back by BasicObject#method_missing when
-        // that definition calls super, so that NoMethodError#private_call? can answer.
+        // method_missing had an implicit receiver, and whether it was a bare name that could have
+        // been a local variable, read back by BasicObject#method_missing when that definition
+        // calls super, so that NoMethodError#private_call? can answer and a bare name raises
+        // NameError ("undefined local variable or method").
         [ThreadStatic]
         private static bool _methodMissingPrivateCall;
+        [ThreadStatic]
+        private static bool _methodMissingVariableCall;
 
         public static bool MethodMissingPrivateCall {
             get { return _methodMissingPrivateCall; }
             set { _methodMissingPrivateCall = value; }
         }
 
+        public static bool MethodMissingVariableCall {
+            get { return _methodMissingVariableCall; }
+            set { _methodMissingVariableCall = value; }
+        }
+
         [Emitted]
-        public static void SetMethodMissingReason(bool privateCall) {
+        public static void SetMethodMissingReason(bool privateCall, bool variableCall) {
             _methodMissingPrivateCall = privateCall;
+            _methodMissingVariableCall = variableCall;
         }
 
         [Emitted]
@@ -3435,9 +3445,23 @@ namespace IronRuby.Runtime {
             return error;
         }
 
+        /// <summary>
+        /// The frame of the method an ArgumentError for the wrong number of arguments was raised for:
+        /// the backtrace starts with it, as MRI's does (see MetaObjectBuilder.AddCalleeFrame). No file
+        /// for a library method, whose frame is at the call.
+        /// </summary>
         [Emitted]
-        public static Exception/*!*/ MakeUndefinedLocalOrMethodError(RubyContext/*!*/ context, object self, string/*!*/ methodName) {
-            return RubyExceptions.CreateUndefinedLocalOrMethod(context, self, methodName);
+        public static Exception/*!*/ SetCalleeFrame(Exception/*!*/ error, string file, int line, string/*!*/ label) {
+            RubyExceptionData.GetInstance(error).SetCalleeFrame(file, line, label);
+            return error;
+        }
+
+        [Emitted]
+        public static Exception/*!*/ MakeUndefinedLocalOrMethodError(RubyContext/*!*/ context, RubyScope/*!*/ scope, object self, string/*!*/ methodName) {
+            var error = RubyExceptions.CreateUndefinedLocalOrMethod(context, self, methodName);
+            // NameError#local_variables: the locals the name might have been meant as (did_you_mean)
+            RubyExceptionData.GetInstance(error).LocalVariables = scope.GetLocalVariableSymbols();
+            return error;
         }
 
         [Emitted]

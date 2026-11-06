@@ -476,6 +476,24 @@ namespace IronRuby.Runtime {
             get { return null; }
         }
 
+        /// <summary>
+        /// Kernel#local_variables: the names of the locals visible here, as symbols, without the
+        /// compiler's own (`?rest?', `?kw?' and the like keep anonymous and forwarded parameters
+        /// and the arguments a zsuper passes on).
+        /// </summary>
+        public RubyArray/*!*/ GetLocalVariableSymbols() {
+            var names = GetVisibleLocalNames();
+            // an isolated proc (Ractor.new's block, a shareable proc) sees none of the locals around it
+            var isolated = GetIsolatedLocalNames();
+            if (isolated != null) {
+                names.RemoveAll(isolated.Contains);
+            }
+            // `?rest?', `?kw?' and the like are the compiler's: where anonymous and forwarded
+            // parameters, and the argument list a zsuper passes on, are kept
+            names.RemoveAll(name => name.Length > 0 && name[0] == '?');
+            return new RubyArray(names.Count).AddRange(RubyContext.StringifyIdentifiers(names));
+        }
+
         public List<string/*!*/>/*!*/ GetVisibleLocalNames() {
             var result = new List<string>();
             // a block parameter shadowing an outer local is the same name twice on the way up,

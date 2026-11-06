@@ -281,10 +281,8 @@ namespace IronRuby.Builtins {
 
     public class SyntaxError : ScriptError {
         private readonly string _file;
-        private readonly string _lineSourceCode;
         private readonly string _description;
         private readonly int _line;
-        private readonly int _column;
         private readonly bool _hasLineInfo;
 
         public SyntaxError() : this(null, null) { }
@@ -302,14 +300,6 @@ namespace IronRuby.Builtins {
             get { return _line; }
         }
 
-        internal int Column {
-            get { return _column; }
-        }
-
-        internal string LineSourceCode {
-            get { return _lineSourceCode; }
-        }
-
         internal bool HasLineInfo {
             get { return _hasLineInfo; }
         }
@@ -321,13 +311,11 @@ namespace IronRuby.Builtins {
             get { return _description ?? Message; }
         }
 
-        internal SyntaxError(string/*!*/ description, string file, int line, int column, string lineSourceCode) 
+        internal SyntaxError(string/*!*/ description, string file, int line)
             : base(file != null ? String.Format("{0}:{1}: {2}", file, line, description) : description) {
             _description = description;
             _file = file;
             _line = line;
-            _column = column;
-            _lineSourceCode = lineSourceCode;
             _hasLineInfo = true;
         }
     }

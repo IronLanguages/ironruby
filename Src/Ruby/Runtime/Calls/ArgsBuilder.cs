@@ -154,16 +154,16 @@ namespace IronRuby.Runtime.Calls {
                         given
                     );
                 }
-                metaBuilder.SetError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                metaBuilder.SetArityError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
                     given, AstUtils.Constant(_keywordSignature.DescribeExpectedArguments())
                 ));
             } else if (_hasUnsplatParameter) {
-                metaBuilder.SetError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                metaBuilder.SetArityError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
                     AstUtils.Constant(_actualArgumentCount),
                     AstUtils.Constant(_mandatoryParamCount.ToString(System.Globalization.CultureInfo.InvariantCulture) + "+")
                 ));
             } else if (_optionalParamCount > 0) {
-                metaBuilder.SetError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                metaBuilder.SetArityError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
                     AstUtils.Constant(_actualArgumentCount),
                     AstUtils.Constant(
                         _mandatoryParamCount.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".." +

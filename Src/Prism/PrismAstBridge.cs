@@ -211,6 +211,14 @@ namespace IronRuby.Prism {
 
             if (result.Errors.Count > 0) {
                 if (errorSink != null && sourceUnit != null) {
+                    // A SyntaxError's message is MRI's: "syntax errors found" and prism's picture of where,
+                    // at the line of the first error prism found (not the first in the source). Any other
+                    // sink - a host's - is told of each error.
+                    string formatted = (errorSink is RuntimeErrorSink) ? SyntaxErrorDescription(result, bridge._startLine + bridge._lineOffset) : null;
+                    if (formatted != null) {
+                        errorSink.Add(sourceUnit, formatted, bridge.Span(result.Errors[0].Location), 0, Severity.FatalError);
+                        return null;
+                    }
                     foreach (var error in result.Errors) {
                         errorSink.Add(sourceUnit, error.Message, bridge.Span(error.Location), 0, Severity.FatalError);
                     }
@@ -230,6 +238,33 @@ namespace IronRuby.Prism {
             }
 
             return bridge.Program((Pm.ProgramNode)result.Root, outerLocalNames, result.DataOffset);
+        }
+
+        /// <summary>
+        /// What a SyntaxError says after its "file:line: ": prism's layout of the errors (see
+        /// PrismParser.FormatErrors) without the location prism puts in front of it, which the
+        /// error sink adds - eval decodes the file name and line its own way. Colored, as MRI's is,
+        /// when $stderr is a terminal (bold only under NO_COLOR).
+        /// </summary>
+        private static string SyntaxErrorDescription(PrismParseResult/*!*/ result, int startLine) {
+            int formatType = 1;
+            if (!Console.IsErrorRedirected) {
+                formatType = String.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR")) ? 3 : 2;
+            }
+            string formatted;
+            try {
+                formatted = PrismParser.FormatErrors(result, formatType, startLine);
+            } catch (Exception) {
+                // no layout: the first error's message, as before
+                return null;
+            }
+            if (formatted == null) {
+                return null;
+            }
+            string header = (result.Errors.Count > 1) ? ": syntax errors found\n" : ": syntax error found\n";
+            int end = formatted.IndexOf('\n');
+            int at = (end < 0) ? -1 : formatted.LastIndexOf(header, end, StringComparison.Ordinal);
+            return (at < 0) ? null : formatted.Substring(at + 2);
         }
 
         /// <summary>

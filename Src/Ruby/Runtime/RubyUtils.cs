@@ -1344,7 +1344,7 @@ namespace IronRuby.Runtime {
                     int reportedLine = (line <= 0) ? e.Line - 1 + line : e.Line;
                     string errorFile = e.File;
                     DecodeEvalLineOffset(ref errorFile);
-                    throw new SyntaxError(e.Description, errorFile, reportedLine, e.Column, e.LineSourceCode);
+                    throw new SyntaxError(e.Description, errorFile, reportedLine);
                 }
                 throw;
             }
