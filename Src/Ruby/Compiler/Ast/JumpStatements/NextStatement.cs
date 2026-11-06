@@ -26,7 +26,7 @@ namespace IronRuby.Compiler.Ast {
             : base(arguments, location) {
         }
 
-        // see Ruby Language.doc/Runtime/Control Flow Implementation/Next
+        // see Docs/Ruby Language.docx, Runtime/Control Flow Implementation/Next
         // a class body inside the loop has to be left first
         private static MSA.Expression/*!*/ LoopNext(AstGenerator/*!*/ gen, MSA.Expression/*!*/ value) {
             var module = gen.GetModuleBodyToEscape(true);

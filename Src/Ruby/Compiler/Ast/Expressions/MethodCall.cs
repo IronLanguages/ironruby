@@ -223,7 +223,7 @@ namespace IronRuby.Compiler.Ast {
             Assert.NotNull(invoke);
             Debug.Assert((blockArgVariable == null) == (transformedBlock == null));
 
-            // see Ruby Language.doc/Control Flow Implementation/Method Call With a Block
+            // see Docs/Ruby Language.docx, Runtime/Control Flow Implementation/A method call with a block
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#method-result", typeof(object));
             MSA.ParameterExpression evalUnwinder;
 
