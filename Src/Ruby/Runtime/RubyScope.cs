@@ -1155,30 +1155,6 @@ namespace IronRuby.Runtime {
             return null;
         }
 
-#if TODO_DebugView
-         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
-            private readonly string/*!*/ _matchClassName;
-            [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
-            private readonly string/*!*/ _lastInputLine;
-var closureScope = scope as RubyClosureScope;
-                if (closureScope != null) {
-                    _matchClassName = _scope.RubyContext.GetImmediateClassOf(closureScope.CurrentMatch).GetDisplayName(true).ConvertToString();
-                    _lastInputLine = _scope.RubyContext.GetImmediateClassOf(closureScope.LastInputLine).GetDisplayName(true).ConvertToString();
-                }
-                
-
-            [DebuggerBrowsable(DebuggerBrowsableState.Collapsed)]
-            [DebuggerDisplay("{A2 != null ? A2.ToString() : \"nil\",nq}", Name = "$~", Type = "{_matchClassName,nq}")]
-            public Match A2 {
-                get { return (_scope._currentMatch != null) ? _scope._currentMatch.Match : null; }
-            }
-
-            [DebuggerBrowsable(DebuggerBrowsableState.Collapsed)]
-            [DebuggerDisplay("{A2 != null ? A2.ToString() : \"nil\",nq}", Name = "$~", Type = "{_matchClassName,nq}")]
-            public Match A2 {
-                get { return (_scope._currentMatch != null) ? _scope._currentMatch.Match : null; }
-            }
-#endif
     }
 
     /// <summary>

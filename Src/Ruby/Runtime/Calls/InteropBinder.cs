@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -159,12 +155,6 @@ namespace IronRuby.Runtime.Calls {
 
             public override DynamicMetaObject/*!*/ FallbackInvoke(DynamicMetaObject/*!*/ target, DynamicMetaObject/*!*/[]/*!*/ args, 
                 DynamicMetaObject errorSuggestion) {
-#if FEATURE_COM
-                DynamicMetaObject result;
-                if (Microsoft.Scripting.ComInterop.ComBinder.TryBindInvoke(this, target, InplaceConvertComArguments(args), out result)) {
-                    return result;
-                }
-#endif
                 return InvokeMember.FallbackInvokeMember(this, "call", CallInfo, target, args, errorSuggestion, null);
             }
 
@@ -229,12 +219,6 @@ namespace IronRuby.Runtime.Calls {
             #region Ruby -> DLR
 
             public override DynamicMetaObject/*!*/ FallbackInvokeMember(DynamicMetaObject/*!*/ target, DynamicMetaObject/*!*/[]/*!*/ args, DynamicMetaObject errorSuggestion) {
-#if FEATURE_COM
-                DynamicMetaObject result;
-                if (Microsoft.Scripting.ComInterop.ComBinder.TryBindInvokeMember(this, target, InplaceConvertComArguments(args), out result)) {
-                    return result;
-                }
-#endif
 
                 return FallbackInvokeMember(this, _originalName ?? Name, CallInfo, target, args, errorSuggestion, _unmangled);
             }
@@ -391,12 +375,6 @@ namespace IronRuby.Runtime.Calls {
             #region Ruby -> DLR
 
             public override DynamicMetaObject/*!*/ FallbackGetMember(DynamicMetaObject/*!*/ target, DynamicMetaObject errorSuggestion) {
-#if FEATURE_COM
-                DynamicMetaObject result;
-                if (Microsoft.Scripting.ComInterop.ComBinder.TryBindGetMember(this, target, out result)) {
-                    return result;
-                }
-#endif
 
                 var metaBuilder = new MetaObjectBuilder(target);
                 var callArgs = new CallArguments(_context, target, DynamicMetaObject.EmptyMetaObjects, _CallInfo);
@@ -476,12 +454,6 @@ namespace IronRuby.Runtime.Calls {
             #region Ruby -> DLR
 
             public override DynamicMetaObject/*!*/ FallbackGetMember(DynamicMetaObject/*!*/ target, DynamicMetaObject errorSuggestion) {
-#if FEATURE_COM
-                DynamicMetaObject result;
-                if (Microsoft.Scripting.ComInterop.ComBinder.TryBindGetMember(this, target, out result)) {
-                    return result;
-                }
-#endif
 
                 return errorSuggestion ?? new DynamicMetaObject(
                     Expression.Constant(OperationFailed.Value, typeof(object)),
@@ -621,12 +593,6 @@ namespace IronRuby.Runtime.Calls {
             public override DynamicMetaObject/*!*/ FallbackSetMember(DynamicMetaObject/*!*/ target, DynamicMetaObject/*!*/ value,
                 DynamicMetaObject errorSuggestion) {
 
-#if FEATURE_COM
-                DynamicMetaObject result;
-                if (Microsoft.Scripting.ComInterop.ComBinder.TryBindSetMember(this, target, ConvertComArgument(value), out result)) {
-                    return result;
-                }
-#endif
 
                 return errorSuggestion ?? new DynamicMetaObject(
                     Expression.Throw(
@@ -669,12 +635,6 @@ namespace IronRuby.Runtime.Calls {
 
             public override DynamicMetaObject/*!*/ FallbackGetIndex(DynamicMetaObject/*!*/ target, DynamicMetaObject/*!*/[]/*!*/ indexes, 
                 DynamicMetaObject errorSuggestion) {
-#if FEATURE_COM
-                DynamicMetaObject result;
-                if (Microsoft.Scripting.ComInterop.ComBinder.TryBindGetIndex(this, target, InplaceConvertComArguments(indexes), out result)) {
-                    return result;
-                }
-#endif
 
                 return InvokeMember.FallbackInvokeMember(this, "[]", CallInfo, target, indexes, errorSuggestion, null);
             }
@@ -733,12 +693,6 @@ namespace IronRuby.Runtime.Calls {
             public override DynamicMetaObject/*!*/ FallbackSetIndex(DynamicMetaObject/*!*/ target, DynamicMetaObject/*!*/[]/*!*/ indexes,
                 DynamicMetaObject/*!*/ value, DynamicMetaObject errorSuggestion) {
 
-#if FEATURE_COM
-                DynamicMetaObject result;
-                if (Microsoft.Scripting.ComInterop.ComBinder.TryBindSetIndex(this, target, InplaceConvertComArguments(indexes), ConvertComArgument(value), out result)) {
-                    return result;
-                }
-#endif
 
                 return InvokeMember.FallbackInvokeMember(this, "[]=", CallInfo, target, ArrayUtils.Append(indexes, value), errorSuggestion, null);
             }
@@ -960,12 +914,6 @@ namespace IronRuby.Runtime.Calls {
             }
 
             public override DynamicMetaObject/*!*/ FallbackConvert(DynamicMetaObject/*!*/ target, DynamicMetaObject errorSuggestion) {
-#if FEATURE_COM
-                DynamicMetaObject result;
-                if (Microsoft.Scripting.ComInterop.ComBinder.TryConvert(this, target, out result)) {
-                    return result;
-                }
-#endif
                 var metaBuilder = new MetaObjectBuilder(this, target, DynamicMetaObject.EmptyMetaObjects);
 
                 if (!GenericConversionAction.BuildConversion(metaBuilder, target, Ast.Constant(_context), Type, errorSuggestion == null)) {
@@ -1010,12 +958,6 @@ namespace IronRuby.Runtime.Calls {
             }
 
             public override DynamicMetaObject/*!*/ FallbackConvert(DynamicMetaObject/*!*/ target, DynamicMetaObject errorSuggestion) {
-#if FEATURE_COM
-                DynamicMetaObject result;
-                if (Microsoft.Scripting.ComInterop.ComBinder.TryConvert(this, target, out result)) {
-                    return result;
-                }
-#endif
                 return target.Clone(Ast.NewArrayInit(typeof(object), target.Expression));
             }
 

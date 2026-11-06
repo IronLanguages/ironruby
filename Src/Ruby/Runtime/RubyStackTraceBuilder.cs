@@ -29,7 +29,6 @@ using Microsoft.Scripting.Interpreter;
 
 namespace IronRuby.Runtime {
     public sealed class RubyStackTraceBuilder {
-#if FEATURE_STACK_TRACE
         private readonly RubyArray/*!*/ _trace;
         private readonly bool _hasFileAccessPermission;
         private readonly bool _needsClrFileInfo;
@@ -276,7 +275,6 @@ namespace IronRuby.Runtime {
         internal static bool TryGetInterpretedFrameLocation(out string file, out int line) {
             file = null;
             line = 0;
-#if FEATURE_STACK_TRACE
             var frame = InterpretedFrame.CurrentFrame.Value;
             for (int depth = 0; frame != null && depth < MaxThreadBacktraceDepth; depth++, frame = frame.Parent) {
                 string methodName = frame.Name;
@@ -313,7 +311,6 @@ namespace IronRuby.Runtime {
                 line = frameLine;
                 return true;
             }
-#endif
             return false;
         }
 
@@ -724,13 +721,8 @@ namespace IronRuby.Runtime {
 
         // TODO: partial trust
         private static bool DetectFileAccessPermissions() {
-#if FEATURE_FILESYSTEM
             return true;
-#else
-            return false;
-#endif
         }
-#endif
         private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb", "/ironruby/gem_compat.rb",
             "/ironruby/ironruby/rational.rb", "/ironruby/ironruby/complex.rb" };
 

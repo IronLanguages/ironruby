@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Concurrent;
@@ -4035,10 +4031,6 @@ namespace IronRuby.Runtime {
             return new RubyScriptCode(lambda, sourceUnit, rubyOptions.FactoryKind);
         }
 
-#if MEASURE_AST
-        private static readonly object _TransformationLock = new object();
-        private static readonly Dictionary<ExpressionType, int> _TransformationHistogram = new Dictionary<ExpressionType,int>();
-#endif
 
         /// <summary>
         /// The front end a host chose, or null for prism (IronRuby.Prism's bridge), which is the
@@ -4085,24 +4077,12 @@ namespace IronRuby.Runtime {
             }
 
             MSA.Expression<T> lambda;
-#if MEASURE_AST
-            lock (_TransformationLock) {
-                var oldHistogram = System.Linq.Expressions.Expression.Histogram;
-                System.Linq.Expressions.Expression.Histogram = _TransformationHistogram;
-                try {
-#endif
             traceStart = StartupTrace.Now();
             try {
                 lambda = TransformTree<T>(ast, sourceUnit, options);
             } finally {
                 StartupTrace.Transformed(traceStart);
             }
-#if MEASURE_AST
-                } finally {
-                    System.Linq.Expressions.Expression.Histogram = oldHistogram;
-                }
-            }
-#endif
 
             return lambda;
         }
@@ -4662,46 +4642,9 @@ namespace IronRuby.Runtime {
 
             if (Options.PerfStats) {
                 using (TextWriter output = File.CreateText("perfstats.log")) {
-                    output.WriteLine(String.Format(@"
-  total:         {0}
-  binding:       {1} ({2} calls)
-",
-                        _upTime.Elapsed,
-#if MEASURE
-                    new TimeSpan(MetaAction.BindingTimeTicks), 
-                    MetaAction.BindCallCount
-#else
-     "N/A", "N/A"
-#endif
-));
-
-#if MEASURE_BINDING
                     output.WriteLine();
-                    output.WriteLine("---- MetaAction kinds ----");
+                    output.WriteLine("  total:         {0}", _upTime.Elapsed);
                     output.WriteLine();
-
-                    PerfTrack.DumpHistogram(MetaAction.HistogramOfKinds, output);
-
-                    output.WriteLine();
-
-                    output.WriteLine();
-                    output.WriteLine("---- MetaAction instances ----");
-                    output.WriteLine();
-
-                    PerfTrack.DumpHistogram(MetaAction.HistogramOfInstances, output);
-
-                    output.WriteLine();
-#endif
-
-#if MEASURE_AST
-                    output.WriteLine();
-                    output.WriteLine("---- Ruby Parser generated Expression Trees ----");
-                    output.WriteLine();
-                    
-                    PerfTrack.DumpHistogram(_TransformationHistogram, output);
-
-                    output.WriteLine();
-#endif
                     PerfTrack.DumpStats(output);
                 }
             }
@@ -5360,11 +5303,9 @@ namespace IronRuby.Runtime {
         }
 
         internal void ReportTraceEvent(string/*!*/ operation, RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/ name, string fileName, int lineNumber) {
-#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
             if (RubyUtils.IsReclaimingFiber) {
                 return;
             }
-#endif
             if (_traceListener != null && !_traceListenerSuspended) {
                 try {
                     _traceListenerSuspended = true;

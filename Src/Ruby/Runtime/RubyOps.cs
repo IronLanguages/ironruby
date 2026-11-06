@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -659,19 +655,11 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Proc/*!*/ DefineBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
-#if NETFRAMEWORK
-            // DLR closures should not be used:
-            Debug.Assert(!(((Delegate)clrMethod).Target is Closure) || ((Closure)((Delegate)clrMethod).Target).Locals == null);
-#endif
             return new Proc(ProcKind.Block, self, scope, dispatcher.SetMethod(clrMethod));
         }
 
         [Emitted]
         public static Proc/*!*/ DefineLambda(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
-#if NETFRAMEWORK
-            // DLR closures should not be used:
-            Debug.Assert(!(((Delegate)clrMethod).Target is Closure) || ((Closure)((Delegate)clrMethod).Target).Locals == null);
-#endif
             return new Proc(ProcKind.Lambda, self, scope, dispatcher.SetMethod(clrMethod));
         }
 
@@ -3246,13 +3234,11 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static bool CanRescue(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
             // A CLR finally may replace the reclaim signal with an ordinary exception.
             // That still belongs to a discarded stack and must not enter a Ruby rescue.
             if (RubyUtils.IsReclaimingFiber) {
                 return false;
             }
-#endif
             if (exception is StackUnwinder) {
                 return false;
             }

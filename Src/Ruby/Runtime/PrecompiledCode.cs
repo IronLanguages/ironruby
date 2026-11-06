@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Diagnostics;

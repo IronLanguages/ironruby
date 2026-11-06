@@ -91,7 +91,6 @@ namespace IronRuby.Runtime {
         // (ResolveAssembly).
         private static readonly ConditionalWeakTable<Assembly, string>/*!*/ _AssemblyFilesOfAllRuntimes = new ConditionalWeakTable<Assembly, string>();
 
-#if FEATURE_FILESYSTEM
         // TODO: static
         // maps full normalized path to compiled code:
         private Dictionary<string, CompiledFile> _compiledFiles;
@@ -119,7 +118,6 @@ namespace IronRuby.Runtime {
         private int _cacheHitCount;
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
         private int _compiledFileCount;
-#endif
 
         /// <summary>
         /// TODO: Thread safety: the user of this object is responsible for locking it.
@@ -167,11 +165,9 @@ namespace IronRuby.Runtime {
             _loadedFiles = new RubyArray();
             _unfinishedFiles = new Dictionary<string, Thread>();
 
-#if FEATURE_ASSEMBLY_RESOLVE
             if (!context.RubyOptions.NoAssemblyResolveHook) {
                 new AssemblyResolveHolder(this).HookAssemblyResolve();
             }
-#endif
         }
 
         private RubyArray/*!*/ MakeLoadPaths(RubyOptions/*!*/ options) {
@@ -214,7 +210,6 @@ namespace IronRuby.Runtime {
         }
 
         private void AddStandardLibraryPath(RubyArray/*!*/ loadPaths, string path, string applicationBaseDir) {
-#if FEATURE_FILESYSTEM
             bool isFullPath;
             if (path != null) {
                 try {
@@ -276,7 +271,6 @@ namespace IronRuby.Runtime {
                 _context.SetInstanceVariable(entry, "@gem_prelude_index", entry);
                 entry.Freeze();
             }
-#endif
             }
 
         // bin/<config>/net8.0 of a project under Src/: the nearest ancestor with a StdLib/ironruby directory.
@@ -296,7 +290,6 @@ namespace IronRuby.Runtime {
             return null;
         }
 
-#if FEATURE_FILESYSTEM
         private Dictionary<string, CompiledFile>/*!*/ LoadCompiledCode() {
             Debug.Assert(_context.RubyOptions.LoadFromDisk);
 
@@ -400,7 +393,6 @@ namespace IronRuby.Runtime {
                 }
             }
         }
-#endif
         public bool LoadFile(Scope globalScope, object self, MutableString/*!*/ path, LoadFlags flags) {
             object loaded;
             return LoadFile(globalScope, self, path, flags, out loaded);
@@ -552,7 +544,6 @@ namespace IronRuby.Runtime {
             return false;
         }
 
-#if FEATURE_ASSEMBLY_RESOLVE
         private sealed class AssemblyResolveHolder {
             private readonly WeakReference _loader;
 
@@ -726,7 +717,6 @@ namespace IronRuby.Runtime {
                 && (token == null || token.Length == 0 || token.AsSpan().SequenceEqual(definition.GetPublicKeyToken()));
         }
 
-#endif
         /// <summary>
         /// Loads the assembly in the file at <paramref name="path"/>, remembering the file and that this runtime
         /// loaded it (ResolveAssembly).
@@ -961,7 +951,6 @@ namespace IronRuby.Runtime {
             string fullPath = Platform.GetFullPath(sourceUnit.Path);
             _context.RegisterSourceFileLocation(sourceUnit.Path);
 
-#if FEATURE_FILESYSTEM
             CompiledFile compiledFile;
             // a saved or precompiled top level is a file's, not the anonymous module `load(file, true)' wraps it in
             if ((flags & LoadFlags.LoadIsolated) == 0 && TryGetCompiledFile(fullPath, out compiledFile)) {
@@ -974,7 +963,6 @@ namespace IronRuby.Runtime {
             if (IronRuby.Runtime.Precompiled.PrecompiledCode.Trace) {
                 Console.Error.WriteLine("IronRuby.Startup: compiling " + fullPath);
             }
-#endif
 
             RubyCompilerOptions options = new RubyCompilerOptions(_context.RubyOptions) {
                 FactoryKind = (flags & LoadFlags.LoadIsolated) != 0 ? TopScopeFactoryKind.WrappedFile : TopScopeFactoryKind.File
@@ -982,9 +970,7 @@ namespace IronRuby.Runtime {
 
             ScriptCode compiledCode = sourceUnit.Compile(options, _context.RuntimeErrorSink);
 
-#if FEATURE_FILESYSTEM
             AddCompiledFile(fullPath, compiledCode);
-#endif
             return compiledCode;
         }
 
@@ -1450,10 +1436,8 @@ namespace IronRuby.Runtime {
         /// lists the features MRI has in $" from the start.
         /// </summary>
         internal void LoadCorePrelude(Scope/*!*/ globalScope, object self, string/*!*/ path) {
-#if FEATURE_FILESYSTEM
             // the prelude, rubygems and the rest of startup compiled ahead of time, if there is such a library
             IronRuby.Runtime.Precompiled.PrecompiledCode.TryRegisterStartupLibrary(_context);
-#endif
             _corePreludeLoaderThread = Thread.CurrentThread;
             _loadingCorePrelude = true;
             PhaseTimer.MarkPrelude(true);

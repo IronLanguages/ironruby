@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Globalization;
@@ -740,7 +736,6 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-#if FEATURE_ENCODING
         private sealed class CheckDecoderFallback : DecoderFallback {
             public bool HasInvalidCharacters { get; private set; }
 
@@ -867,34 +862,6 @@ namespace IronRuby.Runtime {
             }
             return fallback.HasInvalidCharacters;
         }
-#else
-        internal static bool ContainsInvalidCharacters(byte[]/*!*/ bytes, int start, int count, Encoding/*!*/ encoding) {
-            try {
-                encoding.GetCharCount(bytes, start, count);
-                return true;
-            } catch (DecoderFallbackException){
-                return false;
-            }
-        }
-
-        internal static bool ContainsInvalidCharacters(char[]/*!*/ chars, int start, int count, Encoding/*!*/ encoding) {
-            try {
-                encoding.GetByteCount(chars, start, count);
-                return true;
-            } catch (EncoderFallbackException) {
-                return false;
-            }
-        }
-
-        internal static bool ContainsInvalidCharacters(ReadOnlySpan<char> chars, Encoding/*!*/ encoding) {
-            try {
-                encoding.GetByteCount(chars);
-                return true;
-            } catch (EncoderFallbackException) {
-                return false;
-            }
-        }
-#endif
     }
 }
 

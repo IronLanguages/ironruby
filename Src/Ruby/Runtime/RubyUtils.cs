@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -1598,8 +1594,6 @@ namespace IronRuby.Runtime {
 
         #region Exceptions
 
-#if FEATURE_THREAD
-#if FEATURE_EXCEPTION_STATE
         // Unwinds only discarded fiber stacks. Set before throwing, cleared by the worker
         // boundary after CLR finally cleanup has completed; Ruby ensure bodies consult it.
         public sealed class FiberReclaimSignal : StackUnwinder {
@@ -2007,20 +2001,6 @@ namespace IronRuby.Runtime {
             }
             return e;
         }
-#else
-        public static Exception GetVisibleException(Exception e) { return e; }
-
-        public static void ExitThread(Thread/*!*/ thread) {
-            thread.Abort();
-        }
-
-        public static bool IsRubyThreadExit(Exception e) {
-            return e is ThreadAbortException;
-        }
-#endif
-#else
-        public static Exception GetVisibleException(Exception e) { return e; }
-#endif
         #endregion
 
         #region Paths
@@ -2175,11 +2155,7 @@ namespace IronRuby.Runtime {
                         // This will always succeed with a non-null string, but it can fail
                         // if the Personal folder was renamed or deleted. In this case it returns
                         // an empty string.
-#if FEATURE_FILESYSTEM // TODO: virtualize via PAL?
                         result = Environment.GetFolderPath(Environment.SpecialFolder.Personal);
-#else
-                        result = null;
-#endif
                     } else {
                         result = userEnvironment;
                     }

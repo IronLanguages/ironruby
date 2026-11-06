@@ -50,7 +50,7 @@ namespace IronRuby.Runtime {
         // is wrapped in a TheadAbortException (accessible via _exception)
         private Exception/*!*/ _visibleException;
 
-#if DEBUG && FEATURE_THREAD
+#if DEBUG
 #pragma warning disable 414 // msc: unused field
         // For asynchronous exceptions, this is useful to figure out which thread raised the exception
         [NonSerialized]
@@ -69,7 +69,6 @@ namespace IronRuby.Runtime {
         // of #backtrace (see CallRedefinedSetBacktrace); null otherwise.
         private RubyArray _raiseBacktrace;
 
-#if FEATURE_STACK_TRACE
         // The backtrace the runtime captured when the exception was raised, until someone asks for
         // it (see CaptureExceptionTrace). Only ever set while _backtrace is null.
         [NonSerialized]
@@ -80,7 +79,6 @@ namespace IronRuby.Runtime {
         private static WeakReference<InterpretedFrame> _lastCatchFrame;
         [ThreadStatic]
         private static StackTrace _lastCatchSiteTrace;
-#endif
 
         // Exception#cause; _hasCause tells "decided" from "not raised yet", see TrySetCause.
         private Exception _cause;
@@ -102,17 +100,13 @@ namespace IronRuby.Runtime {
         private RubyExceptionData(Exception/*!*/ exception) {
             _exception = exception;
             _visibleException = exception;
-#if DEBUG && FEATURE_THREAD
+#if DEBUG
             _throwingThread = Thread.CurrentThread;
 #endif
         }
 
         public static RubyArray/*!*/ CreateBacktrace(RubyContext/*!*/ context, int skipFrames) {
-#if FEATURE_STACK_TRACE
             return new RubyStackTraceBuilder(context, skipFrames).RubyTrace;
-#else
-            return new RubyArray();
-#endif
         }
 
         /// <summary>
@@ -120,11 +114,7 @@ namespace IronRuby.Runtime {
         /// instead of being reported at their caller's (TracePoint needs to see where a call really is).
         /// </summary>
         internal static RubyArray/*!*/ CreateRawBacktrace(RubyContext/*!*/ context) {
-#if FEATURE_STACK_TRACE
             return new RubyStackTraceBuilder(context, 0, true).RubyTrace;
-#else
-            return new RubyArray();
-#endif
         }
 
         /// <summary>
@@ -132,7 +122,6 @@ namespace IronRuby.Runtime {
         /// stack to speak of - it has not started, it has finished, or it has never run Ruby code.
         /// </summary>
         public static RubyArray CreateBacktrace(RubyContext/*!*/ context, Thread/*!*/ thread) {
-#if FEATURE_STACK_TRACE && FEATURE_THREAD
             if (thread == Thread.CurrentThread) {
                 return CreateBacktrace(context, 0);
             }
@@ -148,9 +137,6 @@ namespace IronRuby.Runtime {
             }
 
             return new RubyStackTraceBuilder(context, frame, precompiled).RubyTrace;
-#else
-            return null;
-#endif
         }
 
         /// <summary>
@@ -161,7 +147,6 @@ namespace IronRuby.Runtime {
         internal void CaptureExceptionTrace(RubyScope/*!*/ scope) {
             if (!HasBacktrace && _raiseBacktrace == null) {
                 var context = scope.RubyContext;
-#if FEATURE_STACK_TRACE
                 bool debugMode = context.DomainManager.Configuration.DebugMode;
 
                 // The catch-site walk is the expensive part of a raise: the whole CLR stack, every frame's
@@ -196,9 +181,6 @@ namespace IronRuby.Runtime {
 
                 // formatted on first use, see Backtrace:
                 _capturedTrace = new RubyStackTraceBuilder.CapturedTrace(context, _exception, catchSiteTrace, scope.InterpretedFrame != null);
-#else
-                _backtrace = new RubyArray();
-#endif
                 // MRI (setup_exception) only calls #set_backtrace when it has been redefined:
                 if (!HasBuiltinSetBacktrace(context)) {
                     CallRedefinedSetBacktrace(context);
@@ -220,7 +202,6 @@ namespace IronRuby.Runtime {
             if (HasBacktrace || _raiseBacktrace != null) {
                 return;
             }
-#if FEATURE_STACK_TRACE
             // the catch site's callers: this walk has the catching method too, below which they are (see Build)
             var captured = new RubyStackTraceBuilder.CapturedTrace(context, _exception,
                 RubyStackTraceBuilder.GetClrStackTrace(null, context.DomainManager.Configuration.DebugMode));
@@ -231,7 +212,6 @@ namespace IronRuby.Runtime {
             if (!HasBuiltinSetBacktrace(context)) {
                 CallRedefinedSetBacktrace(context);
             }
-#endif
         }
 
         /// <summary>
@@ -315,7 +295,6 @@ namespace IronRuby.Runtime {
         internal static RubyExceptionData/*!*/ AssociateInstance(Exception/*!*/ e) {
             RubyExceptionData result;
 
-#if FEATURE_THREAD
             Exception visibleException = RubyUtils.GetVisibleException(e);
             if (e == visibleException || visibleException == null) {
                 result = new RubyExceptionData(e);
@@ -332,9 +311,6 @@ namespace IronRuby.Runtime {
                     result._exception = e;
                 }
             }
-#else
-            result = new RubyExceptionData(e);
-#endif
 
             e.SetData(_DataKey, result);
             return result;
@@ -374,17 +350,13 @@ namespace IronRuby.Runtime {
 
         public RubyArray Backtrace {
             get {
-#if FEATURE_STACK_TRACE
                 if (_capturedTrace != null) {
                     FormatCapturedTrace();
                 }
-#endif
                 return _backtrace;
             }
             set {
-#if FEATURE_STACK_TRACE
                 _capturedTrace = null;
-#endif
                 _backtrace = value;
             }
         }
@@ -394,15 +366,10 @@ namespace IronRuby.Runtime {
         /// </summary>
         public bool HasBacktrace {
             get {
-#if FEATURE_STACK_TRACE
                 return _backtrace != null || _capturedTrace != null;
-#else
-                return _backtrace != null;
-#endif
             }
         }
 
-#if FEATURE_STACK_TRACE
         private void FormatCapturedTrace() {
             var captured = _capturedTrace;
             if (captured == null) {
@@ -417,7 +384,6 @@ namespace IronRuby.Runtime {
                 }
             }
         }
-#endif
 
         /// <summary>
         /// Exception#cause. MRI fixes the cause the first time an exception is raised and never
@@ -575,9 +541,7 @@ namespace IronRuby.Runtime {
             
             newInstanceData.Handled = true;
             newInstanceData._backtrace = instanceData._backtrace;
-#if FEATURE_STACK_TRACE
             newInstanceData._capturedTrace = instanceData._capturedTrace;
-#endif
             return newException;
         }
 

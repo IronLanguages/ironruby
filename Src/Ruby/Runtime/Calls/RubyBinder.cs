@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Dynamic;
@@ -93,7 +89,7 @@ namespace IronRuby.Runtime.Calls {
 
         [Conditional("DEBUG")]
         internal static void DumpPrecompiledRule(CallSiteBinder/*!*/ binder, MemberDispatcher/*!*/ dispatcher) {
-#if DEBUG && FEATURE_FULL_CONSOLE
+#if DEBUG
             if (RubyOptions.ShowRules) {
                 var oldColor = Console.ForegroundColor;
                 Console.ForegroundColor = ConsoleColor.Cyan;
@@ -107,7 +103,7 @@ namespace IronRuby.Runtime.Calls {
 
         [Conditional("DEBUG")]
         internal static void DumpRule(CallSiteBinder/*!*/ binder, BindingRestrictions/*!*/ restrictions, Expression/*!*/ expr) {
-#if DEBUG && FEATURE_FULL_CONSOLE
+#if DEBUG
             if (RubyOptions.ShowRules) {
                 var oldColor = Console.ForegroundColor;
                 try {
