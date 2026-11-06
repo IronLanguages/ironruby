@@ -66,10 +66,10 @@ namespace IronRuby.StandardLibrary.Pty {
 
         private static readonly bool IsMac = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 
-        // Linux's values; macOS spells three of them differently.
         private const int O_RDWR = 2;
-        private static readonly int O_NOCTTY = IsMac ? 0x20000 : 0x100;
-        private static readonly int O_CLOEXEC = IsMac ? 0x1000000 : 0x80000;
+        private static readonly int O_NOCTTY = IOModeNative.NoControllingTerminal;
+        private static readonly int O_CLOEXEC = IOModeNative.CloseOnExec;
+        // Linux's value; macOS spells it differently.
         private static readonly int F_DUPFD_CLOEXEC = IsMac ? 67 : 1030;
 
         // The file-action opcodes the Process.spawn prelude shares with RubyProcess.

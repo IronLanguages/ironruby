@@ -127,8 +127,7 @@ namespace IronRuby.Builtins {
             RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? (short)0x400 : (short)0x80;
         // The value differs by kernel: Linux's 0x80000 is not O_CLOEXEC on macOS, whose
         // pipe2 rejects it with EINVAL - which broke every pipe to a child there.
-        private static readonly int O_CLOEXEC =
-            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 0x1000000 : 0x80000;
+        private static readonly int O_CLOEXEC = IOModeNative.CloseOnExec;
         private const int F_GETFD = 1;
         private const int F_SETFD = 2;
         private const int FD_CLOEXEC = 1;

@@ -981,10 +981,9 @@ namespace IronRuby.Builtins {
 
         #region fcntl
 
-        // Linux values. fcntl is variadic; for F_GETFL and F_SETFL the third argument is an int.
+        // The same on every Unix. fcntl is variadic; for F_GETFL and F_SETFL the third argument is an int.
         public const int F_GETFL = 3;
         public const int F_SETFL = 4;
-        public const int O_NONBLOCK = 0x800;
 
         private static readonly bool _hasFileControl = System.IO.Path.DirectorySeparatorChar == '/';
 

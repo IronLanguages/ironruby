@@ -177,7 +177,7 @@ namespace IronRuby.Builtins {
 
             int errno;
             if (Posix.ChRoot(strPath, out errno) != 0) {
-                throw Posix.Error(errno, strPath);
+                throw Posix.Error(errno, strPath, self.Context);
             }
             return 0;
         }
@@ -467,7 +467,7 @@ namespace IronRuby.Builtins {
                 int mode = Protocols.CastToFixnum(fixnumCast, permissions);
                 int errno;
                 if (Posix.MkDir(strDir, mode, out errno) != 0) {
-                    throw Posix.Error(errno, strDir);
+                    throw Posix.Error(errno, strDir, self.Context);
                 }
                 return 0;
             }
@@ -677,7 +677,7 @@ namespace IronRuby.Builtins {
             // Close-on-exec is the default for every descriptor Ruby opens.
             int fd = Posix.Open(path, Posix.O_RDONLY | Posix.O_DIRECTORY | Posix.O_CLOEXEC, out errno);
             if (fd < 0) {
-                throw Posix.Error(errno, path);
+                throw Posix.Error(errno, path, ImmediateClass.Context);
             }
             _fd = fd;
             return fd;

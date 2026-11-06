@@ -15,6 +15,7 @@
 
 
 using System;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -336,6 +337,87 @@ namespace IronRuby.StandardLibrary.Sockets {
                 // Reset the blocking
                 self.Socket.Blocking = blocking;
             }
+        }
+
+        /// <summary>
+        /// connect(2) with a deadline, as CRuby's rsock_connect does it: a non-blocking connect, SO_ERROR
+        /// for a failure the kernel already knows (a refusal over loopback), then a wait of at most
+        /// <paramref name="seconds"/> - a zero timeout polls once - and SO_ERROR again for the verdict,
+        /// not a second connect(2), which some kernels (Darwin 27) answer with EISCONN for a connection
+        /// that failed [Bug #22223]. Answers 0 when connected, -1 when the time ran out, or the errno
+        /// it failed with (CRuby's SystemCallError "connect(2) for ...").
+        ///
+        /// On Unix the connect and the first checks are libc calls: CRuby polls microseconds after
+        /// connect(2), before a remote peer's refusal can arrive, and the exception .NET throws for
+        /// EINPROGRESS took long enough that it sometimes had - which turned the IO::TimeoutError of a
+        /// zero timeout into ECONNREFUSED. .NET's own connect then records the connection.
+        /// </summary>
+        [RubyMethod("__ir_raw_connect_within", RubyMethodAttributes.PrivateInstance)]
+        public static int ConnectWithin(RubySocket/*!*/ self, [NotNull]MutableString/*!*/ sockaddr, double seconds) {
+            Socket socket = self.Socket;
+            EndPoint ep = CreateEndPoint(sockaddr);
+            bool blocking = socket.Blocking;
+            socket.Blocking = false;
+            try {
+                // Once before connecting, so that the first one after it does not wait for the JIT
+                // (a fresh socket has no error to clear).
+                PendingError(socket);
+                int error = PosixMessages.StartConnect(socket, ep);
+                if (error < 0) {
+                    // No libc: .NET's connect, and its SocketException for a failure.
+                    try {
+                        socket.Connect(ep);
+                        return 0;
+                    } catch (SocketException e) when (e.SocketErrorCode is SocketError.WouldBlock or SocketError.InProgress) {
+                    }
+                } else if (error != PosixMessages.EINPROGRESS) {
+                    return error;
+                }
+
+                error = PendingError(socket);
+                if (error != 0) {
+                    return error;
+                }
+                if (seconds > 0) {
+                    long deadline = Stopwatch.GetTimestamp() + (long)(seconds * Stopwatch.Frequency);
+                    while (true) {
+                        long remaining = (deadline - Stopwatch.GetTimestamp()) * 1000000 / Stopwatch.Frequency;
+                        int slice = (int)Math.Max(0, Math.Min(remaining, PollSliceMicroseconds));
+                        if (socket.Poll(slice, SelectMode.SelectWrite) || socket.Poll(0, SelectMode.SelectError)) {
+                            break;
+                        }
+                        if (remaining <= slice) {
+                            return -1;
+                        }
+                        RubyUtils.CheckAsyncException();
+                    }
+                } else if (!socket.Poll(0, SelectMode.SelectWrite) && !socket.Poll(0, SelectMode.SelectError)) {
+                    return -1;
+                }
+
+                error = PendingError(socket);
+                if (error == 0 && !socket.Connected) {
+                    // Connected behind .NET's back (libc): its connect says EISCONN and records it.
+                    try {
+                        socket.Connect(ep);
+                    } catch (SocketException) {
+                    }
+                }
+                return error;
+            } finally {
+                socket.Blocking = blocking;
+            }
+        }
+
+        private static int PendingError(Socket/*!*/ socket) {
+            int error = PosixMessages.GetPendingError(socket);
+            if (error < 0) {
+                error = (int)socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
+                if (error != 0) {
+                    throw new SocketException(error);
+                }
+            }
+            return error;
         }
 
         [RubyMethod("listen")]

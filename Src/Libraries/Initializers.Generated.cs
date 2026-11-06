@@ -2198,6 +2198,8 @@ namespace IronRuby.Builtins {
             SetBuiltinConstant(module, "APPEND", IronRuby.Builtins.RubyFileOps.Constants.APPEND);
             SetBuiltinConstant(module, "BINARY", IronRuby.Builtins.RubyFileOps.Constants.BINARY);
             SetBuiltinConstant(module, "CREAT", IronRuby.Builtins.RubyFileOps.Constants.CREAT);
+            SetBuiltinConstant(module, "DIRECT", IronRuby.Builtins.RubyFileOps.Constants.DIRECT);
+            SetBuiltinConstant(module, "DSYNC", IronRuby.Builtins.RubyFileOps.Constants.DSYNC);
             SetBuiltinConstant(module, "EXCL", IronRuby.Builtins.RubyFileOps.Constants.EXCL);
             SetBuiltinConstant(module, "FNM_CASEFOLD", IronRuby.Builtins.RubyFileOps.Constants.FNM_CASEFOLD);
             SetBuiltinConstant(module, "FNM_DOTMATCH", IronRuby.Builtins.RubyFileOps.Constants.FNM_DOTMATCH);
@@ -2210,12 +2212,17 @@ namespace IronRuby.Builtins {
             SetBuiltinConstant(module, "LOCK_NB", IronRuby.Builtins.RubyFileOps.Constants.LOCK_NB);
             SetBuiltinConstant(module, "LOCK_SH", IronRuby.Builtins.RubyFileOps.Constants.LOCK_SH);
             SetBuiltinConstant(module, "LOCK_UN", IronRuby.Builtins.RubyFileOps.Constants.LOCK_UN);
+            SetBuiltinConstant(module, "NOATIME", IronRuby.Builtins.RubyFileOps.Constants.NOATIME);
             SetBuiltinConstant(module, "NOCTTY", IronRuby.Builtins.RubyFileOps.Constants.NOCTTY);
+            SetBuiltinConstant(module, "NOFOLLOW", IronRuby.Builtins.RubyFileOps.Constants.NOFOLLOW);
             SetBuiltinConstant(module, "NONBLOCK", IronRuby.Builtins.RubyFileOps.Constants.NONBLOCK);
+            SetBuiltinConstant(module, "NULL", IronRuby.Builtins.RubyFileOps.Constants.NULL);
             SetBuiltinConstant(module, "RDONLY", IronRuby.Builtins.RubyFileOps.Constants.RDONLY);
             SetBuiltinConstant(module, "RDWR", IronRuby.Builtins.RubyFileOps.Constants.RDWR);
+            SetBuiltinConstant(module, "RSYNC", IronRuby.Builtins.RubyFileOps.Constants.RSYNC);
             SetBuiltinConstant(module, "SHARE_DELETE", IronRuby.Builtins.RubyFileOps.Constants.SHARE_DELETE);
             SetBuiltinConstant(module, "SYNC", IronRuby.Builtins.RubyFileOps.Constants.SYNC);
+            SetBuiltinConstant(module, "TMPFILE", IronRuby.Builtins.RubyFileOps.Constants.TMPFILE);
             SetBuiltinConstant(module, "TRUNC", IronRuby.Builtins.RubyFileOps.Constants.TRUNC);
             SetBuiltinConstant(module, "WRONLY", IronRuby.Builtins.RubyFileOps.Constants.WRONLY);
             
@@ -11838,6 +11845,11 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
         
         private static void LoadSocket_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_raw_connect_within", 0x12, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Sockets.RubySocket, IronRuby.Builtins.MutableString, System.Double, System.Int32>(IronRuby.StandardLibrary.Sockets.RubySocket.ConnectWithin)
+            );
+            
             DefineLibraryMethod(module, "accept", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.RubySocket, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.RubySocket.Accept)
@@ -13720,11 +13732,13 @@ namespace IronRuby.StandardLibrary.FileControl {
             SetConstant(module, "F_GETFD", IronRuby.StandardLibrary.FileControl.Fcntl.F_GETFD);
             SetConstant(module, "F_GETFL", IronRuby.StandardLibrary.FileControl.Fcntl.F_GETFL);
             SetConstant(module, "F_GETLK", IronRuby.StandardLibrary.FileControl.Fcntl.F_GETLK);
+            SetConstant(module, "F_GETPIPE_SZ", IronRuby.StandardLibrary.FileControl.Fcntl.F_GETPIPE_SZ);
             SetConstant(module, "F_RDLCK", IronRuby.StandardLibrary.FileControl.Fcntl.F_RDLCK);
             SetConstant(module, "F_SETFD", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETFD);
             SetConstant(module, "F_SETFL", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETFL);
             SetConstant(module, "F_SETLK", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETLK);
             SetConstant(module, "F_SETLKW", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETLKW);
+            SetConstant(module, "F_SETPIPE_SZ", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETPIPE_SZ);
             SetConstant(module, "F_UNLCK", IronRuby.StandardLibrary.FileControl.Fcntl.F_UNLCK);
             SetConstant(module, "F_WRLCK", IronRuby.StandardLibrary.FileControl.Fcntl.F_WRLCK);
             SetConstant(module, "FD_CLOEXEC", IronRuby.StandardLibrary.FileControl.Fcntl.FD_CLOEXEC);

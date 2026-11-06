@@ -997,6 +997,65 @@ Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
         }
 
         /// <summary>
+        /// A UDP socket an ICMP "port unreachable" has failed is ECONNREFUSED on the next read (recv
+        /// waited forever, read_nonblock said EAGAIN), and a name gethostbyname cannot resolve is
+        /// Socket::ResolutionError (a plain SocketError). connect(2) with a timeout - IO#timeout,
+        /// Addrinfo#connect(timeout:), Socket.tcp - reads SO_ERROR for the verdict as CRuby does since
+        /// [Bug #22223]; Addrinfo#connect and Socket.tcp ignored the timeout altogether.
+        /// </summary>
+        public void Errno_SocketCalls3() {
+            TestOutput(@"
+require 'ruby4'
+require 'socket'
+def t
+  r = yield
+  puts r.inspect
+rescue StandardError => e
+  puts ""#{e.class}#{e.message[/ - .*/]&.gsub(/\d{4,5}/, 'PORT')}""
+end
+closed = (s = UDPSocket.new; s.bind('127.0.0.1', 0); port = s.addr[1]; s.close; port)
+u = UDPSocket.new
+u.connect('127.0.0.1', closed)
+[-> { u.recv(10) }, -> { u.read_nonblock(10) }, -> { u.recvfrom_nonblock(10) }].each do |l|
+  u.send('x', 0)
+  sleep 0.1
+  t(&l)
+end
+u.close
+t { Socket.gethostbyname('no.such.host.invalid') }
+t { Socket.gethostbyname('no.such.host.invalid') rescue $!.error_code == Socket::EAI_NONAME || $!.error_code == Socket::EAI_AGAIN }
+
+server = TCPServer.new('127.0.0.1', 0)
+port = server.addr[1]
+t { Socket.tcp('127.0.0.1', port, connect_timeout: 5) { |c| c.remote_address.ip_port == port } }
+t { Socket.tcp('127.0.0.1', port, open_timeout: 0) { |c| c.remote_address.ip_port == port } }
+t { Addrinfo.tcp('127.0.0.1', port).connect(timeout: 5) { |c| c.remote_address.ip_port == port } }
+t { s = Socket.new(:INET, :STREAM); s.timeout = 5; s.connect(Socket.sockaddr_in(port, '127.0.0.1')); s.getpeername == Socket.sockaddr_in(port, '127.0.0.1') }
+t { Socket.tcp('127.0.0.1', port, open_timeout: 1, connect_timeout: 1) }
+server.close
+t { Socket.tcp('127.0.0.1', port, connect_timeout: 5) }
+t { Addrinfo.tcp('127.0.0.1', port).connect(timeout: 0) }
+t { s = Socket.new(:INET, :STREAM); s.timeout = 5; s.connect(Socket.sockaddr_in(port, '127.0.0.1')) }
+t { TCPSocket.new('127.0.0.1', port, connect_timeout: 5) }
+", @"
+Errno::ECONNREFUSED - recvfrom(2)
+Errno::ECONNREFUSED
+Errno::ECONNREFUSED - recvfrom(2)
+Socket::ResolutionError
+true
+true
+true
+true
+true
+ArgumentError
+Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
+Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
+Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
+Errno::ECONNREFUSED - connect(2) for ""127.0.0.1"" port PORT
+");
+        }
+
+        /// <summary>
         /// File.rename is rename(2): a directory renamed onto a file is ENOTDIR and a file onto a
         /// directory EISDIR - the emulation deleted the file at the target first, and lost it. A name
         /// too long for the file system is ENAMETOOLONG (Dir.mkdir said EEXIST, File.open ENOENT with

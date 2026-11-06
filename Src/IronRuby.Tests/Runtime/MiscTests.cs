@@ -1275,6 +1275,56 @@ true
         }
 
         /// <summary>
+        /// File::Constants and Fcntl hold the platform's own open(2)/fcntl(2) numbers, and the flags
+        /// a platform lacks are undefined (File::DIRECT and friends were missing on Linux; macOS got
+        /// Linux's numbers). File::NULL lives in File::Constants, where IO and File both see it.
+        /// File.lchmod works where libc has it: on Linux it changes a file and raises ENOTSUP for a
+        /// link (it raised NotImplementedError although File.respond_to?(:lchmod) said true).
+        /// </summary>
+        public void File_PlatformConstants1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+require 'fcntl'
+linux = RUBY_PLATFORM =~ /\A(x86_64|i[3-6]86|s390x|riscv64|loongarch64)-linux/
+expected = {
+  APPEND: 1024, CREAT: 64, DIRECT: 16384, DSYNC: 4096, EXCL: 128, NOATIME: 262144, NOCTTY: 256,
+  NOFOLLOW: 131072, NONBLOCK: 2048, RSYNC: 1052672, SYNC: 1052672, TMPFILE: 4259840, TRUNC: 512,
+}
+p !linux || expected.all? { |k, v| File::Constants.const_get(k) == v }
+p !linux || [Fcntl::F_GETPIPE_SZ, Fcntl::F_SETPIPE_SZ, Fcntl::F_GETLK, Fcntl::F_RDLCK, Fcntl::F_WRLCK] == [1032, 1031, 5, 0, 1]
+p File::Constants::NULL == (File::ALT_SEPARATOR ? 'NUL' : '/dev/null'), IO::NULL.equal?(File::NULL), IO.const_defined?(:NULL, false), File::NULL.frozen?
+if linux
+  Dir.mktmpdir do |d|
+    f = File.join(d, 'f')
+    File.write(f, '')
+    File.chmod(0644, f)
+    File.symlink(f, l = File.join(d, 'l'))
+    p File.respond_to?(:lchmod), File.lchmod(0600, f), File.stat(f).mode & 0777 == 0600
+    begin
+      File.lchmod(0600, l)
+    rescue NotImplementedError, SystemCallError => e
+      p e.class
+    end
+  end
+else
+  puts 'true', '1', 'true', 'Errno::ENOTSUP'
+end
+", @"
+true
+true
+true
+true
+false
+true
+true
+1
+true
+Errno::ENOTSUP
+");
+        }
+
+        /// <summary>
         /// A raw control character (U+0000-U+001F) inside a JSON string is a ParserError, as in the json gem;
         /// JSON.parse took a document with a literal line break in a value as it was. The gem's
         /// allow_control_characters option (2.18.0) lets them through.

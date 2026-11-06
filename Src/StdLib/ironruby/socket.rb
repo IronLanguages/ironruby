@@ -664,10 +664,27 @@ class Addrinfo
     end
   end
 
-  def connect(timeout: nil) # :yield: socket
+  def connect(timeout: nil, &block) # :yield: socket
+    __ir_connect_internal(nil, timeout, &block)
+  end
+
+  def connect_from(*args, timeout: nil, &block)
+    __ir_connect_internal(family_addrinfo(*args), timeout, &block)
+  end
+
+  # CRuby's connect_internal: a timeout is Errno::ETIMEDOUT here (IO::TimeoutError is
+  # TCPSocket's and Socket#connect's), and a refusal names the address.
+  def __ir_connect_internal(local, timeout) # :nodoc:
     sock = __ir_new_socket
     begin
-      sock.connect(to_sockaddr)
+      sock.bind(local.to_sockaddr) if local
+      if timeout
+        unless sock.__ir_connect_within(to_sockaddr, timeout)
+          raise Errno::ETIMEDOUT, "user specified timeout for #{inspect_sockaddr}"
+        end
+      else
+        sock.connect(to_sockaddr)
+      end
     rescue Exception
       sock.close
       raise
@@ -679,24 +696,7 @@ class Addrinfo
       sock.close unless sock.closed?
     end
   end
-
-  def connect_from(*args, **opts, &block)
-    local = family_addrinfo(*args)
-    sock = __ir_new_socket
-    begin
-      sock.bind(local.to_sockaddr)
-      sock.connect(to_sockaddr)
-    rescue Exception
-      sock.close
-      raise
-    end
-    return sock unless block
-    begin
-      block.call(sock)
-    ensure
-      sock.close unless sock.closed?
-    end
-  end
+  private :__ir_connect_internal
 
   # Addrinfo#connect_to is the mirror image: self is the local address.
   def connect_to(*args, **opts, &block)
@@ -768,26 +768,11 @@ class BasicSocket
   private :__ir_socktype
 end
 
-# Socket.tcp / Socket.tcp_server_loop and friends are written in Ruby in CRuby
+# Socket.tcp_server_loop and friends are written in Ruby in CRuby
 # too (ext/socket/lib/socket.rb).  CRuby drives them through Addrinfo, which we
 # do not have; TCPSocket/TCPServer already perform the same name resolution
 # internally, so they stand in for it here.
 class Socket
-  def self.tcp(host, port, local_host = nil, local_port = nil,
-               connect_timeout: nil, resolv_timeout: nil) # :yield: socket
-    sock = if local_host || local_port
-      TCPSocket.new(host, port, local_host, local_port)
-    else
-      TCPSocket.new(host, port)
-    end
-    return sock unless block_given?
-    begin
-      yield sock
-    ensure
-      sock.close unless sock.closed?
-    end
-  end
-
   def self.tcp_server_sockets(host = nil, port = nil)
     host, port = nil, host if port.nil?
     server = host ? TCPServer.new(host, port) : TCPServer.new(port)
@@ -2024,18 +2009,26 @@ class Socket
     seconds = timeout
     return __ir_raw_connect(sockaddr) if seconds.nil?
 
-    result = connect_nonblock(sockaddr, exception: false)
-    return result unless result == :wait_writable
-
-    unless wait_writable(seconds)
+    unless __ir_connect_within(sockaddr, seconds)
       raise IO::TimeoutError, "user specified timeout for #{Socket.__ir_connect_target(sockaddr)}"
     end
+    0
+  end
 
-    begin
-      __ir_raw_connect(sockaddr)
-    rescue Errno::EISCONN
-      0
+  # connect(2) given at most `seconds` (see RubySocket.ConnectWithin): true once connected,
+  # false when the time ran out. A failure is its Errno, naming the address as CRuby's does.
+  def __ir_connect_within(sockaddr, seconds) # :nodoc:
+    sockaddr = sockaddr.to_sockaddr if Addrinfo === sockaddr
+    errno = begin
+      __ir_raw_connect_within(sockaddr, seconds)
+    rescue SocketError => e
+      # Off Unix the failure is .NET's SocketException.
+      mapped = IronRubySocketErrors__.translate(e)
+      raise if mapped.equal?(e) || !mapped.kind_of?(SystemCallError)
+      mapped.errno
     end
+    return errno.zero? if errno <= 0
+    raise SystemCallError.new("connect(2) for #{Socket.__ir_connect_target(sockaddr)}", errno)
   end
 
   def connect_nonblock(sockaddr, exception: true)
@@ -2330,7 +2323,11 @@ module IronRubySocketErrors__ # :nodoc: all
   RESOLVER = { "HostNotFound" => :EAI_NONAME, "NoData" => :EAI_NONAME,
                "TryAgain" => :EAI_AGAIN, "NoRecovery" => :EAI_FAIL }.freeze
 
-  def self.translate(error)
+  # The call MRI names after the message: "Connection refused - recvfrom(2)".
+  DETAIL = { recv: "recvfrom(2)", recvfrom: "recvfrom(2)",
+             recv_nonblock: "recvfrom(2)", recvfrom_nonblock: "recvfrom(2)" }.freeze
+
+  def self.translate(error, detail = nil)
     if error.kind_of?(SocketError)
       code = Socket.__ir_socket_error_code(error)
       if (eai = RESOLVER[code]) && !error.kind_of?(Socket::ResolutionError)
@@ -2339,10 +2336,13 @@ module IronRubySocketErrors__ # :nodoc: all
       return error if KEEP.include?(code)
       name = BY_CODE[code]
       return error if name.nil? || !Errno.const_defined?(name)
-      return Errno.const_get(name).new
+      return Errno.const_get(name).new(*detail)
     end
-    if error.class.name == "System::ObjectDisposedException"
+    case error.class.name
+    when "System::ObjectDisposedException"
       return IOError.new("closed stream")
+    when "System::InvalidOperationException"
+      return Errno::EINVAL.new
     end
     error
   end
@@ -2364,7 +2364,7 @@ module IronRubySocketErrors__ # :nodoc: all
         begin
           __send__(raw, *args, &block)
         rescue Exception => error
-          mapped = IronRubySocketErrors__.translate(error)
+          mapped = IronRubySocketErrors__.translate(error, DETAIL[name])
           raise mapped.equal?(error) ? error : mapped
         end
       end
@@ -2475,19 +2475,6 @@ class Socket
       :wait_readable
     else
       raise
-    end
-  end
-end
-
-module IronRubySocketErrors__ # :nodoc: all
-  class << self
-    alias_method :__ir_translate_socket, :translate
-
-    def translate(error)
-      if error.class.name == "System::InvalidOperationException"
-        return Errno::EINVAL.new
-      end
-      __ir_translate_socket(error)
     end
   end
 end
@@ -2690,42 +2677,19 @@ class Socket
 
   # CRuby's Socket.tcp / .tcp_server_sockets / .udp_server_sockets return Socket
   # instances, not TCPSocket/TCPServer/UDPSocket.
-  # CRuby 4.0's open_timeout bounds name resolution plus connect(2) together and
-  # reports a miss as Errno::ETIMEDOUT (connect_timeout, which predates it, is an
-  # IO::TimeoutError).  connect(2) is the part that can actually hang, so it is
-  # issued non-blocking and waited for with select(2).
-  def self.__ir_tcp_open_timeout(host, port, local_host, local_port, timeout) # :nodoc:
-    remote = Addrinfo.tcp(host, port)
-    sock = Socket.new(remote.afamily, SOCK_STREAM, 0)
-    begin
-      if local_host || local_port
-        sock.bind(Socket.sockaddr_in(local_port.to_i,
-                                     local_host || (remote.ipv6? ? "::" : "0.0.0.0")))
-      end
-      if sock.connect_nonblock(remote.to_sockaddr, exception: false) == :wait_writable
-        raise Errno::ETIMEDOUT unless IO.select(nil, [sock], nil, timeout)
-        # select(2) only says the handshake finished; a refused connection also
-        # makes the socket writable, so ask connect(2) again for the verdict.
-        sock.connect_nonblock(remote.to_sockaddr, exception: false)
-      end
-    rescue Exception
-      sock.close unless sock.closed?
-      raise
-    end
-    sock
-  end
-
+  # Either timeout bounds connect(2) (CRuby 4.0's open_timeout covers name resolution as
+  # well) and a miss is Errno::ETIMEDOUT, from Addrinfo#connect as in CRuby.
   def self.tcp(host, port, local_host = nil, local_port = nil,
                connect_timeout: nil, resolv_timeout: nil, open_timeout: nil) # :yield: socket
-    sock = if open_timeout
-      __ir_tcp_open_timeout(host, port, local_host, local_port, open_timeout)
+    if open_timeout && (connect_timeout || resolv_timeout)
+      raise ArgumentError, "Cannot specify open_timeout along with connect_timeout or resolv_timeout"
+    end
+    timeout = open_timeout || connect_timeout
+    remote = Addrinfo.tcp(host, port)
+    sock = if local_host || local_port
+      remote.connect_from(local_host || (remote.ipv6? ? "::" : "0.0.0.0"), local_port.to_i, timeout: timeout)
     else
-      remote = Addrinfo.tcp(host, port)
-      if local_host || local_port
-        remote.connect_from(local_host || (remote.ipv6? ? "::" : "0.0.0.0"), local_port.to_i)
-      else
-        remote.connect
-      end
+      remote.connect(timeout: timeout)
     end
     return sock unless block_given?
     begin
@@ -2855,20 +2819,16 @@ class TCPServer
 end
 
 class Socket
-  # Connect a throwaway socket without blocking and wait at most `timeout` for it
-  # to become writable, which is how connect(2) reports completion.  Anything the
-  # kernel refuses outright (ECONNREFUSED and friends) is raised as-is, so
-  # TCPSocket.new's own error reporting still applies.
+  # Connect a throwaway socket, giving it at most `timeout`. A failure is left to the
+  # real connect that follows, so TCPSocket.new's own error reporting still applies.
   def self.__ir_check_reachable(host, port, timeout) # :nodoc:
     remote = Addrinfo.tcp(host.nil? ? "127.0.0.1" : host, port)
     probe = Socket.new(remote.afamily, SOCK_STREAM, 0)
     begin
-      case probe.connect_nonblock(remote.to_sockaddr, exception: false)
-      when :wait_writable
-        unless IO.select(nil, [probe], nil, timeout)
-          raise IO::TimeoutError, "Connection timed out"
-        end
+      unless probe.__ir_connect_within(remote.to_sockaddr, timeout)
+        raise IO::TimeoutError, "user specified timeout for #{remote.inspect_sockaddr}"
       end
+    rescue SystemCallError
     ensure
       probe.close unless probe.closed?
     end
@@ -3152,6 +3112,9 @@ IronRubySocketErrors__.wrap(UNIXServer, :accept, :sysaccept, :listen)
 # CRuby gets it from socket(2) as an errno.
 IronRubySocketErrors__.wrap(Socket.singleton_class, :new)
 IronRubySocketErrors__.wrap(UDPSocket.singleton_class, :new)
+# A name gethostbyname cannot resolve is Socket::ResolutionError with its EAI_* code.
+IronRubySocketErrors__.wrap(Socket.singleton_class, :gethostbyname)
+IronRubySocketErrors__.wrap(TCPSocket.singleton_class, :gethostbyname)
 
 # recv_nonblock and recvfrom_nonblock only translate "would block"; every other
 # socket failure -- ENOTCONN on an unconnected stream socket, say -- has to go
