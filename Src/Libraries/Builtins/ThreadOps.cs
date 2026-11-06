@@ -1426,6 +1426,28 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        #region set_trace_func, add_trace_func
+
+        /// <summary>Kernel#set_trace_func for this thread only.</summary>
+        [RubyMethod("set_trace_func")]
+        public static Proc SetTraceFunc(RubyContext/*!*/ context, Thread/*!*/ self, object traceFunc) {
+            Proc proc = KernelOps.CastTraceFunc(traceFunc);
+            TracePoint.SetTraceFunc(context, proc, self);
+            return proc;
+        }
+
+        [RubyMethod("add_trace_func")]
+        public static Proc AddTraceFunc(RubyContext/*!*/ context, Thread/*!*/ self, object traceFunc) {
+            Proc proc = KernelOps.CastTraceFunc(traceFunc);
+            if (proc == null) {
+                throw RubyExceptions.CreateTypeError("trace_func needs to be Proc");
+            }
+            TracePoint.AddTraceFunc(context, proc, self);
+            return proc;
+        }
+
+        #endregion
+
         // Thread#fetch lives in Src/StdLib/ironruby/ruby4.rb: the miss has to raise KeyError, and
         // KeyError is one of the exception classes defined in Ruby above the runtime.
 

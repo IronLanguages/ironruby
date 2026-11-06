@@ -172,17 +172,6 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression paramInit = MakeParametersInitialization(gen, parameters);
             MSA.ParameterExpression blockUnwinder;
 
-            MSA.Expression traceCall, traceReturn;
-			if (gen.TraceEnabled) {
-                int firstStatementLine = _body.Count > 0 ? _body.First.Location.Start.Line : Location.End.Line;
-                int lastStatementLine = _body.Count > 0 ? _body.Last.Location.End.Line : Location.End.Line;
-
-                traceCall = Methods.TraceBlockCall.OpCall(scopeVariable, blockParameter, gen.SourcePathConstant, AstUtils.Constant(firstStatementLine));
-                traceReturn = Methods.TraceBlockReturn.OpCall(scopeVariable, blockParameter, gen.SourcePathConstant, AstUtils.Constant(lastStatementLine));
-            } else {
-                traceCall = traceReturn = Ast.Empty();
-            }
-
             MSA.Expression statements = gen.TransformStatements(_body, ResultOperation.Return);
             bool hasNestedReturn = gen.CurrentBlock.HasNestedReturn;
 
@@ -236,15 +225,12 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression body = AstUtils.Try(
                 enterNestedReturn,
                 paramInit,
-                traceCall,
                 Ast.Label(redoLabel),
                 bodyTry
             ).Finally(
-                AstUtils.Try(traceReturn).Finally(
-                    leaveNestedReturn,
-                    Methods.ReleaseScopeFrame.OpCall(scopeVariable),
-                    Ast.Empty()
-                )
+                leaveNestedReturn,
+                Methods.ReleaseScopeFrame.OpCall(scopeVariable),
+                Ast.Empty()
             );
 
             // A body that needs its scope but defines no closure over it can reuse the scope of the

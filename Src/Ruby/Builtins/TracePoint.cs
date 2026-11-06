@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
@@ -101,11 +102,26 @@ namespace IronRuby.Builtins {
         private Thread _targetThread;
         private TraceTarget _target;
 
+        // A hook of Kernel#set_trace_func or Thread#set_trace_func/add_trace_func: _handler is called
+        // with MRI's six arguments rather than with the TracePoint.
+        private readonly bool _isTraceFunc;
+
+        /// <summary>The events set_trace_func reports (MRI's RUBY_EVENT_ALL).</summary>
+        public const TraceEvents TraceFuncEvents =
+            TraceEvents.Line | TraceEvents.Class | TraceEvents.End | TraceEvents.Call | TraceEvents.Return |
+            TraceEvents.CCall | TraceEvents.CReturn | TraceEvents.Raise;
+
         public TracePoint(RubyContext/*!*/ context, TraceEvents events, Proc/*!*/ handler) {
             Assert.NotNull(context, handler);
             _context = context;
             _events = events;
             _handler = handler;
+        }
+
+        private TracePoint(RubyContext/*!*/ context, Proc/*!*/ traceFunc, Thread thread)
+            : this(context, TraceFuncEvents, traceFunc) {
+            _isTraceFunc = true;
+            _targetThread = thread;
         }
 
         public RubyContext/*!*/ Context { get { return _context; } }
@@ -203,6 +219,30 @@ namespace IronRuby.Builtins {
         [CLSCompliant(false)] // a volatile field is not CLS-compliant
         public static volatile bool CCallTracing;
 
+        /// <summary>
+        /// set_trace_func: removes the trace funcs installed for <paramref name="thread"/> (null: the
+        /// ones for every thread, Kernel#set_trace_func's) and installs <paramref name="traceFunc"/>
+        /// unless it is null.
+        /// </summary>
+        public static void SetTraceFunc(RubyContext/*!*/ context, Proc traceFunc, Thread thread) {
+            foreach (var tp in _enabledTracePoints) {
+                if (tp._isTraceFunc && tp._context == context && tp._targetThread == thread) {
+                    tp.Disable();
+                }
+            }
+            if (traceFunc != null) {
+                AddTraceFunc(context, traceFunc, thread);
+            }
+        }
+
+        /// <summary>Thread#add_trace_func: another hook, run before the ones already there.</summary>
+        public static void AddTraceFunc(RubyContext/*!*/ context, Proc/*!*/ traceFunc, Thread thread) {
+            var tp = new TracePoint(context, traceFunc, thread);
+            tp.Enable();
+            // Disable forgets the thread a TracePoint is enabled for; a trace func keeps it.
+            tp._targetThread = thread;
+        }
+
         #endregion
 
         #region Delivery
@@ -255,10 +295,49 @@ namespace IronRuby.Builtins {
             _currentEvent = info;
             try {
                 _context.CurrentException = null;
-                _handler.Call(null, this);
+                if (_isTraceFunc) {
+                    CallTraceFunc(info);
+                } else {
+                    _handler.Call(null, this);
+                }
             } finally {
                 _currentEvent = null;
                 _context.CurrentException = savedException;
+            }
+        }
+
+        // MRI's call_trace_func: event, file, line, id, binding, klass. C functions have no binding,
+        // and a singleton class is reported as the object it belongs to.
+        private void CallTraceFunc(TraceEventInfo/*!*/ info) {
+            ResolveMethod(info);
+            bool cFunction = (info.Event & (TraceEvents.CCall | TraceEvents.CReturn)) != 0;
+            RubyModule module = info.DefinedClass;
+            object klass = module;
+            if (module != null && module.IsSingletonClass) {
+                klass = ((RubyClass)module).SingletonClassOf;
+            }
+
+            _handler.Call(null, new object[] {
+                MutableString.CreateAscii(TraceFuncEventName(info.Event)),
+                info.Path != null ? _context.EncodePath(info.Path) : null,
+                ScriptingRuntimeHelpers.Int32ToObject(info.Line),
+                info.MethodName != null ? (object)_context.EncodeIdentifier(info.MethodName) : null,
+                (!cFunction && info.Scope != null) ? new Binding(info.Scope) : null,
+                klass,
+            });
+        }
+
+        private static string/*!*/ TraceFuncEventName(TraceEvents e) {
+            switch (e) {
+                case TraceEvents.Line: return "line";
+                case TraceEvents.Class: return "class";
+                case TraceEvents.End: return "end";
+                case TraceEvents.Call: return "call";
+                case TraceEvents.Return: return "return";
+                case TraceEvents.CCall: return "c-call";
+                case TraceEvents.CReturn: return "c-return";
+                case TraceEvents.Raise: return "raise";
+                default: return "unknown";
             }
         }
 

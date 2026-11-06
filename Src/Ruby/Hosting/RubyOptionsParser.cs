@@ -926,7 +926,7 @@ namespace IronRuby.Hosting {
              // { "--copyright",                 "print the copyright" },
                 { "--version",                   "print the version" },
 
-                { "-trace",                      "enable support for set_trace_func" },
+                { "-trace",                      "compile every frame in full (set_trace_func and TracePoint work without it)" },
                 { "-profile",                    "enable support for 'pi = IronRuby::Clr.profile { block_to_profile }'" },
                 
                 { "-X:ExceptionDetail",          "enable ExceptionDetail mode" },

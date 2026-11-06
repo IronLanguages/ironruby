@@ -455,37 +455,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        public static void TraceMethodCall(RubyMethodScope/*!*/ scope, string fileName, int lineNumber) {
-            // MRI: 
-            // Reports DeclaringModule even though an aliased method in a sub-module is called.
-            // Also works for singleton module-function, which shares DeclaringModule with instance module-function.
-            RubyModule module = scope.DeclaringModule;
-            scope.RubyContext.ReportTraceEvent("call", scope, module, scope.DefinitionName, fileName, lineNumber);
-        }
-
-        [Emitted]
-        public static void TraceMethodReturn(RubyMethodScope/*!*/ scope, string fileName, int lineNumber) {
-            RubyModule module = scope.DeclaringModule;
-            scope.RubyContext.ReportTraceEvent("return", scope, module, scope.DefinitionName, fileName, lineNumber);
-        }
-
-        [Emitted]
-        public static void TraceBlockCall(RubyBlockScope/*!*/ scope, BlockParam/*!*/ block, string fileName, int lineNumber) {
-            var method = block.Proc.Method;
-            if (method != null) {
-                scope.RubyContext.ReportTraceEvent("call", scope, method.DeclaringModule, method.DefinitionName, fileName, lineNumber);
-            }
-        }
-
-        [Emitted]
-        public static void TraceBlockReturn(RubyBlockScope/*!*/ scope, BlockParam/*!*/ block, string fileName, int lineNumber) {
-            var method = block.Proc.Method;
-            if (method != null) {
-                scope.RubyContext.ReportTraceEvent("return", scope, method.DeclaringModule, method.DefinitionName, fileName, lineNumber);
-            }
-        }
-
-        [Emitted]
         public static void PrintInteractiveResult(RubyScope/*!*/ scope, MutableString/*!*/ value) {
             var writer = scope.RubyContext.DomainManager.SharedIO.OutputStream;
             writer.WriteByte((byte)'=');

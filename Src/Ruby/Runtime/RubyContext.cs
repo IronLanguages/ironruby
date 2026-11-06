@@ -219,12 +219,7 @@ namespace IronRuby.Runtime {
         #region Tracing
 
         private readonly RubyInputProvider/*!*/ _inputProvider;
-        private Proc _traceListener;
 
-        // Set while the trace proc runs on this thread, so that what the proc does is not traced itself.
-        [ThreadStatic]
-        private static bool _traceListenerSuspended;
-        
         private readonly Stopwatch _upTime;
 
         #endregion
@@ -559,11 +554,6 @@ namespace IronRuby.Runtime {
         public MutableString ItemSeparator {
             get { return _itemSeparator; }
             set { _itemSeparator = value; }
-        }
-
-        public Proc TraceListener {
-            get { return _traceListener; }
-            set { _traceListener = value; }
         }
 
         public RubyInputProvider/*!*/ InputProvider {
@@ -5001,28 +4991,6 @@ namespace IronRuby.Runtime {
 
         public bool RespondTo(object target, string/*!*/ methodName) {
             return RubyOps.IsTrue(Send(ref _respondTo, "respond_to?", target, methodName));
-        }
-
-        internal void ReportTraceEvent(string/*!*/ operation, RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/ name, string fileName, int lineNumber) {
-            if (RubyUtils.IsReclaimingFiber) {
-                return;
-            }
-            if (_traceListener != null && !_traceListenerSuspended) {
-                try {
-                    _traceListenerSuspended = true;
-
-                    _traceListener.Call(null, new[] {
-                        MutableString.CreateAscii(operation),                                         // event
-                        fileName != null ? scope.RubyContext.EncodePath(fileName) : null,             // file
-                        ScriptingRuntimeHelpers.Int32ToObject(lineNumber),                            // line
-                        EncodeIdentifier(name),                                                       // TODO: alias
-                        new Binding(scope),                                                           // binding
-                        module.IsSingletonClass ? ((RubyClass)module).SingletonClassOf : module       // module
-                    });
-                } finally {
-                    _traceListenerSuspended = false;
-                }
-            }
         }
 
         #endregion

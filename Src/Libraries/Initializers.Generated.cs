@@ -4945,7 +4945,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "set_trace_func", 0x52, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.KernelOps.SetTraceListener)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.KernelOps.SetTraceFunc)
             );
             
             DefineLibraryMethod(module, "singleton_class", 0x51, 
@@ -5264,7 +5264,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "set_trace_func", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.KernelOps.SetTraceListener)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.KernelOps.SetTraceFunc)
             );
             
             DefineLibraryMethod(module, "sleep", 0x61, 
@@ -9884,6 +9884,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Threading.Thread, System.Boolean, System.Object>(IronRuby.Builtins.ThreadOps.AbortOnException)
             );
             
+            DefineLibraryMethod(module, "add_trace_func", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.ThreadOps.AddTraceFunc)
+            );
+            
             DefineLibraryMethod(module, "alive?", 0x51, 
                 0x00000000U, 
                 new Func<System.Threading.Thread, System.Boolean>(IronRuby.Builtins.ThreadOps.IsAlive)
@@ -9975,6 +9980,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "run", 0x51, 
                 0x00000000U, 
                 new Func<System.Threading.Thread, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Run)
+            );
+            
+            DefineLibraryMethod(module, "set_trace_func", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.ThreadOps.SetTraceFunc)
             );
             
             DefineLibraryMethod(module, "status", 0x51, 

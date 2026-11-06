@@ -244,24 +244,6 @@ namespace IronRuby.Compiler.Ast {
                 profileEnd = Methods.UpdateProfileTicks.OpCall(AstUtils.Constant(profileTickIndex), stampVariable);
             }
 
-            // tracing:
-            MSA.Expression traceCall, traceReturn;
-            if (gen.TraceEnabled) {
-                traceCall = Methods.TraceMethodCall.OpCall(
-                    scopeVariable, 
-                    gen.SourcePathConstant, 
-                    AstUtils.Constant(Location.Start.Line)
-                );
-
-                traceReturn = Methods.TraceMethodReturn.OpCall(
-                    gen.CurrentScopeVariable,
-                    gen.SourcePathConstant,
-                    AstUtils.Constant(Location.End.Line)
-                );
-            } else {
-                traceCall = traceReturn = AstUtils.Empty();
-            }
-
             MSA.ParameterExpression unwinder;
             
             // see RubyScope.GetActiveRefinements:
@@ -303,7 +285,6 @@ namespace IronRuby.Compiler.Ast {
                 recordRefinements,
                 profileStart,
                 optionalsInitialization,
-                traceCall,
                 statements
             ).Filter(unwinder = Ast.Parameter(typeof(MethodUnwinder), "#u"),
                 // a light frame makes a scope for the filter only when a MethodUnwinder passes:
@@ -313,8 +294,7 @@ namespace IronRuby.Compiler.Ast {
                 // leave frame:
                 (light != null) ? Methods.LeaveLightMethodFrame.OpCall(light.Rfc, scopeVariable) : Methods.LeaveMethodFrame.OpCall(scopeVariable),
                 Ast.Empty(),
-                profileEnd,
-                traceReturn
+                profileEnd
             );
 
             // TracePoint :return: falling off the end reports the line of `end'; an explicit
