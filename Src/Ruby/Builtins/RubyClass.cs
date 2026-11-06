@@ -366,10 +366,11 @@ namespace IronRuby.Builtins {
             }
 
             if (_underlyingSystemType == null) {
-                Interlocked.Exchange(ref _underlyingSystemType, 
+                Type baseType = _superClass != null ? _superClass.GetUnderlyingSystemType() : typeof(BasicObject);
+                Interlocked.Exchange(ref _underlyingSystemType,
                     RubyTypeDispenser.GetOrCreateType(
-                        _superClass != null ? _superClass.GetUnderlyingSystemType() : typeof(BasicObject), 
-                        GetImplementedInterfaces(),
+                        baseType,
+                        GetImplementedInterfaces(baseType),
                         _superClass != null && (_superClass.Restrictions & ModuleRestrictions.NoOverrides) != 0
                     )
                 );

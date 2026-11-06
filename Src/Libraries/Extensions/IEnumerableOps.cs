@@ -28,12 +28,12 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each", RubyMethodAttributes.PublicInstance)]
         public static object Each(BlockParam block, IEnumerable/*!*/ self) {
+            if (block == null) {
+                return new Enumerator(self, "each");
+            }
+
             foreach (object obj in self) {
                 object result;
-                if (block == null) {
-                    throw RubyExceptions.NoBlockGiven();
-                }
-
                 if (block.Yield(obj, out result)) {
                     return result;
                 }

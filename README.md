@@ -175,7 +175,8 @@ group gets them as more overloads (`list.count(pred)`, the instance member winni
 and a Ruby object such as an Array, whose ancestors don't include `IEnumerable[T]`, gets none.
 Moving from one to the other means changing that one line.
 
-Also: a `Method` converts to a delegate, `IComparable<T>` types are `Comparable`,
+Also: a `Method` converts to a delegate, `IComparable<T>` types are `Comparable`, a Ruby class
+that includes `Comparable` or `Enumerable` is an `IComparable` or `IEnumerable` to .NET code,
 `IAsyncEnumerable<T>` is `Enumerable`, C# 8 default interface methods are callable and run for
 Ruby implementations, `include System::IComparable` works although the name is also a generic,
 and `Method#parameters` names a CLR method's parameters. See

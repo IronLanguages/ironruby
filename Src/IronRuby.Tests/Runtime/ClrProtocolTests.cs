@@ -853,6 +853,110 @@ nil
 ");
         }
 
+        public static class ProtocolClrCaller1 {
+            public static int Compare(IComparable a, object b) { return a.CompareTo(b); }
+            public static int DefaultCompare(object a, object b) { return Comparer<object>.Default.Compare(a, b); }
+
+            public static string Sort(IList items) {
+                var list = new List<object>();
+                foreach (object item in items) {
+                    list.Add(item);
+                }
+                list.Sort();
+                return String.Join(" ", list);
+            }
+
+            public static string Each(IEnumerable items) {
+                var result = new List<string>();
+                foreach (object item in items) {
+                    result.Add(item is IList ? "[" + ((IList)item).Count + "]" : item.ToString());
+                }
+                return String.Join(" ", result);
+            }
+
+            public static string Str(object obj) { return obj.ToString(); }
+        }
+
+        /// <summary>
+        /// A Ruby class that mixes in Comparable is an IComparable to CLR code: CompareTo calls &lt;=&gt;, and nil from it is the
+        /// ArgumentError Comparable raises. A class that includes System::IComparable gets CompareTo from compare_to, or &lt;=&gt;.
+        /// </summary>
+        public void ClrRubyComparable1() {
+            Context.ObjectClass.SetConstant("Caller", Context.GetClass(typeof(ProtocolClrCaller1)));
+            TestOutput(@"
+class V
+  include Comparable
+  attr_reader :v
+  def initialize(v) = @v = v
+  def <=>(o) = o.is_a?(V) ? v <=> o.v : nil
+  def to_s = ""V#{v}""
+end
+class SubV < V; end
+
+p Caller.compare(V.new(1), V.new(2)), Caller.compare(V.new(2), V.new(2)), Caller.default_compare(SubV.new(5), V.new(2))
+puts Caller.sort([V.new(3), SubV.new(1), V.new(2)])
+begin
+  Caller.compare(V.new(1), 1)
+rescue ArgumentError => e
+  puts e.message
+end
+
+class W
+  include System::IComparable
+  def initialize(v) = @v = v
+  def <=>(o) = (@v <=> o.instance_variable_get(:@v)) * 10
+end
+p Caller.compare(W.new(1), W.new(2)), Caller.compare(W.new(2), W.new(1))
+
+class X
+  include System::IComparable
+  def compare_to(o) = 5
+  def <=>(o) = -1
+end
+p Caller.compare(X.new, X.new)
+
+S = Struct.new(:a) { include Comparable; def <=>(o) = a <=> o.a }
+p S.new(1) < S.new(2)
+puts Caller.str(V.new(7)), Caller.str(W.new(1)) =~ /\A#<W:0x\h+>\z/
+", @"
+-1
+0
+1
+V1 V2 V3
+comparison of V with 1 failed
+-1
+1
+1
+true
+V7
+0
+");
+        }
+
+        /// <summary>
+        /// A Ruby class that mixes in Enumerable is an IEnumerable to CLR code, enumerating what its each yields (Enumerable#to_a).
+        /// </summary>
+        public void ClrRubyEnumerable1() {
+            Context.ObjectClass.SetConstant("Caller", Context.GetClass(typeof(ProtocolClrCaller1)));
+            TestOutput(@"
+class E
+  include Enumerable
+  def initialize(*a) = @a = a
+  def each
+    @a.each { yield it }
+    yield 1, 2
+  end
+end
+puts Caller.each(E.new(:a, 'b', 3))
+puts Caller.each(E.new)
+p E.new(1).to_a
+", @"
+a b 3 [2]
+[2]
+[1, [1, 2]]
+");
+        }
+
         #endregion
 
         #region Tasks and async streams

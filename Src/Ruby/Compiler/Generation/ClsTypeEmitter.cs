@@ -60,6 +60,14 @@ namespace IronRuby.Compiler.Generation {
         
         protected abstract Type/*!*/[]/*!*/ MakeSiteSignature(int nargs);
         protected abstract Type/*!*/ ContextType { get; }
+
+        /// <summary>
+        /// Emits the conversion of the dynamic call's result (in <paramref name="result"/>) to the return type of <paramref name="mi"/>
+        /// if the method's result needs one other than the language's conversion to that type.
+        /// </summary>
+        protected virtual bool TryEmitResultConversion(ILGen/*!*/ il, MethodInfo/*!*/ mi, LocalBuilder/*!*/ result) {
+            return false;
+        }
         
         protected ILGen GetCCtor() {
             if (_cctor == null) {
@@ -147,7 +155,13 @@ namespace IronRuby.Compiler.Generation {
         /// has the same signature and then returns the result
         /// </summary>
         private void EmitBaseMethodDispatch(MethodInfo mi, ILGen il) {
-            if (!mi.IsAbstract) {
+            if (_baseType == typeof(object) && mi.DeclaringType == typeof(object) && mi.Name == "ToString") {
+                // A Ruby class implementing CLR interfaces: Object#ToString answers what RubyObject#ToString does (Kernel#to_s),
+                // not the name of the generated CLR type.
+                il.EmitLoadArg(0);
+                il.EmitCall(Methods.ObjectToString);
+                il.Emit(OpCodes.Ret);
+            } else if (!mi.IsAbstract) {
                 int offset = 0;
                 if (!mi.IsStatic) {
                     il.EmitLoadArg(0);
@@ -248,7 +262,7 @@ namespace IronRuby.Compiler.Generation {
             il.Emit(OpCodes.Ceq);
             il.Emit(OpCodes.Brtrue, baseCallLabel);
 
-            if (mi.ReturnType != typeof(void)) {
+            if (mi.ReturnType != typeof(void) && !TryEmitResultConversion(il, mi, resultVar)) {
                 il.Emit(OpCodes.Ldloc, resultVar);
                 EmitConvertFromObject(il, mi.ReturnType);
             }

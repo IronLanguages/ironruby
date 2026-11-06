@@ -235,6 +235,12 @@ namespace IronRuby.Builtins {
     public static class IndexErrorOps {
     }
 
+    // What a CLR array or indexer throws for an index out of its bounds: an IndexError to Ruby code, as Ruby's own
+    // out-of-bounds errors are (it was Ruby's IndexError itself until IndexError had to be subclassable).
+    [RubyClass(Extends = typeof(IndexOutOfRangeException), Inherits = typeof(IndexError), Restrictions = ModuleRestrictions.None)]
+    public static class IndexOutOfRangeExceptionOps {
+    }
+
     [RubyException("RangeError", Extends = typeof(ArgumentOutOfRangeException), Inherits = typeof(SystemException))]
     [HideMethod("message")]
     public static class RangeErrorOps {

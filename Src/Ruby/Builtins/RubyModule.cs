@@ -2986,6 +2986,15 @@ namespace IronRuby.Builtins {
                         return true;
                     }
                 }
+
+                // IComparable.CompareTo and IEnumerable.GetEnumerator of a Ruby class that defines <=> or mixes in Enumerable
+                // (see GetImpliedClrInterface). Only a <=> written in Ruby: a library one (System::IComparable's) calls CompareTo.
+                if (name == "CompareTo" && TryGetDefinedMethod("<=>", out method) && method.IsRubyMember && !(method is RubyLibraryMethodInfo)) {
+                    return true;
+                }
+                if (name == "GetEnumerator" && GetImpliedClrInterface() == typeof(System.Collections.IEnumerable) && TryGetDefinedMethod("to_a", out method)) {
+                    return true;
+                }
             }
 
             return !skipHidden && TryGetClrMember(name, virtualLookup, out method);
@@ -3849,12 +3858,35 @@ namespace IronRuby.Builtins {
             get { return true; }
         }
 
-        internal List<Type> GetImplementedInterfaces() {
+        /// <summary>
+        /// The CLR interface the type of a Ruby class mixing in this module implements although the module is not a CLR interface:
+        /// Comparable makes the class an IComparable (CompareTo calls &lt;=&gt;), Enumerable an IEnumerable (GetEnumerator
+        /// lists Enumerable#to_a), so that CLR code can sort and iterate its instances.
+        /// </summary>
+        internal Type GetImpliedClrInterface() {
+            if ((_restrictions & ModuleRestrictions.Builtin) != ModuleRestrictions.Builtin || _typeTracker != null) {
+                return null;
+            }
+            switch (_name) {
+                case "Comparable": return typeof(IComparable);
+                case "Enumerable": return typeof(System.Collections.IEnumerable);
+                default: return null;
+            }
+        }
+
+        internal List<Type> GetImplementedInterfaces(Type/*!*/ baseType) {
             List<Type> interfaces = new List<Type>();
             using (Context.ClassHierarchyLocker()) {
                 foreach (RubyModule m in _mixins) {
                     if (m.IsInterface && !m.TypeTracker.Type.IsGenericTypeDefinition && !interfaces.Contains(m.TypeTracker.Type)) {
                         interfaces.Add(m.TypeTracker.Type);
+                    }
+
+                    // only where a type can be generated for it (a Struct's RubyStruct is sealed, NativeAOT emits no types)
+                    Type implied = m.GetImpliedClrInterface();
+                    if (implied != null && !implied.IsAssignableFrom(baseType) && !interfaces.Contains(implied) &&
+                        !baseType.IsSealed && System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported) {
+                        interfaces.Add(implied);
                     }
                 }
             }

@@ -63,6 +63,52 @@ namespace IronRuby.Compiler.Generation {
             return typeof(RubyTypeEmitter).GetMethod("InvokeMethodMissing");
         }
 
+        /// <summary>
+        /// The result of CompareTo implemented in Ruby (compare_to, or &lt;=&gt;): nil means that the objects are not comparable,
+        /// which Comparable reports as an ArgumentError; any other result is read the way Comparable reads the result of &lt;=&gt;.
+        /// </summary>
+        [Emitted]
+        public static int ConvertCompareToResult(RubyContext/*!*/ context, object result, object self, object other) {
+            if (result == null) {
+                throw RubyExceptions.MakeComparisonError(context, self, other);
+            }
+            return Protocols.ConvertCompareResult(new ComparisonStorage(context), result);
+        }
+
+        /// <summary>
+        /// The result of GetEnumerator implemented in Ruby (get_enumerator, or Enumerable#to_a): an enumerator or an enumerable.
+        /// </summary>
+        [Emitted]
+        public static System.Collections.IEnumerator/*!*/ ConvertGetEnumeratorResult(RubyContext/*!*/ context, object result) {
+            if (result is System.Collections.IEnumerator enumerator) {
+                return enumerator;
+            }
+            if (result is System.Collections.IEnumerable enumerable) {
+                return enumerable.GetEnumerator();
+            }
+            throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(result), "System::Collections::IEnumerator");
+        }
+
+        protected override bool TryEmitResultConversion(ILGen/*!*/ il, MethodInfo/*!*/ mi, LocalBuilder/*!*/ result) {
+            ParameterInfo[] ps = mi.GetParameters();
+            if (mi.Name == "CompareTo" && mi.ReturnType == typeof(int) && ps.Length == 1 && !ps[0].ParameterType.IsByRef) {
+                EmitImplicitContext(il);
+                il.Emit(OpCodes.Ldloc, result);
+                il.EmitLoadArg(0);
+                il.EmitLoadArg(1);
+                il.EmitBoxing(ps[0].ParameterType);
+                il.EmitCall(typeof(RubyTypeEmitter).GetMethod(nameof(ConvertCompareToResult)));
+                return true;
+            }
+            if (mi.Name == "GetEnumerator" && mi.ReturnType == typeof(System.Collections.IEnumerator) && ps.Length == 0) {
+                EmitImplicitContext(il);
+                il.Emit(OpCodes.Ldloc, result);
+                il.EmitCall(typeof(RubyTypeEmitter).GetMethod(nameof(ConvertGetEnumeratorResult)));
+                return true;
+            }
+            return false;
+        }
+
         [Emitted]
         public static RubyCallAction/*!*/ MakeRubyCallSite(string/*!*/ methodName, int argumentCount) {
             // TODO: load context from class field?
