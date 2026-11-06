@@ -27,8 +27,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public const int BASE_FIG = 9;
         // Each word contains a value between 0 and BASE-1
         public const uint BASE = 1000000000;
-        // Half the BASE value used in rounding
-        public const uint HALF_BASE = BASE / 2;
         // BASE divided by 10
         public const uint BASE_DIV_10 = BASE / 10;
         #endregion

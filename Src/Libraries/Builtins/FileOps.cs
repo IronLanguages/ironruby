@@ -321,7 +321,6 @@ namespace IronRuby.Builtins {
         }
 
         internal static void Chmod(string/*!*/ path, int permission) {
-#if FEATURE_FILESYSTEM
             if (Posix.IsAvailable) {
                 int errno;
                 if (Posix.Chmod(path, permission, out errno) != 0) {
@@ -335,7 +334,6 @@ namespace IronRuby.Builtins {
             } else {
                 File.SetAttributes(path, oldAttributes & ~FileAttributes.ReadOnly);
             }
-#endif
         }
 
         private static int ToUidGid(RubyContext/*!*/ context, object value, bool owner) {
@@ -467,10 +465,8 @@ namespace IronRuby.Builtins {
         internal static void Delete(RubyContext/*!*/ context, string/*!*/ path) {
             try {
                 context.Platform.DeleteFile(path, true);
-#if FEATURE_FILESYSTEM
             } catch (DirectoryNotFoundException) {
                 throw RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
-#endif
             } catch (IOException e) {
                 throw Errno.CreateEACCES(e.Message, e);
             }
@@ -486,9 +482,8 @@ namespace IronRuby.Builtins {
             return paths.Length;
         }
 
-#if FEATURE_FILESYSTEM
         // The size is an off_t: a file of 4 GiB and more is an ordinary thing to ask for.
-        [RubyMethod("truncate", BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("truncate")]
         public static int Truncate(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyFile/*!*/ self, object length) {
             long size = Protocols.CastToInteger(integerConversion, length).ToInt64();
             self.RequireWritable();
@@ -504,7 +499,7 @@ namespace IronRuby.Builtins {
             return 0;
         }
 
-        [RubyMethod("truncate", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("truncate", RubyMethodAttributes.PublicSingleton)]
         public static int Truncate(ConversionStorage<MutableString>/*!*/ toPath, ConversionStorage<IntegerValue>/*!*/ integerConversion,
             RubyClass/*!*/ self, object path, object length) {
             string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
@@ -517,7 +512,6 @@ namespace IronRuby.Builtins {
             }
             return 0;
         }
-#endif
 
         [RubyMethod("rename", RubyMethodAttributes.PublicSingleton)]
         public static int Rename(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object oldPath, object newPath) {
@@ -1130,7 +1124,6 @@ namespace IronRuby.Builtins {
 
         #region flock, readlink, link, symlink
 
-#if FEATURE_FILESYSTEM
         /// <summary>
         /// IronRuby's "file descriptor" is an index into a per-context table, not
         /// an OS descriptor, so syscalls that need a real fd have to dig the
@@ -1145,7 +1138,7 @@ namespace IronRuby.Builtins {
             return (int)fs.SafeFileHandle.DangerousGetHandle();
         }
 
-        [RubyMethod("flock", BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("flock")]
         public static object FileLock(RubyFile/*!*/ self, [DefaultProtocol]int operation) {
             self.RequireInitialized();
             if (OperatingSystem.IsWindows()) {
@@ -1349,7 +1342,7 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("readlink", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("readlink", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ Readlink(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
             if (!Posix.IsAvailable) {
@@ -1367,7 +1360,7 @@ namespace IronRuby.Builtins {
             return self.Context.EncodePath(target);
         }
 
-        [RubyMethod("link", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("link", RubyMethodAttributes.PublicSingleton)]
         public static int Link(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object oldPath, object newPath) {
             string strOld = self.Context.DecodePath(Protocols.CastToPath(toPath, oldPath));
             string strNew = self.Context.DecodePath(Protocols.CastToPath(toPath, newPath));
@@ -1390,7 +1383,7 @@ namespace IronRuby.Builtins {
             return 0;
         }
 
-        [RubyMethod("symlink", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("symlink", RubyMethodAttributes.PublicSingleton)]
         public static int SymLink(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object oldPath, object newPath) {
             string strOld = self.Context.DecodePath(Protocols.CastToPath(toPath, oldPath));
             string strNew = self.Context.DecodePath(Protocols.CastToPath(toPath, newPath));
@@ -1410,7 +1403,7 @@ namespace IronRuby.Builtins {
         }
 
         // MRI on Windows has no mkfifo: the rb_f_notimplement stub, which #respond_to? denies.
-        [RubyMethod("mkfifo", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("mkfifo", RubyMethodAttributes.PublicSingleton)]
         [RubyNotImplemented(OnWindowsOnly = true)]
         public static int MakeFifo(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             [DefaultParameterValue(0x1B6 /* 0666 */)]int mode) {
@@ -1503,14 +1496,14 @@ namespace IronRuby.Builtins {
             return resolved.Length == 0 ? "/" : resolved;
         }
 
-        [RubyMethod("realpath", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("realpath", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ RealPath(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             [Optional]object basedir) {
 
             return RealPath(toPath, self, path, basedir, true);
         }
 
-        [RubyMethod("realdirpath", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("realdirpath", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ RealDirPath(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             [Optional]object basedir) {
 
@@ -1572,46 +1565,44 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
-#endif
         #endregion
 
         #region atime, ctime, mtime, utime
-#if FEATURE_FILESYSTEM
 
-        [RubyMethod("atime", BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("atime")]
         public static RubyTime AccessTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
             return RubyStatOps.AccessTime(RubyStatOps.Create(self));
         }
 
-        [RubyMethod("atime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("atime", RubyMethodAttributes.PublicSingleton)]
         public static RubyTime AccessTime(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             return RubyStatOps.AccessTime(FileTest.Stat(respondToStorage, toIoStorage, toPath, self.Context, path));
         }
 
-        [RubyMethod("ctime", BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("ctime")]
         public static RubyTime CreateTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
             return RubyStatOps.CreateTime(RubyStatOps.Create(self));
         }
 
-        [RubyMethod("ctime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("ctime", RubyMethodAttributes.PublicSingleton)]
         public static RubyTime CreateTime(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             return RubyStatOps.CreateTime(FileTest.Stat(respondToStorage, toIoStorage, toPath, self.Context, path));
         }
 
-        [RubyMethod("mtime", BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("mtime")]
         public static RubyTime ModifiedTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
             return RubyStatOps.ModifiedTime(RubyStatOps.Create(self));
         }
 
-        [RubyMethod("mtime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("mtime", RubyMethodAttributes.PublicSingleton)]
         public static RubyTime ModifiedTime(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             return RubyStatOps.ModifiedTime(FileTest.Stat(respondToStorage, toIoStorage, toPath, self.Context, path));
         }
 
-        [RubyMethod("utime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("utime", RubyMethodAttributes.PublicSingleton)]
         public static int UpdateTimes(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object accessTime, object modifiedTime,
             params object[]/*!*/ paths) {
 
@@ -1621,7 +1612,7 @@ namespace IronRuby.Builtins {
         // MRI on Windows has neither lutimes nor utimensat: File.lutime is the rb_f_notimplement
         // stub there, which #respond_to? denies. Setting the times through the BCL would set the
         // target's, not the link's.
-        [RubyMethod("lutime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("lutime", RubyMethodAttributes.PublicSingleton)]
         [RubyNotImplemented(OnWindowsOnly = true)]
         public static int UpdateLinkTimes(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object accessTime, object modifiedTime,
             params object[]/*!*/ paths) {
@@ -1672,7 +1663,6 @@ namespace IronRuby.Builtins {
             seconds = time.Seconds;
             nanoseconds = time.Nanoseconds;
         }
-#endif
         private static RubyTime MakeTime(RubyContext/*!*/ context, object obj) {
             if (obj == null) {
                 return new RubyTime(DateTime.Now);
@@ -1692,14 +1682,13 @@ namespace IronRuby.Builtins {
 
         #region ftype, stat, inspect, path, to_path
 
-#if FEATURE_FILESYSTEM
-        [RubyMethod("ftype", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("ftype", RubyMethodAttributes.PublicSingleton)]
         public static MutableString FileType(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             // ftype reports on the link itself, not on its target
             return RubyStatOps.FileType(RubyStatOps.Create(self.Context, self.Context.DecodePath(Protocols.CastToPath(toPath, path)), false));
         }
 
-        [RubyMethod("stat", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("stat", RubyMethodAttributes.PublicSingleton)]
         public static FileSystemInfo/*!*/ Stat(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             MutableString strPath = Protocols.CastToPath(toPath, path);
             string decoded = self.Context.DecodePath(strPath);
@@ -1717,35 +1706,34 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("lstat", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("lstat", RubyMethodAttributes.PublicSingleton)]
         public static FileSystemInfo/*!*/ LStat(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             return RubyStatOps.Create(self.Context, self.Context.DecodePath(Protocols.CastToPath(toPath, path)), false);
         }
 
-        [RubyMethod("lstat", BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("stat", BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("lstat")]
+        [RubyMethod("stat")]
         public static FileSystemInfo Stat(RubyFile/*!*/ self) {
             return RubyStatOps.Create(self);
         }
 
-        [RubyMethod("birthtime", BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("birthtime")]
         public static RubyTime BirthTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
             return RubyStatOps.BirthTime(RubyStatOps.Create(self));
         }
 
-        [RubyMethod("birthtime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("birthtime", RubyMethodAttributes.PublicSingleton)]
         public static RubyTime BirthTime(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             return RubyStatOps.BirthTime(RubyStatOps.Create(self.Context, Protocols.CastToPath(toPath, path)));
         }
 
-        [RubyMethod("size", BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("size")]
         public static object FileSize(RubyFile/*!*/ self) {
             // fstat the descriptor rather than the path: the size of a file that has
             // since been unlinked is still readable, and a closed File raises IOError.
             self.RequireOpen();
             return RubyStatOps.Size(RubyStatOps.Create((RubyIO)self));
         }
-#endif
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(RubyFile/*!*/ self) {
             var result = MutableString.CreateMutable(self.Context.GetPathEncoding()).
@@ -1781,7 +1769,6 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region File::Stat
-#if FEATURE_FILESYSTEM
 
         /// <summary>
         /// A File::Stat backed by a real statx(2) result. Off Unix (or if libc
@@ -1832,7 +1819,7 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Stat
         /// </summary>
-        [RubyClass("Stat", Extends = typeof(StatInfo), Inherits = typeof(object), BuildConfig = "FEATURE_FILESYSTEM"), Includes(typeof(Comparable))]
+        [RubyClass("Stat", Extends = typeof(StatInfo), Inherits = typeof(object)), Includes(typeof(Comparable))]
         public class RubyStatOps {
 
             /// <summary>
@@ -2334,8 +2321,8 @@ namespace IronRuby.Builtins {
 
             #endregion
 
-            [RubyMethod("identical?")]
-            public static bool AreIdentical(RubyContext/*!*/ context, FileSystemInfo/*!*/ self, [NotNull]FileSystemInfo/*!*/ other) {
+            // File.identical? / FileTest.identical?; File::Stat has no #identical? of its own.
+            internal static bool AreIdentical(RubyContext/*!*/ context, FileSystemInfo/*!*/ self, [NotNull]FileSystemInfo/*!*/ other) {
                 var a = D(self);
                 var b = D(other);
                 if (a != null && b != null) {
@@ -2475,159 +2462,156 @@ namespace IronRuby.Builtins {
                 }
             }
         }
-#endif
         #endregion
 
         #region FileTest methods (public singletons only)
-#if FEATURE_FILESYSTEM
         // Which of these take a stream as well as a path is FileTest's business: see FileTest.cs.
 
-        [RubyMethod("blockdev?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("blockdev?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsBlockDevice(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsBlockDevice(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("chardev?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("chardev?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsCharDevice(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsCharDevice(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("directory?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("directory?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsDirectory(RespondToStorage/*!*/ respondToStorage,
             CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsDirectory(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("executable?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("executable?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsExecutable(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsExecutable(toPath, self, path);
         }
 
-        [RubyMethod("executable_real?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("executable_real?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsExecutableReal(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsExecutableReal(toPath, self, path);
         }
 
-        [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton)]
         // #exists? was deprecated in 2.1 and removed in 3.9.
         public static bool Exists(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.Exists(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("file?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("file?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsFile(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsFile(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("grpowned?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("grpowned?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsGroupOwned(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsGroupOwned(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("identical?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("identical?", RubyMethodAttributes.PublicSingleton)]
         public static bool AreIdentical(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path1, object path2) {
             return FileTest.AreIdentical(respondToStorage, toIoStorage, toPath, self, path1, path2);
         }
 
-        [RubyMethod("owned?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("owned?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsUserOwned(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsUserOwned(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("pipe?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("pipe?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsPipe(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsPipe(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("readable?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("readable?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsReadable(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsReadable(toPath, self, path);
         }
 
-        [RubyMethod("readable_real?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("readable_real?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsReadableReal(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsReadableReal(toPath, self, path);
         }
 
-        [RubyMethod("setgid?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("setgid?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsSetGid(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsSetGid(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("setuid?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("setuid?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsSetUid(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsSetUid(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("size", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("size", RubyMethodAttributes.PublicSingleton)]
         public static object Size(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.Size(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("size?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("size?", RubyMethodAttributes.PublicSingleton)]
         public static object NullableSize(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.NullableSize(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("socket?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("socket?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsSocket(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsSocket(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("sticky?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("sticky?", RubyMethodAttributes.PublicSingleton)]
         public static object IsSticky(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsSticky(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("symlink?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("symlink?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsSymLink(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsSymLink(toPath, self, path);
         }
 
-        [RubyMethod("writable?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("writable?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsWritable(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsWritable(toPath, self, path);
         }
 
-        [RubyMethod("writable_real?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("writable_real?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsWritableReal(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsWritableReal(toPath, self, path);
         }
 
-        [RubyMethod("world_readable?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("world_readable?", RubyMethodAttributes.PublicSingleton)]
         public static object IsWorldReadable(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsWorldReadable(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("world_writable?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("world_writable?", RubyMethodAttributes.PublicSingleton)]
         public static object IsWorldWritable(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsWorldWritable(respondToStorage, toIoStorage, toPath, self, path);
         }
 
-        [RubyMethod("empty?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("zero?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("empty?", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("zero?", RubyMethodAttributes.PublicSingleton)]
         public static bool IsZeroLength(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsZeroLength(respondToStorage, toIoStorage, toPath, self, path);
         }
-#endif
         #endregion
     }
 }

@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_ENCODING
 
 using System;
 using System.Collections.Generic;
@@ -25,7 +24,7 @@ using Microsoft.Scripting;
 using System.Globalization;
 
 namespace IronRuby.Builtins {
-    [RubyClass("Encoding", Extends = typeof(RubyEncoding), Inherits = typeof(Object), BuildConfig = "FEATURE_ENCODING")]
+    [RubyClass("Encoding", Extends = typeof(RubyEncoding), Inherits = typeof(Object))]
     public static partial class RubyEncodingOps {
         #region Exceptions
 
@@ -231,11 +230,6 @@ namespace IronRuby.Builtins {
             }
             result.Append('>');
             return result;
-        }
-
-        [RubyMethod("based_encoding")]
-        public static RubyEncoding BasedEncoding(RubyEncoding/*!*/ self) {
-            return null;
         }
 
         [RubyMethod("dummy?")]
@@ -571,4 +565,3 @@ namespace IronRuby.Builtins {
         #endregion
     }
 }
-#endif

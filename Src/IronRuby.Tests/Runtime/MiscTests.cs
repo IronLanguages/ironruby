@@ -2058,7 +2058,7 @@ no implicit conversion of nil into Integer
             TestOutput(@"
 e = [1, 2].each
 p e.dup.to_a, e.clone.to_a, [1, 2, 3].each_slice(2).dup.to_a
-p Float.ancestors.include?(Precision), Float.ancestors[0, 3].map(&:to_s)
+p defined?(Precision), Float.ancestors[0, 3].map(&:to_s)
 $VERBOSE = nil; p $-W
 $VERBOSE = false; p $-W
 $VERBOSE = true; p $-W
@@ -2067,7 +2067,7 @@ begin; $-W = 1; rescue NameError => x; puts x.message; end
 [1, 2]
 [1, 2]
 [[1, 2], [3]]
-false
+nil
 [""Float"", ""Numeric"", ""Comparable""]
 0
 1
@@ -2081,6 +2081,7 @@ $-W is a read-only variable
 p 1e-20.round(25), 1e-20.round(30), 1e-20.round(19), 1.5.round(16), 0.1.round(20), 5e-324.round(324)
 p((-1e-10).ceil(1), 1e-10.floor(1), (-1e-10).floor(1), 2.1.floor(1), 1.1.ceil(1), (-2.5).truncate(1))
 p Float::MAX_10_EXP, Float::MIN_10_EXP
+p '%#.0f' % 3, '%#.0f' % 10**20, '%#5.0f' % -3, '%#.0f' % 3.0
 begin; '%5 5d' % 3; rescue ArgumentError => e; puts e.message; end
 begin; '%.5+d' % 3; rescue ArgumentError => e; puts e.message; end
 begin; '%1$1$d' % 3; rescue ArgumentError => e; puts e.message; end
@@ -2109,6 +2110,10 @@ begin; Float(""½.5""); rescue ArgumentError => e; puts e.message; end
 -2.5
 308
 -307
+""3""
+""100000000000000000000""
+""   -3""
+""3.""
 flag after width
 flag after precision
 value given twice - 1$

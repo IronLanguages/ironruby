@@ -19,7 +19,6 @@
  * rather than silently dropped.
  *
  * ***************************************************************************/
-#if FEATURE_PROCESS
 
 using System;
 using System.Collections.Generic;
@@ -934,4 +933,3 @@ namespace IronRuby.Builtins {
         #endregion
     }
 }
-#endif

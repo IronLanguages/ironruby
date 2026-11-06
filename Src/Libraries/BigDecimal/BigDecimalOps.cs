@@ -190,11 +190,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return GetConfig(context).Limit;
         }
 
-        [RubyMethod("ver", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ Version(RubyClass/*!*/ self) {
-            return MutableString.CreateAscii("1.0.1");
-        }
-
         /// <summary>
         /// Parses as much of the string as looks like a number and answers zero when none of
         /// it does, where Kernel#BigDecimal would raise. This is what String#to_d uses.
@@ -203,30 +198,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public static BigDecimal/*!*/ InterpretLoosely(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol]MutableString/*!*/ value) {
             return BigDecimal.Create(GetConfig(context), value.ConvertToString(), 0);
         }
-
-        #region induced_from
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static BigDecimal InducedFrom(RubyClass/*!*/ self, [NotNull]BigDecimal/*!*/ value) {
-            return value;
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static BigDecimal InducedFrom(RubyContext/*!*/ context, RubyClass/*!*/ self, int value) {
-            return BigDecimal.Create(GetConfig(context), value.ToString(CultureInfo.InvariantCulture));
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static BigDecimal InducedFrom(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ value) {
-            return BigDecimal.Create(GetConfig(context), value.ToString(CultureInfo.InvariantCulture));
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static BigDecimal InducedFrom(RubyClass/*!*/ self, object value) {
-            throw RubyExceptions.CreateImplicitConversionError(self.Context.GetClassDisplayName(value), self.Name);
-        }
-
-        #endregion
 
         #endregion
 
@@ -267,11 +238,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return self.Exponent > 0
                 ? Math.Max(self.Digits, self.Exponent)
                 : self.Digits - self.Exponent;
-        }
-
-        [RubyMethod("precs")]
-        public static RubyArray/*!*/ Precs(BigDecimal/*!*/ self) {
-            return RubyOps.MakeArray2(self.Precision * BigDecimal.BASE_FIG, self.MaxPrecision * BigDecimal.BASE_FIG);
         }
 
         [RubyMethod("split")]

@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_CRYPTOGRAPHY
 using System;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -24,7 +23,7 @@ using Microsoft.Scripting.Generation;
 
 namespace IronRuby.StandardLibrary.Digest {
 
-    [RubyModule("Digest", BuildConfig = "FEATURE_CRYPTOGRAPHY")]
+    [RubyModule("Digest")]
     public static class Digest {
 
         #region Module Methods
@@ -421,4 +420,3 @@ namespace IronRuby.StandardLibrary.Digest {
         }
     }
 }
-#endif

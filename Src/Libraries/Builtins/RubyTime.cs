@@ -153,14 +153,6 @@ namespace IronRuby.Builtins {
             return TimeSpan.FromSeconds((double)UtcOffsetSeconds);
         }
 
-        public static string GetCurrentZoneName() {
-            return _CurrentTimeZone.GetAbbreviation((long)(DateTime.UtcNow - Epoch).TotalSeconds);
-        }
-
-        public bool GetCurrentDst(RubyContext/*!*/ context) {
-            return IsDaylightSavingTime;
-        }
-
         public static DateTime ToUniversalTime(DateTime dateTime) {
             if (dateTime.Kind == DateTimeKind.Utc) {
                 return dateTime;
@@ -474,10 +466,6 @@ namespace IronRuby.Builtins {
             set { InitializeFromDateTime(value); }
         }
 
-        internal void SetDateTime(DateTime value) {
-            InitializeFromDateTime(value);
-        }
-
         public long TicksSinceEpoch {
             get { return _seconds * TicksPerSecond + SubsecTicks(_subsec); }
         }
@@ -496,10 +484,6 @@ namespace IronRuby.Builtins {
 
         public DateTimeKind Kind {
             get { return _zoneKind == RubyTimeZoneKind.Utc ? DateTimeKind.Utc : DateTimeKind.Local; }
-        }
-
-        internal static long ToTicks(long seconds, long microseconds) {
-            return seconds * 10000000 + microseconds * 10;
         }
 
         internal static DateTime AddSeconds(DateTime dateTime, double seconds) {

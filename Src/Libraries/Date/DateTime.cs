@@ -28,11 +28,9 @@ namespace IronRuby.StandardLibrary.Date {
             : base(cls) {
         }
 
-#if FEATURE_SERIALIZATION
         protected RubyDateTime(SerializationInfo/*!*/ info, StreamingContext context)
             : base(info, context) {
         }
-#endif
 
         protected override RubyObject/*!*/ CreateInstance() {
             return new RubyDateTime(ImmediateClass.NominalClass);

@@ -413,7 +413,7 @@ namespace IronRuby.Builtins {
             return InternalToPublicOptions(self.Options);
         }
 
-        [RubyMethod("encoding", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("encoding")]
         public static RubyEncoding/*!*/ GetEncoding(RubyRegex/*!*/ self) {
             return self.Encoding;
         }

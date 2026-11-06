@@ -15,7 +15,6 @@
  * -errno, which the prelude turns into the right Errno:: class.
  *
  * ***************************************************************************/
-#if FEATURE_PROCESS
 
 using System;
 using System.Collections.Generic;
@@ -758,4 +757,3 @@ namespace IronRuby.Builtins {
         #endregion
     }
 }
-#endif

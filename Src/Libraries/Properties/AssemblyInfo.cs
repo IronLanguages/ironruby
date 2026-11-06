@@ -16,9 +16,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using IronRuby.Hosting;
-using IronRuby.Runtime;
-using System.Security;
 
 [assembly: AssemblyTitle("Ruby Libraries")]
 [assembly: AssemblyDescription("")]
@@ -31,10 +28,3 @@ using System.Security;
 
 [assembly: ComVisible(false)]
 [assembly: Guid("ca75230d-3011-485d-b1db-dfe924b6c434")]
-
-[assembly: SecurityTransparent]
-
-
-[assembly: AllowPartiallyTrustedCallers]
-[assembly: SecurityRules(SecurityRuleSet.Level1)]
-

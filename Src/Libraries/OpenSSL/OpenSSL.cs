@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_CRYPTOGRAPHY
 
 using System;
 using System.Collections;
@@ -39,7 +38,7 @@ using Crypto = System.Security.Cryptography;
 
 namespace IronRuby.StandardLibrary.OpenSsl {
 
-    [RubyModule("OpenSSL", BuildConfig = "FEATURE_CRYPTOGRAPHY")]
+    [RubyModule("OpenSSL")]
     public static class OpenSsl {
         // TODO: constants
         // Config,HMACError,PKCS12,Random,OPENSSL_VERSION,PKCS7,BN,ConfigError,PKey,Engine,BNError,Netscape,OCSP
@@ -553,7 +552,6 @@ namespace IronRuby.StandardLibrary.OpenSsl {
 
         [RubyModule("SSL")]
         public static class SSL {
-#if FEATURE_SYNC_SOCKETS
         /// <summary>
         /// One TLS connection.  Not an MRI class: OpenSSL::SSL::SSLSocket is the
         /// Ruby class in openssl/ssl.rb and this is what it does its reading and
@@ -760,9 +758,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                         // exception that was raised into this thread through.
                         self._broken = "the TLS handshake was interrupted";
                         cancel.Cancel();
-#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
                         RubyUtils.TranslateThreadInterrupt();
-#endif
                         throw;
                     }
                     if (cancel.IsCancellationRequested && !task.IsCompletedSuccessfully) {
@@ -863,9 +859,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     // done, with an error the caller reports
                     return true;
                 } catch (ThreadInterruptedException) {
-#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
                     RubyUtils.TranslateThreadInterrupt();
-#endif
                     throw;
                 }
             }
@@ -1255,7 +1249,6 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 }
             }
         }
-#endif
 
             [RubyException("SSLError")]
             public class SSLError : OpenSSLError {
@@ -1267,4 +1260,3 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         }
     }
 }
-#endif

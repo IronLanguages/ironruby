@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Net.Sockets;
@@ -24,7 +23,7 @@ using System.Runtime.InteropServices;
 using System.Net;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("TCPSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("TCPSocket")]
     public class TCPSocket : IPSocket {
         /// <summary>
         /// Creates an uninitialized socket.
@@ -134,4 +133,3 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
     }
 }
-#endif

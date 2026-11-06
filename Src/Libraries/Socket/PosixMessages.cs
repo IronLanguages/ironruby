@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Collections.Generic;
@@ -357,4 +356,3 @@ namespace IronRuby.StandardLibrary.Sockets {
     }
 }
 
-#endif

@@ -145,13 +145,8 @@ namespace IronRuby.StandardLibrary.Iconv {
             int bytesEncoded = _toEncoding.GetBytes(buffer, 0, 0, result, 0, true);
             Debug.Assert(bytesEncoded == result.Length);
             if (resetEncoder) {
-#if FEATURE_ENCODING
                 _toEncoding.Reset();
                 ResetByteOrderMark();
-#else
-                // TODO - Create a new encoder
-                throw new NotImplementedException();
-#endif
             } else {
                 _isClosed = true;
             }

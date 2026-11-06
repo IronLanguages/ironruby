@@ -579,8 +579,6 @@ namespace IronRuby.Builtins {
 
         #region UU (Unix-Unix)
 
-        private const char UUEncodeZero = '`';
-
         private static void EncodeUU(byte[]/*!*/ input, int bytesPerLine, Stream/*!*/ output) {
             ContractUtils.RequiresNotNull(input, "input");
             ContractUtils.RequiresNotNull(output, "output");

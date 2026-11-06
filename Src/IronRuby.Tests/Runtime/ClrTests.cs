@@ -3657,7 +3657,7 @@ System::UInt64
 6
 Integer
 8
-[System::Single, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::Single, Numeric, Comparable, Object, Kernel, BasicObject]
 System::Single
 7.0
 Float

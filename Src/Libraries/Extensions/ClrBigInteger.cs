@@ -285,7 +285,7 @@ namespace IronRuby.Builtins {
         /// that the quotient lands in double's range with bits to spare, and put the shift back
         /// afterwards.
         /// </summary>
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
             if (other.IsZero()) {
                 // Dividing by zero answers what a Float would: a signed infinity, or NaN for 0/0.

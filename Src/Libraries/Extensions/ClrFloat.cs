@@ -33,48 +33,6 @@ namespace IronRuby.Builtins {
     [RubyModule("Float", DefineIn = typeof(IronRubyOps.Clr))]
     public static class ClrFloat {
 
-        #region induced_from
-
-        /// <summary>
-        /// Convert value to Float, where value is Float.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static double InducedFrom(RubyModule/*!*/ self, double value) {
-            return value;
-        }
-
-        /// <summary>
-        /// Convert value to Float, where value is Fixnum.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(UnaryOpStorage/*!*/ tofStorage, RubyModule/*!*/ self, int value) {
-            var site = tofStorage.GetCallSite("to_f");
-            return site.Target(site, ScriptingRuntimeHelpers.Int32ToObject(value));
-        }
-
-        /// <summary>
-        /// Convert value to Float, where value is Bignum.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(UnaryOpStorage/*!*/ tofStorage, RubyModule/*!*/ self, [NotNull]BigInteger/*!*/ value) {
-            var site = tofStorage.GetCallSite("to_f");
-            return site.Target(site, value);
-        }
-
-        /// <summary>
-        /// Convert value to Float, where value is not Float, Fixnum or Bignum.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static double InducedFrom(RubyModule/*!*/ self, object value) {
-            throw RubyExceptions.CreateTypeError("failed to convert {0} into Float", self.Context.GetClassDisplayName(value));
-        }
-
-        #endregion
-
         #region Arithmetic Operators
 
         #region *

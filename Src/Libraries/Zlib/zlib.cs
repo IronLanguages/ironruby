@@ -642,10 +642,6 @@ namespace IronRuby.StandardLibrary.Zlib {
                 set { _finished = value; }
             }
 
-            internal bool IsEnded {
-                get { return _ended; }
-            }
-
             internal List<byte>/*!*/ Output {
                 get { return _output; }
             }

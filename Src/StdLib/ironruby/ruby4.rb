@@ -8729,9 +8729,6 @@ module Process
     RLIM_INFINITY: 2**64 - 1, RLIM_SAVED_CUR: 2**64 - 1, RLIM_SAVED_MAX: 2**64 - 1,
   }.each { |name, value| const_set(name, value) unless const_defined?(name) } unless ::File::ALT_SEPARATOR == "\\"
 
-  # Process.times returns this; MRI names the struct under Process as well as Struct.
-  Tms = Struct::Tms unless const_defined?(:Tms)
-
   # Process.clock_gettime is C# (RubyProcess.ClockGetTime); this is what a build without
   # the C# Process module has.
   unless respond_to?(:clock_gettime)

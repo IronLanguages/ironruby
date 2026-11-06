@@ -143,8 +143,6 @@ namespace IronRuby.StandardLibrary.Oj {
 
         internal static readonly byte[] Empty = new byte[0];
 
-        internal int CreateIdLen { get { return CreateId == null ? 0 : CreateId.Length; } }
-
         internal Options/*!*/ Clone() {
             var result = (Options)MemberwiseClone();
             return result;

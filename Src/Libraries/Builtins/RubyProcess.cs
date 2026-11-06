@@ -12,11 +12,9 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_PROCESS 
 
 using System;
 using System.Diagnostics;
-using System.Security;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -32,7 +30,7 @@ namespace IronRuby.Builtins {
     /// <summary>
     /// Process builtin module
     /// </summary>
-    [RubyModule("Process", BuildConfig = "FEATURE_PROCESS")]
+    [RubyModule("Process")]
     public static partial class RubyProcess {
         #region Utils
 
@@ -329,7 +327,7 @@ namespace IronRuby.Builtins {
         /// lets us distinguish "exited with 137" from "killed by signal 9" - a distinction
         /// System.Diagnostics.Process throws away when it folds a signal into ExitCode.
         /// </summary>
-        [RubyClass("Status", BuildConfig = "FEATURE_PROCESS")]
+        [RubyClass("Status")]
         [HideMethod("new", IsStatic = true)]
         public sealed class Status {
             private readonly int _pid;
@@ -580,25 +578,31 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("times", RubyMethodAttributes.PublicSingleton)]
         public static RubyStruct/*!*/ GetTimes(RubyModule/*!*/ self) {
-            var result = RubyStruct.Create(RubyStructOps.GetTmsClass(self.Context));
-            try {
-                FillTimes(result);
-            } catch (SecurityException) {
-                RubyStructOps.TmsSetUserTime(result, 0.0);
-                RubyStructOps.TmsSetSystemTime(result, 0.0);
-                RubyStructOps.TmsSetChildUserTime(result, 0.0);
-                RubyStructOps.TmsSetChildSystemTime(result, 0.0);
+            var result = RubyStruct.Create(GetTmsClass(self.Context));
+            using (var process = Process.GetCurrentProcess()) {
+                result[0] = process.UserProcessorTime.TotalSeconds;
+                result[1] = process.PrivilegedProcessorTime.TotalSeconds;
             }
-
+            result[2] = 0.0;
+            result[3] = 0.0;
             return result;
         }
 
-        private static void FillTimes(RubyStruct/*!*/ result) {
-            var process = Process.GetCurrentProcess();
-            RubyStructOps.TmsSetUserTime(result, process.UserProcessorTime.TotalSeconds);
-            RubyStructOps.TmsSetSystemTime(result, process.PrivilegedProcessorTime.TotalSeconds);
-            RubyStructOps.TmsSetChildUserTime(result, 0.0);
-            RubyStructOps.TmsSetChildSystemTime(result, 0.0);
+        private static readonly object TmsClassKey = new object();
+
+        // Process::Tms, the struct Process.times returns. (It was Struct::Tms until Ruby 1.9.)
+        [RubyConstant("Tms")]
+        internal static RubyClass/*!*/ CreateTmsClass(RubyModule/*!*/ module) {
+            return GetTmsClass(module.Context);
+        }
+
+        // Process.times can run before Process's constants are initialized, so the class is kept on the context.
+        private static RubyClass/*!*/ GetTmsClass(RubyContext/*!*/ context) {
+            return (RubyClass)context.GetOrCreateLibraryData(TmsClassKey, () => {
+                var tms = RubyStruct.DefineStruct(context.GetClass(typeof(RubyStruct)), null, new[] { "utime", "stime", "cutime", "cstime" });
+                tms.SetName("Process::Tms", true);
+                return tms;
+            });
         }
 
         [RubyMethod("uid", RubyMethodAttributes.PublicSingleton)]
@@ -698,62 +702,4 @@ namespace IronRuby.Builtins {
 
         #endregion
     }
-
-    #region Struct::Tms
-
-    public static partial class RubyStructOps {
-        #region Tms
-
-        internal static readonly object TmsStructClassKey = new object();
-        
-        [RubyConstant("Tms", BuildConfig = "FEATURE_PROCESS")]
-        internal static RubyClass/*!*/ CreateTmsClass(RubyModule/*!*/ module) {
-            // class is available for the library even if the constant is removed => store it on the context:
-            return (RubyClass)module.Context.GetOrCreateLibraryData(TmsStructClassKey, () => RubyStruct.DefineStruct(
-                (RubyClass)module, 
-                "Tms",
-                new[] { "utime", "stime", "cutime", "cstime" }
-            ));
-        }
-
-        public static RubyClass/*!*/ GetTmsClass(RubyContext/*!*/ context) {
-            ContractUtils.RequiresNotNull(context, "context");
-
-            object value;
-            if (context.TryGetLibraryData(TmsStructClassKey, out value)) {
-                return (RubyClass)value;
-            }
-
-            // trigger constant initialization of Struct class:
-            context.GetClass(typeof(RubyStruct)).TryGetConstant(null, "Tms", out value);
-
-            // try again:
-            if (context.TryGetLibraryData(TmsStructClassKey, out value)) {
-                return (RubyClass)value;
-            }
-
-            throw Assert.Unreachable;
-        }
-
-        public static void TmsSetUserTime(RubyStruct/*!*/ tms, double value) {
-            tms[0] = value;
-        }
-
-        public static void TmsSetSystemTime(RubyStruct/*!*/ tms, double value) {
-            tms[1] = value;
-        }
-
-        public static void TmsSetChildUserTime(RubyStruct/*!*/ tms, double value) {
-            tms[2] = value;
-        }
-
-        public static void TmsSetChildSystemTime(RubyStruct/*!*/ tms, double value) {
-            tms[3] = value;
-        }
-
-#endregion
-    }
-
-#endregion
 }
-#endif

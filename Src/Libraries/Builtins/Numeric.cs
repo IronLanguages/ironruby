@@ -34,11 +34,9 @@ namespace IronRuby.Builtins {
             : base(cls) { 
         }
 
-#if FEATURE_SERIALIZATION
         protected Numeric(SerializationInfo/*!*/ info, StreamingContext context) 
             : base(info, context) {
         }
-#endif
 
         #region +@, -@
 

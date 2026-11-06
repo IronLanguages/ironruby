@@ -1262,26 +1262,6 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
-
-        #region enum_cons, enum_slice, enum_with_index
-
-        [RubyMethod("enum_cons")]
-        public static Enumerator/*!*/ GetConsEnumerator(object self, [DefaultProtocol]int sliceSize) {
-            return new Enumerator(self, "each_cons", sliceSize);
-        }
-
-        [RubyMethod("enum_slice")]
-        public static Enumerator/*!*/ GetSliceEnumerator(object self, [DefaultProtocol]int sliceSize) {
-            return new Enumerator(self, "each_slice", sliceSize);
-        }
-
-        [RubyMethod("enum_with_index")]
-        public static Enumerator/*!*/ GetEnumeratorWithIndex(object self) {
-            return new Enumerator(self, "each_with_index", null);
-        }
-
-        #endregion
-
         // TODO: 
         // chunk
         // collect_concat
