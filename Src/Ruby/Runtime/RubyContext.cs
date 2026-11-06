@@ -3829,11 +3829,34 @@ namespace IronRuby.Runtime {
         }
 
         public MutableString TryEncodePath(string/*!*/ path) {
-            var result = MutableString.Create(path, GetPathEncoding());
+            var encoding = GetPathEncoding();
+            var result = TryEncodeRawAsciiPath(path, encoding) ?? MutableString.Create(path, encoding);
             return result.ContainsInvalidCharacters() ? null : result;
         }
 
+        /// <summary>
+        /// Under the C locale the filesystem encoding is US-ASCII, which has no character for a
+        /// non-ASCII file name. MRI hands such a name over as its bytes - the file system's, UTF-8 -
+        /// in a BINARY string (Dir.children: "\xE3\x81\x93.txt"), which DecodePath reads back as
+        /// UTF-8; an ASCII name stays US-ASCII.
+        /// </summary>
+        private static MutableString TryEncodeRawAsciiPath(string/*!*/ path, RubyEncoding/*!*/ encoding) {
+            if (encoding != RubyEncoding.Ascii || Path.DirectorySeparatorChar == '\\') {
+                return null;
+            }
+            foreach (char c in path) {
+                if (c > 0x7f) {
+                    return MutableString.CreateBinary(Encoding.UTF8.GetBytes(path), RubyEncoding.Binary);
+                }
+            }
+            return null;
+        }
+
         internal static MutableString/*!*/ EncodePath(string/*!*/ path, RubyEncoding/*!*/ encoding) {
+            var raw = TryEncodeRawAsciiPath(path, encoding);
+            if (raw != null) {
+                return raw;
+            }
             try {
                 return MutableString.Create(path, encoding).CheckEncoding();
             } catch (EncoderFallbackException e) {
@@ -3853,8 +3876,8 @@ namespace IronRuby.Runtime {
         /// <exception cref="InvalidError">Invalid characters present.</exception>
         public string/*!*/ DecodePath(MutableString/*!*/ path) {
             try {
-                if (path.Encoding == RubyEncoding.Binary) {
-                    // force UTF8 encoding to make round-trip work:
+                if (path.Encoding == RubyEncoding.Binary || path.Encoding == RubyEncoding.Ascii && !path.IsAscii()) {
+                    // force UTF8 encoding to make round-trip work (see TryEncodeRawAsciiPath):
                     return path.ToString(Encoding.UTF8);
                 } else {
                     return path.ConvertToString();

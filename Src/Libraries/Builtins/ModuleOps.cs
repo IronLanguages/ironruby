@@ -1075,6 +1075,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("class_eval")]
+        [SameRubyMethod("ModuleEval")]
         [MethodImpl(MethodImplOptions.NoInlining)]
         public static object ClassEval(ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyScope/*!*/ scope, BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
@@ -1113,6 +1114,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("class_exec")]
+        [SameRubyMethod("ModuleExec")]
         [MethodImpl(MethodImplOptions.NoInlining)]
         public static object ClassExec(BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
             return Execute(block, self, args);

@@ -84,6 +84,59 @@ end
         }
 
         /// <summary>
+        /// An alias of a method define_method made is the same method to Method#== and
+        /// UnboundMethod#==, as an alias of a def is (Socket.pack_sockaddr_in == sockaddr_in).
+        /// </summary>
+        public void Scenario_MethodAliases3() {
+            TestOutput(@"
+class C
+  define_method(:x) { |*a| a }
+  alias_method :y, :x
+  class << self
+    define_method(:s) { 1 }
+    alias_method :t, :s
+  end
+end
+c = C.new
+p c.method(:x) == c.method(:y), c.method(:x).hash == c.method(:y).hash
+p C.instance_method(:x) == C.instance_method(:y), C.method(:s) == C.method(:t)
+p C.new.method(:x) == C.new.method(:y)
+class D; define_method(:x) { 1 }; end
+p D.instance_method(:x) == C.instance_method(:x)
+", @"
+true
+true
+true
+true
+false
+false
+");
+        }
+
+        /// <summary>
+        /// Module#class_eval and #module_eval (and the _exec pair) are one method to Method#==, as in
+        /// MRI, though each is its own CLR method so that a backtrace names the one called.
+        /// </summary>
+        public void Scenario_MethodAliases4() {
+            TestOutput(@"
+p Module.instance_method(:class_eval) == Module.instance_method(:module_eval)
+p Module.instance_method(:class_exec) == Module.instance_method(:module_exec)
+p Module.instance_method(:class_eval) == Module.instance_method(:module_exec)
+p Module.instance_method(:class_eval).hash == Module.instance_method(:module_eval).hash
+p String.method(:class_eval) == String.method(:module_eval), String.method(:class_eval) == Array.method(:module_eval)
+puts((String.class_eval { raise 'x' } rescue $!.backtrace.grep(/Module#/).map { it[/'.*'/] }))
+", @"
+true
+true
+false
+true
+true
+false
+'Module#class_eval'
+");
+        }
+
+        /// <summary>
         /// Alias (unlike undef) looks up the method in Object.
         /// </summary>
         public void AliasMethodLookup1() {

@@ -958,6 +958,43 @@ a b 3 [2]
         }
 
         /// <summary>
+        /// A class whose CLR type implements IEnumerable or IComparable because it mixes in Enumerable or
+        /// Comparable keeps BasicObject#equal? an identity test (it called the type's own Equals, so eql?/==),
+        /// and Kernel#hash and #to_s their defaults.
+        /// </summary>
+        public void ClrRubyEnumerableIdentity1() {
+            TestOutput(@"
+class E
+  include Enumerable
+  def each = yield(1)
+  def ==(o) = true
+  def eql?(o) = true
+  def hash = 1
+end
+class C
+  include Comparable
+  def <=>(o) = 0
+end
+class P; include Enumerable; def each; end; end
+a, b = E.new, E.new
+p a.equal?(b), a.equal?(a), a == b, a.clone.equal?(a)
+c = C.new
+p c.equal?(C.new), c == C.new, c.equal?(c)
+p P.new.hash.is_a?(Integer), P.new.to_s.start_with?('#<P:')
+", @"
+false
+true
+true
+false
+false
+true
+true
+true
+true
+");
+        }
+
+        /// <summary>
         /// The CLR type of a subclass that mixes in Comparable or Enumerable (or includes a CLR interface) under a plain Ruby
         /// class keeps one set of instance data: what the superclass's initialize sets is there after super, dup copies it.
         /// Whether or not the superclass's type exists already; and a subclass of a class that got IComparable is one too.

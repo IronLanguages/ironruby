@@ -2389,7 +2389,9 @@ IronRubySocketErrors__.wrap(TCPSocket, :recvfrom)
 IronRubySocketErrors__.wrap(UDPSocket, :bind, :connect, :send, :recvfrom)
 # Name lookups through .NET's Dns, whose failure is a plain SocketError.
 IronRubySocketErrors__.wrap(IPSocket.singleton_class, :getaddress)
-IronRubySocketErrors__.wrap(Socket.singleton_class, :pack_sockaddr_in, :sockaddr_in)
+IronRubySocketErrors__.wrap(Socket.singleton_class, :sockaddr_in)
+# One method under two names, as in MRI: Socket.method(:pack_sockaddr_in) == method(:sockaddr_in).
+Socket.singleton_class.__send__(:alias_method, :pack_sockaddr_in, :sockaddr_in)
 
 # MRI's Errno from Socket#connect and #bind names the address after the call:
 # "Connection refused - connect(2) for 127.0.0.1:1".

@@ -1639,6 +1639,35 @@ Integer
 ");
         }
 
+        /// <summary>
+        /// Process.maxgroups= is read back by Process.maxgroups (it set an ivar the getter did not read), takes a positive
+        /// Integer by implicit conversion and caps it at 65536, as MRI's does.
+        /// </summary>
+        public void Process_MaxGroups1() {
+            TestOutput(@"
+require 'ruby4'
+def t; p yield; rescue => e; p e; end
+n = Process.maxgroups
+t { Process.maxgroups = n - 1; Process.maxgroups }
+t { Process.maxgroups = 70000; Process.maxgroups }
+t { Process.maxgroups = 0 }
+t { Process.maxgroups = nil }
+t { Process.maxgroups = 'a' }
+t { Process.maxgroups = 3.7; Process.maxgroups }
+Process.maxgroups = n
+p Process.instance_variables, Process.maxgroups == n
+", @"
+65535
+65536
+#<ArgumentError: maxgroups 0 should be positive>
+#<TypeError: no implicit conversion from nil to integer>
+#<TypeError: no implicit conversion of String into Integer>
+3
+[]
+true
+");
+        }
+
         // Nine "Integer out of Float range" warnings, as MRI gives under -w: one for each Bignum
         // that meets a Float in an operator - on either side of it - except fdiv and <=>/>/==.
         public void Numeric_BignumFloatOverflow1() {
@@ -3383,6 +3412,55 @@ rmdir broken/x: Errno::ENOENT
 rmdir tofile: Errno::ENOTDIR
 rmdir todir: Errno::ENOTDIR
 link still there: :ok
+");
+        }
+
+        /// <summary>
+        /// Under the C locale the filesystem encoding is US-ASCII. A non-ASCII file name still opens,
+        /// and comes back from Dir as its UTF-8 bytes in a BINARY string, from File.readlink in a
+        /// US-ASCII one, as in MRI (it was Errno::EINVAL, and Dir.children left the name out).
+        /// </summary>
+        public void Dir_AsciiFilesystemNames1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+old = Encoding.default_external
+Encoding.default_external = Encoding::US_ASCII
+begin
+  name = File.join(dir, ""あ.txt"")
+  File.write(name, ""x"")
+  File.symlink(name, File.join(dir, ""lnk""))
+  p Encoding.find(""filesystem"")
+  p Dir.children(dir).sort.map { [it, it.encoding] }
+  p Dir.entries(dir).sort.map(&:encoding).uniq
+  p Dir.glob(File.join(dir, ""*.txt"")).map(&:encoding)
+  Dir.children(dir).each { p File.exist?(File.join(dir, it)) }
+  p File.read(name)
+  link = File.readlink(File.join(dir, ""lnk""))
+  p link.encoding, link.b == name.b
+  sub = File.join(dir, ""あ""); Dir.mkdir(sub)
+  p File.realdirpath(""."".encode(""ISO-8859-1""), sub).encoding
+  Dir.rmdir(sub)
+ensure
+  Encoding.default_external = old
+  Dir.children(dir).each { File.unlink(File.join(dir, it)) }
+  Dir.rmdir(dir)
+end
+", @"
+#<Encoding:US-ASCII>
+[[""lnk"", #<Encoding:US-ASCII>], [""\xE3\x81\x82.txt"", #<Encoding:BINARY (ASCII-8BIT)>]]
+[#<Encoding:US-ASCII>, #<Encoding:BINARY (ASCII-8BIT)>]
+[#<Encoding:UTF-8>]
+true
+true
+""x""
+#<Encoding:US-ASCII>
+true
+#<Encoding:UTF-8>
 ");
         }
 
