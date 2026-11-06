@@ -208,6 +208,13 @@ namespace IronRuby.Builtins {
             internal bool CreatedFromRuby { get; set; }
 
             /// <summary>
+            /// Set by a thread Ruby created while it runs Ruby code: from just before its block until it has
+            /// cleaned up after it. Outside that the CLR reports the thread as WaitSleepJoin while it starts
+            /// up and while it is torn down, where MRI's thread is "run".
+            /// </summary>
+            internal volatile bool RunsRuby;
+
+            /// <summary>
             /// The runtime whose Thread.new made this thread; null for a thread Ruby did not create
             /// (a host's, the main thread). Each RubyContext is a VM of its own, as far as which
             /// threads it has goes.
@@ -914,7 +921,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if ((state & ThreadState.WaitSleepJoin) == ThreadState.WaitSleepJoin) {
+            if ((state & ThreadState.WaitSleepJoin) == ThreadState.WaitSleepJoin && (info.RunsRuby || !info.CreatedFromRuby)) {
                 // We will report a thread to be sleeping more often than in CRuby. This is because any "lock" statement
                 // can potentially cause ThreadState.WaitSleepJoin. Also, "Thread.pass" does System.Threading.Thread.Sleep(0)
                 // which also briefly changes the state to ThreadState.WaitSleepJoin
@@ -1218,6 +1225,7 @@ namespace IronRuby.Builtins {
                     // typically stored it in a variable the hook compares Thread.current with. Wait for that.
                     WaitForCreatorToBlock(creator);
                 }
+                info.RunsRuby = true;
                 if ((TracePoint.ActiveEvents & (int)TraceEvents.ThreadBegin) != 0) {
                     TracePoint.OnThread(TraceEvents.ThreadBegin, context, Thread.CurrentThread);
                 }
@@ -1321,6 +1329,7 @@ namespace IronRuby.Builtins {
                 // A Thread#raise that arrived too late to be delivered dies with the thread. Left
                 // parked it would keep every other thread's safe points on the slow path.
                 RubyUtils.GetPendingAsyncException(Thread.CurrentThread);
+                info.RunsRuby = false;
             }
         }
 
