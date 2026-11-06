@@ -907,6 +907,7 @@ namespace IronRuby.Tests {
                 Main_Initialize1,
                 Dir_NotADirectory1,
                 Dir_NotADirectorySymlinks1,
+                Dir_AsciiFilesystemNames1,
                 File_StatPredicatesToIo1,
                 File_StatPredicatesToIo2,
                 IO_SysOpenArguments1,

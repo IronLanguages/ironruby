@@ -1378,7 +1378,14 @@ namespace IronRuby.Builtins {
             if (target == null) {
                 throw Posix.Error(errno, strPath);
             }
-            return self.Context.EncodePath(target);
+            // MRI labels the link's bytes with the file system encoding even where they are not
+            // valid in it (US-ASCII under the C locale), which other paths make BINARY
+            var result = self.Context.EncodePath(target);
+            var fsEncoding = self.Context.GetPathEncoding();
+            if (result.Encoding != fsEncoding) {
+                result.ForceEncoding(fsEncoding);
+            }
+            return result;
         }
 
         [RubyMethod("link", RubyMethodAttributes.PublicSingleton)]
@@ -1536,9 +1543,8 @@ namespace IronRuby.Builtins {
 
             MutableString pathStr = Protocols.CastToPath(toPath, path);
             string strPath = self.Context.DecodePath(pathStr);
-            string strBase = (basedir == Missing.Value || basedir == null)
-                ? null
-                : self.Context.DecodePath(Protocols.CastToPath(toPath, basedir));
+            MutableString baseStr = (basedir == Missing.Value || basedir == null) ? null : Protocols.CastToPath(toPath, basedir);
+            string strBase = (baseStr == null) ? null : self.Context.DecodePath(baseStr);
 
             if (!Posix.IsAvailable) {
                 MutableString expanded = ExpandPath(toPath, self, path, basedir == Missing.Value ? null : basedir);
@@ -1557,12 +1563,18 @@ namespace IronRuby.Builtins {
             string resolved = ResolvePath(self.Context, strPath, strBase, strict);
 
             // MRI's realdirpath converts a non-ASCII result into the argument's encoding, and where
-            // that cannot be done leaves it in the file system encoding; realpath, which uses
-            // realpath(3), relabels it either way.
+            // that cannot be done into an absolute base directory's (the result is built on it, as
+            // a relative one is on the working directory), and otherwise leaves it in the file
+            // system encoding; realpath, which uses realpath(3), relabels it either way.
             if (!strict && pathStr.Encoding != RubyEncoding.Binary && !IsAsciiString(resolved)) {
-                return (CanEncode(resolved, pathStr.Encoding)
-                    ? MutableString.Create(resolved, pathStr.Encoding)
-                    : self.Context.EncodePath(resolved));
+                if (CanEncode(resolved, pathStr.Encoding)) {
+                    return MutableString.Create(resolved, pathStr.Encoding);
+                }
+                if (baseStr != null && baseStr.Encoding != RubyEncoding.Binary && System.IO.Path.IsPathRooted(strBase)
+                    && CanEncode(resolved, baseStr.Encoding)) {
+                    return MutableString.Create(resolved, baseStr.Encoding);
+                }
+                return self.Context.EncodePath(resolved);
             }
             return EncodePathLike(self.Context, resolved, pathStr);
         }
