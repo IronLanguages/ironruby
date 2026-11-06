@@ -131,6 +131,9 @@ ARGF_CLASS = Class.new do
   # ---- reading ----
 
   def __ir_gets__(*args)
+    # counted before there is anything to read: at the end too, as MRI's argf_getline does
+    positional = args.last.is_a?(Hash) ? args.size - 1 : args.size
+    raise ArgumentError, "wrong number of arguments (given #{positional}, expected 0..2)" if positional > 2
     return nil unless prepare_read
     # chomp: arrives here as a trailing positional Hash (through the C# alias); IO#gets takes
     # no Hash positionally, so hand it back as keywords

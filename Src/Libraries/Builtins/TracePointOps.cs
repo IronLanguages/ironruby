@@ -402,7 +402,7 @@ namespace IronRuby.Builtins {
             }
 
             TracePoint.ResolveMethod(info);
-            return info.Method != null ? info.Method.GetRubyParameterArray() : new RubyArray();
+            return info.Method != null ? MethodReflection.GetParameters(self.Context, info.Method, info.MethodName ?? "") : new RubyArray();
         }
 
         [RubyMethod("inspect")]

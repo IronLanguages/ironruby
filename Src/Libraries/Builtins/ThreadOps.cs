@@ -1510,7 +1510,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        [RubyMethod("exit", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("kill", RubyMethodAttributes.PublicSingleton)]
         public static Thread/*!*/ KillThread(object self, [NotNull]Thread/*!*/ thread) {
             return Kill(thread);

@@ -60,6 +60,11 @@ namespace IronRuby.Builtins {
             throw error;
         }
 
+        [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
+        public static object MethodMissing(object/*!*/ self) {
+            throw RubyExceptions.CreateArgumentError("no method name given");
+        }
+
         #endregion
 
         #region __send__

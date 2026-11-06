@@ -295,7 +295,7 @@ namespace IronRuby.Runtime.Calls {
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<MethodBase, bool>/*!*/ _takesKeywords =
             new System.Collections.Concurrent.ConcurrentDictionary<MethodBase, bool>();
 
-        private static bool TakesKeywords(OverloadInfo/*!*/ overload) {
+        internal static bool TakesKeywords(OverloadInfo/*!*/ overload) {
             var method = overload.ReflectionInfo;
             if (method == null) {
                 return false;

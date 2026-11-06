@@ -266,6 +266,18 @@ namespace IronRuby.Builtins {
             return MutableStringOps.Match(storage, scope, block, self.String.Clone(), pattern);
         }
 
+        [RubyMethod("match")]
+        public static object Match(RubyScope/*!*/ scope, [Optional]BlockParam block, RubySymbol/*!*/ self,
+            [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int start) {
+            return MutableStringOps.Match(scope, block, self.String.Clone(), regex, start);
+        }
+
+        [RubyMethod("match")]
+        public static object Match(RubyScope/*!*/ scope, [Optional]BlockParam block, RubySymbol/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [DefaultProtocol]int start) {
+            return MutableStringOps.Match(scope, block, self.String.Clone(), pattern, start);
+        }
+
         // Delegating from Ruby would put an extra frame between the =~ a Regexp prefix performs
         // and the caller, and $~ is frame-local, so Regexp.last_match would come back nil.
         [RubyMethod("start_with?")]
