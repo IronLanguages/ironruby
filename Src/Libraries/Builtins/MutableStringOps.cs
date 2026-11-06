@@ -1940,7 +1940,15 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        // #bytes, #chars and #codepoints with a block are #each_byte, #each_char and #each_codepoint, but
+        // methods of their own, which a backtrace names by the name called (see IListOps.Map)
         [RubyMethod("bytes")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("EachByte")]
+        public static object Bytes([NotNull]BlockParam/*!*/ block, MutableString/*!*/ self) {
+            return EachByte(block, self);
+        }
+
         [RubyMethod("each_byte")]
         public static object EachByte([NotNull]BlockParam/*!*/ block, MutableString/*!*/ self) {
             // MRI re-reads the length and the bytes on every step, so a block that changes the
@@ -1960,9 +1968,14 @@ namespace IronRuby.Builtins {
             return new Enumerator(self, "each_char");
         }
 
-        // MRI's backtrace names the method by the first of these
-        [RubyMethod("each_char")]
         [RubyMethod("chars")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("EachChar")]
+        public static object Chars([NotNull]BlockParam/*!*/ block, MutableString/*!*/ self) {
+            return EachChar(block, self);
+        }
+
+        [RubyMethod("each_char")]
         public static object EachChar([NotNull]BlockParam/*!*/ block, MutableString/*!*/ self) {
             var enumerator = self.GetCharacters();
             while (enumerator.MoveNext()) {
@@ -2009,6 +2022,12 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("codepoints")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("EachCodePoint")]
+        public static object Codepoints([NotNull]BlockParam/*!*/ block, MutableString/*!*/ self) {
+            return EachCodePoint(block, self);
+        }
+
         [RubyMethod("each_codepoint")]
         public static object EachCodePoint([NotNull]BlockParam/*!*/ block, MutableString/*!*/ self) {
             var enumerator = self.GetCharacters();

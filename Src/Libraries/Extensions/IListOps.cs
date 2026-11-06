@@ -915,13 +915,25 @@ namespace IronRuby.Builtins {
 
         #region collect!, map!, compact, compact!
 
+        // A method of several names is a CLR method per name where its frame can show in a backtrace -
+        // under a block that raises - since MRI names the frame by the name called (see IListOps.Map).
         [RubyMethod("collect!")]
-        [RubyMethod("map!")]
         public static object CollectInPlace(BlockParam collector, IList/*!*/ self) {
+            return CollectInPlace(collector, self, "collect!");
+        }
+
+        [RubyMethod("map!")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("CollectInPlace")]
+        public static object MapInPlace(BlockParam collector, IList/*!*/ self) {
+            return CollectInPlace(collector, self, "map!");
+        }
+
+        private static object CollectInPlace(BlockParam collector, IList/*!*/ self, string/*!*/ name) {
             if (collector == null) {
                 // The Enumerator itself is fine to hand out; its #each comes back through here
                 // with a block and raises then, which is what MRI does.
-                return new Enumerator(self, "collect!");
+                return new Enumerator(self, name);
             }
             // The check belongs to the method rather than to the loop, so that an empty frozen
             // array - where the loop never runs - raises too.
@@ -1216,14 +1228,28 @@ namespace IronRuby.Builtins {
         // given block - two block invocations and a packed argument array per element. Like MRI's,
         // they do not call an #each that a subclass defines.
 
-        [RubyMethod("map")]
-        [RubyMethod("collect")]
-        public static Enumerator/*!*/ GetMapEnumerator(IList/*!*/ self) {
-            return new Enumerator(self, "map");
-        }
+        //
+        // MRI defines each name as a method of its own, and a backtrace names a frame by the method called:
+        // under a block that raises, `ary.collect' says Array#collect and `ary.map' Array#map. A backtrace
+        // here names a library frame by its CLR method, so the second name is a method that calls the first
+        // (the outermost of library frames calling one another is reported); NoInlining keeps its frame and
+        // [SameRubyMethod] keeps the two one method to Ruby (UnboundMethod#==), as MRI's are one C function.
+        // Without a block one method does for all names: [CalledName] tells it which the Enumerator calls.
 
         [RubyMethod("map")]
         [RubyMethod("collect")]
+        public static Enumerator/*!*/ GetMapEnumerator([CalledName]string/*!*/ name, IList/*!*/ self) {
+            return new Enumerator(self, name);
+        }
+
+        [RubyMethod("collect")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Map")]
+        public static object Collect([NotNull]BlockParam/*!*/ collector, IList/*!*/ self) {
+            return Map(collector, self);
+        }
+
+        [RubyMethod("map")]
         public static object Map([NotNull]BlockParam/*!*/ collector, IList/*!*/ self) {
             var result = new RubyArray(self.Count);
             var array = self as RubyArray;
@@ -1247,11 +1273,17 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("filter")]
         [RubyMethod("select")]
-        public static Enumerator/*!*/ GetSelectEnumerator(IList/*!*/ self) {
-            return new Enumerator(self, "select");
+        public static Enumerator/*!*/ GetSelectEnumerator([CalledName]string/*!*/ name, IList/*!*/ self) {
+            return new Enumerator(self, name);
         }
 
         [RubyMethod("filter")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Select")]
+        public static object Filter([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
+            return Select(predicate, self);
+        }
+
         [RubyMethod("select")]
         public static object Select([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
             var result = new RubyArray();
@@ -1768,11 +1800,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("find_index")]
         [RubyMethod("index")]
-        public static Enumerator/*!*/ GetFindIndexEnumerator(BlockParam predicate, IList/*!*/ self) {
+        public static Enumerator/*!*/ GetFindIndexEnumerator([CalledName]string/*!*/ name, BlockParam predicate, IList/*!*/ self) {
             Debug.Assert(predicate == null);
             // The Enumerator finds the index once it is given a block, so it reports no size:
             // it answers one number, not one element per element of the receiver.
-            return new Enumerator(self, "find_index");
+            return new Enumerator(self, name);
         }
 
         [RubyMethod("rindex")]
@@ -1781,8 +1813,14 @@ namespace IronRuby.Builtins {
             return new Enumerator(self, "rindex");
         }
 
-        [RubyMethod("find_index")]
         [RubyMethod("index")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("FindIndex")]
+        public static object Index([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
+            return FindIndex(predicate, self);
+        }
+
+        [RubyMethod("find_index")]
         public static object FindIndex([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
             for (int i = 0; i < self.Count; i++) {
                 object blockResult;

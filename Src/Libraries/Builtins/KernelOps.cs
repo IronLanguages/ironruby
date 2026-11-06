@@ -2985,22 +2985,70 @@ namespace IronRuby.Builtins {
         //sub
         //sub!
 
+        // Format errors are common, and MRI's backtrace names the method as it was called: Kernel#format,
+        // Kernel#sprintf, Kernel.format or Kernel.sprintf. A backtrace here names a library frame by its CLR
+        // method, so each is one of its own. NoInlining keeps the frame of the one-line ones.
+        //
         // MRI: a missing format string is "too few arguments", not an arity error.
         [RubyMethod("format", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ Format(object self) {
+            throw RubyExceptions.CreateArgumentError("too few arguments");
+        }
+
         [RubyMethod("sprintf", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("sprintf", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static MutableString/*!*/ Sprintf(object self) {
             throw RubyExceptions.CreateArgumentError("too few arguments");
         }
 
-        [RubyMethod("format", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
-        [RubyMethod("sprintf", RubyMethodAttributes.PrivateInstance)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ SingletonFormat(object self) {
+            throw RubyExceptions.CreateArgumentError("too few arguments");
+        }
+
         [RubyMethod("sprintf", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ SingletonSprintf(object self) {
+            throw RubyExceptions.CreateArgumentError("too few arguments");
+        }
+
+        [RubyMethod("format", RubyMethodAttributes.PrivateInstance)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ Format(StringFormatterSiteStorage/*!*/ storage,
+            object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
+            return Sprintf(storage, format, args);
+        }
+
+        [RubyMethod("sprintf", RubyMethodAttributes.PrivateInstance)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static MutableString/*!*/ Sprintf(StringFormatterSiteStorage/*!*/ storage,
             object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
+            return Sprintf(storage, format, args);
+        }
 
+        [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ SingletonFormat(StringFormatterSiteStorage/*!*/ storage,
+            object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
+            return Sprintf(storage, format, args);
+        }
+
+        [RubyMethod("sprintf", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ SingletonSprintf(StringFormatterSiteStorage/*!*/ storage,
+            object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
+            return Sprintf(storage, format, args);
+        }
+
+        internal static MutableString/*!*/ Sprintf(StringFormatterSiteStorage/*!*/ storage, MutableString/*!*/ format, object[]/*!*/ args) {
             if (!format.Encoding.IsAsciiIdentity) {
                 throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", format.Encoding.Name);
             }

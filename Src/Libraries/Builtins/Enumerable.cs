@@ -252,8 +252,17 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("map")]
         [RubyMethod("collect")]
-        public static Enumerator/*!*/ GetMapEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam collector, object self) {
-            return new Enumerator(self, "map");
+        public static Enumerator/*!*/ GetMapEnumerator(CallSiteStorage<EachSite>/*!*/ each, [CalledName]string/*!*/ name, BlockParam collector, object self) {
+            return new Enumerator(self, name);
+        }
+
+        // a method of its own to have a frame of its own (see IListOps.Map)
+        [RubyMethod("collect")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Map")]
+        public static object Collect(CallSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ each, RubyScope/*!*/ scope,
+            [NotNull]BlockParam/*!*/ collector, object self) {
+            return Map(each, scope, collector, self);
         }
 
         /// <summary>
@@ -268,7 +277,6 @@ namespace IronRuby.Builtins {
         /// </code>
         /// </summary>
         [RubyMethod("map")]
-        [RubyMethod("collect")]
         public static object Map(CallSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ each, RubyScope/*!*/ scope,
             [NotNull]BlockParam/*!*/ collector, object self) {
             RubyArray resultArray = new RubyArray();
@@ -302,11 +310,20 @@ namespace IronRuby.Builtins {
         [RubyMethod("detect")]
         [RubyMethod("find")]
         public static Enumerator/*!*/ GetFindEnumerator(CallSiteStorage<EachSite>/*!*/ each, CallSiteStorage<Func<CallSite, object, object>>/*!*/ callStorage,
-            BlockParam predicate, object self, [Optional]object ifNone) {
-            return new Enumerator((_, block) => Find(each, callStorage, block, self, ifNone));
+            [CalledName]string/*!*/ name, BlockParam predicate, object self, [Optional]object ifNone) {
+            // the Enumerator calls the method again, as MRI's does: it shows as #<Enumerator: obj:find>
+            return (ifNone != Missing.Value) ? new Enumerator(self, name, ifNone) : new Enumerator(self, name);
         }
 
+        // a method of its own to have a frame of its own (see IListOps.Map)
         [RubyMethod("detect")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Find")]
+        public static object Detect(CallSiteStorage<EachSite>/*!*/ each, CallSiteStorage<Func<CallSite, object, object>>/*!*/ callStorage,
+            [NotNull]BlockParam/*!*/ predicate, object self, [Optional]object ifNone) {
+            return Find(each, callStorage, predicate, self, ifNone);
+        }
+
         [RubyMethod("find")]
         public static object Find(CallSiteStorage<EachSite>/*!*/ each, CallSiteStorage<Func<CallSite, object, object>>/*!*/ callStorage,
             [NotNull]BlockParam/*!*/ predicate, object self, [Optional]object ifNone) {
@@ -340,7 +357,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("find_index")]
         public static Enumerator/*!*/ GetFindIndexEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
-            return new Enumerator((_, block) => FindIndex(each, block, self));
+            return new Enumerator(self, "find_index");
         }
 
         [RubyMethod("find_index")]
@@ -449,19 +466,29 @@ namespace IronRuby.Builtins {
 
         #region find_all, select, reject
 
-        [RubyMethod("find_all")]
+        // a method per name to have a frame of its own (see IListOps.Map)
         [RubyMethod("select")]
         public static object Select(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
-            return (predicate != null) ? FilterImpl(each, predicate, self, true) : FilterEnum(each, predicate, self, true);
+            return (predicate != null) ? FilterImpl(each, predicate, self, true) : new Enumerator(self, "select");
+        }
+
+        [RubyMethod("filter")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Select")]
+        public static object Filter(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
+            return (predicate != null) ? FilterImpl(each, predicate, self, true) : new Enumerator(self, "filter");
+        }
+
+        [RubyMethod("find_all")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Select")]
+        public static object FindAll(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
+            return (predicate != null) ? FilterImpl(each, predicate, self, true) : new Enumerator(self, "find_all");
         }
 
         [RubyMethod("reject")]
         public static object Reject(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
-            return (predicate != null) ? FilterImpl(each, predicate, self, false) : FilterEnum(each, predicate, self, false);
-        }
-
-        private static Enumerator/*!*/ FilterEnum(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self, bool acceptingValue) {
-            return new Enumerator(self, acceptingValue ? "select" : "reject");
+            return (predicate != null) ? FilterImpl(each, predicate, self, false) : new Enumerator(self, "reject");
         }
 
         private static object FilterImpl(CallSiteStorage<EachSite>/*!*/ each, BlockParam/*!*/ predicate, object self, bool acceptingValue) {

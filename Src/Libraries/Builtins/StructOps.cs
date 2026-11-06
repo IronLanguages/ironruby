@@ -326,6 +326,14 @@ namespace IronRuby.Builtins {
             return Enumerable.Select(each, predicate, self);
         }
 
+        // a method of its own to have a frame of its own (see IListOps.Map)
+        [RubyMethod("filter")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Select")]
+        public static object Filter(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, RubyStruct/*!*/ self) {
+            return Enumerable.Filter(each, predicate, self);
+        }
+
         // equivalent to Array#values_at over the data array
         [RubyMethod("values_at")]
         public static RubyArray/*!*/ ValuesAt(ConversionStorage<int>/*!*/ fixnumCast, RubyStruct/*!*/ self, params object[]/*!*/ values) {

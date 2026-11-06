@@ -286,5 +286,152 @@ bar
                 Assert(frameInfo.StartsWith(srcName + ":"));
             }
         }
+
+        /// <summary>
+        /// MRI defines `collect' and `map' (and `each_pair' and `each', `format' and `sprintf', ...) as one C
+        /// function under several names, and a backtrace names the frame by the name called. Here one CLR
+        /// method was registered under them all, and the frame said "Array#map" under `collect' too; a module
+        /// function called on the module is "Kernel.format", not "Kernel#format". The methods are still one
+        /// to UnboundMethod#==.
+        /// </summary>
+        public void Backtrace_CalledNameLabels1() {
+            TestOutput(@"
+def label(i)
+  yield
+rescue => e
+  e.backtrace[i][/'(.*)'/, 1]
+end
+class E; include Enumerable; def each; yield 1; end; end
+puts label(1) { [1].collect { raise 'x' } }, label(1) { [1].map { raise 'x' } }
+puts label(1) { [1].collect! { raise 'x' } }, label(1) { [1].map! { raise 'x' } }
+puts label(1) { [1].filter { raise 'x' } }, label(1) { [1].select { raise 'x' } }
+puts label(1) { [1].index { raise 'x' } }, label(1) { [1].find_index { raise 'x' } }
+puts label(1) { {a: 1}.each_pair { raise 'x' } }, label(1) { {a: 1}.each { raise 'x' } }
+puts label(1) { {a: 1}.filter { raise 'x' } }, label(1) { {a: 1}.select { raise 'x' } }
+puts label(1) { {a: 1}.filter! { raise 'x' } }, label(1) { {a: 1}.select! { raise 'x' } }
+puts label(1) { 'ab'.chars { raise 'x' } }, label(1) { 'ab'.each_char { raise 'x' } }
+puts label(1) { 'ab'.bytes { raise 'x' } }, label(1) { 'ab'.each_byte { raise 'x' } }
+puts label(1) { 'ab'.codepoints { raise 'x' } }, label(1) { 'ab'.each_codepoint { raise 'x' } }
+puts label(2) { E.new.collect { raise 'x' } }, label(2) { E.new.map { raise 'x' } }
+puts label(2) { E.new.detect { raise 'x' } }, label(2) { E.new.find { raise 'x' } }
+puts label(2) { E.new.filter { raise 'x' } }, label(2) { E.new.find_all { raise 'x' } }, label(2) { E.new.select { raise 'x' } }
+puts label(0) { format('%d', 'x') }, label(0) { sprintf('%d', 'x') }
+puts label(0) { Kernel.format('%d', 'x') }, label(0) { Kernel.sprintf('%d', 'x') }
+puts label(0) { format }, label(0) { Kernel.sprintf }
+p Array.instance_method(:collect) == Array.instance_method(:map), Hash.instance_method(:filter) == Hash.instance_method(:select)
+p Kernel.instance_method(:format) == Kernel.instance_method(:sprintf), Kernel.method(:format) == Kernel.method(:sprintf)
+p Enumerable.instance_method(:detect) == Enumerable.instance_method(:find), String.instance_method(:chars) == String.instance_method(:each_char)
+a = [1]
+p a.method(:collect).hash == a.method(:map).hash, a.method(:collect).arity, Kernel.method(:sprintf).arity
+", @"
+Array#collect
+Array#map
+Array#collect!
+Array#map!
+Array#filter
+Array#select
+Array#index
+Array#find_index
+Hash#each_pair
+Hash#each
+Hash#filter
+Hash#select
+Hash#filter!
+Hash#select!
+String#chars
+String#each_char
+String#bytes
+String#each_byte
+String#codepoints
+String#each_codepoint
+Enumerable#collect
+Enumerable#map
+Enumerable#detect
+Enumerable#find
+Enumerable#filter
+Enumerable#find_all
+Enumerable#select
+Kernel#format
+Kernel#sprintf
+Kernel.format
+Kernel.sprintf
+Kernel#format
+Kernel.sprintf
+true
+true
+true
+true
+true
+false
+true
+0
+-1
+");
+        }
+
+        /// <summary>
+        /// An Enumerator a builtin answers without a block names the method by the name it was called by, as MRI's
+        /// does: `[1].collect' is #&lt;Enumerator: [1]:collect&gt;, not :map. An alias names the method it aliases.
+        /// Enumerable#find and #detect said #&lt;Enumerator: ...&gt;.
+        /// </summary>
+        public void Enumerator_CalledName1() {
+            TestOutput(@"
+require 'ruby4'
+class E; include Enumerable; def each; yield 1; end; def inspect; 'e'; end; end
+class A2 < Array; alias foo collect; alias bar filter; def collect!; super; end; end
+S = Struct.new(:a)
+[
+  [1].collect, [1].map, [1].collect!, [1].map!, [1].filter, [1].select, [1].index, [1].find_index,
+  {}.each_pair, {}.each, {}.filter, {}.select, {}.filter!, {}.select!,
+  E.new.collect, E.new.map, E.new.detect, E.new.find, E.new.find(:none), E.new.filter, E.new.find_all, E.new.select,
+  E.new.find_index, S.new(1).filter, S.new(1).select, A2.new([1]).foo, A2.new([1]).bar, A2.new([1]).collect!,
+  [1].method(:collect).call, [1].send(:filter),
+].each { |e| puts e.inspect }
+p E.new.find.each { |x| x == 1 }, E.new.find(-> { 0 }).each { |x| x == 2 }, E.new.find_index.each { |x| x == 1 }
+p [1, 2].index.each { |x| x == 2 }, [3].filter.each { |x| x > 1 }, {a: 1}.each_pair.to_a, S.new(1).filter.to_a
+p [1, 2].map!.with_index { |x, i| x * i }, [3, 4].collect.with_index(1).to_a, (1..3).detect.size
+", @"
+#<Enumerator: [1]:collect>
+#<Enumerator: [1]:map>
+#<Enumerator: [1]:collect!>
+#<Enumerator: [1]:map!>
+#<Enumerator: [1]:filter>
+#<Enumerator: [1]:select>
+#<Enumerator: [1]:index>
+#<Enumerator: [1]:find_index>
+#<Enumerator: {}:each_pair>
+#<Enumerator: {}:each>
+#<Enumerator: {}:filter>
+#<Enumerator: {}:select>
+#<Enumerator: {}:filter!>
+#<Enumerator: {}:select!>
+#<Enumerator: e:collect>
+#<Enumerator: e:map>
+#<Enumerator: e:detect>
+#<Enumerator: e:find>
+#<Enumerator: e:find(:none)>
+#<Enumerator: e:filter>
+#<Enumerator: e:find_all>
+#<Enumerator: e:select>
+#<Enumerator: e:find_index>
+#<Enumerator: #<struct S a=1>:filter>
+#<Enumerator: #<struct S a=1>:select>
+#<Enumerator: [1]:collect>
+#<Enumerator: [1]:filter>
+#<Enumerator: [1]:collect!>
+#<Enumerator: [1]:collect>
+#<Enumerator: [1]:filter>
+1
+0
+0
+1
+[3]
+[[:a, 1]]
+[1]
+[0, 2]
+[[3, 1], [4, 2]]
+nil
+");
+        }
     }
 }
