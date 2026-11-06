@@ -445,7 +445,9 @@ namespace IronRuby.Builtins {
 
             // The thread now runs a fiber of the current thread's, as a new one would have.
             RubyThreadInfo info = RubyThreadInfo.FromThread(worker.Thread);
-            info.Group = RubyThreadInfo.FromThread(Thread.CurrentThread).Group;
+            RubyThreadInfo creator = RubyThreadInfo.FromThread(Thread.CurrentThread);
+            info.Group = creator.Group;
+            info.Ractor = creator.Ractor;
             info.IsIdleFiberWorker = false;
             worker.Jobs.Post(fiber);
             return worker.Thread;

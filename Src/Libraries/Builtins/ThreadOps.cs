@@ -199,6 +199,12 @@ namespace IronRuby.Builtins {
 
             internal Exception Exception { get; set; }
             internal object Result { get; set; }
+
+            /// <summary>
+            /// The Ractor the thread belongs to: the one that started it, or the one it is the main
+            /// thread of. Null for the main Ractor's threads.
+            /// </summary>
+            internal RubyRactor Ractor { get; set; }
             internal bool CreatedFromRuby { get; set; }
 
             /// <summary>
@@ -1060,6 +1066,26 @@ namespace IronRuby.Builtins {
             internal BlockParam StartRoutine;
             internal object[] Args;
             internal Thread Creator;
+            // a Ractor's main thread runs this instead of yielding StartRoutine, in a group of its own
+            internal Func<object> Body;
+            internal ThreadGroup Group;
+        }
+
+        /// <summary>
+        /// Starts the main thread of <paramref name="ractor"/>, which runs <paramref name="body"/>
+        /// and is a Ruby thread in every other respect (Thread.current, report_on_exception).
+        /// </summary>
+        internal static Thread/*!*/ StartRactorThread(RubyContext/*!*/ context, RubyRactor/*!*/ ractor, Func<object>/*!*/ body) {
+            ThreadStarter starter;
+            Thread result = AllocateThread(context, null, out starter);
+            RubyThreadInfo info = RubyThreadInfo.FromThread(result);
+            info.Ractor = ractor;
+            info.Location = null;
+            info.Group = starter.Group = new ThreadGroup();
+            ractor.MainThread = result;
+            starter.Body = body;
+            result.Start();
+            return result;
         }
 
         private static Thread/*!*/ StartThread(RubyContext/*!*/ context, RubyClass subclass, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
@@ -1094,7 +1120,7 @@ namespace IronRuby.Builtins {
                 context.ThreadTerminator = CreateThreadTerminator(context);
             }
             s.Creator = Thread.CurrentThread;
-            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, group, s.Creator)));
+            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, s.Group ?? group, s.Creator, s.Body)));
             if (subclass != null) {
                 context.AdoptClrObject(result, subclass);
             }
@@ -1107,6 +1133,7 @@ namespace IronRuby.Builtins {
             info.Group = group;
             info.Priority = creator.Priority;
             info.Location = GetCallerLocation(context);
+            info.Ractor = creator.Ractor;
 
             // MRI: a new thread's root fiber inherits the storage of the fiber that created it.
             // Fiber is implemented in Ruby, so all that is needed here is to carry the creating
@@ -1126,7 +1153,7 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// "file:line" of the Ruby frame that called Thread.new, for Thread#inspect.
         /// </summary>
-        private static string GetCallerLocation(RubyContext/*!*/ context) {
+        internal static string GetCallerLocation(RubyContext/*!*/ context) {
             try {
                 RubyArray trace = RubyExceptionData.CreateBacktrace(context, 1);
                 if (trace != null && trace.Count > 0) {
@@ -1145,7 +1172,7 @@ namespace IronRuby.Builtins {
         /// unhandled exception is printed at top level. It goes to $stderr rather than to the CLR
         /// console, because $stderr is what Ruby code (and the specs) can redirect.
         /// </summary>
-        private static void ReportThreadException(RubyContext/*!*/ context, RubyThreadInfo/*!*/ info, Exception/*!*/ e) {
+        internal static void ReportThreadException(RubyContext/*!*/ context, RubyThreadInfo/*!*/ info, Exception/*!*/ e) {
             try {
                 StringBuilder report = new StringBuilder();
                 report.Append(Inspect(context, info.Thread).ToString());
@@ -1171,8 +1198,8 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private static void RubyThreadStart(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args, ThreadGroup group,
-            Thread creator) {
+        private static void RubyThreadStart(RubyContext/*!*/ context, BlockParam startRoutine, object[] args, ThreadGroup group,
+            Thread creator, Func<object> body) {
             RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
             info.CreatedFromRuby = true;
 
@@ -1194,7 +1221,9 @@ namespace IronRuby.Builtins {
 
                 object threadResult;
                 // TODO: break/returns might throw LocalJumpError if the RFC that was created for startRoutine is not active anymore:
-                if (startRoutine.Yield(args, out threadResult) && startRoutine.Returning(threadResult, out threadResult)) {
+                if (body != null) {
+                    threadResult = body();
+                } else if (startRoutine.Yield(args, out threadResult) && startRoutine.Returning(threadResult, out threadResult)) {
                     info.Exception = new ThreadError("return can't jump across threads");
                 }
                 info.Result = threadResult;
@@ -1267,7 +1296,8 @@ namespace IronRuby.Builtins {
                         // whole process down. Park it for the main thread instead - it is delivered
                         // at the main thread's next blocking point, and #join still re-raises it
                         // because info.Exception is set.
-                        Thread mainThread = context.MainThread;
+                        // in a Ractor, to the Ractor's main thread
+                        Thread mainThread = info.Ractor != null ? info.Ractor.MainThread : context.MainThread;
                         if (mainThread != null && mainThread != Thread.CurrentThread) {
                             RubyUtils.RaiseAsyncException(mainThread, e);
                         }

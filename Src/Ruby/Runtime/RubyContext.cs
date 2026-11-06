@@ -1852,6 +1852,19 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// A class a library defines the way Ruby code would - no CLR type of its own, so it is a
+        /// Ruby class whose instances are Ruby objects - that no constant names yet: the library
+        /// publishes it (Ractor::MovedObject is a [RubyConstant]).
+        /// </summary>
+        public RubyClass/*!*/ CreateRubyClass(string/*!*/ qualifiedName, RubyClass/*!*/ superClass) {
+            ContractUtils.RequiresNotNull(qualifiedName, "qualifiedName");
+            ContractUtils.RequiresNotNull(superClass, "superClass");
+            return CreateClass(
+                qualifiedName, null, null, null, null, null, null, superClass, null, null, null, true, false, ModuleRestrictions.None
+            );
+        }
+
         private static void PublishModule(string name, RubyModule/*!*/ owner, RubyModule/*!*/ module) {
             if (name != null) {
                 owner.SetConstant(name, module);
@@ -2713,6 +2726,25 @@ namespace IronRuby.Runtime {
                 return false;
             }
             return !(name.Length > 5 && name.StartsWith("@__", StringComparison.Ordinal) && name.EndsWith("__", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// The object's state kept in instance variables: the visible ones and those the runtime keeps
+        /// under names Ruby cannot spell (<see cref="RubyUtils.GetHiddenInstanceVariableName"/>, a Data's
+        /// members), which a deep copy or deep freeze has to reach too.
+        /// </summary>
+        public string[]/*!*/ GetStateInstanceVariableNames(object obj) {
+            RubyInstanceData data = TryGetInstanceData(obj);
+            if (data == null) {
+                return ArrayUtils.EmptyStrings;
+            }
+            var result = new List<string>();
+            foreach (string name in data.GetInstanceVariableNames()) {
+                if (IsVisibleInstanceVariableName(name) || name.StartsWith(RubyUtils.GetHiddenInstanceVariableName(""), StringComparison.Ordinal)) {
+                    result.Add(name);
+                }
+            }
+            return result.ToArray();
         }
 
         public bool TryGetInstanceVariable(object obj, string/*!*/ name, out object value) {

@@ -93,6 +93,20 @@ namespace IronRuby.Builtins {
             _flags |= FrozenFlag;
         }
         
+        /// <summary>
+        /// A range of endpoints already known to be valid together: a copy of an existing range
+        /// with copies of its endpoints (a Ractor message).
+        /// </summary>
+        public static Range/*!*/ CreateValidated(object begin, object end, bool excludeEnd) {
+            var result = new Range();
+            result._begin = begin;
+            result._end = end;
+            result._excludeEnd = excludeEnd;
+            result._initialized = true;
+            result._flags |= FrozenFlag;
+            return result;
+        }
+
         // Convience function for constructing from C#, calls initialize
         public Range(BinaryOpStorage/*!*/ comparisonStorage, 
             RubyContext/*!*/ context, object begin, object end, bool excludeEnd) {

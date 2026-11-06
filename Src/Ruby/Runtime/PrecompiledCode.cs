@@ -142,6 +142,18 @@ namespace IronRuby.Runtime.Precompiled {
             return result;
         }
 
+        /// <summary>
+        /// A block that uses locals of the scopes around it: Ractor.new needs to know which
+        /// (BlockDispatcher.OuterVariableNames).
+        /// </summary>
+        public static BlockDispatcher/*!*/ CreateBlockDispatcher(int parameterCount, int postCount, int attributesAndArity,
+            string sourcePath, int sourceLine, RubyParameterSignature signature, string[] outerVariables, string[] assignedOuterVariables) {
+            var result = CreateBlockDispatcher(parameterCount, postCount, attributesAndArity, sourcePath, sourceLine, signature);
+            result.OuterVariableNames = outerVariables;
+            result.AssignedOuterVariableNames = assignedOuterVariables;
+            return result;
+        }
+
         public static RubyParameterSignature/*!*/ Signature(string[]/*!*/ kinds, string[]/*!*/ names, int leadingCount, int optionalCount,
             int postCount, bool hasRest, int requiredKeywordCount, bool hasKeywords, bool hasKeywordRest, string[] implicitParameterNames) {
             var ps = new RubyParameterSignature.Parameter[kinds.Length];
