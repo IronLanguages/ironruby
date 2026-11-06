@@ -3369,10 +3369,6 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// Same, but with MRI's variable-arity spelling of the expected count: "1..3", "1+" or "2, 3, or 5".
-        /// The description is a compile-time constant produced by the binder.
-        /// </summary>
-        /// <summary>
         /// The arity error of a call to a method with keyword parameters, worded from the declared
         /// signature as MRI words it: the keyword hash a call made is not one of the arguments
         /// given, the hidden parameter it arrives in is not one of those expected, and a required
@@ -3392,6 +3388,10 @@ namespace IronRuby.Runtime {
             return MakeWrongNumberOfArgumentsErrorN(positional, expected + MissingRequiredKeywordsNote(parameters, keywords));
         }
 
+        /// <summary>
+        /// Same, but with MRI's variable-arity spelling of the expected count: "1..3", "1+" or "2, 3, or 5".
+        /// The description is a compile-time constant produced by the binder.
+        /// </summary>
         [Emitted]
         public static ArgumentException/*!*/ MakeWrongNumberOfArgumentsErrorN(int actual, string/*!*/ expected) {
             return new ArgumentException(String.Format("wrong number of arguments (given {0}, expected {1})", actual, expected));
