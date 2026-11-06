@@ -109,39 +109,268 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        #region Kernel#Integer, Kernel#Float
+
         /// <summary>
-        /// A Float given to Float() comes back as the very same object. Taking it as a double and
-        /// handing it back boxes it afresh, and #equal? on a boxed double compares the boxes - so
-        /// Float(f).equal?(f) was false, including for the NaN and the Infinity that have no
-        /// other way of being told apart from any other NaN or Infinity.
+        /// Kernel#Integer(arg, base = 0, exception: true), MRI's rb_convert_to_integer. A non-zero base
+        /// goes with a String, so anything else must have #to_str. A String is parsed, an Integer is
+        /// answered as it is, a Float truncated and nil is a TypeError. Anything else is asked for #to_int
+        /// - an error it raises, or an answer that is not an Integer, only moves on to the next step -
+        /// then for #to_str, then for #to_i. With exception: false a failure answers nil, including an
+        /// error raised by the object's own #to_i; an unusable base or a String in an ASCII-incompatible
+        /// encoding still raises.
+        /// </summary>
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        public static object ToInteger(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ toInt, UnaryOpStorage/*!*/ toStr,
+            UnaryOpStorage/*!*/ toI, object self, object value, [Optional]object radixOrOptions, [Optional]object options) {
+
+            // the common cases, without the keyword and protocol machinery
+            if (radixOrOptions == Missing.Value) {
+                if (value is MutableString str) {
+                    return ParseInteger(str, 0, true);
+                }
+                if (value is int || value is long || value is BigInteger) {
+                    return value;
+                }
+            }
+
+            bool raise = TakeExceptionOption(fixnumCast.Context, ref radixOrOptions, options, 2);
+            int radix = (radixOrOptions == Missing.Value) ? 0 : Protocols.CastToFixnum(fixnumCast, radixOrOptions);
+            RubyContext context = fixnumCast.Context;
+
+            if (radix != 0) {
+                MutableString str = TryConvertToStr(toStr, value);
+                if (str == null) {
+                    if (!raise) {
+                        return null;
+                    }
+                    throw RubyExceptions.CreateArgumentError("base specified for non string value");
+                }
+                value = str;
+            }
+
+            if (value is double d) {
+                if (!raise && (Double.IsNaN(d) || Double.IsInfinity(d))) {
+                    return null;
+                }
+                return ClrFloat.ToInt(d);
+            }
+            object clrInteger = AsInteger(value);
+            if (clrInteger != null) {
+                return clrInteger;
+            }
+            if (value is MutableString s) {
+                return ParseInteger(s, radix, raise);
+            }
+            if (value == null) {
+                if (!raise) {
+                    return null;
+                }
+                throw RubyExceptions.CreateTypeConversionError("NilClass", "Integer");
+            }
+
+            // rb_protect(rb_check_to_int)
+            if (CanCall(context, value, "to_int")) {
+                try {
+                    object integer = AsInteger(Call(toInt, value, "to_int"));
+                    if (integer != null) {
+                        return integer;
+                    }
+                } catch (Exception e) when (IsStandardError(context, e)) {
+                    // MRI forgets it and goes on to #to_str
+                }
+            }
+
+            MutableString text = TryConvertToStr(toStr, value);
+            if (text != null) {
+                return ParseInteger(text, radix, raise);
+            }
+
+            if (!raise) {
+                try {
+                    return CanCall(context, value, "to_i") ? AsInteger(Call(toI, value, "to_i")) : null;
+                } catch (Exception e) when (IsStandardError(context, e)) {
+                    return null;
+                }
+            }
+
+            string className = RubyExceptions.MessageTypeName(context.GetClassName(value));
+            if (!CanCall(context, value, "to_i")) {
+                throw RubyExceptions.CreateTypeConversionError(className, "Integer");
+            }
+            object result = Call(toI, value, "to_i");
+            if (AsInteger(result) != null) {
+                return AsInteger(result);
+            }
+            throw RubyExceptions.CreateTypeError("can't convert {0} to Integer ({0}#to_i gives {1})",
+                className, RubyExceptions.MessageTypeName(context.GetClassName(result)));
+        }
+
+        /// <summary>
+        /// Kernel#Float(arg, exception: true), MRI's rb_convert_to_float. A Float is its own answer - the
+        /// very object, so a NaN or an Infinity stays itself - an Integer is converted and a String
+        /// parsed. nil, true and false are TypeErrors; anything else is asked for #to_f, whose answer is
+        /// handed back as it is if it is a Float. With exception: false a failure answers nil, including
+        /// an error raised by the object's own #to_f.
         /// </summary>
         [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
-        public static object ToFloat(ConversionStorage<double>/*!*/ floatConversion, object self, object value) {
+        public static object ToFloat(UnaryOpStorage/*!*/ toF, object self, object value, [Optional]object options) {
             if (value is double) {
                 return value;
             }
-            return Protocols.CastToFloat(floatConversion, value);
-        }
 
-        // An Integer too large for a Float is Infinity, with MRI's -w warning.
-        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
-        public static double ToFloat(RubyContext/*!*/ context, object self, [NotNull]BigInteger value) {
-            return Protocols.ConvertToDouble(context, value);
-        }
+            RubyContext context = toF.Context;
+            bool raise = (options == Missing.Value) || TakeExceptionOption(context, ref options, Missing.Value, 1);
 
-        // A String has to be readable as a number at all: in an ASCII-compatible encoding - MRI
-        // checks that before anything else, and exception: false does not change it - and, for
-        // Float, without a NUL, which MRI names rather than calling the value invalid.
-        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
-        public static object ToFloat(RubyContext/*!*/ context, object self, [NotNull]MutableString/*!*/ value) {
-            RequireAsciiCompatible(value);
-            if (value.IndexOf('\0') >= 0) {
-                throw RubyExceptions.CreateArgumentError("string for Float contains null byte");
+            if (value is int i) {
+                return (double)i;
             }
-            return RubyOps.ConvertMutableStringToFloat(context, value);
+            if (value is BigInteger big) {
+                return Protocols.ConvertToDouble(context, big);
+            }
+            if (value is MutableString str) {
+                RequireAsciiCompatible(str);
+                if (str.IndexOf('\0') >= 0) {
+                    return raise ? throw RubyExceptions.CreateArgumentError("string for Float contains null byte") : null;
+                }
+                if (!raise) {
+                    double parsed;
+                    return RubyOps.TryParseRubyFloat(str.ConvertToString(), out parsed) ? (object)parsed : null;
+                }
+                return RubyOps.ConvertMutableStringToFloat(context, str);
+            }
+            if (value == null || value is bool) {
+                if (!raise) {
+                    return null;
+                }
+                throw RubyExceptions.CreateTypeConversionError(context.GetClassName(value), "Float");
+            }
+
+            if (!CanCall(context, value, "to_f")) {
+                if (!raise) {
+                    return null;
+                }
+                throw RubyExceptions.CreateTypeConversionError(context.GetClassName(value), "Float");
+            }
+
+            object result;
+            try {
+                result = Call(toF, value, "to_f");
+            } catch (Exception e) when (!raise && IsStandardError(context, e)) {
+                return null;
+            }
+            if (result is double) {
+                return result;
+            }
+            if (!raise) {
+                return null;
+            }
+            throw RubyExceptions.CreateTypeError("can't convert {0} to Float ({0}#to_f gives {1})",
+                context.GetClassName(value), context.GetClassName(result));
+        }
+
+        /// <summary>
+        /// The exception: keyword of Integer() and Float(), which arrives in place of the first optional
+        /// argument that was not given (<paramref name="arg"/>, then <paramref name="options"/>), as a Hash
+        /// flagged as keywords. MRI's rb_bool_expected: only true and false are accepted.
+        /// </summary>
+        private static bool TakeExceptionOption(RubyContext/*!*/ context, ref object arg, object options, int maxArgs) {
+            Hash keywords;
+            if (options != Missing.Value) {
+                keywords = options as Hash;
+                if (keywords == null || !keywords.IsKeywordArguments) {
+                    throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 1..{1})", maxArgs + 1, maxArgs);
+                }
+            } else if ((keywords = arg as Hash) != null && keywords.IsKeywordArguments) {
+                arg = Missing.Value;
+            } else if (maxArgs == 1 && arg != Missing.Value) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 2, expected 1)");
+            } else {
+                return true;
+            }
+
+            bool raise = true;
+            foreach (var entry in keywords) {
+                var key = entry.Key as RubySymbol;
+                if (key == null || key.ToString() != "exception") {
+                    throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(entry.Key));
+                }
+                if (!(entry.Value is bool flag)) {
+                    throw RubyExceptions.CreateArgumentError("expected true or false as exception: {0}", context.Inspect(entry.Value));
+                }
+                raise = flag;
+            }
+            return raise;
+        }
+
+        /// <summary>
+        /// <paramref name="value"/> as a Ruby Integer: an Integer itself - a Fixnum, an Int64 or a Bignum - and
+        /// one of the CLR's other integer types widened to one; null for anything else.
+        /// </summary>
+        private static object AsInteger(object value) {
+            switch (value) {
+                case int _:
+                case long _:
+                case BigInteger _: return value;
+                case byte b: return (int)b;
+                case sbyte sb: return (int)sb;
+                case short sh: return (int)sh;
+                case ushort us: return (int)us;
+                case uint ui: return Protocols.Normalize(ui);
+                case ulong ul: return Protocols.Normalize(ul);
+                default: return null;
+            }
+        }
+
+        /// <summary>
+        /// MRI's rb_check_funcall test: the object answers <paramref name="name"/>, privately or not.
+        /// A respond_to? of its own is asked; otherwise the method is looked up, and a
+        /// respond_to_missing? of its own is asked when there is none.
+        /// </summary>
+        private static bool CanCall(RubyContext/*!*/ context, object value, string/*!*/ name) {
+            RubyClass cls = context.GetImmediateClassOf(value);
+            var respondTo = cls.ResolveMethod("respond_to?", VisibilityContext.AllVisible);
+            if (respondTo.Found && !(respondTo.Info is RubyLibraryMethodInfo)) {
+                return context.RespondTo(value, name);
+            }
+            if (cls.ResolveMethod(name, VisibilityContext.AllVisible).Found) {
+                return true;
+            }
+            var missing = cls.ResolveMethod("respond_to_missing?", VisibilityContext.AllVisible);
+            return respondTo.Found && missing.Found && !(missing.Info is RubyLibraryMethodInfo) && context.RespondTo(value, name);
+        }
+
+        /// <summary>A call of a conversion method that may be private, as MRI's rb_check_funcall makes it.</summary>
+        private static object Call(UnaryOpStorage/*!*/ storage, object value, string/*!*/ name) {
+            var site = storage.GetCallSite(name, new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, value);
+        }
+
+        /// <summary>
+        /// MRI's rb_check_string_type: the String itself, the result of #to_str, or null when there is
+        /// no #to_str; a #to_str that answers anything else is a TypeError.
+        /// </summary>
+        private static MutableString TryConvertToStr(UnaryOpStorage/*!*/ toStr, object value) {
+            if (value is MutableString str) {
+                return str;
+            }
+            RubyContext context = toStr.Context;
+            if (value == null || !CanCall(context, value, "to_str")) {
+                return null;
+            }
+            object result = Call(toStr, value, "to_str");
+            if (result is MutableString || result == null) {
+                return (MutableString)result;
+            }
+            string className = RubyExceptions.MessageTypeName(context.GetClassName(value));
+            throw RubyExceptions.CreateTypeError("can't convert {0} to String ({0}#to_str gives {1})",
+                className, RubyExceptions.MessageTypeName(context.GetClassName(result)));
+        }
+
+        private static bool IsStandardError(RubyContext/*!*/ context, Exception/*!*/ e) {
+            return context.GetClassOf(e).IsSubclassOf(context.StandardErrorClass);
         }
 
         private static void RequireAsciiCompatible(MutableString/*!*/ value) {
@@ -150,24 +379,20 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
-        public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value) {
-            return ToInteger(self, value, 0);
-        }
-
-        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
-        public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value, [DefaultProtocol]int radix) {
+        /// <summary>
+        /// Kernel#Integer's reading of a String, which must be ASCII-compatible. A positive radix must be
+        /// 2..36; a negative one is only a hint a prefix overrides, and 0 works it out from the prefix.
+        /// A string that does not read as an Integer is an ArgumentError, or null when
+        /// <paramref name="raise"/> is false.
+        /// </summary>
+        public static object ParseInteger(MutableString/*!*/ value, int radix, bool raise = true) {
             RequireAsciiCompatible(value);
             var str = value.ConvertToString();
 
-            // A negative radix means "this is only a hint, a prefix wins"; zero and the
-            // absent argument both mean "work it out from the prefix".
             // MRI complains about the string before it complains about the radix, so
             // Integer("\n", 1) is "invalid value", not "invalid radix".
             if (!HasIntegerDigits(str)) {
-                throw InvalidIntegerValue(str);
+                return raise ? throw InvalidIntegerValue(str) : null;
             }
 
             // Only a positive radix is range-checked; a negative one is a hint, and an
@@ -180,44 +405,10 @@ namespace IronRuby.Builtins {
             if (TryParseRubyInteger(str, radix, out result)) {
                 return result;
             }
-
-            throw InvalidIntegerValue(str);
+            return raise ? throw InvalidIntegerValue(str) : null;
         }
 
-        // Kernel#Integer and #Float with exception: false (ruby4.rb): a String that does not read
-        // as a number answers nil here, rather than raising an ArgumentError for the prelude to
-        // rescue - which cost ~55 us a failure. An invalid radix still raises, as it does in MRI
-        // whatever exception: says.
-
-        [RubyMethod("__ir_try_Integer__", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("__ir_try_Integer__", RubyMethodAttributes.PublicSingleton)]
-        public static object TryToInteger(object self, [NotNull]MutableString/*!*/ value) {
-            return TryToInteger(self, value, 0);
-        }
-
-        [RubyMethod("__ir_try_Integer__", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("__ir_try_Integer__", RubyMethodAttributes.PublicSingleton)]
-        public static object TryToInteger(object self, [NotNull]MutableString/*!*/ value, [DefaultProtocol]int radix) {
-            RequireAsciiCompatible(value);
-            var str = value.ConvertToString();
-            if (!HasIntegerDigits(str)) {
-                return null;
-            }
-            if (radix > 0 && (radix < 2 || radix > 36)) {
-                throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
-            }
-            object result;
-            return TryParseRubyInteger(str, radix, out result) ? result : null;
-        }
-
-        [RubyMethod("__ir_try_Float__", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("__ir_try_Float__", RubyMethodAttributes.PublicSingleton)]
-        public static object TryToFloat(object self, [NotNull]MutableString/*!*/ value) {
-            RequireAsciiCompatible(value);
-            double result;
-            return RubyOps.TryParseRubyFloat(value.ConvertToString(), out result) ? (object)result : null;
-        }
-
+        #endregion
         #region Kernel#Integer string grammar
 
         // Kernel#Integer is stricter than String#to_i: it consumes the whole string or fails.
@@ -371,13 +562,6 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
-
-        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
-        public static object/*!*/ ToInteger(ConversionStorage<IntegerValue>/*!*/ integerConversion, object self, object value) {
-            var integer = Protocols.ConvertToInteger(integerConversion, value);
-            return integer.IsFixnum ? ScriptingRuntimeHelpers.Int32ToObject(integer.Fixnum) : integer.Bignum;
-        }
 
         [RubyMethod("String", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("String", RubyMethodAttributes.PublicSingleton)]

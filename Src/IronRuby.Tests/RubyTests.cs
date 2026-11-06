@@ -918,6 +918,7 @@ namespace IronRuby.Tests {
                 MethodInspect_LibraryParameters1,
                 MethodDef_SymbolInBody1,
                 ToIntegerConversion1,
+                Kernel_IntegerFloat1,
                 ToIntToStrConversion1,
                 ConvertToFixnum1,
                 ProtocolCaching1,

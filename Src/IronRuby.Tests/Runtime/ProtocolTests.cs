@@ -47,6 +47,72 @@ namespace IronRuby.Tests {
     }
 
     public partial class Tests {
+        /// <summary>
+        /// Kernel#Integer and #Float as MRI's rb_convert_to_integer and rb_convert_to_float: a base only with a
+        /// String or #to_str, #to_int (whose errors and non-Integer answers are ignored) before #to_str before
+        /// #to_i, private conversion methods called, exception: false answering nil for any failure but a bad
+        /// keyword or an ASCII-incompatible String, and the Float #to_f answers handed back as they are.
+        /// </summary>
+        public void Kernel_IntegerFloat1() {
+            TestOutput(@"
+def t
+  r = yield
+  r.inspect
+rescue => e
+  ""#{e.class}: #{e.message}""
+end
+ti = Object.new; def ti.to_int = 7
+ts = Object.new; def ts.to_str = ""0x1f""
+tii = Object.new; def tii.to_i = 9
+tis = Object.new; def tis.to_int = ""x""; def tis.to_str = ""12""
+tir = Object.new; def tir.to_int = raise(""boom""); def tir.to_i = 3
+tbi = Object.new; def tbi.to_i = ""s""
+tbs = Object.new; def tbs.to_str = 5
+tpi = Object.new; class << tpi; private def to_int = 4; end
+p [Integer(""0x1A""), Integer("" 12 "", 8), Integer(""z"", 36), Integer(12, 0), Integer(1.9), Integer(-1.9), Integer(2**70)]
+p [Integer(ti), Integer(ts), Integer(ts, 16), Integer(tii), Integer(tis), Integer(tir), Integer(tpi)]
+p [Integer(""x"", exception: false), Integer(nil, exception: false), Integer((0.0 / 0), exception: false), Integer(tbi, exception: false), Integer(Object.new, 16, exception: false)]
+puts t { Integer(nil) }, t { Integer(true) }, t { Integer(:a) }, t { Integer((1.0 / 0)) }, t { Integer(tbi) }, t { Integer(tbs) }
+puts t { Integer(12, 8) }, t { Integer(nil, 8) }, t { Integer(""1__0"") }, t { Integer(""10"", 37) }
+puts t { Integer(""1"", exception: nil) }, t { Integer(""1"", foo: 1) }, t { Integer(""12"".encode(""UTF-16LE""), exception: false) }
+tf = Object.new; def tf.to_f = 2.5
+tbf = Object.new; def tbf.to_f = ""x""
+trf = Object.new; def trf.to_f = raise(""boom"")
+n = 0.0 / 0; tn = Object.new; tn.define_singleton_method(:to_f) { n }
+p [Float(""1_000.5""), Float(3), Float(tf), Float(""x"", exception: false), Float(""1\0"", exception: false), Float(trf, exception: false), Float(nil, exception: false)]
+p [Float(n).equal?(n), Float(tn).equal?(n)]
+puts t { Float(nil) }, t { Float(false) }, t { Float(:s) }, t { Float(tbf) }, t { Float(""1\0"") }, t { Float("""") }, t { Float(""1"", exception: 1) }
+p [Kernel.Integer(""0b11""), Kernel.Float(""2""), method(:Integer).arity, method(:Float).arity]
+", @"
+[26, 10, 35, 12, 1, -1, 1180591620717411303424]
+[7, 31, 31, 9, 12, 3, 4]
+[nil, nil, nil, nil, nil]
+TypeError: can't convert nil into Integer
+TypeError: can't convert true into Integer
+TypeError: can't convert Symbol into Integer
+FloatDomainError: Infinity
+TypeError: can't convert Object to Integer (Object#to_i gives String)
+TypeError: can't convert Object to String (Object#to_str gives Integer)
+ArgumentError: base specified for non string value
+ArgumentError: base specified for non string value
+ArgumentError: invalid value for Integer(): ""1__0""
+ArgumentError: invalid radix 37
+ArgumentError: expected true or false as exception: nil
+ArgumentError: unknown keyword: :foo
+Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE
+[1000.5, 3.0, 2.5, nil, nil, nil, nil]
+[true, true]
+TypeError: can't convert nil into Float
+TypeError: can't convert false into Float
+TypeError: can't convert Symbol into Float
+TypeError: can't convert Object to Float (Object#to_f gives String)
+ArgumentError: string for Float contains null byte
+ArgumentError: invalid value for Float(): """"
+ArgumentError: expected true or false as exception: 1
+[3, 2.0, -2, -2]
+");
+        }
+
         public void ToIntegerConversion1() {
             AssertOutput(delegate() {
                 CompilerTest(@"
@@ -81,6 +147,7 @@ puts Integer(E.new) rescue puts $!
 1000000000000
 1
 to_int
+to_str
 to_i
 can't convert E into Integer
 ");
