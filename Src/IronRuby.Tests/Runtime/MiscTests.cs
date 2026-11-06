@@ -3172,6 +3172,81 @@ p r
         }
 
         /// <summary>
+        /// Rational as a C# type (RubyRational) with its arithmetic, comparison, #to_f and #hash in C#, and
+        /// Kernel#Rational: Integer, Float, Rational and big operands, coercion, division by zero, NaN,
+        /// Marshal, hash keys, the conversions and errors left to rational.rb. The expected output is CRuby's.
+        /// </summary>
+        public void Rational_CSharp1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+a = Rational(1, 3); b = Rational(-2, 5); big = Rational(2**70, 3); c = Rational(5)
+t('add') { [a + b, a + 1, a + 2**70, a + 0.5, a + big, big + big, a - b, a - 3, b - a, c - c] }
+t('mul') { [a * b, a * 3, a * 0, a * 0.5, big * big, b * -1, a * Rational(3, 1)] }
+t('div') { [a / b, a / 3, a / 0.5, a.quo(b), Rational(1) / a, big / a, a / -2, a / Rational(-1, 2)] }
+t('div0') { a / 0 }
+t('div0r') { a / Rational(0) }
+t('div0f') { a / 0.0 }
+t('cmp') { [a <=> b, a <=> 1, a <=> a, a <=> 0.25, a <=> Float::NAN, a <=> ""x"", big <=> a, c <=> 5] }
+t('eq') { [a == Rational(2, 6), a == b, c == 5, Rational(0) == 0, a == 1.0/3, a == ""x"", Rational(0) == 0.0, big == big] }
+t('to_f') { [a.to_f, b.to_f, big.to_f, Rational(10**400, 3*10**399).to_f, Rational(1, 10**400).to_f] }
+t('hash') { [a.hash == Rational(2, 6).hash, {a => 1}[Rational(1, 3)], {big => 2}[Rational(2**70, 3)], a.eql?(Rational(1, 3)), a.hash == b.hash] }
+o = Object.new; def o.coerce(x) = [x, Rational(1, 2)]
+t('coerce') { [a + o, a * o, a <=> o] }
+t('bad') { a + ""x"" }
+t('int ops') { [1 + a, 2 * a, 3 - a, 4 / a, 1.5 + a, 2**70 + a, 1 <=> a, 1 == Rational(1)] }
+t('misc') { [a.numerator, a.denominator, -a, a.abs, a ** 2, a.round, a.floor, a.ceil, a.truncate, a.to_s, a.inspect, a.to_i, a.zero?, a.positive?] }
+t('marshal') { [Marshal.load(Marshal.dump(a)), Marshal.load(Marshal.dump(big)), a.instance_variables, a.frozen?] }
+t('sum') { (1..10).sum { |i| Rational(1, i) } }
+t('ints') { [Rational(1, 3), Rational(2, 4), Rational(-2, -4), Rational(2, -4), Rational(0, 5), Rational(5), Rational(-5), Rational(2**70, 2**68), Rational(6, 2**70)] }
+t('zero') { Rational(1, 0) }
+t('rat') { [Rational(Rational(1, 2)), Rational(Rational(1, 2), 3), Rational(Rational(1, 2), 1), Rational(1, Rational(1, 2))] }
+t('str') { [Rational(""1/3""), Rational(""0.75""), Rational(""x"", exception: false), Rational(1.5), Rational(nil, exception: false)] }
+t('nil') { Rational(nil) }
+t('nil2') { Rational(1, nil) }
+t('arity0') { Rational() }
+t('arity3') { Rational(1, 2, 3) }
+t('arity4') { Rational(1, 2, 3, 4) }
+t('kw') { [Rational(1, 2, exception: false), Rational(""1/2"", exception: true)] }
+t('badkw') { Rational(1, exception: 1) }
+t('Kernel.') { Kernel.Rational(3, 9) }
+t('arity') { method(:Rational).arity }
+t('class') { [Rational(1, 3).class, Rational(4, 2).denominator.class] }
+", @"
+add: [(-1/15), (4/3), (3541774862152233910273/3), 0.8333333333333333, (1180591620717411303425/3), (2361183241434822606848/3), (11/15), (-8/3), (-11/15), (0/1)]
+mul: [(-2/15), (1/1), (0/1), 0.16666666666666666, (1393796574908163946345982392040522594123776/9), (2/5), (1/1)]
+div: [(-5/6), (1/9), 0.6666666666666666, (-5/6), (3/1), (1180591620717411303424/1), (-1/6), (-2/3)]
+div0: [ZeroDivisionError, ""divided by 0""]
+div0r: [ZeroDivisionError, ""divided by 0""]
+div0f: Infinity
+cmp: [1, -1, 0, 1, nil, nil, 1, 0]
+eq: [true, false, true, true, true, false, true, true]
+to_f: [0.3333333333333333, -0.4, 3.935305402391371e+20, 3.3333333333333335, 0.0]
+hash: [true, 1, 2, true, false]
+coerce: [(5/6), (1/6), -1]
+bad: [TypeError, ""String can't be coerced into Rational""]
+int ops: [(4/3), (2/3), (8/3), (12/1), 1.8333333333333333, (3541774862152233910273/3), 1, true]
+misc: [1, 3, (-1/3), (1/3), (1/9), 0, 0, 1, 0, ""1/3"", ""(1/3)"", 0, false, true]
+marshal: [(1/3), (1180591620717411303424/3), [], true]
+sum: (7381/2520)
+ints: [(1/3), (1/2), (1/2), (-1/2), (0/1), (5/1), (-5/1), (4/1), (3/590295810358705651712)]
+zero: [ZeroDivisionError, ""divided by 0""]
+rat: [(1/2), (1/6), (1/2), (2/1)]
+str: [(1/3), (3/4), nil, (3/2), nil]
+nil: [TypeError, ""can't convert nil into Rational""]
+nil2: [TypeError, ""can't convert nil into Rational""]
+arity0: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+arity3: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+arity4: [ArgumentError, ""wrong number of arguments (given 4, expected 1..2)""]
+kw: [(1/2), (1/2)]
+badkw: [ArgumentError, ""expected true or false as exception: 1""]
+Kernel.: (1/3)
+arity: -1
+class: [Rational, Integer]
+");
+        }
+
+        /// <summary>
         /// Integer#** in C# with what it hands rational.rb (__ir_pow_slow__): a negative exponent (a Rational),
         /// a negative base to a fractional power (a Complex), coercion, and MRI's answers for 0 ** NaN and
         /// Bignum exponents. The expected output is CRuby's.
