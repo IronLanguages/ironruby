@@ -322,10 +322,6 @@ namespace IronRuby.Runtime {
             get { return false; }
         }
 
-        protected virtual bool IsFlowControlScope {
-            get { return false; }
-        }
-
         #region Local Variables
 
         internal void SetLocals(MutableTuple locals, string/*!*/[]/*!*/ variableNames) {

@@ -68,13 +68,6 @@ namespace IronRuby.Runtime.Calls {
         #region MetaObjects
 
         // negative start reserves as many slots at the beginning of the new array:
-        internal static object/*!*/[]/*!*/ ToValues(DynamicMetaObject/*!*/[]/*!*/ args, int start) {
-            var result = new object[args.Length - start];
-            for (int i = Math.Max(0, -start); i < result.Length; i++) {
-                result[i] = args[start + i].Value;
-            }
-            return result;
-        }
 
 #if DEBUG
         // ExpressionWriter might call ToString on a live object that might dynamically invoke a method.

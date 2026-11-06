@@ -60,14 +60,6 @@ namespace IronRuby.Runtime {
     // TODO: thread safety
     public sealed class Loader {
 
-        internal enum FileKind {
-            RubySourceFile,
-            NonRubySourceFile,
-            Assembly,
-            Type,
-            Unknown,
-        }
-
         private RubyContext/*!*/ _context;
 
         // $:

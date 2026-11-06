@@ -71,10 +71,6 @@ namespace IronRuby.Runtime {
             _readLen = 0;
         }
 
-        public object UnderlyingObject {
-            get { return _obj; }
-        }
-
         public override bool CanRead {
             get { return _canRead; }
         }

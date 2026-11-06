@@ -98,15 +98,6 @@ namespace IronRuby.Runtime.Calls {
         internal RubyCallFlags Flags { get { return (RubyCallFlags)(_countAndFlags & FlagsMask); } }
         
         // total call-site arguments w/o RubyContext/RubyScope
-        public int TotalArgumentCount {
-            get {
-                return 1 + // instance (self)
-                    ArgumentCount +
-                    (HasSplattedArgument ? 1 : 0) +
-                    (HasBlock ? 1 : 0) +
-                    (HasRhsArgument ? 1 : 0);
-            }
-        }
 
         /// <summary>
         /// Used by defined? operator applied on methods.
@@ -153,24 +144,12 @@ namespace IronRuby.Runtime.Calls {
             return new RubyCallSignature(argumentCount, RubyCallFlags.HasSplattedArgument);
         }
 
-        public static RubyCallSignature WithSplatAndBlock(int argumentCount) {
-            return new RubyCallSignature(argumentCount, RubyCallFlags.HasBlock | RubyCallFlags.HasSplattedArgument);
-        }
-
         public static RubyCallSignature WithScope(int argumentCount) {
             return new RubyCallSignature(argumentCount, RubyCallFlags.HasScope);
         }
 
         public static RubyCallSignature WithScopeAndBlock(int argumentCount) {
             return new RubyCallSignature(argumentCount, RubyCallFlags.HasScope | RubyCallFlags.HasBlock);
-        }
-
-        public static RubyCallSignature WithScopeAndSplat(int argumentCount) {
-            return new RubyCallSignature(argumentCount, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument);
-        }
-
-        public static RubyCallSignature WithScopeAndSplatAndBlock(int argumentCount) {
-            return new RubyCallSignature(argumentCount, RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasSplattedArgument);
         }
 
         public static RubyCallSignature IsDefined(bool hasImplicitSelf) {

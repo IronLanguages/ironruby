@@ -137,10 +137,6 @@ namespace IronRuby.Runtime.Calls {
             return (IList)_args[GetSplattedArgumentIndex()].Value;
         }
 
-        public object GetRhsArgument() {
-            return _args[GetRhsArgumentIndex()].Value;
-        }
-
         public Expression GetBlockExpression() {
             return _signature.HasBlock ? _args[GetBlockIndex()].Expression : null;
         }
@@ -321,19 +317,6 @@ namespace IronRuby.Runtime.Calls {
             // insert the method name argument into the args
             object symbol = RubyContext.EncodeIdentifier(methodName);
             InsertSimple(0, new DynamicMetaObject(AstUtils.Constant(symbol), BindingRestrictions.Empty, symbol));
-        }
-
-        public void SetSimpleArgument(int index, DynamicMetaObject/*!*/ arg) {
-            SetArgument(GetSimpleArgumentIndex(index), arg);
-        }
-
-        private void SetArgument(int index, DynamicMetaObject/*!*/ arg) {
-            if (_copyArgsOnWrite) {
-                _args = ArrayUtils.Copy(_args);
-                _copyArgsOnWrite = false;
-            }
-
-            _args[index] = arg;
         }
 
         public void SetTarget(Expression/*!*/ expression, object value) {

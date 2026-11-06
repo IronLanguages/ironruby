@@ -1140,8 +1140,6 @@ namespace IronRuby.Runtime {
 
         #region Tracking operations that have the potential for infinite recursion
 
-        public static readonly MutableString InfiniteRecursionMarker = MutableString.CreateAscii("[...]").Freeze();
-
         public class RecursionTracker {
             // The set of objects an operation is already inside must be per thread: the
             // trackers themselves are process-wide singletons, so a Dictionary held here is
@@ -1191,13 +1189,6 @@ namespace IronRuby.Runtime {
 
         public static RecursionTracker InfiniteInspectTracker {
             get { return _infiniteInspectTracker; }
-        }
-
-        [MultiRuntimeAware]
-        private static readonly RecursionTracker _infiniteToSTracker = new RecursionTracker();
-
-        public static RecursionTracker InfiniteToSTracker {
-            get { return _infiniteToSTracker; }
         }
 
         #endregion

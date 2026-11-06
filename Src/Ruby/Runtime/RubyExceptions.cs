@@ -200,11 +200,6 @@ namespace IronRuby.Runtime {
             return CreateTypeError("wrong argument type {0} (expected {1})", MessageTypeName(context.GetClassDisplayName(param)), MessageTypeName(type));
         }
 
-        public static Exception/*!*/ CannotConvertTypeToTargetType(RubyContext/*!*/ context, object param, string/*!*/ toType) {
-            Assert.NotNull(context, toType);
-            return CreateTypeConversionError(context.GetClassName(param), toType);
-        }
-
         public static Exception/*!*/ CreateAllocatorUndefinedError(RubyClass/*!*/ rubyClass) {
             return CreateTypeError("allocator undefined for {0}", rubyClass.Name);
         }

@@ -33,12 +33,6 @@ namespace IronRuby.Runtime {
     using ScriptCodeFunc = Func<RubyScope, object, object>;
 
     internal class RubyScriptCode : ScriptCode {
-        private sealed class CustomGenerator : DebugInfoGenerator {
-            public override void MarkSequencePoint(LambdaExpression method, int ilOffset, DebugInfoExpression node) {
-                RubyMethodDebugInfo.GetOrCreate(method.Name).AddMapping(ilOffset, node.StartLine);
-            }
-        }
-
         private readonly Expression<ScriptCodeFunc> _code;
         private readonly TopScopeFactoryKind _kind;
         private ScriptCodeFunc _target;

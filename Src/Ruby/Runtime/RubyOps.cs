@@ -2696,28 +2696,6 @@ namespace IronRuby.Runtime {
             throw new NotImplementedException();
         }
 
-        // TODO:
-        internal static IList<KeyValuePair<string, object>> ScopeGetItems(Scope scope) {
-            object storage = (object)scope.Storage;
-
-            var scopeStorage = storage as ScopeStorage;
-            if (scopeStorage != null) {
-                return scopeStorage.GetItems();
-            }
-
-            var stringDict = storage as StringDictionaryExpando;
-            if (stringDict != null) {
-                var list = new KeyValuePair<string, object>[stringDict.Dictionary.Count];
-                int i = 0;
-                foreach (var entry in stringDict.Dictionary) {
-                    list[i++] = entry;
-                }
-                return list;
-            }
-
-            throw new NotImplementedException();
-        }
-
         #endregion
 
         #region Regex

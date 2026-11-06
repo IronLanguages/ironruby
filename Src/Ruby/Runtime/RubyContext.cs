@@ -92,7 +92,6 @@ namespace IronRuby.Runtime {
         public const string BinDirEnvironmentVariable = "IRONRUBY_11";
 
         // IronRuby:
-        public const string IronRubyInformationalVersion = "1.1.3";
         internal const string/*!*/ IronRubyDisplayName = "IronRuby";
         internal const string/*!*/ IronRubyNames = "IronRuby;Ruby;rb";
         internal const string/*!*/ IronRubyFileExtensions = ".rb";
@@ -611,10 +610,6 @@ namespace IronRuby.Runtime {
 
         public Loader/*!*/ Loader {
             get { return _loader; }
-        }
-
-        public bool ShowCls {
-            get { return false; }
         }
 
         public EqualityComparer/*!*/ EqualityComparer {
@@ -2982,13 +2977,6 @@ namespace IronRuby.Runtime {
             }
         }
 
-        public void DefineReadOnlyGlobalVariable(string/*!*/ name, object value) {
-            lock (GlobalVariablesLock) {
-                _globalVariables[name] = new ReadOnlyGlobalVariableInfo(value);
-                GlobalVariablesChanged();
-            }
-        }
-
         public void DefineGlobalVariable(string/*!*/ name, GlobalVariable/*!*/ variable) {
             ContractUtils.RequiresNotNull(variable, "variable");
             lock (GlobalVariablesLock) {
@@ -3000,13 +2988,6 @@ namespace IronRuby.Runtime {
         internal void DefineGlobalVariableNoLock(string/*!*/ name, GlobalVariable/*!*/ variable) {
             _globalVariables[name] = variable;
             GlobalVariablesChanged();
-        }
-
-        public bool DeleteGlobalVariable(string/*!*/ name) {
-            lock (GlobalVariablesLock) {
-                GlobalVariablesChanged();
-                return _globalVariables.Remove(name);
-            }
         }
 
         public void AliasGlobalVariable(string/*!*/ newName, string/*!*/ oldName) {

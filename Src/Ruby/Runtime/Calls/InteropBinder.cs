@@ -135,10 +135,6 @@ namespace IronRuby.Runtime.Calls {
                 _context = context;
             }
 
-            public Type/*!*/ ResultType {
-                get { return typeof(object); }
-            }
-
             public RubyContext Context {
                 get { return _context; }
             }
@@ -981,34 +977,6 @@ namespace IronRuby.Runtime.Calls {
             metaBuilder.AddTypeRestriction(type, target.Expression);
             metaBuilder.Result = delegateFactory.OpCall(AstUtils.Constant(delegateType), Ast.Convert(target.Expression, type));
             return true;
-        }
-
-        internal static DynamicMetaObject/*!*/[]/*!*/ InplaceConvertComArguments(DynamicMetaObject/*!*/[]/*!*/ args) {
-            for (int i = 0; i < args.Length; i++) {
-                args[i] = ConvertComArgument(args[i]);
-            }
-            return args;
-        }
-
-        internal static DynamicMetaObject/*!*/ ConvertComArgument(DynamicMetaObject/*!*/ arg) {
-            Expression expr = arg.Expression;
-            BindingRestrictions restrictions;
-            if (arg.Value != null) {
-                Type type = arg.Value.GetType();
-                if (type == typeof(BigInteger)) {
-                    expr = Ast.Convert(AstUtils.Convert(arg.Expression, typeof(BigInteger)), typeof(double));
-                } else if (type == typeof(MutableString)) {
-                    // TODO: encoding?
-                    expr = Ast.Convert(AstUtils.Convert(arg.Expression, typeof(MutableString)), typeof(string));
-                } else if (type == typeof(RubySymbol)) {
-                    // TODO: encoding?
-                    expr = Ast.Convert(AstUtils.Convert(arg.Expression, typeof(RubySymbol)), typeof(string));
-                }
-                restrictions = BindingRestrictions.GetTypeRestriction(arg.Expression, type);
-            } else {
-                restrictions = BindingRestrictions.GetExpressionRestriction(Ast.Equal(arg.Expression, AstUtils.Constant(null)));
-            }
-            return arg.Clone(expr, restrictions);
         }
     }
 }
