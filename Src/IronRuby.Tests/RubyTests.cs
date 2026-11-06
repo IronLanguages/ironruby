@@ -459,6 +459,7 @@ namespace IronRuby.Tests {
                 Loader_Assemblies1,
 
                 Require1,
+                LoadPath_NoCurrentDirectory1,
                 RequireInterop1,
                 RequireInterop2,
                 Load1,
