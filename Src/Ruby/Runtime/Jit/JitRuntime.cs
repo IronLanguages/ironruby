@@ -586,6 +586,9 @@ namespace IronRuby.Runtime.Jit {
                 if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
                     return value;
                 }
+            } else if (RubyOps.TrySetRubyObjectInstanceVariable(self, value, site)) {
+                // an instance of a Ruby subclass of Array, Hash, Exception, Enumerator...
+                return value;
             }
             // A frozen receiver raises FrozenError, and a typed body has no frame to raise it from:
             // let the generic body run instead (see JitCompiler._ivarWrite).
