@@ -553,7 +553,7 @@ true
 true
 nil
 true
-{:a=>1, :b=>2}
+{a: 1, b: 2}
 false
 ");
         }
@@ -617,7 +617,7 @@ false
 false
 false
 false
-{:y=>2}
+{y: 2}
 false
 false
 ");
@@ -651,17 +651,17 @@ p Throws.new.deconstruct_keys([:ok])
 p((Throws.new.deconstruct_keys([:bad]) rescue [$!.class, $!.message]))
 p((Throws.new.deconstruct_keys(nil) rescue $!.message))
 ", @"
-{:x=>1, :y=>2}
-{:x=>1, :Y=>2, ""x""=>1}
+{x: 1, y: 2}
+{x: 1, Y: 2, ""x"" => 1}
 {}
 #<TypeError: wrong argument type Integer (expected Array or nil)>
 #<TypeError: wrong argument type Symbol (expected Array or nil)>
-{:first_name=>""Ann"", :age=>30, :nick=>nil}
-{:name=>""tri"", :sides=>3}
+{first_name: ""Ann"", age: 30, nick: nil}
+{name: ""tri"", sides: 3}
 {}
-{:name=>""derived"", :sides=>0}
-{:name=>""derived""}
-{:ok=>1}
+{name: ""derived"", sides: 0}
+{name: ""derived""}
+{ok: 1}
 [TypeError, ""bad getter""]
 ""bad getter""
 ");
