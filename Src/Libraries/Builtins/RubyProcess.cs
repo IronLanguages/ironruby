@@ -412,11 +412,12 @@ namespace IronRuby.Builtins {
                 return self._status;
             }
 
+            // MRI's pst_equal compares #to_i only: two processes that exited alike are equal
             [RubyMethod("==")]
             public static bool Equals(Status/*!*/ self, object other) {
                 var status = other as Status;
                 if (status != null) {
-                    return self._pid == status._pid && self._status == status._status;
+                    return self._status == status._status;
                 }
                 return (other is int) && (int)other == self._status;
             }
