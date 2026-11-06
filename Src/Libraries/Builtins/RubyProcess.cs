@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_PROCESS 
 
 using System;
 using System.Diagnostics;
@@ -32,7 +31,7 @@ namespace IronRuby.Builtins {
     /// <summary>
     /// Process builtin module
     /// </summary>
-    [RubyModule("Process", BuildConfig = "FEATURE_PROCESS")]
+    [RubyModule("Process")]
     public static partial class RubyProcess {
         #region Utils
 
@@ -329,7 +328,7 @@ namespace IronRuby.Builtins {
         /// lets us distinguish "exited with 137" from "killed by signal 9" - a distinction
         /// System.Diagnostics.Process throws away when it folds a signal into ExitCode.
         /// </summary>
-        [RubyClass("Status", BuildConfig = "FEATURE_PROCESS")]
+        [RubyClass("Status")]
         [HideMethod("new", IsStatic = true)]
         public sealed class Status {
             private readonly int _pid;
@@ -706,7 +705,7 @@ namespace IronRuby.Builtins {
 
         internal static readonly object TmsStructClassKey = new object();
         
-        [RubyConstant("Tms", BuildConfig = "FEATURE_PROCESS")]
+        [RubyConstant("Tms")]
         internal static RubyClass/*!*/ CreateTmsClass(RubyModule/*!*/ module) {
             // class is available for the library even if the constant is removed => store it on the context:
             return (RubyClass)module.Context.GetOrCreateLibraryData(TmsStructClassKey, () => RubyStruct.DefineStruct(
@@ -756,4 +755,3 @@ namespace IronRuby.Builtins {
 
 #endregion
 }
-#endif

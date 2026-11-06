@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_THREAD
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -38,7 +37,7 @@ namespace IronRuby.Builtins {
     /// For such methods, we use Thread.Abort which is unsafe. Howevever, Ruby 1.9 may not support green threads,
     /// and this will not be an issue then.
     /// </summary>
-    [RubyClass("Thread", Extends = typeof(Thread), Inherits = typeof(object), BuildConfig = "FEATURE_THREAD")]
+    [RubyClass("Thread", Extends = typeof(Thread), Inherits = typeof(object))]
     public static partial class ThreadOps {
         static bool _globalAbortOnException;
         static bool _globalReportOnException = true;
@@ -822,7 +821,6 @@ namespace IronRuby.Builtins {
         #endregion
         #region raise, fail
 
-#if FEATURE_EXCEPTION_STATE
         private static CallSite<Func<CallSite, object, object>> _exceptionSite;
 
         private static void RaiseAsyncException(RubyContext/*!*/ context, Thread thread, Exception exception) {
@@ -853,7 +851,6 @@ namespace IronRuby.Builtins {
                 // Run(thread);
             }
         }
-#endif
 
         /// <summary>
         /// Thread#raise takes exactly the arguments Kernel#raise does, including `cause:`, and is
@@ -868,7 +865,6 @@ namespace IronRuby.Builtins {
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
             RubyContext/*!*/ context, Thread/*!*/ self, params object[]/*!*/ args) {
 
-#if FEATURE_EXCEPTION_STATE
             // A bare Thread#raise is a plain RuntimeError even on the current thread: unlike
             // Kernel#raise it does not re-raise $!, and on another thread MRI cannot see that
             // thread's $! anyway.
@@ -881,9 +877,6 @@ namespace IronRuby.Builtins {
             }
 
             RaiseAsyncException(context, self, e);
-#else
-            throw new NotImplementedError("Thread#raise not supported on this platform");
-#endif
         }
 
         #endregion
@@ -1738,4 +1731,3 @@ namespace IronRuby.Builtins {
         }
     }
 }
-#endif

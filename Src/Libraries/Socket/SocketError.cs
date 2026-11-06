@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Net.Sockets;
@@ -22,7 +21,7 @@ using IronRuby.Runtime;
 using IronRuby.Builtins;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("SocketError", BuildConfig = "FEATURE_SYNC_SOCKETS", Extends = typeof(SocketException), Inherits = typeof(SystemException))]
+    [RubyClass("SocketError", Extends = typeof(SocketException), Inherits = typeof(SystemException))]
     [HideMethod("message")] // SocketException overrides Message so we have to hide it here
     public static class SocketErrorOps {
         [RubyConstructor]
@@ -73,4 +72,3 @@ namespace IronRuby.StandardLibrary.Sockets {
     }
 }
 
-#endif

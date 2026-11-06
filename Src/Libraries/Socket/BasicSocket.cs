@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Collections.Generic;
@@ -36,7 +35,7 @@ using System.Globalization;
 using IronRuby.Compiler;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("BasicSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("BasicSocket")]
     public abstract class RubyBasicSocket : RubyIO {
         // TODO: do these escape out of the library?
         private static readonly MutableString BROADCAST_STRING = MutableString.CreateAscii("<broadcast>").Freeze();
@@ -1498,4 +1497,3 @@ namespace IronRuby.StandardLibrary.Sockets {
 #endregion
     }
 }
-#endif

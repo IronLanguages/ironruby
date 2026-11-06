@@ -240,13 +240,11 @@ namespace IronRuby.Builtins {
             }
         }
 
-#if FEATURE_FILESYSTEM
-        [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton)]
         // #exists? was deprecated in 2.1 and removed in 3.9.
         public static bool Exists(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return RubyFileOps.DirectoryExists(self.Context, Protocols.CastToPath(toPath, path));
         }
-#endif
 
         [RubyMethod("delete", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("rmdir", RubyMethodAttributes.PublicSingleton)]

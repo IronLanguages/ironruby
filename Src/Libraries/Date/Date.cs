@@ -56,13 +56,11 @@ namespace IronRuby.StandardLibrary.Date {
             _sg = DateMath.ITALY;
         }
 
-#if FEATURE_SERIALIZATION
         protected RubyDate(SerializationInfo/*!*/ info, StreamingContext context)
             : base(info, context) {
             _sf = Frac.Zero;
             _sg = DateMath.ITALY;
         }
-#endif
 
         protected override RubyObject/*!*/ CreateInstance() {
             return new RubyDate(ImmediateClass.NominalClass);

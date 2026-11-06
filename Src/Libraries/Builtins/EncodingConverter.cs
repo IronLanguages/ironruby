@@ -19,7 +19,6 @@
  * bad byte, exactly as CRuby does.
  *
  * ***************************************************************************/
-#if FEATURE_ENCODING
 
 using System;
 using System.Collections.Generic;
@@ -37,7 +36,7 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Encoding::Converter
         /// </summary>
-        [RubyClass("Converter", Inherits = typeof(Object), BuildConfig = "FEATURE_ENCODING")]
+        [RubyClass("Converter", Inherits = typeof(Object))]
         public class RubyConverter {
             #region Flags and constants
 
@@ -1226,4 +1225,3 @@ namespace IronRuby.Builtins {
         }
     }
 }
-#endif

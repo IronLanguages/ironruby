@@ -12,7 +12,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Net;
@@ -25,7 +24,7 @@ using IronRuby.Runtime;
 
 namespace IronRuby.StandardLibrary.Sockets {
 
-    [RubyClass("UNIXSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("UNIXSocket")]
     public class UNIXSocket : RubyBasicSocket {
 
         /// <summary>
@@ -259,7 +258,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         #endregion
     }
 
-    [RubyClass("UNIXServer", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("UNIXServer")]
     public class UNIXServer : UNIXSocket {
 
         public UNIXServer(RubyContext/*!*/ context)
@@ -329,4 +328,3 @@ namespace IronRuby.StandardLibrary.Sockets {
 
 }
 
-#endif

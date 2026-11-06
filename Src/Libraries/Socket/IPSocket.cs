@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System.Net;
 using System.Net.Sockets;
@@ -24,7 +23,7 @@ using System.Runtime.InteropServices;
 using System.Numerics;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("IPSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("IPSocket")]
     public abstract class IPSocket : RubyBasicSocket {
 
         /// <summary>
@@ -78,4 +77,3 @@ namespace IronRuby.StandardLibrary.Sockets {
 #endregion
     }
 }
-#endif

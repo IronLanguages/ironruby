@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Net;
@@ -29,7 +28,7 @@ using System.IO;
 using System.Numerics;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("Socket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("Socket")]
     [Includes(typeof(SocketConstants), Copy = true)]
     public class RubySocket : RubyBasicSocket {
 
@@ -770,4 +769,3 @@ namespace IronRuby.StandardLibrary.Sockets {
 #endregion
     }
 }
-#endif

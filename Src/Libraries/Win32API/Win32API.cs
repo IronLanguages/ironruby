@@ -12,14 +12,8 @@
  *
  *
  * ***************************************************************************/
-// debug only:
-// #define USE_SNIPPETS
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -369,12 +363,7 @@ namespace IronRuby.StandardLibrary.Win32API {
                 parameterTypes[1 + i] = ToNativeType(_signature[i]);
             }
 
-#if USE_SNIPPETS
-            TypeGen tg = Snippets.Shared.DefineType("calli", typeof(object), false, false);
-            MethodBuilder dm = tg.TypeBuilder.DefineMethod("calli", CompilerHelpers.PublicStatic, returnType, parameterTypes);
-#else
             DynamicMethod dm = new DynamicMethod("calli", returnType, parameterTypes, DynamicModule);
-#endif
 
             var il = dm.GetILGenerator();
             var signature = SignatureHelper.GetMethodSigHelper(CallingConventions.Standard, returnType);
@@ -390,11 +379,7 @@ namespace IronRuby.StandardLibrary.Win32API {
             il.Emit(OpCodes.Calli, signature);
             il.Emit(OpCodes.Ret);
 
-#if USE_SNIPPETS
-            return _calliStub = tg.TypeBuilder.CreateType().GetMethod("calli");
-#else
             return _calliStub = dm;
-#endif
         }
 
         private static ModuleBuilder _dynamicModule;                                      // the dynamic module we generate unsafe code into

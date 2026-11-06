@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System.Net;
 using System.Net.Sockets;
@@ -23,7 +22,7 @@ using IronRuby.Runtime;
 using System.Runtime.InteropServices;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("UDPSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("UDPSocket")]
     public class UDPSocket : IPSocket {
         /// <summary>
         /// Creates an uninitialized socket.
@@ -148,4 +147,3 @@ namespace IronRuby.StandardLibrary.Sockets {
         #endregion
     }
 }
-#endif

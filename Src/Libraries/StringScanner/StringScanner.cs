@@ -82,7 +82,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
             _scanString = MutableString.FrozenEmpty;
         }
 
-#if FEATURE_SERIALIZATION
         public StringScanner(SerializationInfo/*!*/ info, StreamingContext context)
             : base(info, context) {
             // TODO: deserialize
@@ -92,7 +91,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
             base.GetObjectData(info, context);
             // TODO: serialize
         }
-#endif
 
         protected override RubyObject/*!*/ CreateInstance() {
             return new StringScanner(ImmediateClass.NominalClass);

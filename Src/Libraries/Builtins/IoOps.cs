@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -579,8 +575,7 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region pipe, popen
-#if FEATURE_PROCESS
-        [RubyMethod("pipe", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
+        [RubyMethod("pipe", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ OpenPipe(RubyClass/*!*/ self) {
             Stream reader, writer;
             RubyPipe.CreatePipe(out reader, out writer);
@@ -597,7 +592,7 @@ namespace IronRuby.Builtins {
 
         // TODO: params, conversions, options?
 
-        [RubyMethod("popen", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
+        [RubyMethod("popen", RubyMethodAttributes.PublicSingleton)]
         public static object OpenPipe(RubyContext/*!*/ context, BlockParam block, RubyClass/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ command, [DefaultProtocol, Optional, NotNull]MutableString modeString) {
 
@@ -620,7 +615,7 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("popen", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
+        [RubyMethod("popen", RubyMethodAttributes.PublicSingleton)]
         public static RubyIO/*!*/ OpenPipe(RubyContext/*!*/ context, RubyClass/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ command, [DefaultProtocol, Optional, NotNull]MutableString modeString) {
             return OpenPipe(context, command, IOModeEnum.Parse(modeString));
@@ -659,7 +654,6 @@ namespace IronRuby.Builtins {
             return new RubyIO(context, reader, writer, mode);
         }
 
-#endif
         #endregion
 
         #region select
@@ -1351,7 +1345,7 @@ namespace IronRuby.Builtins {
             return self.IsBinmode;
         }
 
-        [RubyMethod("stat", BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("stat")]
         public static System.IO.FileSystemInfo/*!*/ Stat(RubyIO/*!*/ self) {
             self.RequireOpen();
             return RubyFileOps.RubyStatOps.Create(self);
@@ -1842,18 +1836,6 @@ namespace IronRuby.Builtins {
             } else {
                 buffer.Clear();
             } 
-#if TODO
-            var internalEncoding = io.InternalEncoding ?? io.ExternalEncoding;
-
-            if (buffer != null) {
-                buffer.Clear();
-                buffer.ForceEncoding(internalEncoding);
-            } else if (io.ExternalEncoding == RubyEncoding.Binary && internalEncoding == RubyEncoding.Binary) {
-                buffer = MutableString.CreateBinary();
-            } else {
-                buffer = MutableString.CreateMutable(internalEncoding);
-            }
-#endif            
             return buffer;
         }
 

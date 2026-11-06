@@ -86,8 +86,7 @@ namespace IronRuby.Builtins {
             }
         }
 
-#if FEATURE_FILESYSTEM
-        [RubyClass("ENOTDIR", Extends = typeof(DirectoryNotFoundException), Inherits = typeof(ExternalException), BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyClass("ENOTDIR", Extends = typeof(DirectoryNotFoundException), Inherits = typeof(ExternalException))]
         public class DirectoryNotFoundExceptionOps {
             [RubyConstructor]
             public static DirectoryNotFoundException/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
@@ -96,7 +95,6 @@ namespace IronRuby.Builtins {
                 return result;
             }
         }
-#endif
         [RubyClass("EACCES", Extends=typeof(System.UnauthorizedAccessException), Inherits=typeof(ExternalException))]
         public class UnauthorizedAccessExceptionOps {
             [RubyConstructor]

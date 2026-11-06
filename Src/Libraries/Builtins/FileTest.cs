@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_FILESYSTEM
 
 
 using System;
@@ -28,7 +27,7 @@ namespace IronRuby.Builtins {
     // permission tests (readable?, writable?, executable? and their _real forms) and symlink? go
     // through access(2) / lstat(2) on a path in MRI, and take only a path (#to_path or #to_str).
 
-    [RubyModule("FileTest", BuildConfig = "FEATURE_FILESYSTEM")]
+    [RubyModule("FileTest")]
     public static class FileTest {
         /// <summary>
         /// Every one of these predicates answers false (or nil) for a path that
@@ -325,4 +324,3 @@ namespace IronRuby.Builtins {
         }
     }
 }
-#endif

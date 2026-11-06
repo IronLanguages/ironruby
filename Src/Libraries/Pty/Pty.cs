@@ -9,7 +9,6 @@
  * You must not remove this notice, or any other, from this software.
  *
  * ***************************************************************************/
-#if FEATURE_PROCESS
 
 using System;
 using System.Runtime.InteropServices;
@@ -38,7 +37,7 @@ namespace IronRuby.StandardLibrary.Pty {
     ///
     /// Unix only: Windows has no pty, and MRI does not build the library there either.
     /// </summary>
-    [RubyModule("PTY", BuildConfig = "FEATURE_PROCESS")]
+    [RubyModule("PTY")]
     public static class PtyOps {
 
         [DllImport("libc", SetLastError = true, EntryPoint = "posix_openpt")]
@@ -243,4 +242,3 @@ namespace IronRuby.StandardLibrary.Pty {
         }
     }
 }
-#endif

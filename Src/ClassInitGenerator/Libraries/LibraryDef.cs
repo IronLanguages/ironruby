@@ -1009,13 +1009,6 @@ internal class LibraryDef {
                     }
                 }
 
-#if TODO
-                string extensionType = "null";
-                if (def.Trait != def.Extends) {
-                    extensionType = string.Format("typeof({0})", TypeName(def.Trait));
-                }
-                pass:    extensionType,
-#endif
 
                 if (def.IsExtension) {
                     _output.Write("ExtendClass(typeof({0}), {1}, {2}, {3}, ",
