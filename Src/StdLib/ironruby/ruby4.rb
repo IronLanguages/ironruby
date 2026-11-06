@@ -9624,6 +9624,8 @@ module Process
     "TIMES_BASED_CLOCK_MONOTONIC" => 1.0e-2,
     "MACH_ABSOLUTE_TIME_BASED_CLOCK_MONOTONIC" => 1.0e-9,
   }.freeze unless const_defined?(:CLOCK_RESOLUTIONS__)
+  # not a clock: kept out of Process.constants, which ruby/spec feeds to clock_gettime one by one
+  private_constant :CLOCK_RESOLUTIONS__
 
   def self.respond_to?(name, include_all = false)
     return false if NOT_IMPLEMENTED_METHODS.include?(name.to_sym)

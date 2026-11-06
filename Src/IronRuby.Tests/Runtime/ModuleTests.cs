@@ -770,5 +770,48 @@ p D.new.public_methods(false), D.new.private_methods(false), D.new.methods(false
 []
 ");
         }
+
+        /// <summary>
+        /// const_get and friends walk a scoped name as MRI does: a malformed path names the whole
+        /// path, a bad segment just that segment, each only once the segments before it resolve;
+        /// a segment after the first does not see Object's constants through the module's
+        /// ancestry (rb_const_get_from). private_constant and friends check frozen-ness first.
+        /// </summary>
+        public void ConstantPaths1() {
+            TestOutput(@"
+X = 1; class C; Q = 1; end; module M; end
+def t; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+p t { Object.const_get(""C::b"") }, t { Object.const_get(""::b"") }, t { Object.const_get(""C::"") }, t { Object.const_get(""C:::D"") }
+p t { Object.const_get(""Zz::C:D"") }, t { Object.const_get(""X::Y"") }, t { Object.const_get("""") }, t { Object.const_get(:b) }
+p t { Object.const_get(""C::String"") }, t { Object.const_get(""C::Kernel"") }, t { Object.const_get(""M::String"") }, Object.const_get(""Object::String""), C.const_get(""String"")
+p Object.const_defined?(""C::String""), Object.const_defined?(""C::Q""), t { Object.const_defined?(""C::b"") }, Object.const_source_location(""C::String"")
+module N; R = 1; end; N.freeze
+p t { N.private_constant(:R) }, t { N.public_constant }, t { N.deprecate_constant(:R) }
+p t { C.private_constant(:q) }, t { C.deprecate_constant(:q) }
+", @"
+""NameError: wrong constant name b""
+""NameError: wrong constant name b""
+""NameError: wrong constant name C::""
+""NameError: wrong constant name C:::D""
+""NameError: uninitialized constant Zz""
+""TypeError: X::Y does not refer to class/module""
+""NameError: wrong constant name ""
+""NameError: wrong constant name b""
+""NameError: uninitialized constant C::String""
+""NameError: uninitialized constant C::Kernel""
+""NameError: uninitialized constant M::String""
+String
+String
+false
+true
+""NameError: wrong constant name b""
+nil
+""FrozenError: can't modify frozen Module: N""
+""FrozenError: can't modify frozen Module: N""
+""FrozenError: can't modify frozen Module: N""
+""NameError: constant C::q not defined""
+""NameError: constant C::q not defined""
+");
+        }
     }
 }

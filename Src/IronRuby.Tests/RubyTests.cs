@@ -153,6 +153,7 @@ namespace IronRuby.Tests {
                 Strings9,
                 String_CharacterBoundaries1,
                 String_NonCharacter1,
+                String_SuccSeparators1,
                 String_CountDeleteSqueeze1,
                 ToSConversion1,
                 ToSConversion2,
@@ -815,6 +816,7 @@ namespace IronRuby.Tests {
 
                 Scenario_ModuleOps_Methods,
                 InstanceMethods_NotInherited1,
+                ConstantPaths1,
                 Scenario_MainSingleton,
                 Time_LoadZone1,
                 Time_DumpLoadedZone1,
@@ -843,6 +845,7 @@ namespace IronRuby.Tests {
                 Float_NegativeZero1,
                 Math_CLibrary1,
                 Errno_MessageNotDoubled1,
+                Process_ClockGetTime1,
                 Numeric_BignumFloatOverflow1,
                 Numeric_BignumExponent1,
                 Float_Eql1,
@@ -1008,6 +1011,7 @@ namespace IronRuby.Tests {
                 Integer_ToStringRadix1,
                 Pack_BerTruncated1,
                 Integer_Int64Shifts1,
+                Integer_OutOfFloatRange1,
             };
         }
     }

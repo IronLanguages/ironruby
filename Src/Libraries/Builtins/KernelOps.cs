@@ -124,6 +124,13 @@ namespace IronRuby.Builtins {
             return Protocols.CastToFloat(floatConversion, value);
         }
 
+        // An Integer too large for a Float is Infinity, with MRI's -w warning.
+        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
+        public static double ToFloat(RubyContext/*!*/ context, object self, [NotNull]BigInteger value) {
+            return Protocols.ConvertToDouble(context, value);
+        }
+
         // A String has to be readable as a number at all: in an ASCII-compatible encoding - MRI
         // checks that before anything else, and exception: false does not change it - and, for
         // Float, without a NUL, which MRI names rather than calling the value invalid.
@@ -708,12 +715,6 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Builds the exception `raise` would throw, without throwing it. Fiber#raise is written
-        /// in Ruby (Src/StdLib/ironruby/ruby4.rb) and has to hand the exception to another fiber,
-        /// so it needs the argument handling - including `cause:`, which MRI resolves in the
-        /// *calling* context - without the throw. Private, and not part of MRI's Kernel.
-        /// </summary>
-        /// <summary>
         /// Where a source file that has run was when it started - see
         /// RubyContext.RegisterSourceFileLocation - or nil. Private, and not part of MRI's Kernel.
         /// </summary>
@@ -723,6 +724,12 @@ namespace IronRuby.Builtins {
             return (result != null) ? context.EncodePath(result) : null;
         }
 
+        /// <summary>
+        /// Builds the exception `raise` would throw, without throwing it. Fiber#raise is written
+        /// in Ruby (Src/StdLib/ironruby/ruby4.rb) and has to hand the exception to another fiber,
+        /// so it needs the argument handling - including `cause:`, which MRI resolves in the
+        /// *calling* context - without the throw. Private, and not part of MRI's Kernel.
+        /// </summary>
         [RubyMethod("__build_exception__", RubyMethodAttributes.PrivateInstance)]
         public static Exception/*!*/ BuildException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,

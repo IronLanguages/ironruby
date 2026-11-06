@@ -1594,6 +1594,36 @@ No such file or directory @ rb_sysopen - x
 ");
         }
 
+        /// <summary>
+        /// Process::CLOCK_* are MRI's Integers (Linux's numbers); clock_gettime takes those and
+        /// MRI's emulated-clock Symbols and is Errno::EINVAL for any other clock. The CPU-time
+        /// clocks are processor time, not the monotonic clock.
+        /// </summary>
+        public void Process_ClockGetTime1() {
+            TestOutput(@"
+p Process::CLOCK_REALTIME, Process::CLOCK_MONOTONIC, Process::CLOCK_PROCESS_CPUTIME_ID, Process::CLOCK_THREAD_CPUTIME_ID
+def t; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+p t { Process.clock_gettime(:bogus) }, t { Process.clock_gettime(99) }, t { Process.clock_gettime(nil) }, t { Process.clock_gettime(0, :bogus) }
+p (Process.clock_gettime(Process::CLOCK_REALTIME) - Time.now.to_f).abs < 5, Process.clock_gettime(:GETTIMEOFDAY_BASED_CLOCK_REALTIME).class
+p Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID) <= Process.clock_gettime(Process::CLOCK_MONOTONIC), Process.clock_gettime(1, :nanosecond).class
+", @"
+0
+1
+2
+3
+""Errno::EINVAL: Invalid argument - clock_gettime(:bogus)""
+""Errno::EINVAL: Invalid argument - clock_gettime(99)""
+""TypeError: no implicit conversion from nil to integer""
+""ArgumentError: unexpected unit: bogus""
+true
+Float
+true
+Integer
+");
+        }
+
+        // Nine "Integer out of Float range" warnings, as MRI gives under -w: one for each Bignum
+        // that meets a Float in an operator - on either side of it - except fdiv and <=>/>/==.
         public void Numeric_BignumFloatOverflow1() {
             TestOutput(@"
 x = 10**400
@@ -1615,7 +1645,7 @@ false
 -0.0
 Infinity
 -Infinity
-", 1, 4);
+", 1, 9);
         }
 
         public void Numeric_BignumExponent1() {

@@ -809,10 +809,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: min_by, max_by, minmax_by
-
-        #endregion
-
         #region partition
 
         [RubyMethod("partition")]
@@ -1262,11 +1258,5 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
-        // TODO: 
-        // chunk
-        // collect_concat
-        // reverse_each
-        // flat_map
-        // join
     }
 }

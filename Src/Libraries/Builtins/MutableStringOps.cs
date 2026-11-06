@@ -3921,38 +3921,34 @@ namespace IronRuby.Builtins {
             return true;
         }
 
-        // TODO: remove recursion
         public static void IncrementAlphaNumericChar(MutableString/*!*/ str, int index) {
-            char c = str.GetChar(index);
-            if (c >= 0x80 && str.Encoding.IsUnicodeEncoding && TryIncrementNonAsciiAlphaNumericChar(str, index)) {
-                return;
-            }
-            if (c == 'z' || c == 'Z' || c == '9') {
+            while (true) {
+                char c = str.GetChar(index);
+                if (c >= 0x80 && str.Encoding.IsUnicodeEncoding && TryIncrementNonAsciiAlphaNumericChar(str, index)) {
+                    return;
+                }
+                if (c != 'z' && c != 'Z' && c != '9') {
+                    IncrementCharacterOrByte(str, index);
+                    return;
+                }
+
+                // c wraps round and carries into the alphanumeric to its left - unless
+                // something else stands between the two and they are of different kinds
+                // (rb_str_succ): "1.9".succ is "2.0" but "a-9".succ is "a-10".
+                char first = (c == '9') ? '0' : (char)(c - 25);
+                str.SetChar(index, first);
                 int nextIndex = GetIndexOfRightmostAlphaNumericCharacter(str, index - 1);
-                if (c == 'z') {
-                    str.SetChar(index, 'a');
-                    if (nextIndex == -1) {
-                        str.Insert(index, 'a');
-                    } else {
-                        IncrementAlphaNumericChar(str, nextIndex);
-                    }
-                } else if (c == 'Z') {
-                    str.SetChar(index, 'A');
-                    if (nextIndex == -1) {
-                        str.Insert(index, 'A');
-                    } else {
-                        IncrementAlphaNumericChar(str, nextIndex);
-                    }
-                } else {
-                    str.SetChar(index, '0');
-                    if (nextIndex == -1) {
-                        str.Insert(index, '1');
-                    } else {
-                        IncrementAlphaNumericChar(str, nextIndex);
+                if (nextIndex != -1 && nextIndex != index - 1) {
+                    char left = str.GetChar(nextIndex);
+                    if (c == '9' ? Char.IsAsciiLetter(left) : Char.IsAsciiDigit(left)) {
+                        nextIndex = -1;
                     }
                 }
-            } else {
-                IncrementCharacterOrByte(str, index);
+                if (nextIndex == -1) {
+                    str.Insert(index, (c == '9') ? '1' : first);
+                    return;
+                }
+                index = nextIndex;
             }
         }
 

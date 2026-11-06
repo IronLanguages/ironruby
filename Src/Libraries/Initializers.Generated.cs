@@ -2709,7 +2709,6 @@ namespace IronRuby.Builtins {
             SetBuiltinConstant(module, "MIN_10_EXP", IronRuby.Builtins.FloatOps.MIN_10_EXP);
             SetBuiltinConstant(module, "MIN_EXP", IronRuby.Builtins.FloatOps.MIN_EXP);
             SetBuiltinConstant(module, "RADIX", IronRuby.Builtins.FloatOps.RADIX);
-            SetBuiltinConstant(module, "ROUNDS", IronRuby.Builtins.FloatOps.ROUNDS);
             
         }
         
@@ -3775,7 +3774,7 @@ namespace IronRuby.Builtins {
                 new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
-                new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
                 new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
@@ -3806,7 +3805,7 @@ namespace IronRuby.Builtins {
                 new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
-                new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
                 new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
@@ -3822,7 +3821,7 @@ namespace IronRuby.Builtins {
                 new[] { 0x00000004U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000004U}, 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Power), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Power), 
-                new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Power), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Power), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Power), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Power), 
                 new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Power), 
@@ -3833,7 +3832,7 @@ namespace IronRuby.Builtins {
                 new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
-                new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.DivideOp), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.DivideOp), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
                 new Func<System.Int64, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
@@ -3855,7 +3854,7 @@ namespace IronRuby.Builtins {
                 new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
-                new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.ModuloOp), 
                 new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Modulo), 
@@ -3878,7 +3877,7 @@ namespace IronRuby.Builtins {
                 new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
-                new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
                 new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
@@ -4020,8 +4019,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "coerce", 0x51, 
-                0x00000002U, 0x00000000U, 
+                0x00000002U, 0x00000000U, 0x00000000U, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.Coerce), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.Coerce), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Double>, IronRuby.Runtime.ConversionStorage<System.Double>, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.Coerce)
             );
             
@@ -4029,7 +4029,7 @@ namespace IronRuby.Builtins {
                 new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
-                new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Div), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
                 new Func<System.Int64, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
@@ -4041,7 +4041,7 @@ namespace IronRuby.Builtins {
                 new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
                 new Func<System.Numerics.BigInteger, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
-                new Func<System.Numerics.BigInteger, System.Double, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.DivMod), 
                 new Func<System.Int32, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
                 new Func<System.Int64, System.Int64, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
@@ -4087,7 +4087,7 @@ namespace IronRuby.Builtins {
                 new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
-                new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.ModuloOp), 
                 new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Modulo), 
@@ -4100,7 +4100,7 @@ namespace IronRuby.Builtins {
                 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Remainder), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Remainder), 
-                new Func<System.Numerics.BigInteger, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Remainder), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Remainder), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Remainder)
             );
             
@@ -4685,8 +4685,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "Float", 0x52, 
-                0x00000000U, 0x00000004U, 
+                0x00000000U, 0x00000004U, 0x00000004U, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Double>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Numerics.BigInteger, System.Double>(IronRuby.Builtins.KernelOps.ToFloat), 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToFloat)
             );
             
@@ -5165,8 +5166,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "Float", 0x61, 
-                0x00000000U, 0x00000004U, 
+                0x00000000U, 0x00000004U, 0x00000004U, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Double>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Numerics.BigInteger, System.Double>(IronRuby.Builtins.KernelOps.ToFloat), 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToFloat)
             );
             
@@ -6991,6 +6993,17 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadProcess_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+            SetBuiltinConstant(module, "CLOCK_BOOTTIME", IronRuby.Builtins.RubyProcess.CLOCK_BOOTTIME);
+            SetBuiltinConstant(module, "CLOCK_BOOTTIME_ALARM", IronRuby.Builtins.RubyProcess.CLOCK_BOOTTIME_ALARM);
+            SetBuiltinConstant(module, "CLOCK_MONOTONIC", IronRuby.Builtins.RubyProcess.CLOCK_MONOTONIC);
+            SetBuiltinConstant(module, "CLOCK_MONOTONIC_COARSE", IronRuby.Builtins.RubyProcess.CLOCK_MONOTONIC_COARSE);
+            SetBuiltinConstant(module, "CLOCK_MONOTONIC_RAW", IronRuby.Builtins.RubyProcess.CLOCK_MONOTONIC_RAW);
+            SetBuiltinConstant(module, "CLOCK_PROCESS_CPUTIME_ID", IronRuby.Builtins.RubyProcess.CLOCK_PROCESS_CPUTIME_ID);
+            SetBuiltinConstant(module, "CLOCK_REALTIME", IronRuby.Builtins.RubyProcess.CLOCK_REALTIME);
+            SetBuiltinConstant(module, "CLOCK_REALTIME_ALARM", IronRuby.Builtins.RubyProcess.CLOCK_REALTIME_ALARM);
+            SetBuiltinConstant(module, "CLOCK_REALTIME_COARSE", IronRuby.Builtins.RubyProcess.CLOCK_REALTIME_COARSE);
+            SetBuiltinConstant(module, "CLOCK_TAI", IronRuby.Builtins.RubyProcess.CLOCK_TAI);
+            SetBuiltinConstant(module, "CLOCK_THREAD_CPUTIME_ID", IronRuby.Builtins.RubyProcess.CLOCK_THREAD_CPUTIME_ID);
             SetBuiltinConstant(module, "Tms", IronRuby.Builtins.RubyProcess.CreateTmsClass(module));
             
         }
@@ -7146,7 +7159,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "clock_gettime", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyProcess.ClockGetTime)
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyProcess.ClockGetTime)
             );
             
             DefineLibraryMethod(module, "egid", 0x61, 
