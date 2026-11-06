@@ -452,6 +452,8 @@ namespace IronRuby.Builtins {
 
             procDispatcher.SetMethod(block);
             procDispatcher.ParameterSignature = SymbolProcSignature;
+            // keywords given to the proc are the method's: the rest list keeps them marked, and the splat passes them on
+            procDispatcher.Ruby2Keywords = true;
 
             // MRI's symbol proc is a lambda: it reports #lambda? true, arity -2 and
             // [[:req], [:rest]] for #parameters

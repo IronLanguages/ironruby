@@ -478,7 +478,11 @@ namespace IronRuby.Runtime.Calls {
                     if (!RubyOverloadResolver.ReceivesKeywordArguments(bindingTarget.Overload.ReflectionInfo)) {
                         var last = resolver.GetLastArgumentExpression();
                         if (last != null && last.Type.IsAssignableFrom(typeof(Hash))) {
-                            metaBuilder.Result = Ast.Block(Methods.ClearKeywordArguments.OpCall(AstUtils.Box(last)), metaBuilder.Result);
+                            last = AstUtils.Box(last);
+                            metaBuilder.Result = Ast.Block(
+                                Ast.IfThen(Ast.TypeIs(last, typeof(Hash)), Methods.ClearKeywordArguments.OpCall(last)),
+                                metaBuilder.Result
+                            );
                         }
                     }
                 }

@@ -434,7 +434,8 @@ namespace IronRuby.Compiler.Ast {
 
         private MSA.Expression/*!*/ GetPositionalParameterAccess(AstParameters/*!*/ parameters, MSA.Expression paramsArray, int i, bool clearsKeywords) {
             var access = GetParameterAccess(parameters, paramsArray, i);
-            return clearsKeywords ? Methods.ClearKeywordArguments.OpCall(access) : access;
+            // the call only for a Hash: the type test is all an argument of any other class costs
+            return clearsKeywords ? Ast.Condition(Ast.TypeIs(access, typeof(Hash)), Methods.ClearKeywordArguments.OpCall(access), access) : access;
         }
 
         private MSA.Expression/*!*/ MakeParametersInitialization(AstGenerator/*!*/ gen, AstParameters/*!*/ parameters) {

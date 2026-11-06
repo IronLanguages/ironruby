@@ -231,6 +231,29 @@ p r
         }
 
         /// <summary>
+        /// A Symbol#to_proc proc passes keywords on to the method it calls, and a Hash passed positionally stays positional.
+        /// </summary>
+        public void SymbolProcKeywords1() {
+            TestOutput(@"
+o = Object.new
+def o.m(*a, **k) = [a, k]
+pr = :m.to_proc
+p pr.call(o, x: 1), pr.call(o, {x: 1}), pr.call(o, 1, x: 2), pr.call(o)
+def o.n(h) = h
+r = :n.to_proc.call(o, x: 1)
+def f(h = nil, **kw) = [h, kw]
+p f(r), Hash.ruby2_keywords_hash?(r)
+", @"
+[[], {x: 1}]
+[[{x: 1}], {}]
+[[1], {x: 2}]
+[[], {}]
+[{x: 1}, {}]
+false
+");
+        }
+
+        /// <summary>
         /// Kernel#Integer and #Float as MRI's rb_convert_to_integer and rb_convert_to_float: a base only with a
         /// String or #to_str, #to_int (whose errors and non-Integer answers are ignored) before #to_str before
         /// #to_i, private conversion methods called, exception: false answering nil for any failure but a bad
