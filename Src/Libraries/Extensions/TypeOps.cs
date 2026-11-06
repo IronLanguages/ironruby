@@ -21,7 +21,7 @@ namespace IronRuby.Builtins {
     public static class TypeOps {
         [RubyMethod("to_module")]
         public static RubyModule/*!*/ ToModule(RubyContext/*!*/ context, Type/*!*/ self) {
-            return context.GetModule(self);
+            return context.GetClrTypeModule(self);
         }
 
         [RubyMethod("to_class")]
@@ -29,7 +29,7 @@ namespace IronRuby.Builtins {
             if (self.IsInterface) {
                 RubyExceptions.CreateTypeError("Cannot convert a CLR interface to a Ruby class");
             }
-            return context.GetClass(self);
+            return context.GetClrTypeModule(self) as RubyClass ?? context.GetClass(self);
         }
     }
 }

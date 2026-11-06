@@ -240,10 +240,8 @@ end
 p Array.new(4.3004, 1)                     # implicit conversion, to_int not called 
 [][8e19] rescue p $!                       # overflow -> RangeError
 
-# Int64 is missing from this list for the same reason Int32 is: it is one of the CLR types
-# the Ruby Integer class extends, so System::Int64 IS Integer and has no .new.
 include System
-[Byte, SByte, Int16, UInt16, UInt32, UInt64, Single, Decimal].each_with_index do |n,i|
+[Byte, SByte, Int16, UInt16, UInt32, UInt64, Single, Decimal, Int64].each_with_index do |n,i|
   p Array.new(n.new(i), i)
 end
 "), @"
@@ -257,6 +255,7 @@ end
 [5, 5, 5, 5, 5]
 [6, 6, 6, 6, 6, 6]
 [7, 7, 7, 7, 7, 7, 7]
+[8, 8, 8, 8, 8, 8, 8, 8]
 ", OutputFlags.Match);
         }
 

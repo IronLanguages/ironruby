@@ -179,7 +179,9 @@ Also: a `Method` converts to a delegate, `IComparable<T>` types are `Comparable`
 that includes `Comparable` or `Enumerable` is an `IComparable` or `IEnumerable` to .NET code,
 `IAsyncEnumerable<T>` is `Enumerable`, C# 8 default interface methods are callable and run for
 Ruby implementations, `include System::IComparable` works although the name is also a generic,
-and `Method#parameters` names a CLR method's parameters. See
+and `Method#parameters` names a CLR method's parameters. An Int32, Int64 or BigInteger value is an
+`Integer`, yet `System::Int64` and `System::Numerics::BigInteger` still name their CLR types
+(`List[System::Int64]` is a `List<long>`, `System::Int64.MaxValue` is 2**63-1). See
 [`Src/IronRuby.Tests/Runtime/ClrBinderTests.cs`](Src/IronRuby.Tests/Runtime/ClrBinderTests.cs),
 [`ClrProtocolTests.cs`](Src/IronRuby.Tests/Runtime/ClrProtocolTests.cs) and
 [`ClrRuntimeInteropTests.cs`](Src/IronRuby.Tests/Runtime/ClrRuntimeInteropTests.cs) for the
