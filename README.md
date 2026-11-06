@@ -39,9 +39,9 @@ not kept.
 
 - **Ruby 4.0, parsed by prism**: pattern matching, endless methods, `it`, keyword
   arguments, `...` forwarding — the syntax CRuby 4.0 accepts, read by CRuby's own parser.
-- **[ruby/spec](#status) at CRuby 4.0.6**: `spec/language` (2,934 examples) and
-  `spec/library` (6,398) pass with **0 failures**; `spec/core` has 21 of 23,136, 20 of them
-  `ObjectSpace.each_object`.
+- **[ruby/spec](#status)**: `spec/library` (6,011 examples), `spec/command_line` and
+  `spec/security` pass with **0 failures**, `spec/language` has 1 of 2,935 and `spec/core`
+  51 of 23,130 - 20 of them `ObjectSpace.each_object`, 24 a newer error wording than CRuby 4.0's.
 - **[A method JIT and OSR](#performance)**, on by default: integer and float loops, `fib`
   and `mandelbrot` run in **0.27–0.74×** CRuby's time. Over all 50 benchmarks the geomean
   is 3.25×; calls, strings and arrays are where the work is.
@@ -247,16 +247,35 @@ See [`Src/Prism/README.md`](Src/Prism/README.md) for the details and the known g
 
 ## Status
 
-Measured with [ruby/spec](https://github.com/ruby/spec) at CRuby 4.0.6, `Util/parallel-sweep.sh`:
+Measured on 2026-11-06 with [ruby/spec](https://github.com/ruby/spec) `dda28d04` (2026-10-24,
+"Update to latest CRuby releases") and [mspec](https://github.com/ruby/mspec) `b79c65ed` - the
+`SPEC_REF`/`MSPEC_REF` CI pins - on Linux x64, .NET 10, Debug build, `LANG=C.UTF-8`, with
+`Util/parallel-sweep.sh`:
 
 | suite | examples | failing |
 |---|---|---|
-| `spec/language` | 2934 | **0** |
+| `spec/language` | 2935 | **1** — error wording (below) |
 | `spec/command_line` | 175 | **0** |
 | `spec/security` | 34 | **0** |
-| `spec/library` | 6398 | **0** |
-| `spec/core` | 23136 | **21** — 20 of them `ObjectSpace.each_object`, which needs `-X:ObjectSpace` |
-| IronRuby's own C# test suite | ~1470 | 19 known |
+| `spec/library` | 6011 | **0** |
+| `spec/core` | 23130 | **51** — 20 `ObjectSpace.each_object`, 24 error wording, 7 backtraces (below) |
+| IronRuby's own C# test suite | ~1000 | **0** |
+
+What the failing examples are:
+
+- **`ObjectSpace.each_object` (20)**: walking the heap needs `-X:ObjectSpace`, which the
+  sweep does not pass (see below).
+- **Error wording (25: 24 in core, 1 in language)**: these specs expect the wording of
+  CRuby's development branch for a conversion method returning the wrong type, "can't
+  convert X **into** Y (X#to_y gives Z)". CRuby 4.0 says "can't convert X **to** Y" and so
+  does IronRuby; mspec's `raise_consistent_error` checks the message only on
+  implementations other than CRuby.
+- **Backtraces (7)**: `Thread#backtrace_locations`, `Thread.each_caller_location`,
+  `Binding#eval`'s default file name and `Thread::Backtrace::Location#label` of a top-level
+  block - the location of a library method's own frame. These are IronRuby bugs.
+- `Mutex#lock` "does not raise deadlock if a fiber's attempt to lock was interrupted" fails in
+  some runs: a `Thread#raise` that arrives just as a thread resumes a fiber can land in the
+  resuming thread instead of the fiber.
 
 CRuby 4.0.9 is the oracle: where a spec and IronRuby disagree, the behaviour is checked
 against `ruby` and IronRuby is changed, not the spec. The aim is Ruby 4.0 compatibility
@@ -270,8 +289,8 @@ The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0`; `Src/Std
 holds what CRuby implements as C extensions, written in C# (`Src/Libraries`) or Ruby, and is
 the only other library directory on the load path. A compatibility prelude
 ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb)) supplies what MRI provides
-natively — `Process.clock_gettime`, `Random`, `ObjectSpace::WeakMap`, `ruby2_keywords`,
-pattern-matching support classes and core methods from Ruby 2.x-4.x; `Rational` and `Complex`
+natively and is simplest written in Ruby — `Fiber` (over C# mailboxes), `Random` (over a C#
+MT19937), `ruby2_keywords` and core methods from Ruby 2.x-4.x; `Rational` and `Complex`
 are Ruby ports of CRuby 4.0's `rational.c` and `complex.c`, and `Pathname` is CRuby 4.0's own
 `pathname_builtin.rb`. `Ripper` is implemented
 on prism, the way CRuby 4.0 implements it, and `io/console` over termios, so the current
@@ -701,8 +720,9 @@ C:\ir> ir.cmd -Imspec/lib mspec/bin/mspec-run spec/language
 separator, so its argument is `;`-separated on Windows (a `:`-separated list would be cut
 apart at every drive letter).
 
-Conformance on Windows 11 x64 (.NET 8.0.31), same ruby/spec revision as the Linux table
-above. Some suites are run a directory at a time there because three of them hang (see
+Conformance on Windows 11 x64 (.NET 8.0.31), measured in September 2026 against an earlier
+ruby/spec revision than the [Status](#status) table, with the Linux numbers of that time
+beside it. Some suites are run a directory at a time there because three of them hang (see
 below), which the whole-suite numbers on Linux do not need:
 
 | suite | examples | Windows | Linux |
