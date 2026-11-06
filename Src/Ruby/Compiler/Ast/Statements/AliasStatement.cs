@@ -28,22 +28,6 @@ namespace IronRuby.Compiler.Ast {
         private readonly ConstructedSymbol _oldName;
         private readonly bool _isMethodAlias;
 
-        public ConstructedSymbol NewName {
-            get { return _newName; }
-        }
-
-        public ConstructedSymbol OldName {
-            get { return _oldName; }
-        }
-
-        public bool IsMethodAlias {
-            get { return _isMethodAlias; }
-        }
-
-        public bool IsGlobalVariableAlias {
-            get { return !_isMethodAlias; }
-        }
-
         public AliasStatement(bool isMethodAlias, ConstructedSymbol newName, ConstructedSymbol oldName, SourceSpan location)
             : base(location) {
             Assert.NotNull(newName, oldName);

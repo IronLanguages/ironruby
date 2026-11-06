@@ -70,7 +70,7 @@ namespace IronRuby.Compiler.Ast {
             _statements = statements;
         }
 
-        // see Ruby Language.doc/Runtime/Control Flow Implementation/While-Until
+        // see Docs/Ruby Language.docx, Runtime/Control Flow Implementation/While-until
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#loop-result", typeof(object));
             MSA.Expression redoVariable = gen.CurrentScope.DefineHiddenVariable("#skip-condition", typeof(bool));

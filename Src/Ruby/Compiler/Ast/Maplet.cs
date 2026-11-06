@@ -19,8 +19,6 @@ using Microsoft.Scripting.Utils;
 namespace IronRuby.Compiler.Ast {
 
     public partial class Maplet : Node {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static Maplet[] EmptyArray = new Maplet[0];
 
         private readonly Expression/*!*/ _key;
         private readonly Expression/*!*/ _value;

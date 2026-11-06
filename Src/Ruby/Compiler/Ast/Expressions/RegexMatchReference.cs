@@ -47,34 +47,10 @@ namespace IronRuby.Compiler.Ast {
 
         private readonly int _index;
 
-        public int Index {
-            get { return (_index > 0) ? _index : 0; }
-        }
-
         internal RegexMatchReference(int index, SourceSpan location) 
             : base(location) {
             Debug.Assert(index >= PostMatch, "index");
             _index = index;
-        }
-
-        // TODO: keep only full names?
-        public string/*!*/ VariableName {
-            get {
-                switch (_index) {
-                    case EntireMatch: return EntireMatchName;
-                    case MatchData: return MatchDataName;
-                    case MatchLastGroup: return MatchLastGroupName;
-                    case PreMatch: return PreMatchName;
-                    case PostMatch: return PostMatchName;
-                    default: return _index.ToString();
-                }
-            }
-        }
-
-        public string/*!*/ FullName {
-            get {
-                return "$" + VariableName;
-            }
         }
 
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
@@ -101,14 +77,7 @@ namespace IronRuby.Compiler.Ast {
         }
         
         internal override string/*!*/ GetNodeName(AstGenerator/*!*/ gen) {
-            // TODO: Ruby 1.9: all return "global-variable"
-            switch (_index) {
-                case MatchData: return "$" + MatchDataName;
-                case MatchLastGroup: return "$" + MatchLastGroupName;
-                case PreMatch: return "$" + PreMatchName;
-                case PostMatch: return "$" + PostMatchName;
-                default: return "$" + _index.ToString();
-            }
+            return "global-variable";
         }
     }
 }

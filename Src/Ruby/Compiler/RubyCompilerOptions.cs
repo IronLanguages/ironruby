@@ -93,6 +93,11 @@ namespace IronRuby.Compiler {
         internal bool TopLevelHasUnsplatParameter { get; set; }
 
         /// <summary>
+        /// The declared signature of the method, if it has keyword parameters (see SuperCall.RecordKeywordSignature).
+        /// </summary>
+        internal IronRuby.Runtime.Calls.RubyParameterSignature TopLevelParameterSignature { get; set; }
+
+        /// <summary>
         /// Eval only: the encoding of the string being evaluated, which is the source encoding
         /// unless a magic comment says otherwise.
         /// </summary>

@@ -317,6 +317,7 @@ namespace IronRuby.Tests {
                 MethodToProc1,
                 DefineMethod1,
                 DefineMethod2,
+                DefineMethodBlockBreak1,
                 ProcPosition1,
                 
                 Scenario_RubyInitializers0,
@@ -701,6 +702,8 @@ namespace IronRuby.Tests {
                 RescueSplat3,
                 RescueSplat4,
                 RescueSplat5,
+                RescueListEvaluation1,
+                RescueCallsCaseEquality1,
 
                 ExceptionMapping1,
                 ExceptionMapping2,
@@ -973,6 +976,8 @@ namespace IronRuby.Tests {
                 MethodAliasInModuleEval1,
                 SuperInModuleEval1,
                 SuperCallInEvalWithBinding19,
+                SuperParameterlessEval1,
+                SuperParameterlessEval2,
                 SuperInDefineMethodEval1,
                 BEGIN1,
                 BEGIN2,

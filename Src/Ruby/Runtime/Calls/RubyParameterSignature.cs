@@ -76,6 +76,11 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         public string[] ImplicitParameterNames { get; set; }
 
+        /// <summary>The declared parameters, in order.</summary>
+        internal Parameter[]/*!*/ Parameters {
+            get { return _parameters; }
+        }
+
         /// <summary>Declares keyword parameters or a keyword splat.</summary>
         public bool TakesKeywords {
             get { return _hasKeywords || _hasKeywordRest; }

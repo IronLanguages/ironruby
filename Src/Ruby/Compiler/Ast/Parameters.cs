@@ -93,8 +93,8 @@ namespace IronRuby.Compiler.Ast {
         public Parameters(LeftValue/*!*/[] mandatory, int leadingMandatoryCount, SimpleAssignmentExpression/*!*/[] optional, LeftValue unsplat, LocalVariable block, SourceSpan location)
             : base(location) {
 
-            mandatory = mandatory ?? LeftValue.EmptyArray;
-            optional = optional ?? SimpleAssignmentExpression.EmptyArray;
+            mandatory = mandatory ?? Array.Empty<LeftValue>();
+            optional = optional ?? Array.Empty<SimpleAssignmentExpression>();
 
             Debug.Assert(leadingMandatoryCount >= 0 && leadingMandatoryCount <= mandatory.Length);
             Debug.Assert(leadingMandatoryCount == mandatory.Length || optional != null || unsplat != null);

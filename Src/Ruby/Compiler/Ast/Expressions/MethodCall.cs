@@ -80,7 +80,7 @@ namespace IronRuby.Compiler.Ast {
             if (_target != null) {
                 transformedTarget = _target.TransformRead(gen);
                 // `self.foo` may call a private method, just like a receiverless call does
-                hasImplicitSelf = _target.NodeType == NodeTypes.SelfReference;
+                hasImplicitSelf = _target is SelfReference;
             } else {
                 transformedTarget = gen.CurrentSelfVariable;
                 hasImplicitSelf = true;
@@ -223,7 +223,7 @@ namespace IronRuby.Compiler.Ast {
             Assert.NotNull(invoke);
             Debug.Assert((blockArgVariable == null) == (transformedBlock == null));
 
-            // see Ruby Language.doc/Control Flow Implementation/Method Call With a Block
+            // see Docs/Ruby Language.docx, Runtime/Control Flow Implementation/A method call with a block
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#method-result", typeof(object));
             MSA.ParameterExpression evalUnwinder;
 

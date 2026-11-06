@@ -3235,15 +3235,9 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted] //RescueClause:
-        public static bool CompareDefaultException(RubyScope/*!*/ scope) {
-            RubyContext ec = scope.RubyContext;
-
-            // MRI doesn't call === here;
-            bool result = ec.IsInstanceOf(ec.CurrentException, ec.StandardErrorClass);
-            if (result) {
-                TraceRescue(scope, ec.CurrentException);
-            }
-            return result;
+        public static bool CompareDefaultException(BinaryOpStorage/*!*/ comparisonStorage, RubyScope/*!*/ scope) {
+            // a bare rescue is "rescue StandardError": CRuby calls StandardError.=== too
+            return CompareException(comparisonStorage, scope, scope.RubyContext.StandardErrorClass);
         }
 
         private static void TraceRescue(RubyScope/*!*/ scope, Exception exception) {

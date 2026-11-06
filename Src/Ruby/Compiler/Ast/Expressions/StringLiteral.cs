@@ -60,10 +60,6 @@ namespace IronRuby.Compiler.Ast {
             _mutability = mutability;
         }
 
-        public StringLiteralMutability Mutability {
-            get { return _mutability; }
-        }
-
         public object/*!*/ Value {
             get { return _value; }
         }

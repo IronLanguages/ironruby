@@ -36,7 +36,7 @@ namespace IronRuby.Compiler.Ast {
     /// A plain `f(1, {})` is *not* built this way and keeps passing the hash.
     ///
     /// Deriving from <see cref="SplattedArgument"/> (rather than wrapping one) is what makes
-    /// Arguments.IndexOfSplatted see it, so no new NodeTypes entry is needed.
+    /// Arguments.IndexOfSplatted see it.
     /// </summary>
     public partial class KeywordArgumentSplat : SplattedArgument {
         // `f(**h)` alone: Argument stores h in a temporary, and this is the hash to splat instead

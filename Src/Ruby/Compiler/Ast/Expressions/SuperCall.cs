@@ -17,6 +17,7 @@ using MSA = System.Linq.Expressions;
 
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
@@ -64,14 +65,12 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression blockArgVariable = gen.CurrentScope.DefineHiddenVariable("#super-call-block", typeof(Proc));
 
             MSA.Expression invoke;
-            KeywordArgumentSplat keywordSplat = TrailingKeywordSplat();
-            string[] evalParameters;
+            Arguments arguments = Arguments ?? EvalImplicitArguments(gen);
+            KeywordArgumentSplat keywordSplat = TrailingKeywordSplat(arguments);
             if (keywordSplat != null) {
-                invoke = TransformKeywordSplatCall(gen, blockArgVariable, keywordSplat);
-            } else if ((evalParameters = EvalParametersEndingInKeywords(gen)) != null) {
-                invoke = TransformEvalKeywordsCall(gen, blockArgVariable, evalParameters);
+                invoke = TransformKeywordSplatCall(gen, blockArgVariable, arguments, keywordSplat);
             } else {
-                invoke = TransformCall(gen, blockArgVariable);
+                invoke = TransformCall(gen, blockArgVariable, arguments);
             }
 
             // block:
@@ -93,15 +92,14 @@ namespace IronRuby.Compiler.Ast {
             );
         }
 
-        private MSA.Expression/*!*/ TransformCall(AstGenerator/*!*/ gen, MSA.Expression/*!*/ blockArgVariable) {
+        private MSA.Expression/*!*/ TransformCall(AstGenerator/*!*/ gen, MSA.Expression/*!*/ blockArgVariable, Arguments arguments) {
             // invoke super member action:
             var siteBuilder = new CallSiteBuilder(gen, gen.CurrentSelfVariable, blockArgVariable);
 
             // arguments:
-            if (HasImplicitArguments) {
-                // MRI 1.8: If a block is called via define_method stub its parameters are used here.
-                // MRI 1.9: This scenario is not supported.
-                // We don't support this either. Otherwise we would need to emit super call with dynamic parameters if gen.CurrentBlock != null.
+            if (arguments == null) {
+                // The parameters of the enclosing def. A block's are never passed: in a block that
+                // define_method made a method of, the super call site raises (as MRI does).
 
                 if (gen.CurrentMethod.Parameters != null) {
                     gen.CurrentMethod.Parameters.TransformForSuperCall(gen, siteBuilder);
@@ -121,7 +119,7 @@ namespace IronRuby.Compiler.Ast {
                     // this means we are not inside any method scope -> an exception will be thrown at the call site
                 }
             } else {
-                Arguments.TransformToCall(gen, siteBuilder);
+                arguments.TransformToCall(gen, siteBuilder);
             }
 
             return siteBuilder.MakeSuperCallAction(gen.CurrentFrame.UniqueId, _argumentsAreImplicit);
@@ -131,11 +129,11 @@ namespace IronRuby.Compiler.Ast {
         /// The `**h` the argument list ends with, if it does: `super(a, **h)`, and the parameterless
         /// `super` of a method with **rest (PrismAstBridge.ZSuperArguments).
         /// </summary>
-        private KeywordArgumentSplat TrailingKeywordSplat() {
-            if (HasImplicitArguments) {
+        private static KeywordArgumentSplat TrailingKeywordSplat(Arguments arguments) {
+            if (arguments == null) {
                 return null;
             }
-            var expressions = Arguments.Expressions;
+            var expressions = arguments.Expressions;
             return expressions.Length > 0 ? expressions[expressions.Length - 1] as KeywordArgumentSplat : null;
         }
 
@@ -153,9 +151,9 @@ namespace IronRuby.Compiler.Ast {
         /// those are read where they are passed.
         /// </summary>
         private MSA.Expression/*!*/ TransformKeywordSplatCall(AstGenerator/*!*/ gen, MSA.Expression/*!*/ blockArgVariable,
-            KeywordArgumentSplat/*!*/ keywordSplat) {
+            Arguments/*!*/ arguments, KeywordArgumentSplat/*!*/ keywordSplat) {
 
-            var expressions = Arguments.Expressions;
+            var expressions = arguments.Expressions;
             int count = expressions.Length - 1;
             var temps = new List<MSA.ParameterExpression>();
             var body = new List<MSA.Expression>();
@@ -182,44 +180,116 @@ namespace IronRuby.Compiler.Ast {
             return MakeKeywordsCall(gen, blockArgVariable, temps, body, values, splatted, keywordSplat.TransformToArgument(gen));
         }
 
-        // The name PrismAstBridge.LowerKeywords gives the hidden trailing parameter that a method with
-        // keyword parameters takes the keywords in.
-        private const string KeywordsParameterName = "?kw?";
+        #region Parameterless super in eval
+
+        // The names PrismAstBridge gives the hidden locals of a method with keyword parameters: the
+        // keywords as they arrived (LowerKeywords, LowerGeneralParameters, RefuseKeywords), the one
+        // splat the positionals arrive in when they are not all mandatory (LowerGeneralParameters),
+        // a copy of that kept for `super` when they cannot all be read back by name, and an
+        // anonymous **.
+        private const string KeywordsLocal = "?kw?";
+        private const string ArgsLocal = "?args?";
+        private const string SuperArgsLocal = "?superargs?";
+        private const string AnonymousKeywordRestLocal = "?kwrest?";
+
+        // The declared signatures of the methods with keyword parameters, by the array of local
+        // names their scopes are made with, of which each compilation of a method body has its own.
+        private static readonly ConditionalWeakTable<string[], RubyParameterSignature> _keywordSignatures =
+            new ConditionalWeakTable<string[], RubyParameterSignature>();
 
         /// <summary>
-        /// The parameter names a parameterless `super` in an eval'd string reads its arguments by, when
-        /// the last of them is the hidden keyword parameter; null otherwise.
+        /// Records the signature of a method body compiled with these local names if it has keyword
+        /// parameters (or `**nil`). Their lowering hides them, and all positionals but mandatory ones,
+        /// from the parameter list a parameterless `super` in an eval'd string otherwise reads its
+        /// arguments off (RubyMethodScope.GetVisibleParameterNames).
         /// </summary>
-        private string[] EvalParametersEndingInKeywords(AstGenerator/*!*/ gen) {
-            if (!HasImplicitArguments || gen.CurrentMethod.Parameters != null || gen.CompilerOptions.TopLevelHasUnsplatParameter) {
+        internal static void RecordKeywordSignature(string[] variableNames, RubyParameterSignature signature) {
+            if (variableNames != null && signature != null && System.Array.IndexOf(variableNames, KeywordsLocal) >= 0) {
+                _keywordSignatures.AddOrUpdate(variableNames, signature);
+            }
+        }
+
+        /// <summary>
+        /// The signature RecordKeywordSignature recorded for the local names of a method scope, or null.
+        /// </summary>
+        internal static RubyParameterSignature GetKeywordSignature(string/*!*/[]/*!*/ variableNames) {
+            RubyParameterSignature signature;
+            return _keywordSignatures.TryGetValue(variableNames, out signature) ? signature : null;
+        }
+
+        /// <summary>
+        /// `eval("super")` in a method with keyword parameters: the arguments a parameterless `super` in
+        /// the method itself passes (PrismAstBridge.ZSuperArguments), rebuilt from the declared signature
+        /// with each parameter read by name - its current value, as in MRI. Null for any other call.
+        /// </summary>
+        private Arguments EvalImplicitArguments(AstGenerator/*!*/ gen) {
+            RubyParameterSignature signature;
+            string[] visibleParameters;
+            if (gen.CurrentMethod.Parameters != null ||
+                (signature = gen.CompilerOptions.TopLevelParameterSignature) == null ||
+                (visibleParameters = gen.CompilerOptions.TopLevelParameterNames) == null) {
                 return null;
             }
-            string[] names = gen.CompilerOptions.TopLevelParameterNames;
-            return (names != null && names.Length > 0 && names[names.Length - 1] == KeywordsParameterName) ? names : null;
-        }
 
-        /// <summary>
-        /// `eval("super")` in a method with keyword parameters: the parameters are read back by name, and
-        /// the hidden keyword one is passed the way `**` passes a hash - nothing at all when it is empty, a
-        /// copy otherwise - rather than as one more positional argument. When the call passed no keywords
-        /// it holds the method's own empty default, or the **rest parameter that took that default over
-        /// (RubyOps.MakeKeywordRest), neither of which the parent is to see; once a parameterless `super`
-        /// has passed the keywords on, it holds the **rest (KeywordArgumentSplat.PassingOn). Otherwise it
-        /// holds the keywords as they arrived, so a change the body made to a **rest is not seen here.
-        /// </summary>
-        private MSA.Expression/*!*/ TransformEvalKeywordsCall(AstGenerator/*!*/ gen, MSA.Expression/*!*/ blockArgVariable,
-            string/*!*/[]/*!*/ names) {
-
-            int count = names.Length - 1;
-            var values = new MSA.Expression[count];
-            for (int i = 0; i < count; i++) {
-                values[i] = Methods.GetLocalVariable.OpCall(gen.CurrentScopeVariable, AstUtils.Constant(names[i]));
+            var span = Location;
+            var arguments = new List<Expression>();
+            bool positionalsSplatted = visibleParameters.Length == 1 && visibleParameters[0] == ArgsLocal;
+            if (!positionalsSplatted) {
+                // mandatory positionals, then ?kw?: these read back by name, destructured ones included
+                for (int i = 0; i < visibleParameters.Length - 1; i++) {
+                    arguments.Add(ReadLocal(visibleParameters[i], span));
+                }
+            } else if (gen.CompilerOptions.LocalNames != null && gen.CompilerOptions.LocalNames.Contains(SuperArgsLocal)) {
+                // the arguments as the method was called with them, keywords included
+                arguments.Add(new SplattedArgument(ReadLocal(SuperArgsLocal, span)));
+                return new Arguments(arguments.ToArray());
             }
-            var keywords = Methods.KeywordSplatArgument.OpCall(gen.CurrentScopeVariable,
-                Methods.GetLocalVariable.OpCall(gen.CurrentScopeVariable, AstUtils.Constant(names[count])));
-            return MakeKeywordsCall(gen, blockArgVariable, new List<MSA.ParameterExpression>(), new List<MSA.Expression>(),
-                values, new bool[count], keywords);
+
+            var keywords = new List<Maplet>();
+            Expression keywordRest = null;
+            foreach (var parameter in signature.Parameters) {
+                switch (parameter.Kind) {
+                    case "req":
+                    case "opt":
+                        if (positionalsSplatted) {
+                            arguments.Add(ReadLocal(parameter.Name, span));
+                        }
+                        break;
+                    case "rest":
+                        arguments.Add(new SplattedArgument(ReadLocal(parameter.Name, span)));
+                        break;
+                    case "keyreq":
+                    case "key":
+                        keywords.Add(new Maplet(new SymbolLiteral(parameter.Name, gen.Encoding, span), ReadLocal(parameter.Name, span), span));
+                        break;
+                    case "keyrest":
+                        keywordRest = ReadLocal(parameter.Name == "**" ? AnonymousKeywordRestLocal : parameter.Name, span);
+                        break;
+                }
+            }
+
+            if (keywords.Count > 0) {
+                Expression hash = new HashConstructor(keywords.ToArray(), true, span);
+                if (keywordRest != null) {
+                    // rest first, and it has to be a Hash still (see PrismAstBridge.ZSuperArguments)
+                    hash = KeywordSplatMerge.HashOnly(
+                        KeywordSplatMerge.HashOnly(new HashConstructor(new Maplet[0], true, span), keywordRest, span), hash, span);
+                }
+                arguments.Add(hash);
+            } else if (keywordRest != null) {
+                var converted = new MethodCall(new HashConstructor(new Maplet[0], true, span), "merge",
+                    new Arguments(new OrExpression(keywordRest, new HashConstructor(new Maplet[0], span), span)), span);
+                arguments.Add(KeywordArgumentSplat.PassingOn(keywordRest, converted, ReadLocal(KeywordsLocal, span)));
+            }
+            return new Arguments(arguments.ToArray());
         }
+
+        // a local of the method the eval runs in, looked up by name
+        private static LocalVariable/*!*/ ReadLocal(string/*!*/ name, SourceSpan span) {
+            return new LocalVariable(name, span, -1);
+        }
+
+        #endregion
 
         /// <summary>
         /// <paramref name="body"/>, then `#kw = keywordsValue` and `#kw == null ? super(values) : super(values, #kw)`.

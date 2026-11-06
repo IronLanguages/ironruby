@@ -107,8 +107,6 @@ namespace IronRuby.Compiler.Ast {
 
         #region Factories
 
-        // TODO:
-
         internal interface IFactory {
             MSA.Expression/*!*/ CreateExpression(AstGenerator/*!*/ gen, string/*!*/ literal, RubyEncoding/*!*/ encoding);
             MSA.Expression/*!*/ CreateExpression(AstGenerator/*!*/ gen, byte[]/*!*/ literal, RubyEncoding/*!*/ encoding);
@@ -170,10 +168,6 @@ namespace IronRuby.Compiler.Ast {
             private int _length;
             private bool _isBinary;
 
-            private void ObjectInvariant() {
-                ContractUtils.Invariant(_isBinary || CollectionUtils.TrueForAll(this, (item) => item is string));
-            }
-
             public LiteralConcatenation(RubyEncoding/*!*/ sourceEncoding) {
                 Assert.NotNull(sourceEncoding);
                 _encoding = sourceEncoding;
@@ -226,8 +220,6 @@ namespace IronRuby.Compiler.Ast {
             }
 
             public object/*!*/ GetValue() {
-                ContractUtils.Ensures(ContractUtils.Result<object>() is byte[] || ContractUtils.Result<object>() is string);
-
                 if (Count == 1) {
                     return this[0];
                 }

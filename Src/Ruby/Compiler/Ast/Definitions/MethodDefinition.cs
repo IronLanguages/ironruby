@@ -328,11 +328,20 @@ namespace IronRuby.Compiler.Ast {
                 body = gen.AddReturnTarget(body);
             }
 
+            // A body with keyword parameters is never a light frame (IsLightFrameCandidate).
+            MSA.Expression variableNames = null;
+            if (light == null) {
+                variableNames = scope.GetVariableNamesExpression();
+                if (variableNames is MSA.ConstantExpression names) {
+                    SuperCall.RecordKeywordSignature((string[])names.Value, _parameters.Signature);
+                }
+            }
+
             body = scope.CreateScope(
                 scopeVariable,
                 (light != null) ? light.Enter(scope) : Methods.CreateMethodScope.OpCall(new AstExpressions {
                     scope.MakeLocalsStorage(),
-                    scope.GetVariableNamesExpression(),
+                    variableNames,
                     Ast.Constant(visiblePrameterCountAndSignatureFlags),
                     declaringScope,
                     declaringModule,

@@ -62,7 +62,7 @@ namespace IronRuby.Compiler.Ast {
 
             MSA.Expression leftTemp = gen.CurrentScope.DefineHiddenVariable(String.Empty, transformedLeftTarget.Type);
 
-            bool leftIsSelf = _leftTarget.NodeType == NodeTypes.SelfReference;
+            bool leftIsSelf = _leftTarget is SelfReference;
 
             // lhs &&= rhs  -->  left.member && (left.member = rhs)
             // lhs ||= rhs  -->  left.member || (left.member = rhs)
