@@ -286,10 +286,6 @@ namespace IronRuby.Compiler {
         private KeyValuePair<string, TValue>[] _list;
         private int _listSize;
 
-        public int Count {
-            get { return _listSize + (_dict != null ? _dict.Count : 0); }
-        }
-
         public bool TryGetValue(string key, out TValue value) {
             for (int i = 0; i < _listSize; i++) {
                 var entry = _list[i];

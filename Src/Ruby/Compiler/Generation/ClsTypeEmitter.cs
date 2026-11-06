@@ -50,7 +50,6 @@ namespace IronRuby.Compiler.Generation {
             return true;
         }
 
-        protected abstract MethodInfo EventHelper();
         protected abstract MethodInfo MissingInvokeMethodException();
 
         protected abstract void EmitImplicitContext(ILGen il);

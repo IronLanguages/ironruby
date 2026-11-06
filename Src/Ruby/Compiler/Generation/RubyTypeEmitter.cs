@@ -54,14 +54,6 @@ namespace IronRuby.Compiler.Generation {
             get { return _instanceDataField; }
         }
 
-        public static void AddRemoveEventHelper(object method, object instance, object dt, object eventValue, string name) {
-            throw new NotImplementedException();
-        }
-
-        protected override MethodInfo EventHelper() {
-            return typeof(RubyTypeEmitter).GetMethod("AddRemoveEventHelper");
-        }
-
         [Emitted]
         public static Exception/*!*/ InvokeMethodMissing(object o, string/*!*/ name) {
             return RubyExceptions.CreateMethodMissing(RubyContext._Default, o, name);
