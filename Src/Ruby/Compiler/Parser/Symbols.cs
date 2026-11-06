@@ -19,10 +19,6 @@ using System;
 
 namespace IronRuby.Compiler {
     public static class Symbols {
-        // TODO:
-        public static readonly string None = String.Empty;
-        public static readonly string Error = "#error";
-        public static readonly string ErrorVariable = "error__";
         public static readonly string RestArgsLocal = "?rest?";
         
         public static readonly string MethodMissing = "method_missing";
@@ -36,9 +32,7 @@ namespace IronRuby.Compiler {
         public static readonly string Inherited = "inherited";
         public static readonly string RespondTo = "respond_to?";
         public static readonly string RespondToMissing = "respond_to_missing?";
-        public static readonly string Call = "call";
         public static readonly string ToProc = "to_proc";
-        public static readonly string ToS = "to_s";
         public static readonly string ToStr = "to_str";
         public static readonly string ToPath = "to_path";
         public static readonly string ToA = "to_a";
@@ -55,39 +49,11 @@ namespace IronRuby.Compiler {
         public static readonly string Module = "Module";
         public static readonly string Class = "Class";
 
-        public static readonly string Each = "each";
-
-        public static readonly string DoubleDot = "..";
-        public static readonly string TripleDot = "...";
-        public static readonly string Power = "**";
-        public static readonly string UnaryPlus = "+@";
-        public static readonly string Plus = "+";
-        public static readonly string UnaryMinus = "-@";
-        public static readonly string Minus = "-";
-        public static readonly string Comparison = "<=>";
-        public static readonly string GreaterEqual = ">=";
         public static readonly string GreaterThan = ">";
-        public static readonly string LessEqual = "<=";
         public static readonly string LessThan = "<";
-        public static readonly string Equal = "==";
-        public static readonly string StrictEqual = "===";
-        public static readonly string NotEqual = "!=";
-        public static readonly string Match = "=~";
-        public static readonly string NotMatch = "!~";
-        public static readonly string BitwiseNot = "~";
-        public static readonly string ArrayItemRead = "[]";
-        public static readonly string ArrayItemWrite = "[]=";
-        public static readonly string LeftShift = "<<";
-        public static readonly string RightShift = ">>";
-        public static readonly string DoubleColon = "::";
         public static readonly string Or = "||";
         public static readonly string And = "&&";
-        public static readonly string BitwiseOr = "|";
-        public static readonly string BitwiseAnd = "&";
-        public static readonly string Mod = "%";
-        public static readonly string Xor = "^";
         public static readonly string Multiply = "*";
-        public static readonly string Backtick = "`";
         public static readonly string Divide = "/";
         public static readonly string Bang = "!";
 
@@ -102,7 +68,6 @@ namespace IronRuby.Compiler {
         public static readonly string CommandLineProgramPath = "0";
         public static readonly string CurrentProcessId = "$";
         public static readonly string ChildProcessExitStatus = "?";
-        public static readonly string IgnoreCaseComparator = "=";
         public static readonly string LoadPath = ":";
         public static readonly string LoadedFiles = "\"";
         public static readonly string InputContent = LessThan;

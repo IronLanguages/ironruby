@@ -14,18 +14,10 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
-using System.Text;
-using System.Text.RegularExpressions;
-using IronRuby.Builtins;
-using IronRuby.Compiler.Ast;
 using IronRuby.Runtime;
-using Microsoft.Scripting;
 using System.Numerics;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Compiler {
@@ -95,50 +87,8 @@ namespace IronRuby.Compiler {
             }
         }
 
-        private static bool TryDecodeDouble(char[]/*!*/ str, int first, int end, out double result) {
-            StringBuilder sb = new StringBuilder(end - first);
-            sb.Length = end - first;
-
-            int j = 0;
-            for (int i = first; i < end; i++) {
-                if (str[i] != '_') {
-                    sb[j++] = str[i];
-                }
-            }
-
-            sb.Length = j;
-            return Double.TryParse(sb.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out result);
-        }
-
-        private static bool TryDecodeDouble(string/*!*/ str, int first, int end, out double result) {
-            StringBuilder sb = new StringBuilder(end - first);
-            sb.Length = end - first;
-
-            int j = 0;
-            for (int i = first; i < end; i++) {
-                if (str[i] != '_') {
-                    sb[j++] = str[i];
-                }
-            }
-
-            sb.Length = j;
-            return Double.TryParse(sb.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out result);
-        }
-
         public static bool IsDecimalDigit(int c) {
             return unchecked((uint)c - '0' <= (uint)'9' - '0');
-        }
-
-        public static bool IsOctalDigit(int c) {
-            return unchecked((uint)c - '0' <= (uint)'7' - '0');
-        }
-
-        public static bool IsHexadecimalDigit(int c) {
-            unchecked {
-                return IsDecimalDigit(c) ||
-                    (uint)c - 'a' <= (uint)'f' - 'a' ||
-                    (uint)c - 'A' <= (uint)'F' - 'A';
-            }
         }
 
         public static int ToDigit(int c) {
@@ -171,10 +121,6 @@ namespace IronRuby.Compiler {
 
         public static bool IsLetter(int c) {
             return IsUpperLetter(c) || IsLowerLetter(c);
-        }
-
-        public static bool IsLetterOrDigit(int c) {
-            return IsLetter(c) || IsDecimalDigit(c);
         }
 
         /// <summary>
@@ -315,81 +261,6 @@ namespace IronRuby.Compiler {
                 
                 return parser.Parse(digitCount, @base) * sign;
             }
-        }
-
-        private static int Read(string/*!*/ str, ref int i) {
-            i++;
-            return (i < str.Length) ? str[i] : -1;
-        }
-
-        // subsequent _ are not considered error
-        public static bool TryParseDouble(string/*!*/ str, out double result, out bool complete) {
-            double sign;
-            int i = -1;
-
-            int c;
-            do { c = Read(str, ref i); } while (IsWhiteSpace(c));
-            
-            if (c == '-') {
-                c = Read(str, ref i);
-                if (c == '_') {
-                    result = 0.0;
-                    complete = false;
-                    return false;
-                }
-                sign = -1;
-            } else if (c == '+') {
-                c = Read(str, ref i);
-                if (c == '_') {
-                    result = 0.0;
-                    complete = false;
-                    return false;
-                }
-                sign = +1;
-            } else {
-                sign = +1;
-            }
-
-            int start = i;
-
-            while (c == '_' || IsDecimalDigit(c)) {
-                c = Read(str, ref i);
-            }
-
-            if (c == '.') {
-                c = Read(str, ref i);
-                while (c == '_' || IsDecimalDigit(c)) {
-                    c = Read(str, ref i);
-                }
-            }
-
-            // just before the current character:
-            int end = i;
-
-            if (c == 'e' || c == 'E') {
-                c = Read(str, ref i);
-                if (c == '+' || c == '-') {
-                    c = Read(str, ref i);
-                }
-
-                int expEnd = end;
-
-                while (true) {
-                    if (IsDecimalDigit(c)) {
-                        expEnd = i + 1;
-                    } else if (c != '_') {
-                        break;
-                    }
-                    c = Read(str, ref i);
-                }
-
-                end = expEnd;
-            }
-
-            bool success = TryDecodeDouble(str, start, end, out result);
-            result *= sign;
-            complete = end == str.Length;
-            return success;
         }
 
         // The header is matched by hand rather than with the regex ^[#].*?coding\s*[:=]\s*(?<encoding>[a-z0-9_-]+)
