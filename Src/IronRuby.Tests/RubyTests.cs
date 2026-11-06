@@ -211,6 +211,7 @@ namespace IronRuby.Tests {
                 UnqualifiedConstants1,
                 LoadAndGlobalConstants,
                 GlobalConstants1,
+                GlobalConstants2,
                 ConstantCaching_Unqualified1,
                 ConstantCaching_Unqualified2,
                 ConstantCaching_Unqualified3,

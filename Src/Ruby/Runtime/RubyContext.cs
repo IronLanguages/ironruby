@@ -868,10 +868,6 @@ namespace IronRuby.Runtime {
                 obj.SetConstantNoMutateNoLock("RUBY_DESCRIPTION", MutableString.CreateAscii(MakeDescriptionString()).Freeze());
                 obj.SetConstantNoMutateNoLock("RUBY_REVISION", revision);
 
-                obj.SetConstantNoMutateNoLock("VERSION", version);
-                obj.SetConstantNoMutateNoLock("PLATFORM", platform);
-                obj.SetConstantNoMutateNoLock("RELEASE_DATE", releaseDate);
-
                 obj.SetConstantNoMutateNoLock("IRONRUBY_VERSION", MutableString.CreateAscii(IronRuby.CurrentVersion.DisplayVersion));
 
                 obj.SetConstantNoMutateNoLock("STDIN", StandardInput);
