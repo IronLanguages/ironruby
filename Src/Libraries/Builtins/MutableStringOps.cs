@@ -2602,6 +2602,14 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // Most strings are valid, and a strict decoder reads those in one go; only one that is
+            // not needs the byte by byte walk below, which finds out where and how it went wrong.
+            try {
+                return strict.GetString(bytes);
+            } catch (DecoderFallbackException) {
+                // fall through
+            }
+
             var result = new StringBuilder(bytes.Length);
             var decoder = strict.GetDecoder();
             var chars = new char[8];

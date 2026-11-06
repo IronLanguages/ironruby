@@ -745,6 +745,56 @@ namespace IronRuby.Runtime {
             get { return 2; }
         }
 
+        // The table reads a well formed run just as the sequence by sequence loop does, only much
+        // faster; the loop is for what it refuses (and for the lossless form's plane 15 stand-ins).
+
+        public override int GetCharCount(byte[]/*!*/ bytes, int index, int count) {
+            if (FindInvalid(bytes, index, count) < 0) {
+                try {
+                    return _table.GetCharCount(bytes, index, count);
+                } catch (DecoderFallbackException) {
+                    // a sequence the table has no character for
+                }
+            }
+            return base.GetCharCount(bytes, index, count);
+        }
+
+        public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex) {
+            if (FindInvalid(bytes, byteIndex, byteCount) < 0) {
+                try {
+                    return _table.GetChars(bytes, byteIndex, byteCount, chars, charIndex);
+                } catch (DecoderFallbackException) {
+                    // a sequence the table has no character for
+                }
+            }
+            return base.GetChars(bytes, byteIndex, byteCount, chars, charIndex);
+        }
+
+        /// <summary>The table's bytes for the characters, if all of them are in a shape of this encoding.</summary>
+        private byte[] TryEncodeWithTable(char[]/*!*/ chars, int index, int count) {
+            byte[] result;
+            try {
+                result = _table.GetBytes(chars, index, count);
+            } catch (EncoderFallbackException) {
+                return null;
+            }
+            return FindInvalid(result, 0, result.Length) < 0 ? result : null;
+        }
+
+        public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
+            byte[] bytes = TryEncodeWithTable(chars, index, count);
+            return bytes != null ? bytes.Length : base.GetByteCount(chars, index, count);
+        }
+
+        public override int GetBytes(char[]/*!*/ chars, int charIndex, int charCount, byte[]/*!*/ bytes, int byteIndex) {
+            byte[] encoded = TryEncodeWithTable(chars, charIndex, charCount);
+            if (encoded == null) {
+                return base.GetBytes(chars, charIndex, charCount, bytes, byteIndex);
+            }
+            Array.Copy(encoded, 0, bytes, byteIndex, encoded.Length);
+            return encoded.Length;
+        }
+
         protected override int Scan(byte[]/*!*/ bytes, int index, int end) {
             byte b = bytes[index];
             if (_layout.Single[b]) {
