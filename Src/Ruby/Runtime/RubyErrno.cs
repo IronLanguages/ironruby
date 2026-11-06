@@ -123,6 +123,14 @@ namespace IronRuby.Runtime {
             }
         }
 
+        private static int NumberOf((string Name, int Linux, int Darwin, int Windows) entry) {
+            return s_platform switch {
+                Platform.Darwin => entry.Darwin,
+                Platform.Windows => entry.Windows,
+                _ => entry.Linux,
+            };
+        }
+
         /// <summary>The errno <paramref name="name"/> has on this platform, or 0 if it has none.</summary>
         public static int GetNumber(string/*!*/ name) {
             int lo = 0, hi = s_table.Length - 1;
@@ -130,12 +138,7 @@ namespace IronRuby.Runtime {
                 int mid = (lo + hi) / 2;
                 int cmp = String.CompareOrdinal(s_table[mid].Name, name);
                 if (cmp == 0) {
-                    var entry = s_table[mid];
-                    return s_platform switch {
-                        Platform.Darwin => entry.Darwin,
-                        Platform.Windows => entry.Windows,
-                        _ => entry.Linux,
-                    };
+                    return NumberOf(s_table[mid]);
                 }
                 if (cmp < 0) {
                     lo = mid + 1;
@@ -144,6 +147,22 @@ namespace IronRuby.Runtime {
                 }
             }
             return 0;
+        }
+
+        /// <summary>
+        /// The name whose class MRI raises for <paramref name="errno"/> on this platform (the first
+        /// of the names that share it), or null for a number the platform does not know.
+        /// </summary>
+        public static string GetName(int errno) {
+            if (errno == 0) {
+                return null;
+            }
+            foreach (var entry in s_table) {
+                if (NumberOf(entry) == errno) {
+                    return entry.Name;
+                }
+            }
+            return null;
         }
 
         /// <summary>strerror(errno), as MRI reports it on this platform.</summary>

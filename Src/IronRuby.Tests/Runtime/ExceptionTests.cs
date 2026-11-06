@@ -963,6 +963,54 @@ Errno::ECONNREFUSED
         }
 
         /// <summary>
+        /// File.rename is rename(2): a directory renamed onto a file is ENOTDIR and a file onto a
+        /// directory EISDIR - the emulation deleted the file at the target first, and lost it. A name
+        /// too long for the file system is ENAMETOOLONG (Dir.mkdir said EEXIST, File.open ENOENT with
+        /// .NET's text) and a symbolic link loop is ELOOP (File.open said IOError).
+        /// </summary>
+        public void Errno_FileCalls1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+win = RUBY_PLATFORM =~ /mswin|mingw/
+Dir.mktmpdir do |d|
+  def t(d)
+    yield
+    puts 'ok'
+  rescue SystemCallError => e
+    puts ""#{e.class}: #{e.message.sub(d, 'D').sub(d, 'D')}""
+  end
+  f = File.join(d, 'f')
+  File.write(f, 'data')
+  Dir.mkdir(File.join(d, 'sub'))
+  t(d) { File.rename(File.join(d, 'sub'), f) }
+  t(d) { File.rename(f, File.join(d, 'sub')) }
+  p File.read(f), File.directory?(File.join(d, 'sub'))
+  t(d) { File.rename(f, File.join(d, 'g')); File.rename(File.join(d, 'g'), f) }
+  unless win
+    t(d) { Dir.mkdir(File.join(d, 'a' * 300)) rescue raise $!.class }
+    t(d) { File.open(File.join(d, 'a' * 300)) rescue raise $!.class }
+    File.symlink(File.join(d, 'l1'), File.join(d, 'l2'))
+    File.symlink(File.join(d, 'l2'), File.join(d, 'l1'))
+    t(d) { File.open(File.join(d, 'l1')) }
+  else
+    # Windows has no ENAMETOOLONG for open (win32.c says ENOENT), and a symbolic link needs a privilege.
+    puts 'Errno::ENAMETOOLONG: File name too long', 'Errno::ENAMETOOLONG: File name too long', 'Errno::ELOOP: Too many levels of symbolic links - D/l1'
+  end
+end
+", @"
+Errno::ENOTDIR: Not a directory - (D/sub, D/f)
+Errno::EISDIR: Is a directory - (D/f, D/sub)
+""data""
+true
+ok
+Errno::ENAMETOOLONG: File name too long
+Errno::ENAMETOOLONG: File name too long
+Errno::ELOOP: Too many levels of symbolic links - D/l1
+");
+        }
+
+        /// <summary>
         /// Objects Marshal cannot write are refused the way MRI words it: Queue and SizedQueue by name
         /// ("can't dump Thread::Queue"), and a Fiber as native data rather than by the Proc it holds.
         /// </summary>

@@ -526,12 +526,33 @@ namespace IronRuby.Builtins {
 
             // MRI names both ends of a failed rename: "No such file or directory - (old, new)".
             string paths = "(" + strOldPath + ", " + strNewPath + ")";
+
+            // rename(2) itself where it can be called: the emulation below deletes a file standing
+            // at the target before moving onto it, so a directory renamed onto a file destroyed the
+            // file (rename(2): ENOTDIR), and it cannot replace an empty directory as rename(2) does.
+            if (Posix.IsAvailable) {
+                int errno;
+                if (Posix.Rename(strOldPath, strNewPath, out errno) != 0) {
+                    throw RubyExceptions.CreateErrno(context, errno, paths);
+                }
+                return 0;
+            }
+
             if (!context.Platform.FileExists(strOldPath) && !context.Platform.DirectoryExists(strOldPath)) {
                 throw RubyExceptions.CreateENOENT("No such file or directory - {0}", paths);
             }
 
             if (RubyUtils.ExpandPath(context.Platform, strOldPath) == RubyUtils.ExpandPath(context.Platform, strNewPath)) {
                 return 0;
+            }
+
+            // win32.c's rename: a directory cannot replace a file, nor a file a directory.
+            bool oldIsDirectory = context.Platform.DirectoryExists(strOldPath);
+            if (oldIsDirectory && context.Platform.FileExists(strNewPath)) {
+                throw RubyExceptions.CreateErrno(context, RubyErrno.GetNumber("ENOTDIR"), paths);
+            }
+            if (!oldIsDirectory && context.Platform.DirectoryExists(strNewPath)) {
+                throw RubyExceptions.CreateErrno(context, RubyErrno.GetNumber("EISDIR"), paths);
             }
 
             if (context.Platform.FileExists(strNewPath)) {
