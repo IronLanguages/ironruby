@@ -225,7 +225,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             io.Flush();
             int errno;
             if (PosixMessages.SendDescriptor((int)self.Socket.Handle, descriptor, out errno) < 0) {
-                throw Posix.Error(errno, null);
+                throw Posix.Error(errno, null, self.Context);
             }
         }
 
@@ -236,7 +236,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             int descriptor = Blocking(socket, SelectMode.SelectRead,
                 () => PosixMessages.ReceiveDescriptor((int)socket.Handle, out errno));
             if (errno != 0) {
-                throw Posix.Error(errno, null);
+                throw Posix.Error(errno, null, context);
             }
             if (descriptor < 0) {
                 // The peer sent data but no descriptor, which is what CRuby reports this way.

@@ -11845,6 +11845,11 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
         
         private static void LoadSocket_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_raw_connect_within", 0x12, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Sockets.RubySocket, IronRuby.Builtins.MutableString, System.Double, System.Int32>(IronRuby.StandardLibrary.Sockets.RubySocket.ConnectWithin)
+            );
+            
             DefineLibraryMethod(module, "accept", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.RubySocket, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.RubySocket.Accept)

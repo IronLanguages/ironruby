@@ -97,7 +97,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             // an idle keep-alive connection (puma does, after every response) paid for both.
             // Bytes already in IronRuby's buffer are served without touching the socket.
             if (isRead && !Closed && _socket != null && !GetStream().DataBuffered
-                && !_socket.Poll(0, SelectMode.SelectRead)) {
+                && !IsReadableOrFailed(_socket, 0)) {
                 throw RubyIOOps.NonBlockingError(Context, true, "read would block");
             }
 
@@ -273,7 +273,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static RubyArray/*!*/ CreateSocketPair(RubyClass/*!*/ self, [DefaultProtocol]int type, [DefaultProtocol]int protocol) {
             int[] descriptors = new int[2];
             if (PosixMessages.socketpair(UnixAddressFamilyNumber, type, protocol, descriptors) != 0) {
-                throw Posix.Error(Marshal.GetLastWin32Error(), null);
+                throw Posix.Error(Marshal.GetLastWin32Error(), null, self.Context);
             }
             RubyArray result = new RubyArray(2);
             result.Add(CreateForClass(self, new Socket(new SafeSocketHandle((IntPtr)descriptors[0], true))));
@@ -380,7 +380,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         // never be killed. Wait for readiness in slices instead and check for a parked asynchronous
         // exception between them, which turns the wait into a Ruby safe point. mspec's block_caller
         // matcher does exactly "wait for status == sleep, then kill and join".
-        private const int PollSliceMicroseconds = 50 * 1000;
+        internal const int PollSliceMicroseconds = 50 * 1000;
 
         /// <summary>
         /// A read that waits for data. A *stream* socket that is not connected does not wait at all --
@@ -434,7 +434,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 // Only a socket left in blocking mode can park here; the *_nonblock family has
                 // already cleared Socket.Blocking and must not wait at all.
                 if (socket != null && socket.Blocking) {
-                    while (!socket.Poll(PollSliceMicroseconds, mode)) {
+                    while (mode == SelectMode.SelectRead ? !IsReadableOrFailed(socket, PollSliceMicroseconds) : !socket.Poll(PollSliceMicroseconds, mode)) {
                         RubyUtils.CheckAsyncException();
                     }
                 }
@@ -443,6 +443,16 @@ namespace IronRuby.StandardLibrary.Sockets {
                 info.Blocked = wasBlocked;
                 info.BlockedLabel = wasLabel;
             }
+        }
+
+        /// <summary>
+        /// Whether a read would not block: data, end of file, or a pending error, which poll(2)
+        /// reports as POLLERR and .NET's SelectRead does not count. A UDP socket an ICMP "port
+        /// unreachable" has failed (ECONNREFUSED in MRI) was never readable, so recv waited forever
+        /// and read_nonblock said EAGAIN.
+        /// </summary>
+        internal static bool IsReadableOrFailed(Socket/*!*/ socket, int microseconds) {
+            return socket.Poll(microseconds, SelectMode.SelectRead) || socket.Poll(0, SelectMode.SelectError);
         }
 
         internal static void Blocking(Action/*!*/ operation) {
@@ -874,7 +884,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 return true;  // let the operation itself raise IOError
             }
             var socket = self.Socket;
-            return self.GetStream().DataBuffered || socket.Poll(0, SelectMode.SelectRead);
+            return self.GetStream().DataBuffered || IsReadableOrFailed(socket, 0);
         }
 
         [RubyMethod("recv_nonblock")]
@@ -913,7 +923,11 @@ namespace IronRuby.StandardLibrary.Sockets {
             } else if (hostNameOrAddress == IPAddress.Loopback.ToString()) {
                 return MakeEntry(IPAddress.Loopback, doNotReverseLookup);
             } else {
-                return Dns.GetHostEntry(hostNameOrAddress);
+                try {
+                    return Dns.GetHostEntry(hostNameOrAddress);
+                } catch (SocketException e) when (IsResolutionFailure(e)) {
+                    throw ResolutionFailure(e, "getaddrinfo: ");
+                }
             }
         }
 
