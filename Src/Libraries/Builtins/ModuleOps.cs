@@ -1424,6 +1424,10 @@ namespace IronRuby.Builtins {
         }
 
         private static bool IsHiddenConstant(RubyModule/*!*/ owner, string/*!*/ name, bool inherit) {
+            // the common case, a name no module hid, without the lock:
+            if (!owner.Context.MayBeHiddenConstant(name)) {
+                return false;
+            }
             if (!inherit) {
                 return owner.IsHiddenConstant(name);
             }

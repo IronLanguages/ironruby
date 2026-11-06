@@ -1542,6 +1542,7 @@ namespace IronRuby.Builtins {
             SetConstantVisibility(name, true);
             using (Context.ClassHierarchyLocker()) {
                 (_hiddenConstants ??= new HashSet<string>()).Add(name);
+                Context.NoteHiddenConstant(name);
             }
         }
 

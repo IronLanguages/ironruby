@@ -3691,6 +3691,26 @@ namespace IronRuby.Runtime {
             _hasDeprecatedConstants = true;
         }
 
+        // The names of the constants any module hid (RubyModule.HideConstant), replaced rather than changed: read without a lock.
+        private HashSet<string> _hiddenConstantNames;
+
+        internal void NoteHiddenConstant(string/*!*/ name) {
+            RequiresClassHierarchyLock();
+            var names = _hiddenConstantNames;
+            if (names == null || !names.Contains(name)) {
+                Volatile.Write(ref _hiddenConstantNames, names != null ? new HashSet<string>(names) { name } : new HashSet<string> { name });
+            }
+        }
+
+        /// <summary>
+        /// False if no module hid a constant of this name: then const_get and const_defined? need not take the class hierarchy
+        /// lock to find the module that declares it and ask that one.
+        /// </summary>
+        public bool MayBeHiddenConstant(string/*!*/ name) {
+            var names = Volatile.Read(ref _hiddenConstantNames);
+            return names != null && names.Contains(name);
+        }
+
         /// <summary>
         /// The warning Module#deprecate_constant asks for, emitted on reference, on #const_get and
         /// on #remove_const - but not on #defined?, #const_defined? or #const_source_location,
