@@ -98,9 +98,8 @@ namespace IronRuby.Compiler.Ast {
 
             // arguments:
             if (arguments == null) {
-                // MRI 1.8: If a block is called via define_method stub its parameters are used here.
-                // MRI 1.9: This scenario is not supported.
-                // We don't support this either. Otherwise we would need to emit super call with dynamic parameters if gen.CurrentBlock != null.
+                // The parameters of the enclosing def. A block's are never passed: in a block that
+                // define_method made a method of, the super call site raises (as MRI does).
 
                 if (gen.CurrentMethod.Parameters != null) {
                     gen.CurrentMethod.Parameters.TransformForSuperCall(gen, siteBuilder);

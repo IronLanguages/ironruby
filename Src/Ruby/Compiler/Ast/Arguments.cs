@@ -33,7 +33,6 @@ namespace IronRuby.Compiler.Ast {
     using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
     using ExpressionsBuilder = Microsoft.Scripting.Ast.ExpressionCollectionBuilder<MSA.Expression>;
 
-    // TODO: remove this class
     public class Arguments {
         internal static readonly Arguments Empty = new Arguments();
 
@@ -85,9 +84,8 @@ namespace IronRuby.Compiler.Ast {
                 result.Add(_expressions[i].TransformRead(gen));
             }
 
-            // TODO: 1.9 allows multiple splats at call-site, e.g. foo(a,b,*c,*d,e,*f).
-            // Currently our call-sites only implement single splatting so we convert the arguments to such form, 
-            // e.g. foo(a,b,*[*c,*d,e,*f]).
+            // A call site splats one trailing array, so from the first splat on the arguments go into
+            // one: foo(a,b,*c,*d,e,*f) is passed as foo(a,b,*[*c,*d,e,*f]).
             if (splattedCount == 1 && firstSplatted == _expressions.Length - 1) {
                 return _expressions[firstSplatted].TransformRead(gen);
             } else if (splattedCount >= 1) {
