@@ -639,11 +639,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("local_variables", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("local_variables", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ GetLocalVariableNames(RubyScope/*!*/ scope, object self) {
-            // `?rest?', `?kw?' and the like are the compiler's: where anonymous and forwarded
-            // parameters, and the argument list a zsuper passes on, are kept
-            var names = scope.GetVisibleLocalNames();
-            names.RemoveAll(name => name.Length > 0 && name[0] == '?');
-            return new RubyArray(names.Count).AddRange(scope.RubyContext.StringifyIdentifiers(names));
+            return scope.GetLocalVariableSymbols();
         }
 
         [RubyMethod("caller", RubyMethodAttributes.PrivateInstance)]

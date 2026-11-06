@@ -889,7 +889,9 @@ namespace IronRuby.Runtime.Calls {
                 case MethodMissingBinding.Custom:
                     Debug.Assert(!metaBuilder.Error);
                     // a user-defined method_missing may call super: record how the call was made
-                    metaBuilder.AddInitialization(Methods.SetMethodMissingReason.OpCall(AstUtils.Constant(args.Signature.HasImplicitSelf)));
+                    metaBuilder.AddInitialization(Methods.SetMethodMissingReason.OpCall(
+                        AstUtils.Constant(args.Signature.HasImplicitSelf), AstUtils.Constant(defaultFallback && args.Signature.IsVariableCall)
+                    ));
                     methodMissing.BuildMethodMissingCall(metaBuilder, args, methodName);
                     return true;
 
@@ -902,6 +904,7 @@ namespace IronRuby.Runtime.Calls {
                     if (defaultFallback && args.Signature.IsVariableCall) {
                         metaBuilder.SetError(Methods.MakeUndefinedLocalOrMethodError.OpCall(
                             args.MetaContext.Expression,
+                            AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope)),
                             AstUtils.Convert(args.TargetExpression, typeof(object)),
                             Ast.Constant(methodName)
                         ));

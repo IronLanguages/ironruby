@@ -486,6 +486,8 @@ namespace IronRuby.Runtime.Calls {
                         }
                     }
                 }
+            } else if (bindingTarget.Result == BindingResult.IncorrectArgumentCount) {
+                metaBuilder.SetArityError(resolver.MakeInvalidParametersError(bindingTarget).Expression);
             } else {
                 metaBuilder.SetError(resolver.MakeInvalidParametersError(bindingTarget).Expression);
             }
@@ -545,7 +547,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             if (!takes) {
-                metaBuilder.SetError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                metaBuilder.SetArityError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
                     AstUtils.Constant(isKeywords ? count - 1 : count),
                     AstUtils.Constant(RubyOverloadResolver.DescribePositionalArities(arities, restFrom))
                 ));

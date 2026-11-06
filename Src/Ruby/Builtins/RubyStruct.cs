@@ -213,7 +213,9 @@ namespace IronRuby.Builtins {
             if (TryGetIndex(name, out index)) {
                 return index;
             }
-            throw RubyExceptions.CreateNameError(String.Format("no member '{0}' in struct", name));
+            // with the name and the struct, as MRI's: did_you_mean suggests the members
+            throw RubyExceptions.WithNameAndReceiver(ImmediateClass.Context,
+                RubyExceptions.CreateNameError(String.Format("no member '{0}' in struct", name)), name, this);
         }
 
         // Structs whose #hash is being computed on this thread, outermost first.

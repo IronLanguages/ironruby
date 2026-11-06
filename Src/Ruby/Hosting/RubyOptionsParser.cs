@@ -40,6 +40,8 @@ namespace IronRuby.Hosting {
         private bool _disableRubyGems;
         private bool _disableRubyOpt;
         private bool _disableDidYouMean;
+        private bool _disableErrorHighlight;
+        private bool _disableSyntaxSuggest;
         private readonly List<string>/*!*/ _stdLibPaths = new List<string>();
         private readonly List<string>/*!*/ _warningCategoryFlags = new List<string>();
 
@@ -105,21 +107,30 @@ namespace IronRuby.Hosting {
                     _disableRubyOpt = !enable;
                     break;
 
-                // did_you_mean is on by default, as in MRI, but loaded on first use (see
-                // ironruby/did_you_mean.rb): requiring it at startup costs half a second.
+                // did_you_mean, error_highlight and syntax_suggest are on by default, as in MRI,
+                // but loaded on first use (see ironruby/error_extensions.rb): requiring them at
+                // startup costs half a second.
                 case "did_you_mean":
                     _disableDidYouMean = !enable;
+                    break;
+
+                case "error_highlight":
+                    _disableErrorHighlight = !enable;
+                    break;
+
+                case "syntax_suggest":
+                    _disableSyntaxSuggest = !enable;
                     break;
 
                 case "all":
                     _disableRubyGems = !enable;
                     _disableRubyOpt = !enable;
                     _disableDidYouMean = !enable;
+                    _disableErrorHighlight = !enable;
+                    _disableSyntaxSuggest = !enable;
                     LanguageSetup.Options["FrozenStringLiteral"] = enable ? 1 : -1;
                     break;
 
-                case "error_highlight":
-                case "syntax_suggest":
                 case "jit":
                 case "yjit":
                 case "zjit":
@@ -801,8 +812,15 @@ namespace IronRuby.Hosting {
             LanguageSetup.Options["SearchPaths"] = _loadPaths;
 
             if (!_disableRubyGems) {
+                // in MRI's order: did_you_mean's suggestions follow error_highlight's snippet
+                if (!_disableSyntaxSuggest) {
+                    _requiredPaths.Insert(0, "ironruby/syntax_suggest");
+                }
                 if (!_disableDidYouMean) {
                     _requiredPaths.Insert(0, "ironruby/did_you_mean");
+                }
+                if (!_disableErrorHighlight) {
+                    _requiredPaths.Insert(0, "ironruby/error_highlight");
                 }
                 _requiredPaths.Insert(0, "gem_prelude.rb");
             } else {

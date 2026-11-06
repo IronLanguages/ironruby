@@ -209,13 +209,14 @@ namespace IronRuby.Builtins {
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
         [RubyStackTraceHidden]
         [ReceivesKeywords]
-        public static object MethodMissing(RubyContext/*!*/ context, BlockParam block, TypeGroup/*!*/ self,
+        public static object MethodMissing(RubyScope/*!*/ scope, BlockParam block, TypeGroup/*!*/ self,
             [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
+            var context = scope.RubyContext;
 
             string methodName = name.ToString();
             RubyModule target = TryGetForwardTarget(context, self, methodName);
             if (target == null) {
-                return BasicObjectOps.MethodMissing(context, self, name, args);
+                return BasicObjectOps.MethodMissing(scope, self, name, args);
             }
 
             var site = context.GetOrCreateSendSite<Func<CallSite, object, Proc, RubyArray, object>>(methodName, ForwardSignature);

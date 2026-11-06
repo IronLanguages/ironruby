@@ -500,7 +500,7 @@ namespace IronRuby.Compiler {
         private static MethodInfo _MakeTopLevelSuperException;
         public static MethodInfo/*!*/ MakeTypeConversionError { get { return _MakeTypeConversionError ?? (_MakeTypeConversionError = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.Object, System.Type, System.Exception>(RubyOps.MakeTypeConversionError)); } }
         private static MethodInfo _MakeTypeConversionError;
-        public static MethodInfo/*!*/ MakeUndefinedLocalOrMethodError { get { return _MakeUndefinedLocalOrMethodError ?? (_MakeUndefinedLocalOrMethodError = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Exception>(RubyOps.MakeUndefinedLocalOrMethodError)); } }
+        public static MethodInfo/*!*/ MakeUndefinedLocalOrMethodError { get { return _MakeUndefinedLocalOrMethodError ?? (_MakeUndefinedLocalOrMethodError = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, IronRuby.Runtime.RubyScope, System.Object, System.String, System.Exception>(RubyOps.MakeUndefinedLocalOrMethodError)); } }
         private static MethodInfo _MakeUndefinedLocalOrMethodError;
         public static MethodInfo/*!*/ MakeUninitializedClassInstantiatedError { get { return _MakeUninitializedClassInstantiatedError ?? (_MakeUninitializedClassInstantiatedError = CallInstruction.CacheFunc<System.Exception>(RubyOps.MakeUninitializedClassInstantiatedError)); } }
         private static MethodInfo _MakeUninitializedClassInstantiatedError;
@@ -572,6 +572,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _SerializeObject;
         public static MethodInfo/*!*/ SetCachedGlobalVariable { get { return _SetCachedGlobalVariable ?? (_SetCachedGlobalVariable = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, IronRuby.Runtime.GlobalVariableSite, System.Object>(RubyOps.SetCachedGlobalVariable)); } }
         private static MethodInfo _SetCachedGlobalVariable;
+        public static MethodInfo/*!*/ SetCalleeFrame { get { return _SetCalleeFrame ?? (_SetCalleeFrame = CallInstruction.CacheFunc<System.Exception, System.String, System.Int32, System.String, System.Exception>(RubyOps.SetCalleeFrame)); } }
+        private static MethodInfo _SetCalleeFrame;
         public static MethodInfo/*!*/ SetClassVariable { get { return _SetClassVariable ?? (_SetClassVariable = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.SetClassVariable)); } }
         private static MethodInfo _SetClassVariable;
         public static MethodInfo/*!*/ SetCurrentException { get { return _SetCurrentException ?? (_SetCurrentException = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.Exception>(RubyOps.SetCurrentException)); } }
@@ -586,7 +588,7 @@ namespace IronRuby.Compiler {
         private static MethodInfo _SetInstanceVariable;
         public static MethodInfo/*!*/ SetLocalVariable { get { return _SetLocalVariable ?? (_SetLocalVariable = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.SetLocalVariable)); } }
         private static MethodInfo _SetLocalVariable;
-        public static MethodInfo/*!*/ SetMethodMissingReason { get { return _SetMethodMissingReason ?? (_SetMethodMissingReason = CallInstruction.CacheAction<System.Boolean>(RubyOps.SetMethodMissingReason)); } }
+        public static MethodInfo/*!*/ SetMethodMissingReason { get { return _SetMethodMissingReason ?? (_SetMethodMissingReason = CallInstruction.CacheAction<System.Boolean, System.Boolean>(RubyOps.SetMethodMissingReason)); } }
         private static MethodInfo _SetMethodMissingReason;
         public static MethodInfo/*!*/ SetMissingMethodArguments { get { return _SetMissingMethodArguments ?? (_SetMissingMethodArguments = CallInstruction.CacheFunc<System.Exception, System.Object[], System.Collections.IList, System.Object, System.Boolean, System.Boolean, System.Exception>(RubyOps.SetMissingMethodArguments)); } }
         private static MethodInfo _SetMissingMethodArguments;

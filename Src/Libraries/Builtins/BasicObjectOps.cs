@@ -51,9 +51,20 @@ namespace IronRuby.Builtins {
         // This method is a binder intrinsic and the behavior of the binder needs to be adjusted appropriately if changed.
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
         [RubyStackTraceHidden]
-        public static object MethodMissing(RubyContext/*!*/ context, object/*!*/ self, [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
+        public static object MethodMissing(RubyScope/*!*/ scope, object/*!*/ self, [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
+            var context = scope.RubyContext;
             // the arguments of the call that found no method are what NoMethodError#args reports,
             // and the way the call was made (implicit receiver or not) is what #private_call? reports
+            bool variableCall = RubyOps.MethodMissingVariableCall && args.Length == 0;
+            RubyOps.MethodMissingVariableCall = false;
+            if (variableCall) {
+                // a bare name: MRI's NameError, as the call would have raised without a method_missing
+                RubyOps.MethodMissingPrivateCall = false;
+                var nameError = RubyExceptions.CreateUndefinedLocalOrMethod(context, self, name.ToString());
+                // MRI's are those of the frame that called this: the method_missing that called super
+                RubyExceptionData.GetInstance(nameError).LocalVariables = scope.GetLocalVariableSymbols();
+                throw nameError;
+            }
             var error = NoMethodErrorOps.SetArguments(RubyExceptions.CreateMethodMissing(context, self, name.ToString()), args);
             RubyExceptionData.GetInstance(error).PrivateCall = RubyOps.MethodMissingPrivateCall;
             RubyOps.MethodMissingPrivateCall = false;

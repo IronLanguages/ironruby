@@ -252,7 +252,7 @@ namespace IronRuby.Builtins {
             DefineGlobalClass("LocalJumpError", typeof(IronRuby.Builtins.LocalJumpError), 0x00000007, def70, LoadLocalJumpError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__LocalJumpError));
             IronRuby.Builtins.RubyClass def83 = DefineGlobalClass("NameError", typeof(System.MemberAccessException), 0x00000007, def70, LoadNameError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Builtins.RubyClass, System.Object[], System.MemberAccessException>(IronRuby.Builtins.NameErrorOps.Factory)
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyClass, System.Object[], System.MemberAccessException>(IronRuby.Builtins.NameErrorOps.Factory)
             );
             DefineGlobalClass("NotImplementedError", typeof(IronRuby.Builtins.NotImplementedError), 0x00000007, def76, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__NotImplementedError));
@@ -263,7 +263,9 @@ namespace IronRuby.Builtins {
             IronRuby.Builtins.RubyClass def74 = DefineGlobalClass("RuntimeError", typeof(IronRuby.Builtins.RuntimeError), 0x00000007, def70, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__RuntimeError));
             DefineGlobalClass("SyntaxError", typeof(IronRuby.Builtins.SyntaxError), 0x00000007, def76, LoadSyntaxError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__SyntaxError));
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.SyntaxError>(IronRuby.Builtins.SyntaxErrorOps.Create), 
+                new Func<IronRuby.Builtins.RubyClass, System.Object, IronRuby.Builtins.SyntaxError>(IronRuby.Builtins.SyntaxErrorOps.Create)
+            );
             ExtendClass(typeof(System.Byte), 0x00000000, def81, LoadSystem__Byte_Instance, LoadSystem__Byte_Class, LoadSystem__Byte_Constants, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Builtins.RubyClass, System.Int32, System.Byte>(IronRuby.Builtins.ByteOps.InducedFrom), 
                 new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.Byte>(IronRuby.Builtins.ByteOps.InducedFrom), 
@@ -372,7 +374,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.FrozenError>(IronRuby.Builtins.FrozenErrorOps.Factory)
             );
             DefineGlobalClass("NoMethodError", typeof(System.MissingMethodException), 0x00000007, def83, LoadNoMethodError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Builtins.RubyClass, System.Object[], System.MissingMethodException>(IronRuby.Builtins.NoMethodErrorOps.Factory)
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyClass, System.Object[], System.MissingMethodException>(IronRuby.Builtins.NoMethodErrorOps.Factory)
             );
             IronRuby.Builtins.RubyClass def43 = DefineClass("Ractor::Error", typeof(IronRuby.Builtins.RactorError), 0x00000007, def74, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__Ractor__Error));
@@ -631,7 +633,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "method_missing", 0x52, 
                 0x80000004U, 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubySymbol, System.Object[], System.Object>(IronRuby.Builtins.BasicObjectOps.MethodMissing), 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubySymbol, System.Object[], System.Object>(IronRuby.Builtins.BasicObjectOps.MethodMissing), 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.BasicObjectOps.MethodMissing)
             );
             
@@ -5978,7 +5980,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "method_missing", 0x52, 
                 0x80000008U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, Microsoft.Scripting.Actions.TypeGroup, IronRuby.Builtins.RubySymbol, System.Object[], System.Object>(IronRuby.Builtins.TypeGroupOps.MethodMissing)
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, Microsoft.Scripting.Actions.TypeGroup, IronRuby.Builtins.RubySymbol, System.Object[], System.Object>(IronRuby.Builtins.TypeGroupOps.MethodMissing)
             );
             
             DefineLibraryMethod(module, "name", 0x51, 
@@ -6515,6 +6517,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadNameError_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "local_variables", 0x51, 
+                0x00000000U, 
+                new Func<System.Exception, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.NameErrorOps.GetLocalVariables)
+            );
+            
             DefineLibraryMethod(module, "name", 0x51, 
                 0x00000000U, 
                 new Func<System.Exception, System.Object>(IronRuby.Builtins.NameErrorOps.GetName)
@@ -8883,6 +8890,12 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadSyntaxError_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "initialize", 0x52, 
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.SyntaxError, System.Exception>(IronRuby.Builtins.SyntaxErrorOps.Initialize), 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.SyntaxError, System.Object, System.Exception>(IronRuby.Builtins.SyntaxErrorOps.Initialize)
+            );
+            
             DefineLibraryMethod(module, "path", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.SyntaxError, IronRuby.Builtins.MutableString>(IronRuby.Builtins.SyntaxErrorOps.GetPath)

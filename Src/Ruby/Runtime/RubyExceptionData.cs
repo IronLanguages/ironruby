@@ -77,6 +77,15 @@ namespace IronRuby.Runtime {
         // NoMethodError#args: the arguments of the call that found no method (nil if unknown).
         private object _arguments;
 
+        // NameError#local_variables: those of the scope the error was made in (null: none).
+        private RubyArray _localVariables;
+
+        // The frame of the method an arity error was raised for (see RubyOps.SetCalleeFrame): file null
+        // for a library method, which is reported at the location of its caller.
+        private string _calleeFile;
+        private int _calleeLine;
+        private string _calleeLabel;
+
         [NonSerialized]
         private CallSite<Func<CallSite, RubyContext, Exception, RubyArray, object>> _setBacktraceCallSite;
 
@@ -350,6 +359,9 @@ namespace IronRuby.Runtime {
                 if (_capturedTrace == captured) {
                     _backtrace = captured.Build();
                     _capturedTrace = null;
+                    if (_calleeLabel != null && _backtrace != null) {
+                        _backtrace.Insert(0, RubyStackTraceBuilder.FormatCalleeFrame(_backtrace, _calleeFile, _calleeLine, _calleeLabel));
+                    }
                 }
             }
         }
@@ -411,6 +423,23 @@ namespace IronRuby.Runtime {
         public object Arguments {
             get { return _arguments; }
             set { _arguments = value; }
+        }
+
+        internal void SetCalleeFrame(string file, int line, string/*!*/ label) {
+            _calleeFile = file;
+            _calleeLine = line;
+            _calleeLabel = label;
+        }
+
+        /// <summary>
+        /// NameError#local_variables: the local variables of the scope the error was made in, which
+        /// MRI takes from the instruction sequence it keeps on the error. Null when there is none.
+        /// The names rather than the scope are kept, so that the error does not keep the variables'
+        /// values alive.
+        /// </summary>
+        public RubyArray LocalVariables {
+            get { return _localVariables; }
+            set { _localVariables = value; }
         }
 
         public bool TrySetCause(Exception cause) {
