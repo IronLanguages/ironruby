@@ -1866,7 +1866,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("write_nonblock")]
         public static int WriteNoBlock(ConversionStorage<MutableString>/*!*/ tosConversion, RubyIO/*!*/ self, object obj) {
-            return Write(self, Protocols.ConvertToString(tosConversion, obj), true);
+            // rb_obj_as_string, then the same single write(2) a String gets - never a blocking write
+            return WriteNoBlock(self, Protocols.ConvertToString(tosConversion, obj));
         }
         
         #endregion

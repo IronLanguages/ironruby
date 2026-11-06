@@ -164,6 +164,7 @@ namespace IronRuby.Tests {
                 File_AppendBytes1,
                 File_WriteBytes1,
                 File_ReadLine1,
+                File_LoadBufferOffset1,
                 File_ReadLineSeparator1,
                 File_AppendBytesToEnd1,
                 Dir2,
@@ -955,6 +956,8 @@ namespace IronRuby.Tests {
                 Block_ReturnTraceFrameCleanup1,
                 Thread_SetTraceFunc1,
                 Fiber_ReclamationClrBoundary1,
+                Fiber_Keywords1,
+                WeakMap_NoBlock1,
                 DeepNesting1,
 
                 Scenario_RubyThreads1,

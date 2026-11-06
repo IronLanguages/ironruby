@@ -261,7 +261,8 @@ namespace IronRuby.Builtins {
         public static object Each(BlockParam block, WeakMap/*!*/ self) {
             var entries = self.GetLiveEntries();
             if (entries.Count > 0 && block == null) {
-                throw RubyExceptions.NoBlockGiven();
+                // wmap_each and friends yield from C: MRI's message has no "(yield)"
+                throw RubyExceptions.CreateLocalJumpError("no block given");
             }
             foreach (var entry in entries) {
                 object result;
@@ -276,7 +277,7 @@ namespace IronRuby.Builtins {
         public static object EachKey(BlockParam block, WeakMap/*!*/ self) {
             var entries = self.GetLiveEntries();
             if (entries.Count > 0 && block == null) {
-                throw RubyExceptions.NoBlockGiven();
+                throw RubyExceptions.CreateLocalJumpError("no block given");
             }
             foreach (var entry in entries) {
                 object result;
@@ -291,7 +292,7 @@ namespace IronRuby.Builtins {
         public static object EachValue(BlockParam block, WeakMap/*!*/ self) {
             var entries = self.GetLiveEntries();
             if (entries.Count > 0 && block == null) {
-                throw RubyExceptions.NoBlockGiven();
+                throw RubyExceptions.CreateLocalJumpError("no block given");
             }
             foreach (var entry in entries) {
                 object result;

@@ -2211,15 +2211,15 @@ unless defined?(Fiber)
       ::Thread.__fiber_mailbox__
     end
 
-    # Storage keys are Symbols; anything with #to_str (but not #to_sym) is
-    # converted, which is what MRI does.
+    # Fiber[] and Fiber[]= take a Symbol, or anything with #to_str (but not #to_sym), which
+    # is converted: rb_check_id, with its message for anything else.
     def self.__check_key__(key)
       return key if key.is_a?(::Symbol)
       if key.respond_to?(:to_str)
         str = key.to_str
         return str.to_sym if str.is_a?(::String)
       end
-      __err__(::TypeError, "wrong argument type #{key.class} (expected Symbol)")
+      __err__(::TypeError, "#{key.inspect} is not a symbol nor a string")
     end
 
     # Exactly Kernel#raise's argument handling (including cause:) but returning the
@@ -2238,10 +2238,12 @@ unless defined?(Fiber)
       when nil
         nil
       when ::Hash
-        __err__(::FrozenError, "can't modify frozen Hash") if storage.frozen?
-        copy = {}
-        storage.each { |k, v| copy[__check_key__(k)] = v }
-        copy
+        __err__(::FrozenError, "storage must not be frozen") if storage.frozen?
+        # fiber_storage_validate: the keys of a whole storage hash must be Symbols already
+        storage.each_key do |k|
+          __err__(::TypeError, "wrong argument type #{k.class} (expected Symbol)") unless k.is_a?(::Symbol)
+        end
+        storage.dup
       else
         __err__(::TypeError, "storage must be a hash")
       end
@@ -2306,9 +2308,15 @@ unless defined?(Fiber)
     def inspect; __state__.inspect; end
     alias to_s inspect
     def storage; __state__.storage; end
-    def storage=(value); __state__.storage = value; end
-    def resume(*args); __state__.resume(*args); end
-    def transfer(*args); __state__.transfer(*args); end
+    def storage=(value)
+      ::Kernel.warn("Fiber#storage= is experimental and may be removed in the future!",
+                    uplevel: 1, category: :experimental)
+      __state__.storage = value
+    end
+    # Keywords given to resume/transfer reach the fiber's block as keywords (and come back
+    # from Fiber.yield as a plain Hash: FiberMessage.Value drops the ruby2_keywords mark).
+    ruby2_keywords def resume(*args); __state__.resume(*args); end
+    ruby2_keywords def transfer(*args); __state__.transfer(*args); end
     def kill; __state__.kill; self; end
     ruby2_keywords def raise(*args); __state__.raise(*args); end
 
@@ -2321,6 +2329,8 @@ unless defined?(Fiber)
     def self.set_scheduler(scheduler); State.set_scheduler(scheduler); end
     def self.current_scheduler; State.current_scheduler; end
     def self.schedule(*args, &block); State.schedule(*args, &block); end
+    # Fiber.schedule(blocking: false) { } hands its keywords on to the scheduler's #fiber
+    singleton_class.send(:ruby2_keywords, :schedule)
 
     # This object, rather than the public handle, is retained by the worker stack.
     class State
@@ -2432,7 +2442,8 @@ unless defined?(Fiber)
         unless State.current.equal?(self)
           Fiber.__err__(::ArgumentError, "Fiber storage can only be accessed from the Fiber it belongs to")
         end
-        (@storage || {}).dup
+        # nil until something is stored, as in MRI
+        @storage && @storage.dup
       end
 
       def storage=(hash)
@@ -2451,23 +2462,26 @@ unless defined?(Fiber)
         end
       end
 
-      def resume(*args)
+      ruby2_keywords def resume(*args)
         cur = State.current
         Fiber.__err__(::FiberError, "attempt to resume the current fiber") if cur.equal?(self)
         __check_thread__(cur)
         Fiber.__err__(::FiberError, "attempt to resume a terminated fiber") unless @alive
-        Fiber.__err__(::FiberError, "double resume") if @prev
+        Fiber.__err__(::FiberError, "attempt to resume a resumed fiber (double resume)") if @prev
         Fiber.__err__(::FiberError, "attempt to resume a resuming fiber") if @resuming
+        # suspended by #transfer rather than Fiber.yield: only a transfer can go back to it
+        Fiber.__err__(::FiberError, "attempt to resume a transferring fiber") if @thread && !@yielded
         @prev = cur
         cur.__set_resuming__(self)
         State.__switch__(cur, self, MSG_RESUME, args)
       end
 
-      def transfer(*args)
+      ruby2_keywords def transfer(*args)
         cur = State.current
         return nil if cur.equal?(self)
         __check_thread__(cur)
-        Fiber.__err__(::FiberError, "attempt to transfer to a resuming fiber") if @resuming || @yielded
+        Fiber.__err__(::FiberError, "attempt to transfer to a resuming fiber") if @resuming
+        Fiber.__err__(::FiberError, "attempt to transfer to a yielding fiber") if @yielded
         Fiber.__err__(::FiberError, "dead fiber called") unless @alive
         cur.__set_transferred__
         State.__switch__(cur, self, MSG_TRANSFER, args)
@@ -2567,6 +2581,10 @@ unless defined?(Fiber)
               Fiber.__err__(::ArgumentError, "Scheduler must implement ##{m}")
             end
           end
+          # rb_fiber_scheduler_set (3.4): optional, but MRI says so when it is missing
+          unless scheduler.respond_to?(:fiber_interrupt)
+            ::Kernel.warn("Scheduler should implement #fiber_interrupt", uplevel: 2)
+          end
         end
         current.__root_fiber__.__scheduler_set__(scheduler)
         scheduler
@@ -2581,6 +2599,7 @@ unless defined?(Fiber)
         Fiber.__err__(::RuntimeError, "No scheduler is available!") unless s
         s.fiber(*args, &block)
       end
+      singleton_class.send(:ruby2_keywords, :schedule)
 
       # ---- the switch ------------------------------------------------------
 
@@ -8819,8 +8838,6 @@ module ObjectSpace
     def key?(key)
       @table.key?(Key.new(key))
     end
-    alias :member? :key?
-    alias :include? :key?
 
     def clear
       @table.clear
