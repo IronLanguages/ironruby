@@ -575,6 +575,7 @@ namespace IronRuby.Tests {
                 ClrHashEqualsToString3,
                 ClrToString1,
                 ClrHashEquals4,
+                ClrDictionaryInspect1,
                 ClrTypeVariance1,
                 ClrValueTypes1,
                 ClrValueTypes2,

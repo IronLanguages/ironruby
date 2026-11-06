@@ -101,6 +101,7 @@ namespace IronRuby.Builtins {
             DefineGlobalModule("Signal", typeof(IronRuby.Builtins.Signal), 0x0000000F, null, LoadSignal_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Collections.DictionaryEntry), 0x00000000, null, LoadSystem__Collections__DictionaryEntry_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(System.Collections.Generic.KeyValuePair<,>), 0x00000000, LoadSystem__Collections__Generic__KeyValuePair_2_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            ExtendModule(typeof(System.Collections.IDictionary), 0x00000000, LoadSystem__Collections__IDictionary_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Delegate), 0x00000000, null, LoadSystem__Delegate_Instance, null, null, new IronRuby.Builtins.RubyModule[] {moduleRef0, moduleRef1});
             ExtendModule(typeof(System.Runtime.CompilerServices.ITuple), 0x00000000, LoadSystem__Runtime__CompilerServices__ITuple_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Threading.Tasks.Task), 0x00000000, null, LoadSystem__Threading__Tasks__Task_Instance, null, null, new IronRuby.Builtins.RubyModule[] {moduleRef2, moduleRef3});
@@ -8947,6 +8948,19 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "to_ary", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KeyValuePairOps.ToArray)
+            );
+            
+        }
+        
+        private static void LoadSystem__Collections__IDictionary_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Collections.IDictionary, IronRuby.Builtins.MutableString>(IronRuby.Builtins.NonGenericIDictionaryOps.Inspect)
+            );
+            
+            DefineLibraryMethod(module, "to_s", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Collections.IDictionary, IronRuby.Builtins.MutableString>(IronRuby.Builtins.NonGenericIDictionaryOps.Inspect)
             );
             
         }
