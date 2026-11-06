@@ -631,9 +631,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "equal?", 0x51, 
-                0x00000001U, 0x00000000U, 
-                new Func<IronRuby.Runtime.IRubyObject, System.Object, System.Boolean>(IronRuby.Builtins.BasicObjectOps.ValueEquals), 
-                new Func<System.Object, System.Object, System.Boolean>(IronRuby.Builtins.BasicObjectOps.ValueEquals)
+                0x00000000U, 
+                new Func<System.Object, System.Object, System.Boolean>(IronRuby.Builtins.BasicObjectOps.IsEqual)
             );
             
             DefineLibraryMethod(module, "initialize", 0x5a, 
