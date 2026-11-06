@@ -345,12 +345,12 @@ namespace IronRuby.Tests {
         public void AreBagsEqual<T>(IEnumerable<T> x, IEnumerable<T> y) {
             if (x == null && y == null) return;
 
-            var bag = new HashSet<Key<T, int>>(GroupWithCount(x));
+            var bag = new HashSet<(T, int)>(GroupWithCount(x));
             bag.SymmetricExceptWith(GroupWithCount(y));
             Assert(bag.Count == 0);
         }
 
-        private IEnumerable<Key<T, int>> GroupWithCount<T>(IEnumerable<T> sequence) {
+        private IEnumerable<(T, int)> GroupWithCount<T>(IEnumerable<T> sequence) {
             Dictionary<T, int> groups = new Dictionary<T, int>();
             foreach (var item in sequence) {
                 int count;
@@ -364,7 +364,7 @@ namespace IronRuby.Tests {
             }
 
             foreach (var entry in groups) {
-                yield return Key.Create(entry.Key, entry.Value);
+                yield return (entry.Key, entry.Value);
             }
         }
 

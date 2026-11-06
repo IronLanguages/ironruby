@@ -5064,8 +5064,8 @@ namespace IronRuby.Runtime {
             get { return RubyUtils.GetCallSite(ref _stringConversionSite, ConvertToSAction.Make(this)); }
         }
 
-        private readonly Dictionary<Key<string, RubyCallSignature>, CallSite>/*!*/ _sendSites =
-            new Dictionary<Key<string, RubyCallSignature>, CallSite>();
+        private readonly Dictionary<(string, RubyCallSignature), CallSite>/*!*/ _sendSites =
+            new Dictionary<(string, RubyCallSignature), CallSite>();
 
         private object SendSitesLock { get { return _sendSites; } }
 
@@ -5074,12 +5074,12 @@ namespace IronRuby.Runtime {
 
             lock (SendSitesLock) {
                 CallSite site;
-                if (_sendSites.TryGetValue(Key.Create(methodName, callSignature), out site)) {
+                if (_sendSites.TryGetValue((methodName, callSignature), out site)) {
                     return (CallSite<TSiteFunc>)site;
                 }
 
                 var newSite = CallSite<TSiteFunc>.Create(RubyCallAction.Make(this, methodName, callSignature));
-                _sendSites.Add(Key.Create(methodName, callSignature), newSite);
+                _sendSites.Add((methodName, callSignature), newSite);
                 return newSite;
             }
         }

@@ -920,7 +920,7 @@ namespace IronRuby.Builtins {
         /// Reflection is not efficient at caching look-ups and we do multiple of them (due to mangling) each time a method is being resolved.
         /// { (declaring-type, method-name, isStatic) -> (type-extension-version) }
         /// </summary>
-        private static Dictionary<Key<Type, string, bool>, int> _clrFailedMemberLookupCache = new Dictionary<Key<Type, string, bool>, int>();
+        private static Dictionary<(Type, string, bool), int> _clrFailedMemberLookupCache = new Dictionary<(Type, string, bool), int>();
 
         /// <summary>
         /// GetRuntimeMethods includes
@@ -938,7 +938,7 @@ namespace IronRuby.Builtins {
         private static bool IsFailureCached(Type/*!*/ type, string/*!*/ methodName, bool isStatic, int extensionVersion) {
             // check for cached lookup failure (if the cache is available):
             bool result = false;
-            var key = Key.Create(type, methodName, isStatic);
+            var key = (type, methodName, isStatic);
 
             var cache = Interlocked.Exchange(ref _clrFailedMemberLookupCache, null);
             if (cache != null) {
@@ -968,7 +968,7 @@ namespace IronRuby.Builtins {
             // store failure to the cache if the cache is not owned by another thread:
             var cache = Interlocked.Exchange(ref _clrFailedMemberLookupCache, null);
             if (cache != null) {
-                cache[Key.Create(type, methodName, isStatic)] = extensionVersion;
+                cache[(type, methodName, isStatic)] = extensionVersion;
                 Interlocked.Exchange(ref _clrFailedMemberLookupCache, cache);
             }
         }
@@ -1292,7 +1292,7 @@ namespace IronRuby.Builtins {
             });
 
             // (method clr name, parameter types) => (overload, owner)
-            Dictionary<Key<string, ValueArray<Type>>, ClrOverloadInfo> allMethods = null;
+            Dictionary<(string, ValueArray<Type>), ClrOverloadInfo> allMethods = null;
 
             if (inheritedRubyMember != null) {
                 // case [2.2.2]: add CLR methods from the Ruby member:
@@ -1418,16 +1418,16 @@ namespace IronRuby.Builtins {
         }
 
         // Returns the number of methods newly added to the dictionary.
-        private bool AddMethodsOverwriteExisting(ref Dictionary<Key<string, ValueArray<Type>>, ClrOverloadInfo> methods,
+        private bool AddMethodsOverwriteExisting(ref Dictionary<(string, ValueArray<Type>), ClrOverloadInfo> methods,
             IEnumerable<OverloadInfo/*!*/>/*!*/ newOverloads, RubyOverloadGroupInfo/*!*/[] overloadOwners, bool specialNameOnly) {
 
             bool anyChange = false;
             int i = 0;
             foreach (var method in newOverloads) {
                 if (IsVisible(method.Attributes, method.DeclaringType, specialNameOnly)) {
-                    var paramTypes = Key.Create(method.Name, new ValueArray<Type>(ReflectionUtils.GetParameterTypes(method.Parameters)));
+                    var paramTypes = (method.Name, new ValueArray<Type>(ReflectionUtils.GetParameterTypes(method.Parameters)));
                     if (methods == null) {
-                        methods = new Dictionary<Key<string, ValueArray<Type>>, ClrOverloadInfo>();
+                        methods = new Dictionary<(string, ValueArray<Type>), ClrOverloadInfo>();
                     }
 
                     methods[paramTypes] = new ClrOverloadInfo {

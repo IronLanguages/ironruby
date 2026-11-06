@@ -55,7 +55,7 @@ namespace IronRuby.Runtime.Calls {
         private IList _list;
 
         // An optional list of assumptions upon arguments that were made during resolution.
-        private List<Key<int, NarrowingLevel, Expression>> _argumentAssumptions;
+        private List<(int, NarrowingLevel, Expression)> _argumentAssumptions;
 
         // Arguments whose class the rule tests, because the protocol conversions their class implements decided the binding.
         private List<DynamicMetaObject> _classTestedArguments;
@@ -664,8 +664,8 @@ namespace IronRuby.Runtime.Calls {
 
             if (_argumentAssumptions != null) {
                 foreach (var assumption in _argumentAssumptions) {
-                    if (assumption.Second == bindingTarget.NarrowingLevel) {
-                        metaBuilder.AddCondition(assumption.Third);
+                    if (assumption.Item2 == bindingTarget.NarrowingLevel) {
+                        metaBuilder.AddCondition(assumption.Item3);
                     }
                 }
             }
@@ -685,11 +685,11 @@ namespace IronRuby.Runtime.Calls {
 
             if (result.Assumption != null) {
                 if (_argumentAssumptions == null) {
-                    _argumentAssumptions = new List<Key<int, NarrowingLevel, Ast>>();
+                    _argumentAssumptions = new List<(int, NarrowingLevel, Ast)>();
                 }
 
-                if (_argumentAssumptions.FindIndex((k) => k.First == toParameter.ParameterInfo.Position && k.Second == level) < 0) {
-                    _argumentAssumptions.Add(Key.Create(toParameter.ParameterInfo.Position, level, result.Assumption));
+                if (_argumentAssumptions.FindIndex((k) => k.Item1 == toParameter.ParameterInfo.Position && k.Item2 == level) < 0) {
+                    _argumentAssumptions.Add((toParameter.ParameterInfo.Position, level, result.Assumption));
                 }
             }
 
