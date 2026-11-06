@@ -3372,6 +3372,26 @@ namespace IronRuby.Runtime {
         /// Same, but with MRI's variable-arity spelling of the expected count: "1..3", "1+" or "2, 3, or 5".
         /// The description is a compile-time constant produced by the binder.
         /// </summary>
+        /// <summary>
+        /// The arity error of a call to a method with keyword parameters, worded from the declared
+        /// signature as MRI words it: the keyword hash a call made is not one of the arguments
+        /// given, the hidden parameter it arrives in is not one of those expected, and a required
+        /// keyword is named ("given 4, expected 1..3; required keyword: j").
+        /// </summary>
+        [Emitted]
+        public static ArgumentException/*!*/ MakeKeywordMethodArityError(object/*!*/ signature, int count, object lastArgument) {
+            var parameters = (RubyParameterSignature)signature;
+            var keywords = lastArgument as Hash;
+            if (keywords != null && !keywords.IsKeywordArguments) {
+                keywords = null;
+            }
+            int positional = count - (keywords != null ? 1 : 0);
+            int min = parameters.MinPositionalCount, max = parameters.MaxPositionalCount;
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            string expected = (min == max) ? min.ToString(inv) : min.ToString(inv) + (max < 0 ? "+" : ".." + max.ToString(inv));
+            return MakeWrongNumberOfArgumentsErrorN(positional, expected + MissingRequiredKeywordsNote(parameters, keywords));
+        }
+
         [Emitted]
         public static ArgumentException/*!*/ MakeWrongNumberOfArgumentsErrorN(int actual, string/*!*/ expected) {
             return new ArgumentException(String.Format("wrong number of arguments (given {0}, expected {1})", actual, expected));

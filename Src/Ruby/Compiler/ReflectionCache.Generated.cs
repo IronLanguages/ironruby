@@ -532,6 +532,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _MakeVirtualClassInstantiatedError;
         public static MethodInfo/*!*/ MakeWrongNumberOfArgumentsError { get { return _MakeWrongNumberOfArgumentsError ?? (_MakeWrongNumberOfArgumentsError = CallInstruction.CacheFunc<System.Int32, System.Int32, System.ArgumentException>(RubyOps.MakeWrongNumberOfArgumentsError)); } }
         private static MethodInfo _MakeWrongNumberOfArgumentsError;
+        public static MethodInfo/*!*/ MakeKeywordMethodArityError { get { return _MakeKeywordMethodArityError ?? (_MakeKeywordMethodArityError = CallInstruction.CacheFunc<System.Object, System.Int32, System.Object, System.ArgumentException>(RubyOps.MakeKeywordMethodArityError)); } }
+        private static MethodInfo _MakeKeywordMethodArityError;
         public static MethodInfo/*!*/ MakeWrongNumberOfArgumentsErrorN { get { return _MakeWrongNumberOfArgumentsErrorN ?? (_MakeWrongNumberOfArgumentsErrorN = CallInstruction.CacheFunc<System.Int32, System.String, System.ArgumentException>(RubyOps.MakeWrongNumberOfArgumentsErrorN)); } }
         private static MethodInfo _MakeWrongNumberOfArgumentsErrorN;
         public static MethodInfo/*!*/ MarkAliasCall { get { return _MarkAliasCall ?? (_MarkAliasCall = CallInstruction.CacheFunc<System.Object, System.String, System.String, System.Object>(RubyOps.MarkAliasCall)); } }

@@ -3148,6 +3148,115 @@ symlink existing: Errno::EEXIST
         }
 
         /// <summary>
+        /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
+        /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
+        /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the
+        /// end runs the methods specialized). Arity errors name the positionals and required keywords as
+        /// MRI does, and #parameters lists required keywords first. The expected output is CRuby's.
+        /// </summary>
+        public void Method_OptionalAndKeywordParameters1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+def m1(a, b = 2, k: 3) = [a, b, k]
+def m2(a, b = 2, c = a + b, k: 3, j:) = [a, b, c, k, j]
+def m3(a, b = {x: 1}, **kw) = [a, b, kw]
+def m4(b = 1, k: 2) = [b, k]
+def m5(a, b = nil, exception: true) = [a, b, exception]
+t(1) { [m1(1), m1(1, 5), m1(1, k: 9), m1(1, 5, k: 9)] }
+t(2) { m1(1, {k: 9}) }
+t(3) { m1(1, 5, {k: 9}) }
+t(4) { m1(1, 5, 6) }
+t(5) { m1(k: 1) }
+t(6) { m1() }
+t(7) { m1(1, z: 2) }
+t(8) { [m2(1, j: 0), m2(1, 4, j: 0), m2(1, 4, 5, j: 0, k: 7)] }
+t(9) { m2(1, 4) }
+t(10) { m2(1, 4, 5, 6, j: 0) }
+t(11) { [m3(1), m3(1, z: 2), m3(1, {y: 2}), m3(1, {y: 2}, z: 3), m3(1, **{})] }
+t(12) { h = {k: 7}; [m1(1, **h), m1(1, 2, **h), m4, m4(5), m4(k: 6), m4(5, k: 6), m4({k: 6})] }
+t(13) { [m5(1), m5(""1"", 16), m5(1, exception: false), m5(1, 2, exception: false)] }
+t(14) { [method(:m1).arity, method(:m2).arity, method(:m3).arity, method(:m4).arity, method(:m1).parameters, method(:m2).parameters] }
+class P; def s(a, b = 2, k: 3) = [:p, a, b, k]; end
+class C < P; def s(a, b = 5, k: 4); super; end; end
+class D < P; def s(a, b = 5, k: 4); b = 9; k = 8; super; end; end
+t(15) { [C.new.s(1), C.new.s(1, 2), C.new.s(1, k: 0), D.new.s(1)] }
+def nil_kw(a, b = 1, k: 2) = [a, b, k]
+t(16) { [nil_kw(1, nil), nil_kw(nil), nil_kw(1, nil, k: nil)] }
+t(18) { send(:m1, 1, k: 4) }
+t(19) { method(:m1).call(1, k: 4) }
+t(20) { pr = method(:m1).to_proc; [pr.(1), pr.(1, k: 2)] }
+o = Object.new
+def o.each_pair(x = 1, sep: "",""); ""#{x}#{sep}""; end
+t(21) { [o.each_pair, o.each_pair(2), o.each_pair(sep: "";""), o.each_pair(3, sep: ""|"")] }
+def opt_hash_default(a, b = {}, k: 1) = [a, b, k]
+t(22) { [opt_hash_default(1), opt_hash_default(1, {z: 1}), opt_hash_default(1, k: 2)] }
+1000.times { m1(1, k: 2); m1(1); m1(1, 2) }
+t(23) { [m1(1), m1(1, 5), m1(1, k: 9), m1(1, 5, k: 9)] }
+# every case again after the JIT has specialized the methods
+def n1(a, b = 2, k: 3) = [a, b, k]
+def n2(a, b = 2, c = 7, k: 3, j:) = [a, b, c, k, j]
+def n4(b = 1, k: 2) = [b, k]
+def m6(a, b = 1.5, k: :x) = [a, b, k]
+def mi(a, b = 2, k: 3) = a + b + k
+r = nil
+3000.times do |i|
+  r = [n1(1), n1(1, 5), n1(1, k: 9), n1(1, 5, k: 9), n2(1, j: 0), n2(1, 4, j: 0), n2(1, 4, 5, j: 0, k: 7),
+       m4, n4(5), n4(k: 6), n4(5, k: 6), n4({k: 6}), m6(1), m6(1, 2.5), m6(1, k: :y), mi(1), mi(1, 2, k: 4), mi(i, k: i)]
+end
+p r
+t(1) { n1(k: 1) }
+t(2) { n1(1, {k: 9}) }
+t(3) { n1(1, 5, 6) }
+t(4) { n1(1, z: 2) }
+t(5) { n2(1, 4) }
+t(6) { mi(1, ""x"") }
+t(7) { mi(""a"", k: 1) }
+t(8) { n1({k: 1}) }
+t(9) { n4({k: 6}, k: 1) }
+def kwreq_order(a, k: 1, j:) = 1
+t(24) { method(:kwreq_order).parameters }
+def mand_only(a, k: 1) = 1
+t(25) { [(mand_only rescue $!.message), (mand_only(1, 2) rescue $!.message)] }
+", @"
+1: [[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9]]
+2: [1, {k: 9}, 3]
+3: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+4: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+5: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+6: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+7: [ArgumentError, ""unknown keyword: :z""]
+8: [[1, 2, 3, 3, 0], [1, 4, 5, 3, 0], [1, 4, 5, 7, 0]]
+9: [ArgumentError, ""missing keyword: :j""]
+10: [ArgumentError, ""wrong number of arguments (given 4, expected 1..3; required keyword: j)""]
+11: [[1, {x: 1}, {}], [1, {x: 1}, {z: 2}], [1, {y: 2}, {}], [1, {y: 2}, {z: 3}], [1, {x: 1}, {}]]
+12: [[1, 2, 7], [1, 2, 7], [1, 2], [5, 2], [1, 6], [5, 6], [{k: 6}, 2]]
+13: [[1, nil, true], [""1"", 16, true], [1, nil, false], [1, 2, false]]
+14: [-2, -3, -2, -1, [[:req, :a], [:opt, :b], [:key, :k]], [[:req, :a], [:opt, :b], [:opt, :c], [:keyreq, :j], [:key, :k]]]
+15: [[:p, 1, 5, 4], [:p, 1, 2, 4], [:p, 1, 5, 0], [:p, 1, 9, 8]]
+16: [[1, nil, 2], [nil, 1, 2], [1, nil, nil]]
+18: [1, 2, 4]
+19: [1, 2, 4]
+20: [[1, 2, 3], [1, 2, 2]]
+21: [""1,"", ""2,"", ""1;"", ""3|""]
+22: [[1, {}, 1], [1, {z: 1}, 1], [1, {}, 2]]
+23: [[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9]]
+[[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9], [1, 2, 7, 3, 0], [1, 4, 7, 3, 0], [1, 4, 5, 7, 0], [1, 2], [5, 2], [1, 6], [5, 6], [{k: 6}, 2], [1, 1.5, :x], [1, 2.5, :x], [1, 1.5, :y], 6, 7, 6000]
+1: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+2: [1, {k: 9}, 3]
+3: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+4: [ArgumentError, ""unknown keyword: :z""]
+5: [ArgumentError, ""missing keyword: :j""]
+6: [TypeError, ""String can't be coerced into Integer""]
+7: [TypeError, ""no implicit conversion of Integer into String""]
+8: [{k: 1}, 2, 3]
+9: [{k: 6}, 1]
+24: [[:req, :a], [:keyreq, :j], [:key, :k]]
+25: [""wrong number of arguments (given 0, expected 1)"", ""wrong number of arguments (given 2, expected 1)""]
+");
+        }
+
+        /// <summary>
         /// Kernel#Integer and #Float in C# (the cases they answer themselves and the ones they hand to
         /// the prelude), Integer#round/floor/ceil/truncate of a Fixnum in long arithmetic, Range#first
         /// and #last without a count, the lazily inspected ArithmeticSequence, and the Float loop of

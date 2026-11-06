@@ -269,6 +269,22 @@ namespace IronRuby.Runtime.Calls {
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             Assert.NotNull(metaBuilder, args, name);
 
+            // A method with keyword parameters takes them in one more, hidden, optional parameter
+            // (PrismAstBridge.LowerKeywords), which ArgsBuilder would count as one more positional.
+            var signature = _body.Ast.Parameters.Signature;
+            if (signature != null && TakesOrRefusesKeywords && !args.Signature.HasSplattedArgument && !args.Signature.HasRhsArgument &&
+                Parameters.Unsplat == null) {
+                int count = args.SimpleArgumentCount;
+                if (count < Parameters.Mandatory.Length || count > Parameters.Mandatory.Length + Parameters.Optional.Length) {
+                    metaBuilder.SetError(Methods.MakeKeywordMethodArityError.OpCall(
+                        AstUtils.Constant(signature, typeof(object)),
+                        AstUtils.Constant(count),
+                        (count > 0) ? AstUtils.Box(args.GetSimpleArgumentExpression(count - 1)) : AstUtils.Constant(null)
+                    ));
+                    return;
+                }
+            }
+
             // 2 implicit args: self, block
             var argsBuilder = new ArgsBuilder(2, Parameters.Mandatory.Length, Parameters.LeadingMandatoryCount, Parameters.Optional.Length, Parameters.Unsplat != null);
             argsBuilder.SetImplicit(0, AstUtils.Box(args.TargetExpression));

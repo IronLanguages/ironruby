@@ -2236,16 +2236,18 @@ namespace IronRuby.Prism {
                     (post as Pm.RequiredParameterNode)?.Name));
             }
 
+            // MRI lists the required keywords first, whatever order they were declared in:
+            // `def m(k: 1, j:)' has [[:keyreq, :j], [:key, :k]].
             int requiredKeywordCount = 0;
             foreach (var keyword in node.Keywords) {
-                switch (keyword) {
-                    case Pm.RequiredKeywordParameterNode required:
-                        parameters.Add(new RubyParameterSignature.Parameter("keyreq", required.Name));
-                        requiredKeywordCount++;
-                        break;
-                    case Pm.OptionalKeywordParameterNode optional:
-                        parameters.Add(new RubyParameterSignature.Parameter("key", optional.Name));
-                        break;
+                if (keyword is Pm.RequiredKeywordParameterNode required) {
+                    parameters.Add(new RubyParameterSignature.Parameter("keyreq", required.Name));
+                    requiredKeywordCount++;
+                }
+            }
+            foreach (var keyword in node.Keywords) {
+                if (keyword is Pm.OptionalKeywordParameterNode optional) {
+                    parameters.Add(new RubyParameterSignature.Parameter("key", optional.Name));
                 }
             }
 
@@ -2330,23 +2332,43 @@ namespace IronRuby.Prism {
                 }
             }
 
+            bool keywordsAfterOptionals = false;
+
             // keyword arguments: with only mandatory positionals a trailing optional hash
             // is equivalent, so use that (it keeps arity and Method#parameters sane).
             // Anything richer needs positional binding done by hand, because keywords do
             // not have their own calling-convention slot here.
             if (node.Keywords.Length > 0 || node.KeywordRest is Pm.KeywordRestParameterNode) {
+                // A method with optional positionals and nothing else past them keeps them as
+                // optional parameters, the keywords lowered after them as below: the keyword hash
+                // of a call that leaves an optional out is moved into place before the defaults run
+                // (Parameters.KeywordsAfterOptionals). The general lowering puts everything in one
+                // splat, which no call can bind without allocating, and the method JIT does not take.
+                //
                 // A block's keyword parameters must not count towards the auto-splat decision:
                 // `{ |a, **k| }` takes one positional parameter, so a single Array argument is
                 // passed whole. The general lowering is the one that knows that, since it binds
                 // the positionals itself.
-                if (optional.Count > 0 || unsplat != null || node.Posts.Length > 0 || autoSplat) {
+                if (isMethod && optional.Count > 0 && unsplat == null && node.Posts.Length == 0 && !autoSplat) {
+                    int optionalPositionals = optional.Count;
+                    // `super' passes the positionals by name: the mandatory ones are locals (a
+                    // destructured one a hidden local), and so are the optional ones
+                    var positionals = new List<Expression>(mandatory);
+                    foreach (var opt in optional) {
+                        positionals.Add((Expression)opt.Left);
+                    }
+                    prologue = LowerKeywords(node, optional, true, mandatory, isMethod, span, optionalPositionals);
+                    _zsuperArguments = ZSuperArguments(node, positionals);
+                    keywordsAfterOptionals = true;
+                } else if (optional.Count > 0 || unsplat != null || node.Posts.Length > 0 || autoSplat) {
                     return LowerGeneralParameters(node, autoSplat, isMethod, span, out prologue);
-                }
-                // a lambda checks arity as strictly as a method does; a plain block does not
-                prologue = LowerKeywords(node, optional, isMethod || !autoSplat, mandatory, isMethod, span);
-                if (isMethod) {
-                    // only leading mandatory parameters can be here, and they are all locals
-                    _zsuperArguments = ZSuperArguments(node, new List<Expression>(mandatory));
+                } else {
+                    // a lambda checks arity as strictly as a method does; a plain block does not
+                    prologue = LowerKeywords(node, optional, isMethod || !autoSplat, mandatory, isMethod, span, 0);
+                    if (isMethod) {
+                        // only leading mandatory parameters can be here, and they are all locals
+                        _zsuperArguments = ZSuperArguments(node, new List<Expression>(mandatory));
+                    }
                 }
             } else if (node.KeywordRest is Pm.ForwardingParameterNode) {
                 // def f(...) => def f(*?fwd?, &?fwdblk?); calls with `...` splat them back
@@ -2384,7 +2406,9 @@ namespace IronRuby.Prism {
             }
 
             return new Parameters(mandatory.ToArray(), leadingMandatoryCount,
-                optional.Count > 0 ? optional.ToArray() : null, unsplat, blockParam, span);
+                optional.Count > 0 ? optional.ToArray() : null, unsplat, blockParam, span) {
+                KeywordsAfterOptionals = keywordsAfterOptionals
+            };
         }
 
         /// <summary>
@@ -2543,7 +2567,7 @@ namespace IronRuby.Prism {
         ///   rest = ?kw?.dup ; rest.delete(:j) ; rest.delete(:k)
         /// </summary>
         private Statements/*!*/ LowerKeywords(Pm.ParametersNode/*!*/ node, List<SimpleAssignmentExpression>/*!*/ optional,
-            bool strict, List<LeftValue>/*!*/ mandatory, bool isMethod, SourceSpan span) {
+            bool strict, List<LeftValue>/*!*/ mandatory, bool isMethod, SourceSpan span, int optionalPositionals) {
 
             var kwVar = CurrentScope.AddVariable("?kw?", span);
             // The default stands for "the caller passed no keywords", so it is marked as keyword
@@ -2562,7 +2586,7 @@ namespace IronRuby.Prism {
             }
 
             if (strict) {
-                foreach (var check in KeywordSeparationChecks(kwVar, mandatory, true, span)) {
+                foreach (var check in KeywordSeparationChecks(kwVar, mandatory, optionalPositionals, true, span)) {
                     prologue.Add(check);
                 }
             }
@@ -2584,24 +2608,25 @@ namespace IronRuby.Prism {
         ///   m("a" =&gt; 1, b: 2)   # the keywords landed in a:  given 0, expected 1
         /// </summary>
         private List<Expression>/*!*/ KeywordSeparationChecks(LocalVariable/*!*/ kwVar, List<LeftValue>/*!*/ mandatory,
-            bool acceptsKeywords, SourceSpan span) {
+            int optionalPositionals, bool acceptsKeywords, SourceSpan span) {
 
             var checks = new List<Expression>();
             int count = mandatory.Count;
+            string expected = (optionalPositionals > 0) ? count + ".." + (count + optionalPositionals) : count.ToString();
 
             var lastMandatory = count > 0 ? mandatory[count - 1] as LocalVariable : null;
             if (lastMandatory != null) {
                 checks.Add(new IfExpression(
                     new KeywordArgumentsTest(lastMandatory, span),
                     new Statements(acceptsKeywords
-                        ? RaiseArityError(count - 1, count, span)
+                        ? RaiseArityError(count - 1, expected, span)
                         : RaiseError("ArgumentError", "no keywords accepted", span)),
                     new List<ElseIfClause>(), span));
             }
 
             checks.Add(new UnlessExpression(
                 new KeywordArgumentsTest(kwVar, span),
-                new Statements(RaiseArityError(count + 1, count, span)), null, span));
+                new Statements(RaiseArityError(count + optionalPositionals + 1, expected, span)), null, span));
 
             if (!acceptsKeywords) {
                 checks.Add(new UnlessExpression(
@@ -2621,7 +2646,7 @@ namespace IronRuby.Prism {
             optional.Add(new SimpleAssignmentExpression(kwVar, new HashConstructor(new Maplet[0], true, span), null, span));
 
             var prologue = new Statements();
-            foreach (var check in KeywordSeparationChecks(kwVar, mandatory, false, span)) {
+            foreach (var check in KeywordSeparationChecks(kwVar, mandatory, 0, false, span)) {
                 prologue.Add(check);
             }
             return prologue;
@@ -2638,6 +2663,10 @@ namespace IronRuby.Prism {
         }
 
         private Expression/*!*/ RaiseArityError(int given, int expected, SourceSpan span) {
+            return RaiseArityError(given, expected.ToString(), span);
+        }
+
+        private Expression/*!*/ RaiseArityError(int given, string/*!*/ expected, SourceSpan span) {
             return RaiseError("ArgumentError",
                 "wrong number of arguments (given " + given + ", expected " + expected + ")", span);
         }
