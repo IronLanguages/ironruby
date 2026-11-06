@@ -926,5 +926,40 @@ true
 true
 ");
         }
+
+        /// <summary>
+        /// Socket errors say which call failed, as MRI does, and name resolution is Socket::ResolutionError
+        /// with the platform's EAI_* code for TCPServer too (EAI_NONAME was BSD's 8 on Linux, where it is -2).
+        /// </summary>
+        public void Errno_SocketCalls1() {
+            TestOutput(@"
+require 'ruby4'
+require 'socket'
+win = RUBY_PLATFORM =~ /mswin|mingw/
+mac = RUBY_PLATFORM =~ /darwin/
+p Socket::EAI_NONAME == (win ? 11001 : mac ? 8 : -2), Socket::EAI_AGAIN == (win ? 11002 : mac ? 2 : -3)
+s = TCPServer.new('127.0.0.1', 0)
+port = s.addr[1]
+begin; TCPServer.new('127.0.0.1', port); rescue => e; p e.class; puts e.message[/ - .*/].sub(port.to_s, 'PORT'); end
+s.close
+begin; TCPSocket.new('127.0.0.1', port); rescue => e; p e.class; puts e.message[/ - .*/].sub(port.to_s, 'PORT'); end
+[-> { TCPServer.new('no.such.host.invalid', 0) }, -> { TCPSocket.new('no.such.host.invalid', 80) }].each do |l|
+  begin
+    l.call
+  rescue SocketError => e
+    p [e.class, e.message[/\Agetaddrinfo(\(3\))?: /], [Socket::EAI_NONAME, Socket::EAI_AGAIN].include?(e.error_code)]
+  end
+end
+", @"
+true
+true
+Errno::EADDRINUSE
+ - bind(2) for ""127.0.0.1"" port PORT
+Errno::ECONNREFUSED
+ - connect(2) for ""127.0.0.1"" port PORT
+[Socket::ResolutionError, ""getaddrinfo: "", true]
+[Socket::ResolutionError, ""getaddrinfo(3): "", true]
+");
+        }
     }
 }

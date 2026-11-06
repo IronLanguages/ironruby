@@ -42,25 +42,31 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// in Src/StdLib/ironruby/socket.rb, where the whole Errno table is available.
         /// </summary>
         internal static Exception/*!*/ ToRubyException(Exception/*!*/ e) {
+            return ToRubyException(e, null);
+        }
+
+        /// <param name="detail">What failed, as CRuby words it after the strerror text:
+        /// <c>connect(2) for "localhost" port 80</c>.</param>
+        internal static Exception/*!*/ ToRubyException(Exception/*!*/ e, string detail) {
             SocketException se = e as SocketException;
             if (se != null) {
                 switch (se.SocketErrorCode) {
                     case System.Net.Sockets.SocketError.ConnectionRefused:
-                        return new Errno.ConnectionRefusedError();
+                        return new Errno.ConnectionRefusedError(detail);
                     case System.Net.Sockets.SocketError.AddressAlreadyInUse:
-                        return new Errno.AddressInUseError();
+                        return new Errno.AddressInUseError(detail);
                     case System.Net.Sockets.SocketError.ConnectionReset:
-                        return new Errno.ConnectionResetError();
+                        return new Errno.ConnectionResetError(detail);
                     case System.Net.Sockets.SocketError.ConnectionAborted:
-                        return new Errno.ConnectionAbortedError();
+                        return new Errno.ConnectionAbortedError(detail);
                     case System.Net.Sockets.SocketError.NotConnected:
-                        return new Errno.NotConnectedError();
+                        return new Errno.NotConnectedError(detail);
                     case System.Net.Sockets.SocketError.HostDown:
-                        return new Errno.HostDownError();
+                        return new Errno.HostDownError(detail);
                     case System.Net.Sockets.SocketError.Shutdown:
-                        return new Errno.PipeError();
+                        return new Errno.PipeError(detail);
                     case System.Net.Sockets.SocketError.InvalidArgument:
-                        return new InvalidError();
+                        return new InvalidError(detail);
                 }
                 return e;
             }

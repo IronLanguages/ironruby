@@ -199,6 +199,8 @@ class Addrinfo
     return host if host.empty?
     begin
       IPSocket.getaddress(host)
+    rescue Socket::ResolutionError
+      raise
     rescue StandardError
       host
     end
@@ -307,6 +309,8 @@ class Addrinfo
 
     addresses = begin
       Socket.getaddrinfo(nodename.to_s, nil).map { |entry| entry[3] }
+    rescue Socket::ResolutionError
+      raise
     rescue StandardError
       [__resolve(nodename)]
     end
@@ -870,11 +874,20 @@ class Socket
     "TCP_INFO"        => 11,
     "TCP_MAXSEG"      => 2,
     "UDP_CORK"        => 1,
-    "EAI_ADDRFAMILY"  => -9,
     # A Linux-only socket type with no SocketType member; it exists here only so
     # that Addrinfo can reject it the way getaddrinfo(3) does.
     "SOCK_PACKET"     => 10,
-  }.each do |name, value|
+  }.merge(
+    # The getaddrinfo(3) codes only some platforms have (the common ones are in Socket.cs).
+    case RUBY_PLATFORM
+    when /mswin|mingw|cygwin/ then {}
+    when /darwin|bsd|dragonfly/
+      { "EAI_ADDRFAMILY" => 1, "EAI_SYSTEM" => 11, "EAI_BADHINTS" => 12, "EAI_PROTOCOL" => 13,
+        "EAI_OVERFLOW" => 14, "EAI_MAX" => 15 }
+    else
+      { "EAI_ADDRFAMILY" => -9, "EAI_SYSTEM" => -11, "EAI_OVERFLOW" => -12 }
+    end
+  ).each do |name, value|
     # Socket copies Socket::Constants at class-definition time (Includes(Copy
     # = true) in Socket.cs), so a late addition has to be set on both.
     Constants.const_set(name, value) unless Constants.const_defined?(name, false)
@@ -2310,9 +2323,16 @@ module IronRubySocketErrors__ # :nodoc: all
   KEEP = %w[WouldBlock InProgress Success HostNotFound NoData TryAgain NoRecovery
             TypeNotFound SystemNotReady VersionNotSupported].freeze
 
+  # The resolver's failures are Socket::ResolutionError in CRuby, with the EAI_* code.
+  RESOLVER = { "HostNotFound" => :EAI_NONAME, "NoData" => :EAI_NONAME,
+               "TryAgain" => :EAI_AGAIN, "NoRecovery" => :EAI_FAIL }.freeze
+
   def self.translate(error)
     if error.kind_of?(SocketError)
       code = Socket.__ir_socket_error_code(error)
+      if (eai = RESOLVER[code]) && !error.kind_of?(Socket::ResolutionError)
+        return Socket.__ir_resolution_error(error.message, Socket.const_get(eai))
+      end
       return error if KEEP.include?(code)
       name = BY_CODE[code]
       return error if name.nil? || !Errno.const_defined?(name)
@@ -2363,7 +2383,10 @@ IronRubySocketErrors__.wrap(BasicSocket,
 IronRubySocketErrors__.wrap(Socket, :bind, :connect, :listen, :accept, :sysaccept, :recvfrom)
 IronRubySocketErrors__.wrap(TCPServer, :accept, :listen, :sysaccept)
 IronRubySocketErrors__.wrap(TCPSocket, :recvfrom)
-IronRubySocketErrors__.wrap(UDPSocket, :bind, :connect, :recvfrom)
+IronRubySocketErrors__.wrap(UDPSocket, :bind, :connect, :send, :recvfrom)
+# Name lookups through .NET's Dns, whose failure is a plain SocketError.
+IronRubySocketErrors__.wrap(IPSocket.singleton_class, :getaddress)
+IronRubySocketErrors__.wrap(Socket.singleton_class, :pack_sockaddr_in, :sockaddr_in)
 
 class TCPServer
   class << self

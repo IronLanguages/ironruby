@@ -110,6 +110,8 @@ namespace IronRuby.StandardLibrary.Sockets {
             Exception failure = null;
             foreach (IPAddress address in addresses) {
                 Socket socket = null;
+                // CRuby says which call failed, for the host and port as they were given.
+                string call = "socket(2)";
                 try {
                     // A host without IPv6 refuses even to create the socket (EAFNOSUPPORT); that is one
                     // more address that did not work, and the next one is tried.
@@ -118,13 +120,17 @@ namespace IronRuby.StandardLibrary.Sockets {
                         IPAddress localAddress = localHost != null
                             ? GetHostAddress(localHost.ConvertToString(), address.AddressFamily)
                             : (address.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any);
+                        call = "bind(2)";
                         socket.Bind(new IPEndPoint(localAddress, localPort));
                     }
+                    call = "connect(2)";
                     socket.Connect(address, port);
                     return socket;
                 } catch (SocketException e) {
                     socket?.Close();
-                    failure = SocketErrorOps.ToRubyException(e);
+                    failure = call == "bind(2)"
+                        ? SocketErrorOps.ToRubyException(e, DescribeEndPoint(call, localHost, localPort))
+                        : SocketErrorOps.ToRubyException(e, DescribeEndPoint(call, remoteHost, port));
                 }
             }
             throw failure;

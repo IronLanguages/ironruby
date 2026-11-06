@@ -107,7 +107,9 @@ namespace IronRuby.StandardLibrary.Sockets {
                 Assert.NotNull(listeningInterface);
             }
 
+            int portNumber = ConvertToPortNum(stringCast, fixnumCast, port);
             Socket socket = NewSocket(listeningInterface.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            string call = "bind(2)";
             try {
                 // CRuby's TCPServer sets SO_REUSEADDR before bind(2), but that cannot be done
                 // through .NET: SocketOptionName.ReuseAddress is translated to SO_REUSEPORT on
@@ -119,11 +121,12 @@ namespace IronRuby.StandardLibrary.Sockets {
                 if (PosixMessages.HasSocketOptions) {
                     PosixMessages.SetSocketOption((int)socket.Handle, 1, 2, BitConverter.GetBytes(1));
                 }
-                socket.Bind(new IPEndPoint(listeningInterface, ConvertToPortNum(stringCast, fixnumCast, port)));
+                socket.Bind(new IPEndPoint(listeningInterface, portNumber));
+                call = "listen(2)";
                 socket.Listen(128);
             } catch (SocketException e) {
                 socket.Close();
-                throw SocketErrorOps.ToRubyException(e);
+                throw SocketErrorOps.ToRubyException(e, DescribeEndPoint(call, hostname, portNumber));
             }
             return socket;
         }

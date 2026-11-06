@@ -445,24 +445,32 @@ namespace IronRuby.StandardLibrary.Sockets {
 
 #region Error Return Codes from GetAddressInfo
 
+            // The platform's getaddrinfo(3) codes, as CRuby takes them from netdb.h: negative in
+            // glibc, small positive numbers on macOS and the BSDs, Winsock error codes on Windows.
+            private static int Eai(int linux, int bsd, int windows) {
+                return RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? windows :
+                    RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || RuntimeInformation.IsOSPlatform(OSPlatform.FreeBSD) ? bsd :
+                    linux;
+            }
+
             [RubyConstant]
-            public const int EAI_AGAIN = 2;
+            public static readonly int EAI_AGAIN = Eai(-3, 2, 11002);
             [RubyConstant]
-            public const int EAI_BADFLAGS = 3;
+            public static readonly int EAI_BADFLAGS = Eai(-1, 3, 10022);
             [RubyConstant]
-            public const int EAI_FAIL = 4;
+            public static readonly int EAI_FAIL = Eai(-4, 4, 11003);
             [RubyConstant]
-            public const int EAI_FAMILY = 5;
+            public static readonly int EAI_FAMILY = Eai(-6, 5, 10047);
             [RubyConstant]
-            public const int EAI_MEMORY = 6;
+            public static readonly int EAI_MEMORY = Eai(-10, 6, 8);
             [RubyConstant]
-            public const int EAI_NODATA = 7;
+            public static readonly int EAI_NODATA = Eai(-5, 7, 11001);
             [RubyConstant]
-            public const int EAI_NONAME = 8;
+            public static readonly int EAI_NONAME = Eai(-2, 8, 11001);
             [RubyConstant]
-            public const int EAI_SERVICE = 9;
+            public static readonly int EAI_SERVICE = Eai(-8, 9, 10109);
             [RubyConstant]
-            public const int EAI_SOCKTYPE = 10;
+            public static readonly int EAI_SOCKTYPE = Eai(-7, 10, 10044);
 
 #endregion
 

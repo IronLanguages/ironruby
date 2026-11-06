@@ -943,9 +943,13 @@ namespace IronRuby.StandardLibrary.Sockets {
             if (IPAddress.TryParse(hostNameOrAddress, out address)) {
                 return address;
             }
-            // TODO: map exceptions
-
-            var addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            IPAddress[] addresses;
+            try {
+                addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            } catch (SocketException e) when (IsResolutionFailure(e)) {
+                // CRuby: Socket::ResolutionError, "getaddrinfo: Name or service not known".
+                throw ResolutionFailure(e, "getaddrinfo: ");
+            }
 
             // prefer V4 address:
             foreach (var hostAddress in addresses) {
@@ -955,6 +959,23 @@ namespace IronRuby.StandardLibrary.Sockets {
             }
 
             return addresses[0];
+        }
+
+        private static bool IsResolutionFailure(SocketException/*!*/ e) {
+            return e.SocketErrorCode is SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain or SocketError.NoRecovery;
+        }
+
+        /// <summary>
+        /// The resolver's own exception, with the message CRuby gives. It keeps its SocketErrorCode, which
+        /// is what Src/StdLib/ironruby/socket.rb turns into a Socket::ResolutionError and its error_code.
+        /// </summary>
+        private static Exception/*!*/ ResolutionFailure(SocketException/*!*/ e, string/*!*/ call) {
+            return RubyExceptionData.InitializeException(e, MutableString.Create(call + e.Message, RubyEncoding.UTF8));
+        }
+
+        /// <summary>CRuby's detail for a failed socket call: <c>connect(2) for "localhost" port 80</c>.</summary>
+        internal static string/*!*/ DescribeEndPoint(string/*!*/ call, MutableString host, int port) {
+            return call + " for " + (host != null ? "\"" + host.ConvertToString() + "\"" : "nil") + " port " + port;
         }
 
         /// <summary>
@@ -973,9 +994,9 @@ namespace IronRuby.StandardLibrary.Sockets {
             IPAddress[] addresses;
             try {
                 addresses = Dns.GetHostAddresses(hostNameOrAddress);
-            } catch (SocketException e) when (e.SocketErrorCode is SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain) {
+            } catch (SocketException e) when (IsResolutionFailure(e)) {
                 // CRuby names the call that failed: "getaddrinfo(3): Name or service not known".
-                throw SocketErrorOps.Create(MutableString.Create("getaddrinfo(3): " + e.Message, RubyEncoding.UTF8));
+                throw ResolutionFailure(e, "getaddrinfo(3): ");
             }
             var ordered = new List<IPAddress>(addresses.Length);
             foreach (var hostAddress in addresses) {
@@ -1000,7 +1021,12 @@ namespace IronRuby.StandardLibrary.Sockets {
             if (IPAddress.TryParse(hostNameOrAddress, out address)) {
                 return address;
             }
-            var addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            IPAddress[] addresses;
+            try {
+                addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            } catch (SocketException e) when (IsResolutionFailure(e)) {
+                throw ResolutionFailure(e, "getaddrinfo: ");
+            }
             foreach (var hostAddress in addresses) {
                 if (hostAddress.AddressFamily == family) {
                     return hostAddress;

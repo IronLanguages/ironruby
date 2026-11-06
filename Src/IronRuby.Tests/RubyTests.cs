@@ -711,6 +711,7 @@ namespace IronRuby.Tests {
                 ExceptionMapping3,
                 SystemCallErrorSubclass1,
                 Errno_PlatformTable1,
+                Errno_SocketCalls1,
 
                 ClassVariables1,
                 UnqualifiedConstants2,
