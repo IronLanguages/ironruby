@@ -2,9 +2,9 @@
 # on Numeric, Float and String, and Kernel#Complex. Loaded by ruby4.rb as part of the
 # core prelude, after rational.rb.
 #
-# A Complex is a real part in @real and an imaginary part in @image (MRI's names, which
-# its marshal format carries), frozen from birth. complex.c undefines Complex.new and
-# Complex.allocate; instances are made by __raw__ (nucomp_s_new_internal).
+# A Complex is a real part in @__real__ and an imaginary part in @__image__ (hidden from
+# #instance_variables, as MRI keeps them in a C struct), frozen from birth. complex.c
+# undefines Complex.new and Complex.allocate; instances are made by __raw__ (nucomp_s_new_internal).
 #
 # complex.c does its arithmetic through f_add, f_mul and friends rather than calling +
 # and * directly: they skip an exact 0 or 1 operand, which is what keeps an exact zero
@@ -25,8 +25,8 @@ class Complex < Numeric
   end
 
   def __ir_set_parts__(real, imag)
-    @real = real
-    @image = imag
+    @__real__ = real
+    @__image__ = imag
     freeze
   end
   private :__ir_set_parts__
@@ -323,25 +323,27 @@ class Complex < Numeric
 
   # --- instance methods --------------------------------------------------------
 
-  attr_reader :real
+  def real
+    @__real__
+  end
 
   def imaginary
-    @image
+    @__image__
   end
   alias imag imaginary
 
   # rb_complex_uminus
   def -@
-    ::Complex.__new2__(-@real, -@image)
+    ::Complex.__new2__(-@__real__, -@__image__)
   end
 
   # rb_complex_plus
   def +(other)
     if ::Complex === other
-      return ::Complex.__new2__(::Complex.__f_add__(@real, other.real), ::Complex.__f_add__(@image, other.imaginary))
+      return ::Complex.__new2__(::Complex.__f_add__(@__real__, other.real), ::Complex.__f_add__(@__image__, other.imaginary))
     end
     if ::Numeric === other && ::Complex.__real_p__(other)
-      return ::Complex.__new2__(::Complex.__f_add__(@real, other), @image)
+      return ::Complex.__new2__(::Complex.__f_add__(@__real__, other), @__image__)
     end
     __ir_num_coerce_bin__(other, :+)
   end
@@ -349,10 +351,10 @@ class Complex < Numeric
   # rb_complex_minus
   def -(other)
     if ::Complex === other
-      return ::Complex.__new2__(::Complex.__f_sub__(@real, other.real), ::Complex.__f_sub__(@image, other.imaginary))
+      return ::Complex.__new2__(::Complex.__f_sub__(@__real__, other.real), ::Complex.__f_sub__(@__image__, other.imaginary))
     end
     if ::Numeric === other && ::Complex.__real_p__(other)
-      return ::Complex.__new2__(::Complex.__f_sub__(@real, other), @image)
+      return ::Complex.__new2__(::Complex.__f_sub__(@__real__, other), @__image__)
     end
     __ir_num_coerce_bin__(other, :-)
   end
@@ -385,11 +387,11 @@ class Complex < Numeric
   # rb_complex_mul
   def *(other)
     if ::Complex === other
-      real, imag = ::Complex.__comp_mul__(@real, @image, other.real, other.imaginary)
+      real, imag = ::Complex.__comp_mul__(@__real__, @__image__, other.real, other.imaginary)
       return ::Complex.__new2__(real, imag)
     end
     if ::Numeric === other && ::Complex.__real_p__(other)
-      return ::Complex.__new2__(::Complex.__f_mul__(@real, other), ::Complex.__f_mul__(@image, other))
+      return ::Complex.__new2__(::Complex.__f_mul__(@__real__, other), ::Complex.__f_mul__(@__image__, other))
     end
     __ir_num_coerce_bin__(other, :*)
   end
@@ -398,8 +400,8 @@ class Complex < Numeric
   def __ir_divide__(other, func, id)
     c = ::Complex
     if ::Complex === other
-      ar = @real
-      ai = @image
+      ar = @__real__
+      ai = @__image__
       br = other.real
       bi = other.imaginary
       flo = ::Float === ar || ::Float === ai || ::Float === br || ::Float === bi
@@ -421,8 +423,8 @@ class Complex < Numeric
       return c.__new2__(x, y)
     end
     if ::Numeric === other && c.__real_p__(other)
-      x = ::Rational.__canonicalize_value__(c.__send__(func, @real, other))
-      y = ::Rational.__canonicalize_value__(c.__send__(func, @image, other))
+      x = ::Rational.__canonicalize_value__(c.__send__(func, @__real__, other))
+      y = ::Rational.__canonicalize_value__(c.__send__(func, @__image__, other))
       return c.__new2__(x, y)
     end
     __ir_num_coerce_bin__(other, id)
@@ -456,17 +458,17 @@ class Complex < Numeric
     return nil unless ::Integer === other
     c = ::Complex
     x = nil
-    if c.__zero__(@image)
-      x = @real
+    if c.__zero__(@__image__)
+      x = @__real__
       dir = 0
-    elsif c.__zero__(@real)
-      x = @image
+    elsif c.__zero__(@__real__)
+      x = @__image__
       dir = 2
-    elsif c.__eqeq__(@real, @image)
-      x = @real
+    elsif c.__eqeq__(@__real__, @__image__)
+      x = @__real__
       dir = 1
-    elsif c.__eqeq__(@real, c.__f_negate__(@image))
-      x = @image
+    elsif c.__eqeq__(@__real__, c.__f_negate__(@__image__))
+      x = @__image__
       dir = 3
     else
       dir = 0
@@ -506,7 +508,7 @@ class Complex < Numeric
       other = other.real
     end
     if ::Integer === other && other == 1
-      return c.__raw__(@real, @image)
+      return c.__raw__(@__real__, @__image__)
     end
 
     result = __ir_pow_special_angle__(other)
@@ -568,10 +570,10 @@ class Complex < Numeric
   def ==(other)
     c = ::Complex
     if ::Complex === other
-      return c.__eqeq__(@real, other.real) && c.__eqeq__(@image, other.imaginary)
+      return c.__eqeq__(@__real__, other.real) && c.__eqeq__(@__image__, other.imaginary)
     end
     if ::Numeric === other && c.__real_p__(other)
-      return c.__eqeq__(@real, other) && c.__zero__(@image)
+      return c.__eqeq__(@__real__, other) && c.__zero__(@__image__)
     end
     c.__eqeq__(other, self)
   end
@@ -580,13 +582,13 @@ class Complex < Numeric
   def <=>(other)
     c = ::Complex
     return __ir_num_coerce_cmp__(other, :<=>) unless ::Numeric === other
-    return nil unless c.__zero__(@image)
+    return nil unless c.__zero__(@__image__)
     if ::Complex === other
-      return @real <=> other.real if c.__zero__(other.imaginary)
+      return @__real__ <=> other.real if c.__zero__(other.imaginary)
     elsif c.__real_p__(other)
-      return @real <=> other
+      return @__real__ <=> other
     else
-      return @real.__send__(:__ir_num_coerce_cmp__, other, :<=>)
+      return @__real__.__send__(:__ir_num_coerce_cmp__, other, :<=>)
     end
     nil
   end
@@ -603,35 +605,35 @@ class Complex < Numeric
   # rb_complex_abs
   def abs
     c = ::Complex
-    if c.__zero__(@real)
-      a = @image.abs
-      a = a.to_f if ::Float === @real && !(::Float === @image)
+    if c.__zero__(@__real__)
+      a = @__image__.abs
+      a = a.to_f if ::Float === @__real__ && !(::Float === @__image__)
       return a
     end
-    if c.__zero__(@image)
-      a = @real.abs
-      a = a.to_f if !(::Float === @real) && ::Float === @image
+    if c.__zero__(@__image__)
+      a = @__real__.abs
+      a = a.to_f if !(::Float === @__real__) && ::Float === @__image__
       return a
     end
-    ::Math.hypot(@real, @image)
+    ::Math.hypot(@__real__, @__image__)
   end
   alias magnitude abs
 
   # nucomp_abs2
   def abs2
     c = ::Complex
-    c.__f_add__(c.__f_mul__(@real, @real), c.__f_mul__(@image, @image))
+    c.__f_add__(c.__f_mul__(@__real__, @__real__), c.__f_mul__(@__image__, @__image__))
   end
 
   # rb_complex_arg
   def arg
-    ::Math.atan2(@image, @real)
+    ::Math.atan2(@__image__, @__real__)
   end
   alias angle arg
   alias phase arg
 
   def rectangular
-    [@real, @image]
+    [@__real__, @__image__]
   end
   alias rect rectangular
 
@@ -641,7 +643,7 @@ class Complex < Numeric
 
   # rb_complex_conjugate
   def conjugate
-    ::Complex.__new2__(@real, -@image)
+    ::Complex.__new2__(@__real__, -@__image__)
   end
   alias conj conjugate
 
@@ -651,34 +653,34 @@ class Complex < Numeric
 
   # nucomp_denominator / nucomp_numerator
   def denominator
-    ::Complex.__denominator__(@real).lcm(::Complex.__denominator__(@image))
+    ::Complex.__denominator__(@__real__).lcm(::Complex.__denominator__(@__image__))
   end
 
   def numerator
     c = ::Complex
     cd = denominator
-    c.__new2__(c.__f_mul__(c.__numerator__(@real), c.__f_div__(cd, c.__denominator__(@real))),
-               c.__f_mul__(c.__numerator__(@image), c.__f_div__(cd, c.__denominator__(@image))))
+    c.__new2__(c.__f_mul__(c.__numerator__(@__real__), c.__f_div__(cd, c.__denominator__(@__real__))),
+               c.__f_mul__(c.__numerator__(@__image__), c.__f_div__(cd, c.__denominator__(@__image__))))
   end
 
   # nucomp_hash
   def hash
-    [@real, @image, ::Complex].hash
+    [@__real__, @__image__, ::Complex].hash
   end
 
   # nucomp_eql_p
   def eql?(other)
     return false unless ::Complex === other
-    @real.class == other.real.class && @image.class == other.imaginary.class && self == other
+    @__real__.class == other.real.class && @__image__.class == other.imaginary.class && self == other
   end
 
   # f_format: the imaginary part's sign, its magnitude, then "i" - with a "*" in front
   # when the magnitude does not end in a digit, as in "(3/4)*i" or "Infinity*i".
   def __ir_format__(s, inspecting)
-    impos = !::Complex.__signbit__(@image)
-    s << (inspecting ? @real.inspect : ::Kernel.String(@real))
+    impos = !::Complex.__signbit__(@__image__)
+    s << (inspecting ? @__real__.inspect : ::Kernel.String(@__real__))
     s << (impos ? "+" : "-")
-    mag = @image.abs
+    mag = @__image__.abs
     s << (inspecting ? mag.inspect : ::Kernel.String(mag))
     s << "*" unless s.end_with?("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
     s << "i"
@@ -695,49 +697,49 @@ class Complex < Numeric
 
   # rb_complex_finite_p / rb_complex_infinite_p
   def finite?
-    ::Complex.__finite__(@real) && ::Complex.__finite__(@image)
+    ::Complex.__finite__(@__real__) && ::Complex.__finite__(@__image__)
   end
 
   def infinite?
-    return nil if !::Complex.__infinite__(@real) && !::Complex.__infinite__(@image)
+    return nil if !::Complex.__infinite__(@__real__) && !::Complex.__infinite__(@__image__)
     1
   end
 
   # nucomp_to_i / nucomp_to_f / nucomp_to_r / nucomp_rationalize
   def to_i
-    unless ::Complex.__exact_zero__(@image)
+    unless ::Complex.__exact_zero__(@__image__)
       ::Kernel.raise(::RangeError, "can't convert #{self} into Integer")
     end
-    @real.to_i
+    @__real__.to_i
   end
 
   def to_f
-    unless ::Complex.__exact_zero__(@image)
+    unless ::Complex.__exact_zero__(@__image__)
       ::Kernel.raise(::RangeError, "can't convert #{self} into Float")
     end
-    @real.to_f
+    @__real__.to_f
   end
 
   def to_r
-    if ::Float === @image && @image == 0.0
+    if ::Float === @__image__ && @__image__ == 0.0
       # a Float zero imaginary part converts as well as an exact one
-    elsif !::Complex.__exact_zero__(@image)
-      imag = ::Rational.__check_to_rational__(@image) rescue nil
+    elsif !::Complex.__exact_zero__(@__image__)
+      imag = ::Rational.__check_to_rational__(@__image__) rescue nil
       if imag.nil? || !(::Rational === imag) || !::Complex.__exact_zero__(imag)
         ::Kernel.raise(::RangeError, "can't convert #{self} into Rational")
       end
     end
-    @real.to_r
+    @__real__.to_r
   end
 
   def rationalize(*args)
     if args.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
     end
-    unless ::Complex.__exact_zero__(@image)
+    unless ::Complex.__exact_zero__(@__image__)
       ::Kernel.raise(::RangeError, "can't convert #{self} into Rational")
     end
-    @real.rationalize(*args)
+    @__real__.rationalize(*args)
   end
 
   def to_c
@@ -758,7 +760,7 @@ class Complex < Numeric
 
   # nucomp_marshal_dump / nucomp_marshal_load (by way of Complex::compatible in MRI).
   def marshal_dump
-    [@real, @image]
+    [@__real__, @__image__]
   end
   private :marshal_dump
 
@@ -767,8 +769,8 @@ class Complex < Numeric
     if a.size != 2
       ::Kernel.raise(::ArgumentError, "marshaled complex must have an array whose length is 2 but #{a.size}")
     end
-    @real = a[0]
-    @image = a[1]
+    @__real__ = a[0]
+    @__image__ = a[1]
     freeze
     self
   end

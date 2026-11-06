@@ -177,10 +177,11 @@ namespace IronRuby.Runtime {
 
             // The runtime's own slots in the instance variable table - the finalizer that
             // ObjectSpace.define_finalizer attaches is one, spelled with angle brackets so that
-            // it cannot collide with a Ruby name - have no business in an #inspect.
+            // it cannot collide with a Ruby name - have no business in an #inspect, nor has the
+            // @__name__ state of the Ruby-written core classes.
             var visible = new List<KeyValuePair<string, object>>();
             foreach (KeyValuePair<string, object> var in vars) {
-                if (var.Key.Length == 0 || var.Key[0] != '<') {
+                if (RubyContext.IsVisibleInstanceVariableName(var.Key)) {
                     visible.Add(var);
                 }
             }

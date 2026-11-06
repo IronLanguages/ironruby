@@ -2817,6 +2817,51 @@ Integer
         }
 
         /// <summary>
+        /// The state the Ruby-written core keeps in @__name__ ivars is not the object's state to Ruby, as
+        /// MRI keeps it in C: a Rational's numerator, a Complex's parts, the errno tables and Process.argv0
+        /// are not instance variables or constants (MRI has no Errno::ERRNO_TABLE, Process::ORIGINAL_ARGV0),
+        /// and Marshal still round-trips. GC::INTERNAL_CONSTANTS and GC::OPTS exist. Enumerator#inspect
+        /// shows a trailing all-Symbol Hash as keywords, as inspect_enumerator does.
+        /// </summary>
+        public void Prelude_HiddenState1() {
+            TestOutput(@"
+require 'ruby4'
+r, c = Rational(3, 4), Complex(1, 2.5)
+p r.instance_variables, c.instance_variables, Marshal.load(Marshal.dump(r)), Marshal.load(Marshal.dump(c)), r.inspect, r.numerator
+p Errno.instance_variables, Errno.const_defined?(:ERRNO_TABLE), Errno.const_defined?(:ERRNO_CLASSES), SystemCallError.new('x', 2).class
+p Process.const_defined?(:ORIGINAL_ARGV0), Process.instance_variables, Process.argv0 == Process.argv0
+p GC::INTERNAL_CONSTANTS[:BASE_SLOT_SIZE], GC::INTERNAL_CONSTANTS.frozen?, GC::OPTS.include?('USE_RGENGC'), GC::OPTS.frozen?
+def m(*a, **k); end
+p [1].to_enum(:m, 1, x: 2, y: [3]), [1].to_enum(:m, {x: 2}), [1].to_enum(:m, 'a' => 1), [1].to_enum(:m, :'a b' => 1)
+o = Object.new; o.instance_variable_set(:@a, 1)
+p o.instance_variables
+", @"
+[]
+[]
+(3/4)
+(1+2.5i)
+""(3/4)""
+3
+[]
+false
+false
+Errno::ENOENT
+false
+[]
+true
+40
+true
+true
+true
+#<Enumerator: [1]:m(1, x: 2, y: [3])>
+#<Enumerator: [1]:m(x: 2)>
+#<Enumerator: [1]:m({""a"" => 1})>
+#<Enumerator: [1]:m(a b: 1)>
+[:@a]
+");
+        }
+
+        /// <summary>
         /// Integer.sqrt, #pow, #digits and #fdiv are C# (Integer.cs, ClrInteger.cs) rather than the
         /// prelude's Ruby: the same answers, with MRI's checks in MRI's order - #pow(b, 1) is 0, a
         /// non-Integer exponent is "unless a 1st argument is integer", #digits refuses a negative

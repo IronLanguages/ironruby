@@ -3946,8 +3946,13 @@ module Errno
   # their Errno and Message constants -- they are CLR-backed and carry no number, so
   # without the constant Errno::ENOENT::Errno would resolve up to the Errno module
   # itself -- and supplies the default message for SystemCallError#initialize below.
-  ERRNO_TABLE = {}
-  ERRNO_CLASSES = {}
+  # MRI has no such constants, so they are hidden ivars of the module, read through
+  # Errno.__errno_table__ and Errno.__errno_classes__.
+  @__errno_table__ = {}
+  @__errno_classes__ = {}
+  class << self
+    attr_reader :__errno_table__, :__errno_classes__
+  end
 
   # Every class below is a new receiver, so a call like klass.const_set(...) would bind
   # a rule of its own for each class - about 150 of them, for calls made once. Module's
@@ -3962,14 +3967,14 @@ module Errno
       missing << name
       next
     end
-    if (klass = ERRNO_CLASSES[errno])
+    if (klass = @__errno_classes__[errno])
       # The second name for a number is the first name's class: MRI's EWOULDBLOCK *is*
       # EAGAIN where the numbers agree (and EDEADLOCK is EDEADLK, EOPNOTSUPP is ENOTSUP).
       remove_const(name) if const_defined?(name, false)
       const_set(name, klass)
       next
     end
-    ERRNO_TABLE[errno] = [name, message]
+    @__errno_table__[errno] = [name, message]
     if const_defined?(name, false)
       klass = const_get(name)
       # const_defined? without the second argument would find the enclosing Errno
@@ -3986,15 +3991,14 @@ module Errno
       klass::Errno = errno
       klass::Message = message
     end
-    ERRNO_CLASSES[errno] = klass
+    @__errno_classes__[errno] = klass
   end
 
   # A name this platform has no such error for (EAUTH on Linux) is NOERROR, as in MRI.
   missing.each { |name| const_set(name, NOERROR) unless const_defined?(name, false) }
 
-  ERRNO_TABLE.freeze
-  ERRNO_CLASSES.freeze
-  private_constant :ERRNO_TABLE, :ERRNO_CLASSES
+  @__errno_table__.freeze
+  @__errno_classes__.freeze
 end
 
 # SystemCallError's constructor understood exactly one argument: either a message
@@ -4032,7 +4036,7 @@ class SystemCallError
       klass = klass.superclass
     end
     return "unknown error" if errno.nil?
-    entry = ::Errno.const_get(:ERRNO_TABLE)[errno]
+    entry = ::Errno.__errno_table__[errno]
     entry ? entry[1] : "Unknown error #{errno}"
   end
 
@@ -4085,7 +4089,7 @@ class SystemCallError
       end
       # A known errno names a subclass; an unknown one stays a plain
       # SystemCallError that remembers the number for #errno.
-      klass = ::Errno.const_get(:ERRNO_CLASSES)[errno]
+      klass = ::Errno.__errno_classes__[errno]
       return klass.new(message, args[2]) if klass
       return super(message, errno, args[2])
     end
@@ -4811,8 +4815,17 @@ class Enumerator
     text = recv_text || recv.inspect
     return text if meth.nil?
     text = "#{text}:#{meth}"
-    text += "(#{args.map { |a| a.inspect }.join(', ')})" unless args.nil? || args.empty?
-    text
+    return text if args.nil? || args.empty?
+    # inspect_enumerator: a non-empty Hash with only Symbol keys at the end is shown as
+    # keywords, whether or not it was passed as such, each key by its bare name.
+    last = args[-1]
+    if ::Hash === last && !last.empty? && last.each_key.all?(::Symbol)
+      args = args[0...-1]
+      kwds = last
+    end
+    parts = args.map { |a| a.inspect }
+    kwds&.each { |k, v| parts << "#{k.name}: #{v.inspect}" }
+    "#{text}(#{parts.join(', ')})"
   end
   private :__inspect_detail__
 
@@ -7505,18 +7518,23 @@ module Process
 
   unless respond_to?(:argv0)
     # MRI hands back the $0 the program started with, and keeps handing it back
-    # after $0 is assigned to. setproctitle is what assignment goes through.
-    ORIGINAL_ARGV0 = ($0 && $0.dup.freeze) unless const_defined?(:ORIGINAL_ARGV0)
+    # after $0 is assigned to. setproctitle is what assignment goes through. MRI has no
+    # constant for it: a hidden ivar of the module, which RubyContext sets again once the
+    # main script is known.
+    @__argv0__ = ($0 && $0.dup.freeze) unless instance_variable_defined?(:@__argv0__)
+    class << self
+      attr_reader :__argv0__
+    end
 
     def argv0
-      ORIGINAL_ARGV0
+      ::Process.__argv0__
     end
     module_function :argv0
   end
 
   unless respond_to?(:maxgroups)
     def maxgroups
-      @maxgroups ||= 65536
+      @__maxgroups__ ||= 65536
     end
     module_function :maxgroups
 
@@ -11591,6 +11609,16 @@ module GC
     retained_weak_references_count: 0
   }.freeze
   private_constant :LATEST_GC_INFO
+
+  # gc.c's layout constants and compile options. The object sizes are MRI's on a 64-bit
+  # build, the sizes ObjectSpace.memsize_of counts in; the CLR collector is generational
+  # and compacting.
+  INTERNAL_CONSTANTS = {
+    DEBUG: false, BASE_SLOT_SIZE: 40, RBASIC_SIZE: 16, RVALUE_OVERHEAD: 0,
+    HEAP_PAGE_OBJ_LIMIT: 1638, HEAP_PAGE_BITMAP_SIZE: 208, HEAP_PAGE_SIZE: 65536,
+    HEAP_COUNT: 5, RVARGC_MAX_ALLOCATE_SIZE: 640, RVALUE_OLD_AGE: 3
+  }.freeze
+  OPTS = ["USE_RGENGC", "GC_COMPACTION_SUPPORTED"].each(&:freeze).freeze
 
   def self.latest_gc_info(key = nil)
     case key

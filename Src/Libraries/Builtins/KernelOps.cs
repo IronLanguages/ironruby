@@ -609,8 +609,8 @@ namespace IronRuby.Builtins {
                 return null;
             }
             var result = new Numeric(cls);
-            context.SetInstanceVariable(result, "@numerator", Protocols.Normalize(numerator));
-            context.SetInstanceVariable(result, "@denominator", Protocols.Normalize(denominator));
+            context.SetInstanceVariable(result, "@__numerator__", Protocols.Normalize(numerator));
+            context.SetInstanceVariable(result, "@__denominator__", Protocols.Normalize(denominator));
             result.Freeze();
             return result;
         }
