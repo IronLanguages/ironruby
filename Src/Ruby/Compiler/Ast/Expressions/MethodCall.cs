@@ -80,7 +80,7 @@ namespace IronRuby.Compiler.Ast {
             if (_target != null) {
                 transformedTarget = _target.TransformRead(gen);
                 // `self.foo` may call a private method, just like a receiverless call does
-                hasImplicitSelf = _target.NodeType == NodeTypes.SelfReference;
+                hasImplicitSelf = _target is SelfReference;
             } else {
                 transformedTarget = gen.CurrentSelfVariable;
                 hasImplicitSelf = true;
