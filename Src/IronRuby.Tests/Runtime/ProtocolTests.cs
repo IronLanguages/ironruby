@@ -685,7 +685,7 @@ ArgumentError: wrong number of arguments (given 0, expected 1..2; required keywo
 => [""ErrorMessages.rb:31:in 'Module#class_exec'""]
 ErrorMessages.rb:*: warning: already initialized constant X
 ErrorMessages.rb:33: warning: previous definition of X was here
-ErrorMessages.rb:36: warning: Float 1e400 out of range
+<internal:kernel>:196: warning: Float 1e400 out of range
 => Infinity
 ErrorMessages.rb:37: warning: Float -1e-400 out of range
 => -0.0

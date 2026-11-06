@@ -463,6 +463,103 @@ nil
         }
 
         /// <summary>
+        /// MRI gives a C function a frame when it is called as a method (rb_funcall, rb_block_call) and none when C calls it
+        /// directly. Of library methods calling one another only the outermost was reported, which lost the ones a library
+        /// method calls as Ruby methods: Array#map under Kernel#public_send, Hash#each under Enumerable#map. Methods of the
+        /// Ruby half of the core library showed their helpers (Math.__dom__, Enumerable#__extreme_by__) and the methods
+        /// they are written with (Array#select! under Array#keep_if, Enumerable#sum under Array#sum); an alias there was
+        /// labelled by the method it aliases (Array#filter! as Array#select!, Enumerable#reduce as #inject); a module
+        /// function called on its module was labelled as the instance method (Math#sqrt, Kernel#Integer for Kernel.Integer).
+        /// </summary>
+        public void Backtrace_LibraryFrames1() {
+            TestOutput(@"
+require 'ruby4'
+# the frames of methods with an owner: the blocks and the host's frames are not what this is about
+def bt; yield; rescue => e; e.backtrace.map { |l| l[/'(.*)'/, 1] }.grep(/\A[A-Z][\w:]*[#.]/).grep_v(/\AObject#/).join(' < '); end
+2.times { puts bt { [1].public_send(:map) { raise 'x' } } }
+puts bt { {a: 1}.map { raise 'x' } }, bt { [1].each_with_index { raise 'x' } }, bt { [1].each.with_index { raise 'x' } }
+puts bt { [1, 2].min_by { raise 'x' } }, bt { [1, 2].sum { raise 'x' } }, bt { [1, 2].uniq { raise 'x' } }
+puts bt { Math.sqrt(-1) }, bt { Math.sqrt('x') }, bt { Math.log(-1) }
+puts bt { Kernel.Integer('zz') }, bt { Integer('zz') }, bt { Kernel.Float('zz') }, bt { Float('zz') }
+puts bt { [1].filter! { raise 'x' } }, bt { [1].keep_if { raise 'x' } }, bt { [1].select! { raise 'x' } }
+puts bt { {a: 1, b: 2}.reduce { raise 'x' } }, bt { {a: 1, b: 2}.inject { raise 'x' } }
+puts bt { [1].collect_concat { raise 'x' } }, bt { [1].flat_map { raise 'x' } }, bt { [].each.next }
+puts bt { 'ab'.each_line { raise 'x' } }, bt { 'ab'.upto('ac') { raise 'x' } }
+p Array.instance_method(:filter!) == Array.instance_method(:select!), Enumerable.instance_method(:reduce) == Enumerable.instance_method(:inject)
+p Enumerable.instance_method(:collect_concat) == Enumerable.instance_method(:flat_map), IO.instance_method(:each) == IO.instance_method(:each_line)
+p Array.instance_method(:keep_if) == Array.instance_method(:select!), Kernel.method(:Integer).call('12'), Kernel.Float('1.5')
+p [1, 2, 3].filter!(&:odd?), [1].filter!.inspect, [1, 2, 3].keep_if(&:even?), [1, 2].reduce(:+), [[1], [2]].collect_concat.to_a
+", @"
+Array#map < Kernel#public_send < Integer#times
+Array#map < Kernel#public_send < Integer#times
+Hash#each < Enumerable#map
+Array#each < Enumerable#each_with_index
+Array#each < Enumerator#with_index
+Array#each < Enumerable#min_by
+Array#sum
+Array#uniq
+Math.sqrt
+Math.sqrt
+Math.log
+Kernel.Integer
+Kernel#Integer
+Kernel.Float
+Kernel#Float
+Array#filter!
+Array#keep_if
+Array#select!
+Hash#each < Enumerable#reduce
+Hash#each < Enumerable#inject
+Array#each < Enumerable#collect_concat
+Array#each < Enumerable#flat_map
+Enumerator#next
+String#each_line
+String#upto
+true
+true
+true
+true
+false
+12
+1.5
+[1, 3]
+""#<Enumerator: [1]:filter!>""
+[2]
+3
+[[1], [2]]
+");
+        }
+
+        /// <summary>
+        /// An Errno a library method raised had no backtrace when rescued: the rescue replaces the exception with one the
+        /// class's own #initialize made (SystemCallError's is Ruby), and copied the backtrace over before it had been taken.
+        /// Kernel#Float's warning about a number out of range is located in &lt;internal:kernel&gt;, as MRI's (written in Ruby).
+        /// </summary>
+        public void Backtrace_RescuedErrno1() {
+            TestOutput(@"
+require 'ruby4'
+# the backtrace reaches the block that called the method, above the method that rescued it
+def bt; yield; rescue => e; [e.class, e.backtrace.any? { |l| l.include?('block in') }]; end
+p bt { File.read('/nonexistent/x') }, bt { Dir.rmdir('/nonexistent/x') }, bt { File.unlink('/nonexistent/x') }
+def f; File.stat('/nonexistent/x'); end
+p bt { f }
+begin; f; rescue => e; p e.backtrace.grep(/[#']f'/).size; end
+def Warning.warn(message, category: nil) = print(message)
+$VERBOSE = true
+Float('1e400'); Float('1e400', exception: false)
+$VERBOSE = false
+", @"
+[Errno::ENOENT, true]
+[Errno::ENOENT, true]
+[Errno::ENOENT, true]
+[Errno::ENOENT, true]
+1
+<internal:kernel>:196: warning: Float 1e400 out of range
+<internal:kernel>:198: warning: Float 1e400 out of range
+");
+        }
+
+        /// <summary>
         /// StringIO's iterators without a block were Enumerators over a generator (#&lt;Enumerator:
         /// #&lt;Enumerator::Generator:...&gt;:each&gt;) rather than of the method, as MRI's; under a block that
         /// raised, StringIO#each_line had two frames - the Ruby wrapper's in stringio.rb and the built-in's, named

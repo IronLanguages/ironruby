@@ -74,6 +74,15 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         private bool _ruby2Keywords;
 
+        // What Method#== compares: the body itself, or the body of the method this one was made the same as
+        // (RubyMethodInfo.MakeEquivalentTo).
+        private RubyMethodBody _equivalenceKey;
+
+        internal RubyMethodBody/*!*/ EquivalenceKey {
+            get { return _equivalenceKey ?? this; }
+            set { _equivalenceKey = value; }
+        }
+
         public bool Ruby2Keywords {
             get { return _ruby2Keywords; }
             set { _ruby2Keywords = value; }

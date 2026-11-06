@@ -124,6 +124,16 @@ namespace IronRuby.Runtime {
         /// Called from compiled code.
         /// </summary>
         internal void CaptureExceptionTrace(RubyScope/*!*/ scope) {
+            if (CaptureTrace(scope)) {
+                // MRI (setup_exception) only calls #set_backtrace when it has been redefined:
+                if (!HasBuiltinSetBacktrace(scope.RubyContext)) {
+                    CallRedefinedSetBacktrace(scope.RubyContext);
+                }
+            }
+        }
+
+        // Takes the trace of the exception as a Ruby frame first sees it go by; false if it has one already.
+        private bool CaptureTrace(RubyScope/*!*/ scope) {
             if (!HasBacktrace && _raiseBacktrace == null) {
                 var context = scope.RubyContext;
                 bool debugMode = context.DomainManager.Configuration.DebugMode;
@@ -160,11 +170,9 @@ namespace IronRuby.Runtime {
 
                 // formatted on first use, see Backtrace:
                 _capturedTrace = new RubyStackTraceBuilder.CapturedTrace(context, _exception, catchSiteTrace, scope.InterpretedFrame != null);
-                // MRI (setup_exception) only calls #set_backtrace when it has been redefined:
-                if (!HasBuiltinSetBacktrace(context)) {
-                    CallRedefinedSetBacktrace(context);
-                }
+                return true;
             }
+            return false;
         }
 
         /// <summary>
@@ -455,7 +463,8 @@ namespace IronRuby.Runtime {
             return exception;
         }
 
-        internal static Exception/*!*/ HandleException(RubyContext/*!*/ context, Exception/*!*/ exception) {
+        internal static Exception/*!*/ HandleException(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            var context = scope.RubyContext;
             // already handled:
             var instanceData = GetInstance(exception);
             if (instanceData.Handled) {
@@ -490,7 +499,7 @@ namespace IronRuby.Runtime {
                 newException = site.Target(site, exceptionClass, message) as Exception;
             } catch (Exception e) {
                 // MRI: this can lead to stack overflow:
-                return HandleException(context, e);
+                return HandleException(scope, e);
             }
 
             // MRI doesn't handle this correctly, see http://redmine.ruby-lang.org/issues/show/1886:
@@ -498,11 +507,18 @@ namespace IronRuby.Runtime {
                 newException = RubyExceptions.CreateTypeError("exception object expected");
             }
 
+            // The new exception was never thrown and has no trace of its own: it gets the one the thrown exception has come by
+            // so far (an Errno raised by a library method had none at all when rescued).
+            bool captured = instanceData.CaptureTrace(scope);
+
             var newInstanceData = GetInstance(newException);
             
             newInstanceData.Handled = true;
             newInstanceData._backtrace = instanceData._backtrace;
             newInstanceData._capturedTrace = instanceData._capturedTrace;
+            if (captured && !newInstanceData.HasBuiltinSetBacktrace(context)) {
+                newInstanceData.CallRedefinedSetBacktrace(context);
+            }
             return newException;
         }
 

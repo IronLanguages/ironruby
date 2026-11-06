@@ -164,12 +164,16 @@ class StringIO
   private :__ir_each_line__
 
   def each_line(*args, **opts, &block)
-    # #<Enumerator: #<StringIO>:each>, by the name called, as MRI's
-    return to_enum(__callee__, *args, **opts) { nil } unless block
+    return to_enum(:each_line, *args, **opts) { nil } unless block
     __ir_each_line__(*args, **opts, &block)
   end
 
-  alias_method :each, :each_line
+  # one method in MRI, which a backtrace names by the name called
+  def each(*args, **opts, &block)
+    return to_enum(:each, *args, **opts) { nil } unless block
+    __ir_each_line__(*args, **opts, &block)
+  end
+  __ir_same_method__(:each, :each_line)
 end
 
 # StringIO.open closes the stream when its block is done and lets the string go with it, so
