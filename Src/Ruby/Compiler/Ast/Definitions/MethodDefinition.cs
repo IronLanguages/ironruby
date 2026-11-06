@@ -334,7 +334,7 @@ namespace IronRuby.Compiler.Ast {
 
             gen.LeaveMethodDefinition();
 
-            return CreateLambda(encodedName, parameters, body);
+            return CreateLambda(encodedName, parameters, new CompiledFrameExpression(body, encodedName, Location.Start.Line));
         }
 
         #region Light frames
@@ -595,8 +595,11 @@ namespace IronRuby.Compiler.Ast {
                     }
                     return traceReturn.Update(hookScope, Visit(traceReturn.Value));
                 }
-                if (node is EnterInterpretedFrameExpression) {
+                if (node is EnterInterpretedFrameExpression || node is SourceLineMarker) {
                     return node;
+                }
+                if (node is CompiledFrameExpression) {
+                    return base.VisitExtension(node);
                 }
                 NeedsScope = true;
                 return node;

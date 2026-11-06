@@ -361,6 +361,14 @@ namespace IronRuby.Aot {
             }
 
             protected override Expression VisitExtension(Expression node) {
+                // The frame a runtime-compiled lambda keeps its line in: saved code has its line table (and the frames
+                // ThreadFrameAdder adds, where another thread's backtrace needs them).
+                if (node is IronRuby.Compiler.Ast.CompiledFrameExpression frame) {
+                    return Visit(frame.Body);
+                }
+                if (node is IronRuby.Compiler.Ast.SourceLineMarker) {
+                    return Expression.Empty();
+                }
                 if (!node.CanReduce) {
                     throw new NotSupportedException("irreducible extension node " + node.GetType());
                 }

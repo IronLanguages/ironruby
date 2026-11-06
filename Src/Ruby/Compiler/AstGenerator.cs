@@ -1100,7 +1100,7 @@ namespace IronRuby.Compiler.Ast {
             if (_document != null) {
                 // TODO: should we add clearance for non-goto expressions?
                 var sequencePoint = Ast.DebugInfo(_document, location.Start.Line, location.Start.Column, location.End.Line, location.End.Column);
-                return Ast.Block(sequencePoint, expression);
+                return Ast.Block(sequencePoint, SourceLineMarker.Create(location.Start.Line), expression);
             } else {
                 return expression;
             }

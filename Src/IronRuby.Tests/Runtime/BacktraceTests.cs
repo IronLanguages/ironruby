@@ -21,13 +21,6 @@ using System.Runtime.CompilerServices;
 
 namespace IronRuby.Tests {
     public partial class Tests {
-        private bool PreciseSinglePassTraces {
-            get { 
-                // We have precise traces in debug mode and if we interpret the methods. We assume that the tests are not executing any metho
-                return Runtime.Setup.DebugMode || !_driver.NoAdaptiveCompilation && _driver.CompilationThreshold > 0; 
-            }
-        }
-
         public void Backtrace1() {
             AssertOutput(delegate() {
                 Engine.CreateScriptSourceFromString(@"
@@ -49,16 +42,11 @@ end
 
 goo
 ", "Backtrace1.rb", SourceCodeKind.File).Execute();
-            }, PreciseSinglePassTraces ? @"
+            }, @"
 Backtrace1.rb:11:in 'Object#bar'
 Backtrace1.rb:7:in 'Object#foo'
 Backtrace1.rb:3:in 'Object#goo'
 Backtrace1.rb:18
-" : @"
-Backtrace1.rb:10:in 'Object#bar'
-Backtrace1.rb:6:in 'Object#foo'
-Backtrace1.rb:2:in 'Object#goo'
-Backtrace1.rb:0
 ");
         }
 
@@ -87,18 +75,12 @@ rescue
   puts $@[0..4]
 end
 ");
-            }, PreciseSinglePassTraces ? @"
+            }, @"
 Backtrace2.rb:15:in 'baz'
 Backtrace2.rb:11:in 'bar'
 Backtrace2.rb:7:in 'foo'
 Backtrace2.rb:3:in 'goo'
 Backtrace2.rb:19
-" : @"
-Backtrace2.rb:14:in 'baz'
-Backtrace2.rb:10:in 'bar'
-Backtrace2.rb:6:in 'foo'
-Backtrace2.rb:2:in 'goo'
-Backtrace2.rb:0
 ");
         }
 
@@ -131,18 +113,12 @@ rescue
   puts $@[0..4]
 end
 ");
-            }, PreciseSinglePassTraces ? @"
+            }, @"
 Backtrace3.rb:19:in 'baz'
 Backtrace3.rb:13:in 'bar'
 Backtrace3.rb:9:in 'foo'
 Backtrace3.rb:3:in 'goo'
 Backtrace3.rb:23
-" : @"
-Backtrace3.rb:18:in 'baz'
-Backtrace3.rb:12:in 'bar'
-Backtrace3.rb:8:in 'foo'
-Backtrace3.rb:2:in 'goo'
-Backtrace3.rb:0
 ");
         }
 
@@ -173,18 +149,12 @@ end
 
 foo
 ");
-            }, PreciseSinglePassTraces ? @"
+            }, @"
 Backtrace4.rb:7:in 'baz'
 Backtrace4.rb:11:in 'block in foo'
 *:*:in 'Bar'
 Backtrace4.rb:11:in 'foo'
 Backtrace4.rb:14
-" : @"
-Backtrace4.rb:6:in 'baz'
-Backtrace4.rb:11:in 'block in foo'
-*:*:in 'Bar'
-Backtrace4.rb:10:in 'foo'
-Backtrace4.rb:0
 ", OutputFlags.Match);
         }
 
@@ -215,20 +185,13 @@ def f3
 end
 
 f1 rescue puts $@[0..5]
-", PreciseSinglePassTraces ? @"
+", @"
 Backtrace6.rb:23:in 'f3'
 Backtrace6.rb:13:in 'block in f2'
 Backtrace6.rb:10:in 'Integer#times'
 Backtrace6.rb:10:in 'f2'
 Backtrace6.rb:3:in 'f1'
 Backtrace6.rb:26
-" : @"
-Backtrace6.rb:22:in 'f3'
-Backtrace6.rb:10:in 'block in f2'
-Backtrace6.rb:6:in 'Integer#times'
-Backtrace6.rb:6:in 'f2'
-Backtrace6.rb:2:in 'f1'
-Backtrace6.rb:0
 ");
         }
         
@@ -281,6 +244,57 @@ end
 many
 caller_of_many
 Backtrace9.rb
+");
+        }
+
+        /// <summary>
+        /// A compiled method or block (the tests compile every method before its first run; ir.sh, once it has run ~300
+        /// times) has no line information of its own: every frame of one was reported at the line its method or block
+        /// starts on. It keeps its line in a frame of PrecompiledFrames (see CompiledFrameExpression) - also once an
+        /// exception has left it, and for a recursive call that has returned - and for caller (Thread#backtrace,
+        /// caller_locations and backtrace_locations, which the prelude defines, read the same lines).
+        /// </summary>
+        public void Backtrace_CompiledLines1() {
+            TestOutput(@"
+def inner(x)
+  y = x
+  raise IOError, 'x' if y > 2
+end
+
+def middle(x)
+  [x].each do |v|
+    inner(v)
+  end
+end
+
+def walk(n)
+  return 0 if n == 0
+  r = walk(n - 1)
+  raise 'after' if n == 2
+  r
+end
+
+def here
+  caller(0, 2).map { |f| f[/:(\d+)/, 1].to_i }
+end
+
+4.times do |i|
+  begin
+    middle(i)
+  rescue IOError => e
+    p e.backtrace.first(4).map { |f| f[/:(\d+)/, 1].to_i }
+  end
+end
+begin
+  walk(3)
+rescue => e
+  p e.backtrace.first(3).map { |f| f[/:(\d+)/, 1].to_i }
+end
+p here
+", @"
+[4, 9, 8, 8]
+[16, 15, 32]
+[21, 36]
 ");
         }
 
