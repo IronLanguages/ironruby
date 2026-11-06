@@ -89,9 +89,6 @@ module Kernel
     yield(self)
     self
   end
-end
-
-class Object
 
   def itself
     self
