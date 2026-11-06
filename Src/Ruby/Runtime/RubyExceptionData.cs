@@ -44,19 +44,8 @@ namespace IronRuby.Runtime {
         // True if the exception has already been handled by Ruby EH clause or if it was constructed "dynamically" via Class#new.
         internal bool Handled { get; set; }
 
-        // Real exception begin propagated by the CLR. Needed for lazy initialization of message, backtrace
-        private Exception/*!*/ _exception;
-        // For asynchronous exceptions (Thread#raise), the user-visible exception (accessible via _visibleException)
-        // is wrapped in a TheadAbortException (accessible via _exception)
-        private Exception/*!*/ _visibleException;
-
-#if DEBUG
-#pragma warning disable 414 // msc: unused field
-        // For asynchronous exceptions, this is useful to figure out which thread raised the exception
-        [NonSerialized]
-        private Thread/*!*/ _throwingThread;
-#pragma warning restore 414
-#endif
+        // The exception this data belongs to. Needed for lazy initialization of message, backtrace
+        private readonly Exception/*!*/ _exception;
 
         // if this is set to null we need to initialize it
         private object _message; 
@@ -99,10 +88,6 @@ namespace IronRuby.Runtime {
 
         private RubyExceptionData(Exception/*!*/ exception) {
             _exception = exception;
-            _visibleException = exception;
-#if DEBUG
-            _throwingThread = Thread.CurrentThread;
-#endif
         }
 
         public static RubyArray/*!*/ CreateBacktrace(RubyContext/*!*/ context, int skipFrames) {
@@ -307,15 +292,15 @@ namespace IronRuby.Runtime {
                 if (_message == null) {
                     // A Ruby-defined exception class whose #initialize never set a message: MRI's
                     // default is the class name, not the CLR's "Exception of type X was thrown."
-                    var rubyObject = _visibleException as IRubyObject;
+                    var rubyObject = _exception as IRubyObject;
                     if (rubyObject != null) {
                         var immediateClass = rubyObject.ImmediateClass;
                         if (immediateClass != null) {
                             return _message = GetDefaultMessage(immediateClass.NominalClass);
                         }
                     }
-                    string clrMessage = _visibleException.Message;
-                    if (_visibleException is DivideByZeroException && clrMessage == _DefaultDivideByZeroMessage) {
+                    string clrMessage = _exception.Message;
+                    if (_exception is DivideByZeroException && clrMessage == _DefaultDivideByZeroMessage) {
                         // Integer division by zero raises the CLR's own exception, whose message is
                         // "Attempted to divide by zero."; MRI says "divided by 0".
                         clrMessage = "divided by 0";
@@ -442,7 +427,7 @@ namespace IronRuby.Runtime {
         public void SetCause(Exception cause) {
             _hasCause = true;
             // an exception is never its own cause (MRI: `raise e, cause: e` leaves cause nil)
-            _cause = (cause == _exception || cause == _visibleException) ? null : cause;
+            _cause = (cause == _exception) ? null : cause;
         }
 
         public static string/*!*/ GetClrMessage(RubyContext/*!*/ context, object message) {
