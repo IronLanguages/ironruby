@@ -34,9 +34,7 @@ namespace IronRuby.StandardLibrary.Open3 {
             result.Add(new RubyIO(context, process.StandardOutput, null, IOMode.ReadOnly));
             result.Add(new RubyIO(context, process.StandardError, null, IOMode.ReadOnly));
 
-            if (context.RubyOptions.Compatibility >= RubyCompatibility.Ruby19) {
-                result.Add(ThreadOps.RubyThreadInfo.FromThread(System.Threading.Thread.CurrentThread));
-            }
+            result.Add(ThreadOps.RubyThreadInfo.FromThread(System.Threading.Thread.CurrentThread));
 
             return result;
         }

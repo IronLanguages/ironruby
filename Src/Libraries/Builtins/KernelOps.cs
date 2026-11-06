@@ -97,13 +97,10 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
-            // MRI 1.9 calls to_a (MRI 1.8 doesn't):
-            //if (context.RubyOptions.Compatibility > RubyCompatibility.Ruby18) {
             result = Protocols.TryConvertToArray(tryToA, obj);
             if (result != null) {
                 return result;
             }
-            //}
 
             result = new RubyArray();
             if (obj != null) {
@@ -435,7 +432,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("binding", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("binding", RubyMethodAttributes.PublicSingleton)]
         public static Binding/*!*/ GetLocalScope(RubyScope/*!*/ scope, object self) {
-            var result = Binding.Create(scope, scope.RubyContext.RubyOptions.Compatibility < RubyCompatibility.Ruby19 ? self : scope.SelfObject);
+            var result = Binding.Create(scope, scope.SelfObject);
 
             // Binding#source_location is the line that called #binding
             string path;
@@ -694,11 +691,6 @@ namespace IronRuby.Builtins {
 
             RubyContext context = scope.RubyContext;
             Exception exception = CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args);
-#if DEBUG && FEATURE_THREAD && FEATURE_EXCEPTION_STATE
-            if (RubyOptions.UseThreadAbortForSyncRaise) {
-                RubyUtils.RaiseAsyncException(Thread.CurrentThread, exception);
-            }
-#endif
             if ((TracePoint.ActiveEvents & (int)TraceEvents.Raise) != 0) {
                 TracePoint.OnException(TraceEvents.Raise, scope, context, exception);
             }

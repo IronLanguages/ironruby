@@ -53,13 +53,6 @@ namespace IronRuby.Hosting {
         protected override int? TryInteractiveAction() {
             try {
                 return base.TryInteractiveAction();
-            } catch (ThreadAbortException e) {
-                Exception visibleException = RubyUtils.GetVisibleException(e);
-                if (visibleException == e || visibleException == null) {
-                    throw;
-                } else {
-                    throw visibleException;
-                }
             } catch (SystemExit e) {
                 return e.Status;
             }

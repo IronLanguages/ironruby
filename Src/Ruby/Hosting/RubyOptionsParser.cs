@@ -657,10 +657,6 @@ namespace IronRuby.Hosting {
                     LanguageSetup.Options["LoadFromDisk"] = ScriptingRuntimeHelpers.True;
                     break;
 
-                case "-useThreadAbortForSyncRaise":
-                    RubyOptions.UseThreadAbortForSyncRaise = true;
-                    break;
-
                 case "-compileRegexps":
                     RubyOptions.CompileRegexps = true;
                     break;
@@ -959,7 +955,6 @@ namespace IronRuby.Hosting {
                 { "-ET*",                        "enables tracing of all events [debug only]" },
                 { "-save [path]",                "save generated code to given path [debug only]" },
                 { "-load",                       "load pre-compiled code [debug only]" },
-                { "-useThreadAbortForSyncRaise", "for testing purposes [debug only]" },
                 { "-compileRegexps",             "faster throughput, slower startup [debug only]" },
                 { "-X:AssembliesDir <dir>",      "set the directory for saving generated assemblies [debug only]" },
                 { "-X:SaveAssemblies",           "save generated assemblies [debug only]" },

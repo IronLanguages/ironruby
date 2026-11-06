@@ -62,11 +62,6 @@ namespace IronRuby.Runtime {
         private readonly string/*!*/ _name;
         private readonly RubyMethodAttributes _methodAttributes;
 
-        /// <summary>
-        /// RubyCompatibility is encoded along with the method attributes in the initialization code
-        /// </summary>
-        internal const int CompatibilityEncodingShift = 16;
-
         public string/*!*/ Name {
             get { return _name; }
         }
