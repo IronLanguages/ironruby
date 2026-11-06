@@ -696,4 +696,3 @@ table, so such a redirection is refused with `EINVAL`), and the Unix-only half o
 ## License
 
 Apache License 2.0, as the original. See [`Src/Public`](Src/Public/LICENSE.APACHE.html).
-The original content description is preserved in [`README.txt`](README.txt).
