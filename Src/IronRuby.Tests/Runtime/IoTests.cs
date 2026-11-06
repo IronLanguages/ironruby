@@ -35,6 +35,34 @@ hello
 ");
         }
 
+        /// <summary>
+        /// IO.popen(cmd, "r+") moves bytes: ones that are not valid UTF-8 used to be decoded by the
+        /// pipe writer's encoding (and raise), and #getbyte returned a decoded character.
+        /// </summary>
+        public void IO_PopenDuplexBytes1() {
+            if (OperatingSystem.IsWindows()) {
+                return;
+            }
+
+            TestOutput(@"
+IO.popen('cat', 'r+b') do |io|
+  io.write(""\xff\x00\x80\xC3\xA9"".force_encoding(""BINARY""))
+  io.close_write
+  p io.read.bytes
+end
+IO.popen('cat', 'r+') do |io|
+  io.write(""hé!"")
+  io.close_write
+  p io.getc, io.getbyte, io.getbyte
+end
+", @"
+[255, 0, 128, 195, 169]
+""h""
+195
+169
+");
+        }
+
         private class TestStream : MemoryStream {
             private readonly bool _canSeek;
 

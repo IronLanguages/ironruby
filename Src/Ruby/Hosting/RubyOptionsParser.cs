@@ -531,8 +531,8 @@ namespace IronRuby.Hosting {
                 return;
             }
 
-            if (arg.StartsWith("-C", StringComparison.Ordinal) ||
-                arg.StartsWith("-T", StringComparison.Ordinal)) {
+            // -T was $SAFE's switch (-C is handled above)
+            if (arg.StartsWith("-T", StringComparison.Ordinal)) {
                 throw new InvalidOptionException(String.Format("Option '{0}' not supported", arg));
             }
 

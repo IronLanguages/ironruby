@@ -158,6 +158,7 @@ namespace IronRuby.Tests {
                 Symbols1,
                 Inspect2,
                 File1,
+                IO_PopenDuplexBytes1,
                 File_AppendBytes1,
                 File_WriteBytes1,
                 File_ReadLine1,
