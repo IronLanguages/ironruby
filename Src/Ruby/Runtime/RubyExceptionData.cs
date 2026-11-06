@@ -65,6 +65,10 @@ namespace IronRuby.Runtime {
         // can be set explicitly by the user (even to nil):
         private RubyArray _backtrace;
 
+        // The backtrace of the raise, when a #set_backtrace of the exception's own was handed it instead
+        // of #backtrace (see CallRedefinedSetBacktrace); null otherwise.
+        private RubyArray _raiseBacktrace;
+
 #if FEATURE_STACK_TRACE
         // The backtrace the runtime captured when the exception was raised, until someone asks for
         // it (see CaptureExceptionTrace). Only ever set while _backtrace is null.
@@ -155,7 +159,7 @@ namespace IronRuby.Runtime {
         /// Called from compiled code.
         /// </summary>
         internal void CaptureExceptionTrace(RubyScope/*!*/ scope) {
-            if (!HasBacktrace) {
+            if (!HasBacktrace && _raiseBacktrace == null) {
                 var context = scope.RubyContext;
 #if FEATURE_STACK_TRACE
                 bool debugMode = context.DomainManager.Configuration.DebugMode;
@@ -197,7 +201,7 @@ namespace IronRuby.Runtime {
 #endif
                 // MRI (setup_exception) only calls #set_backtrace when it has been redefined:
                 if (!HasBuiltinSetBacktrace(context)) {
-                    DynamicSetBacktrace(context, Backtrace);
+                    CallRedefinedSetBacktrace(context);
                 }
             }
         }
@@ -213,7 +217,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
         public void CaptureExceptionTrace(RubyContext/*!*/ context) {
-            if (HasBacktrace) {
+            if (HasBacktrace || _raiseBacktrace != null) {
                 return;
             }
 #if FEATURE_STACK_TRACE
@@ -225,15 +229,47 @@ namespace IronRuby.Runtime {
             }
             _capturedTrace = captured;
             if (!HasBuiltinSetBacktrace(context)) {
-                // This runs in a catch block (a thread's start, a callback from native code, an error
-                // parked for later): a user's #set_backtrace that raises must not replace the exception
-                // being handled there, as it could not from the exception filter of the RubyScope overload.
-                try {
-                    DynamicSetBacktrace(context, Backtrace);
-                } catch (Exception) {
-                }
+                CallRedefinedSetBacktrace(context);
             }
 #endif
+        }
+
+        /// <summary>
+        /// MRI's setup_exception with a #set_backtrace of the exception's own: the method is handed the
+        /// backtrace of the raise and #backtrace is whatever it leaves - the raise's if it calls super,
+        /// nil if it does not - while #backtrace_locations is the raise's either way (see
+        /// RaiseBacktrace). An exception the method raises is dropped: the exception being raised
+        /// is still the one raised, as in MRI. Without this the method's error escaped the rescue
+        /// around the raise - the capture runs in a handler the DLR emits as a catch and a rethrow,
+        /// and from a C# catch block (a thread's start) it escaped the thread. Control flow still
+        /// goes through: a break or a throw out of the method, a thread being killed or interrupted.
+        /// Called once per exception: the frames the exception goes by later find RaiseBacktrace set.
+        /// </summary>
+        private void CallRedefinedSetBacktrace(RubyContext/*!*/ context) {
+            RubyArray raised = Backtrace ?? new RubyArray();
+            _raiseBacktrace = raised;
+            Backtrace = null;
+            try {
+                DynamicSetBacktrace(context, raised);
+            } catch (Exception e) when (!(e is StackUnwinder || e is ThreadAbortException || e is ThreadInterruptedException)) {
+                // MRI drops it too; #backtrace stays as the method left it
+            }
+        }
+
+        /// <summary>
+        /// The backtrace of the raise when #set_backtrace was redefined and handed it, whatever the
+        /// method did with it; null otherwise. Exception#backtrace_locations falls back to it.
+        /// </summary>
+        public RubyArray RaiseBacktrace {
+            get { return _raiseBacktrace; }
+        }
+
+        /// <summary>
+        /// Kernel#raise of an exception that has no backtrace: it gets one from where it is raised now,
+        /// and a redefined #set_backtrace is called again, as in MRI.
+        /// </summary>
+        public void ResetRaiseBacktrace() {
+            _raiseBacktrace = null;
         }
 
         /// <summary>

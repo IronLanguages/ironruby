@@ -3736,7 +3736,7 @@ namespace IronRuby.Runtime {
         
         [Emitted] // ProtocolConversionAction
         public static RubyRegex/*!*/ ToRegexValidator(string/*!*/ className, object obj) {
-            return new RubyRegex(RubyRegex.Escape(ToStringValidator(className, obj)), RubyRegexOptions.NONE);
+            return RubyRegex.FromLiteralPattern(ToStringValidator(className, obj));
         }
 
         /// <summary>

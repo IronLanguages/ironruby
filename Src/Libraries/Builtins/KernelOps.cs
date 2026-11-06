@@ -710,6 +710,7 @@ namespace IronRuby.Builtins {
             // hand those back again.
             if (!RubyExceptionData.GetInstance(exception).HasBacktrace) {
                 exception.RemoveData(typeof(Microsoft.Scripting.Interpreter.InterpretedFrameInfo));
+                RubyExceptionData.GetInstance(exception).ResetRaiseBacktrace();
             }
 
             // rethrow semantics, preserves the backtrace associated with the exception:
@@ -793,6 +794,7 @@ namespace IronRuby.Builtins {
             // exception and would otherwise report those again.
             if (!RubyExceptionData.GetInstance(exception).HasBacktrace) {
                 exception.SetData(typeof(Microsoft.Scripting.Interpreter.InterpretedFrameInfo), null);
+                RubyExceptionData.GetInstance(exception).ResetRaiseBacktrace();
             }
             return exception;
         }

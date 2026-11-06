@@ -160,10 +160,17 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // On Windows these four are MRI's rb_f_notimplement stubs (no chroot, fchdir, dirfd or
+        // fdopendir there): NotImplementedError, and #respond_to? denies them.
+        private static Exception/*!*/ Unimplemented(string/*!*/ function) {
+            return new NotImplementedError(function + "() function is unimplemented on this machine");
+        }
+
         [RubyMethod("chroot", RubyMethodAttributes.PublicSingleton)]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static int ChangeRoot(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dir) {
             if (!Posix.IsAvailable) {
-                throw new InvalidOperationException();
+                throw Unimplemented("chroot");
             }
             var path = Protocols.CastToPath(toPath, dir);
             string strPath = self.Context.DecodePath(path);
@@ -180,9 +187,10 @@ namespace IronRuby.Builtins {
         /// lasts for the block only, and the block's value is the result.
         /// </summary>
         [RubyMethod("fchdir", RubyMethodAttributes.PublicSingleton)]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static object ChangeDirectoryToDescriptor(BlockParam block, RubyClass/*!*/ self, [DefaultProtocol]int fd) {
             if (!Posix.IsAvailable) {
-                throw new NotImplementedException("fchdir");
+                throw Unimplemented("fchdir");
             }
 
             var pal = self.Context.Platform;
@@ -509,15 +517,17 @@ namespace IronRuby.Builtins {
         /// is opened the first time it is asked for and closed with the Dir.
         /// </summary>
         [RubyMethod("fileno")]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static int FileNo(RubyDir/*!*/ self) {
             self.ThrowIfClosed();
             return self.GetFileDescriptor();
         }
 
         [RubyMethod("for_fd", RubyMethodAttributes.PublicSingleton)]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static RubyDir/*!*/ ForFileDescriptor(RubyClass/*!*/ self, [DefaultProtocol]int fd) {
             if (!Posix.IsAvailable) {
-                throw new NotImplementedException("Dir.for_fd");
+                throw Unimplemented("for_fd");
             }
 
             // There is no fdopendir here, so the descriptor is turned back into the path it
@@ -661,7 +671,7 @@ namespace IronRuby.Builtins {
                 return _fd;
             }
             if (!Posix.IsAvailable) {
-                throw new NotImplementedException("Dir#fileno");
+                throw Unimplemented("fileno");
             }
 
             string path = ImmediateClass.Context.DecodePath(_dirName);

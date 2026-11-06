@@ -1049,8 +1049,8 @@ namespace IronRuby.StandardLibrary.StringIO {
             // is not wrapped in Ruby the way the chomp: option once was.
             scope.GetInnerMostClosureScope().LastInputLine = result;
             // Every read that answers a line counts, cut short by a limit or not - but the nil at
-            // the end is not a line (MRI's strio_gets).
-            if (result != null) {
+            // the end is not a line, and neither is the "" of gets(0) (MRI's strio_gets).
+            if (result != null && limit != 0) {
                 self._lineNumber++;
             }
 
@@ -1403,7 +1403,7 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyMethod("fcntl")]
         public static void FileControl(StringIO/*!*/ self) {
-            throw new NotImplementedError();
+            throw new NotImplementedError("fcntl() function is unimplemented on this machine");
         }
 
         [RubyMethod("fileno")]
