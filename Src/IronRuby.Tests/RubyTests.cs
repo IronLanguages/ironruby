@@ -700,6 +700,8 @@ namespace IronRuby.Tests {
                 RescueSplat3,
                 RescueSplat4,
                 RescueSplat5,
+                RescueListEvaluation1,
+                RescueCallsCaseEquality1,
 
                 ExceptionMapping1,
                 ExceptionMapping2,

@@ -720,6 +720,67 @@ foo(1)
 ");
         }
 
+        /// <summary>
+        /// Splatted class lists of a rescue clause are evaluated only up to the one that matches, as plain
+        /// ones are (Scenario_RubyExceptions12A).
+        /// </summary>
+        public void RescueListEvaluation1() {
+            TestOutput(@"
+x = []
+begin; raise TypeError; rescue *(x << 1; [ArgumentError]), *(x << 2; [TypeError]), *(x << 3; [NameError]); end
+p x
+x = []
+begin; raise TypeError; rescue (x << 1; ArgumentError), *(x << 2; [TypeError]), (x << 3; NameError) => e; x << e.class; end
+p x
+x = []
+begin; raise TypeError; rescue (x << 1; ArgumentError); rescue (x << 2; TypeError); rescue (x << 3; NameError); end
+p x
+", @"
+[1, 2]
+[1, 2, TypeError]
+[1, 2]
+");
+        }
+
+        /// <summary>
+        /// A bare rescue, a rescue list and a splatted one all match by calling ===, so a redefined
+        /// Module#=== or StandardError.=== is seen.
+        /// </summary>
+        public void RescueCallsCaseEquality1() {
+            TestOutput(@"
+class Module
+  alias old_eqq ===
+  def ===(o); $log << [self, o.class] if $log; old_eqq(o); end
+end
+$log = []
+begin; raise 'x'; rescue; end
+p $log
+$log = []
+begin; raise TypeError; rescue ArgumentError, TypeError; end
+p $log
+$log = []
+begin; raise TypeError; rescue *[ArgumentError, TypeError]; end
+p $log
+$log = nil
+class Module; alias === old_eqq; end
+class << StandardError; def ===(o); puts 'StandardError.==='; super; end; end
+begin; raise IOError; rescue; puts 'rescued'; end
+begin
+  begin; raise Exception; rescue; puts 'wrong'; end
+rescue Exception
+  puts 'not a StandardError'
+end
+", @"
+[[StandardError, RuntimeError]]
+[[ArgumentError, TypeError], [TypeError, TypeError]]
+[[ArgumentError, TypeError], [TypeError, TypeError]]
+StandardError.===
+rescued
+StandardError.===
+not a StandardError
+");
+        }
+
         public void ExceptionMapping1() {
             TestOutput(@"
 class LoadError

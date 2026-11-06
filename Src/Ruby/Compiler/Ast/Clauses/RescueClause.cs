@@ -68,10 +68,9 @@ namespace IronRuby.Compiler.Ast {
         internal IfStatementTest/*!*/ Transform(AstGenerator/*!*/ gen, ResultOperation resultOperation) {
             Assert.NotNull(gen);
             
+            var comparisonSiteStorage = Ast.Constant(new BinaryOpStorage(gen.Context));
             MSA.Expression condition;
             if (_types.Length != 0) {
-                var comparisonSiteStorage = Ast.Constant(new BinaryOpStorage(gen.Context));
-
                 // CompareException(type[0]) || ... || CompareException(type[n]): as in MRI, each type is evaluated
                 // and compared before the next one is evaluated, and the ones after a match are not evaluated at all.
                 condition = MakeCompareException(gen, comparisonSiteStorage, _types[0].TransformRead(gen), _types[0] is SplattedArgument);
@@ -79,7 +78,7 @@ namespace IronRuby.Compiler.Ast {
                     condition = Ast.OrElse(condition, MakeCompareException(gen, comparisonSiteStorage, _types[i].TransformRead(gen), _types[i] is SplattedArgument));
                 }
             } else {
-                condition = Methods.CompareDefaultException.OpCall(gen.CurrentScopeVariable);
+                condition = Methods.CompareDefaultException.OpCall(comparisonSiteStorage, gen.CurrentScopeVariable);
             }
 
             return AstUtils.IfCondition(condition,

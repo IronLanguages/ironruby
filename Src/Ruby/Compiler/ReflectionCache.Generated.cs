@@ -62,7 +62,7 @@ namespace IronRuby.Compiler {
         private static MethodInfo _CheckSplatArity;
         public static MethodInfo/*!*/ ClearKeywordArguments { get { return _ClearKeywordArguments ?? (_ClearKeywordArguments = CallInstruction.CacheFunc<System.Object, System.Object>(RubyOps.ClearKeywordArguments)); } }
         private static MethodInfo _ClearKeywordArguments;
-        public static MethodInfo/*!*/ CompareDefaultException { get { return _CompareDefaultException ?? (_CompareDefaultException = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Boolean>(RubyOps.CompareDefaultException)); } }
+        public static MethodInfo/*!*/ CompareDefaultException { get { return _CompareDefaultException ?? (_CompareDefaultException = CallInstruction.CacheFunc<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RubyScope, System.Boolean>(RubyOps.CompareDefaultException)); } }
         private static MethodInfo _CompareDefaultException;
         public static MethodInfo/*!*/ CompareException { get { return _CompareException ?? (_CompareException = CallInstruction.CacheFunc<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RubyScope, System.Object, System.Boolean>(RubyOps.CompareException)); } }
         private static MethodInfo _CompareException;
