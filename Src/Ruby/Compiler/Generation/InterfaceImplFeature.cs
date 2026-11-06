@@ -75,7 +75,7 @@ namespace IronRuby.Compiler.Generation {
         }
 
         public override int GetHashCode() {
-            return typeof(InterfaceImplFeature).GetHashCode();
+            return _hash;
         }
 
         public override bool Equals(object obj) {

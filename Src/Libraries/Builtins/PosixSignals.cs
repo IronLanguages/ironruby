@@ -131,8 +131,6 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "kill")]
         private static extern int SysKill(int pid, int signal);
 
-        private const int ESRCH = 3;
-        private const int EPERM = 1;
         private const int EINVAL = 22;
 
         /// <summary>
@@ -421,7 +419,6 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private const int SignalInterrupt = 2;
         private const int SignalKill = 9;
 
         /// <summary>

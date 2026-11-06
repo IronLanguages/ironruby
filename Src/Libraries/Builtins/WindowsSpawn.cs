@@ -61,7 +61,6 @@ namespace IronRuby.Builtins {
         private const int ERROR_LOCK_VIOLATION = 33;
         private const int ERROR_INVALID_NAME = 123;
         private const int ERROR_BAD_EXE_FORMAT = 193;
-        private const int ERROR_BROKEN_PIPE = 109;
 
         // Linux errno values, which is what the prelude's Errno:: table is built from.
         private const int ENOENT = 2;

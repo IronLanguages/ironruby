@@ -62,11 +62,8 @@ end
         }
 
         private class TestStream : MemoryStream {
-            private readonly bool _canSeek;
-
-            public TestStream(bool canSeek, byte[] data) 
+            public TestStream(byte[] data) 
                 : base(data) {
-                _canSeek = canSeek;
             }
 
             public override bool CanSeek {
@@ -82,7 +79,7 @@ end
         public void File_AppendBytes1() {
             string s;
             string crlf = "\r\n";
-            var stream = new TestStream(false, B(
+            var stream = new TestStream(B(
                 "ab\r\r\n" +
                 "e" + (s = "fgh" + crlf + "ijkl" + crlf + "mnop" + crlf + crlf + crlf + crlf + "qrst") +
                 crlf + "!"
@@ -113,7 +110,7 @@ end
             Assert(io.AppendBytes(buffer, 10, false) == 0);
             Assert(buffer.ToString() == "");
 
-            stream = new TestStream(false, B(s = "abcd" + crlf + "xyz" + crlf + "qqq;"));
+            stream = new TestStream(B(s = "abcd" + crlf + "xyz" + crlf + "qqq;"));
             io = new RubyBufferedStream(stream);
             buffer = MutableString.CreateBinary();
             Assert(io.AppendBytes(buffer, Int32.MaxValue, true) == s.Length);
@@ -146,7 +143,7 @@ end
 
         [Options(NoRuntime = true)]
         public void File_ReadLine1() {
-            var stream = new TestStream(false, B(
+            var stream = new TestStream(B(
                 "a\r\n\r\nbbbbbbbbbbbbbbbbbbbbb1bbbbbbbbbbbbb2bbbbbbbbbbbbbbbbbbbbb3bbbbbbbbbbbbb4\rc\nd\n\n\n\nef")
             );
 
@@ -203,7 +200,7 @@ end
             foreach (var c in cases) {
                 foreach (int bufferSize in new[] { 1, 2, 3, 4, 5, 7, 100 }) {
                     foreach (bool seekable in new[] { false, true }) {
-                        var stream = seekable ? new MemoryStream(B(c[0])) : new TestStream(false, B(c[0]));
+                        var stream = seekable ? new MemoryStream(B(c[0])) : new TestStream(B(c[0]));
                         var io = new RubyBufferedStream(stream, false, bufferSize);
                         var separator = MutableString.CreateBinary(B(c[1]));
                         int limit = Int32.Parse(c[2]);
@@ -235,7 +232,7 @@ end
             }
 
             foreach (bool seekable in new[] { false, true }) {
-                var stream = seekable ? new MemoryStream(data) : new TestStream(false, data);
+                var stream = seekable ? new MemoryStream(data) : new TestStream(data);
                 var io = new RubyBufferedStream(stream, false, 16);
                 Assert(io.PeekByte() == data[0]);
 
