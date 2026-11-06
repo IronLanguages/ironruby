@@ -3844,5 +3844,51 @@ autoload const: ""LoadError: cannot load such file -- /nonexistent/thing""
 tracepoint ctor: [[:call, :initialize], [:return, :initialize], [:call, :x], [:return, :x]]
 ");
         }
+
+        /// <summary>
+        /// BigDecimal against CRuby 4.0's bigdecimal 4.0.1: a Rational operand of a comparison is expanded as
+        /// for arithmetic (== used to recurse through Rational#== until the stack overflowed), #power and #**
+        /// take any real exponent and a precision, round takes half:, and a BigDecimal is frozen and has no
+        /// public constructor.
+        /// </summary>
+        public void BigDecimal_Ruby4_1() {
+            TestOutput(@"
+require 'ruby4'
+require 'bigdecimal'
+def t(label)
+  r = begin; v = yield; v.is_a?(BigDecimal) ? v.to_s : v.inspect; rescue => e; ""#{e.class}: #{e.message}""; end
+  puts ""#{label}: #{r}""
+end
+t('==') { BigDecimal('0.5') == Rational(1, 2) }
+t('<=>') { BigDecimal('0.5') <=> Rational(1, 3) }
+t('r+') { Rational(1, 3) + BigDecimal('0.5') }
+t('div') { BigDecimal('1').div(Rational(1, 3), 5) }
+t('power') { BigDecimal('2').power(BigDecimal('0.5'), 20) }
+t('**') { BigDecimal('4') ** Rational(1, 2) }
+t('round') { BigDecimal('1.25').round(1, half: :even) }
+t('quo') { BigDecimal('1').quo(3, 5) }
+t('sqrt') { BigDecimal('-2').sqrt(10) }
+t('frozen') { BigDecimal('1').frozen? }
+t('new') { BigDecimal.new('1') }
+t('allocate') { BigDecimal.allocate }
+t('_dump') { BigDecimal('1.5')._dump }
+t('BASE') { BigDecimal::BASE.class }
+", @"
+==: true
+<=>: 1
+r+: 0.83333333333333333333333333333333e0
+div: 0.3e1
+power: 0.14142135623730950488e1
+**: 0.2e1
+round: 0.12e1
+quo: 0.33333e0
+sqrt: FloatDomainError: sqrt of negative value
+frozen: true
+new: NoMethodError: undefined method 'new' for class BigDecimal
+allocate: TypeError: allocator undefined for BigDecimal
+_dump: ""18:0.15e1""
+BASE: Integer
+");
+        }
     }
 }

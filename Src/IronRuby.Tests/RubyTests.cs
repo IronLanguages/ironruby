@@ -884,6 +884,7 @@ namespace IronRuby.Tests {
                 Kernel_ConversionsInjectZip1,
                 Method_LightFrame1,
                 Method_LightFrame2,
+                BigDecimal_Ruby4_1,
                 Hash_SelfKey1,
                 Thread_JoinSelf1,
                 Reflection_Misc1,

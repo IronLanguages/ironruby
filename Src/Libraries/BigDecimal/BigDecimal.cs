@@ -20,11 +20,12 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using IronRuby.Builtins;
+using IronRuby.Runtime;
 using System.Numerics;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.StandardLibrary.BigDecimal {
-    public class BigDecimal : IComparable<BigDecimal>, IEquatable<BigDecimal> {
+    public class BigDecimal : IComparable<BigDecimal>, IEquatable<BigDecimal>, IRubyObjectState {
 
         static BigDecimal() {
             CreateSC();
@@ -213,7 +214,16 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public int Precision { get { return _fraction.Precision; } }
         public int MaxPrecision { get { return _maxPrecision; } }
         public int Digits { get { return _fraction.DigitCount; } }
-        public int MaxPrecisionDigits { get { return _maxPrecision * BASE_FIG; } }
+        #endregion
+
+        #region IRubyObjectState
+
+        // A BigDecimal is immutable and, as in MRI, always frozen.
+        public bool IsFrozen => true;
+        public void Freeze() { }
+        public bool IsTainted { get => false; set { } }
+        public bool IsUntrusted { get => false; set { } }
+
         #endregion
 
         #region Create Methods
@@ -689,79 +699,19 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             }
         }
 
-        public static BigDecimal/*!*/ Power(Config/*!*/ config, BigDecimal/*!*/ x, int power) {
-            if (IsNaN(x)) {
-                return CheckOverflowExceptions(config, NaN);
-            }
-
-            if (power == 0) {
-                // Even Infinity ** 0 is 1.
-                return One;
-            }
-
-            // power is odd  => sign = x.Sign
-            // power is even => sign = 1
-            int sign = (power % 2 != 0) ? x.Sign : 1;
-
-            if (IsInfinite(x)) {
-                // Infinity to a positive power stays infinite; to a negative power it
-                // collapses onto a (signed) zero, exactly as 0 ** -n blows up to Infinity.
-                if (power < 0) {
-                    return new BigDecimal(sign, PositiveZero);
-                }
-                return CheckOverflowExceptions(config, sign < 0 ? NegativeInfinity : PositiveInfinity);
-            }
-
-            if (IsOne(x)) {
-                return new BigDecimal(sign, One);
-            }
-
-            if (IsZero(x)) {
-                if (power < 0) {
-                    return CheckOverflowExceptions(config, new BigDecimal(sign, PositiveInfinity));
-                } else {
-                    return new BigDecimal(sign, PositiveZero);
-                }
-            }
-
-            BigDecimal result = x;
-            int n = Math.Abs(power) - 1;
-            int precision = x.Precision * (n + 2);
-            while (n > 0) {
-                // Copy x into temp ensuring a good precision
-                BigDecimal temp = new BigDecimal(x.Sign, x, precision);
-                int s = 2;
-                int ss = 1;
-                while (s <= n) {
-                    temp = Multiply(config, temp, temp);
-                    ss = s;
-                    s += s;
-                }
-                n -= ss;
-                result = Multiply(config, result, temp);
-            }
-            if (power < 0) {
-                BigDecimal remainder;
-                result = Divide(config, One, result, precision * (BASE_FIG + 1), out remainder);
-            }
-            return result;
-        }
-
         public static BigDecimal/*!*/ SquareRoot(Config/*!*/ config, BigDecimal/*!*/ x, int limit) {
             if (limit < 0) {
-                throw new ArgumentException("argument must be positive");
+                throw new ArgumentException("Negative precision for sqrt");
             }
             // Special cases
             if (IsZero(x) || IsPositiveOne(x)) {
                 return x;
             }
-            if (x.Sign < 0) {
-                throw new FloatDomainError("SQRT(negative value)");
-                // Really it seems more consistent to check the overflow exceptions
-                // return CheckOverflowExceptions(config, NaN);
-            }
             if (IsNaN(x)) {
-                throw new FloatDomainError("SQRT(NaN)");
+                throw new FloatDomainError("sqrt of 'NaN'(Not a Number)");
+            }
+            if (x.Sign < 0) {
+                throw new FloatDomainError("sqrt of negative value");
             }
             if (!IsFinite(x)) {
                 return CheckOverflowExceptions(config, x);
@@ -1355,7 +1305,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             if (IsNaN(result) && (config.OverflowMode & OverflowExceptionModes.NaN) == OverflowExceptionModes.NaN) {
                 throw new FloatDomainError("Computation results to 'NaN'");
             } else if (IsInfinite(result) && (config.OverflowMode & OverflowExceptionModes.Infinity) == OverflowExceptionModes.Infinity) {
-                throw new FloatDomainError("Computation results to 'Infinity'");
+                throw new FloatDomainError(result.Sign > 0 ? "Computation results in 'Infinity'" : "Computation results in '-Infinity'");
             }
             return result;
         }
