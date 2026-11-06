@@ -6993,6 +6993,17 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadProcess_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+            SetBuiltinConstant(module, "CLOCK_BOOTTIME", IronRuby.Builtins.RubyProcess.CLOCK_BOOTTIME);
+            SetBuiltinConstant(module, "CLOCK_BOOTTIME_ALARM", IronRuby.Builtins.RubyProcess.CLOCK_BOOTTIME_ALARM);
+            SetBuiltinConstant(module, "CLOCK_MONOTONIC", IronRuby.Builtins.RubyProcess.CLOCK_MONOTONIC);
+            SetBuiltinConstant(module, "CLOCK_MONOTONIC_COARSE", IronRuby.Builtins.RubyProcess.CLOCK_MONOTONIC_COARSE);
+            SetBuiltinConstant(module, "CLOCK_MONOTONIC_RAW", IronRuby.Builtins.RubyProcess.CLOCK_MONOTONIC_RAW);
+            SetBuiltinConstant(module, "CLOCK_PROCESS_CPUTIME_ID", IronRuby.Builtins.RubyProcess.CLOCK_PROCESS_CPUTIME_ID);
+            SetBuiltinConstant(module, "CLOCK_REALTIME", IronRuby.Builtins.RubyProcess.CLOCK_REALTIME);
+            SetBuiltinConstant(module, "CLOCK_REALTIME_ALARM", IronRuby.Builtins.RubyProcess.CLOCK_REALTIME_ALARM);
+            SetBuiltinConstant(module, "CLOCK_REALTIME_COARSE", IronRuby.Builtins.RubyProcess.CLOCK_REALTIME_COARSE);
+            SetBuiltinConstant(module, "CLOCK_TAI", IronRuby.Builtins.RubyProcess.CLOCK_TAI);
+            SetBuiltinConstant(module, "CLOCK_THREAD_CPUTIME_ID", IronRuby.Builtins.RubyProcess.CLOCK_THREAD_CPUTIME_ID);
             SetBuiltinConstant(module, "Tms", IronRuby.Builtins.RubyProcess.CreateTmsClass(module));
             
         }
@@ -7148,7 +7159,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "clock_gettime", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyProcess.ClockGetTime)
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyProcess.ClockGetTime)
             );
             
             DefineLibraryMethod(module, "egid", 0x61, 

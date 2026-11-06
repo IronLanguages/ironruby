@@ -842,6 +842,7 @@ namespace IronRuby.Tests {
                 Float_NegativeZero1,
                 Math_CLibrary1,
                 Errno_MessageNotDoubled1,
+                Process_ClockGetTime1,
                 Numeric_BignumFloatOverflow1,
                 Numeric_BignumExponent1,
                 Float_Eql1,
