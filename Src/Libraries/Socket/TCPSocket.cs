@@ -109,8 +109,11 @@ namespace IronRuby.StandardLibrary.Sockets {
 
             Exception failure = null;
             foreach (IPAddress address in addresses) {
-                Socket socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+                Socket socket = null;
                 try {
+                    // A host without IPv6 refuses even to create the socket (EAFNOSUPPORT); that is one
+                    // more address that did not work, and the next one is tried.
+                    socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
                     if (localHost != null || localPort != 0) {
                         IPAddress localAddress = localHost != null
                             ? GetHostAddress(localHost.ConvertToString(), address.AddressFamily)
@@ -120,7 +123,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                     socket.Connect(address, port);
                     return socket;
                 } catch (SocketException e) {
-                    socket.Close();
+                    socket?.Close();
                     failure = SocketErrorOps.ToRubyException(e);
                 }
             }
