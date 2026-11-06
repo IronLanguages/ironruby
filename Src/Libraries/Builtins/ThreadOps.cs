@@ -571,7 +571,12 @@ namespace IronRuby.Builtins {
                 if (label >= 0) {
                     caller = caller.Substring(0, label);
                 }
-                trace.Insert(0, MutableString.CreateMutable(caller + ":in '" + blockedIn + "'", RubyEncoding.UTF8));
+                // the frame of the core method written in Ruby that the thread is blocked in (the prelude's Kernel#sleep)
+                // has its label already
+                string blockedFrame = caller + ":in '" + blockedIn + "'";
+                if (trace[0].ToString() != blockedFrame) {
+                    trace.Insert(0, MutableString.CreateMutable(blockedFrame, RubyEncoding.UTF8));
+                }
             }
             return trace;
         }
