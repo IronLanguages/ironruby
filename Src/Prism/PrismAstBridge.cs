@@ -2517,7 +2517,7 @@ namespace IronRuby.Prism {
             if (node.Block is Pm.BlockParameterNode block) {
                 blockParam = DefineParameter(block.Name ?? "?block?", Span(node.Block));
             }
-            return new Parameters(LeftValue.EmptyArray, 0, null, args, blockParam, span) {
+            return new Parameters(Array.Empty<LeftValue>(), 0, null, args, blockParam, span) {
                 SuperSplat = superArgs
             };
         }

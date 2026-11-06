@@ -29,8 +29,6 @@ namespace IronRuby.Compiler.Ast {
     /// lhs op= rhs
     /// </summary>
     public partial class SimpleAssignmentExpression : AssignmentExpression {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static new SimpleAssignmentExpression[] EmptyArray = new SimpleAssignmentExpression[0];
 
         private readonly LeftValue/*!*/ _left;
         private readonly Expression/*!*/ _right;

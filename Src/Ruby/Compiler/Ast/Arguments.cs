@@ -13,6 +13,7 @@
  *
  * ***************************************************************************/
 
+using System;
 using MSA = System.Linq.Expressions;
 
 using System.Collections;
@@ -45,7 +46,7 @@ namespace IronRuby.Compiler.Ast {
         public Expression/*!*/[]/*!*/ Expressions { get { return _expressions; } }
         
         public Arguments() {
-            _expressions = Expression.EmptyArray;
+            _expressions = Array.Empty<Expression>();
         }
 
         public Arguments(Expression/*!*/ arg) {
@@ -58,7 +59,7 @@ namespace IronRuby.Compiler.Ast {
                 Assert.NotNullItems(expressions);
             }
 
-            _expressions = expressions ?? Expression.EmptyArray;
+            _expressions = expressions ?? Array.Empty<Expression>();
         }
 
         #region Transform to Call/Yield Expression

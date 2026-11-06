@@ -73,7 +73,7 @@ namespace IronRuby.Compiler.Ast {
         public CaseExpression(Expression value, WhenClause/*!*/[] whenClauses, Statements elseStatements, SourceSpan location)
             : base(location) {
             _value = value;
-            _whenClauses = whenClauses ?? WhenClause.EmptyArray;
+            _whenClauses = whenClauses ?? Array.Empty<WhenClause>();
             _elseStatements = elseStatements;
         }
 

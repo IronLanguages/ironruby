@@ -34,8 +34,6 @@ namespace IronRuby.Compiler.Ast {
     /// although some syntactic statements evaluate to a non-null value (e.g. if/unless-statements).
     /// </summary>
     public abstract class Expression : Node {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly Expression[]/*!*/ EmptyArray = new Expression[0];
         internal static readonly Statements/*!*/ _EmptyStatements = new Statements();   
 
         internal static Statements/*!*/ EmptyStatements {

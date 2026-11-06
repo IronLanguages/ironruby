@@ -13,6 +13,7 @@
  *
  * ***************************************************************************/
 
+using System;
 using Microsoft.Scripting;
 
 namespace IronRuby.Compiler.Ast {
@@ -48,7 +49,7 @@ using MSA = System.Linq.Expressions;
         private Body/*!*/ ToBody(AstGenerator/*!*/ gen) {
             return new Body(
                 new Statements(_guardedExpression),
-                CollectionUtils.MakeList(new RescueClause(Expression.EmptyArray, null, new Statements(_rescueClauseStatement), _rescueSpan)),
+                CollectionUtils.MakeList(new RescueClause(Array.Empty<Expression>(), null, new Statements(_rescueClauseStatement), _rescueSpan)),
             null, null, Location);
         }
 
