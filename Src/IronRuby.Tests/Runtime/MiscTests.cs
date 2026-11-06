@@ -2246,6 +2246,52 @@ t { ""\xe0"".force_encoding(""macThai"").ord }
 ");
         }
 
+        public void Encoding_Converter1() {
+            TestOutput(@"
+def t
+  r = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+  p r
+end
+ec = Encoding::Converter.new("""", """", crlf_newline: true)
+t { [ec.convert(""a\nb"").encoding, ec.convpath, ec.source_encoding, ec.destination_encoding, ec.inspect] }
+t { Encoding::Converter.new("""", """", universal_newline: true).convert(""a\r\nb\rc"") }
+t { Encoding::Converter.new("""", """", xml: :text).convert(""<a&'\"">"") }
+t { Encoding::Converter.new("""", """").inspect }
+t { Encoding::Converter.new("""", """").convert(""a\xff"") }
+t { Encoding::Converter.new(""UTF-8"", """", crlf_newline: true) }
+t { Encoding::Converter.new("""", ""UTF-8"") }
+t { Encoding::Converter.search_convpath("""", """", crlf_newline: true) }
+t { Encoding::Converter.search_convpath("""", """") }
+t { Encoding::Converter.new(""UTF-8"", ""EUC-JP"", crlf_newline: true, xml: :text).inspect }
+ec = Encoding::Converter.new(""UTF-8"", ""EUC-JP"")
+d = """".dup
+t { ec.primitive_convert(""a"".dup, d) }
+t { ec.convert(""b"") }
+t { [ec.primitive_convert(""c"".dup, d), d] }
+t { ec.finish }
+ec = Encoding::Converter.new(""UTF-8"", ""Shift_JIS"")
+t { [ec.convert(""あ""), ec.finish, ec.finish] }
+t { ec.convert(""b"") }
+", @"
+[#<Encoding:BINARY (ASCII-8BIT)>, [""crlf_newline""], nil, nil, ""#<Encoding::Converter: crlf_newline>""]
+""a\nb\nc""
+""&lt;a&amp;'\""&gt;""
+""#<Encoding::Converter: no-conversion>""
+""a\xFF""
+""Encoding::ConverterNotFoundError: code converter not found (UTF-8 with crlf_newline)""
+""Encoding::ConverterNotFoundError: code converter not found (UTF-8)""
+""Encoding::ConverterNotFoundError: code converter not found (crlf_newline)""
+""Encoding::ConverterNotFoundError: code converter not found (no-conversion)""
+""#<Encoding::Converter: UTF-8 to EUC-JP with crlf_newline,xml_text>""
+:finished
+""ArgumentError: converter already finished""
+[:finished, ""a""]
+""""
+[""\x{82A0}"", """", """"]
+""ArgumentError: converter already finished""
+");
+        }
+
         public void Io_Messages1() {
             TestOutput(@"
 r, w = IO.pipe
