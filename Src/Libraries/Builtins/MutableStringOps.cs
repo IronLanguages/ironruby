@@ -504,7 +504,7 @@ namespace IronRuby.Builtins {
             self.Append(other);
             // The encoding comes across too: "".send(:initialize, utf16) is a UTF-16 string.
             self.ForceEncoding(other.Encoding);
-            return self.TaintBy(other);
+            return self;
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
@@ -522,7 +522,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("%")]
         public static MutableString/*!*/ Format(StringFormatterSiteStorage/*!*/ storage, MutableString/*!*/ self, [NotNull]IList/*!*/ args) {
             StringFormatter formatter = new StringFormatter(storage, self.ConvertToString(), self.Encoding, args);
-            return formatter.Format().TaintBy(self);
+            return formatter.Format();
         }
 
         [RubyMethod("%")]
@@ -539,7 +539,7 @@ namespace IronRuby.Builtins {
             }
 
             // Ruby 3.0 dropped subclass preservation here: "MyString.new("x") * 2".class is String.
-            var result = MutableString.CreateMutable(self.Encoding).TaintBy(self);
+            var result = MutableString.CreateMutable(self.Encoding);
             if (self.IsEmpty) {
                 // AppendMultiple would spin `times` times appending nothing: "" * 2_000_000_000 hung.
                 return result;
@@ -565,7 +565,7 @@ namespace IronRuby.Builtins {
             }
 
             // Ruby 3.0 dropped subclass preservation here: "MyString.new("x") * 2".class is String.
-            var result = MutableString.CreateMutable(self.Encoding).TaintBy(self);
+            var result = MutableString.CreateMutable(self.Encoding);
             if (self.IsEmpty) {
                 return result;
             }
@@ -576,7 +576,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("+")]
         public static MutableString/*!*/ Concatenate(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ other) {
             // doesn't create a subclass:
-            return self.Concat(other).TaintBy(self).TaintBy(other);
+            return self.Concat(other);
         }
 
         // No Symbol overload: `"a" + :b` is a TypeError in Ruby 1.9 and later, not "ab".
@@ -589,7 +589,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("<<")]
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ other) {
-            return self.Append(other).TaintBy(other);
+            return self.Append(other);
         }
 
         [RubyMethod("<<")]
@@ -794,7 +794,7 @@ namespace IronRuby.Builtins {
 
         /// <summary>Removes and answers the CLR range [start, start + length).</summary>
         private static MutableString/*!*/ RemoveClrRange(MutableString/*!*/ self, int start, int length) {
-            MutableString result = self.CreateDerived().Append(self, start, length).TaintBy(self);
+            MutableString result = self.CreateDerived().Append(self, start, length);
             self.Remove(start, length);
             return result;
         }
@@ -821,7 +821,7 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
-            return RemoveClrRange(self, match.Index, match.Length).TaintBy(regex, scope);
+            return RemoveClrRange(self, match.Index, match.Length);
         }
 
         [RubyMethod("slice!")]
@@ -835,7 +835,7 @@ namespace IronRuby.Builtins {
             }
 
             return match.GroupSuccess(occurrance) ?
-                RemoveClrRange(self, match.GetGroupStart(occurrance), match.GetGroupLength(occurrance)).TaintBy(regex, scope) : null;
+                RemoveClrRange(self, match.GetGroupStart(occurrance), match.GetGroupLength(occurrance)) : null;
         }
 
         [RubyMethod("slice!")]
@@ -878,11 +878,11 @@ namespace IronRuby.Builtins {
         public static MutableString GetSubstring(MutableString/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol]int count) {
             int charCount = GetCharacterLength(self);
             if (!NormalizeSubstringRange(charCount, ref start, ref count)) {
-                return (start == charCount && count >= 0) ? self.CreateDerived().TaintBy(self) : null;
+                return (start == charCount && count >= 0) ? self.CreateDerived() : null;
             }
 
             self.ToClrRange(ref start, ref count);
-            return self.CreateDerived().Append(self, start, count).TaintBy(self);
+            return self.CreateDerived().Append(self, start, count);
         }
 
         #region byteslice
@@ -982,7 +982,7 @@ namespace IronRuby.Builtins {
             if (!NormalizeSubstringRange(fixnumCast, range, GetCharacterLength(self), out begin, out count)) {
                 return null;
             }
-            return (count < 0) ? self.CreateDerived().TaintBy(self) : GetSubstring(self, begin, count);
+            return (count < 0) ? self.CreateDerived() : GetSubstring(self, begin, count);
         }
 
         [RubyMethod("[]")]
@@ -996,7 +996,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice")]
         public static MutableString GetSubstring(RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
             if (regex.IsEmpty) {
-                return self.CreateDerived().TaintBy(self).TaintBy(regex, scope);
+                return self.CreateDerived();
             }
 
             MatchData match = RegexpOps.Match(scope, regex, self);
@@ -1004,7 +1004,7 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
-            return self.CreateDerived().TaintBy(self).Append(self, match.Index, match.Length).TaintBy(regex, scope);
+            return self.CreateDerived().Append(self, match.Index, match.Length);
         }
 
         [RubyMethod("[]")]
@@ -1017,7 +1017,7 @@ namespace IronRuby.Builtins {
             }
 
             MutableString result = match.AppendGroupValue(occurrance, self.CreateDerived());
-            return result != null ? result.TaintBy(regex, scope) : null;
+            return result;
         }
 
         // MRI also addresses a capture by its name, as a String or a Symbol.
@@ -1135,18 +1135,18 @@ namespace IronRuby.Builtins {
             }
 
             if (at == length) {
-                self.Append(value).TaintBy(value);
+                self.Append(value);
                 return value;
             }
 
             int count = 1;
             self.ToClrRange(ref at, ref count);
             if (value.IsEmpty) {
-                self.Remove(at, count).TaintBy(value);
+                self.Remove(at, count);
                 return MutableString.CreateEmpty();
             }
 
-            self.Replace(at, count, value).TaintBy(value);
+            self.Replace(at, count, value);
             return value;
         }
 
@@ -1172,7 +1172,6 @@ namespace IronRuby.Builtins {
         /// <summary>Replaces the CLR range [start, start + count) with value.</summary>
         private static MutableString/*!*/ ReplaceClrRange(MutableString/*!*/ self, int start, int count, MutableString/*!*/ value) {
             self.Replace(start, count, value);
-            self.TaintBy(value);
             return value;
         }
 
@@ -1402,11 +1401,11 @@ namespace IronRuby.Builtins {
 
             string source = TryDecodeForCaseMapping(self);
             if (source != null) {
-                return MutableString.Create(UnicodeCaseMapping.Apply(source, kind, flags), self.Encoding).TaintBy(self);
+                return MutableString.Create(UnicodeCaseMapping.Apply(source, kind, flags), self.Encoding);
             }
 
             byte[] bytes = self.ToByteArray();
-            return MutableString.CreateBinary(MapAsciiBytes(bytes, kind) ?? bytes, self.Encoding).TaintBy(self);
+            return MutableString.CreateBinary(MapAsciiBytes(bytes, kind) ?? bytes, self.Encoding);
         }
 
         private static MutableString CaseMapInPlace(MutableString/*!*/ self, CaseMappingKind kind,
@@ -1585,7 +1584,7 @@ namespace IronRuby.Builtins {
             // Built by appending strings rather than characters, so that padding of another
             // encoding decides the result's along with the receiver's: "abc" in IBM437 centred
             // with a UTF-8 pad comes back UTF-8, the way #ljust already did it.
-            MutableString result = self.CreateDerived().TaintBy(self).TaintBy(padding);
+            MutableString result = self.CreateDerived();
             AppendPadding(result, padding, left);
             result.Append(self);
             AppendPadding(result, padding, right);
@@ -1647,7 +1646,7 @@ namespace IronRuby.Builtins {
 
             // Remove multiple trailing CR/LFs
             if (separator.IsEmpty) {
-                return ChompTrailingCarriageReturns(self, false).TaintBy(self);
+                return ChompTrailingCarriageReturns(self, false);
             }
 
             // Remove single trailing CR/LFs
@@ -1721,7 +1720,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("chop")]
         public static MutableString/*!*/ Chop(MutableString/*!*/ self) {
-            return self.IsEmpty ? self.CreateDerived().TaintBy(self) : ChopInteral(self.CloneDerived());
+            return self.IsEmpty ? self.CreateDerived() : ChopInteral(self.CloneDerived());
         }
 
         #endregion
@@ -1758,10 +1757,10 @@ namespace IronRuby.Builtins {
                 var bytes = MutableString.CreateBinary(self.ToByteArray());
                 string quoted = GetQuotedStringRepresentation(bytes, true, '"')
                     + ".dup.force_encoding(\"" + self.Encoding.Name + "\")";
-                return MutableString.Create(quoted, RubyEncoding.Ascii).TaintBy(self);
+                return MutableString.Create(quoted, RubyEncoding.Ascii);
             }
 
-            return self.CreateDerived().Append(GetQuotedStringRepresentation(self, true, '"')).TaintBy(self);
+            return self.CreateDerived().Append(GetQuotedStringRepresentation(self, true, '"'));
         }
 
         // encoding aware
@@ -1778,12 +1777,12 @@ namespace IronRuby.Builtins {
             }
 
             if (!self.IsAscii() && self.Encoding != resultEncoding) {
-                return InspectForeignEncoding(self, resultEncoding).TaintBy(self);
+                return InspectForeignEncoding(self, resultEncoding);
             }
 
             // Note that "self" could be a subclass of MutableString, but the return value should
             // always be just a MutableString
-            return MutableString.Create(GetQuotedStringRepresentation(self, false, '"'), resultEncoding).TaintBy(self);
+            return MutableString.Create(GetQuotedStringRepresentation(self, false, '"'), resultEncoding);
         }
 
         /// <summary>
@@ -2061,7 +2060,7 @@ namespace IronRuby.Builtins {
                 }
 
                 object result;
-                MutableString line = self.CreateDerived().TaintBy(self).Append(str, start, end - start);
+                MutableString line = self.CreateDerived().Append(str, start, end - start);
                 if (block.Yield(line, out result)) {
                     return result;
                 }
@@ -2734,7 +2733,6 @@ namespace IronRuby.Builtins {
             matchScope.CurrentMatch = match;
 
             MutableString replacement = Protocols.ConvertToString(tosConversion, blockResult);
-            result.TaintBy(replacement);
 
             // Note - we don't interpolate special sequences like \1 in block return value
             result.Replace(match.Index, match.Length, replacement);
@@ -2760,7 +2758,7 @@ namespace IronRuby.Builtins {
             }
 
             // create an empty result:
-            result = input.CreateDerived().TaintBy(input);
+            result = input.CreateDerived();
             
             int offset = 0;
             foreach (MatchData match in matches) {
@@ -2778,7 +2776,6 @@ namespace IronRuby.Builtins {
                 matchScope.CurrentMatch = match;
 
                 MutableString replacement = Protocols.ConvertToString(tosConversion, blockResult);
-                result.TaintBy(replacement);
 
                 // prematch:
                 AppendInputPiece(result, input, offset, match.Index - offset);
@@ -2813,7 +2810,7 @@ namespace IronRuby.Builtins {
                 object replacementObj = HashOps.GetElement(hashDefault, replacement.First, match.GetValue());
                 if (replacementObj != null) {
                     var replacementStr = Protocols.ConvertToString(toS, replacementObj);
-                    result.Append(replacementStr).TaintBy(replacementStr);
+                    result.Append(replacementStr);
                 }
             }
         }
@@ -2894,7 +2891,6 @@ namespace IronRuby.Builtins {
             } else {
                 AppendBackslashes(backslashCount, result, 1);
             }
-            result.TaintBy(replacement);
         }
 
         /// <summary>
@@ -2969,7 +2965,7 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
-            MutableString result = input.CreateDerived().TaintBy(input);
+            MutableString result = input.CreateDerived();
             
             // prematch:
             AppendInputPiece(result, input, 0, match.Index);
@@ -2993,7 +2989,7 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
-            MutableString result = input.CreateDerived().TaintBy(input);
+            MutableString result = input.CreateDerived();
 
             int offset = 0;
             foreach (MatchData match in matches) {
@@ -3559,7 +3555,7 @@ namespace IronRuby.Builtins {
         private static MutableString/*!*/ InternalDelete(MutableString/*!*/ self, MutableString[]/*!*/ ranges) {
             var map = CharacterSelectorSet.Parse(self, ranges);
             self.PrepareForCharacterRead();
-            MutableString result = self.CreateDerived().TaintBy(self);
+            MutableString result = self.CreateDerived();
             if (self.HasSurrogatePairs()) {
                 for (int i = 0; i < self.Length; ) {
                     int start = i;
@@ -3703,7 +3699,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("insert")]
         public static MutableString Insert(MutableString/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
-            return self.Insert(self.ToClrIndex(NormalizeInsertIndex(start, GetCharacterLength(self))), value).TaintBy(value);
+            return self.Insert(self.ToClrIndex(NormalizeInsertIndex(start, GetCharacterLength(self))), value);
         }
 
         #endregion
@@ -3839,12 +3835,12 @@ namespace IronRuby.Builtins {
 
         private static object MatchToScanResult(RubyScope/*!*/ scope, MutableString/*!*/ self, RubyRegex/*!*/ regex, MatchData/*!*/ match) {
             if (match.GroupCount == 1) {
-                return match.GetValue().TaintBy(regex, scope);
+                return match.GetValue();
             } else {
                 var result = new RubyArray(match.GroupCount - 1);
                 for (int i = 1; i < match.GroupCount; i++) {
                     MutableString value = match.GetGroupValue(i);
-                    result.Add(value != null ? value.TaintBy(regex, scope) : value);
+                    result.Add(value);
                 }
                 return result;
             }
@@ -4033,7 +4029,7 @@ namespace IronRuby.Builtins {
         private static RubyArray/*!*/ MakeRubyArray(MutableString/*!*/ self, MutableString[]/*!*/ elements, int start, int count) {
             RubyArray result = new RubyArray(elements.Length);
             for (int i = 0; i < count; i++) {
-                result.Add(self.CreateDerived().Append(elements[start + i]).TaintBy(self));
+                result.Add(self.CreateDerived().Append(elements[start + i]));
             }
             return result;
         }
@@ -4072,7 +4068,7 @@ namespace IronRuby.Builtins {
                         }
                     }
                 } else if (IsAwkWhiteSpace(c)) {
-                    result.Add(str.CreateDerived().Append(str, begin, end - begin).TaintBy(str));
+                    result.Add(str.CreateDerived().Append(str, begin, end - begin));
                     skipping = true;
                     begin = position;
                     if (limit > 0) {
@@ -4084,7 +4080,7 @@ namespace IronRuby.Builtins {
             }
 
             if (length > 0 && (limit != 0 || length > begin)) {
-                result.Add(str.CreateDerived().Append(str, begin, length - begin).TaintBy(str));
+                result.Add(str.CreateDerived().Append(str, begin, length - begin));
             }
 
             if (limit == 0) {
@@ -4099,7 +4095,7 @@ namespace IronRuby.Builtins {
             if (limit == 1) {
                 // one field: the whole string, but as a fresh String
                 result = new RubyArray(1);
-                result.Add(str.CreateDerived().Append(str).TaintBy(str));
+                result.Add(str.CreateDerived().Append(str));
                 return result;
             }
 
@@ -4126,11 +4122,11 @@ namespace IronRuby.Builtins {
             int i = 0;
             int next;
             while ((limit <= 0 || result.Count < limit - 1) && (next = str.IndexOf(separator, i)) != -1) {
-                result.Add(str.CreateDerived().Append(str, i, next - i).TaintBy(str));
+                result.Add(str.CreateDerived().Append(str, i, next - i));
                 i = next + separatorLength;
             }
 
-            result.Add(str.CreateDerived().Append(str, i).TaintBy(str));
+            result.Add(str.CreateDerived().Append(str, i));
 
             if (limit == 0) {
                 RemoveTrailingEmptyItems(result);
@@ -4155,12 +4151,12 @@ namespace IronRuby.Builtins {
                     break;
                 }
 
-                result.Add(str.CreateDerived().Append(charEnum.Current).TaintBy(str));
+                result.Add(str.CreateDerived().Append(charEnum.Current));
                 i++;
             }
 
             if (charEnum.HasMore || limit != 0) {
-                result.Add(str.CreateDerived().AppendRemaining(charEnum).TaintBy(str));
+                result.Add(str.CreateDerived().AppendRemaining(charEnum));
             }
             
             return result;
@@ -4223,7 +4219,7 @@ namespace IronRuby.Builtins {
             if (limit == 1) {
                 // one field: the whole string, but as a fresh String
                 RubyArray result = new RubyArray(1);
-                result.Add(self.CreateDerived().Append(self).TaintBy(self));
+                result.Add(self.CreateDerived().Append(self));
                 return result;
             }
 
@@ -4265,7 +4261,7 @@ namespace IronRuby.Builtins {
 
                 if (matchStart == searchFrom && matchStart == matchEnd) {
                     if (length == 0) {
-                        result.Add(self.CreateDerived().TaintBy(self));
+                        result.Add(self.CreateDerived());
                         break;
                     }
                     if (!steppedOverEmptyMatch) {
@@ -4275,10 +4271,10 @@ namespace IronRuby.Builtins {
                         steppedOverEmptyMatch = true;
                         continue;
                     }
-                    result.Add(self.GetSlice(fieldStart, searchFrom - fieldStart).TaintBy(self));
+                    result.Add(self.GetSlice(fieldStart, searchFrom - fieldStart));
                     fieldStart = searchFrom;
                 } else {
-                    result.Add(self.GetSlice(fieldStart, matchStart - fieldStart).TaintBy(self));
+                    result.Add(self.GetSlice(fieldStart, matchStart - fieldStart));
                     fieldStart = searchFrom = matchEnd;
                 }
                 steppedOverEmptyMatch = false;
@@ -4287,7 +4283,7 @@ namespace IronRuby.Builtins {
                 // took part in the match - the other side of an alternation - contributes nothing.
                 for (int i = 1; i < match.GroupCount; i++) {
                     if (match.GroupSuccess(i)) {
-                        result.Add(match.GetGroupValue(i).TaintBy(self));
+                        result.Add(match.GetGroupValue(i));
                     }
                 }
 
@@ -4297,7 +4293,7 @@ namespace IronRuby.Builtins {
             }
 
             if (length > 0 && (limit != 0 || length > fieldStart)) {
-                result.Add(self.GetSlice(fieldStart, length - fieldStart).TaintBy(self));
+                result.Add(self.GetSlice(fieldStart, length - fieldStart));
             }
 
             return result;
@@ -4377,7 +4373,7 @@ namespace IronRuby.Builtins {
             RequireStrippable(str, trimLeft);
             int left, right;
             GetTrimRange(str, trimLeft, trimRight, out left, out right);
-            return str.GetSlice(left, right - left).TaintBy(str);
+            return str.GetSlice(left, right - left);
         }
 
         public static MutableString StripInPlace(MutableString/*!*/ self, bool trimLeft, bool trimRight) {
@@ -4589,7 +4585,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_s")]
         [RubyMethod("to_str")]
         public static MutableString/*!*/ ToS(MutableString/*!*/ self) {
-            return self.GetType() == typeof(MutableString) ? self : MutableString.Create(self).TaintBy(self);
+            return self.GetType() == typeof(MutableString) ? self : MutableString.Create(self);
         }
 
         [RubyMethod("to_clr_string")]
@@ -4648,7 +4644,7 @@ namespace IronRuby.Builtins {
             self.Clear();
             self.Append(other);
             self.ForceEncoding(other.Encoding);
-            return self.TaintBy(other);
+            return self;
         }
 
         [RubyMethod("reverse")]
@@ -4701,7 +4697,7 @@ namespace IronRuby.Builtins {
             if (inplace) {
                 dst = src;
             } else {
-                dst = src.CreateDerived().TaintBy(src);
+                dst = src.CreateDerived();
             }
             if (dst.Encoding != encoding) {
                 dst.ForceEncoding(encoding);
@@ -4813,7 +4809,7 @@ namespace IronRuby.Builtins {
             int last = toRanges.Count > 0 ? toRanges[toRanges.Count - 1] : -1;
             bool delete = to.IsEmpty;
 
-            var result = src.CreateDerived().TaintBy(src);
+            var result = src.CreateDerived();
             if (result.Encoding != encoding) {
                 result.ForceEncoding(encoding);
             }
@@ -4936,7 +4932,7 @@ namespace IronRuby.Builtins {
                 return self;
             }
 
-            MutableString result = self.CloneDerived().TaintBy(padding);
+            MutableString result = self.CloneDerived();
             AppendPadding(result, padding, count);
             return result;
         }
@@ -4965,7 +4961,7 @@ namespace IronRuby.Builtins {
                 return self;
             }
 
-            MutableString result = self.CreateDerived().TaintBy(self).TaintBy(padding);
+            MutableString result = self.CreateDerived();
             AppendPadding(result, padding, count);
             result.Append(self);
             return result;

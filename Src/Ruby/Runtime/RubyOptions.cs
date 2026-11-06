@@ -62,7 +62,6 @@ namespace IronRuby.Runtime {
         private readonly bool _osr;
 
 #if DEBUG
-        public static bool UseThreadAbortForSyncRaise;
         public static bool CompileRegexps;
         public static bool ShowRules;
 #endif
@@ -260,10 +259,6 @@ namespace IronRuby.Runtime {
 
         public bool HasSearchPaths {
             get { return _hasSearchPaths; }
-        }
-
-        public RubyCompatibility Compatibility {
-            get { return RubyCompatibility.Default; }
         }
 
         /// <summary>

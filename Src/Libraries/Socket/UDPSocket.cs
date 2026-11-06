@@ -59,7 +59,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("bind")]
         public static int Bind(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast, 
             UDPSocket/*!*/ self, object hostNameOrAddress, object port) {
-
             int iPort = ConvertToPortNum(stringCast, fixnumCast, port);
             IPAddress address = (hostNameOrAddress != null) ? 
                 GetHostAddress(ConvertToHostString(stringCast, hostNameOrAddress)) : IPAddress.Loopback;
@@ -117,7 +116,6 @@ namespace IronRuby.StandardLibrary.Sockets {
             RubyBasicSocket/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ message,
             object flags, object hostNameOrAddress, object port) {
 
-            Protocols.CheckSafeLevel(fixnumCast.Context, 4, "send");
             int iPort = ConvertToPortNum(stringCast, fixnumCast, port);
             SocketFlags sFlags = ConvertToSocketFlag(fixnumCast, flags);
 

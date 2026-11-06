@@ -657,10 +657,6 @@ namespace IronRuby.Hosting {
                     LanguageSetup.Options["LoadFromDisk"] = ScriptingRuntimeHelpers.True;
                     break;
 
-                case "-useThreadAbortForSyncRaise":
-                    RubyOptions.UseThreadAbortForSyncRaise = true;
-                    break;
-
                 case "-compileRegexps":
                     RubyOptions.CompileRegexps = true;
                     break;
@@ -928,7 +924,6 @@ namespace IronRuby.Hosting {
                 { "-rlibrary",                   "require the library, before executing your script" },
              // { "-s",                          "enable some switch parsing for switches after script name" },
                 { "-S",                          "look for the script using PATH environment variable" },
-             // { "-T[level]",                   "turn on tainting checks" },
                 { "-v",                          "print version number, then turn on verbose mode" },
                 { "-w",                          "turn warnings on for your script" },
                 { "-W[level]",                   "set warning level; 0=silence, 1=medium (default), 2=verbose" },
@@ -960,7 +955,6 @@ namespace IronRuby.Hosting {
                 { "-ET*",                        "enables tracing of all events [debug only]" },
                 { "-save [path]",                "save generated code to given path [debug only]" },
                 { "-load",                       "load pre-compiled code [debug only]" },
-                { "-useThreadAbortForSyncRaise", "for testing purposes [debug only]" },
                 { "-compileRegexps",             "faster throughput, slower startup [debug only]" },
                 { "-X:AssembliesDir <dir>",      "set the directory for saving generated assemblies [debug only]" },
                 { "-X:SaveAssemblies",           "save generated assemblies [debug only]" },

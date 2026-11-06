@@ -128,7 +128,6 @@ namespace IronRuby.Builtins {
         private bool? _useAbsolute;
         private bool _useNamed;
         private int _relativeIndex;
-        private bool _tainted;
 
         private int _index;
 
@@ -171,7 +170,6 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ Format() {
             _index = 0;
             _buf = new StringBuilder();
-            _tainted = false;
             int modIndex;
 
             while ((modIndex = _format.IndexOf('%', _index)) != -1) {
@@ -197,13 +195,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            MutableString result = MutableString.Create(_buf.ToString(), _resultEncoding ?? _encoding);
-
-            if (_tainted) {
-                result.IsTainted = true;
-            }
-
-            return result;
+            return MutableString.Create(_buf.ToString(), _resultEncoding ?? _encoding);
         }
 
         #endregion
@@ -1497,22 +1489,13 @@ namespace IronRuby.Builtins {
         }
 
         private void AppendInspect() {
-            MutableString result = _context.Inspect(_opts.Value);
-            if (_context.IsObjectTainted(result)) {
-                _tainted = true;
-            }
-
-            AppendString(result);
+            AppendString(_context.Inspect(_opts.Value));
         }
 
         private void AppendString() {
             MutableString/*!*/ str = (_opts.Value == null)
                 ? MutableString.CreateEmpty()
                 : _siteStorage.ConvertToString(_opts.Value);
-
-            if (_context.IsObjectTainted(str)) {
-                _tainted = true;
-            }
 
             AppendString(str);
         }

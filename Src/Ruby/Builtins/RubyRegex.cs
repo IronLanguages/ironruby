@@ -106,8 +106,6 @@ namespace IronRuby.Builtins {
         }
 
         private const int FrozenFlag = 1;
-        private const int TaintedFlag = 2;
-        private const int UntrustedFlag = 4;
 
         // A regexp literal is frozen by MRI, so the state has to live on the object itself rather
         // than in the context's instance data, which the literal-construction path has no access to.
@@ -117,16 +115,6 @@ namespace IronRuby.Builtins {
 
         public bool IsFrozen {
             get { return (_flags & FrozenFlag) != 0; }
-        }
-
-        public bool IsTainted {
-            get { return (_flags & TaintedFlag) != 0; }
-            set { _flags = (_flags & ~TaintedFlag) | (value ? TaintedFlag : 0); }
-        }
-
-        public bool IsUntrusted {
-            get { return (_flags & UntrustedFlag) != 0; }
-            set { _flags = (_flags & ~UntrustedFlag) | (value ? UntrustedFlag : 0); }
         }
 
         public void Freeze() {

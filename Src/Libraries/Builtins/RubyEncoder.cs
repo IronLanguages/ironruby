@@ -1288,7 +1288,7 @@ namespace IronRuby.Builtins {
                         case 'a':
                         case 'Z':
                             count = 1;
-                            WriteString(stream, directive, ToMutableString(stringCast, stream, GetPackArg(self, i)));
+                            WriteString(stream, directive, ToMutableString(stringCast, GetPackArg(self, i)));
                             break;
 
                         case 'B':
@@ -1298,7 +1298,7 @@ namespace IronRuby.Builtins {
                                 stream,
                                 directive.Count,
                                 directive.Directive == 'b',
-                                str = GetPackArg(self, i) != null ? ToMutableString(stringCast, stream, GetPackArg(self, i)) : MutableString.FrozenEmpty
+                                str = GetPackArg(self, i) != null ? ToMutableString(stringCast, GetPackArg(self, i)) : MutableString.FrozenEmpty
                             );
                             break;
 
@@ -1334,7 +1334,7 @@ namespace IronRuby.Builtins {
                             // count still asks for that many nibbles, so the padding goes out.
                             object hexArg = GetPackArg(self, i);
                             if (hexArg != null) {
-                                str = ToMutableString(stringCast, stream, hexArg);
+                                str = ToMutableString(stringCast, hexArg);
                                 FromHex(stream, str, directive.Count ?? str.GetByteCount(), directive.Directive == 'h');
                             } else {
                                 FromHex(stream, MutableString.FrozenEmpty, directive.Count ?? 1, directive.Directive == 'h');
@@ -1384,7 +1384,7 @@ namespace IronRuby.Builtins {
                             if (GetPackArg(self, i) == null) {
                                 throw RubyExceptions.CreateImplicitConversionError("nil", "String");
                             }
-                            WriteBase64(stream, ToMutableString(stringCast, stream, GetPackArg(self, i)),
+                            WriteBase64(stream, ToMutableString(stringCast, GetPackArg(self, i)),
                                 // count 0 means a single unbroken line; 1 and 2 fall back to the default 45
                                 (directive.Count.HasValue && (directive.Count.Value > 2 || directive.Count.Value == 0)) ? directive.Count.Value : 45
                             );
@@ -1396,7 +1396,6 @@ namespace IronRuby.Builtins {
                             if (GetPackArg(self, i) != null) {
                                 var site = tosConversion.GetSite(ConvertToSAction.Make(tosConversion.Context));
                                 MutableString s = site.Target(site, GetPackArg(self, i));
-                                stream.String.TaintBy(s);
                                 WritePrintedQuotable(stream, s,
                                     (directive.Count.HasValue && directive.Count.Value >= 2) ? directive.Count.Value : 72
                                 );
@@ -1407,7 +1406,7 @@ namespace IronRuby.Builtins {
                             if (GetPackArg(self, i) == null) {
                                 throw RubyExceptions.CreateImplicitConversionError("nil", "String");
                             }
-                            RubyEncoder.EncodeUU(ToMutableString(stringCast, stream, GetPackArg(self, i)).ToByteArray(), 
+                            RubyEncoder.EncodeUU(ToMutableString(stringCast, GetPackArg(self, i)).ToByteArray(), 
                                 (directive.Count.HasValue && directive.Count.Value > 2) ? directive.Count.Value : 45, 
                                 stream
                             );
@@ -1462,7 +1461,7 @@ namespace IronRuby.Builtins {
                             object pointerArg = GetPackArg(self, i);
                             long pointer = 0;
                             if (pointerArg != null) {
-                                MutableString target = ToMutableString(stringCast, stream, pointerArg);
+                                MutableString target = ToMutableString(stringCast, pointerArg);
                                 if (target != null) {
                                     if (pointers == null) {
                                         pointers = new RubyArray();
@@ -1490,7 +1489,7 @@ namespace IronRuby.Builtins {
                     i += count;
                 }
                 stream.SetLength(stream.Position);
-                MutableString result = stream.String.TaintBy(format);
+                MutableString result = stream.String;
                 if (pointers != null) {
                     stringCast.Context.SetInstanceVariable(result, PackedPointersVariable, pointers);
                 }
@@ -1560,13 +1559,9 @@ namespace IronRuby.Builtins {
             return target.GetSlice(0, Math.Min(count, target.GetCharCount()));
         }
 
-        private static MutableString ToMutableString(ConversionStorage<MutableString>/*!*/ stringCast, MutableStringStream/*!*/ stream, object value) {
+        private static MutableString ToMutableString(ConversionStorage<MutableString>/*!*/ stringCast, object value) {
             var site = stringCast.GetSite(ConvertToStrAction.Make(stringCast.Context));
-            var result = site.Target(site, value);
-            if (result != null) {
-                stream.String.TaintBy(result);
-            }
-            return result;
+            return site.Target(site, value);
         }
 
         private static object GetPackArg(RubyArray/*!*/ array, int index) {

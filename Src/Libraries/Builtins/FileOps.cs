@@ -575,7 +575,7 @@ namespace IronRuby.Builtins {
             string[] parts = strPath.Split(SeparatorChars, StringSplitOptions.RemoveEmptyEntries);
 
             if (parts.Length == 0) {
-                return MutableString.CreateMutable(path.Encoding).Append((char)path.GetLastChar()).TaintBy(path);
+                return MutableString.CreateMutable(path.Encoding).Append((char)path.GetLastChar());
             }
 
             bool isWindows = Environment.OSVersion.Platform != PlatformID.Unix && Environment.OSVersion.Platform != PlatformID.MacOSX;
@@ -587,12 +587,12 @@ namespace IronRuby.Builtins {
                     if (parts.Length <= 2) {
                         char lastChar = strPath[strPath.Length - 1];
                         return MutableString.CreateMutable(path.Encoding)
-                            .Append(IsDirectorySeparator(lastChar) ? lastChar : DirectorySeparatorChar).TaintBy(path);
+                            .Append(IsDirectorySeparator(lastChar) ? lastChar : DirectorySeparatorChar);
                     }
                 } else if (first.Length == 2 && Tokenizer.IsLetter(first[0]) && first[1] == ':') {
                     // skip drive letter "X:"
                     if (parts.Length <= 1) {
-                        var result = MutableString.CreateMutable(path.Encoding).TaintBy(path);
+                        var result = MutableString.CreateMutable(path.Encoding);
                         if (strPath.Length > 2) {
                             result.Append(strPath[2]);
                         }
@@ -628,7 +628,7 @@ namespace IronRuby.Builtins {
                 matchLength = last.Length;
             }
 
-            return MutableString.CreateMutable(path.Encoding).Append(last, 0, matchLength).TaintBy(path);
+            return MutableString.CreateMutable(path.Encoding).Append(last, 0, matchLength);
         }
 
         [RubyMethod("dirname", RubyMethodAttributes.PublicSingleton)]
@@ -652,7 +652,7 @@ namespace IronRuby.Builtins {
                 if (!IsWindows) {
                     strPath = NormalizeRoot(strPath);
                 }
-                return MutableString.CreateMutable(strPath, result.Encoding).TaintBy(result);
+                return MutableString.CreateMutable(strPath, result.Encoding);
             }
 
             for (int i = 0; i < level; i++) {
@@ -668,7 +668,7 @@ namespace IronRuby.Builtins {
 
         private static MutableString/*!*/ DirName(MutableString/*!*/ path) {
             if (!IsWindows) {
-                return MutableString.CreateMutable(PosixDirName(path.ConvertToString()), path.Encoding).TaintBy(path);
+                return MutableString.CreateMutable(PosixDirName(path.ConvertToString()), path.Encoding);
             }
             return WindowsDirName(path);
         }
@@ -808,8 +808,8 @@ namespace IronRuby.Builtins {
             // CRuby hands back a shared empty binary string when there is no extension,
             // so File.extname("foo").encoding is ASCII-8BIT, not the path's encoding.
             return extension.Length == 0
-                ? MutableString.CreateBinary().TaintBy(pathStr)
-                : MutableString.Create(extension, pathStr.Encoding).TaintBy(pathStr);
+                ? MutableString.CreateBinary()
+                : MutableString.Create(extension, pathStr.Encoding);
         }
 
         private static string/*!*/ LastPathComponent(string/*!*/ path) {
@@ -983,7 +983,7 @@ namespace IronRuby.Builtins {
                     bytes[i] = (byte)result[i];
                 }
                 if (i == result.Length) {
-                    return MutableString.CreateBinary(bytes).TaintBy(original);
+                    return MutableString.CreateBinary(bytes);
                 }
             }
 
@@ -992,7 +992,7 @@ namespace IronRuby.Builtins {
             // the argument's encoding still has to come back (CRuby "forces" the encoding).
             MutableString encoded = context.EncodePath(result);
             encoded.ForceEncoding(original.Encoding);
-            return encoded.TaintBy(original);
+            return encoded;
         }
 
         [RubyMethod("absolute_path", RubyMethodAttributes.PublicSingleton)]
@@ -1541,7 +1541,7 @@ namespace IronRuby.Builtins {
             if (!strict && pathStr.Encoding != RubyEncoding.Binary && !IsAsciiString(resolved)) {
                 return (CanEncode(resolved, pathStr.Encoding)
                     ? MutableString.Create(resolved, pathStr.Encoding)
-                    : self.Context.EncodePath(resolved)).TaintBy(pathStr);
+                    : self.Context.EncodePath(resolved));
             }
             return EncodePathLike(self.Context, resolved, pathStr);
         }

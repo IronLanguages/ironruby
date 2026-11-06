@@ -205,7 +205,6 @@ namespace IronRuby.StandardLibrary.Sockets {
 
             MutableString str = MutableString.CreateBinary();
             str.Append(buffer, 0, received);
-            str.IsTainted = true;
             return RubyOps.MakeArray2(str, AddressArray(self.Context, from));
         }
 

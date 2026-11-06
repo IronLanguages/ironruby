@@ -32,7 +32,7 @@ namespace IronRuby.Builtins {
     /// <summary>
     /// All encodings in Ruby are represented by instances of a single class. Therefore we need to wrap .NET Encoding class in RubyEncoding.
     /// Instances of this class are app-domain singletons. That's all right as far as the class is readonly and doesn't implement IRubyObject.
-    /// Taint, frozen flags and instance variables need to be stored in per-runtime lookaside table.
+    /// Frozen flag and instance variables need to be stored in per-runtime lookaside table.
     /// </summary>
     [Serializable]
     public class RubyEncoding : ISerializable, IExpressionSerializable {

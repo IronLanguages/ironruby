@@ -796,7 +796,7 @@ namespace IronRuby.Builtins {
                 // singleton members are copied here, not in InitializeCopy:
                 result.ImmediateClass.InitializeMembersFrom(ImmediateClass);
 
-                // copy instance variables and taint flag:
+                // copy instance variables:
                 Context.CopyInstanceData(this, result, false);
             }
             

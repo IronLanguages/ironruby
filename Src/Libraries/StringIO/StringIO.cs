@@ -287,10 +287,6 @@ namespace IronRuby.StandardLibrary.StringIO {
             self._initialMode = other._initialMode;
             self._lineNumber = other._lineNumber;
             self._position = other._position;
-
-            // TODO: this seems to be MRI bug
-            // Shouldn't StringIO's taint be always same as the underlying string's taint?
-            context.TaintObjectBy(self, other);
             return self;
         }
 
@@ -576,7 +572,6 @@ namespace IronRuby.StandardLibrary.StringIO {
                     throw RubyExceptions.CreateIOError("not modifiable string");
                 }
 
-                content.TaintBy(value);
                 self._position = pos + bytesWritten;
             }
             return bytesWritten;
@@ -656,7 +651,7 @@ namespace IronRuby.StandardLibrary.StringIO {
 
             if (start < length) {
                 self._position = length;
-                buffer.Append(content, start, length - start).TaintBy(content);
+                buffer.Append(content, start, length - start);
             } else if (eofError) {
                 throw new EOFError("end of file reached");
             }
@@ -711,7 +706,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             }
 
             int bytesRead = Math.Min(count, length - self._position);
-            buffer.Append(content, self._position, bytesRead).TaintBy(content);
+            buffer.Append(content, self._position, bytesRead);
             buffer.ForceEncoding(encoding);
             self._position += bytesRead;
             return buffer;

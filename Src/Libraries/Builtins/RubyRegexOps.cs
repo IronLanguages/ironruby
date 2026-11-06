@@ -607,7 +607,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("escape", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("quote", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ Escape(RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
-            MutableString result = RubyRegex.Escape(str).TaintBy(str);
+            MutableString result = RubyRegex.Escape(str);
             // rb_reg_quote: an ASCII-only string in an ASCII-compatible encoding comes back US-ASCII.
             if (str.Encoding.IsAsciiIdentity && result.IsAscii()) {
                 result.ForceEncoding(RubyEncoding.Ascii);

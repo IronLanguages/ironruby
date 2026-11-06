@@ -121,8 +121,6 @@ bases.sort_by { |b| b.full_name.to_s }.each do |base|
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return #{to_string}; }

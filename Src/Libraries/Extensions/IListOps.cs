@@ -304,7 +304,6 @@ namespace IronRuby.Builtins {
                 AddRange(result, self);
             }
 
-            allocateStorage.Context.TaintObjectBy(result, self);
             return result;
         }
 
@@ -950,7 +949,6 @@ namespace IronRuby.Builtins {
                         compacted.Add(item);
                     }
                 }
-                allocateStorage.Context.TaintObjectBy(compacted, self);
                 return compacted;
             }
 
@@ -961,8 +959,6 @@ namespace IronRuby.Builtins {
                     result.Add(item);
                 }
             }
-
-            allocateStorage.Context.TaintObjectBy(result, self);
 
             return result;
         }
@@ -1966,16 +1962,9 @@ namespace IronRuby.Builtins {
 
                 if (part != null) {
                     result.Append(part);
-                    result.TaintBy(part);
                 }
             }
 
-            if (separator != null) {
-                result.TaintBy(separator);
-            }
-            if (!result.IsTainted || !result.IsUntrusted) {
-                result.TaintBy(self, conversions.Context);
-            }
             return result;
         }
 

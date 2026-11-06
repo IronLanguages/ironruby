@@ -30,12 +30,9 @@ namespace IronRuby.Builtins {
 
     /// <summary>
     /// Ruby threads are represented by CLR thread objects (System.Threading.Thread).
-    /// Ruby 1.8.N has green threads where the language does the thread scheduling. We map the green threads 
-    /// directly to CLR threads.
-    /// 
-    /// Ruby supports asynchronously manipulating of an arbitrary thread with methods like Thread#raise, Thread#exit, etc.
-    /// For such methods, we use Thread.Abort which is unsafe. Howevever, Ruby 1.9 may not support green threads,
-    /// and this will not be an issue then.
+    ///
+    /// Thread#raise, Thread#kill and friends act on another thread cooperatively: the exception is parked
+    /// and the target picks it up at its next safe point (see RubyUtils.RaiseAsyncException).
     /// </summary>
     [RubyClass("Thread", Extends = typeof(Thread), Inherits = typeof(object))]
     public static partial class ThreadOps {
@@ -829,7 +826,6 @@ namespace IronRuby.Builtins {
                 thread = activeFiber;
             }
             RubyThreadInfo info = RubyThreadInfo.FromThread(thread);
-            RubyThreadStatus status = GetStatus(thread);
 
             // rethrow semantics, preserves the backtrace associated with the exception:
             RubyUtils.RaiseAsyncException(thread, exception, e => {
@@ -840,16 +836,6 @@ namespace IronRuby.Builtins {
             // Kernel#sleep and Thread.stop use the Ruby run signal. This is race-safe even when
             // the target has announced sleep but has not entered WaitOne yet.
             info.Run();
-
-            if (status == RubyThreadStatus.Sleeping) {
-                // Thread.Abort can interrupt a thread with ThreadState.WaitSleepJoin. However, Thread.Abort 
-                // is deferred while the thread is in a catch block. If there is a Kernel.sleep in a catch block,
-                // then that sleep will not be interrupted. 
-                // TODO: We should call Run to nudge the thread if its CurrentException is not-null, and 
-                // ThreadOps.Stop should have a checkpoint to see whether an async exception needs to be thrown
-
-                // Run(thread);
-            }
         }
 
         /// <summary>
@@ -996,7 +982,6 @@ namespace IronRuby.Builtins {
         }
 
         private static void SetCritical(RubyContext/*!*/ context, bool value) {
-            // Debug.Assert(context.RubyOptions.Compatibility < RubyCompatibility.Ruby19);
             if (value) {
                 bool lockTaken = false;
                 try {
@@ -1333,15 +1318,6 @@ namespace IronRuby.Builtins {
                 // A Thread#raise that arrived too late to be delivered dies with the thread. Left
                 // parked it would keep every other thread's safe points on the slow path.
                 RubyUtils.GetPendingAsyncException(Thread.CurrentThread);
-
-                // Its not a good idea to terminate a thread which has set Thread.critical=true, but its hard to predict
-                // which thread will be scheduled next, even with green threads. However, ConditionVariable.create_timer 
-                // in monitor.rb explicitly does "Thread.critical=true; other_thread.raise" before exiting, and expects
-                // other_thread to be scheduled immediately.
-                // To deal with such code, we release the critical monitor here if the current thread is holding it
-                if (context.RubyOptions.Compatibility < RubyCompatibility.Ruby19 && context.CriticalThread == Thread.CurrentThread) {
-                    SetCritical(context, false);
-                }
             }
         }
 

@@ -150,16 +150,6 @@ namespace IronRuby.Builtins {
             get { return _instanceData != null && _instanceData.IsFrozen; }
         }
 
-        public bool IsTainted {
-            get { return _instanceData != null && _instanceData.IsTainted; }
-            set { GetInstanceData().IsTainted = value; }
-        }
-
-        public bool IsUntrusted {
-            get { return _instanceData != null && _instanceData.IsUntrusted; }
-            set { GetInstanceData().IsUntrusted = value; }
-        }
-
         public void Freeze() {
             GetInstanceData().Freeze();
         }

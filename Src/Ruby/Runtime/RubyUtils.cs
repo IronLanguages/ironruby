@@ -110,11 +110,10 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// The object maintains a state (frozen, tainted flags and instance variables).
+        /// The object maintains a state (frozen flag and instance variables).
         /// <code>
         /// obj.instance_variable_set(:@foo, 'bar')
         /// puts obj.instance_variable_get(:@foo)     # => 'bar'
-        /// puts obj.taint.tainted?                   # => true
         /// </code>
         /// </summary>
         public static bool HasObjectState(object obj) {
@@ -256,18 +255,15 @@ namespace IronRuby.Runtime {
 
                         var tosSite = tosConversion.GetSite(ConvertToSAction.Make(context));
                         str.Append(tosSite.Target(tosSite, inspectedValue));
-
-                        str.TaintBy(var.Value, context);
                     }
                 }
                 str.Append(">");
 
-                str.TaintBy(obj, context);
                 return str;
             }
         }
 
-        public static MutableString/*!*/ FormatObjectPrefix(RubyContext/*!*/ context, string/*!*/ className, long objectId, bool isTainted, bool isUntrusted) {
+        public static MutableString/*!*/ FormatObjectPrefix(RubyContext/*!*/ context, string/*!*/ className, long objectId) {
             MutableString str = MutableString.CreateMutable(context.GetIdentifierEncoding());
             str.Append("#<");
             str.Append(className);
@@ -275,26 +271,19 @@ namespace IronRuby.Runtime {
             // Ruby prints 2*object_id for objects
             str.Append(':');
             AppendFormatHexObjectId(str, objectId);
-
-            str.IsTainted |= isTainted;
-            str.IsUntrusted |= isUntrusted;
             return str;
         }
 
-        public static MutableString/*!*/ FormatObject(RubyContext/*!*/ context, string/*!*/ className, long objectId, bool isTainted, bool isUntrusted) {
-            return FormatObjectPrefix(context, className, objectId, isTainted, isUntrusted).Append(">");
+        public static MutableString/*!*/ FormatObject(RubyContext/*!*/ context, string/*!*/ className, long objectId) {
+            return FormatObjectPrefix(context, className, objectId).Append(">");
         }
 
         public static MutableString/*!*/ ObjectToMutableString(RubyContext/*!*/ context, object obj) {
-            bool tainted, untrusted;
-            context.GetObjectTrust(obj, out tainted, out untrusted);
-            return FormatObject(context, context.GetClassDisplayName(obj), GetObjectId(context, obj), tainted, untrusted);
+            return FormatObject(context, context.GetClassDisplayName(obj), GetObjectId(context, obj));
         }
 
         public static MutableString/*!*/ ObjectToMutableStringPrefix(RubyContext/*!*/ context, object obj) {
-            bool tainted, untrusted;
-            context.GetObjectTrust(obj, out tainted, out untrusted);
-            return FormatObjectPrefix(context, context.GetClassDisplayName(obj), GetObjectId(context, obj), tainted, untrusted);
+            return FormatObjectPrefix(context, context.GetClassDisplayName(obj), GetObjectId(context, obj));
         }
 
         public static MutableString/*!*/ AppendFormatHexObjectId(MutableString/*!*/ str, long objectId) {
@@ -308,9 +297,7 @@ namespace IronRuby.Runtime {
                 // an anonymous class has no Name to print, and MRI does not leave a blank there:
                 // it uses how the class describes itself, "#<#<Class:0x...>:0x...>"
                 self.ImmediateClass.GetNonSingletonClass().GetNonNullName(context),
-                self.GetInstanceData().ObjectId, 
-                self.IsTainted,
-                self.IsUntrusted
+                self.GetInstanceData().ObjectId
             );
         }
 
@@ -648,9 +635,7 @@ namespace IronRuby.Runtime {
             "public_methods",
             "send",
             "singleton_methods",
-            "taint",
             // "type", Kernel#type is deprecated
-            "untaint",
         };
 
         internal static readonly HashSet<string> NotMangledObject = new HashSet<string>() {
@@ -677,9 +662,7 @@ namespace IronRuby.Runtime {
             "PublicMethods",
             "Send",
             "SingletonMethods",
-            "Taint",
             // "Type", Kernel#type is deprecated
-            "Untaint",
         };
 
         public static void CheckConstantName(string name) {

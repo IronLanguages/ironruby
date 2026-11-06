@@ -370,14 +370,6 @@ namespace IronRuby.Compiler {
         private static MethodInfo _IRubyObjectState_Freeze;
         public static MethodInfo/*!*/ IRubyObjectState_get_IsFrozen { get { return _IRubyObjectState_get_IsFrozen ?? (_IRubyObjectState_get_IsFrozen = GetMethod(typeof(IRubyObjectState), "get_IsFrozen")); } }
         private static MethodInfo _IRubyObjectState_get_IsFrozen;
-        public static MethodInfo/*!*/ IRubyObjectState_get_IsTainted { get { return _IRubyObjectState_get_IsTainted ?? (_IRubyObjectState_get_IsTainted = GetMethod(typeof(IRubyObjectState), "get_IsTainted")); } }
-        private static MethodInfo _IRubyObjectState_get_IsTainted;
-        public static MethodInfo/*!*/ IRubyObjectState_get_IsUntrusted { get { return _IRubyObjectState_get_IsUntrusted ?? (_IRubyObjectState_get_IsUntrusted = GetMethod(typeof(IRubyObjectState), "get_IsUntrusted")); } }
-        private static MethodInfo _IRubyObjectState_get_IsUntrusted;
-        public static MethodInfo/*!*/ IRubyObjectState_set_IsTainted { get { return _IRubyObjectState_set_IsTainted ?? (_IRubyObjectState_set_IsTainted = GetMethod(typeof(IRubyObjectState), "set_IsTainted")); } }
-        private static MethodInfo _IRubyObjectState_set_IsTainted;
-        public static MethodInfo/*!*/ IRubyObjectState_set_IsUntrusted { get { return _IRubyObjectState_set_IsUntrusted ?? (_IRubyObjectState_set_IsUntrusted = GetMethod(typeof(IRubyObjectState), "set_IsUntrusted")); } }
-        private static MethodInfo _IRubyObjectState_set_IsUntrusted;
         public static MethodInfo/*!*/ IsAdoptedClrRuleValid { get { return _IsAdoptedClrRuleValid ?? (_IsAdoptedClrRuleValid = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyClass, System.Int32, System.Boolean>(RubyOps.IsAdoptedClrRuleValid)); } }
         private static MethodInfo _IsAdoptedClrRuleValid;
         public static MethodInfo/*!*/ IsArrayExtremeNotHandled { get { return _IsArrayExtremeNotHandled ?? (_IsArrayExtremeNotHandled = CallInstruction.CacheFunc<System.Object, System.Boolean>(RubyOps.IsArrayExtremeNotHandled)); } }
@@ -414,10 +406,6 @@ namespace IronRuby.Compiler {
         private static MethodInfo _IsMethodUnwinderTargetFrame;
         public static MethodInfo/*!*/ IsObjectFrozen { get { return _IsObjectFrozen ?? (_IsObjectFrozen = CallInstruction.CacheFunc<IronRuby.Runtime.RubyInstanceData, System.Boolean>(RubyOps.IsObjectFrozen)); } }
         private static MethodInfo _IsObjectFrozen;
-        public static MethodInfo/*!*/ IsObjectTainted { get { return _IsObjectTainted ?? (_IsObjectTainted = CallInstruction.CacheFunc<IronRuby.Runtime.RubyInstanceData, System.Boolean>(RubyOps.IsObjectTainted)); } }
-        private static MethodInfo _IsObjectTainted;
-        public static MethodInfo/*!*/ IsObjectUntrusted { get { return _IsObjectUntrusted ?? (_IsObjectUntrusted = CallInstruction.CacheFunc<IronRuby.Runtime.RubyInstanceData, System.Boolean>(RubyOps.IsObjectUntrusted)); } }
-        private static MethodInfo _IsObjectUntrusted;
         public static MethodInfo/*!*/ IsProcConverterTarget { get { return _IsProcConverterTarget ?? (_IsProcConverterTarget = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, IronRuby.Runtime.MethodUnwinder, System.Boolean>(RubyOps.IsProcConverterTarget)); } }
         private static MethodInfo _IsProcConverterTarget;
         public static MethodInfo/*!*/ IsRetrySingleton { get { return _IsRetrySingleton ?? (_IsRetrySingleton = CallInstruction.CacheFunc<System.Object, System.Boolean>(RubyOps.IsRetrySingleton)); } }
@@ -614,10 +602,6 @@ namespace IronRuby.Compiler {
         private static MethodInfo _SetMethodMissingReason;
         public static MethodInfo/*!*/ SetMissingMethodArguments { get { return _SetMissingMethodArguments ?? (_SetMissingMethodArguments = CallInstruction.CacheFunc<System.Exception, System.Object[], System.Collections.IList, System.Object, System.Boolean, System.Boolean, System.Exception>(RubyOps.SetMissingMethodArguments)); } }
         private static MethodInfo _SetMissingMethodArguments;
-        public static MethodInfo/*!*/ SetObjectTaint { get { return _SetObjectTaint ?? (_SetObjectTaint = GetMethod(typeof(RubyOps), "SetObjectTaint")); } }
-        private static MethodInfo _SetObjectTaint;
-        public static MethodInfo/*!*/ SetObjectTrustiness { get { return _SetObjectTrustiness ?? (_SetObjectTrustiness = GetMethod(typeof(RubyOps), "SetObjectTrustiness")); } }
-        private static MethodInfo _SetObjectTrustiness;
         public static MethodInfo/*!*/ SetQualifiedConstant { get { return _SetQualifiedConstant ?? (_SetQualifiedConstant = CallInstruction.CacheFunc<System.Object, System.Object, IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, IronRuby.Builtins.RubyEncoding, System.Object>(RubyOps.SetQualifiedConstant)); } }
         private static MethodInfo _SetQualifiedConstant;
         public static MethodInfo/*!*/ SetUnqualifiedConstant { get { return _SetUnqualifiedConstant ?? (_SetUnqualifiedConstant = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, IronRuby.Builtins.RubyEncoding, System.Object>(RubyOps.SetUnqualifiedConstant)); } }

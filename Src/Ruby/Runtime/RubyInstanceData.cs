@@ -23,7 +23,7 @@ using System;
 
 namespace IronRuby.Runtime {
     /// <summary>
-    /// Stores the per-instance data that all Ruby objects need (frozen?, tainted?, untrusted?, instance_variables, etc)
+    /// Stores the per-instance data that all Ruby objects need (frozen?, instance_variables, etc)
     /// Stored in a lookaside weak hashtable for types that don't implement IRubyObject (i.e. .NET types).
     /// </summary>
     /// <remarks>
@@ -90,7 +90,6 @@ namespace IronRuby.Runtime {
 
         // The values are unused if the object itself implements IRubyObjectState.
         internal bool _frozen;
-        private bool _tainted, _untrusted;
 
         internal object[]/*!*/ _ivars = InstanceVariableShape.EmptySlots;
         private RubyClass _immediateClass;
@@ -156,34 +155,12 @@ namespace IronRuby.Runtime {
 
         #region Flags
 
-        public bool IsTainted {
-            get { return _tainted; }
-            set {
-                Mutate();
-                _tainted = value;
-            }
-        }
-
-        public bool IsUntrusted {
-            get { return _untrusted; }
-            set {
-                Mutate();
-                _untrusted = value;
-            }
-        }
-
         public bool IsFrozen {
             get { return _frozen; }
         }
 
         public void Freeze() {
             _frozen = true;
-        }
-
-        private void Mutate() {
-            if (_frozen) {
-                throw RubyExceptions.CreateObjectFrozenError();
-            }
         }
 
         #endregion

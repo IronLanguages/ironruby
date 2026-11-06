@@ -2315,13 +2315,12 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// What every line reader does to a line it has read: it is tainted, converted when the
+        /// What every line reader does to a line it has read: it is converted when the
         /// stream has an internal encoding or conversion options (the conversion is Ruby code,
         /// IO#__transcode__ in ruby4.rb), and chomped when chomp: was given.
         /// </summary>
         private static MutableString/*!*/ FinishLine(TranscodeStorage/*!*/ transcode, RubyIO/*!*/ self, MutableString/*!*/ line,
             MutableString separator, bool chomp) {
-            line.IsTainted = true;
             if (self.Enc2 != null || self.ConversionOptions != null) {
                 var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
                 line = site.Target(site, self, line) as MutableString ?? line;

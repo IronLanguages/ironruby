@@ -33,18 +33,6 @@ namespace IronRuby.Builtins {
             get { return _obj.ImmediateClass; }
         }
 
-        [DebuggerDisplay("{B}", Name = "tainted?", Type = "")]
-        public bool B {
-            get { return _obj.IsTainted; }
-            set { _obj.IsTainted = value; }
-        }
-
-        [DebuggerDisplay("{C}", Name = "untrusted?", Type = "")]
-        public bool C {
-            get { return _obj.IsUntrusted; }
-            set { _obj.IsUntrusted = value; }
-        }
-
         [DebuggerDisplay("{D}", Name = "frozen?", Type = "")]
         public bool D {
             get { return _obj.IsFrozen; }

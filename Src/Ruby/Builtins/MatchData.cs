@@ -24,8 +24,6 @@ using System.Text;
 namespace IronRuby.Builtins {
     public partial class MatchData : IDuplicable, IRubyObjectState {
         private const int FrozenFlag = 1;
-        private const int TaintedFlag = 2;
-        private const int UntrustedFlag = 4;
 
         private int _flags;
         private Match/*!*/ _match;
@@ -126,9 +124,6 @@ namespace IronRuby.Builtins {
 
             // TODO (opt): create groups instead?
             _originalString = originalString;
-
-            IsTainted = originalString.IsTainted;
-            IsUntrusted = originalString.IsUntrusted;
         }
 
         private MatchData(Match/*!*/ match, MutableString/*!*/ originalString, string encodedInput, Encoding encoding, int startByteOffset)
@@ -350,16 +345,6 @@ namespace IronRuby.Builtins {
             get { return (_flags & FrozenFlag) != 0; }
         }
 
-        public bool IsTainted {
-            get { return (_flags & TaintedFlag) != 0; }
-            set { _flags = (_flags & ~TaintedFlag) | (value ? TaintedFlag : 0); }
-        }
-
-        public bool IsUntrusted {
-            get { return (_flags & UntrustedFlag) != 0; }
-            set { _flags = (_flags & ~UntrustedFlag) | (value ? UntrustedFlag : 0); }
-        }
-
         public void Freeze() {
             _flags |= FrozenFlag;
         }
@@ -371,7 +356,7 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString GetValue() {
-            return _match.Success ? _originalString.GetSlice(Index, Length).TaintBy(this) : null;
+            return _match.Success ? _originalString.GetSlice(Index, Length) : null;
         }
 
         /// <summary>
@@ -391,12 +376,12 @@ namespace IronRuby.Builtins {
 
         public MutableString GetGroupValue(int index) {
             // we don't need to check index range, Groups indexer returns an unsuccessful group if out of range:
-            return GroupSuccess(index) ? _originalString.GetSlice(GetGroupStart(index), GetGroupLength(index)).TaintBy(this) : null;
+            return GroupSuccess(index) ? _originalString.GetSlice(GetGroupStart(index), GetGroupLength(index)) : null;
         }
 
         public MutableString AppendGroupValue(int index, MutableString/*!*/ result) {
             // we don't need to check index range, Groups indexer returns an unsuccessful group if out of range:
-            return GroupSuccess(index) ? result.Append(_originalString, GetGroupStart(index), GetGroupLength(index)).TaintBy(this) : null;
+            return GroupSuccess(index) ? result.Append(_originalString, GetGroupStart(index), GetGroupLength(index)) : null;
         }
 
         /// <summary>
@@ -451,7 +436,7 @@ namespace IronRuby.Builtins {
 
         public MutableString GetNamedGroupValue(string/*!*/ name) {
             return NamedGroupSuccess(name)
-                ? _originalString.GetSlice(GetNamedGroupStart(name), GetNamedGroupLength(name)).TaintBy(this)
+                ? _originalString.GetSlice(GetNamedGroupStart(name), GetNamedGroupLength(name))
                 : null;
         }
 
@@ -478,11 +463,11 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ GetPreMatch() {
-            return _originalString.GetSlice(0, GetGroupStart(0)).TaintBy(this);
+            return _originalString.GetSlice(0, GetGroupStart(0));
         }
         
         public MutableString/*!*/ GetPostMatch() {
-            return _originalString.GetSlice(GetGroupEnd(0)).TaintBy(this);
+            return _originalString.GetSlice(GetGroupEnd(0));
         }
     }
 }
