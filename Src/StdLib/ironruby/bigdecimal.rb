@@ -152,14 +152,16 @@ class BigDecimal
   alias_method :eql?, :==
   alias_method :===, :==
 
-  { :add => "other, digits", :sub => "other, digits", :mult => "other, digits", :div => "other, *digits",
+  # (#div takes one argument or two, so its arity is -1 as in MRI.)
+  { :add => "other, digits", :sub => "other, digits", :mult => "other, digits", :div => "*args",
     :divmod => "other", :remainder => "other" }.each do |name, params|
-    alias_method :"__#{name}_without_rationals", name
-    private :"__#{name}_without_rationals"
+    alias_method :"__#{name}_method_without_rationals", name
+    private :"__#{name}_method_without_rationals"
+    operand = params == "*args" ? "args[0]" : "other"
     class_eval <<-RUBY, __FILE__, __LINE__ + 1
       def #{name}(#{params})
-        other = __bigdecimal_expand(other) if Rational === other
-        __#{name}_without_rationals(#{params})
+        #{operand} = __bigdecimal_expand(#{operand}) if Rational === #{operand}
+        __#{name}_method_without_rationals(#{params})
       end
     RUBY
   end
