@@ -136,7 +136,7 @@ namespace IronRuby.Runtime {
         private static object _childProcessExitStatus;
 
         /// <summary>
-        /// $/, $-O
+        /// $/, $-0
         /// </summary>
         private MutableString _inputSeparator;
 
@@ -613,14 +613,9 @@ namespace IronRuby.Runtime {
         }
 
         public EqualityComparer/*!*/ EqualityComparer {
-            get {
-                if (_equalityComparer == null) {
-                    _equalityComparer = new EqualityComparer(this);
-                }
-                return _equalityComparer;
-            }
+            get { return _equalityComparer; }
         }
-        private EqualityComparer _equalityComparer;
+        private readonly EqualityComparer/*!*/ _equalityComparer;
 
         public override Version LanguageVersion {
             get { return new Version(IronRuby.CurrentVersion.Major, IronRuby.CurrentVersion.Minor, IronRuby.CurrentVersion.Micro); }
@@ -817,14 +812,12 @@ namespace IronRuby.Runtime {
 
             DefineGlobalVariableNoLock("stdin", Runtime.GlobalVariables.InputStream);
             DefineGlobalVariableNoLock("stdout", Runtime.GlobalVariables.OutputStream);
-            DefineGlobalVariableNoLock("defout", Runtime.GlobalVariables.OutputStream);
             DefineGlobalVariableNoLock("stderr", Runtime.GlobalVariables.ErrorOutputStream);
 
             DefineGlobalVariableNoLock("LOADED_FEATURES", Runtime.GlobalVariables.LoadedFiles);
             DefineGlobalVariableNoLock("LOAD_PATH", Runtime.GlobalVariables.LoadPath);
             DefineGlobalVariableNoLock("-I", Runtime.GlobalVariables.LoadPath);
             DefineGlobalVariableNoLock("-0", Runtime.GlobalVariables.InputSeparator);
-            DefineGlobalVariableNoLock("-O", Runtime.GlobalVariables.InputSeparator);
             DefineGlobalVariableNoLock("-a", new ReadOnlyGlobalVariableInfo(RubyOptions.AutoSplit));
             DefineGlobalVariableNoLock("-l", new ReadOnlyGlobalVariableInfo(RubyOptions.ChopLines));
             DefineGlobalVariableNoLock("-p", new ReadOnlyGlobalVariableInfo(RubyOptions.PrintEachLine));
@@ -840,23 +833,15 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("DEBUG", debug);
             DefineGlobalVariableNoLock("-d", debug);
 
+            // No $defout (gone since 1.9) or $-O (never an MRI global): ordinary globals, nil until assigned.
+
             // $=: removed from Ruby long ago, but still defined so that reading or writing it
             // produces the deprecation warning rather than an unknown-global nil.
             DefineGlobalVariableNoLock("=", Runtime.GlobalVariables.IgnoreCase);
 
             // $SAFE is an ordinary global since Ruby 3.0, so it is not defined here.
 
-            try {
-                TrySetCurrentProcessVariables();
-            } catch (SecurityException) {
-                // nop
-            }
-        }
-
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2122:DoNotIndirectlyExposeMethodsWithLinkDemands")]
-        private void TrySetCurrentProcessVariables() {
-            Process process = Process.GetCurrentProcess();
-            DefineGlobalVariableNoLock(Symbols.CurrentProcessId, new ReadOnlyGlobalVariableInfo(process.Id));
+            DefineGlobalVariableNoLock(Symbols.CurrentProcessId, new ReadOnlyGlobalVariableInfo(Environment.ProcessId));
         }
 
         private void InitializeGlobalConstants() {
@@ -2582,20 +2567,6 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// Drops the singleton class of an object of a CLR type, so that the next one it needs is a
-        /// fresh one. IO#reopen does this: MRI gives the IO the class of the one it was reopened
-        /// with, and that leaves its old singleton class behind.
-        /// </summary>
-        public void DropClrInstanceSingleton(object/*!*/ obj) {
-            RubyInstanceData data;
-            if (!(obj is IRubyObject) && TryGetClrTypeInstanceData(obj, out data) && data.InstanceSingleton != null) {
-                // an adopted object (AdoptClrObject) keeps its Ruby class:
-                RubyClass super = data.InstanceSingleton.SuperClass;
-                data.ImmediateClass = (super.IsRubyClass && !super.IsSingletonClass) ? super : null;
-            }
-        }
-
-        /// <summary>
         /// Replaces the Ruby class associated with a CLR-backed object. IO#reopen uses this to
         /// give the receiver the source IO's class, as MRI does, while retaining its object id.
         /// </summary>
@@ -3288,7 +3259,6 @@ namespace IronRuby.Runtime {
         /// files of that same encoding, so the common case is all-UTF-8 and IronRuby does not track per-name encodings.
         /// </summary>
         public RubyEncoding/*!*/ GetIdentifierEncoding() {
-            // TODO:
             return RubyEncoding.UTF8;
         }
 
@@ -3300,7 +3270,7 @@ namespace IronRuby.Runtime {
         /// Returns an identifier as a Symbol.
         /// </summary>
         public object/*!*/ StringifyIdentifier(string/*!*/ identifier) {
-            return CreateSymbol(identifier, RubyEncoding.UTF8);
+            return EncodeIdentifier(identifier);
         }
 
         /// <summary>
@@ -3309,7 +3279,7 @@ namespace IronRuby.Runtime {
         public RubyArray/*!*/ StringifyIdentifiers(IList<string>/*!*/ identifiers) {
             var result = new RubyArray(identifiers.Count);
             foreach (var id in identifiers) {
-                result.Add(StringifyIdentifier(id));
+                result.Add(EncodeIdentifier(id));
             }
             return result;
         }
@@ -3821,54 +3791,22 @@ namespace IronRuby.Runtime {
 
         #region Library Data (thread-safe)
 
-        private Dictionary<object, object> _libraryData;
-
-        private void EnsureLibraryData() {
-            if (_libraryData == null) {
-                Interlocked.CompareExchange(ref _libraryData, new Dictionary<object, object>(), null);
-            }
-        }
+        private readonly ConcurrentDictionary<object, object>/*!*/ _libraryData = new ConcurrentDictionary<object, object>();
 
         public bool TryGetLibraryData(object key, out object value) {
-            EnsureLibraryData();
-
-            lock (_libraryData) {
-                return _libraryData.TryGetValue(key, out value);
-            }
+            return _libraryData.TryGetValue(key, out value);
         }
 
+        /// <summary>
+        /// The value stored under <paramref name="key"/>, or the one <paramref name="valueFactory"/> makes. Threads
+        /// that race may each run the factory; all of them get the value that was stored first.
+        /// </summary>
         public object GetOrCreateLibraryData(object key, Func<object> valueFactory) {
-            object value;
-            if (TryGetLibraryData(key, out value)) {
-                return value;
-            }
-
-            value = valueFactory();
-
-            object actualResult;
-            TryAddLibraryData(key, value, out actualResult);
-            return actualResult;
-        }
-
-        public bool TryAddLibraryData(object key, object value, out object actualValue) {
-            EnsureLibraryData();
-
-            lock (_libraryData) {
-                if (_libraryData.TryGetValue(key, out actualValue)) {
-                    return false;
-                }
-
-                _libraryData.Add(key, actualValue = value);
-                return true;
-            }
+            return _libraryData.GetOrAdd(key, _ => valueFactory());
         }
 
         public void TrySetLibraryData(object key, object value) {
-            EnsureLibraryData();
-
-            lock (_libraryData) {
-                _libraryData[key] = value;
-            }
+            _libraryData[key] = value;
         }
 
         #endregion
@@ -3881,15 +3819,6 @@ namespace IronRuby.Runtime {
             ContractUtils.RequiresNotNull(errorSink, "errorSink");
             ContractUtils.Requires(sourceUnit.LanguageContext == this, "Language mismatch.");
 
-#if DEBUG
-            if (RubyOptions.LoadFromDisk) {
-                string code;
-                Utils.Log(String.Format("compiling {0}", sourceUnit.Path ??
-                    ((code = sourceUnit.GetCode()).Length < 100 ? code : code.Substring(0, 100))
-                    .Replace('\r', ' ').Replace('\n', ' ')
-                ), "COMPILER");
-            }
-#endif
             var rubyOptions = (RubyCompilerOptions)options;
 
             var lambda = ParseSourceCode<Func<RubyScope, object, object>>(sourceUnit, rubyOptions, errorSink);
@@ -3899,7 +3828,6 @@ namespace IronRuby.Runtime {
 
             return new RubyScriptCode(lambda, sourceUnit, rubyOptions.FactoryKind);
         }
-
 
         /// <summary>
         /// The front end a host chose, or null for prism (IronRuby.Prism's bridge), which is the
@@ -3945,15 +3873,12 @@ namespace IronRuby.Runtime {
                 return null;
             }
 
-            MSA.Expression<T> lambda;
             traceStart = StartupTrace.Now();
             try {
-                lambda = TransformTree<T>(ast, sourceUnit, options);
+                return TransformTree<T>(ast, sourceUnit, options);
             } finally {
                 StartupTrace.Transformed(traceStart);
             }
-
-            return lambda;
         }
 
         internal MSA.Expression<T>/*!*/ TransformTree<T>(SourceUnitTree/*!*/ ast, SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options) {
@@ -4517,8 +4442,6 @@ namespace IronRuby.Runtime {
                     PerfTrack.DumpStats(output);
                 }
             }
-            _loader.SaveCompiledCode();
-
             ExecuteShutdownHandlers();
 
             _currentException = null;

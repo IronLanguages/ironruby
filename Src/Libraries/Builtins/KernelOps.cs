@@ -2405,7 +2405,7 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]MutableString/*!*/ assemblyName, [DefaultProtocol, Optional, NotNull]MutableString libraryNamespace) {
 
             string initializer = libraryNamespace != null ? LibraryInitializer.GetFullTypeName(libraryNamespace.ConvertToString()) : null;
-            return context.Loader.LoadAssembly(assemblyName.ConvertToString(), initializer, true, true) != null;
+            return context.Loader.LoadAssembly(assemblyName.ConvertToString(), initializer, true) != null;
         }
 
         [RubyMethod("using_clr_extensions", RubyMethodAttributes.PrivateInstance)]

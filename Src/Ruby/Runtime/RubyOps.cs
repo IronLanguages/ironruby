@@ -631,11 +631,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        public static RubyScope/*!*/ GetEmptyScope(RubyContext/*!*/ context) {
-            return context.EmptyScope;
-        }
-
-        [Emitted]
         public static Scope/*!*/ GetGlobalScopeFromScope(RubyScope/*!*/ scope) {
             return scope.GlobalScope.Scope;
         }
@@ -2352,34 +2347,6 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        [Emitted]
-        public static IList/*!*/ SplatAppend(IList/*!*/ array, IList/*!*/ list) {
-            Utils.AddRange(array, list);
-            return array;
-        }
-
-        [Emitted]
-        public static object Splat(IList/*!*/ list) {
-            if (list.Count <= 1) {
-                return (list.Count > 0) ? list[0] : null;
-            }
-
-            return list;
-        }
-
-        // 1.8 behavior
-        [Emitted]
-        public static object SplatPair(object value, IList/*!*/ list) {
-            if (list.Count == 0) {
-                return value;
-            }
-
-            RubyArray result = new RubyArray(list.Count + 1);
-            result.Add(value);
-            result.AddRange(list);
-            return result;
-        }
-
         /// <summary>
         /// `[*x]` and `a = *x`. The result is always a new plain Array: MRI copies, so that
         /// neither the splatted array itself nor an Array subclass nor a frozen #to_a result
@@ -3341,17 +3308,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        public static Exception/*!*/ MakeAbstractMethodCalledError(RuntimeMethodHandle/*!*/ method) {
-            return new NotImplementedException(String.Format("Abstract method '{0}' not implemented", MethodInfo.GetMethodFromHandle(method)));
-        }
-
-        [Emitted]
-        public static Exception/*!*/ MakeInvalidArgumentTypesError(string/*!*/ methodName) {
-            // TODO:
-            return new ArgumentException(String.Format("wrong number or type of arguments for '{0}'", methodName));
-        }
-
-        [Emitted]
         public static Exception/*!*/ MakeTypeConversionError(RubyContext/*!*/ context, object value, Type/*!*/ type) {
             return RubyExceptions.CreateTypeConversionError(context.GetClassDisplayName(value), context.GetTypeName(type, true));
         }
@@ -3473,16 +3429,6 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static Range/*!*/ CreateExclusiveRange(object begin, object end, RubyScope/*!*/ scope, BinaryOpStorage/*!*/ comparisonStorage) {
             return new Range(comparisonStorage, scope.RubyContext, begin, end, true);
-        }
-
-        [Emitted]
-        public static Range/*!*/ CreateInclusiveIntegerRange(int begin, int end) {
-            return new Range(begin, end, false);
-        }
-
-        [Emitted]
-        public static Range/*!*/ CreateExclusiveIntegerRange(int begin, int end) {
-            return new Range(begin, end, true);
         }
 
         #endregion
@@ -3655,28 +3601,10 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted] // ProtocolConversionAction
-        public static string/*!*/ ConvertRubySymbolToClrString(RubyContext/*!*/ context, int value) {
-            context.ReportWarning("do not use Integers as Symbols");
-
-            RubySymbol result = context.FindSymbol(value);
-            if (result != null) {
-                return result.ToString();
-            } else {
-                throw RubyExceptions.CreateArgumentError(String.Format("{0} is not a symbol", value));
-            }
-        }
-
-        [Emitted] // ProtocolConversionAction
         public static string/*!*/ ConvertMutableStringToClrString(MutableString/*!*/ value) {
             return value.ConvertToString();
         }
 
-        [Emitted] // ProtocolConversionAction
-        public static MutableString/*!*/ ConvertSymbolToMutableString(RubySymbol/*!*/ value) {
-            // TODO: this is used for DefaultProtocol conversions; we might avoid clonning in some (many?) cases
-            return value.String.Clone();
-        }
-        
         [Emitted] // ProtocolConversionAction
         public static RubyRegex/*!*/ ToRegexValidator(string/*!*/ className, object obj) {
             return RubyRegex.FromLiteralPattern(ToStringValidator(className, obj));

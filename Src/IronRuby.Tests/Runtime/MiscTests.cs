@@ -56,6 +56,38 @@ p $KCODE, $-K, $SAFE
 ");
         }
 
+        /// <summary>
+        /// $defout went in 1.9 and $-O never was an MRI global; $$ is the process id.
+        /// </summary>
+        public void Scenario_Globals3() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+p global_variables.include?(:$defout), global_variables.include?(:$-O)
+p $$ == Process.pid
+");
+            }, @"
+false
+false
+true
+");
+        }
+
+        /// <summary>
+        /// Kernel#inspect of an object met again inside its own inspect: MRI's "#&lt;Foo:0x... ...&gt;".
+        /// </summary>
+        public void Scenario_InspectRecursive1() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+class Foo; end
+o = Foo.new
+o.instance_variable_set(:@a, o)
+puts o.inspect.gsub(/0x\h+/, 'X')
+");
+            }, @"
+#<Foo:X @a=#<Foo:X ...>>
+");
+        }
+
         public void Scenario_RubyLocals1() {
             AssertOutput(delegate() {
                 CompilerTest(@"

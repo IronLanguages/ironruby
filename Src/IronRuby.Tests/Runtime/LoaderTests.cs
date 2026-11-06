@@ -99,6 +99,14 @@ false
             }
         }
 
+        /// <summary>
+        /// A new runtime's $LOAD_PATH has no "." (MRI dropped it in 1.9.2): `require "foo"` does not find ./foo.rb.
+        /// </summary>
+        public void LoadPath_NoCurrentDirectory1() {
+            var engine = Ruby.CreateEngine();
+            Assert(!engine.GetSearchPaths().Contains("."));
+        }
+
         public void Load1() {
             try {
                 string temp = _driver.MakeTempDir();
