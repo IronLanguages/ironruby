@@ -992,6 +992,7 @@ namespace IronRuby.Tests {
                 LibraryKeywordsArity1,
                 PreludeKeywordsArity1,
                 LibraryKeywordsStored1,
+                BlockKeywordsPositional1,
                 PreludeKeywordsYielder1,
                 SymbolProcKeywords1,
                 ToIntToStrConversion1,
