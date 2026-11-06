@@ -972,6 +972,8 @@ namespace IronRuby.Tests {
                 MethodAliasInModuleEval1,
                 SuperInModuleEval1,
                 SuperCallInEvalWithBinding19,
+                SuperParameterlessEval1,
+                SuperParameterlessEval2,
                 SuperInDefineMethodEval1,
                 BEGIN1,
                 BEGIN2,

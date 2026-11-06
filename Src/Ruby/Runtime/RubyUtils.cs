@@ -1232,6 +1232,7 @@ namespace IronRuby.Runtime {
                 TopLevelMethodName = (methodScope != null) ? methodScope.DefinitionName : null,
                 TopLevelParameterNames = (methodScope != null) ? methodScope.GetVisibleParameterNames() : null,
                 TopLevelHasUnsplatParameter = (methodScope != null) ? methodScope.HasUnsplatParameter : false,
+                TopLevelParameterSignature = (methodScope != null) ? IronRuby.Compiler.Ast.SuperCall.GetKeywordSignature(methodScope._variableNames) : null,
                 InitialLocation = new SourceLocation(0, line <= 0 ? 1 : line, 1),
             };
         }
