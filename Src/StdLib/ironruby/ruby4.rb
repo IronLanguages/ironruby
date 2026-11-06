@@ -4346,27 +4346,13 @@ class Numeric
   private :__step_scan_args__
 
   def step(*args, **kw, &block)
-    # Integer#step(limit[, step]) { } with Integers, the common case: the loop directly,
-    # without scanning the arguments or going through ArithmeticSequence.
-    if block && kw.empty? && ::Integer === self && (args.size == 1 || args.size == 2) && ::Integer === args[0]
-      unit = args.size == 2 ? args[1] : 1
-      if ::Integer === unit && unit != 0
-        i = self
-        limit = args[0]
-        if unit > 0
-          while i <= limit
-            yield i
-            i += unit
-          end
-        else
-          while i >= limit
-            yield i
-            i += unit
-          end
-        end
-        return self
-      end
-    end
+    __ir_step_slow__(args, kw, &block)
+  end
+
+  # Numeric#step. Integer#step (Integer.cs) loops over Fixnums itself and comes here with
+  # everything else: the positional arguments as an Array, the keywords as a Hash or nil.
+  def __ir_step_slow__(args, kw, &block)
+    kw ||= {}
     unless block
       to, unit = __step_extract_args__(args, kw)
       unit = 1 if unit.nil?
@@ -4389,6 +4375,7 @@ class Numeric
     ::Enumerator::ArithmeticSequence.__step_each__(self, to, unit, false, &block)
     self
   end
+  private :__ir_step_slow__
 end
 
 class Numeric

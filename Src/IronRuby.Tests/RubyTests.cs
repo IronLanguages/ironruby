@@ -874,6 +874,7 @@ namespace IronRuby.Tests {
                 Method_OptionalAndKeywordParameters1,
                 Method_OptionalAndKeywordParameters2,
                 Range_MinMaxInclude1,
+                Integer_StepMatchString1,
                 Integer_Power1,
                 Rational_CSharp1,
                 Complex_CSharp1,

@@ -3347,6 +3347,51 @@ method: [1, Integer]
         /// range answered from its endpoints, Strings, blocks, counts, endless and beginless ranges, a break
         /// from the block and a subclass's own #max. The expected output is CRuby's.
         /// </summary>
+        // Integer#step over Fixnums loops in C# (Integer.cs); everything else is the prelude's.
+        // MatchData#string keeps a String subclass and answers a frozen subject itself.
+        public void Integer_StepMatchString1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+def c(*args, **kw); a = []; r = 1.step(*args, **kw) { |v| a << v }; [r, a]; end
+t('fixnum') { [c(10), c(10, 3), c(0), [10.step(1, -4) { }, 7.step(1, -4).to_a]] }
+t('break') { [1.step(100) { |v| break v * 2 if v == 7 }, 1.step(100, 2) { |v| break :x if v > 7 }] }
+def m; 1.step(100) { |v| return v if v == 3 }; :no; end
+t('return') { m }
+t('edges') { a = []; (2**31-3).step(2**31-1, 5) { |v| a << v }; (-2**31+2).step(-2**31, -7) { |v| a << v }; (2**31-2).step(2**31-1) { |v| a << v }; a }
+t('kw') { [c(by: 2, to: 9), c(9, by: 4), c(2.0, 0.5), c(2, 0.5)] }
+t('bignum') { a = []; (2**70).step(2**70+2) { |v| a << v }; a }
+t('enum') { [1.step(10).class, 1.step(10, 3).to_a, 1.step(by: 2).first(2), 1.step(10).size, 1.step(3).map { |x| x * 2 }] }
+t('zero') { 1.step(10, 0) { } }
+t('zero enum') { 1.step(10, 0) }
+t('string step') { 1.step(10, ""x"") { } }
+t('arity') { 1.step(1, 2, 3) { } }
+t('unknown kw') { 1.step(foo: 1) { } }
+t('twice') { 1.step(3, to: 4) { } }
+class S < String; end
+t('md subclass') { m = /b/.match(S.new(""abc"")); [m.string.class, m.string.frozen?] }
+t('md frozen') { f = ""xyz"".freeze; [/y/.match(f).string.equal?(f), (f =~ /z/; $~.string.equal?(f))] }
+t('md mutated') { s = +""abc""; m = s.match(/b/); s << ""d""; [m.string, m.pre_match, m.post_match, m.string.frozen?] }
+", @"
+fixnum: [[1, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], [1, [1, 4, 7, 10]], [1, []], [10, [7, 3]]]
+break: [14, :x]
+return: 3
+edges: [2147483645, -2147483646, 2147483646, 2147483647]
+kw: [[1, [1, 3, 5, 7, 9]], [1, [1, 5, 9]], [1, [1.0, 1.5, 2.0]], [1, [1.0, 1.5, 2.0]]]
+bignum: [1180591620717411303424, 1180591620717411303425, 1180591620717411303426]
+enum: [Enumerator::ArithmeticSequence, [1, 4, 7, 10], [1, 3], 10, [2, 4, 6]]
+zero: [ArgumentError, ""step can't be 0""]
+zero enum: [ArgumentError, ""step can't be 0""]
+string step: [ArgumentError, ""comparison of String with 0 failed""]
+arity: [ArgumentError, ""wrong number of arguments (given 3, expected 0..2)""]
+unknown kw: [ArgumentError, ""unknown keyword: :foo""]
+twice: [ArgumentError, ""to is given twice""]
+md subclass: [S, true]
+md frozen: [true, true]
+md mutated: [""abc"", ""a"", ""c"", true]
+");
+        }
+
         public void Range_MinMaxInclude1() {
             TestOutput(@"
 require 'ruby4'
