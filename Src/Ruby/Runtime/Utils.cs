@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Globalization;
@@ -33,31 +29,8 @@ using Microsoft.Scripting;
 
 namespace IronRuby.Runtime {
     public static class Utils {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly byte[] EmptyBytes = new byte[0];
-
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly char[] EmptyChars = new char[0];
-        
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly MemberInfo[] EmptyMemberInfos = new MemberInfo[0];
-
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly Delegate[] EmptyDelegates = new Delegate[0];
-
-        public static int IndexOf(this string[]/*!*/ array, string/*!*/ value, StringComparer/*!*/ comparer) {
-            ContractUtils.RequiresNotNull(array, "array");
-            ContractUtils.RequiresNotNull(value, "value");
-            ContractUtils.RequiresNotNull(comparer, "comparer");
-
-            for (int i = 0; i < array.Length; i++) {
-                if (comparer.Equals(array[i], value)) {
-                    return i;
-                }
-            }
-
-            return -1;
-        }
+        public static readonly byte[] EmptyBytes = Array.Empty<byte>();
+        public static readonly char[] EmptyChars = Array.Empty<char>();
 
         public static bool IsAscii(this string/*!*/ str) {
             return System.Text.Ascii.IsValid(str);
@@ -740,7 +713,6 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-#if FEATURE_ENCODING
         private sealed class CheckDecoderFallback : DecoderFallback {
             public bool HasInvalidCharacters { get; private set; }
 
@@ -867,34 +839,6 @@ namespace IronRuby.Runtime {
             }
             return fallback.HasInvalidCharacters;
         }
-#else
-        internal static bool ContainsInvalidCharacters(byte[]/*!*/ bytes, int start, int count, Encoding/*!*/ encoding) {
-            try {
-                encoding.GetCharCount(bytes, start, count);
-                return true;
-            } catch (DecoderFallbackException){
-                return false;
-            }
-        }
-
-        internal static bool ContainsInvalidCharacters(char[]/*!*/ chars, int start, int count, Encoding/*!*/ encoding) {
-            try {
-                encoding.GetByteCount(chars, start, count);
-                return true;
-            } catch (EncoderFallbackException) {
-                return false;
-            }
-        }
-
-        internal static bool ContainsInvalidCharacters(ReadOnlySpan<char> chars, Encoding/*!*/ encoding) {
-            try {
-                encoding.GetByteCount(chars);
-                return true;
-            } catch (EncoderFallbackException) {
-                return false;
-            }
-        }
-#endif
     }
 }
 

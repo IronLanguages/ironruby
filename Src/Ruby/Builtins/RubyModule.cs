@@ -358,7 +358,7 @@ namespace IronRuby.Builtins {
         // { (name, activation, the group lookup found or NoBaseGroup) -> the method group a call of name sees
         // there }: the CLR method group extended by the active extension methods, or a group of those
         // alone (null if none applies).  For the class version in _scopedExtensionGroupsVersion; classes only.
-        private Dictionary<Key<string, RefinementActivation, object>, RubyMemberInfo> _scopedExtensionGroups;
+        private Dictionary<(string, RefinementActivation, object), RubyMemberInfo> _scopedExtensionGroups;
         private int _scopedExtensionGroupsVersion;
         private static readonly object NoBaseGroup = new object();
 
@@ -2751,12 +2751,12 @@ namespace IronRuby.Builtins {
 
             int version = Version.Method;
             if (_scopedExtensionGroups == null || _scopedExtensionGroupsVersion != version) {
-                _scopedExtensionGroups = new Dictionary<Key<string, RefinementActivation, object>, RubyMemberInfo>();
+                _scopedExtensionGroups = new Dictionary<(string, RefinementActivation, object), RubyMemberInfo>();
                 _scopedExtensionGroupsVersion = version;
             }
 
             var baseGroup = result.Found ? (RubyMethodGroupInfo)result.Info : null;
-            var key = Key.Create(name, refinements, (object)baseGroup ?? NoBaseGroup);
+            var key = (name, refinements, (object)baseGroup ?? NoBaseGroup);
             RubyMemberInfo group;
             if (!_scopedExtensionGroups.TryGetValue(key, out group)) {
                 var present = new HashSet<MethodBase>();

@@ -15,34 +15,15 @@
 
 using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Reflection;
 
 namespace IronRuby.Runtime {
     internal sealed class RubyMethodDebugInfo {
-        private static readonly Dictionary<string, RubyMethodDebugInfo> _Infos = new Dictionary<string, RubyMethodDebugInfo>();
-
         private readonly List<int>/*!*/ _offsets = new List<int>();
         private readonly List<int>/*!*/ _lines = new List<int>();
 
         public static bool TryGet(MethodBase/*!*/ method, out RubyMethodDebugInfo info) {
-            lock (_Infos) {
-                if (_Infos.TryGetValue(method.Name, out info)) {
-                    return true;
-                }
-            }
             return IronRuby.Runtime.Precompiled.PrecompiledCode.TryGetDebugInfo(method, out info);
-        }
-
-        public static RubyMethodDebugInfo GetOrCreate(string/*!*/ methodName) {
-            lock (_Infos) {
-                RubyMethodDebugInfo info;
-                if (!_Infos.TryGetValue(methodName, out info)) {
-                    info = new RubyMethodDebugInfo();
-                    _Infos.Add(methodName, info);
-                }
-                return info;
-            }
         }
 
         public void AddMapping(int ilOffset, int line) {

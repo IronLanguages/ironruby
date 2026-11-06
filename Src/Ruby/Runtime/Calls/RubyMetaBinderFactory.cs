@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -44,10 +40,10 @@ namespace IronRuby.Runtime.Calls {
         private readonly RubyContext _context;
 
         // (name, signature) => binder:
-        private readonly Dictionary<Key<string/*!*/, RubyCallSignature>, RubyCallAction>/*!*/ _callActions;
+        private readonly Dictionary<(string/*!*/, RubyCallSignature), RubyCallAction>/*!*/ _callActions;
 
         // (scope id, signature) => binder:
-        private readonly Dictionary<Key<int, RubyCallSignature>, SuperCallAction>/*!*/ _superCallActions;
+        private readonly Dictionary<(int, RubyCallSignature), SuperCallAction>/*!*/ _superCallActions;
 
         // (typeof(action)) => binder:
         private readonly Dictionary<Type, RubyConversionAction>/*!*/ _conversionActions;
@@ -62,29 +58,29 @@ namespace IronRuby.Runtime.Calls {
         private Dictionary<CallInfo, InteropBinder.CreateInstance> _interopCreateInstance;
         private Dictionary<CallInfo, InteropBinder.Return> _interopReturn;
         private Dictionary<CallInfo, InteropBinder.Invoke> _interopInvoke;
-        private Dictionary<Key<string, CallInfo>, InteropBinder.InvokeMember> _interopInvokeMember;
+        private Dictionary<(string, CallInfo), InteropBinder.InvokeMember> _interopInvokeMember;
         private Dictionary<string, InteropBinder.GetMember> _interopGetMember;
         private Dictionary<string, InteropBinder.TryGetMemberExact> _interopTryGetMemberExact;
         private Dictionary<string, InteropBinder.SetMember> _interopSetMember;
         private Dictionary<string, InteropBinder.SetMemberExact> _interopSetMemberExact;
         private Dictionary<CallInfo, InteropBinder.GetIndex> _interopGetIndex;
         private Dictionary<CallInfo, InteropBinder.SetIndex> _interopSetIndex;
-        private Dictionary<Key<string, CallInfo>, InteropBinder.SetIndexedProperty> _interopSetIndexedProperty;
+        private Dictionary<(string, CallInfo), InteropBinder.SetIndexedProperty> _interopSetIndexedProperty;
         private Dictionary<ExpressionType, DynamicMetaObjectBinder> _interopOperation;
-        private Dictionary<Key<Type, bool>, InteropBinder.Convert> _interopConvert;
+        private Dictionary<(Type, bool), InteropBinder.Convert> _interopConvert;
         private InteropBinder.Splat _interopSplat;
 
         internal RubyMetaBinderFactory(RubyContext context) {
             _context = context;
-            _callActions = new Dictionary<Key<string, RubyCallSignature>, RubyCallAction>();
-            _superCallActions = new Dictionary<Key<int, RubyCallSignature>, SuperCallAction>();
+            _callActions = new Dictionary<(string, RubyCallSignature), RubyCallAction>();
+            _superCallActions = new Dictionary<(int, RubyCallSignature), SuperCallAction>();
             _conversionActions = new Dictionary<Type, RubyConversionAction>();
             _compositeConversionActions = new CompositeConversionAction[Enum.GetValues<CompositeConversion>().Length];
             _genericConversionActions = new Dictionary<Type, GenericConversionAction>();
         }
 
         public RubyCallAction/*!*/ Call(string/*!*/ methodName, RubyCallSignature signature) {
-            var key = Key.Create(methodName, signature);
+            var key = (methodName, signature);
 
             lock (_callActions) {
                 RubyCallAction result;
@@ -96,7 +92,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public SuperCallAction/*!*/ SuperCall(int/*!*/ lexicalScopeId, RubyCallSignature signature) {
-            var key = Key.Create(lexicalScopeId, signature);
+            var key = (lexicalScopeId, signature);
 
             lock (_superCallActions) {
                 SuperCallAction result;
@@ -188,10 +184,10 @@ namespace IronRuby.Runtime.Calls {
 
         public InteropBinder.InvokeMember/*!*/ InteropInvokeMember(string/*!*/ name, CallInfo/*!*/ callInfo) {
             if (_interopInvokeMember == null) {
-                Interlocked.CompareExchange(ref _interopInvokeMember, new Dictionary<Key<string, CallInfo>, InteropBinder.InvokeMember>(), null);
+                Interlocked.CompareExchange(ref _interopInvokeMember, new Dictionary<(string, CallInfo), InteropBinder.InvokeMember>(), null);
             }
 
-            var key = Key.Create(name, callInfo);
+            var key = (name, callInfo);
 
             lock (_interopInvokeMember) {
                 InteropBinder.InvokeMember result;
@@ -288,10 +284,10 @@ namespace IronRuby.Runtime.Calls {
 
         public InteropBinder.SetIndexedProperty/*!*/ InteropSetIndexedProperty(string/*!*/ name, CallInfo/*!*/ callInfo) {
             if (_interopSetIndexedProperty == null) {
-                Interlocked.CompareExchange(ref _interopSetIndexedProperty, new Dictionary<Key<string, CallInfo>, InteropBinder.SetIndexedProperty>(), null);
+                Interlocked.CompareExchange(ref _interopSetIndexedProperty, new Dictionary<(string, CallInfo), InteropBinder.SetIndexedProperty>(), null);
             }
 
-            var key = Key.Create(name, callInfo);
+            var key = (name, callInfo);
 
             lock (_interopSetIndexedProperty) {
                 InteropBinder.SetIndexedProperty result;
@@ -332,10 +328,10 @@ namespace IronRuby.Runtime.Calls {
 
         public InteropBinder.Convert/*!*/ InteropConvert(Type/*!*/ type, bool isExplicit) {
             if (_interopConvert == null) {
-                Interlocked.CompareExchange(ref _interopConvert, new Dictionary<Key<Type, bool>, InteropBinder.Convert>(), null);
+                Interlocked.CompareExchange(ref _interopConvert, new Dictionary<(Type, bool), InteropBinder.Convert>(), null);
             }
 
-            var key = Key.Create(type, isExplicit);
+            var key = (type, isExplicit);
 
             lock (_interopConvert) {
                 InteropBinder.Convert result;

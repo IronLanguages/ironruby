@@ -359,18 +359,6 @@ namespace IronRuby.Runtime {
             return CastToInteger(integerConversion, obj).ToUInt32Unchecked();
         }
 
-        /// <summary>
-        /// Like CastToInteger, but converts the result to an unsigned int.
-        /// </summary>
-        [CLSCompliant(false)]
-        public static long CastToInt64Unchecked(ConversionStorage<IntegerValue>/*!*/ integerConversion, object obj) {
-            if (obj == null) {
-                throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
-            }
-
-            return CastToInteger(integerConversion, obj).ToInt64();
-        }
-
         #endregion
 
         #region Compare (<=>), ConvertCompareResult

@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -37,14 +33,6 @@ namespace IronRuby.Runtime {
     using ScriptCodeFunc = Func<RubyScope, object, object>;
 
     internal class RubyScriptCode : ScriptCode {
-#if FEATURE_REFEMIT
-        private sealed class CustomGenerator : DebugInfoGenerator {
-            public override void MarkSequencePoint(LambdaExpression method, int ilOffset, DebugInfoExpression node) {
-                RubyMethodDebugInfo.GetOrCreate(method.Name).AddMapping(ilOffset, node.StartLine);
-            }
-        }
-#endif
-
         private readonly Expression<ScriptCodeFunc> _code;
         private readonly TopScopeFactoryKind _kind;
         private ScriptCodeFunc _target;
@@ -131,19 +119,13 @@ namespace IronRuby.Runtime {
         internal static Delegate/*!*/ CompileLambda(LambdaExpression/*!*/ lambda, bool debugMode, bool noAdaptiveCompilation, 
             int compilationThreshold) {
 
-#if FEATURE_REFEMIT
             if (debugMode) {
                 return CompileDebug(lambda);
             } 
-#endif
             long traceStart = StartupTrace.Now();
             try {
                 if (noAdaptiveCompilation) {
                     Delegate result = lambda.Compile();
-#if NETFRAMEWORK
-                    // DLR closures should not be used:
-                    Debug.Assert(!(result.Target is Closure) || ((Closure)result.Target).Locals == null);
-#endif
                     return result;
                 }
 
@@ -153,25 +135,9 @@ namespace IronRuby.Runtime {
             }
         }
 
-#if FEATURE_PDBEMIT
-        private static bool _HasPdbPermissions = true;
-#endif
 
-#if FEATURE_REFEMIT
         private static Delegate/*!*/ CompileDebug(LambdaExpression/*!*/ lambda) {
-#if FEATURE_PDBEMIT
-            // try to use PDBs and fallback to CustomGenerator if not allowed to:
-            if (_HasPdbPermissions) {
-                try {
-                    return CompilerHelpers.CompileToMethod(lambda, DebugInfoGenerator.CreatePdbGenerator(), true);
-                } catch (SecurityException) {
-                    // do not attempt next time in this app-domain:
-                    _HasPdbPermissions = false;
-                }
-            }
-#endif
             return lambda.Compile();
         }
-#endif
     }
 }

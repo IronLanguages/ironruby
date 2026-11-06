@@ -13,12 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CUSTOM_TYPE_DESCRIPTOR
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -241,54 +236,6 @@ namespace IronRuby.Runtime {
             }
         }
 
-#if TODO
-        private class TypeConv : TypeConverter {
-            object convObj;
-
-            public TypeConv(object self) {
-                convObj = self;
-            }
-
-            #region TypeConverter overrides
-
-            public override bool CanConvertTo(ITypeDescriptorContext context, Type destinationType) {
-                object result;
-                return Converter.TryConvert(convObj, destinationType, out result);
-            }
-
-            public override bool CanConvertFrom(ITypeDescriptorContext context, Type sourceType) {
-                return Converter.CanConvertFrom(sourceType, convObj.GetType(), NarrowingLevel.All, true);
-            }
-
-            public override object ConvertFrom(ITypeDescriptorContext context, System.Globalization.CultureInfo culture, object value) {
-                return Converter.Convert(value, convObj.GetType());
-            }
-
-            public override object ConvertTo(ITypeDescriptorContext context, System.Globalization.CultureInfo culture, object value, Type destinationType) {
-                return Converter.Convert(convObj, destinationType);
-            }
-
-            public override bool GetCreateInstanceSupported(ITypeDescriptorContext context) {
-                return false;
-            }
-
-            public override bool GetPropertiesSupported(ITypeDescriptorContext context) {
-                return false;
-            }
-
-            public override bool GetStandardValuesSupported(ITypeDescriptorContext context) {
-                return false;
-            }
-
-            public override bool IsValid(ITypeDescriptorContext context, object value) {
-                object result;
-                return Converter.TryConvert(value, convObj.GetType(), out result);
-            }
-
-            #endregion
-        }
-#endif
     }
 }
 
-#endif

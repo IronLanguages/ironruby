@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_ENCODING
 
 using System;
 using System.Collections.Generic;
@@ -91,5 +90,4 @@ namespace IronRuby.Runtime {
         }
     }
 }
-
-#endif
+

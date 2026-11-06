@@ -79,7 +79,7 @@ namespace IronRuby.Compiler.Generation {
         /// </summary>
         internal void OverrideMethods(Type type) {
             // if we have conflicting virtual's due to new slots only override the methods on the most derived class.
-            var added = new Dictionary<Key<string, MethodSignatureInfo>, MethodInfo>();
+            var added = new Dictionary<(string, MethodSignatureInfo), MethodInfo>();
 
             string defaultGetter, defaultSetter;
             DefaultMemberAttribute defaultMember = type.GetTypeInfo().GetCustomAttributes<DefaultMemberAttribute>(false).SingleOrDefault();
@@ -95,7 +95,7 @@ namespace IronRuby.Compiler.Generation {
             var methods = type.GetInheritedMethods(flattenHierarchy: true);
 
             foreach (MethodInfo mi in methods) {
-                var key = Key.Create(mi.Name, new MethodSignatureInfo(mi));
+                var key = (mi.Name, new MethodSignatureInfo(mi));
 
                 if (!added.TryGetValue(key, out overridden)) {
                     added[key] = mi;

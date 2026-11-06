@@ -322,10 +322,6 @@ namespace IronRuby.Runtime {
             get { return false; }
         }
 
-        protected virtual bool IsFlowControlScope {
-            get { return false; }
-        }
-
         #region Local Variables
 
         internal void SetLocals(MutableTuple locals, string/*!*/[]/*!*/ variableNames) {
@@ -879,12 +875,8 @@ namespace IronRuby.Runtime {
         }
 
         public RubyModule/*!*/ GetMethodDefinitionOwner() {
-            // MRI 1.9: 
-            // - define_method doesn't influence the definition owner (unlike MRI 1.8)
-            // - skips module_eval blocks above method scope 
-            // MRI 1.8: 
-            // - skips module_eval and define_method blocks above method scope.
-            // IronRuby: 
+            // - define_method doesn't influence the definition owner
+            // - module_eval blocks define into the module they evaluate in
             // - Fallback to the top-level singleton class when hosted.
 
             RubyScope scope = this;
@@ -901,17 +893,12 @@ namespace IronRuby.Runtime {
                         return scope.Module;
 
                     case ScopeKind.Method:
-                        // A `def` nested in a method body defines into the same place the
+                    case ScopeKind.BlockMethod:
+                        // A `def` nested in a method body (or a define_method block) defines into the same place the
                         // enclosing definition went, so keep walking the lexical chain - which
                         // may well end in a class_eval-like block scope (`Class.new { def m; def
                         // n; end; end }` defines n on the new class, not on Object).
                         break;
-
-                    case ScopeKind.BlockMethod:
-                        if (RubyContext.RubyOptions.Compatibility == RubyCompatibility.Ruby19) {
-                            break;
-                        }
-                        return ((RubyBlockScope)scope).BlockFlowControl.Proc.Method.DeclaringModule;
 
                     case ScopeKind.BlockModule:
                         BlockParam blockParam = ((RubyBlockScope)scope).BlockFlowControl;
@@ -1155,30 +1142,6 @@ namespace IronRuby.Runtime {
             return null;
         }
 
-#if TODO_DebugView
-         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
-            private readonly string/*!*/ _matchClassName;
-            [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
-            private readonly string/*!*/ _lastInputLine;
-var closureScope = scope as RubyClosureScope;
-                if (closureScope != null) {
-                    _matchClassName = _scope.RubyContext.GetImmediateClassOf(closureScope.CurrentMatch).GetDisplayName(true).ConvertToString();
-                    _lastInputLine = _scope.RubyContext.GetImmediateClassOf(closureScope.LastInputLine).GetDisplayName(true).ConvertToString();
-                }
-                
-
-            [DebuggerBrowsable(DebuggerBrowsableState.Collapsed)]
-            [DebuggerDisplay("{A2 != null ? A2.ToString() : \"nil\",nq}", Name = "$~", Type = "{_matchClassName,nq}")]
-            public Match A2 {
-                get { return (_scope._currentMatch != null) ? _scope._currentMatch.Match : null; }
-            }
-
-            [DebuggerBrowsable(DebuggerBrowsableState.Collapsed)]
-            [DebuggerDisplay("{A2 != null ? A2.ToString() : \"nil\",nq}", Name = "$~", Type = "{_matchClassName,nq}")]
-            public Match A2 {
-                get { return (_scope._currentMatch != null) ? _scope._currentMatch.Match : null; }
-            }
-#endif
     }
 
     /// <summary>
@@ -1658,7 +1621,7 @@ var closureScope = scope as RubyClosureScope;
         #region Factories
 
         internal static RubyTopLevelScope/*!*/ CreateTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context, bool isMain) {
-            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false, false);
+            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false);
 
             RubyTopLevelScope scope = new RubyTopLevelScope(rubyGlobalScope, null, null, rubyGlobalScope.MainObject);
             scope.IsMain = isMain;
@@ -1709,7 +1672,7 @@ var closureScope = scope as RubyClosureScope;
         }
 
         internal static RubyTopLevelScope/*!*/ CreateHostedTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context, bool bindGlobals) {
-            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, true, bindGlobals);
+            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, bindGlobals);
 
             // Reuse existing top-level scope if available:
             RubyTopLevelScope scope = rubyGlobalScope.TopLocalScope;
@@ -1743,7 +1706,7 @@ var closureScope = scope as RubyClosureScope;
         }
 
         internal static RubyTopLevelScope/*!*/ CreateWrappedTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context) {
-            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false, false);
+            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false);
 
             // load(path, true) wraps the file in a fresh anonymous module; load(path, mod) wraps it
             // in that very module, so its constants and methods are reachable through it afterwards.

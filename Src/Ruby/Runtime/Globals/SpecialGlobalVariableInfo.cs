@@ -134,19 +134,12 @@ namespace IronRuby.Runtime {
 
 
                 // misc:
-                case GlobalVariableId.SafeLevel:
-                    return context.CurrentSafeLevel;
-
                 case GlobalVariableId.Verbose:
                     return context.Verbose;
 
                 case GlobalVariableId.WarningLevel:
                     // $-W: 0 for $VERBOSE nil, 1 for false, 2 for true
                     return context.Verbose == null ? 0 : (RubyOps.IsTrue(context.Verbose) ? 2 : 1);
-
-                case GlobalVariableId.KCode:
-                    context.ReportWarning("variable $KCODE is no longer effective");
-                    return null;
 
                 case GlobalVariableId.IgnoreCase:
                     context.ReportDeprecationWarning("variable $= is no longer effective");
@@ -260,10 +253,6 @@ namespace IronRuby.Runtime {
 
 
                 // misc:
-                case GlobalVariableId.SafeLevel:
-                    context.SetSafeLevel(RequireType<int>(value, name, "Integer"));
-                    return;
-
                 case GlobalVariableId.Verbose:
                     // nil means "no warnings at all"; anything else truthy is plain true
                     context.Verbose = (value == null) ? null : (object)RubyOps.IsTrue(value);
@@ -277,10 +266,6 @@ namespace IronRuby.Runtime {
                     SetProcessTitle(context.CommandLineProgramPath.ToByteArray());
                     return;
                 
-                case GlobalVariableId.KCode:
-                    context.ReportWarning("variable $KCODE is no longer effective");
-                    return;
-
                 case GlobalVariableId.IgnoreCase:
                     // MRI keeps $= readable but discards writes; the assignment expression still
                     // evaluates to the assigned value by plain assignment semantics.

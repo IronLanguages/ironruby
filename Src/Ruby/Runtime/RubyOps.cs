@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -659,19 +655,11 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Proc/*!*/ DefineBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
-#if NETFRAMEWORK
-            // DLR closures should not be used:
-            Debug.Assert(!(((Delegate)clrMethod).Target is Closure) || ((Closure)((Delegate)clrMethod).Target).Locals == null);
-#endif
             return new Proc(ProcKind.Block, self, scope, dispatcher.SetMethod(clrMethod));
         }
 
         [Emitted]
         public static Proc/*!*/ DefineLambda(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
-#if NETFRAMEWORK
-            // DLR closures should not be used:
-            Debug.Assert(!(((Delegate)clrMethod).Target is Closure) || ((Closure)((Delegate)clrMethod).Target).Locals == null);
-#endif
             return new Proc(ProcKind.Lambda, self, scope, dispatcher.SetMethod(clrMethod));
         }
 
@@ -1027,8 +1015,7 @@ namespace IronRuby.Runtime {
                     // 2) trace
                     //    Method call trace reports non-singleton module.
 
-                    // MRI 1.8: instance method owner is self -> it is possible (via define_method) to define m.f. on a class (bug)
-                    // MRI 1.9: instance method owner GetMethodDefinitionOwner
+                    // The instance method owner is GetMethodDefinitionOwner.
                     // MRI allows to define m.f. on classes but then doesn't work correctly with it.
                     instanceOwner = scope.GetMethodDefinitionOwner();
                     if (instanceOwner.IsClass) {
@@ -2708,28 +2695,6 @@ namespace IronRuby.Runtime {
             throw new NotImplementedException();
         }
 
-        // TODO:
-        internal static IList<KeyValuePair<string, object>> ScopeGetItems(Scope scope) {
-            object storage = (object)scope.Storage;
-
-            var scopeStorage = storage as ScopeStorage;
-            if (scopeStorage != null) {
-                return scopeStorage.GetItems();
-            }
-
-            var stringDict = storage as StringDictionaryExpando;
-            if (stringDict != null) {
-                var list = new KeyValuePair<string, object>[stringDict.Dictionary.Count];
-                int i = 0;
-                foreach (var entry in stringDict.Dictionary) {
-                    list[i++] = entry;
-                }
-                return list;
-            }
-
-            throw new NotImplementedException();
-        }
-
         #endregion
 
         #region Regex
@@ -2773,9 +2738,6 @@ namespace IronRuby.Runtime {
         }
 
         #endregion
-
-        public const char SuffixLiteral = 'L';       // Repr: literal string
-        public const char SuffixMutable = 'M';       // non-literal "...#{expr}..."
 
         /// <summary>
         /// Specialized signatures exist for upto the following number of string parts
@@ -3246,13 +3208,11 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static bool CanRescue(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
             // A CLR finally may replace the reclaim signal with an ordinary exception.
             // That still belongs to a discarded stack and must not enter a Ruby rescue.
             if (RubyUtils.IsReclaimingFiber) {
                 return false;
             }
-#endif
             if (exception is StackUnwinder) {
                 return false;
             }
@@ -3307,7 +3267,6 @@ namespace IronRuby.Runtime {
             var site = comparisonStorage.GetCallSite("===");
             bool result = IsTrue(site.Target(site, classObject, context.CurrentException));
             if (result) {
-                RubyExceptionData.ActiveExceptionHandled(context.CurrentException);
                 TraceRescue(scope, context.CurrentException);
             }
             return result;
@@ -3330,7 +3289,6 @@ namespace IronRuby.Runtime {
             // MRI doesn't call === here;
             bool result = ec.IsInstanceOf(ec.CurrentException, ec.StandardErrorClass);
             if (result) {
-                RubyExceptionData.ActiveExceptionHandled(ec.CurrentException);
                 TraceRescue(scope, ec.CurrentException);
             }
             return result;

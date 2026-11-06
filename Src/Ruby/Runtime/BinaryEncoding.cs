@@ -37,13 +37,8 @@ namespace IronRuby.Runtime {
 
         private static readonly Encoding/*!*/ _latin1 = Encoding.Latin1;
 
-#if FEATURE_ENCODING
         private BinaryEncoding()
             : base(RubyEncoding.CodePageBinary) {
-#else
-        private BinaryEncoding() 
-            : base() {
-#endif
         }
 
         private static void CheckBytes(ReadOnlySpan<char> chars) {
@@ -143,7 +138,6 @@ namespace IronRuby.Runtime {
 
         #endregion
 
-#if FEATURE_ENCODING
         public override string/*!*/ EncodingName {
             get { return "ASCII-8BIT"; }
         }
@@ -151,7 +145,6 @@ namespace IronRuby.Runtime {
         public override bool IsSingleByte {
             get { return true; }
         }
-#endif
 
         public override string/*!*/ WebName {
             get { return "ASCII-8BIT"; }

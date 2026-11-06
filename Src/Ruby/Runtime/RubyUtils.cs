@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -1144,8 +1140,6 @@ namespace IronRuby.Runtime {
 
         #region Tracking operations that have the potential for infinite recursion
 
-        public static readonly MutableString InfiniteRecursionMarker = MutableString.CreateAscii("[...]").Freeze();
-
         public class RecursionTracker {
             // The set of objects an operation is already inside must be per thread: the
             // trackers themselves are process-wide singletons, so a Dictionary held here is
@@ -1195,13 +1189,6 @@ namespace IronRuby.Runtime {
 
         public static RecursionTracker InfiniteInspectTracker {
             get { return _infiniteInspectTracker; }
-        }
-
-        [MultiRuntimeAware]
-        private static readonly RecursionTracker _infiniteToSTracker = new RecursionTracker();
-
-        public static RecursionTracker InfiniteToSTracker {
-            get { return _infiniteToSTracker; }
         }
 
         #endregion
@@ -1598,8 +1585,6 @@ namespace IronRuby.Runtime {
 
         #region Exceptions
 
-#if FEATURE_THREAD
-#if FEATURE_EXCEPTION_STATE
         // Unwinds only discarded fiber stacks. Set before throwing, cleared by the worker
         // boundary after CLR finally cleanup has completed; Ruby ensure bodies consult it.
         public sealed class FiberReclaimSignal : StackUnwinder {
@@ -2007,20 +1992,6 @@ namespace IronRuby.Runtime {
             }
             return e;
         }
-#else
-        public static Exception GetVisibleException(Exception e) { return e; }
-
-        public static void ExitThread(Thread/*!*/ thread) {
-            thread.Abort();
-        }
-
-        public static bool IsRubyThreadExit(Exception e) {
-            return e is ThreadAbortException;
-        }
-#endif
-#else
-        public static Exception GetVisibleException(Exception e) { return e; }
-#endif
         #endregion
 
         #region Paths
@@ -2175,11 +2146,7 @@ namespace IronRuby.Runtime {
                         // This will always succeed with a non-null string, but it can fail
                         // if the Personal folder was renamed or deleted. In this case it returns
                         // an empty string.
-#if FEATURE_FILESYSTEM // TODO: virtualize via PAL?
                         result = Environment.GetFolderPath(Environment.SpecialFolder.Personal);
-#else
-                        result = null;
-#endif
                     } else {
                         result = userEnvironment;
                     }

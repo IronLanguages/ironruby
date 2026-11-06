@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Concurrent;
@@ -96,7 +92,6 @@ namespace IronRuby.Runtime {
         public const string BinDirEnvironmentVariable = "IRONRUBY_11";
 
         // IronRuby:
-        public const string IronRubyInformationalVersion = "1.1.3";
         internal const string/*!*/ IronRubyDisplayName = "IronRuby";
         internal const string/*!*/ IronRubyNames = "IronRuby;Ruby;rb";
         internal const string/*!*/ IronRubyFileExtensions = ".rb";
@@ -617,10 +612,6 @@ namespace IronRuby.Runtime {
             get { return _loader; }
         }
 
-        public bool ShowCls {
-            get { return false; }
-        }
-
         public EqualityComparer/*!*/ EqualityComparer {
             get {
                 if (_equalityComparer == null) {
@@ -712,7 +703,6 @@ namespace IronRuby.Runtime {
             _loader = new Loader(this);
             _emptyScope = new RubyTopLevelScope(this);            
             _currentException = null;
-            _currentSafeLevel = 0;
             _childProcessExitStatus = null;
             // -0<octal> names the record separator; -l then copies it to $\ so that puts and
             // print put back what the loop chomped off.
@@ -850,9 +840,6 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("DEBUG", debug);
             DefineGlobalVariableNoLock("-d", debug);
 
-            DefineGlobalVariableNoLock("KCODE", Runtime.GlobalVariables.KCode);
-            DefineGlobalVariableNoLock("-K", Runtime.GlobalVariables.KCode);
-
             // $=: removed from Ruby long ago, but still defined so that reading or writing it
             // produces the deprecation warning rather than an unknown-global nil.
             DefineGlobalVariableNoLock("=", Runtime.GlobalVariables.IgnoreCase);
@@ -964,10 +951,7 @@ namespace IronRuby.Runtime {
         }
 
         internal static string MakeRuntimeDesriptionString() {
-            Type mono = typeof(object).Assembly.GetType("Mono.Runtime");
-            return mono != null ?
-                (string)mono.GetMethod("GetDisplayName", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, null)
-                : String.Format(CultureInfo.InvariantCulture, ".NET {0}", Environment.Version);
+            return String.Format(CultureInfo.InvariantCulture, ".NET {0}", Environment.Version);
         }
 
         private static MutableString/*!*/ MakePlatformString() {
@@ -2986,13 +2970,6 @@ namespace IronRuby.Runtime {
             }
         }
 
-        public void DefineReadOnlyGlobalVariable(string/*!*/ name, object value) {
-            lock (GlobalVariablesLock) {
-                _globalVariables[name] = new ReadOnlyGlobalVariableInfo(value);
-                GlobalVariablesChanged();
-            }
-        }
-
         public void DefineGlobalVariable(string/*!*/ name, GlobalVariable/*!*/ variable) {
             ContractUtils.RequiresNotNull(variable, "variable");
             lock (GlobalVariablesLock) {
@@ -3004,13 +2981,6 @@ namespace IronRuby.Runtime {
         internal void DefineGlobalVariableNoLock(string/*!*/ name, GlobalVariable/*!*/ variable) {
             _globalVariables[name] = variable;
             GlobalVariablesChanged();
-        }
-
-        public bool DeleteGlobalVariable(string/*!*/ name) {
-            lock (GlobalVariablesLock) {
-                GlobalVariablesChanged();
-                return _globalVariables.Remove(name);
-            }
         }
 
         public void AliasGlobalVariable(string/*!*/ newName, string/*!*/ oldName) {
@@ -3250,22 +3220,10 @@ namespace IronRuby.Runtime {
         private CallSite<Func<CallSite, object, object, object>> _setBacktraceSite;
         
         /// <summary>
-        /// $SAFE
+        /// Always 0: $SAFE has been an ordinary global since Ruby 3.0.
         /// </summary>
-        [ThreadStatic]
-        private static int _currentSafeLevel;
-
         public int CurrentSafeLevel {
-            get { return _currentSafeLevel; }
-        }
-
-        public void SetSafeLevel(int value) {
-            if (_currentSafeLevel <= value) {
-                _currentSafeLevel = value;
-            } else {
-                throw RubyExceptions.CreateSecurityError(String.Format("tried to downgrade safe level from {0} to {1}",
-                    _currentSafeLevel, value));
-            }
+            get { return 0; }
         }
 
         #endregion
@@ -3376,47 +3334,9 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// TODO
-        /// Ruby 1.9 allows arbitrarily encoded identifiers. We could use a RubySymbol in internal tables, however that would also require
-        /// dynamic sites to use RubySymbols and CLR methods cached in the tables to be represented by RubySymbols. Seems like too much overhead.
-        /// 
-        /// For now we take the same approach as with file system paths. We represent the identifiers as CLR strings and whenever we convert 
-        /// them to RubySymbol or MutableString we use either the current KCODE or (K)UTF8 encoding. This doesn't guarantee a correct roundtrip 
-        /// in the case that a method is defined under K-UTF8, its name is retrieved under K-SJIS, converted to a string and the bytes are examined. 
-        /// The conversion might blow up if it contains a character that is not available in SJIS.
-        /// 
-        /// <para>
-        /// Note that the way how 1.9 works makes non-ascii identifiers encoded by non-UTF-8 encoding almost useless. 
-        /// Libraries written in such encoding are only usable from code written in the same encoding. 
-        /// Thus the common case would probably be that all scripts use UTF-8. For example,
-        /// <code>
-        /// lib1.rb:
-        /// #encoding: UTF-8
-        /// class C; def S; end; end
-        /// 
-        /// lib2.rb:
-        /// #encoding: SJIS
-        /// class D; def S; end; end
-        /// 
-        /// c.rb:
-        /// #encoding: UTF-8
-        /// require 'lib1'
-        /// require 'lib2'
-        /// C.new.S             # works
-        /// D.new.S             # error: no method S
-        /// </code>
-        /// </para>
-        /// 
-        /// <para>
-        /// Ruby 1.9 also allows incorrectly encoded method names (not identifiers in source code though):
-        /// <code>
-        /// #encoding: UTF-8
-        /// class C
-        ///   define_method(:"foo\xce") { }
-        /// end
-        /// </code>
-        /// There seems to be no reason why we should support this.
-        /// </para>
+        /// Method, constant and variable names are kept as CLR strings and always converted to UTF-8 symbols and strings.
+        /// Ruby allows identifiers in any source encoding, but a name defined in a non-UTF-8 file is only reachable from
+        /// files of that same encoding, so the common case is all-UTF-8 and IronRuby does not track per-name encodings.
         /// </summary>
         public RubyEncoding/*!*/ GetIdentifierEncoding() {
             // TODO:
@@ -3428,14 +3348,14 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// Returns an identifier encoded as MutableStrings (Ruby 1.8) or Symbols (Ruby 1.9).
+        /// Returns an identifier as a Symbol.
         /// </summary>
         public object/*!*/ StringifyIdentifier(string/*!*/ identifier) {
             return CreateSymbol(identifier, RubyEncoding.UTF8);
         }
 
         /// <summary>
-        /// Returns an array of identifiers encoded as MutableStrings (Ruby 1.8) or Symbols (Ruby 1.9).
+        /// Returns an array of identifiers as Symbols.
         /// </summary>
         public RubyArray/*!*/ StringifyIdentifiers(IList<string>/*!*/ identifiers) {
             var result = new RubyArray(identifiers.Count);
@@ -3468,10 +3388,6 @@ namespace IronRuby.Runtime {
         }
 
         private readonly List<FileDescriptor>/*!*/ _fileDescriptors = new List<FileDescriptor>(10);
-
-        public const int StandardInputDescriptor = 0;
-        public const int StandardOutputDescriptor = 1;
-        public const int StandardErrorOutputDescriptor = 2;
 
         public object StandardInput { get; set; }
         public object StandardOutput { get; set; }
@@ -4035,10 +3951,6 @@ namespace IronRuby.Runtime {
             return new RubyScriptCode(lambda, sourceUnit, rubyOptions.FactoryKind);
         }
 
-#if MEASURE_AST
-        private static readonly object _TransformationLock = new object();
-        private static readonly Dictionary<ExpressionType, int> _TransformationHistogram = new Dictionary<ExpressionType,int>();
-#endif
 
         /// <summary>
         /// The front end a host chose, or null for prism (IronRuby.Prism's bridge), which is the
@@ -4085,24 +3997,12 @@ namespace IronRuby.Runtime {
             }
 
             MSA.Expression<T> lambda;
-#if MEASURE_AST
-            lock (_TransformationLock) {
-                var oldHistogram = System.Linq.Expressions.Expression.Histogram;
-                System.Linq.Expressions.Expression.Histogram = _TransformationHistogram;
-                try {
-#endif
             traceStart = StartupTrace.Now();
             try {
                 lambda = TransformTree<T>(ast, sourceUnit, options);
             } finally {
                 StartupTrace.Transformed(traceStart);
             }
-#if MEASURE_AST
-                } finally {
-                    System.Linq.Expressions.Expression.Histogram = oldHistogram;
-                }
-            }
-#endif
 
             return lambda;
         }
@@ -4176,7 +4076,7 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Creates a scope extension for a DLR scope unless it already exists for the given scope.
         /// </summary>
-        internal RubyGlobalScope/*!*/ InitializeGlobalScope(Scope/*!*/ globalScope, bool createHosted, bool bindGlobals) {
+        internal RubyGlobalScope/*!*/ InitializeGlobalScope(Scope/*!*/ globalScope, bool bindGlobals) {
             Assert.NotNull(globalScope);
 
             var scopeExtension = globalScope.GetExtension(ContextId);
@@ -4187,7 +4087,7 @@ namespace IronRuby.Runtime {
             RubyObject mainObject = new RubyObject(_objectClass);
             RubyClass mainSingleton = GetOrCreateMainSingleton(mainObject, null);
 
-            RubyGlobalScope result = new RubyGlobalScope(this, globalScope, mainObject, createHosted);
+            RubyGlobalScope result = new RubyGlobalScope(this, globalScope, mainObject);
             // Remember the first one as the fallback for frameless call sites (see MainGlobalScope);
             // the main script's scope replaces it in RubyTopLevelScope.CreateTopLevelScope.
             if (_mainGlobalScope == null) {
@@ -4662,46 +4562,9 @@ namespace IronRuby.Runtime {
 
             if (Options.PerfStats) {
                 using (TextWriter output = File.CreateText("perfstats.log")) {
-                    output.WriteLine(String.Format(@"
-  total:         {0}
-  binding:       {1} ({2} calls)
-",
-                        _upTime.Elapsed,
-#if MEASURE
-                    new TimeSpan(MetaAction.BindingTimeTicks), 
-                    MetaAction.BindCallCount
-#else
-     "N/A", "N/A"
-#endif
-));
-
-#if MEASURE_BINDING
                     output.WriteLine();
-                    output.WriteLine("---- MetaAction kinds ----");
+                    output.WriteLine("  total:         {0}", _upTime.Elapsed);
                     output.WriteLine();
-
-                    PerfTrack.DumpHistogram(MetaAction.HistogramOfKinds, output);
-
-                    output.WriteLine();
-
-                    output.WriteLine();
-                    output.WriteLine("---- MetaAction instances ----");
-                    output.WriteLine();
-
-                    PerfTrack.DumpHistogram(MetaAction.HistogramOfInstances, output);
-
-                    output.WriteLine();
-#endif
-
-#if MEASURE_AST
-                    output.WriteLine();
-                    output.WriteLine("---- Ruby Parser generated Expression Trees ----");
-                    output.WriteLine();
-                    
-                    PerfTrack.DumpHistogram(_TransformationHistogram, output);
-
-                    output.WriteLine();
-#endif
                     PerfTrack.DumpStats(output);
                 }
             }
@@ -5002,7 +4865,6 @@ namespace IronRuby.Runtime {
                 case "FILESYSTEM": return GetPathEncoding().StrictEncoding;
                 case "LOCALE": return _options.LocaleEncoding.StrictEncoding;
                 case "EXTERNAL": return _defaultExternalEncoding.StrictEncoding;
-                // Mono doesn't recognize 'SJIS' encoding name:
                 case "WINDOWS-31J": return Encoding.GetEncoding(RubyEncoding.CodePageSJIS);
                 case "MACCYRILLIC": return Encoding.GetEncoding(10007);
 
@@ -5198,8 +5060,8 @@ namespace IronRuby.Runtime {
             get { return RubyUtils.GetCallSite(ref _stringConversionSite, ConvertToSAction.Make(this)); }
         }
 
-        private readonly Dictionary<Key<string, RubyCallSignature>, CallSite>/*!*/ _sendSites =
-            new Dictionary<Key<string, RubyCallSignature>, CallSite>();
+        private readonly Dictionary<(string, RubyCallSignature), CallSite>/*!*/ _sendSites =
+            new Dictionary<(string, RubyCallSignature), CallSite>();
 
         private object SendSitesLock { get { return _sendSites; } }
 
@@ -5208,12 +5070,12 @@ namespace IronRuby.Runtime {
 
             lock (SendSitesLock) {
                 CallSite site;
-                if (_sendSites.TryGetValue(Key.Create(methodName, callSignature), out site)) {
+                if (_sendSites.TryGetValue((methodName, callSignature), out site)) {
                     return (CallSite<TSiteFunc>)site;
                 }
 
                 var newSite = CallSite<TSiteFunc>.Create(RubyCallAction.Make(this, methodName, callSignature));
-                _sendSites.Add(Key.Create(methodName, callSignature), newSite);
+                _sendSites.Add((methodName, callSignature), newSite);
                 return newSite;
             }
         }
@@ -5360,11 +5222,9 @@ namespace IronRuby.Runtime {
         }
 
         internal void ReportTraceEvent(string/*!*/ operation, RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/ name, string fileName, int lineNumber) {
-#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
             if (RubyUtils.IsReclaimingFiber) {
                 return;
             }
-#endif
             if (_traceListener != null && !_traceListenerSuspended) {
                 try {
                     _traceListenerSuspended = true;

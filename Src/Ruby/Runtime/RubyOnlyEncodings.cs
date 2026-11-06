@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_ENCODING
 
 using System;
 using System.Text;
@@ -1362,4 +1361,3 @@ namespace IronRuby.Runtime {
         }
     }
 }
-#endif
