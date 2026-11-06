@@ -16,13 +16,11 @@
 using MSA = System.Linq.Expressions;
 
 using System.Diagnostics;
-using System.Dynamic;
 using Microsoft.Scripting;
 using IronRuby.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = Expression;
 
     public partial class InstanceVariable : Variable {
         public InstanceVariable(string/*!*/ name, SourceSpan location)

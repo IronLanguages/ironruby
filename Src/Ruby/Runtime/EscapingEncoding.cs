@@ -19,7 +19,6 @@ using System.Buffers;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Unicode;
-using IronRuby.Builtins;
 
 namespace IronRuby.Runtime {
 

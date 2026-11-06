@@ -17,8 +17,6 @@ using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
 

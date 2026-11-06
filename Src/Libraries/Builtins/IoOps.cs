@@ -35,7 +35,6 @@ using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
     using Ast = Expression;
-    using Utils = IronRuby.Runtime.Utils;
     using TranscodeStorage = CallSiteStorage<Func<CallSite, object, object, object>>;
 
     /// <summary>

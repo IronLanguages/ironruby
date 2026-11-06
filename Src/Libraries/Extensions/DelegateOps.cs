@@ -21,7 +21,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
     using InvokeStorage = CallSiteStorage<Func<CallSite, object, Proc, RubyArray, object>>;

@@ -15,11 +15,6 @@
 
 using System;
 using IronRuby.Builtins;
-using System.Text;
-using System.Diagnostics;
-using System.Collections.Generic;
-using IronRuby.Runtime;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using System.Numerics;
 using IronRuby.Compiler;

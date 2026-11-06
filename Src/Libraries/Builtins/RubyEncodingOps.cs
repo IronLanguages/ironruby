@@ -16,12 +16,8 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
-using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using Microsoft.Scripting;
-using System.Globalization;
 
 namespace IronRuby.Builtins {
     [RubyClass("Encoding", Extends = typeof(RubyEncoding), Inherits = typeof(Object))]

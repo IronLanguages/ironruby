@@ -17,10 +17,8 @@ using MSA = System.Linq.Expressions;
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = MSA.Expression;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
     
     public partial class OrExpression : Expression {

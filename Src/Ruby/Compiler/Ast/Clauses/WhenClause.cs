@@ -14,10 +14,7 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Compiler.Ast {
 

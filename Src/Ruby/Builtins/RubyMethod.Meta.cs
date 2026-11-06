@@ -16,10 +16,8 @@
 using System.Linq.Expressions;
 
 using System;
-using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
-using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;

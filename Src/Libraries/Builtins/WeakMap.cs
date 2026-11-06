@@ -13,7 +13,6 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
     /// <summary>

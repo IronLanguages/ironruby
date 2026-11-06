@@ -16,13 +16,10 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Generation;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;

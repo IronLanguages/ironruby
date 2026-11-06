@@ -14,7 +14,6 @@
  * ***************************************************************************/
 
 using System;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Tests {    
     public partial class Tests {

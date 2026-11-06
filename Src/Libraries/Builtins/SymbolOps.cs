@@ -14,12 +14,9 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
-using Microsoft.Scripting;
 using IronRuby.Runtime;
 using IronRuby.Compiler;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 

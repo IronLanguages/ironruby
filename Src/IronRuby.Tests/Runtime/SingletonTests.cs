@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using IronRuby.Runtime;
 using System;
 namespace IronRuby.Tests {
     public partial class Tests {

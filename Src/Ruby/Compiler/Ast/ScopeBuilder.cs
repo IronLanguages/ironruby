@@ -24,7 +24,6 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
-using System.Collections.ObjectModel;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;

@@ -45,7 +45,6 @@ using AstUtils = Microsoft.Scripting.Ast.Utils;
 namespace IronRuby.Runtime.Jit {
     using MSA = System.Linq.Expressions;
     using Ast = System.Linq.Expressions.Expression;
-    using RExpr = IronRuby.Compiler.Ast.Expression;
 
     public sealed class JitKeywordCall {
         internal const int MaxPositional = 2;

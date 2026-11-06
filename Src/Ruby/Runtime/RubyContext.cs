@@ -25,7 +25,6 @@ using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Security;
 using System.Text;
 using System.Threading;
 using IronRuby.Builtins;
@@ -39,7 +38,6 @@ using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using System.Collections.ObjectModel;
 using System.Globalization;
 
 namespace IronRuby.Runtime {

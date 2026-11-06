@@ -14,21 +14,11 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.IO;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Numerics;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using System.Globalization;
 using System.Security;
 using System.Text.RegularExpressions;
-using System.Diagnostics;
 
 namespace IronRuby.Builtins {
     #region RubyTime

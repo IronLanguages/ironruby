@@ -17,11 +17,9 @@ using MSA = System.Linq.Expressions;
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = MSA.Expression;
 
     /// <summary>
     /// TODO: unify with OrExpression (?)

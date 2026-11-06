@@ -13,11 +13,6 @@
  *
  * ***************************************************************************/
 
-using System;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Runtime;
-using IronRuby.Compiler;
-using IronRuby.Compiler.Ast;
 
 namespace IronRuby.Tests {
 

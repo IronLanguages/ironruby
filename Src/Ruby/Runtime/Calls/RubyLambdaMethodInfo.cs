@@ -13,22 +13,16 @@
  *
  * ***************************************************************************/
 
-using System.Linq.Expressions;
 
 using System;
 using System.Threading;
-using System.Diagnostics;
 using System.Reflection;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Calls {
-    using Ast = Expression;
 
     public class RubyLambdaMethodInfo : RubyMemberInfo {
         private static int _Id = 1;

@@ -16,7 +16,6 @@
 using MSA = System.Linq.Expressions;
 
 using System.Diagnostics;
-using System.Dynamic;
 using Microsoft.Scripting;
 
 namespace IronRuby.Compiler.Ast {

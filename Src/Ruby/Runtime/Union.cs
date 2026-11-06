@@ -13,9 +13,6 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections.Generic;
-using System.Text;
 using IronRuby.Compiler.Generation;
 using IronRuby.Builtins;
 using System.Diagnostics;

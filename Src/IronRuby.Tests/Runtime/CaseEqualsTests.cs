@@ -1,5 +1,3 @@
-using System;
-using IronRuby.Builtins;
 
 namespace IronRuby.Tests {
     public partial class Tests {

@@ -17,14 +17,11 @@
 using System;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 using System.Runtime.InteropServices;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
-using System.IO;
 using System.Numerics;
 
 namespace IronRuby.StandardLibrary.Sockets {

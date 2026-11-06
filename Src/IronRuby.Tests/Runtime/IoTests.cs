@@ -16,13 +16,11 @@
 using System;
 using IronRuby.Builtins;
 using System.Text;
-using System.Diagnostics;
 using System.Collections.Generic;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
 using System.IO;
 using Microsoft.Scripting.Utils;
-using System.Text.RegularExpressions;
 
 namespace IronRuby.Tests {
     public partial class Tests {

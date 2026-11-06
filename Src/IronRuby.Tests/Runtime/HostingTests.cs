@@ -17,16 +17,11 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.Diagnostics;
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Utils;
 
 using IronRuby.Builtins;
-using IronRuby.Runtime.Calls;
-using IronRuby.Runtime;
-using System.Runtime.CompilerServices;
 
 namespace IronRuby.Tests {
     public partial class Tests {

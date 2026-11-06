@@ -21,12 +21,9 @@ using System.Text;
 using System.Threading;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
-    using Debug = System.Diagnostics.Debug;
 
     /// <summary>
     /// Ruby threads are represented by CLR thread objects (System.Threading.Thread).

@@ -17,10 +17,8 @@ using MSA = System.Linq.Expressions;
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Ast;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = Expression;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     public abstract class JumpStatement : Expression {

@@ -16,9 +16,7 @@
 using System.Linq.Expressions;
 
 using System;
-using System.Collections.Generic;
 using System.Reflection;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Actions;
 using IronRuby.Compiler;

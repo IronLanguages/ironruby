@@ -1,4 +1,3 @@
-using System;
 
 namespace IronRuby.Tests {
     public partial class Tests {

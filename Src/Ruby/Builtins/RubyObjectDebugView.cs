@@ -16,8 +16,6 @@
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Diagnostics;
-using System.Collections.Generic;
-using System;
 
 namespace IronRuby.Builtins {
     public class RubyObjectDebugView {

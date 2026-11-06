@@ -9,8 +9,6 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections.Generic;
 
 namespace IronRuby.Tests {
     public partial class Tests {

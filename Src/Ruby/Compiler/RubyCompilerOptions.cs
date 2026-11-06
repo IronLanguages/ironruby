@@ -13,11 +13,8 @@
  *
  * ***************************************************************************/
 
-using System;
 using System.Collections.Generic;
 using Microsoft.Scripting;
-using System.Dynamic;
-using IronRuby.Runtime;
 
 namespace IronRuby.Compiler {
     internal enum TopScopeFactoryKind {

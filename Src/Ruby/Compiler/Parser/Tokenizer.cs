@@ -14,7 +14,6 @@
  * ***************************************************************************/
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using IronRuby.Runtime;
 using System.Numerics;

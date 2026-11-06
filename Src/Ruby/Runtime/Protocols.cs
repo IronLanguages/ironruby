@@ -21,7 +21,6 @@ using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;

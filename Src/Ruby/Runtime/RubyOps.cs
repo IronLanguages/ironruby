@@ -38,7 +38,6 @@ using Microsoft.Scripting.Interpreter;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using IronRuby.Compiler.Ast;
 using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Runtime {

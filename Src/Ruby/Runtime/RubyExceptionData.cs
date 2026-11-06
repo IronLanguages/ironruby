@@ -14,19 +14,13 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Security;
 using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Interpreter;
 using Microsoft.Scripting.Utils;
-using System.Globalization;
 
 namespace IronRuby.Runtime {
     /// <summary>

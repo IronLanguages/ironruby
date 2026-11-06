@@ -14,8 +14,6 @@
  * ***************************************************************************/
 
 using System;
-using Microsoft.Scripting.Utils;
-using System.Collections.Generic;
 using System.Diagnostics;
 using IronRuby.Builtins;
 using System.Collections;
@@ -26,7 +24,6 @@ namespace IronRuby.Runtime.Calls {
     using BlockCallTarget2 = Func<BlockParam, object, object, object, object>;
     using BlockCallTarget3 = Func<BlockParam, object, object, object, object, object>;
     using BlockCallTarget4 = Func<BlockParam, object, object, object, object, object, object>;
-    using BlockCallTargetN = Func<BlockParam, object, object[], object>;
 
     // L(0, -)
     internal sealed class BlockDispatcher0 : BlockDispatcher<BlockCallTarget0> {

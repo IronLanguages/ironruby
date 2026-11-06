@@ -13,14 +13,9 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections;
-using System.Collections.Generic;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
-using System.Globalization;
 
 namespace IronRuby.Builtins {
     /// <summary>

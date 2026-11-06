@@ -14,12 +14,8 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using IronRuby.Compiler.Generation;
-using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
-using System.Diagnostics;
-using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Runtime {
     [ReflectionCached, CLSCompliant(false)]

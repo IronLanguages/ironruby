@@ -25,7 +25,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using IronRuby.Builtins;
-using IronRuby.Compiler;
 using IronRuby.Runtime.Conversions;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Generation;

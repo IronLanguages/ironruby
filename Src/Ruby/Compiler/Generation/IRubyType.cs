@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-using System.Linq.Expressions;
 
 namespace IronRuby.Compiler.Generation {
     /// <summary>

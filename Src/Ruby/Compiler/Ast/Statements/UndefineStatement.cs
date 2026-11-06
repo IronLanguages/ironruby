@@ -16,7 +16,6 @@
 using MSA = System.Linq.Expressions;
 
 using System.Collections.Generic;
-using System.Diagnostics;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;

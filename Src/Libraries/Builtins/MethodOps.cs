@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using System;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;

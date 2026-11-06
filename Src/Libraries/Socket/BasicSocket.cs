@@ -28,11 +28,8 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.StandardLibrary.FileControl;
 using System.Numerics;
-using IronRuby.Runtime.Calls;
 using System.Globalization;
-using IronRuby.Compiler;
 
 namespace IronRuby.StandardLibrary.Sockets {
     [RubyClass("BasicSocket")]

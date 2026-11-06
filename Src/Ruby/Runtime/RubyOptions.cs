@@ -13,13 +13,10 @@
  *
  * ***************************************************************************/
 
-using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Threading;
 using IronRuby.Builtins;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime {
 

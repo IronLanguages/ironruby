@@ -14,7 +14,6 @@
  * ***************************************************************************/
 
 using System;
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;

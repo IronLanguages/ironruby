@@ -13,12 +13,10 @@
  *
  * ***************************************************************************/
 
-using System.Linq.Expressions;
 
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;

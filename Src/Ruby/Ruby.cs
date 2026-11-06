@@ -16,16 +16,10 @@
 
 
 using System;
-using System.Collections;
-using System.Collections.Generic;
 using System.ComponentModel;
-using IronRuby.Builtins;
 using IronRuby.Hosting;
 using IronRuby.Runtime;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Hosting.Providers;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
 

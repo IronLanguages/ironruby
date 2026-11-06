@@ -15,7 +15,6 @@ using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.StandardLibrary.Threading;
-using Microsoft.Scripting.Runtime;
 
 // Not "...Monitor": a namespace of that name would hide System.Threading.Monitor from every
 // sibling namespace under IronRuby.StandardLibrary.

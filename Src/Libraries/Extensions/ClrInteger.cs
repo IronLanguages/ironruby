@@ -14,13 +14,10 @@
  * ***************************************************************************/
 
 using System;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using System.Numerics;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
-using System.Runtime.CompilerServices;
 
 namespace IronRuby.Builtins {
     /// <summary>

@@ -16,12 +16,10 @@
 using MSA = System.Linq.Expressions;
 
 using System.Diagnostics;
-using System.Dynamic;
 using Microsoft.Scripting;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = Expression;
     using System.Reflection;
     using Microsoft.Scripting.Utils;
 

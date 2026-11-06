@@ -17,7 +17,6 @@ using System.Linq.Expressions;
 
 using System;
 using System.Diagnostics;
-using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using IronRuby.Runtime;
@@ -25,7 +24,6 @@ using IronRuby.Runtime.Calls;
 using IronRuby.Compiler;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Builtins {

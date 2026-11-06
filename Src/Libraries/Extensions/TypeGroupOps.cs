@@ -13,22 +13,17 @@
  *
  * ***************************************************************************/
 
-using System.Linq.Expressions;
 
 using System;
-using System.Dynamic;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Actions;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using IronRuby.Compiler.Generation;
 using System.Runtime.CompilerServices;
-using System.Collections.Generic;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
-    using Ast = Expression;
-    using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     [RubyClass(Extends = typeof(TypeGroup), Restrictions = ModuleRestrictions.None)]
     [Includes(typeof(Enumerable))]

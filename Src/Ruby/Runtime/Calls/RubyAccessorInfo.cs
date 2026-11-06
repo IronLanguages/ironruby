@@ -22,7 +22,6 @@ using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Calls {
-    using AstFactory = IronRuby.Compiler.Ast.AstFactory;
 
     public abstract class RubyAttributeAccessorInfo : RubyMemberInfo {
         private readonly string/*!*/ _instanceVariableName;

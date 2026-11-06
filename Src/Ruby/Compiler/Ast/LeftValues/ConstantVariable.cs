@@ -17,7 +17,6 @@ using MSA = System.Linq.Expressions;
 
 using System;
 using System.Diagnostics;
-using System.Dynamic;
 using System.Reflection;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
@@ -27,7 +26,6 @@ using IronRuby.Runtime;
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
     using System.Collections.Generic;
-    using System.Threading;
     
     internal enum StaticScopeKind {
         Global,

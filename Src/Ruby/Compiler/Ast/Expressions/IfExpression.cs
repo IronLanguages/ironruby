@@ -21,7 +21,6 @@ using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = MSA.Expression;
 
     public partial class IfExpression : Expression {
         private Expression/*!*/ _condition;

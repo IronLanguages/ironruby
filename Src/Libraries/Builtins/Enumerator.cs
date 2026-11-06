@@ -14,18 +14,14 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
-    using EachSite = Func<CallSite, object, Proc, object>;
 
     internal interface IEnumerator {
         object Each(RubyScope/*!*/ scope, BlockParam/*!*/ block);

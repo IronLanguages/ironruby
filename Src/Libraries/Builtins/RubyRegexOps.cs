@@ -14,18 +14,14 @@
  * ***************************************************************************/
 
 using System;
-using System.Linq;
 using System.Numerics;
 using System.Text.RegularExpressions;
 using System.Collections;
-using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using IronRuby.Runtime.Conversions;
 using System.Collections.Generic;
 
 namespace IronRuby.Builtins {

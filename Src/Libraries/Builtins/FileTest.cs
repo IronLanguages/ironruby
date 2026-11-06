@@ -18,7 +18,6 @@ using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
     // The predicates MRI answers with rb_stat - the file-type and ownership tests, the size

@@ -16,17 +16,14 @@
 using System.Linq.Expressions;
 
 using System;
-using System.Globalization;
 using System.Diagnostics;
 using System.Text;
-using System.Reflection;
 using System.Collections;
 using System.Collections.Generic;
 using System.Dynamic;
 using System.Numerics;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
-using Microsoft.Scripting;
 
 namespace IronRuby.Runtime {
     public static class Utils {

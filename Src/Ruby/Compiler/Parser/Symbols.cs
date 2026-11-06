@@ -13,9 +13,7 @@
  *
  * ***************************************************************************/
 
-using Microsoft.Scripting;
 using IronRuby.Compiler.Ast;
-using System;
 
 namespace IronRuby.Compiler {
     public static class Symbols {

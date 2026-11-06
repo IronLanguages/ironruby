@@ -19,7 +19,6 @@ using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = MSA.Expression;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
     
     // class Name

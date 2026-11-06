@@ -20,7 +20,6 @@ using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using System.Runtime.InteropServices;
 
 namespace IronRuby.StandardLibrary.Iconv {

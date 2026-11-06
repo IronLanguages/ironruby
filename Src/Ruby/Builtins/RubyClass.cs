@@ -37,7 +37,6 @@ using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Builtins {
     using Ast = Expression;
-    using Utils = IronRuby.Runtime.Utils;
 	using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     public sealed partial class RubyClass : RubyModule, IDuplicable {

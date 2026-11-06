@@ -16,18 +16,12 @@
 using System.Linq.Expressions;
 
 using System;
-using System.Collections.Generic;
-using System.Text;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Generation;
 using System.Threading;
-using System.Reflection;
 using Microsoft.Scripting.Utils;
-using System.Runtime.CompilerServices;
-using System.Security;
 using IronRuby.Compiler;
-using System.Diagnostics;
 
 namespace IronRuby.Runtime {
     using ScriptCodeFunc = Func<RubyScope, object, object>;

@@ -16,8 +16,6 @@
 using System;
 using System.Text.RegularExpressions;
 using IronRuby.Builtins;
-using System.Text;
-using System.Diagnostics;
 
 namespace IronRuby.Tests {
     public partial class Tests {

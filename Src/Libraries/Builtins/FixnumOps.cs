@@ -13,9 +13,7 @@
  *
  * ***************************************************************************/
 
-using System;
 using IronRuby.Runtime;
-using Microsoft.Scripting;
 
 namespace IronRuby.Builtins {
     // Was the Fixnum class.  Fixnum and Bignum were unified into Integer in Ruby 2.4 and

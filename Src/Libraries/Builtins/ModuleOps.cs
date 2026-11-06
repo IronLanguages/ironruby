@@ -20,12 +20,7 @@ using System.Runtime.InteropServices;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Generation;
-using Microsoft.Scripting;
-using System.Diagnostics;
 
 namespace IronRuby.Builtins {
 

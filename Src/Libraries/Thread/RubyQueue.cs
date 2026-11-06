@@ -21,7 +21,6 @@ using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.StandardLibrary.Threading {
     /// <summary>

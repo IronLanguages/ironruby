@@ -18,18 +18,15 @@ using System.Linq.Expressions;
 using System;
 using System.Collections;
 using System.ComponentModel;
-using System.Globalization;
 using System.Threading;
 using System.Diagnostics;
 using System.Reflection.Emit;
 using System.Reflection;
 using System.Security;
-using System.Security.Permissions;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Dynamic;
 
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 

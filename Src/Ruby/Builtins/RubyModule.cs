@@ -23,11 +23,9 @@ using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
     [Flags]

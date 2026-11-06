@@ -17,11 +17,8 @@
 using System;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 using System.Runtime.InteropServices;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 
