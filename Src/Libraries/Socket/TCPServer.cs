@@ -17,20 +17,14 @@
 using System;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 using System.Runtime.InteropServices;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 
 namespace IronRuby.StandardLibrary.Sockets {
     [RubyClass("TCPServer")]
     public class TCPServer : TCPSocket {
-        private object _mutex = new object();
-        private IAsyncResult _acceptResult;
-
         /// <summary>
         /// Creates an uninitialized socket.
         /// </summary>
@@ -42,31 +36,8 @@ namespace IronRuby.StandardLibrary.Sockets {
             : base(context, socket) {
         }
 
-        public override WaitHandle/*!*/ CreateReadWaitHandle() {
-            return GetAcceptResult().AsyncWaitHandle;
-        }
-
-        private IAsyncResult/*!*/ GetAcceptResult() {
-            if (_acceptResult == null) {
-                lock (_mutex) {
-                    if (_acceptResult == null) {
-                        _acceptResult = Socket.BeginAccept(null, null);
-                    }
-                }
-            }
-            return _acceptResult;
-        }
-
         private Socket/*!*/ Accept() {
-            // acquire the result and replace it by null, so that no other thread can acquire it:
-            IAsyncResult result = Interlocked.Exchange(ref _acceptResult, null);
-
-            if (result == null) {
-                return RubyBasicSocket.BlockingAccept(Socket, "TCPServer#accept", () => Socket.Accept());
-            }
-
-            // wait until accept finishes:
-            return Socket.EndAccept(result);
+            return RubyBasicSocket.BlockingAccept(Socket, "TCPServer#accept", () => Socket.Accept());
         }
 
         [RubyConstructor]

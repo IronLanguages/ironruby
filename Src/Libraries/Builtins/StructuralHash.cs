@@ -16,7 +16,6 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Conversions;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {

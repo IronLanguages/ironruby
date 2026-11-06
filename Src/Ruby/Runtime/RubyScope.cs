@@ -17,7 +17,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
 using IronRuby.Builtins;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Interpreter;
@@ -1004,7 +1003,6 @@ namespace IronRuby.Runtime {
 
         internal sealed class DebugView {
             private readonly RubyScope/*!*/ _scope;
-            [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
             private readonly string _selfClassName;
             
             public DebugView(RubyScope/*!*/ scope) {

@@ -14,20 +14,15 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System.Dynamic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Numerics;
@@ -873,16 +868,6 @@ namespace IronRuby.Builtins {
                 return (ushort)((data.GetByte(i + 0) << 8) | data.GetByte(i + 1));
             } else {
                 return (ushort)((data.GetByte(i + 1) << 8) | data.GetByte(i + 0));
-            }
-        }
-
-        private static void Write(Stream/*!*/ stream, ushort n, bool swap) {
-            if (swap) {
-                stream.WriteByte((byte)((n >> 8) & 0xff));
-                stream.WriteByte((byte)(n & 0xff));
-            } else {
-                stream.WriteByte((byte)(n & 0xff));
-                stream.WriteByte((byte)((n >> 8) & 0xff));
             }
         }
 

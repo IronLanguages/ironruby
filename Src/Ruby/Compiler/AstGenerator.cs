@@ -17,7 +17,6 @@ using MSA = System.Linq.Expressions;
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Threading;
 using System.Runtime.CompilerServices;
@@ -1062,7 +1061,6 @@ namespace IronRuby.Compiler.Ast {
         internal MSA.Expression/*!*/ AddDebugInfo(MSA.Expression/*!*/ expression, SourceSpan location) {
             if (_document != null) {
                 // TODO: should we add clearance for non-goto expressions?
-                // return AstUtils.AddDebugInfo(expression, _document, location.Start, location.End);
                 var sequencePoint = Ast.DebugInfo(_document, location.Start.Line, location.Start.Column, location.End.Line, location.End.Column);
                 return Ast.Block(sequencePoint, expression);
             } else {

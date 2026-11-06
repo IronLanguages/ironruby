@@ -15,7 +15,6 @@
 
 using IronRuby.Builtins;
 using System;
-using System.IO;
 using Microsoft.Scripting.Hosting.Providers;
 using IronRuby.Runtime;
 namespace IronRuby.Tests {

@@ -16,12 +16,10 @@
 using System.Linq.Expressions;
 
 using System;
-using System.Collections.Generic;
 using System.Reflection;
 using System.Dynamic;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;

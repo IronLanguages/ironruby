@@ -17,7 +17,6 @@ using System;
 using System.Diagnostics;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using System.Collections.Generic;
 using System.IO;

@@ -15,12 +15,9 @@
 
 using System;
 using System.Diagnostics;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using System.Text;
 using System.Text.RegularExpressions;
 using IronRuby.Compiler;
-using IronRuby.Runtime;
 using System.Collections.Generic;
 
 namespace IronRuby.Builtins {

@@ -16,7 +16,6 @@
 
 using System;
 using System.Net.Sockets;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using System.Runtime.InteropServices;

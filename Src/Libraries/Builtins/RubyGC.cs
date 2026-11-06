@@ -13,11 +13,6 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections.Generic;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Actions;
 using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
@@ -35,7 +30,6 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("start", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("garbage_collect", RubyMethodAttributes.PublicInstance)]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
         public static void GarbageCollect(object self) {
             // MRI runs object finalizers as part of a GC. IronRuby parks them for the main thread
             // (see ObjectSpace._pending), so the caller of GC.start is the one that runs them.

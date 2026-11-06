@@ -16,7 +16,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Numerics;
@@ -315,18 +314,14 @@ namespace IronRuby.Builtins {
             }
         }
 
-        /// <summary>
-        /// Interprets a zone specification (nil, a numeric offset, an offset string, or a
-        /// timezone object) and returns the resulting zone kind.
-        /// </summary>
-        private static RubyTimeZoneKind ResolveZone(RubyContext/*!*/ context, object zone, out ExactNum offset, out object zoneObject) {
-            return ResolveZone(context, null, zone, out offset, out zoneObject);
-        }
-
         private static bool IsTimezoneObject(RubyContext/*!*/ context, object zone) {
             return zone != null && (RespondTo(context, zone, "local_to_utc") || RespondTo(context, zone, "utc_to_local"));
         }
 
+        /// <summary>
+        /// Interprets a zone specification (nil, a numeric offset, an offset string, or a
+        /// timezone object) and returns the resulting zone kind.
+        /// </summary>
         private static RubyTimeZoneKind ResolveZone(RubyContext/*!*/ context, RubyClass owner, object zone,
             out ExactNum offset, out object zoneObject) {
 

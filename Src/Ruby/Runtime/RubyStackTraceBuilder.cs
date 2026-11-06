@@ -19,11 +19,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Security;
 using System.Text;
 using System.Threading;
 using IronRuby.Builtins;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Interpreter;
 

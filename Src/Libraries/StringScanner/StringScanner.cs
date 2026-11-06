@@ -16,13 +16,11 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.StringScanner {

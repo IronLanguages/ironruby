@@ -17,7 +17,6 @@ using System.Diagnostics;
 using System.Runtime.Serialization;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {

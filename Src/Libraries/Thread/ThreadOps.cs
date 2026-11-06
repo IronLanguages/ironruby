@@ -13,10 +13,8 @@
  *
  * ***************************************************************************/
 
-using System;
 using System.Threading;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.Threading {
     /// <summary>

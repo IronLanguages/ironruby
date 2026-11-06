@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using System;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Hosting;
 using Microsoft.Scripting.Hosting.Providers;

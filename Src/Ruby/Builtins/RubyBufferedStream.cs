@@ -18,7 +18,6 @@ using System.Diagnostics;
 using System.IO;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
-using System.Collections.Generic;
 
 namespace IronRuby.Builtins {
     /// <summary>

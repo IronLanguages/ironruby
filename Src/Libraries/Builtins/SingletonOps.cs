@@ -14,11 +14,9 @@
  * ***************************************************************************/
 
 using System;
-using System.Diagnostics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using System.Runtime.CompilerServices;
 
 namespace IronRuby.Builtins {

@@ -21,8 +21,6 @@ using Microsoft.Scripting;
 using Microsoft.Scripting.Hosting;
 using Microsoft.Scripting.Hosting.Shell;
 using Microsoft.Scripting.Runtime;
-using System.Reflection;
-using System.Threading;
 using System.IO;
 using System.Globalization;
 using System.Text;

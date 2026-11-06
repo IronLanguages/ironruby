@@ -16,7 +16,6 @@
 using System;
 using System.Diagnostics;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -828,10 +827,6 @@ namespace IronRuby.Builtins {
             int? c = CompareToFloat(self, other);
             return c.HasValue && c.Value == 0;
         }
-
-        #endregion
-
-        #region eql?
 
         #endregion
 

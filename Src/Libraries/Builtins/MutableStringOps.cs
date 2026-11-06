@@ -22,7 +22,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -4043,18 +4042,6 @@ namespace IronRuby.Builtins {
 
 
         #region split
-
-        private static RubyArray/*!*/ MakeRubyArray(MutableString/*!*/ self, MutableString[]/*!*/ elements) {
-            return MakeRubyArray(self, elements, 0, elements.Length);
-        }
-
-        private static RubyArray/*!*/ MakeRubyArray(MutableString/*!*/ self, MutableString[]/*!*/ elements, int start, int count) {
-            RubyArray result = new RubyArray(elements.Length);
-            for (int i = 0; i < count; i++) {
-                result.Add(self.CreateDerived().Append(elements[start + i]));
-            }
-            return result;
-        }
 
         private static bool IsAwkWhiteSpace(char c) {
             return c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == '\v' || c == '\f';

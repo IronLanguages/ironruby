@@ -20,7 +20,6 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.Zlib {

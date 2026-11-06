@@ -43,7 +43,6 @@ namespace IronRuby.Builtins {
         // true if frozen:
         private const uint IsFrozenFlag = 1;
 
-        // TODO: obsolete? (supported 1.8 behavior?)
         // set every time a change occurs (visible externally):
         private const uint HasChangedFlag = 1 << 1;
 
@@ -1419,7 +1418,6 @@ namespace IronRuby.Builtins {
         #region Enumerations (read-only)
 
         public struct Character : IEquatable<Character> {
-            [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
             public readonly byte[] Invalid;
             public readonly char Value;
             public readonly char LowSurrogate;
@@ -2294,7 +2292,6 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ Insert(int index, string value) {
-            //RequiresArrayInsertIndex(index);
             if (value != null) {
                 Mutate();
                 _content.Insert(index, value, 0, value.Length);
@@ -2303,7 +2300,6 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ Insert(int index, string/*!*/ value, int start, int count) {
-            //RequiresArrayInsertIndex(index);
             ContractUtils.RequiresNotNull(value, "value");
             ContractUtils.RequiresArrayRange(value, start, count, "start", "count");
 
@@ -2313,7 +2309,6 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ Insert(int index, byte[] value) {
-            //RequiresArrayInsertIndex(index);
             if (value != null) {
                 Mutate();
                 _content.Insert(index, value, 0, value.Length);
@@ -2322,7 +2317,6 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ Insert(int index, byte[]/*!*/ value, int start, int count) {
-            //RequiresArrayInsertIndex(index);
             ContractUtils.RequiresNotNull(value, "value");
             ContractUtils.RequiresArrayRange(value, start, count, "start", "count");
 
@@ -2335,7 +2329,6 @@ namespace IronRuby.Builtins {
         /// Inserts <paramref name="value"/> before the CLR char at <paramref name="index"/>.
         /// </summary>
         public MutableString/*!*/ Insert(int index, MutableString value) {
-            //RequiresArrayInsertIndex(index);
             if (value != null) {
                 index = ToContentInsertIndex(index, value);
                 MutateAppend(value, true);
@@ -2346,9 +2339,7 @@ namespace IronRuby.Builtins {
 
         // TODO: start, count measured in characters or bytes?
         public MutableString/*!*/ Insert(int index, MutableString/*!*/ value, int start, int count) {
-            //RequiresArrayInsertIndex(index);
             ContractUtils.RequiresNotNull(value, "value");
-            //value.RequiresArrayRange(start, count);
 
             index = ToContentInsertIndex(index, value);
             MutateAppend(value, start == 0 && count == value._content.Count);
@@ -2422,7 +2413,6 @@ namespace IronRuby.Builtins {
         #region Replace, Write, Remove, Trim, Clear, Translate, TranslateSqueeze, TranslateRemove
 
         public MutableString/*!*/ Replace(int start, int count, MutableString value) {
-            //RequiresArrayRange(start, count);
 
             // Checked up front, so that an incompatible value leaves the string as it was. Remove
             // and Insert then keep what is known about the ASCII-ness and surrogates of the string

@@ -13,17 +13,13 @@
  *
  * ***************************************************************************/
 
-using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Threading;
 using IronRuby.Builtins;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime {
 
-    [Serializable]
     public sealed class RubyOptions : LanguageOptions {
         private readonly ReadOnlyCollection<string>/*!*/ _arguments;
         private readonly RubyEncoding/*!*/ _localeEncoding;

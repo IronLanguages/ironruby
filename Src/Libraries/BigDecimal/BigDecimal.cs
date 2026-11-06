@@ -15,7 +15,6 @@
 
 using System;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -131,17 +130,11 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #region Special BigDecimal Values
 
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal One = new BigDecimal(1, Fraction.One, 1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal NaN = new BigDecimal(NumberTypes.NaN, 0);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal PositiveInfinity = new BigDecimal(NumberTypes.Infinite, 1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal NegativeInfinity = new BigDecimal(NumberTypes.Infinite, -1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal PositiveZero = new BigDecimal(1, Fraction.Zero, 1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal NegativeZero = new BigDecimal(-1, Fraction.Zero, 1);
         public const uint BASE = Fraction.BASE;
         public const int BASE_FIG = Fraction.BASE_FIG;

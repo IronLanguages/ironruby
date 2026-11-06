@@ -17,12 +17,9 @@ using System.Linq.Expressions;
 
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Text;
 using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Utils;
 using System.Runtime.CompilerServices;
-using System.Threading;
 using System.Reflection;
 
 namespace IronRuby.Tests {

@@ -15,11 +15,7 @@
 
 using MSA = System.Linq.Expressions;
 
-using System.Dynamic;
 using System.Diagnostics;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
-using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;

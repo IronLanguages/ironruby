@@ -12,17 +12,11 @@
  *
  *
  * ***************************************************************************/
-using MSA = System.Linq.Expressions;
     
-using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Dynamic;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Utils;
 using IronRuby.Compiler.Ast;
-using IronRuby.Runtime;
 
 namespace IronRuby.Compiler {
     /// <summary>

@@ -13,25 +13,17 @@
  *
  * ***************************************************************************/
 
-using System.Linq.Expressions;
 
 using System;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using System.Dynamic;
-using System.Diagnostics;
 using System.Reflection;
-using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
 
 namespace IronRuby.Builtins {
-    using Ast = Expression;
-    using AstFactory = IronRuby.Compiler.Ast.AstFactory;
-    using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     // Exception
     // -- fatal

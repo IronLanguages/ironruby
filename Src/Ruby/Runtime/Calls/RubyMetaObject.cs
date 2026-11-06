@@ -15,20 +15,14 @@
 
 using System.Linq.Expressions;
 
-using System;
-using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Runtime;
-using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 using IronRuby.Compiler;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Calls {
-    using Ast = Expression;    
 
     public interface IRubyDynamicMetaObjectProvider : IDynamicMetaObjectProvider {
     }

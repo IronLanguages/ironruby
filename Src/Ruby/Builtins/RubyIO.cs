@@ -17,7 +17,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Threading;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
 
@@ -569,21 +568,6 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region Operations
-
-        public virtual WaitHandle/*!*/ CreateReadWaitHandle() {
-            // TODO:
-            throw new NotSupportedException();
-        }
-
-        public virtual WaitHandle/*!*/ CreateWriteWaitHandle() {
-            // TODO:
-            throw new NotSupportedException();
-        }
-
-        public virtual WaitHandle/*!*/ CreateErrorWaitHandle() {
-            // TODO:
-            throw new NotSupportedException();
-        }
 
         public virtual int SetReadTimeout(int timeout) {
             if (timeout > 0) {

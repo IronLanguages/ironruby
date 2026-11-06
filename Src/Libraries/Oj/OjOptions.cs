@@ -283,10 +283,6 @@ namespace IronRuby.StandardLibrary.Oj {
             return bytes;
         }
 
-        private static bool IsClass(object v) {
-            return v is RubyClass;
-        }
-
         private static void CheckClass(RubyContext/*!*/ context, object v) {
             if (!(v is RubyClass)) {
                 throw Sites.WrongType(context, v, "Class");

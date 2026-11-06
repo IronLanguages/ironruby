@@ -19,7 +19,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
-using System.Dynamic;
 
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Runtime;

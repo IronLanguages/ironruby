@@ -14,14 +14,10 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
-using System.Text;
 using IronRuby.Builtins;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.IO;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Hosting;
-using IronRuby.Runtime;
 
 namespace IronRuby.Tests {
     public partial class Tests {

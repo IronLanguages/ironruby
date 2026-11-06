@@ -9,7 +9,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using IronRuby.Builtins;
-using IronRuby.Runtime;
 
 namespace IronRuby.StandardLibrary.Rbs {
 

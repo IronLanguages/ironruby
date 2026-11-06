@@ -14,7 +14,6 @@
  * ***************************************************************************/
 
 using System.Collections.Generic;
-using Microsoft.Scripting;
 using System.Threading;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Utils;

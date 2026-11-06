@@ -15,11 +15,7 @@
 
 using MSA = System.Linq.Expressions;
 
-using System.Diagnostics;
-using System.Collections;
-using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Conversions;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Ast;
 using Microsoft.Scripting.Utils;
@@ -27,9 +23,6 @@ using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
-    using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
-    using AstParameters = ReadOnlyCollectionBuilder<MSA.ParameterExpression>;
-    using System;
 
     // rescue types, *type-array, types, *type-array, ... 
     //   statements

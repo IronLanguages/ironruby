@@ -15,15 +15,12 @@
 
 using System.Runtime.InteropServices;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Actions;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Utils;
 using System;
 using System.IO;
-using System.Numerics;
-using System.Diagnostics;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;

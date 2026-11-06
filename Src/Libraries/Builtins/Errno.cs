@@ -15,7 +15,6 @@
 
 using System;
 using System.Runtime.InteropServices;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using System.IO;
 

@@ -14,19 +14,8 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Dynamic;
-using System.Reflection;
 using System.Reflection.Emit;
-using System.Runtime.Serialization;
-using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
-using System.Diagnostics;
 
 namespace IronRuby.Compiler.Generation {
     internal sealed class RubyTypeFeature : ITypeFeature {

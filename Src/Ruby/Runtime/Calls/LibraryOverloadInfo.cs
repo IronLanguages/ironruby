@@ -15,13 +15,11 @@
 
 using System;
 using System.Collections.Generic;
-using System.Text;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Utils;
 using System.Reflection;
 using Microsoft.Scripting.Runtime;
 using System.Collections.ObjectModel;
-using System.Runtime.InteropServices;
 
 namespace IronRuby.Runtime.Calls {
     internal sealed class LibraryOverloadInfo : LibraryOverload {

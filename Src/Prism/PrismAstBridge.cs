@@ -1308,11 +1308,6 @@ namespace IronRuby.Prism {
                 case Pm.CallOperatorWriteNode _:
                     return DefinedAs(new IsDefinedExpression(Expr(node), span), "assignment", span);
 
-                // 1.8 answered with the variable's own name ($&, $1, ...); 1.9+ says "global-variable"
-                case Pm.BackReferenceReadNode _:
-                case Pm.NumberedReferenceReadNode _:
-                    return DefinedAs(new IsDefinedExpression(Expr(node), span), "global-variable", span);
-
                 // an array literal is only defined if every element is
                 case Pm.ArrayNode array:
                     return DefinedAs(ElementsDefined(array, span), "expression", span);

@@ -16,11 +16,6 @@
 using System;
 using IronRuby.Builtins;
 using System.Text;
-using System.Diagnostics;
-using System.Collections.Generic;
-using IronRuby.Runtime;
-using Microsoft.Scripting;
-using System.Runtime.CompilerServices;
 
 namespace IronRuby.Tests {
     public partial class Tests {

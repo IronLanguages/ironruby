@@ -31,13 +31,10 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using IronRuby.Compiler.Ast;
 using IronRuby.Builtins;
 using IronRuby.Runtime.Osr;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Runtime.Jit {
     using MSA = System.Linq.Expressions;

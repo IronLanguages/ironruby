@@ -16,22 +16,11 @@
 using System;
 using MSA = System.Linq.Expressions;
 
-using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
-using IronRuby.Runtime.Conversions;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 	
 namespace IronRuby.Compiler.Ast {
-    using Ast = MSA.Expression;
-    using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
-    using ExpressionsBuilder = Microsoft.Scripting.Ast.ExpressionCollectionBuilder<MSA.Expression>;
 
     public class Arguments {
         internal static readonly Arguments Empty = new Arguments();

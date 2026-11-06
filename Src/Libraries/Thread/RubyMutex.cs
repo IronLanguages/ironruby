@@ -18,12 +18,10 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Threading;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 
 namespace IronRuby.StandardLibrary.Threading {
     /// <summary>

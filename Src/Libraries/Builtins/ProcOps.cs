@@ -14,16 +14,12 @@
  * ***************************************************************************/
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Generation;
 using System.Globalization;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 
 namespace IronRuby.Builtins {
 
@@ -206,9 +202,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region call, [],  ===, yield (TODO)
-        
-        // TODO: 1.9 yield: yield and call might have different semantics with respect to control-flow!
+        #region call, [],  ===, yield
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]

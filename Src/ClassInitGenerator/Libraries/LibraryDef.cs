@@ -696,21 +696,11 @@ internal class LibraryDef {
                             LogMethodError("Block parameter must be the first parameter following optional RubyCallSiteStorage", methodDef, overload);
                         }
 
-                        // TODO: we should detect a call to the BlockParam.Yield:
-                        //if (overload.ReturnType != typeof(object)) {
-                        //    LogMethodWarning("A method that yields to a block must return Object.", methodDef, overload);
-                        //}
-
                         hasBlock = true;
                     } else if (!hasSelf) {
                         // self
                         if (isInstance) {
                             Debug.Assert(methodDef != null);
-
-                            // TODO:
-                            //if (parameterInfos[i].Name != "self") {
-                            //    LogMethodWarning("Self parameter should be named 'self'.", methodDef, overload);
-                            //}
                         } else {
                             Type requiredType;
 

@@ -28,11 +28,8 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.StandardLibrary.FileControl;
 using System.Numerics;
-using IronRuby.Runtime.Calls;
 using System.Globalization;
-using IronRuby.Compiler;
 
 namespace IronRuby.StandardLibrary.Sockets {
     [RubyClass("BasicSocket")]
@@ -130,19 +127,6 @@ namespace IronRuby.StandardLibrary.Sockets {
                 Reset(new SocketStream(value), IOMode.ReadWrite | IOMode.PreserveEndOfLines);
                 _socket = value;
             }
-        }
-
-        public override WaitHandle/*!*/ CreateReadWaitHandle() {
-            return Socket.BeginReceive(Utils.EmptyBytes, 0, 0, SocketFlags.Peek, null, null).AsyncWaitHandle;
-        }
-
-        public override WaitHandle/*!*/ CreateWriteWaitHandle() {
-            return Socket.BeginSend(Utils.EmptyBytes, 0, 0, SocketFlags.Peek, null, null).AsyncWaitHandle;
-        }
-
-        public override WaitHandle/*!*/ CreateErrorWaitHandle() {
-            // TODO:
-            throw new NotSupportedException();
         }
 
         // The Linux fcntl(2) command numbers, which is what io/nonblock.rb, IO#fcntl and Fcntl use.
@@ -477,19 +461,19 @@ namespace IronRuby.StandardLibrary.Sockets {
 #region Public Instance Methods
 
         [RubyMethod("close_read")]
-        public static void CloseRead(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self) {
+        public static void CloseRead(RubyBasicSocket/*!*/ self) {
             // TODO: It would be nice to alter the SocketStream to be WriteOnly here
             self.Socket.Shutdown(SocketShutdown.Receive);
         }
 
         [RubyMethod("close_write")]
-        public static void CloseWrite(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self) {
+        public static void CloseWrite(RubyBasicSocket/*!*/ self) {
             // TODO: It would be nice to alter the SocketStream to be ReadOnly here
             self.Socket.Shutdown(SocketShutdown.Send);
         }
 
         [RubyMethod("shutdown")]
-        public static int Shutdown(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self, [DefaultProtocol, DefaultParameterValue(2)]int how) {
+        public static int Shutdown(RubyBasicSocket/*!*/ self, [DefaultProtocol, DefaultParameterValue(2)]int how) {
             if (how < 0 || 2 < how) {
                 throw RubyExceptions.CreateArgumentError("`how' should be either :SHUT_RD, :SHUT_WR, :SHUT_RDWR");
             }
@@ -507,8 +491,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// <param name="optname">optname is an integer, usually one of the SO_ constants, such as Socket::SO_REUSEADDR.</param>
         /// <param name="value">value is the value of the option, it is passed to the underlying setsockopt() as a pointer to a certain number of bytes. How this is done depends on the type.</param>
         [RubyMethod("setsockopt")]
-        public static void SetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context, 
-            RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname, int value) {
+        public static void SetSocketOption(RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname, int value) {
             self.Socket.SetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, value);
         }
 
@@ -519,16 +502,13 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// <param name="optname">optname is an integer, usually one of the SO_ constants, such as Socket::SO_REUSEADDR.</param>
         /// <param name="value">value is the value of the option, it is passed to the underlying setsockopt() as a pointer to a certain number of bytes. How this is done depends on the type.</param>
         [RubyMethod("setsockopt")]
-        public static void SetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context, 
-            RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname, bool value) {
+        public static void SetSocketOption(RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname, bool value) {
             self.Socket.SetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, value);
         }
 
         /// <summary>
         /// Sets a socket option. These are protocol and system specific, see your local sytem documentation for details. 
         /// </summary>
-        /// <param name="context"></param>
-        /// <param name="self"></param>
         /// <param name="level">level is an integer, usually one of the SOL_ constants such as Socket::SOL_SOCKET, or a protocol level.</param>
         /// <param name="optname">optname is an integer, usually one of the SO_ constants, such as Socket::SO_REUSEADDR.</param>
         /// <param name="value">value is the value of the option, it is passed to the underlying setsockopt() as a pointer to a certain number of bytes. How this is done depends on the type.</param>
@@ -551,7 +531,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         ///   sock.setsockopt(Socket::IPPROTO_IP, Socket::IP_ADD_MEMBERSHIP, optval)
         /// </example>
         [RubyMethod("setsockopt")]
-        public static void SetSocketOption(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self, 
+        public static void SetSocketOption(RubyBasicSocket/*!*/ self,
             [DefaultProtocol]int level, [DefaultProtocol]int optname, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
             self.Socket.SetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, value.ConvertToBytes());
         }
@@ -591,8 +571,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         //    SO_REUSEADDR cannot be set at all (see TCPServer.cs).
         // A libc layer needs the platform constants, which is a bigger change than it looks.
         [RubyMethod("getsockopt")]
-        public static MutableString GetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context,
-            RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname) {
+        public static MutableString GetSocketOption(RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname) {
             // struct linger is two ints; everything else the specs ask about is one.
             int size = (level == (int)SocketOptionLevel.Socket && optname == (int)SocketOptionName.Linger) ? 8 : 4;
             byte[] value = self.Socket.GetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, size);

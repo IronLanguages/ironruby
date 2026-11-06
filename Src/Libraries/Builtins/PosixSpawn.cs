@@ -20,7 +20,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
-using Microsoft.Win32.SafeHandles;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 
@@ -135,8 +134,6 @@ namespace IronRuby.Builtins {
         private const int FD_CLOEXEC = 1;
         private const int X_OK = 1;
         private const int EINTR = 4;
-        private const int ENOEXEC = 8;
-        private const int EACCES = 13;
 
         #endregion
 

@@ -13,9 +13,6 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections.Generic;
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
@@ -23,10 +20,8 @@ using IronRuby.Builtins;
 
 using MSA = System.Linq.Expressions;
 
-using AstUtils = Microsoft.Scripting.Ast.Utils;
     
 namespace IronRuby.Compiler.Ast {
-    using Ast = Expression;
 
     public partial class ForLoopExpression : Expression {
         //	for variables in list 

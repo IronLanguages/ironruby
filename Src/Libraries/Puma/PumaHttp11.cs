@@ -195,7 +195,6 @@ namespace IronRuby.StandardLibrary.Puma {
         private const int Error = 0;
 
         private int _cs;
-        private int _bodyStart;
         private int _nread;
         private int _mark;
         private int _fieldStart;
@@ -214,7 +213,6 @@ namespace IronRuby.StandardLibrary.Puma {
 
         internal void Init() {
             _cs = Start;
-            _bodyStart = 0;
             _nread = 0;
             _mark = 0;
             _fieldStart = 0;
@@ -498,7 +496,6 @@ namespace IronRuby.StandardLibrary.Puma {
                                 case 11: ServerProtocol(p - _mark); break;
                                 case 12: RequestPath(p - _mark); break;
                                 case 13:
-                                    _bodyStart = p + 1;
                                     HeaderDone(p + 1, pe - p - 1);
                                     // fbreak
                                     p += 1;

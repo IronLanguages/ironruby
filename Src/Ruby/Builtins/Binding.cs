@@ -14,7 +14,6 @@
  * ***************************************************************************/
 
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {

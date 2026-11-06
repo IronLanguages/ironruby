@@ -21,12 +21,9 @@ using System.Text;
 using System.Threading;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
-    using Debug = System.Diagnostics.Debug;
 
     /// <summary>
     /// Ruby threads are represented by CLR thread objects (System.Threading.Thread).
@@ -981,33 +978,6 @@ namespace IronRuby.Builtins {
             return value;
         }
 
-        private static void SetCritical(RubyContext/*!*/ context, bool value) {
-            if (value) {
-                bool lockTaken = false;
-                try {
-                    MonitorUtils.Enter(context.CriticalMonitor, ref lockTaken);
-                } finally {
-                    // thread could have been aborted just before/after Monitor.Enter acquired the lock:
-                    if (lockTaken) {
-                        context.CriticalThread = Thread.CurrentThread;
-                    }
-                }
-            } else {
-                Monitor.Exit(context.CriticalMonitor);
-                context.CriticalThread = null;
-            }
-        }
-
-        public static bool Critical(RubyContext/*!*/ context, object self) {
-            RubyThreadInfo.RegisterCurrentThread();
-            return context.CriticalThread != null;
-        }
-
-        public static void Critical(RubyContext/*!*/ context, object self, bool value) {
-            RubyThreadInfo.RegisterCurrentThread();
-            SetCritical(context, value);
-        }
-
         /// <summary>
         /// Every fiber runs on its own CLR thread here, but Ruby says a fiber belongs to the
         /// thread that created it - so inside a fiber this answers that thread, not the one the
@@ -1343,9 +1313,6 @@ namespace IronRuby.Builtins {
             RubyThreadInfo.RegisterCurrentThread();
             if (RubyThreadInfo.GetRubyThreads(context).Length <= 1) {
                 throw new ThreadError("stopping only thread\n\tnote: use sleep to stop forever");
-            }
-            if (context.CriticalThread == Thread.CurrentThread) {
-                SetCritical(context, false);
             }
             DoSleep();
         }

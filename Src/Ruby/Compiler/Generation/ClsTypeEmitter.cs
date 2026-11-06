@@ -20,14 +20,10 @@ using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Runtime.CompilerServices;
-using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Compiler.Generation {
 

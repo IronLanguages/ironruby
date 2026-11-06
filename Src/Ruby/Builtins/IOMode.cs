@@ -18,7 +18,6 @@ using System.IO;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Conversions;
 using System.Collections.Generic;
-using System.Reflection;
 
 namespace IronRuby.Builtins {
     [Flags]

@@ -14,11 +14,8 @@
  * ***************************************************************************/
 
 using System.Linq.Expressions;
-using CsBinder = Microsoft.CSharp.RuntimeBinder.Binder;
-using CSharpBinderFlags = Microsoft.CSharp.RuntimeBinder.CSharpBinderFlags;
 
 using System;
-using System.Diagnostics;
 using System.Dynamic;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
@@ -27,7 +24,6 @@ using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Collections;
-using IronRuby.Runtime;
 using System.Collections.Generic;
 
 namespace IronRuby.Tests {

@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-using System;
-using Microsoft.Scripting.Runtime;
-using System.Numerics;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
 
 namespace IronRuby.Builtins {
     [RubyClass("Float", Extends = typeof(double), Inherits = typeof(Numeric)), Includes(typeof(ClrFloat), Copy = true)]

@@ -27,7 +27,7 @@ the apply step instead of with a confusing CS1061 deep inside IronRuby.
 
 `Util/check-dlr-patches.sh DLR_DIR` checks that a DLR checkout has all of these applied:
 a local one is patched once and falls behind when a new patch lands here.
-`Util/run-tests.sh` warns when the DLR it builds against does not, and
+`make test` warns when the DLR it builds against does not, and
 `Util/package-release.sh` refuses to build a release from it.
 
 `aot/` holds patches for the ahead-of-time/NativeAOT prototype (`Util/aot`). CI does not apply

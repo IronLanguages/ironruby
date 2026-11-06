@@ -33,7 +33,6 @@ using IronRuby.Builtins;
 using IronRuby.Runtime;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using Crypto = System.Security.Cryptography;
 
 namespace IronRuby.StandardLibrary.OpenSsl {

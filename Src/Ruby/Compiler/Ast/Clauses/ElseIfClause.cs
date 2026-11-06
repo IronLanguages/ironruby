@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using System.Collections.Generic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 

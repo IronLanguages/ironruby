@@ -17,10 +17,7 @@ using System.Linq.Expressions;
 
 using System;
 using System.Diagnostics;
-using System.Dynamic;
-using System.Reflection;
 using System.Runtime.CompilerServices;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
@@ -31,12 +28,9 @@ namespace IronRuby.Builtins {
     using AstFactory = IronRuby.Compiler.Ast.AstFactory;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
 
-    using BlockCallTarget0 = Func<BlockParam, object, object>;
     using BlockCallTarget1 = Func<BlockParam, object, object, object>;
     using BlockCallTarget2 = Func<BlockParam, object, object, object, object>;
     using BlockCallTarget3 = Func<BlockParam, object, object, object, object, object>;
-    using BlockCallTarget4 = Func<BlockParam, object, object, object, object, object, object>;
-    using BlockCallTargetN = Func<BlockParam, object, object[], object>;
     using BlockCallTargetUnsplatN = Func<BlockParam, object, object[], RubyArray, object>;
     using BlockCallTargetUnsplatProcN = Func<BlockParam, object, object[], RubyArray, Proc, object>;
 

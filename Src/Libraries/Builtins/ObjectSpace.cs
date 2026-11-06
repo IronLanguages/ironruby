@@ -17,9 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using System.Runtime.CompilerServices;
@@ -411,7 +409,6 @@ namespace IronRuby.Builtins {
 
         // GC.start's keywords (full_mark:, immediate_sweep:) have no CLR counterpart and are ignored
         [RubyMethod("garbage_collect", RubyMethodAttributes.PublicSingleton)]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
         public static void GarbageCollect(RubyModule/*!*/ self, [Optional]IDictionary<object, object> options) {
             GC.Collect();
         }

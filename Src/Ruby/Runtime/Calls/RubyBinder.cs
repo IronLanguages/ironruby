@@ -25,7 +25,6 @@ using System.Diagnostics;
 using IronRuby.Runtime.Conversions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Collections.Generic;
 
 namespace IronRuby.Runtime.Calls {
     public sealed class RubyBinder : DefaultBinder {

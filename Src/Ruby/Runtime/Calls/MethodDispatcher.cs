@@ -13,24 +13,14 @@
  *
  * ***************************************************************************/
 
-using System.Linq.Expressions;
 
 using System;
 using System.Collections.Generic;
-using System.Text;
 using IronRuby.Builtins;
 using System.Runtime.CompilerServices;
-using System.Diagnostics;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Generation;
-using System.Collections.ObjectModel;
-using Microsoft.Scripting.Interpreter;
-using Microsoft.Scripting;
-using AstUtils = Microsoft.Scripting.Ast.Utils;
-using IronRuby.Compiler;
 
 namespace IronRuby.Runtime.Calls {
-    using Ast = Expression;
 
     public abstract partial class MemberDispatcher {
         private static readonly object[]/*!*/ _boxedSmallInts = CreateBoxedSmallInts();

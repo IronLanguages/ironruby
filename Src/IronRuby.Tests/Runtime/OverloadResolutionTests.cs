@@ -22,11 +22,9 @@ using System.Reflection;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Actions.Calls;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Tests {
     using Ast = Expression;

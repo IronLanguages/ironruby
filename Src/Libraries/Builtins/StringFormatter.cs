@@ -17,7 +17,6 @@ using System;
 using System.Collections;
 using System.Diagnostics;
 using System.Globalization;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Text;
 using System.Numerics;
@@ -25,7 +24,6 @@ using IronRuby.Runtime;
 using SM = System.Math;
 using IronRuby.Runtime.Calls;
 using System.Runtime.CompilerServices;
-using Microsoft.Scripting.Generation;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime.Conversions;
 

@@ -13,13 +13,9 @@
  *
  * ***************************************************************************/
 
-using System.Linq.Expressions;
 
-using System.Dynamic;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime;
-using IronRuby.Compiler.Generation;
 using System.Diagnostics;
 
 namespace IronRuby.Builtins {

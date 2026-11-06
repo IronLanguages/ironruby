@@ -15,7 +15,6 @@
 
 using System.Linq.Expressions;
 
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using IronRuby.Builtins;

@@ -31,7 +31,6 @@ namespace IronRuby.Compiler {
     using MSAst = Microsoft.Scripting.Ast;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
     using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
-    using Microsoft.Scripting.Interpreter;
 
     public static partial class Fields {
         internal static FieldInfo/*!*/ GetField(Type/*!*/ type, string/*!*/ name) {

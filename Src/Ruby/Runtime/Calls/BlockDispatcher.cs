@@ -17,21 +17,13 @@ using System.Linq.Expressions;
 
 using System;
 using System.Collections.Generic;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Interpreter;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using System.Reflection;
 using IronRuby.Builtins;
-using System.Collections.ObjectModel;
 using System.Collections;
-using System.Diagnostics;
 using System.Threading;
 
 namespace IronRuby.Runtime.Calls {
     using Ast = Expression;
-    using AstFactory = IronRuby.Compiler.Ast.AstFactory;
 
     using BlockCallTarget0 = Func<BlockParam, object, object>;
     using BlockCallTarget1 = Func<BlockParam, object, object, object>;

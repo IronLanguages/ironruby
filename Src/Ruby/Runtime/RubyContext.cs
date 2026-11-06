@@ -25,7 +25,6 @@ using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Security;
 using System.Text;
 using System.Threading;
 using IronRuby.Builtins;
@@ -39,7 +38,6 @@ using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using System.Collections.ObjectModel;
 using System.Globalization;
 
 namespace IronRuby.Runtime {
@@ -215,10 +213,6 @@ namespace IronRuby.Runtime {
         // Thread#main
         private readonly Thread _mainThread;
 
-        // Thread#critical=
-        // We just need a bool. But we store the Thread object for easier debugging if there is a hang
-        private Thread _criticalThread;
-        private readonly object _criticalMonitor = new object();
 
         #endregion
 
@@ -565,15 +559,6 @@ namespace IronRuby.Runtime {
         public MutableString ItemSeparator {
             get { return _itemSeparator; }
             set { _itemSeparator = value; }
-        }
-
-        public object CriticalMonitor {
-            get { return _criticalMonitor; }
-        }
-
-        public Thread CriticalThread {
-            get { return _criticalThread; }
-            set { _criticalThread = value; }
         }
 
         public Proc TraceListener {

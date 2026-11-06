@@ -17,8 +17,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection.Emit;
 using System.Text;
-using System.Threading;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;

@@ -25,7 +25,6 @@ using IronRuby.Builtins;
 using Range = IronRuby.Builtins.Range;
 using System.Reflection;
 using IronRuby.Compiler;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Generation;
@@ -386,11 +385,6 @@ namespace IronRuby.Runtime.Conversions {
                 Debug.Assert(fromType != typeof(bool));
                 return fromType.IsValueType ? AstUtils.Constant(true) : Ast.NotEqual(expr, AstUtils.Constant(null));
             }
-
-            // TODO:
-            //if (TypeConverter...(fromType, toType)) {
-            //    return true;
-            //}
 
             return null;
         }

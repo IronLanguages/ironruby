@@ -15,7 +15,6 @@
 
 using MSA = System.Linq.Expressions;
 
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using System;

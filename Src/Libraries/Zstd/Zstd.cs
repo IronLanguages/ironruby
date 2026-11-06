@@ -37,7 +37,6 @@ using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Runtime;
 using ZstdSharp.Unsafe;
 using Z = ZstdSharp.Unsafe.Methods;
 

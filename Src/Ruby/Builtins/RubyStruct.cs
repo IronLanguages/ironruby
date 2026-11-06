@@ -21,7 +21,6 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Runtime.Serialization;
 using IronRuby.Compiler;
-using IronRuby.Compiler.Ast;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;

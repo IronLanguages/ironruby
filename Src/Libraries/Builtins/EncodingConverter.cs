@@ -901,13 +901,6 @@ namespace IronRuby.Builtins {
 
             #region Argument coercion
 
-            private static RubyEncoding/*!*/ ToEncoding(ConversionStorage<MutableString>/*!*/ toStr, object obj) {
-                if (obj == null) {
-                    throw RubyExceptions.CreateTypeError("no implicit conversion of nil into String");
-                }
-                return Protocols.ConvertToEncoding(toStr, obj);
-            }
-
             private static MutableString/*!*/ ToReplacementString(ConversionStorage<MutableString>/*!*/ toStr, object obj) {
                 var str = obj as MutableString;
                 if (str != null) {

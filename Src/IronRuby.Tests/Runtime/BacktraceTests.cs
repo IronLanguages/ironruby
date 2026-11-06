@@ -16,8 +16,6 @@
 using System;
 using System.Text;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
-using IronRuby.Builtins;
 using IronRuby.Runtime;
 using System.Runtime.CompilerServices;
 

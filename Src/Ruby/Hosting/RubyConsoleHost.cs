@@ -14,16 +14,10 @@
  * ***************************************************************************/
 using System;
 using System.IO;
-using System.Threading;
-using IronRuby;
-using IronRuby.Builtins;
-using IronRuby.Hosting;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Hosting.Providers;
 using Microsoft.Scripting.Hosting.Shell;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Hosting {
     public abstract partial class RubyConsoleHost : ConsoleHost {

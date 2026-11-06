@@ -21,9 +21,6 @@ using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Diagnostics;
-using Microsoft.Scripting.Generation;
-using System.Threading;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Builtins {

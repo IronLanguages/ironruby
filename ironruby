@@ -32,8 +32,8 @@ S="$IR_ROOT/Src/StdLib"
 # `dotnet build Src/Console/Ruby.Console.csproj -c Release ...`).  It is about 1.8x
 # faster across Util/bench - the Debug build is compiled with optimizations off, which
 # marks the assemblies non-optimizable, so the JIT leaves the whole runtime unoptimized
-# too - and it passes the same specs and the same IronRuby.Tests.  Util/run-tests.sh and
-# regen-initializers.sh read IR_CONFIG as well, so one export covers a whole session.
+# too - and it passes the same specs and the same IronRuby.Tests.  regen-initializers.sh
+# reads IR_CONFIG as well, so one export covers a whole session.
 # Debug is what an unconfigured run uses, because every worktree and agent script builds it.
 # A binary release (Util/package-release.sh) ships only the Release build: when IR_CONFIG is
 # not set and there is no Debug build, run that one.

@@ -16,20 +16,11 @@
 using MSA = System.Linq.Expressions;
 
 using System.Collections;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
 using IronRuby.Runtime.Conversions;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = MSA.Expression;
-    using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
 
     public partial class SplattedArgument : Expression {
         private readonly Expression/*!*/ _argument;

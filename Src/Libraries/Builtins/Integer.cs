@@ -20,7 +20,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Osr;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;

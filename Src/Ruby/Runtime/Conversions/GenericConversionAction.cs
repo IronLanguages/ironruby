@@ -28,7 +28,6 @@ using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Runtime.Conversions {
     using Ast = Expression;
-    using Microsoft.Scripting.Generation;
 
     public sealed class GenericConversionAction : RubyConversionAction {
         private readonly Type/*!*/ _type;

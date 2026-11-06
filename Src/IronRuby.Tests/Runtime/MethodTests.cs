@@ -16,7 +16,6 @@
 using System;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
-using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Tests {

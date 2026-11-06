@@ -16,16 +16,13 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.Dynamic;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Hosting.Providers;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Tests {

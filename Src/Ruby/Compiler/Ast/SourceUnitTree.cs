@@ -17,13 +17,8 @@ using MSA = System.Linq.Expressions;
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Dynamic;
-using System.Runtime.CompilerServices;
-using System.Text;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -33,8 +28,6 @@ using IronRuby.Runtime.Conversions;
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
-    using AstBlock = Microsoft.Scripting.Ast.BlockBuilder;
-    using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
     
     public partial class SourceUnitTree : Node {
 

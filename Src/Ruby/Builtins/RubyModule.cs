@@ -23,11 +23,9 @@ using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
     [Flags]
@@ -86,7 +84,6 @@ namespace IronRuby.Builtins {
     [DebuggerTypeProxy(typeof(RubyModule.DebugView))]
     [ReflectionCached]
     public partial class RubyModule : IDuplicable, IRubyObject {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
         public static readonly RubyModule[]/*!*/ EmptyArray = new RubyModule[0];
 
         // interlocked
@@ -2154,9 +2151,6 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         public void AddMethodAlias(string/*!*/ newName, string/*!*/ oldName) {
-            // MRI 1.8: if (newName == oldName) return;
-            // MRI 1.9: no check
-
             RubyMemberInfo method;
             using (Context.ClassHierarchyLocker()) {
                 // MRI: aliases a super-forwarder not the real method.
