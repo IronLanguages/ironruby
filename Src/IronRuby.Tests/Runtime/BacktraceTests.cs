@@ -333,6 +333,22 @@ end
 ");
         }
 
+        /// <summary>
+        /// A method of the prelude skips its own frame with caller(n + 1) (Kernel#caller_locations); called from another
+        /// one (Thread#backtrace), whose frame stands in for the frames it calls, the caller's frame was skipped instead:
+        /// Thread.current.backtrace started at the caller's caller.
+        /// </summary>
+        public void Backtrace_PreludeCallerSkip1() {
+            TestOutput(@"
+require 'ruby4'
+Object.new.instance_exec do
+  p Thread.current.backtrace[0..1].map { |f| f.sub(/\A.*?\.rb:/, '') }
+end
+", @"
+[""4:in 'Thread#backtrace'"", ""4:in 'block in #'""]
+");
+        }
+
         public void Backtrace7() {
             // TODO: start name by \0 -> bug in reflection?
             StringBuilder sb = new StringBuilder();

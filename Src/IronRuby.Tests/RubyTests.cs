@@ -1071,6 +1071,7 @@ namespace IronRuby.Tests {
                 Backtrace9,
                 Backtrace_CompiledLines1,
                 Backtrace_LibraryErrors1,
+                Backtrace_PreludeCallerSkip1,
 
                 Dlr_RubySnippet,
                 Dlr_ClrSubtype,

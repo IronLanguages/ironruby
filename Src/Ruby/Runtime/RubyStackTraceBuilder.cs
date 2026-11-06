@@ -417,6 +417,7 @@ namespace IronRuby.Runtime {
         // `require' of gem_compat.rb catching a LoadError dropped the frame of the code calling require, once that block was
         // compiled - from the start with the precompiled startup library).
         private void AddBacktrace(IEnumerable<StackFrame> stackTrace, int skipFrames, bool skipInterpreterRunMethod, bool skipCompiledCatchSite) {
+            bool skippedAny = false;
             if (stackTrace != null) {
                 foreach (var frame in InterpretedFrame.GroupStackFrames(stackTrace)) {
                     string methodName, file;
@@ -482,7 +483,13 @@ namespace IronRuby.Runtime {
                     }
 
                     if (!_keepInternalFrames && IsInternalFrameFile(file)) {
-                        AddInternalFrame(methodName);
+                        // Above the first frame reported, the frames it drops still count for caller(n): a method of the prelude
+                        // skips its own frame that way (Kernel#caller_locations calls caller(n + 1)), and Thread#backtrace, which
+                        // calls caller_locations, dropped that frame - so its caller's went instead.
+                        int dropped = AddInternalFrame(methodName);
+                        if (_trace.Count == 0 && !skippedAny) {
+                            skipFrames = Math.Max(0, skipFrames - dropped);
+                        }
                         continue;
                     }
 
@@ -491,6 +498,7 @@ namespace IronRuby.Runtime {
                             _trace.Add(MutableString.Create(FormatFrame(file, line, deferred), _encoding));
                         } else {
                             skipFrames--;
+                            skippedAny = true;
                         }
                     }
                     _deferredMethodNames.Clear();
@@ -500,6 +508,7 @@ namespace IronRuby.Runtime {
                         _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
                     } else {
                         skipFrames--;
+                        skippedAny = true;
                     }
                 }
             }
@@ -520,10 +529,12 @@ namespace IronRuby.Runtime {
         /// Enumerable#__extreme_by__, Math.__ir_sqrt__ - the Ruby half of a library method), which MRI writes as a C function
         /// the method calls directly.
         /// </summary>
-        private void AddInternalFrame(string methodName) {
+        // Returns how many of the deferred frames it dropped.
+        private int AddInternalFrame(string methodName) {
             if (!IsInternalMethodFrame(methodName)) {
-                return;
+                return 0;
             }
+            int deferred = _deferredMethodNames.Count;
             string owner, name;
             SplitLabel(methodName, out owner, out name);
 
@@ -541,9 +552,11 @@ namespace IronRuby.Runtime {
             }
             _libraryRun = 0;
 
+            int dropped = deferred - _deferredMethodNames.Count;
             if (!IsHelperMethodName(name)) {
                 _deferredMethodNames.Add(methodName);
             }
+            return dropped;
         }
 
         // "Enumerable#map" -> ("Enumerable", "map"); "Math.sqrt" -> ("Math", "sqrt"); "foo" -> (null, "foo")
