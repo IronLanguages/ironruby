@@ -54,6 +54,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformReadVariable(AstGenerator/*!*/ gen, bool tryRead) {
+            gen.NoteLocalVariableUse(Name, _definitionLexicalDepth, false);
             if (_definitionLexicalDepth >= 0) {
                 // static lookup:
                 return gen.CurrentScope.GetVariableAccessor(_definitionLexicalDepth, _closureIndex);
@@ -64,6 +65,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformWriteVariable(AstGenerator/*!*/ gen, MSA.Expression/*!*/ rightValue) {
+            gen.NoteLocalVariableUse(Name, _definitionLexicalDepth, true);
             if (_definitionLexicalDepth >= 0) {
                 // static lookup:
                 return Ast.Assign(gen.CurrentScope.GetVariableAccessor(_definitionLexicalDepth, _closureIndex), AstUtils.Box(rightValue));

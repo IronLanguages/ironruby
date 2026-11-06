@@ -163,6 +163,18 @@ namespace IronRuby.Runtime.Calls {
             set { _ruby2Keywords = value; }
         }
 
+        /// <summary>
+        /// The local variables of enclosing scopes the block body (nested blocks included) reads or
+        /// assigns, in order of first use; null if there are none. Ractor.new refuses a block that
+        /// has any, and Ractor.make_shareable checks their values.
+        /// </summary>
+        public string[] OuterVariableNames { get; internal set; }
+
+        /// <summary>
+        /// Those of <see cref="OuterVariableNames"/> the block assigns to; null if none.
+        /// </summary>
+        public string[] AssignedOuterVariableNames { get; internal set; }
+
         private bool _wrapsMethod;
 
         /// <summary>

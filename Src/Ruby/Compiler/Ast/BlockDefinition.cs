@@ -168,6 +168,7 @@ namespace IronRuby.Compiler.Ast {
                 scopeVariable,
                 redoLabel
             );
+            gen.CurrentBlock.LexicalDepth = _definedScope.Depth;
 
             MSA.Expression paramInit = MakeParametersInitialization(gen, parameters);
             MSA.ParameterExpression blockUnwinder;
@@ -185,6 +186,8 @@ namespace IronRuby.Compiler.Ast {
 
             MSA.Expression statements = gen.TransformStatements(_body, ResultOperation.Return);
             bool hasNestedReturn = gen.CurrentBlock.HasNestedReturn;
+            var outerVariables = gen.CurrentBlock.OuterVariables;
+            var assignedOuterVariables = gen.CurrentBlock.AssignedOuterVariables;
 
             // A body that never uses its scope - { }, { |x| x } - has no use for the RubyBlockScope
             // every invocation would allocate, except to hand to the TracePoint hooks, which only
@@ -307,6 +310,10 @@ namespace IronRuby.Compiler.Ast {
 
             var blockDispatcher = BlockDispatcher.Create(parameterCount, PostParameterCount, attributes, gen.SourcePath, Location.Start.Line);
             blockDispatcher.ParameterSignature = _parameters.Signature;
+            if (outerVariables != null) {
+                blockDispatcher.OuterVariableNames = outerVariables.ToArray();
+                blockDispatcher.AssignedOuterVariableNames = assignedOuterVariables?.ToArray();
+            }
             if (!isLambda && gen.CanReplaceLoops) {
                 // -X:OSR: `n.times { }', `a.each { }' and the like run their loop in C#; a block that
                 // can be is outlined into that loop once it is hot (BlockLoopSite)

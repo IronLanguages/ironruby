@@ -317,6 +317,18 @@ namespace IronRuby.Compiler.Ast {
             // A block literal (or lambda) is nested in this one: its Proc captures this block's scope.
             public bool HasNestedBlock;
 
+            // The lexical depth of the block's own scope (LexicalScope.Depth): a local defined at a
+            // smaller depth belongs to an enclosing scope.
+            internal int LexicalDepth;
+
+            // The enclosing scopes' locals the block uses (BlockDispatcher.OuterVariableNames).
+            internal List<string> OuterVariables;
+            internal List<string> AssignedOuterVariables;
+
+            // The module body the block is in, if any: a module body starts a new local scope
+            // without leaving the blocks around it.
+            internal ModuleScope EnclosingModule;
+
             public BlockScope(ScopeBuilder/*!*/ builder, MSA.Expression/*!*/ selfVariable, MSA.ParameterExpression/*!*/ runtimeScopeVariable,
                 MSA.Expression/*!*/ bfcVariable, MSA.LabelTarget/*!*/ redoLabel)
                 : base(builder, selfVariable, runtimeScopeVariable) {
@@ -582,12 +594,38 @@ namespace IronRuby.Compiler.Ast {
             block.ParentLoop = _currentLoop;
             block.ParentBlock = _currentBlock;
             block.ParentVariableScope = _currentVariableScope;
+            block.EnclosingModule = _currentModule;
             
             _currentElement = block;
             _currentRescue = null;
             _currentLoop = null;
             _currentBlock = block;
             _currentVariableScope = block;
+        }
+
+        /// <summary>
+        /// Records a use of a local defined at <paramref name="definitionDepth"/> in every block of the
+        /// current frame the local is from outside of (-1, a local of the eval's runtime scope, is
+        /// outside of all of them). The block chain ends at a method or module body.
+        /// </summary>
+        internal void NoteLocalVariableUse(string/*!*/ name, int definitionDepth, bool isAssignment) {
+            if (_currentVariableScope is ModuleScope) {
+                return;
+            }
+            for (var block = _currentBlock;
+                block != null && block.EnclosingModule == _currentModule && block.LexicalDepth > definitionDepth;
+                block = block.ParentBlock) {
+                var names = block.OuterVariables ??= new List<string>();
+                if (!names.Contains(name)) {
+                    names.Add(name);
+                }
+                if (isAssignment) {
+                    var assigned = block.AssignedOuterVariables ??= new List<string>();
+                    if (!assigned.Contains(name)) {
+                        assigned.Add(name);
+                    }
+                }
+            }
         }
 
         public void LeaveBlockDefinition() {

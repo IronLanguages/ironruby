@@ -621,10 +621,18 @@ namespace IronRuby.Aot {
                     var postField = dispatcher.GetType().GetField("_postCount", BindingFlags.NonPublic | BindingFlags.Instance);
                     if (postField != null) postCount = (int)postField.GetValue(dispatcher);
                     int attributes = (int)(BlockSignatureAttributes)_dispatcherAttributes.GetValue(dispatcher);
-                    return Expression.Call(typeof(PrecompiledCode).GetMethod("CreateBlockDispatcher"),
+                    var args = new List<Expression> {
                         Expression.Constant(dispatcher.ParameterCount), Expression.Constant(postCount), Expression.Constant(attributes),
                         StringExpression(dispatcher.SourcePath), Expression.Constant(dispatcher.SourceLine),
-                        SerializeSignature(dispatcher.ParameterSignature));
+                        SerializeSignature(dispatcher.ParameterSignature)
+                    };
+                    // the locals of enclosing scopes the block uses, which Ractor.new checks
+                    if (dispatcher.OuterVariableNames != null) {
+                        args.Add(Strings(dispatcher.OuterVariableNames));
+                        args.Add(Strings(dispatcher.AssignedOuterVariableNames));
+                    }
+                    return Expression.Call(typeof(PrecompiledCode).GetMethods()
+                        .Single(m => m.Name == "CreateBlockDispatcher" && m.GetParameters().Length == args.Count), args);
                 }
 
                 case RubySymbol symbol:
