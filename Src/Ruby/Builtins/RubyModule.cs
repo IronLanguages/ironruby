@@ -298,6 +298,11 @@ namespace IronRuby.Builtins {
         // one is (guarded by the class hierarchy lock, like _constants)
         private HashSet<string> _deprecatedConstants;
 
+        // private constants of IronRuby's own Ruby code that MRI has no counterpart of, hidden with
+        // Module#__hide_constant__ from const_defined?, const_get and the rest of constant reflection;
+        // null until one is (guarded by the class hierarchy lock, like _constants)
+        private HashSet<string> _hiddenConstants;
+
         // what Module#name hands out; see GetNameString. Cleared whenever the name changes.
         private MutableString _nameString;
 
@@ -1286,6 +1291,10 @@ namespace IronRuby.Builtins {
             public bool Loaded { get { return _loaded; } }
             public MutableString/*!*/ Path { get { return _path; } }
 
+            // Declared by the core prelude, for a class MRI has from the start (Set): #autoload? does
+            // not name a file for it, since there is none to MRI.
+            internal bool IsCore { get; set; }
+
             // The file name without directory or .rb extension - what a #require of some other
             // spelling of the same file has to share with it before resolving both is worth it.
             internal string/*!*/ FeatureName { get { return _featureName; } }
@@ -1427,7 +1436,9 @@ namespace IronRuby.Builtins {
 
                  using (autoloadScope.Context.ClassHierarchyUnlocker()) {
                      _loaded = true;
-                     return RequireFromMain(autoloadScope);
+                     return IsCore
+                         ? autoloadScope.Context.Loader.LoadAsCorePrelude(() => RequireFromMain(autoloadScope))
+                         : RequireFromMain(autoloadScope);
                  }
             }
 
@@ -1459,7 +1470,7 @@ namespace IronRuby.Builtins {
         // autoload of __FILE__), is satisfied from the start. Every autoload is registered with the
         // loader, which is what lets a direct #require of the same file stand in for it.
         private AutoloadedConstant/*!*/ CreateAutoload(MutableString/*!*/ path, string requiredFeature) {
-            var result = new AutoloadedConstant(path);
+            var result = new AutoloadedConstant(path) { IsCore = _context.Loader.IsLoadingCorePrelude };
             if (requiredFeature != null) {
                 result.RequiredAs(requiredFeature);
             }
@@ -1520,6 +1531,33 @@ namespace IronRuby.Builtins {
         /// <summary>True if this module itself declared the constant private.</summary>
         public bool IsPrivateConstant(string/*!*/ name) {
             return _privateConstants != null && _privateConstants.Contains(name);
+        }
+
+        /// <summary>
+        /// Module#__hide_constant__: makes the constant private, and leaves it out of constant reflection
+        /// too - IronRuby's Ruby code keeps its own state in constants that MRI keeps in C, where Ruby
+        /// cannot see it. The code nested in the module still reads it by name, as it reads a private one.
+        /// </summary>
+        public void HideConstant(string/*!*/ name) {
+            SetConstantVisibility(name, true);
+            using (Context.ClassHierarchyLocker()) {
+                (_hiddenConstants ??= new HashSet<string>()).Add(name);
+            }
+        }
+
+        /// <summary>True if this module itself hid the constant (<see cref="HideConstant"/>).</summary>
+        public bool IsHiddenConstant(string/*!*/ name) {
+            return _hiddenConstants != null && _hiddenConstants.Contains(name);
+        }
+
+        /// <summary>
+        /// True if the module that declares <paramref name="name"/> - this one or the first
+        /// ancestor that has it - hid it.
+        /// </summary>
+        public bool IsHiddenConstantInAncestors(string/*!*/ name) {
+            Context.RequiresClassHierarchyLock();
+            var owner = GetConstantOwnerNoLock(name);
+            return owner != null && owner.IsHiddenConstant(name);
         }
 
         /// <summary>
@@ -1773,6 +1811,7 @@ namespace IronRuby.Builtins {
                         // Load() marks itself loaded before running the file, so "not loaded yet"
                         // alone would hide the pending autoload from every thread for its duration.
                         if ((autoloaded = storage.Value as AutoloadedConstant) != null
+                            && !autoloaded.IsCore
                             && (!autoloaded.Loaded || autoloaded.IsLoading)
                             && !autoloaded.IsLoadingOnCurrentThread
                             && !autoloaded.IsSatisfied(Context.Loader)) {

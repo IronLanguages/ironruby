@@ -601,7 +601,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("step")]
         public static Enumerator/*!*/ GetStepEnumerator(StepStorage/*!*/ storage, Range/*!*/ self, [Optional]object step) {
-            return new Enumerator((_, block) => Step(storage, block, self, step));
+            return step != Missing.Value ? new Enumerator(self, "step", step) : new Enumerator(self, "step");
         }
 
         /// <summary>

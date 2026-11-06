@@ -486,8 +486,17 @@ namespace IronRuby.Builtins {
                 var data = RubyExceptionData.GetInstance(exception);
                 Exception cause = data.HasCause ? data.Cause : null;
 
+                // MRI's internal ones - KeyError#receiver and the like - which the prelude keeps hidden
+                var internalNames = new List<string>();
+                foreach (string name in ExceptionInternalIVars) {
+                    object value;
+                    if (_context.TryGetInstanceVariable(exception, HiddenIVarName(name), out value)) {
+                        internalNames.Add(name);
+                    }
+                }
+
                 WriteObject(exception);
-                WriteInt32(2 + (cause != null ? 1 : 0) + instanceNames.Length);
+                WriteInt32(2 + (cause != null ? 1 : 0) + internalNames.Count + instanceNames.Length);
                 WriteSymbol("mesg", RubyEncoding.Binary);
                 object message = data.Message;
                 var messageString = message as MutableString;
@@ -507,6 +516,13 @@ namespace IronRuby.Builtins {
                 if (cause != null) {
                     WriteSymbol("cause", RubyEncoding.Binary);
                     WriteAnObject(cause);
+                }
+
+                foreach (string name in internalNames) {
+                    object value;
+                    _context.TryGetInstanceVariable(exception, HiddenIVarName(name), out value);
+                    WriteSymbol(name, RubyEncoding.Binary);
+                    WriteAnObject(value);
                 }
 
                 WriteIVarPairs(exception, instanceNames);
@@ -658,6 +674,17 @@ namespace IronRuby.Builtins {
                 if (writeEncoding) {
                     WriteEncodingIVar(encoding);
                 }
+                WriteIVarPairs(obj, names);
+            }
+
+            /// <summary>
+            /// A Set: MRI 4.0 writes its table as the "@hash" instance variable the Set of set.rb had, which
+            /// the prelude's Set keeps in a hidden one.
+            /// </summary>
+            private void WriteSetObject(object/*!*/ obj, object setTable, string[]/*!*/ names) {
+                WriteInt32(names.Length + 1);
+                WriteSymbol("@hash", _context.GetIdentifierEncoding());
+                WriteAnObject(setTable);
                 WriteIVarPairs(obj, names);
             }
 
@@ -910,7 +937,12 @@ namespace IronRuby.Builtins {
                             } else {
                                 RequireDumpableAsObject(theClass);
                                 WriteObject(obj);
-                                WriteIVars(obj, instanceNames, encoding);
+                                object setTable;
+                                if (IsSet(_context, theClass) && _context.TryGetInstanceVariable(obj, SetTableIVar, out setTable)) {
+                                    WriteSetObject(obj, setTable, instanceNames);
+                                } else {
+                                    WriteIVars(obj, instanceNames, encoding);
+                                }
                             }
 
                             if (writeInstanceData) {
@@ -929,6 +961,28 @@ namespace IronRuby.Builtins {
                 WriteAnObject(obj);
                 _writer.BaseStream.Flush();
             }
+        }
+
+        #endregion
+
+        #region Instance variables MRI keeps in C
+
+        /// <summary>
+        /// The instance variables MRI's exceptions keep without an "@" - Marshal writes them by those names -
+        /// that the prelude keeps as hidden ones (@__receiver__, ...): KeyError, FrozenError and
+        /// NoMatchingPatternKeyError's receiver, key and matchee, SignalException's signo, StopIteration's result.
+        /// </summary>
+        private static readonly string/*!*/[]/*!*/ ExceptionInternalIVars = { "receiver", "matchee", "key", "signo", "result" };
+
+        private static string/*!*/ HiddenIVarName(string/*!*/ name) {
+            return "@__" + name + "__";
+        }
+
+        private const string SetTableIVar = "@__hash__";
+
+        private static bool IsSet(RubyContext/*!*/ context, RubyClass/*!*/ theClass) {
+            object set;
+            return context.ObjectClass.TryGetConstant(null, "Set", out set) && set is RubyClass setClass && theClass.IsSubclassOf(setClass);
         }
 
         #endregion
@@ -1412,8 +1466,12 @@ namespace IronRuby.Builtins {
                 if (objectRef >= 0) {
                     _objects[objectRef] = obj;
                 }
+                bool isSet = IsSet(Context, theClass);
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
+                    if (isSet && name == "@hash") {
+                        name = SetTableIVar;
+                    }
                     Context.SetInstanceVariable(obj, name, ReadAnObject(false));
                 }
                 return obj;
@@ -1442,7 +1500,8 @@ namespace IronRuby.Builtins {
                             break;
 
                         default:
-                            Context.SetInstanceVariable(exception, pair.Key, pair.Value);
+                            Context.SetInstanceVariable(exception,
+                                Array.IndexOf(ExceptionInternalIVars, pair.Key) >= 0 ? HiddenIVarName(pair.Key) : pair.Key, pair.Value);
                             break;
                     }
                 }

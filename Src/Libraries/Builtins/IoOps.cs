@@ -1852,8 +1852,8 @@ namespace IronRuby.Builtins {
                 }
                 if (fd == 1 || fd == 2) {
                     var signal = new SignalException("SIGPIPE");
-                    io.Context.SetInstanceVariable(signal, "@signo", 13);
-                    io.Context.SetInstanceVariable(signal, "@signm", MutableString.CreateAscii("SIGPIPE"));
+                    io.Context.SetInstanceVariable(signal, "@__signo__", 13);
+                    io.Context.SetInstanceVariable(signal, "@__signm__", MutableString.CreateAscii("SIGPIPE"));
                     return signal;
                 }
             }

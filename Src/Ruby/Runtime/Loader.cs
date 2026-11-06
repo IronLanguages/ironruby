@@ -1265,6 +1265,24 @@ namespace IronRuby.Runtime {
             get { return _corePreludeThread == Thread.CurrentThread; }
         }
 
+        /// <summary>
+        /// Runs the load of a file a core autoload names - set.rb, for the Set MRI has from the start -
+        /// as part of the core prelude, whenever it happens: its helpers are unlisted, its constants have no
+        /// location and its autoloads are core too, as they would be had the prelude loaded it up front.
+        /// A thread that finds another one in the prelude just loads the file.
+        /// </summary>
+        internal bool LoadAsCorePrelude(Func<bool>/*!*/ load) {
+            var thread = Thread.CurrentThread;
+            if (_corePreludeDirectory == null || Interlocked.CompareExchange(ref _corePreludeThread, thread, null) != null) {
+                return load();
+            }
+            try {
+                return load();
+            } finally {
+                _corePreludeThread = null;
+            }
+        }
+
         // Set while the core prelude (gem_prelude.rb and everything it requires, or ruby4.rb) loads,
         // on whichever thread: RubyContext.CompilationThreshold reads it.
         private volatile bool _loadingCorePrelude;

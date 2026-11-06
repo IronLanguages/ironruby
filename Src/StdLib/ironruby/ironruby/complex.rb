@@ -233,7 +233,7 @@ class Complex < Numeric
 
   HALF_PI__ = ::Math::PI / 2
   THREE_HALVES_PI__ = ::Math::PI / 2 + ::Math::PI
-  private_constant :HALF_PI__, :THREE_HALVES_PI__
+  __hide_constant__ :HALF_PI__, :THREE_HALVES_PI__
 
   # f_complex_polar_real
   def self.__polar_real__(x, y)
@@ -450,7 +450,7 @@ class Complex < Numeric
   end
 
   SPECIAL_DIRS__ = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]].freeze
-  private_constant :SPECIAL_DIRS__
+  __hide_constant__ :SPECIAL_DIRS__
 
   # complex_pow_for_special_angle: on an axis or a diagonal an Integer power can be
   # worked out exactly. Answers nil when self is on neither.
@@ -495,7 +495,7 @@ class Complex < Numeric
   private :__ir_pow_special_angle__
 
   FIXNUM_RANGE__ = (-2**62)..(2**62 - 1)
-  private_constant :FIXNUM_RANGE__
+  __hide_constant__ :FIXNUM_RANGE__
 
   # rb_complex_pow
   def **(other)
@@ -746,18 +746,6 @@ class Complex < Numeric
     self
   end
 
-  # Special objects, as Rational: #dup and #clone answer the receiver.
-  def dup
-    self
-  end
-
-  def clone(freeze: nil)
-    unless freeze.nil? || freeze == true || freeze == false
-      ::Kernel.raise(::ArgumentError, "unexpected value for freeze: #{freeze.class}")
-    end
-    self
-  end
-
   # nucomp_marshal_dump / nucomp_marshal_load (by way of Complex::compatible in MRI).
   def marshal_dump
     [@__real__, @__image__]
@@ -965,7 +953,7 @@ class Complex < Numeric
       [ok, value]
     end
   end
-  private_constant :Scanner__
+  __hide_constant__ :Scanner__
 
   # string_to_c_strict / string_to_c
   def self.__parse_string__(str, strict, raise_error = true)

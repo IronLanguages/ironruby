@@ -49,7 +49,7 @@ module Gem
   # IronRuby tree live.
 
   def self.ironruby_stdlib_dirs # :nodoc:
-    @ironruby_stdlib_dirs ||= begin
+    @__ironruby_stdlib_dirs__ ||= begin
       lib = ironruby_lib_dir                                # <root>/Src/StdLib/ruby/4.0
       stdlib = File.expand_path("../..", lib)               # <root>/Src/StdLib
       [lib,
@@ -100,7 +100,7 @@ module Gem
   # Returns name => Gem::Version.
 
   def self.ironruby_pinned_gems
-    @ironruby_pinned_gems ||= begin
+    @__ironruby_pinned_gems__ ||= begin
       pinned = {}
       begin
         Gem::Specification.default_stubs("*.gemspec").each do |stub|
@@ -223,7 +223,7 @@ module Gem
   # gem index.  See BasicSpecification#ignored? below.
 
   def self.ironruby_ignored_gems # :nodoc:
-    @ironruby_ignored_gems ||= []
+    @__ironruby_ignored_gems__ ||= []
   end
 
   ##
@@ -232,12 +232,12 @@ module Gem
   # the file names rather than from the gemspecs, so that nothing is evaluated.
 
   def self.ironruby_default_gem_names # :nodoc:
-    @ironruby_default_gem_names ||=
+    @__ironruby_default_gem_names__ ||=
       Dir.glob(File.join(default_specifications_dir, "*.gemspec")).map do |file|
         File.basename(file, ".gemspec")[/\A(.+)-[^-]+\z/, 1]
       end.compact
   rescue StandardError
-    @ironruby_default_gem_names = []
+    @__ironruby_default_gem_names__ = []
   end
 
   ##
@@ -262,6 +262,7 @@ module Gem
   # Set IRONRUBY_NO_GEM_CACHE=1 to fall back to upstream's eager scan.
 
   IRONRUBY_DEFAULT_SPEC_INDEX_VERSION = 1 # :nodoc:
+  __hide_constant__ :IRONRUBY_DEFAULT_SPEC_INDEX_VERSION
 
   ##
   # The standard library this process is running out of.  A source tree can be
@@ -271,7 +272,7 @@ module Gem
   # worktree's copy of rubygems/dependency.rb would be a real bug.
 
   def self.ironruby_lib_dir # :nodoc:
-    @ironruby_lib_dir ||= File.expand_path("../..", __dir__)
+    @__ironruby_lib_dir__ ||= File.expand_path("../..", __dir__)
   end
 
   def self.ironruby_default_spec_index_file # :nodoc:
@@ -497,6 +498,7 @@ module Gem
       nil
     end
   end
+  __hide_constant__ :IronRubyNoExtensionBuild
 
   ##
   # Gems that are C extensions upstream and that IronRuby has exactly one of,
@@ -537,6 +539,7 @@ module Gem
       lifted.satisfied_by?(built_in) ? lifted : requirement
     end
   end
+  __hide_constant__ :IRONRUBY_LIFTED_REQUIREMENTS, :IronRubyBuiltInRequirement
 
   def self.const_added(name) # :nodoc:
     super
@@ -564,9 +567,9 @@ module Gem
     # and under `bundle exec` it reports false for exactly these gems.
 
     def ironruby_provided_library? # :nodoc:
-      return @ironruby_provided_library unless @ironruby_provided_library.nil?
+      return @__ironruby_provided_library__ unless @__ironruby_provided_library__.nil?
 
-      @ironruby_provided_library =
+      @__ironruby_provided_library__ =
         begin
           !default_gem? &&
             Gem.ironruby_default_gem_names.include?(name) &&
@@ -593,14 +596,14 @@ module Gem
     # The names are recorded so `gem env` and -w can report them.
 
     def ignored?
-      if @ironruby_ignored.nil?
-        @ironruby_ignored = ironruby_provided_library?
-        if @ironruby_ignored || super
+      if @__ironruby_ignored__.nil?
+        @__ironruby_ignored__ = ironruby_provided_library?
+        if @__ironruby_ignored__ || super
           Gem.ironruby_ignored_gems << full_name unless Gem.ironruby_ignored_gems.include?(full_name)
         end
       end
 
-      @ironruby_ignored
+      @__ironruby_ignored__
     end
 
     ##
@@ -642,4 +645,5 @@ module Gem
   end
 
   BasicSpecification.prepend(IronRubyProvidedGem)
+  __hide_constant__ :IronRubyProvidedGem
 end

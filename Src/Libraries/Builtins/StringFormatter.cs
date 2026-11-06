@@ -533,8 +533,8 @@ namespace IronRuby.Builtins {
                     if (exception != null) {
                         // KeyError#receiver and #key read these; see the KeyError
                         // reopening in Src/StdLib/ironruby/ruby4.rb.
-                        _context.SetInstanceVariable(instance, "@__receiver", hash);
-                        _context.SetInstanceVariable(instance, "@__key", key);
+                        _context.SetInstanceVariable(instance, "@__receiver__", hash);
+                        _context.SetInstanceVariable(instance, "@__key__", key);
                         return exception;
                     }
                 } catch (Exception) {

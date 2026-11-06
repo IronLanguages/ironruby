@@ -338,7 +338,7 @@ class Rational < Numeric
 
   # The largest Fixnum: an exponent past it is a Bignum, which rb_rational_pow refuses.
   FIXNUM_MAX__ = 2**62 - 1
-  private_constant :FIXNUM_MAX__
+  __hide_constant__ :FIXNUM_MAX__
 
   # rb_rational_cmp
   def <=>(other)
@@ -618,19 +618,6 @@ class Rational < Numeric
     "(#{@__numerator__.inspect}/#{@__denominator__.inspect})"
   end
 
-  # Rational and Complex are special objects in MRI's sense: #dup and #clone answer the
-  # receiver, like Integer and Symbol, rather than allocating a copy.
-  def dup
-    self
-  end
-
-  def clone(freeze: nil)
-    unless freeze.nil? || freeze == true || freeze == false
-      ::Kernel.raise(::ArgumentError, "unexpected value for freeze: #{freeze.class}")
-    end
-    self
-  end
-
   # nurat_marshal_dump / nurat_marshal_load (by way of Rational::compatible in MRI).
   def marshal_dump
     [@__numerator__, @__denominator__]
@@ -733,7 +720,7 @@ class Rational < Numeric
   end
 
   UNDEF__ = ::Object.new.freeze
-  private_constant :UNDEF__
+  __hide_constant__ :UNDEF__
 
   # nurat_convert. `given2` tells Rational(x) from Rational(x, nil).
   def self.__convert__(a1, a2, given2, raise_)
@@ -892,7 +879,7 @@ class Rational < Numeric
 
   # isspace in the C locale
   WS__ = " \t\n\v\f\r"
-  private_constant :WS__
+  __hide_constant__ :WS__
 
   def self.__skip_ws__(s, i, n)
     i += 1 while i < n && WS__.include?(s[i])
@@ -902,7 +889,7 @@ class Rational < Numeric
   # parse_rat. Answers nil when a strict parse fails; an exponent too large for a power
   # of ten degenerates to a Float, which the callers turn into FloatDomainError.
   EXP_LIMIT__ = 1_000_000
-  private_constant :EXP_LIMIT__
+  __hide_constant__ :EXP_LIMIT__
 
   def self.__parse_rat__(s, strict, raise_)
     n = s.length

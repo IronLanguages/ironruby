@@ -2424,7 +2424,8 @@ namespace IronRuby.Runtime {
         public object ResolveMissingConstant(RubyModule/*!*/ owner, string/*!*/ name) {
             var privateReference = _privateConstantReference;
             _privateConstantReference = null;
-            if (privateReference != null) {
+            // a hidden constant is not there at all, as far as the program can tell
+            if (privateReference != null && !privateReference.IsHiddenConstant(name)) {
                 throw RubyExceptions.WithNameAndReceiver(this, RubyExceptions.CreateNameError(
                     String.Format("private constant {0}::{1} referenced", GetModuleDisplayName(privateReference), name)
                 ), name, privateReference);
