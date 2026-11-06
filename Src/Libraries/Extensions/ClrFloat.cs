@@ -332,10 +332,11 @@ namespace IronRuby.Builtins {
         [RubyMethod("divmod")]
         public static RubyArray DivMod(double self, double other) {
             RubyArray result = InternalDivMod(self, other);
-            // Unlike modulo, divmod blows up if the quotient or modulus are not finite, so we can't put this inside InternalDivMod
-            // We only need to test if the quotient is double since it should have been converted to Integer (Fixnum or Bignum) if it was OK.
-            if (result[0] is double || Double.IsNaN((double)result[1])) {
-                throw CreateFloatDomainError("NaN");
+            // Unlike modulo, divmod needs the quotient as an Integer (flo_divmod's dbl2ival), so a
+            // quotient that is not finite - left as a double by InternalDivMod - is an error named
+            // after that quotient: Float::INFINITY.divmod(1.0) is "Infinity", not "NaN".
+            if (result[0] is double quotient) {
+                throw new FloatDomainError(Double.IsNaN(quotient) ? "NaN" : quotient > 0 ? "Infinity" : "-Infinity");
             }
             return result;
         }
@@ -1257,13 +1258,6 @@ namespace IronRuby.Builtins {
             return new BigInteger(value);
         }
 
-        public static Exception CreateFloatDomainError(string message) {
-            return new FloatDomainError("NaN");
-        }
-
-        public static Exception CreateFloatDomainError(string message, Exception inner) {
-            return new FloatDomainError("NaN", inner);
-        }
 
         #endregion
     }

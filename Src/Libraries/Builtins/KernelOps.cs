@@ -127,6 +127,13 @@ namespace IronRuby.Builtins {
             return Protocols.CastToFloat(floatConversion, value);
         }
 
+        // An Integer too large for a Float is Infinity, with MRI's -w warning.
+        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
+        public static double ToFloat(RubyContext/*!*/ context, object self, [NotNull]BigInteger value) {
+            return Protocols.ConvertToDouble(context, value);
+        }
+
         // A String has to be readable as a number at all: in an ASCII-compatible encoding - MRI
         // checks that before anything else, and exception: false does not change it - and, for
         // Float, without a NUL, which MRI names rather than calling the value invalid.

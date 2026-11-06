@@ -150,6 +150,43 @@ true
 ");
         }
 
+        /// <summary>
+        /// An Integer too large for a Float meets a Float: MRI converts it (to Infinity), with an
+        /// "Integer out of Float range" warning under -w, in every operator that coerces - and
+        /// divmod, div and % then answer as Float#divmod etc. would for Infinity, not with a CLR
+        /// OverflowException. A divmod quotient that is not finite is named in the error.
+        /// </summary>
+        public void Integer_OutOfFloatRange1() {
+            TestOutput(@"
+$VERBOSE = true
+$w = []
+def Warning.warn(m, **) = $w << m[/warning: (.*)/, 1]
+b = 10**400
+p [b + 1.0, b - 1.0, b * 1.0, b / 1.0, b ** 1.0, b % 1.0, b.modulo(1.0), b.remainder(1.0), b.coerce(1.0), Float(b), b.fdiv(1.0), b <=> 1.0]
+p $w.size, $w.uniq
+p((b.divmod(1.0) rescue $!), (b.div(1.0) rescue $!), (b.div(0.0) rescue $!), (b % 0.0 rescue $!), $w.size)
+inf = 1.0 / 0
+p((inf.divmod(1.0) rescue $!), ((-inf).divmod(1.0) rescue $!), (b.divmod(inf) rescue $!))
+p (2**70).divmod(2.5), (-2**70).divmod(2.5), (2**70).div(2.5), (2**70) % -2.5
+", @"
+[Infinity, Infinity, Infinity, Infinity, Infinity, NaN, NaN, NaN, [1.0, Infinity], Infinity, Infinity, 1]
+10
+[""Integer out of Float range""]
+#<FloatDomainError: Infinity>
+#<FloatDomainError: Infinity>
+#<ZeroDivisionError: divided by 0>
+#<ZeroDivisionError: divided by 0>
+13
+#<FloatDomainError: Infinity>
+#<FloatDomainError: -Infinity>
+#<FloatDomainError: NaN>
+[472236648286964547584, 1.5]
+[-472236648286964547584, 1.0]
+472236648286964547584
+-1.0
+", 0, 14);
+        }
+
         private BigInteger ParseBigInt(string str) {
             int i = 0;
             return Tokenizer.ParseInteger(str, 0, ref i).Bignum;

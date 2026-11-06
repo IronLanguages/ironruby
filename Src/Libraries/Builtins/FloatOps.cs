@@ -89,12 +89,6 @@ namespace IronRuby.Builtins {
         [RubyConstant]
         public const int RADIX = 2;
 
-        /// <summary>
-        /// Rounding mode used by Float
-        /// </summary>
-        [RubyConstant]
-        public const int ROUNDS = 1;
-
         #endregion
 
         #region -@

@@ -1562,6 +1562,8 @@ No such file or directory @ rb_sysopen - x
 ");
         }
 
+        // Nine "Integer out of Float range" warnings, as MRI gives under -w: one for each Bignum
+        // that meets a Float in an operator - on either side of it - except fdiv and <=>/>/==.
         public void Numeric_BignumFloatOverflow1() {
             TestOutput(@"
 x = 10**400
@@ -1583,7 +1585,7 @@ false
 -0.0
 Infinity
 -Infinity
-", 1, 4);
+", 1, 9);
         }
 
         public void Numeric_BignumExponent1() {
