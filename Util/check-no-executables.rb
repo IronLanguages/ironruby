@@ -10,8 +10,8 @@
 #     ruby Util/check-no-executables.rb FILE...    # only these
 #
 # A file is recognised by its first bytes, not by its name, so a program cannot pass by
-# being called notes.txt, and an extension-only placeholder such as
-# Tests/Experiments/Loader/Extensions/fcntl.so - which is text - is not flagged.
+# being called notes.txt, and a text file that only carries a program's extension (a
+# placeholder fcntl.so, say) is not flagged.
 
 def kind_of(file, size)
   head = file.read(4096) || "".b
