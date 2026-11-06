@@ -306,7 +306,7 @@ namespace IronRuby.Runtime {
 
         #endregion
 
-        #region ConvertStringToFloat, ConvertToInteger, CastToInteger, CastToFixnum, CastToUInt32Unchecked
+        #region ConvertStringToFloat, ConvertToInteger, CastToInteger, CastToFixnum, CastToUInt32Unchecked, CastToUInt64Unchecked
 
         public static double ConvertStringToFloat(RubyContext/*!*/ context, MutableString/*!*/ value) {
             return RubyOps.ConvertStringToFloat(context, value.ConvertToString());
@@ -517,6 +517,30 @@ namespace IronRuby.Runtime {
             }
 
             throw RubyExceptions.MakeCoercionError(coercionStorage.Context, other, self);
+        }
+
+        /// <summary>
+        /// Applies given operator on coerced values and returns the result.
+        /// </summary>
+        /// <exception cref="TypeError">
+        /// "coerce" method is not defined, throws a subclass of SystemException, or returns something other than a pair of objects.
+        /// </exception>
+        public static object TryCoerceAndApply(
+            BinaryOpStorage/*!*/ coercionStorage,
+            BinaryOpStorage/*!*/ binaryOpStorage, string/*!*/ binaryOp,
+            object self, object other) {
+
+            if (other == null) {
+                return null;
+            }
+
+            object result;
+            if (TryCoerceAndApply(coercionStorage, binaryOpStorage, binaryOp, self, other, out result)) {
+                if (result != null) {
+                    return RubyOps.IsTrue(result);
+                }
+            }
+            return null;
         }
 
         /// <summary>
