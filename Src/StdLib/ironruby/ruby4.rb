@@ -453,6 +453,9 @@ module Enumerable
 
   # Ruby 2.2 added the `n` form: the n smallest/largest, as an Array.
   def min_by(*args, &block)
+    if args.size > 1
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+    end
     return to_enum(:min_by, *args) { size if respond_to?(:size) } unless block
     args = [] if args.size == 1 && args[0].nil?
     if args.empty?
@@ -488,6 +491,9 @@ module Enumerable
   private :__extreme_by__
 
   def max_by(*args, &block)
+    if args.size > 1
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+    end
     return to_enum(:max_by, *args) { size if respond_to?(:size) } unless block
     args = [] if args.size == 1 && args[0].nil?
     if args.empty?
@@ -1927,6 +1933,7 @@ class << IO
   # child *started* - so every caller that looked at the exit status of a popen child,
   # ruby_exe in mspec above all, was reading a status of zero no matter what happened.
   def popen(*args, &block)
+    ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 0, expected 1..2)") if args.empty?
     env = nil
     if !args.empty? && !args.first.is_a?(String) && !args.first.is_a?(Array) &&
        args.first.respond_to?(:to_hash)
@@ -9931,7 +9938,11 @@ class IO
     #
     # Everything in the trailing hash but chomp: is for the open - mode:, the encodings,
     # binmode: and the conversion options - and chomp: is for the read.
-    def readlines(name, *args, **options)
+    def readlines(*args, **options)
+      if args.empty? || args.size > 3
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..3)")
+      end
+      name = args.shift
       chomp = options.key?(:chomp) ? { chomp: options[:chomp] } : {}
       ::File.open(name, **options.reject { |k, _| k == :chomp }) do |io|
         io.readlines(*args, **chomp)
@@ -9998,8 +10009,12 @@ class IO
     # form instead of the block's value.
     alias :__ir_pipe__ :pipe
 
-    def pipe(*args)
-      options = args.last.is_a?(::Hash) ? args.pop : nil
+    # The options are keywords: IO.pipe(ext, int, {}) is "given 3, expected 0..2".
+    def pipe(*args, **options)
+      if args.size > 2
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..2)")
+      end
+      options = nil if options.empty?
       external, internal = args
       if external.is_a?(::String) && external.include?(":")
         external, internal = external.split(":", 2)

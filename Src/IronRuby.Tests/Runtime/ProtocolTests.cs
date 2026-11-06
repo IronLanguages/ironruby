@@ -120,6 +120,44 @@ ArgumentError: wrong number of arguments (given 2, expected 1)
         }
 
         /// <summary>
+        /// The prelude's methods that take keywords count their positional arguments as MRI does: Enumerable#min_by(1, 2)
+        /// raised nothing (it made an Enumerator), and IO#set_encoding, IO.pipe and Dir.children took a Hash passed
+        /// positionally as their options.
+        /// </summary>
+        public void PreludeKeywordsArity1() {
+            TestOutput(@"
+require 'ruby4'
+def t
+  r = yield
+  r.inspect
+rescue => e
+  ""#{e.class}: #{e.message}""
+end
+puts t { [3, 1].min_by(1, 2) }, t { [3, 1].max_by(1, 2) { _1 } }, t { [3, 1, 2].min_by(2) { _1 } }, t { [3, 1].each.max_by(1, 2) }
+puts t { Dir.children(""."", ""x"") }, t { Dir.children(""."", encoding: ""UTF-8"").class }, t { Dir.each_child(""."", {}) }
+puts t { $stdout.set_encoding }, t { $stdout.set_encoding(""UTF-8"", nil, {}) }, t { $stdout.set_encoding(nil, nil, newline: :lf).class }
+puts t { IO.pipe(1, 2, 3) }, t { IO.pipe(""UTF-8"", ""UTF-16LE"", invalid: :replace).first.internal_encoding }, t { IO.popen }
+puts t { IO.readlines }, t { IO.readlines(1, 2, 3, 4) }
+", @"
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+[1, 2]
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+ArgumentError: wrong number of arguments (given 2, expected 1)
+Array
+#<Enumerator: Dir:each_child(""."", {})>
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+ArgumentError: wrong number of arguments (given 3, expected 1..2)
+IO
+ArgumentError: wrong number of arguments (given 3, expected 0..2)
+#<Encoding:UTF-16LE>
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+ArgumentError: wrong number of arguments (given 0, expected 1..3)
+ArgumentError: wrong number of arguments (given 4, expected 1..3)
+");
+        }
+
+        /// <summary>
         /// Kernel#Integer and #Float as MRI's rb_convert_to_integer and rb_convert_to_float: a base only with a
         /// String or #to_str, #to_int (whose errors and non-Integer answers are ignored) before #to_str before
         /// #to_i, private conversion methods called, exception: false answering nil for any failure but a bad
