@@ -21,7 +21,6 @@ using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime {
     /// <summary>
-    /// TODO: use ReaderWriterLockSlim on CLR4?
     /// Queryable recursive lock.
     /// </summary>
     internal sealed class CheckedMonitor {

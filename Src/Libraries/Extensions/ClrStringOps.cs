@@ -218,17 +218,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: casecmp, capitalize, downcase, swapcase, upcase
-
-        #endregion
-
-        #region TODO: center
-
-        #endregion
-
-        #region TODO: chomp, chop
-        #endregion
-
         #region dump, inspect
 
         [RubyMethod("inspect", RubyMethodAttributes.PublicInstance)]
@@ -253,10 +242,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: each, each_byte, each_line
-
-        #endregion
-
         #region empty?, size, length, encoding
 
         [RubyMethod("empty?")]
@@ -274,20 +259,6 @@ namespace IronRuby.Builtins {
             return RubyEncoding.UTF8;
         }
 
-        #endregion
-
-        #region TODO: sub, gsub
-        #endregion
-
-        #region TODO: index, rindex
-
-
-        #endregion
-
-        #region TODO: delete
-        #endregion
-
-        #region TODO: count
         #endregion
 
         #region include?
@@ -329,12 +300,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: scan
-        #endregion
-
-        #region TODO: succ
-        #endregion
-
         #region split
 
         // TODO: return an array of CLR strings, not mutable strings
@@ -358,12 +323,6 @@ namespace IronRuby.Builtins {
             return MutableStringOps.Split(stringCast, MutableString.Create(self, RubyEncoding.UTF8), regexp, limit);
         }
 
-        #endregion
-
-        #region TODO: strip, lstrip, rstrip
-        #endregion
-
-        #region TODO: squeeze
         #endregion
 
         #region to_i, hex, oct
@@ -535,9 +494,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: upto
-        #endregion
-
         #region replace, reverse
 
         // Ruby replace is a mutating operation, we fallback to System.String::Replace.
@@ -553,37 +509,6 @@ namespace IronRuby.Builtins {
 
             return result.ToString();
         }
-
-        #endregion
-
-        #region TODO: tr, tr_s
-        #endregion
-
-        #region TODO: ljust
-        #endregion
-
-        #region TODO: rjust
-        #endregion
-
-        #region TODO: unpack
-        #endregion
-
-        #region TODO: sum
-        #endregion
-
-        #region TODO: Encodings (1.9)
-
-        //ascii_only?
-        //bytes
-        //bytesize
-        //chars
-        //codepoints
-        //each_byte
-        //each_char
-        //each_codepoint
-        //encode
-        //encoding
-        //valid_esncoding?
 
         #endregion
 

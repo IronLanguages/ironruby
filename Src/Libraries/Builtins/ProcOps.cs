@@ -206,9 +206,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region call, [],  ===, yield (TODO)
-        
-        // TODO: 1.9 yield: yield and call might have different semantics with respect to control-flow!
+        #region call, [],  ===, yield
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]

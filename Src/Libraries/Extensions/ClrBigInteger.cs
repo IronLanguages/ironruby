@@ -831,10 +831,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region eql?
-
-        #endregion
-
         #endregion
 
         #region Bitwise Operators

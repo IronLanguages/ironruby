@@ -76,7 +76,6 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override string/*!*/ GetNodeName(AstGenerator/*!*/ gen) {
-            // TODO: 1.8/1.9 variables in a block
             return "local-variable";
         }
     }

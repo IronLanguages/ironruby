@@ -1783,9 +1783,6 @@ tried to create Proc object without a block
 ", 0, 1);
         }
         
-        /// <summary>
-        /// TODO: 1.9 actually doesn't allow proc.binding
-        /// </summary>
         public void MethodToProc1() {
             AssertOutput(() => CompilerTest(@"
 class C

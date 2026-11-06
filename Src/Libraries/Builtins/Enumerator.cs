@@ -346,8 +346,5 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
-
-        // TODO: 1.9:
-        // :each_with_index, :each_with_object, :with_index, :with_object, :next, :rewind
     }
 }
