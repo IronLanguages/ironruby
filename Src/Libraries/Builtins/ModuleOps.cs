@@ -1067,10 +1067,27 @@ namespace IronRuby.Builtins {
         /// was being used. The arguments are taken as a list and checked here for that reason:
         /// overload resolution can only report the union of the two, "expected 0..3".
         /// </summary>
+        /// <remarks>
+        /// MRI defines module_eval and class_eval (and the _exec pair) as two methods, and a backtrace
+        /// names the one that was called; a library method's frame is labelled by the CLR method, so
+        /// each name gets one of its own.
+        /// </remarks>
         [RubyMethod("module_eval")]
-        [RubyMethod("class_eval")]
-        public static object Evaluate(ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object ModuleEval(ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyScope/*!*/ scope, BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+            return Evaluate(toStr, toInt, scope, block, self, args);
+        }
+
+        [RubyMethod("class_eval")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object ClassEval(ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+            return Evaluate(toStr, toInt, scope, block, self, args);
+        }
+
+        private static object Evaluate(ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, BlockParam block, RubyModule/*!*/ self, object[]/*!*/ args) {
 
             if (block != null) {
                 if (args.Length != 0) {
@@ -1094,10 +1111,19 @@ namespace IronRuby.Builtins {
             return RubyUtils.Evaluate(code, scope, self, self, file, line);
         }
 
-        // This method is not available in 1.8 so far, but since the usual workaround is very inefficient it is useful to have it in 1.8 as well.
         [RubyMethod("module_exec")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object ModuleExec(BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+            return Execute(block, self, args);
+        }
+
         [RubyMethod("class_exec")]
-        public static object Execute(BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object ClassExec(BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+            return Execute(block, self, args);
+        }
+
+        private static object Execute(BlockParam block, RubyModule/*!*/ self, object[]/*!*/ args) {
             if (block == null) {
                 throw RubyExceptions.CreateLocalJumpError("no block given");
             }

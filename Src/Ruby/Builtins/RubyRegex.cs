@@ -206,7 +206,7 @@ namespace IronRuby.Builtins {
             var patternEncoding = Encoding;
             if (input.Encoding != patternEncoding && (!patternEncoding.IsAsciiIdentity || !input.IsAscii())) {
                 throw new EncodingCompatibilityError(
-                    "incompatible encoding regexp match (" + patternEncoding.Name + " regexp with " + input.Encoding.Name + " string)"
+                    "incompatible encoding regexp match (" + patternEncoding.InspectName + " regexp with " + input.Encoding.InspectName + " string)"
                 );
             }
         }

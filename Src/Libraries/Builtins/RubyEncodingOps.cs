@@ -222,9 +222,7 @@ namespace IronRuby.Builtins {
             result.Append("#<");
             result.Append(context.GetClassDisplayName(self));
             result.Append(':');
-            // Ruby 3.4 renamed ASCII-8BIT to BINARY but kept #name answering the old spelling, so
-            // #inspect is the one place both appear.
-            result.Append(self == RubyEncoding.Binary ? "BINARY (ASCII-8BIT)" : self.Name);
+            result.Append(self.InspectName);
             if (self.IsDummy) {
                 result.Append(" (dummy)");
             }

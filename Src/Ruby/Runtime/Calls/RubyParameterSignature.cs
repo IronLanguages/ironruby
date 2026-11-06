@@ -129,9 +129,13 @@ namespace IronRuby.Runtime.Calls {
             int min = MinPositionalCount, max = MaxPositionalCount;
             string expected = (min == max) ? min.ToString(inv) : min.ToString(inv) + (max < 0 ? "+" : ".." + max.ToString(inv));
 
-            string[] required = RequiredKeywordNames;
-            return required.Length == 0 ? expected
-                : expected + (required.Length == 1 ? "; required keyword: " : "; required keywords: ") + String.Join(", ", required);
+            return expected + DescribeRequiredKeywords(RequiredKeywordNames);
+        }
+
+        /// <summary>The tail of MRI's argument_arity_error: "; required keyword: k", "; required keywords: k, j", or nothing.</summary>
+        public static string/*!*/ DescribeRequiredKeywords(System.Collections.Generic.IList<string> names) {
+            return (names == null || names.Count == 0) ? ""
+                : (names.Count == 1 ? "; required keyword: " : "; required keywords: ") + String.Join(", ", names);
         }
 
         public static readonly RubyParameterSignature/*!*/ Empty =

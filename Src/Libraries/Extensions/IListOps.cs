@@ -1208,14 +1208,14 @@ namespace IronRuby.Builtins {
         // given block - two block invocations and a packed argument array per element. Like MRI's,
         // they do not call an #each that a subclass defines.
 
-        [RubyMethod("collect")]
         [RubyMethod("map")]
+        [RubyMethod("collect")]
         public static Enumerator/*!*/ GetMapEnumerator(IList/*!*/ self) {
             return new Enumerator(self, "map");
         }
 
-        [RubyMethod("collect")]
         [RubyMethod("map")]
+        [RubyMethod("collect")]
         public static object Map([NotNull]BlockParam/*!*/ collector, IList/*!*/ self) {
             var result = new RubyArray(self.Count);
             var array = self as RubyArray;

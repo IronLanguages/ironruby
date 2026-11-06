@@ -2143,15 +2143,17 @@ namespace IronRuby.Runtime {
 
         /// <summary>
         /// The arity check of a method or lambda whose positionals are in the splat. A negative
-        /// <paramref name="maximum"/> means a rest parameter took the cap off.
+        /// <paramref name="maximum"/> means a rest parameter took the cap off. <paramref name="requiredKeywords"/>
+        /// is the "; required keyword: k" MRI appends.
         /// </summary>
         [Emitted]
-        public static void CheckSplatArity(object args, int minimum, int maximum) {
+        public static void CheckSplatArity(object args, int minimum, int maximum, string/*!*/ requiredKeywords) {
             int count = ((RubyArray)args).Count;
             if (count < minimum || (maximum >= 0 && count > maximum)) {
                 var inv = System.Globalization.CultureInfo.InvariantCulture;
-                throw (minimum == maximum) ? MakeWrongNumberOfArgumentsError(count, minimum)
-                    : MakeWrongNumberOfArgumentsErrorN(count, minimum.ToString(inv) + (maximum < 0 ? "+" : ".." + maximum.ToString(inv)));
+                string expected = (minimum == maximum) ? minimum.ToString(inv)
+                    : minimum.ToString(inv) + (maximum < 0 ? "+" : ".." + maximum.ToString(inv));
+                throw MakeWrongNumberOfArgumentsErrorN(count, expected + requiredKeywords);
             }
         }
 
@@ -3738,7 +3740,7 @@ namespace IronRuby.Runtime {
                 return Converter.ToUInt32(bignum);
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_int/to_i", "Integer");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_int", "Integer", obj);
         }
 
         [Emitted] // ProtocolConversionAction
@@ -3755,7 +3757,7 @@ namespace IronRuby.Runtime {
                 return Converter.ToInt64(bignum);
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_int/to_i", "Integer");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_int", "Integer", obj);
         }
 
         [Emitted] // ProtocolConversionAction
@@ -3772,7 +3774,7 @@ namespace IronRuby.Runtime {
                 return Converter.ToUInt64(bignum);
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_int/to_i", "Integer");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_int", "Integer", obj);
         }
 
         [Emitted] // ProtocolConversionAction
@@ -3789,24 +3791,26 @@ namespace IronRuby.Runtime {
                 return bignum;
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_int/to_i", "Integer");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_int", "Integer", obj);
         }
 
         [Emitted] // ProtocolConversionAction
         public static IntegerValue ToIntegerValidator(string/*!*/ className, object obj) {
-            if (obj is int) {
-                return new IntegerValue((int)obj);
-            }
+            return ToIntegerValue(className, "to_int", obj);
+        }
 
-            if (obj is long wide) {
-                return new IntegerValue((BigInteger)wide);
-            }
+        [Emitted] // ProtocolConversionAction (Kernel#Integer's #to_i step)
+        public static IntegerValue ToIValidator(string/*!*/ className, object obj) {
+            return ToIntegerValue(className, "to_i", obj);
+        }
 
-            if (obj is BigInteger bignum) {
-                return new IntegerValue(bignum);
-            }
-
-            throw RubyExceptions.CreateReturnTypeError(className, "to_int/to_i", "Integer");
+        private static IntegerValue ToIntegerValue(string/*!*/ className, string/*!*/ methodName, object obj) {
+            return obj switch {
+                int fixnum => new IntegerValue(fixnum),
+                long wide => new IntegerValue((BigInteger)wide),
+                BigInteger bignum => new IntegerValue(bignum),
+                _ => throw RubyExceptions.CreateReturnTypeError(className, methodName, "Integer", obj)
+            };
         }
 
         [Emitted] // ProtocolConversionAction
@@ -3819,7 +3823,7 @@ namespace IronRuby.Runtime {
                 return (double)(float)obj;
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_f", "Float");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_f", "Float", obj);
         }
 
         [Emitted] // ProtocolConversionAction
@@ -3832,7 +3836,7 @@ namespace IronRuby.Runtime {
                 return (float)obj;
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_f", "System::Single");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_f", "System::Single", obj);
         }
 
         [Emitted]
@@ -3843,22 +3847,57 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static double ConvertMutableStringToFloat(RubyContext/*!*/ context, MutableString/*!*/ value) {
-            double result;
-            if (TryParseRubyFloat(value.ConvertToString(), out result)) {
-                return result;
-            }
-
-            throw InvalidFloatValue(value.ToByteArray());
+            return ConvertStringToFloat(context, value.ConvertToString(), value);
         }
 
         [Emitted]
         public static double ConvertStringToFloat(RubyContext/*!*/ context, string/*!*/ value) {
+            return ConvertStringToFloat(context, value, null);
+        }
+
+        private static double ConvertStringToFloat(RubyContext/*!*/ context, string/*!*/ value, MutableString original) {
             double result;
             if (TryParseRubyFloat(value, out result)) {
+                WarnIfFloatOutOfRange(context, value.Trim(_FloatWhitespace).Replace("_", ""), result);
                 return result;
             }
 
-            throw InvalidFloatValue(Encoding.UTF8.GetBytes(value));
+            throw InvalidFloatValue(original != null ? original.ToByteArray() : Encoding.UTF8.GetBytes(value));
+        }
+
+        private static readonly char[] _FloatWhitespace = { ' ', '\t', '\n', '\v', '\f', '\r' };
+
+        /// <summary>
+        /// MRI's rb_cstr_to_dbl warns (verbose only) when strtod over- or underflows, quoting at
+        /// most 20 characters of the number it parsed, underscores taken out:
+        ///   "Float 1e400 out of range"
+        /// </summary>
+        public static void WarnIfFloatOutOfRange(RubyContext/*!*/ context, string/*!*/ number, double result) {
+            if (!(context.Verbose is bool verbose && verbose)) {
+                return;
+            }
+            if (!Double.IsInfinity(result) && !(result == 0 && HasNonZeroMantissa(number))) {
+                return;
+            }
+            if (number.Length > 20) {
+                number = number.Substring(0, 20) + "...";
+            }
+            context.ReportWarning("Float " + number + " out of range", true);
+        }
+
+        private static bool HasNonZeroMantissa(string/*!*/ number) {
+            int i = (number.Length > 0 && (number[0] == '+' || number[0] == '-')) ? 1 : 0;
+            bool hex = i + 1 < number.Length && number[i] == '0' && (number[i + 1] == 'x' || number[i + 1] == 'X');
+            for (i += hex ? 2 : 0; i < number.Length; i++) {
+                char c = number[i];
+                if (hex ? (c == 'p' || c == 'P') : (c == 'e' || c == 'E')) {
+                    break;
+                }
+                if ((c >= '1' && c <= '9') || (hex && ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>
@@ -4110,6 +4149,12 @@ namespace IronRuby.Runtime {
         [Emitted] // ProtocolConversionAction
         public static Exception/*!*/ CreateImplicitConversionError(string/*!*/ fromType, string/*!*/ toType) {
             return RubyExceptions.CreateImplicitConversionError(fromType, toType);
+        }
+
+        [Emitted] // ConvertToRegexAction
+        public static Exception/*!*/ CreateWrongArgumentTypeError(string/*!*/ fromType, string/*!*/ toType) {
+            return RubyExceptions.CreateTypeError("wrong argument type {0} (expected {1})",
+                RubyExceptions.MessageTypeName(fromType), toType);
         }
 
         /// <summary>

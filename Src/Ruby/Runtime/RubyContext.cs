@@ -3435,6 +3435,16 @@ namespace IronRuby.Runtime {
             _runtimeErrorSink.Add(null, message, SourceSpan.None, isVerbose ? Errors.RuntimeVerboseWarning : Errors.RuntimeWarning, Severity.Warning);
         }
 
+        /// <summary>
+        /// A warning that points at another place than the running line, like MRI's
+        /// "previous definition of X was here" (rb_compile_warn).
+        /// </summary>
+        public void ReportWarningAt(string/*!*/ path, int line, string/*!*/ message) {
+            if (Verbose is bool) {
+                DispatchWarning(MutableString.Create(FormatErrorMessage(message, "warning", path, line, 0, null), RubyEncoding.UTF8), null);
+            }
+        }
+
         #region Warning categories, chilled string literals
 
         /// <summary>

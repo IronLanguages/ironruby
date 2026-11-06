@@ -252,8 +252,8 @@ namespace IronRuby.Builtins {
 
         #region collect, map
 
-        [RubyMethod("collect")]
         [RubyMethod("map")]
+        [RubyMethod("collect")]
         public static Enumerator/*!*/ GetMapEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam collector, object self) {
             return new Enumerator(self, "map");
         }
@@ -269,8 +269,8 @@ namespace IronRuby.Builtins {
         /// end
         /// </code>
         /// </summary>
-        [RubyMethod("collect")]
         [RubyMethod("map")]
+        [RubyMethod("collect")]
         public static object Map(CallSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ each, RubyScope/*!*/ scope,
             [NotNull]BlockParam/*!*/ collector, object self) {
             RubyArray resultArray = new RubyArray();

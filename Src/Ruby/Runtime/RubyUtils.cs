@@ -858,6 +858,7 @@ namespace IronRuby.Runtime {
             RubyEncoding/*!*/ encoding) {
             Assert.NotNull(owner, name);
 
+            bool hadLocation = owner.TryGetConstantLocation(name, out string previousPath, out int previousLine);
             owner.SetConstantLocation(name, sourcePath, sourceLine);
             owner.SetConstantEncoding(name, encoding);
 
@@ -865,6 +866,9 @@ namespace IronRuby.Runtime {
                 // MRI names the owner unless it is Object: "already initialized constant M::X",
                 // and an anonymous owner by its inspect form, "#<Module:0x...>::X"
                 owner.Context.ReportWarning("already initialized constant " + owner.MakeNestedModuleName(name));
+                if (hadLocation) {
+                    owner.Context.ReportWarningAt(previousPath, previousLine, "previous definition of " + name + " was here");
+                }
             }
 
             // Initializes anonymous module's name, publishes the module:

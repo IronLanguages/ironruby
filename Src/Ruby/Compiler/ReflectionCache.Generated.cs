@@ -58,7 +58,7 @@ namespace IronRuby.Compiler {
         private static MethodInfo _BlockYield;
         public static MethodInfo/*!*/ CanRescue { get { return _CanRescue ?? (_CanRescue = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.CanRescue)); } }
         private static MethodInfo _CanRescue;
-        public static MethodInfo/*!*/ CheckSplatArity { get { return _CheckSplatArity ?? (_CheckSplatArity = CallInstruction.CacheAction<System.Object, System.Int32, System.Int32>(RubyOps.CheckSplatArity)); } }
+        public static MethodInfo/*!*/ CheckSplatArity { get { return _CheckSplatArity ?? (_CheckSplatArity = CallInstruction.CacheAction<System.Object, System.Int32, System.Int32, System.String>(RubyOps.CheckSplatArity)); } }
         private static MethodInfo _CheckSplatArity;
         public static MethodInfo/*!*/ ClearKeywordArguments { get { return _ClearKeywordArguments ?? (_ClearKeywordArguments = CallInstruction.CacheFunc<System.Object, System.Object>(RubyOps.ClearKeywordArguments)); } }
         private static MethodInfo _ClearKeywordArguments;
@@ -186,6 +186,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _CreateVector;
         public static MethodInfo/*!*/ CreateVectorWithValues { get { return _CreateVectorWithValues ?? (_CreateVectorWithValues = GetMethod(typeof(RubyOps), "CreateVectorWithValues")); } }
         private static MethodInfo _CreateVectorWithValues;
+        public static MethodInfo/*!*/ CreateWrongArgumentTypeError { get { return _CreateWrongArgumentTypeError ?? (_CreateWrongArgumentTypeError = CallInstruction.CacheFunc<System.String, System.String, System.Exception>(RubyOps.CreateWrongArgumentTypeError)); } }
+        private static MethodInfo _CreateWrongArgumentTypeError;
         public static MethodInfo/*!*/ DefineBlock { get { return _DefineBlock ?? (_DefineBlock = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.BlockDispatcher, System.Object, IronRuby.Builtins.Proc>(RubyOps.DefineBlock)); } }
         private static MethodInfo _DefineBlock;
         public static MethodInfo/*!*/ DefineClass { get { return _DefineClass ?? (_DefineClass = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.String, System.Object, System.String, System.Int32, IronRuby.Builtins.RubyModule>(RubyOps.DefineClass)); } }
@@ -636,6 +638,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ToInt64Validator;
         public static MethodInfo/*!*/ ToIntegerValidator { get { return _ToIntegerValidator ?? (_ToIntegerValidator = CallInstruction.CacheFunc<System.String, System.Object, IronRuby.Runtime.IntegerValue>(RubyOps.ToIntegerValidator)); } }
         private static MethodInfo _ToIntegerValidator;
+        public static MethodInfo/*!*/ ToIValidator { get { return _ToIValidator ?? (_ToIValidator = CallInstruction.CacheFunc<System.String, System.Object, IronRuby.Runtime.IntegerValue>(RubyOps.ToIValidator)); } }
+        private static MethodInfo _ToIValidator;
         public static MethodInfo/*!*/ ToProcValidator { get { return _ToProcValidator ?? (_ToProcValidator = CallInstruction.CacheFunc<System.String, System.Object, IronRuby.Builtins.Proc>(RubyOps.ToProcValidator)); } }
         private static MethodInfo _ToProcValidator;
         public static MethodInfo/*!*/ ToRegexValidator { get { return _ToRegexValidator ?? (_ToRegexValidator = CallInstruction.CacheFunc<System.String, System.Object, IronRuby.Builtins.RubyRegex>(RubyOps.ToRegexValidator)); } }

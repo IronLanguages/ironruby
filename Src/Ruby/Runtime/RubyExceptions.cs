@@ -242,10 +242,6 @@ namespace IronRuby.Runtime {
             return MessageTypeName(context.GetClassOf(value).Name);
         }
 
-        public static Exception/*!*/ CreateReturnTypeError(string/*!*/ className, string/*!*/ methodName, string/*!*/ returnTypeName) {
-            return CreateTypeError("{0}#{1} should return {2}", className, methodName, returnTypeName);
-        }
-
         /// <summary>
         /// An object promised a conversion and then broke the promise: it answers #to_ary but what
         /// came back is not an Array. MRI names both ends of the failed conversion and what was
@@ -721,7 +717,7 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateEncodingCompatibilityError(RubyEncoding/*!*/ encoding1, RubyEncoding/*!*/ encoding2) {
-            return new EncodingCompatibilityError(FormatMessage("incompatible character encodings: {0} and {1}", encoding1.Name, encoding2.Name));
+            return new EncodingCompatibilityError(FormatMessage("incompatible character encodings: {0} and {1}", encoding1.InspectName, encoding2.InspectName));
         }
 
         /// <summary>

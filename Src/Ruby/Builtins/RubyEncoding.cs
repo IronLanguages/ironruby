@@ -277,6 +277,14 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// MRI's rb_enc_inspect_name: Ruby 3.4 renamed ASCII-8BIT to BINARY but kept #name answering
+        /// the old spelling, so #inspect and the messages naming an encoding show both.
+        /// </summary>
+        public string/*!*/ InspectName {
+            get { return this == Binary ? "BINARY (ASCII-8BIT)" : Name; }
+        }
+
         public static string GetRubySpecificName(int codepage) {
             switch (codepage) {
                 case RubyEncoding.CodePageUTF8: return "UTF-8";

@@ -721,6 +721,11 @@ namespace IronRuby.Runtime.Conversions {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToStr; } }
         protected override string/*!*/ TargetTypeName { get { return "Regexp"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToRegexValidator; } }
+
+        // MRI's get_pat: something that is neither a Regexp nor a String was meant to be a Regexp.
+        protected override MethodInfo/*!*/ ConversionErrorFactory {
+            get { return Methods.CreateWrongArgumentTypeError; }
+        }
     }
 
     // TODO: remove (replace by MutableString/RubySymbol conversion)
@@ -1126,7 +1131,7 @@ namespace IronRuby.Runtime.Conversions {
     /// </summary>
     public sealed class ConvertToIAction : ConvertToIntegerValueAction<ConvertToIAction> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToI; } }
-        protected override MethodInfo ConversionResultValidator { get { return Methods.ToIntegerValidator; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.ToIValidator; } }
 
         // Kernel#Integer(x) and "%d" % x end here; MRI words those "can't convert nil into
         // Integer", not "no implicit conversion ...".

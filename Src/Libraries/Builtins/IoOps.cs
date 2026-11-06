@@ -753,16 +753,8 @@ namespace IronRuby.Builtins {
         private static RubyIO/*!*/ ToSelectableIo(RespondToStorage/*!*/ respondToStorage,
             CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, RubyContext/*!*/ context, object obj) {
 
-            var io = obj as RubyIO;
-            if (io == null && Protocols.RespondTo(respondToStorage, obj, "to_io")) {
-                var site = toIoStorage.GetCallSite("to_io", 0);
-                io = site.Target(site, obj) as RubyIO;
-            }
-
-            if (io == null) {
-                throw RubyExceptions.CreateTypeError("can't convert {0} into IO", context.GetClassDisplayName(obj));
-            }
-            return io;
+            return TryToIO(respondToStorage, toIoStorage, context, obj, true) ??
+                throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(obj), "IO");
         }
 
         private static RubyArray SelectInternal(RespondToStorage/*!*/ respondToStorage,

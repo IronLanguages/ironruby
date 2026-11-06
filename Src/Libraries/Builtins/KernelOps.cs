@@ -777,7 +777,7 @@ namespace IronRuby.Builtins {
 
                 if (args.Length >= 3 && args[2] != null) {
                     if (!(args[2] is MutableString || args[2] is RubyArray)) {
-                        throw RubyExceptions.CreateTypeError("backtrace must be Array of String");
+                        throw RubyExceptions.CreateTypeError("backtrace must be an Array of String or an Array of Thread::Backtrace::Location");
                     }
                     var site = setBackTraceStorage.GetCallSite("set_backtrace", 1);
                     site.Target(site, exception, args[2]);
@@ -2133,22 +2133,42 @@ namespace IronRuby.Builtins {
         [RubyMethod("sleep", RubyMethodAttributes.PublicSingleton)]
         public static int Sleep(object self, int seconds) {
             if (seconds < 0) {
-                throw RubyExceptions.CreateArgumentError("time interval must be positive");
+                throw RubyExceptions.CreateArgumentError("time interval must not be negative");
             }
 
-            long ms = seconds * 1000;
+            long ms = seconds * 1000L;
             return ThreadOps.DoSleep(ms > Int32.MaxValue ? Timeout.Infinite : (int)ms);
         }
 
         [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("sleep", RubyMethodAttributes.PublicSingleton)]
         public static int Sleep(object self, double seconds) {
+            // MRI's rb_time_interval
+            if (Double.IsNaN(seconds)) {
+                throw RubyExceptions.CreateRangeError("NaN out of Time range");
+            }
             if (seconds < 0) {
-                throw RubyExceptions.CreateArgumentError("time interval must be positive");
+                throw RubyExceptions.CreateArgumentError("time interval must not be negative");
             }
 
             double ms = seconds * 1000;
             return ms > Int32.MaxValue ? ThreadOps.DoSleep(Timeout.Infinite) : ThreadOps.DoSleep(ms);
+        }
+
+        [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("sleep", RubyMethodAttributes.PublicSingleton)]
+        public static int Sleep(RubyContext/*!*/ context, object self, object seconds) {
+            switch (seconds) {
+                case null:
+                    // A nil duration (3.3) is the same as none: sleep until woken.
+                    ThreadOps.DoSleep();
+                    return 0;
+                case BigInteger:
+                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+                default:
+                    // Numerics that answer #divmod (Rational) are split up by the prelude's Kernel#sleep.
+                    throw RubyExceptions.CreateTypeError("can't convert {0} into time interval", context.GetClassDisplayName(seconds));
+            }
         }
 
         #endregion
