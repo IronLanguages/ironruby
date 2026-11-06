@@ -660,10 +660,6 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ToUInt32Validator;
         public static MethodInfo/*!*/ ToUInt64Validator { get { return _ToUInt64Validator ?? (_ToUInt64Validator = CallInstruction.CacheFunc<System.String, System.Object, System.UInt64>(RubyOps.ToUInt64Validator)); } }
         private static MethodInfo _ToUInt64Validator;
-        public static MethodInfo/*!*/ TraceBlockCall { get { return _TraceBlockCall ?? (_TraceBlockCall = CallInstruction.CacheAction<IronRuby.Runtime.RubyBlockScope, IronRuby.Runtime.BlockParam, System.String, System.Int32>(RubyOps.TraceBlockCall)); } }
-        private static MethodInfo _TraceBlockCall;
-        public static MethodInfo/*!*/ TraceBlockReturn { get { return _TraceBlockReturn ?? (_TraceBlockReturn = CallInstruction.CacheAction<IronRuby.Runtime.RubyBlockScope, IronRuby.Runtime.BlockParam, System.String, System.Int32>(RubyOps.TraceBlockReturn)); } }
-        private static MethodInfo _TraceBlockReturn;
         public static MethodInfo/*!*/ TraceClassEvent { get { return _TraceClassEvent ?? (_TraceClassEvent = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.String, System.Int32>(RubyOps.TraceClassEvent)); } }
         private static MethodInfo _TraceClassEvent;
         public static MethodInfo/*!*/ TraceLibraryCall { get { return _TraceLibraryCall ?? (_TraceLibraryCall = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.RubyMemberInfo, System.String>(RubyOps.TraceLibraryCall)); } }
@@ -672,10 +668,6 @@ namespace IronRuby.Compiler {
         private static MethodInfo _TraceLibraryReturn;
         public static MethodInfo/*!*/ TraceLineEvent { get { return _TraceLineEvent ?? (_TraceLineEvent = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.String, System.Int32>(RubyOps.TraceLineEvent)); } }
         private static MethodInfo _TraceLineEvent;
-        public static MethodInfo/*!*/ TraceMethodCall { get { return _TraceMethodCall ?? (_TraceMethodCall = CallInstruction.CacheAction<IronRuby.Runtime.RubyMethodScope, System.String, System.Int32>(RubyOps.TraceMethodCall)); } }
-        private static MethodInfo _TraceMethodCall;
-        public static MethodInfo/*!*/ TraceMethodReturn { get { return _TraceMethodReturn ?? (_TraceMethodReturn = CallInstruction.CacheAction<IronRuby.Runtime.RubyMethodScope, System.String, System.Int32>(RubyOps.TraceMethodReturn)); } }
-        private static MethodInfo _TraceMethodReturn;
         public static MethodInfo/*!*/ TraceReturnEvent { get { return _TraceReturnEvent ?? (_TraceReturnEvent = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.Object, System.String, System.Int32>(RubyOps.TraceReturnEvent)); } }
         private static MethodInfo _TraceReturnEvent;
         public static MethodInfo/*!*/ TraceTopLevelCodeFrame { get { return _TraceTopLevelCodeFrame ?? (_TraceTopLevelCodeFrame = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.TraceTopLevelCodeFrame)); } }

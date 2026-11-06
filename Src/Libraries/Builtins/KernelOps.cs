@@ -2290,10 +2290,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("select", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("select", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray Select(RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, UnaryOpStorage/*!*/ toFloatStorage,
             RubyContext/*!*/ context, object self,
             object read, [Optional]object write, [Optional]object error, [Optional]object timeout) {
-            return RubyIOOps.Select(respondToStorage, toIoStorage, context, null, read, write, error, timeout);
+            return RubyIOOps.Select(respondToStorage, toIoStorage, toFloatStorage, context, null, read, write, error, timeout);
         }
 
         [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance)]
@@ -3133,13 +3133,25 @@ namespace IronRuby.Builtins {
 
         #region set_trace_func, trace_var, untrace_var
 
+        /// <summary>
+        /// set_trace_func(proc): replaces the hook of every earlier call with one that is called with
+        /// (event, file, line, id, binding, klass) for each of MRI's RUBY_EVENT_ALL events on any
+        /// thread. It is a TracePoint underneath, as MRI's is.
+        /// </summary>
         [RubyMethod("set_trace_func", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("set_trace_func", RubyMethodAttributes.PublicSingleton)]
-        public static Proc SetTraceListener(RubyContext/*!*/ context, object self, Proc listener) {
-            if (listener != null && !context.RubyOptions.EnableTracing) {
-                throw new NotSupportedException("Tracing is not supported unless -trace option is specified.");
+        public static Proc SetTraceFunc(RubyContext/*!*/ context, object self, object traceFunc) {
+            Proc proc = CastTraceFunc(traceFunc);
+            TracePoint.SetTraceFunc(context, proc, null);
+            return proc;
+        }
+
+        internal static Proc CastTraceFunc(object traceFunc) {
+            var proc = traceFunc as Proc;
+            if (traceFunc != null && proc == null) {
+                throw RubyExceptions.CreateTypeError("trace_func needs to be Proc");
             }
-            return context.TraceListener = listener;
+            return proc;
         }
 
         //trace_var

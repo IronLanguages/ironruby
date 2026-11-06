@@ -184,7 +184,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Object, System.Object, IronRuby.Builtins.RubyRegex>(IronRuby.Builtins.RegexpOps.Create), 
                 new Func<IronRuby.Builtins.RubyClass, Microsoft.Scripting.Runtime.DynamicNull, System.Object, System.Object, IronRuby.Builtins.RubyRegex>(IronRuby.Builtins.RegexpOps.Create)
             );
-            DefineGlobalClass("String", typeof(IronRuby.Builtins.MutableString), 0x00000007, Context.ObjectClass, LoadString_Instance, null, null, new IronRuby.Builtins.RubyModule[] {def69}, 
+            DefineGlobalClass("String", typeof(IronRuby.Builtins.MutableString), 0x00000007, Context.ObjectClass, LoadString_Instance, LoadString_Class, null, new IronRuby.Builtins.RubyModule[] {def69}, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Create), 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Create), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Create), 
@@ -538,6 +538,8 @@ namespace IronRuby.Builtins {
                 0x80000000U, 
                 new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ArrayOps.MakeArray)
             );
+            
+            DefineRuleGenerator(module, "new", 0x61, IronRuby.Builtins.ArrayOps.New());
             
             DefineLibraryMethod(module, "try_convert", 0x61, 
                 0x00000000U, 
@@ -2730,6 +2732,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadGC_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__heap_sizes__", 0x62, 
+                0x00000000U, 
+                new Func<System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyGC.GetHeapSizes)
+            );
+            
             DefineLibraryMethod(module, "disable", 0x61, 
                 0x00000000U, 
                 new Func<System.Object, System.Boolean>(IronRuby.Builtins.RubyGC.Disable)
@@ -3364,6 +3371,16 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyIO, System.Object>(IronRuby.Builtins.RubyIOOps.Pos)
             );
             
+            DefineLibraryMethod(module, "timeout", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyIO, System.Object>(IronRuby.Builtins.RubyIOOps.GetTimeout)
+            );
+            
+            DefineLibraryMethod(module, "timeout=", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyIO, System.Object, System.Object>(IronRuby.Builtins.RubyIOOps.SetTimeout)
+            );
+            
             DefineLibraryMethod(module, "to_i", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyIO, System.Int32>(IronRuby.Builtins.RubyIOOps.FileNo)
@@ -3460,7 +3477,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "select", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyIOOps.Select)
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyIOOps.Select)
             );
             
             DefineLibraryMethod(module, "sysopen", 0x61, 
@@ -4920,7 +4937,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "select", 0x52, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.Select)
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.Select)
             );
             
             DefineLibraryMethod(module, "send", 0x51, 
@@ -4940,7 +4957,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "set_trace_func", 0x52, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.KernelOps.SetTraceListener)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.KernelOps.SetTraceFunc)
             );
             
             DefineLibraryMethod(module, "singleton_class", 0x51, 
@@ -5254,12 +5271,12 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "select", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.Select)
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.Select)
             );
             
             DefineLibraryMethod(module, "set_trace_func", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.KernelOps.SetTraceListener)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.KernelOps.SetTraceFunc)
             );
             
             DefineLibraryMethod(module, "sleep", 0x61, 
@@ -8294,6 +8311,11 @@ namespace IronRuby.Builtins {
             
         }
         
+        private static void LoadString_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineRuleGenerator(module, "new", 0x61, IronRuby.Builtins.MutableStringOps.New());
+            
+        }
+        
         private static void LoadStruct_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "__struct_initialize__", 0x52, 
                 0x80000000U, 
@@ -9884,6 +9906,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Threading.Thread, System.Boolean, System.Object>(IronRuby.Builtins.ThreadOps.AbortOnException)
             );
             
+            DefineLibraryMethod(module, "add_trace_func", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.ThreadOps.AddTraceFunc)
+            );
+            
             DefineLibraryMethod(module, "alive?", 0x51, 
                 0x00000000U, 
                 new Func<System.Threading.Thread, System.Boolean>(IronRuby.Builtins.ThreadOps.IsAlive)
@@ -9975,6 +10002,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "run", 0x51, 
                 0x00000000U, 
                 new Func<System.Threading.Thread, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Run)
+            );
+            
+            DefineLibraryMethod(module, "set_trace_func", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.ThreadOps.SetTraceFunc)
             );
             
             DefineLibraryMethod(module, "status", 0x51, 

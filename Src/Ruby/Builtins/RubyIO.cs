@@ -45,6 +45,16 @@ namespace IronRuby.Builtins {
 
         private bool _autoFlush;
         private IOMode _mode;
+
+        // IO#timeout (3.2): the value as given, and what waits for the stream to be ready for a
+        // read (true) or a write (false) until then, answering false if it is not.
+        private object _timeout;
+        private Func<bool, bool> _waitForStream;
+        private int _timeoutMilliseconds = System.Threading.Timeout.Infinite;
+
+        // #read_nonblock and #write_nonblock fail at once rather than wait out the timeout.
+        [ThreadStatic]
+        private static bool _inNonBlockingOperation;
         public int LineNumber { get; set; }
 
         #region Constants
@@ -273,6 +283,82 @@ namespace IronRuby.Builtins {
         public void SetStream(Stream/*!*/ stream) {
             ContractUtils.RequiresNotNull(stream, "stream");
             _stream = new RubyBufferedStream(stream, true);
+            if (_waitForStream != null) {
+                ApplyTimeout(_stream);
+            }
+        }
+
+        /// <summary>IO#timeout: the value it was set to, nil if none.</summary>
+        public object Timeout {
+            get { return _timeout; }
+        }
+
+        /// <summary>IO#timeout in milliseconds, Timeout.Infinite if none.</summary>
+        public int TimeoutMilliseconds {
+            get { return _timeoutMilliseconds; }
+        }
+
+        /// <summary>
+        /// Sets IO#timeout. <paramref name="waitForStream"/> waits up to the timeout for the stream
+        /// to be ready for a read (true) or a write (false) and tells whether it came ready; null
+        /// together with a nil <paramref name="timeout"/> removes it.
+        /// </summary>
+        public void SetTimeout(object timeout, int milliseconds, Func<bool, bool> waitForStream) {
+            _timeout = timeout;
+            _timeoutMilliseconds = (waitForStream != null) ? milliseconds : System.Threading.Timeout.Infinite;
+            _waitForStream = waitForStream;
+            if (_stream != null) {
+                ApplyTimeout(_stream);
+            }
+        }
+
+        private void ApplyTimeout(RubyBufferedStream/*!*/ stream) {
+            stream.TimeoutOwner = (_waitForStream != null) ? this : null;
+            // A stream that bounds its own waits (IO.pipe) also bounds the rest of a write too big
+            // to go in at once, which the readiness check before it cannot.
+            Stream baseStream = stream.BaseStream;
+            if (baseStream.CanTimeout) {
+                baseStream.ReadTimeout = _timeoutMilliseconds;
+                baseStream.WriteTimeout = _timeoutMilliseconds;
+            }
+        }
+
+        /// <summary>
+        /// Waits for the stream to be ready for a read or a write that would block, for at most
+        /// IO#timeout; IO::TimeoutError when it is not ready by then. Returns at once without a timeout.
+        /// </summary>
+        public void WaitForStream(bool isRead) {
+            var wait = _waitForStream;
+            if (wait != null && !_inNonBlockingOperation && !wait(isRead)) {
+                throw CreateTimeoutError();
+            }
+        }
+
+        /// <summary>IO::TimeoutError, which the prelude defines.</summary>
+        internal Exception/*!*/ CreateTimeoutError() {
+            const string message = "Blocking operation timed out!";
+            object ioClass;
+            if (_context.ObjectClass.TryGetConstant(null, "IO", out ioClass) && ioClass is RubyModule) {
+                var error = _context.CreateLibraryException((RubyModule)ioClass, "TimeoutError", message);
+                if (error != null) {
+                    return error;
+                }
+            }
+            return new TimeoutException(message);
+        }
+
+        /// <summary>
+        /// Runs a #read_nonblock or #write_nonblock: it reports a stream that is not ready as EAGAIN
+        /// and never waits for IO#timeout.
+        /// </summary>
+        public void RunNonBlocking(Action/*!*/ operation, bool isRead) {
+            bool saved = _inNonBlockingOperation;
+            _inNonBlockingOperation = true;
+            try {
+                NonBlockingOperation(operation, isRead);
+            } finally {
+                _inNonBlockingOperation = saved;
+            }
         }
 
         public void RequireInitialized() {

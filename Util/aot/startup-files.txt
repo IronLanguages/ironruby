@@ -2,6 +2,7 @@
 # IronRuby.Aot startup. Paths are relative to this file.
 ../../Src/StdLib/ironruby/argf.rb
 ../../Src/StdLib/ironruby/ironruby/complex.rb
+../../Src/StdLib/ironruby/ironruby/did_you_mean.rb
 ../../Src/StdLib/ironruby/ironruby/gem_compat.rb
 ../../Src/StdLib/ironruby/ironruby/rational.rb
 ../../Src/StdLib/ironruby/monitor.rb

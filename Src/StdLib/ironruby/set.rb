@@ -855,21 +855,23 @@ class Set
   end
 
   InspectKey = :__inspect_key__         # :nodoc:
+  private_constant :InspectKey
 
   # Ruby 4.0 made Set a core class and gave it the literal-looking form
-  # "Set[1, 2]"; a subclass keeps the older "#<MySet: {1, 2}>".
+  # "Set[1, 2]"; a subclass keeps the older "#<MySet: {1, 2}>", unless it is one of
+  # Set::CoreSet, which has the core behaviour ("MySet[1, 2]").
   def inspect
     ids = (Thread.current[InspectKey] ||= [])
-    plain = instance_of?(::Set)
+    plain = __core_set__?
 
     if ids.include?(object_id)
-      return plain ? 'Set[...]' : sprintf('#<%s: {...}>', self.class.name)
+      return plain ? "#{self.class}[...]" : sprintf('#<%s: {...}>', self.class.name)
     end
 
     ids << object_id
     begin
       body = to_a.inspect[1..-2]
-      return plain ? sprintf('Set[%s]', body) : sprintf('#<%s: {%s}>', self.class, body)
+      return plain ? "#{self.class}[#{body}]" : sprintf('#<%s: {%s}>', self.class, body)
     ensure
       ids.pop
     end
@@ -880,8 +882,8 @@ class Set
   # Set itself pretty-prints in the Ruby 4.0 "Set[...]" form, subclasses in
   # the older one, as #inspect does.
   def pretty_print(pp)  # :nodoc:
-    if instance_of?(::Set)
-      return pp.group(1, 'Set[', ']') {
+    if __core_set__?
+      return pp.group(1, "#{self.class}[", ']') {
         pp.seplist(self) { |o|
           pp.pp o
         }
@@ -899,9 +901,19 @@ class Set
   end
 
   def pretty_print_cycle(pp)    # :nodoc:
-    return pp.text(empty? ? 'Set[]' : 'Set[...]') if instance_of?(::Set)
+    return pp.text(empty? ? "#{self.class}[]" : "#{self.class}[...]") if __core_set__?
     pp.text sprintf('#<%s: {%s}>', self.class.name, empty? ? '' : '...')
   end
+
+  def __core_set__? # :nodoc:
+    instance_of?(::Set) || is_a?(CoreSet)
+  end
+  private :__core_set__?
+
+  # In Ruby 4.0 a direct subclass of the core Set is given Set::SubclassCompatible, the
+  # behaviour of the pure-Ruby Set before it, while a subclass of CoreSet keeps the core
+  # behaviour. IronRuby's Set is that pure-Ruby Set, so only #inspect tells them apart.
+  class CoreSet < Set; end
 end
 
 module Enumerable
