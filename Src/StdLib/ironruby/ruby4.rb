@@ -75,13 +75,13 @@ end
 class FrozenError < RuntimeError; end unless defined?(FrozenError)
 
 module Kernel
-  # 3.4 made #then an alias of #yield_self rather than a method of its own, so
-  # the two are one entry and Kernel.instance_method finds the same one twice.
-  def yield_self(&block)
-    return to_enum(:yield_self) { 1 } unless block
+  # #yield_self is an alias of #then (MRI's <internal:kernel>), so the two are one
+  # entry, and the original name - the one an Enumerator and Method#name report - is :then.
+  def then
+    return to_enum(:then) { 1 } unless block_given?
     yield self
-  end unless method_defined?(:yield_self)
-  alias :then :yield_self unless method_defined?(:then)
+  end unless method_defined?(:then)
+  alias :yield_self :then unless method_defined?(:yield_self)
 
   # Written in Ruby, as MRI's is (<internal:kernel>): its frame is reported with its caller's
   # location, and it has a source_location.
@@ -526,7 +526,7 @@ module Enumerable
   end unless method_defined?(:minmax_by)
 
   def flat_map
-    return to_enum(:flat_map) { size if respond_to?(:size) } unless block_given?
+    return to_enum(__callee__) { size if respond_to?(:size) } unless block_given?
     result = []
     each do |*values|
       # Like #map, #flat_map hands the yielded values straight to the block
@@ -796,6 +796,7 @@ module Enumerable
     # the readers the indexed path asks; Range#each itself uses the stored endpoints, so a
     # Range that overrides one of them - (1..3).dup can - has to be enumerated instead
     RANGE_READERS__ = [:begin, :end, :exclude_end?].map { |name| [name, ::Range.instance_method(name)] }.freeze
+    private_constant :ZipIntegerRange__, :RANGE_EACH__, :RANGE_READERS__
 
     def __zip_source__(other)
       return other if other.is_a?(Array)
@@ -1011,7 +1012,7 @@ class Range
       end
       converted = n.to_int
       unless converted.is_a?(::Integer)
-        raise TypeError, "can't convert #{n.class} into Integer (#{n.class}#to_int gives #{__ir_conversion_result_name__(converted)})"
+        raise TypeError, "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{__ir_conversion_result_name__(converted)})"
       end
       converted
     end
@@ -1174,7 +1175,7 @@ class Array
   # The deletions have to be visible if the block raises part way through, so
   # this compacts in place rather than building a new array and swapping it in.
   def select!(&block)
-    return to_enum(:select!) { size } unless block
+    return to_enum(__callee__) { size } unless block
     __array_check_frozen__
     original = size
     kept = 0
@@ -1244,8 +1245,13 @@ class Array
     index && self[index]
   end unless method_defined?(:bsearch)
 
-  def rfind(ifnone = nil, &block)
-    return to_enum(:rfind, ifnone) unless block
+  # The Enumerator shows the ifnone argument only when one was given (MRI's rb_scan_args).
+  def rfind(*args, &block)
+    return to_enum(:rfind, *args) unless block
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    ifnone = args[0]
     index = size - 1
     while index >= 0
       # The array may shrink under us; MRI re-reads the size every step.
@@ -1364,7 +1370,7 @@ class Array
     end
     converted = value.to_int
     unless converted.is_a?(Integer)
-      raise TypeError, "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})"
+      raise TypeError, "can't convert #{value.class} to Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})"
     end
     converted
   end
@@ -2371,6 +2377,7 @@ unless defined?(Fiber)
                      :MSG_RAISE, :MSG_ERROR, :MSG_KILL
 
     SCHEDULER_METHODS = [:block, :unblock, :kernel_sleep, :io_wait]
+    private_constant :KILL_TAG, :SCHEDULER_METHODS
 
     # ---- helpers ---------------------------------------------------------
 
@@ -3089,12 +3096,17 @@ module Kernel
       # anything else that answers #divmod is split into seconds and a fraction.
       # A nil duration (3.3) is the same as none: sleep until woken.
       args = [] if args.size == 1 && args[0].nil?
-      unless args.empty?
+      if args.size == 1
         d = args[0]
-        if !d.nil? && !d.is_a?(::Integer) && !d.is_a?(::Float) && d.respond_to?(:divmod)
+        if !d.is_a?(::Integer) && !d.is_a?(::Float)
+          unless d.respond_to?(:divmod)
+            ::Kernel.raise(::TypeError, "can't convert #{d.class} into time interval")
+          end
           whole, fraction = d.divmod(1)
-          args = [whole.to_i + fraction.to_f] + args[1..-1]
+          d = whole.to_i + fraction.to_f
+          args = [d]
         end
+        ::Kernel.raise(::ArgumentError, "time interval must not be negative") if d < 0
       end
       __ir_sleep__(*args)
     end
@@ -3927,6 +3939,7 @@ class String
   end unless method_defined?(:unicode_normalized?)
 
   def each_grapheme_cluster(&block)
+    return to_enum(:each_grapheme_cluster) { __ir_grapheme_clusters__.size } unless block
     clusters = __ir_grapheme_clusters__
     clusters.each { |g| block.call(g) }
     self
@@ -4074,7 +4087,6 @@ class Float
   alias :quo :fdiv
 end
 
-
 class Float
   # The neighbouring representable Floats. The CLR walks the IEEE bit pattern
   # for us; MRI's next_float of +Infinity is +Infinity, where BitIncrement
@@ -4095,6 +4107,7 @@ end
 
 class Symbol
   include ::Comparable unless ancestors.include?(::Comparable)
+
   def casecmp?(other)
     return nil unless other.is_a?(::Symbol)
     to_s.casecmp?(other.to_s)
@@ -4375,6 +4388,7 @@ module Errno
   end
 
   ERRNO_CLASSES.freeze
+  private_constant :ERRNO_TABLE, :ERRNO_ALIASES, :ERRNO_CLASSES
 end
 
 # SystemCallError's constructor understood exactly one argument: either a message
@@ -4412,7 +4426,7 @@ class SystemCallError
       klass = klass.superclass
     end
     return "unknown error" if errno.nil?
-    entry = ::Errno::ERRNO_TABLE[errno]
+    entry = ::Errno.const_get(:ERRNO_TABLE)[errno]
     entry ? entry[1] : "Unknown error #{errno}"
   end
 
@@ -4465,7 +4479,7 @@ class SystemCallError
       end
       # A known errno names a subclass; an unknown one stays a plain
       # SystemCallError that remembers the number for #errno.
-      klass = ::Errno::ERRNO_CLASSES[errno]
+      klass = ::Errno.const_get(:ERRNO_CLASSES)[errno]
       return klass.new(message, args[2]) if klass
       return super(message, errno, args[2])
     end
@@ -4688,12 +4702,7 @@ module GC
   def self.major_count
     ::System::GC.collection_count(::System::GC.max_generation)
   end
-
-  STAT_KEYS = [
-    :count, :time, :marking_time, :sweeping_time, :minor_gc_count, :major_gc_count,
-    :heap_allocated_pages, :heap_live_slots, :heap_free_slots, :total_allocated_objects,
-    :total_freed_objects, :malloc_increase_bytes, :compact_count
-  ].freeze
+  private_class_method :major_count
 
   def self.__stat_values__
     live = ::System::GC.get_total_memory(false).to_i
@@ -5139,6 +5148,7 @@ class Enumerator
     :each_with_index, :each_with_object, :each_char, :each_byte, :each_codepoint,
     :filter_map
   ].freeze
+  private_constant :SIZE_SAME_METHODS
   # Not in the list, and so of unknown size, as in MRI: #each_line (the lines are
   # not counted until they are read), and the searches - #find_index, #find,
   # #detect, #take_while, #drop_while - which answer one result, not one per element.
@@ -5486,7 +5496,7 @@ class Enumerator
     def map(&block)
       __need_block__("map", block)
       source = self
-      __chain__(size) { |y| source.each { |*values| y << block.call(*values) } }.__set_inspect__(self, :map)
+      __chain__(size) { |y| source.each { |*values| y << block.call(*values) } }.__set_inspect__(self, __callee__)
     end
     alias :collect :map
 
@@ -5508,7 +5518,7 @@ class Enumerator
             y << result
           end
         end
-      end.__set_inspect__(self, :flat_map)
+      end.__set_inspect__(self, __callee__)
     end
     alias :collect_concat :flat_map
 
@@ -5516,7 +5526,7 @@ class Enumerator
       __need_block__("select", block)
       source = self
       __chain__ { |y| source.each { |*values| item = __value__(values); y << item if block.call(item) } }
-        .__set_inspect__(self, :select)
+        .__set_inspect__(self, __callee__)
     end
     alias :filter :select
     alias :find_all :select
@@ -6251,6 +6261,7 @@ class String
   alias :__ir_each_line__ :each_line
 
   def each_line(*args, chomp: false, &block)
+    return to_enum(:each_line, *args, **(chomp ? { chomp: chomp } : {})) unless block
     lines = __ir_split_lines__(args, chomp)
     lines.each { |line| block.call(line) }
     self
@@ -6539,7 +6550,7 @@ end
       converted = value.to_int
       unless converted.is_a?(::Integer)
         ::Kernel.raise(::TypeError,
-          "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})")
+          "can't convert #{value.class} to Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})")
       end
       converted
     end
@@ -6949,11 +6960,11 @@ class Data
     def define(*names, &block)
       names = names.map do |m|
         unless m.is_a?(::Symbol) || m.is_a?(::String)
-          ::Kernel.raise(::TypeError, "#{m.inspect} is not a symbol")
+          ::Kernel.raise(::TypeError, "#{m.inspect} is not a symbol nor a string")
         end
         m = m.to_sym
-        # a member cannot look like a setter
-        ::Kernel.raise(::ArgumentError, "invalid data member: #{m}") if m.to_s.end_with?("=")
+        # a member cannot look like a setter (rb_is_attrset_id: `[]=` is fine)
+        ::Kernel.raise(::ArgumentError, "invalid data member: #{m}") if m.name.match?(/\A[[:alpha:]_][[:alnum:]_]*=\z/)
         m
       end
       duplicate = names.group_by { |m| m }.select { |_, v| v.size > 1 }.keys.first
@@ -7046,10 +7057,10 @@ class Data
         unknown << key.inspect
       end
     end
-    # MRI: fewer keywords than members is a "missing" error, otherwise an unknown one
-    # (and a member named twice, as a String and a Symbol, still leaves one missing).
+    # MRI reports a missing member before an unknown keyword (and a member named
+    # twice, as a String and a Symbol, still leaves one missing).
     missing = names.reject { |name| given.key?(name) }
-    if kwargs.size < names.size || (unknown.empty? && !missing.empty?)
+    unless missing.empty?
       ::Kernel.raise(::ArgumentError,
         "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map { |n| n.inspect }.join(', ')}")
     end
@@ -7227,7 +7238,7 @@ class Data
     converted = key.to_str
     unless ::String === converted
       ::Kernel.raise(::TypeError,
-        "can't convert #{key.class} into String (#{key.class}#to_str gives #{__ir_conversion_result_name__(converted)})")
+        "can't convert #{key.class} to String (#{key.class}#to_str gives #{__ir_conversion_result_name__(converted)})")
     end
     converted
   end
@@ -7341,7 +7352,7 @@ class << ENV
   # MRI hands back an Enumerator rather than complaining about the missing block,
   # and the Enumerator knows how many pairs it will walk.
   def each(&block)
-    return to_enum(:each) { size } unless block
+    return to_enum(__callee__) { size } unless block
     to_hash.each(&block)
     self
   end
@@ -7382,7 +7393,7 @@ class << ENV
   end
 
   def select(&block)
-    return to_enum(:select) { size } unless block
+    return to_enum(__callee__) { size } unless block
     to_hash.select(&block)
   end
   alias :filter :select
@@ -7440,7 +7451,7 @@ class << ENV
   end unless respond_to?(:keep_if)
 
   def select!
-    return to_enum(:select!) unless block_given?
+    return to_enum(__callee__) unless block_given?
     changed = false
     to_hash.each do |k, v|
       unless yield(k, v)
@@ -7868,7 +7879,7 @@ module Process
     PRIO_PROCESS: 0, PRIO_PGRP: 1, PRIO_USER: 2,
     RLIMIT_CPU: 0, RLIMIT_FSIZE: 1, RLIMIT_DATA: 2, RLIMIT_STACK: 3,
     RLIMIT_CORE: 4, RLIMIT_RSS: 5, RLIMIT_NPROC: 6, RLIMIT_NOFILE: 7,
-    RLIMIT_MEMLOCK: 8, RLIMIT_AS: 9, RLIMIT_LOCKS: 10, RLIMIT_SIGPENDING: 11,
+    RLIMIT_MEMLOCK: 8, RLIMIT_AS: 9, RLIMIT_SIGPENDING: 11,
     RLIMIT_MSGQUEUE: 12, RLIMIT_NICE: 13, RLIMIT_RTPRIO: 14, RLIMIT_RTTIME: 15,
     RLIM_INFINITY: 2**64 - 1, RLIM_SAVED_CUR: 2**64 - 1, RLIM_SAVED_MAX: 2**64 - 1,
   }.each { |name, value| const_set(name, value) unless const_defined?(name) } unless ::File::ALT_SEPARATOR == "\\"
@@ -7948,7 +7959,7 @@ module Process
     end
     result = value.to_int
     unless result.is_a?(Integer)
-      raise TypeError, "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(result)})"
+      raise TypeError, "can't convert #{value.class} to Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(result)})"
     end
     result
   end
@@ -8066,6 +8077,9 @@ module Process
     ftype goto if md mkdir mklink move path pause popd prompt pushd rd rem ren rename
     rmdir set setlocal shift start time title type ver verify vol
   ].freeze
+  private_constant :SPAWN_OPTION_KEYS, :SPAWN_DUP2, :SPAWN_CLOSE, :SPAWN_OPEN, :SPAWN_CHDIR,
+    :SPAWN_O_RDONLY, :SPAWN_O_WRONLY, :SPAWN_O_RDWR, :SPAWN_O_CREAT, :SPAWN_O_TRUNC, :SPAWN_O_APPEND,
+    :SPAWN_SHELL_META, :SPAWN_SHELL_BUILTINS, :SPAWN_WINDOWS, :SPAWN_CMD_BUILTINS
 
   # [shell, argv] for running a command line through the system's shell.
   def self.__spawn_shell__(command)
@@ -8507,7 +8521,7 @@ module Process
 
     # rlim_t is unsigned, so RLIM_INFINITY is 2**64-1 and getrlimit hands it back that way.
     # __setrlimit__ takes it as a signed long and reinterprets the bits, so anything above
-    # Integer::MAX has to be folded into the negative half first or the conversion overflows.
+    # 2**63-1 has to be folded into the negative half first or the conversion overflows.
     def __rlimit_value__(value)
       unless value.is_a?(Integer)
         unless value.respond_to?(:to_int)
@@ -8694,6 +8708,7 @@ module Process
     NOT_IMPLEMENTED_METHODS = (::File::ALT_SEPARATOR == "\\" ?
       [:daemon, :fork, :_fork] + WINDOWS_NOT_IMPLEMENTED_METHODS__ : [:daemon, :fork, :_fork]).freeze
   end
+  private_constant :WINDOWS_NOT_IMPLEMENTED_METHODS__, :NOT_IMPLEMENTED_METHODS
 
   if ::File::ALT_SEPARATOR == "\\"
     WINDOWS_NOT_IMPLEMENTED_METHODS__.each do |name|
@@ -10319,6 +10334,7 @@ class IO
   alias :__ir_each_line__ :each_line
 
   def each_line(*args, **opts, &block)
+    return to_enum(__callee__, *args, **opts) unless block
     args, chomp = __take_chomp__(args, opts)
     chomp ? __each_line_chomp__(*args, &block) : __ir_each_line__(*args, &block)
   end
@@ -10958,7 +10974,7 @@ class Hash
   end unless method_defined?(:compact!)
 
   def select!(&block)
-    return to_enum(:select!) unless block
+    return to_enum(__callee__) unless block
     raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     before = size
     keep_if(&block)
@@ -11183,7 +11199,7 @@ class Struct
       end
       i = name.to_int
       unless i.is_a?(Integer)
-        raise TypeError, "can't convert #{name.class} into Integer (#{name.class}#to_int gives #{__ir_conversion_result_name__(i)})"
+        raise TypeError, "can't convert #{name.class} to Integer (#{name.class}#to_int gives #{__ir_conversion_result_name__(i)})"
       end
       i += size if i < 0
       (i >= 0 && i < size) ? i : nil
@@ -11286,6 +11302,10 @@ class << Struct
     seen = {}
     names.each do |name|
       key = name.respond_to?(:to_sym) ? name.to_sym : name
+      # a setter name (rb_is_attrset_id) would clash with the member's own writer
+      if key.is_a?(Symbol) && key.name.match?(/\A[[:alpha:]_][[:alnum:]_]*=\z/)
+        raise ArgumentError, "invalid struct member: #{key}"
+      end
       raise ArgumentError, "duplicate member: #{key}" if seen.key?(key)
       seen[key] = true
     end
@@ -12163,7 +12183,7 @@ module Kernel
     end
     unless converted.is_a?(::String)
       ::Kernel.raise(::TypeError,
-        "can't convert #{object.class} into String (#{object.class}#to_s gives #{__ir_conversion_result_name__(converted)})")
+        "can't convert #{object.class} to String (#{object.class}#to_s gives #{__ir_conversion_result_name__(converted)})")
     end
     converted
   end
@@ -12186,7 +12206,7 @@ module Kernel
     end
     converted = object.to_hash
     unless converted.is_a?(::Hash)
-      ::Kernel.raise(::TypeError, "can't convert #{object.class} into Hash (#{object.class}#to_hash gives #{__ir_conversion_result_name__(converted)})")
+      ::Kernel.raise(::TypeError, "can't convert #{object.class} to Hash (#{object.class}#to_hash gives #{__ir_conversion_result_name__(converted)})")
     end
     converted
   end

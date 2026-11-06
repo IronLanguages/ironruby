@@ -993,7 +993,7 @@ class Complex < Numeric
     unless ::Complex === result
       name = __ir_class_of__(value)
       ::Kernel.raise(::TypeError,
-        "can't convert #{name} into Complex (#{name}#to_c gives #{__ir_conversion_result_name__(result)})")
+        "can't convert #{name} to Complex (#{name}#to_c gives #{__ir_conversion_result_name__(result)})")
     end
     result
   end
