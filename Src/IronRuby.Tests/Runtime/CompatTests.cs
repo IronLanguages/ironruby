@@ -21,7 +21,7 @@ using System.Text;
 namespace IronRuby.Tests {
 
     /// <summary>
-    /// Cross-product tests, ported from the generated Tests/Legacy/Compat suite.  Each one generates a script that
+    /// Cross-product tests, ported from the old generated Compat suite.  Each one generates a script that
     /// tries every combination of a handful of constructs and prints a trace; the trace must be the one CRuby 4.0
     /// prints for the same script, which is pinned by its line count and SHA-256 (the traces run to thousands of lines).
     /// On a mismatch the script and IronRuby's output are written to a temp folder, to diff against `ruby script.rb`.
