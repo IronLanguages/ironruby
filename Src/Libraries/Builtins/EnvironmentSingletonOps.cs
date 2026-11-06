@@ -46,8 +46,15 @@ namespace IronRuby.Builtins {
             }
 
             // (on Windows the environment is Unicode, and MRI reads it as UTF-8, the filesystem's)
-            return MutableString.Create(str, encoding ??
-                (System.IO.Path.DirectorySeparatorChar == '\\' ? context.GetPathEncoding() : context.RubyOptions.LocaleEncoding)).Freeze();
+            encoding = encoding ??
+                (System.IO.Path.DirectorySeparatorChar == '\\' ? context.GetPathEncoding() : context.RubyOptions.LocaleEncoding);
+
+            // A value that is not seven bit cannot be US-ASCII, the C locale's encoding, so MRI
+            // hands its bytes back as ASCII-8BIT (rb_external_str_new_with_enc).
+            if (encoding == RubyEncoding.Ascii && !Utils.IsAscii(str)) {
+                return MutableString.CreateBinary(System.Text.Encoding.UTF8.GetBytes(str)).Freeze();
+            }
+            return MutableString.Create(str, encoding).Freeze();
         }
 
         private static void SetEnvironmentVariable(RubyContext/*!*/ context, string/*!*/ name, string value) {
