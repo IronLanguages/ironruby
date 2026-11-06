@@ -1031,11 +1031,12 @@ class Integer
   end
 
   # numeric.c's rb_int_pow (fix_pow) for what makes a Rational or a Complex: a negative
-  # exponent and a negative base to a fractional power. The rest is the C# Integer#**.
+  # exponent and a negative base to a fractional power, and what has to be coerced. The C#
+  # Integer#** (ClrInteger.Power) answers everything else and hands these here.
   alias_method :__ir_pow__, :**
   private :__ir_pow__
 
-  def **(other)
+  def __ir_pow_slow__(other)
     if ::Integer === other
       return __ir_pow__(other) if other >= 0
       return 1 if self == 1
@@ -1056,6 +1057,7 @@ class Integer
       __ir_num_coerce_bin__(other, :**)
     end
   end
+  private :__ir_pow_slow__
 end
 
 class Float

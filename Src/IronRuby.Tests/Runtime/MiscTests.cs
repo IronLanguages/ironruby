@@ -3172,6 +3172,43 @@ p r
         }
 
         /// <summary>
+        /// Integer#** in C# with what it hands rational.rb (__ir_pow_slow__): a negative exponent (a Rational),
+        /// a negative base to a fractional power (a Complex), coercion, and MRI's answers for 0 ** NaN and
+        /// Bignum exponents. The expected output is CRuby's.
+        /// </summary>
+        public void Integer_Power1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+t('int') { [3 ** 5, 2 ** 62, 2 ** 64, 3 ** 0, 0 ** 0, (-2) ** 3, 10 ** 20] }
+t('neg') { [3 ** -2, 1 ** -5, (-1) ** -3, (-1) ** -4, 2 ** -1, (2**70) ** -1, (-3) ** -3] }
+t('zero neg') { 0 ** -1 }
+t('float') { [3 ** 0.5, 4 ** 0.5, 0 ** -1.5, 0 ** Float::NAN, 1 ** Float::NAN, 2 ** Float::INFINITY, (-2) ** 2.0, (-8) ** (1.0/3), (-2) ** Float::NAN, (2**70) ** 0.5, (-(2**70)) ** 0.5] }
+t('rational') { [2 ** Rational(1, 2), 4 ** Rational(1, 2), 2 ** Rational(3)] }
+t('complex') { [2 ** Complex(1, 1), 2 ** Complex(2, 0)] }
+t('coerce') { o = Object.new; def o.coerce(x) = [x, 3]; 2 ** o }
+t('bad') { 2 ** ""x"" }
+t('big exp') { [1 ** (2**70), (-1) ** (2**70), 0 ** (2**70)] }
+t('big neg exp') { [2 ** -(2**70)] }
+t('pow') { [3.pow(5), 3.pow(-2), 3.pow(5, 7), (2**70).pow(2)] }
+t('method') { [3.method(:**).arity, 2.method(:**).owner] }
+", @"
+int: [243, 4611686018427387904, 18446744073709551616, 1, 1, -8, 100000000000000000000]
+neg: [(1/9), 1, -1, 1, (1/2), (1/1180591620717411303424), (-1/27)]
+zero neg: [ZeroDivisionError, ""divided by 0""]
+float: [1.7320508075688772, 2.0, Infinity, 0.0, 1.0, Infinity, 4.0, (1.0000000000000002+1.7320508075688772i), (NaN+NaN*i), 34359738368.0, (0.0+34359738368.0i)]
+rational: [1.4142135623730951, 2.0, (8/1)]
+complex: [(1.5384778027279442+1.2779225526272695i), (4+0i)]
+coerce: 8
+bad: [TypeError, ""String can't be coerced into Integer""]
+big exp: [1, 1, 0]
+big neg exp: [ArgumentError, ""exponent is too large""]
+pow: [243, (1/9), 5, 1393796574908163946345982392040522594123776]
+method: [1, Integer]
+");
+        }
+
+        /// <summary>
         /// Range#min, #max, #include? and #member? in C#, with what they hand the prelude: an Integer or Float
         /// range answered from its endpoints, Strings, blocks, counts, endless and beginless ranges, a break
         /// from the block and a subclass's own #max. The expected output is CRuby's.
