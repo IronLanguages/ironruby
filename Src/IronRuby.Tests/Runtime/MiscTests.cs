@@ -3191,6 +3191,8 @@ t('float excl max') { (1.0...2.0).max }
 t('minmax') { [(1..10).minmax, (1..10).minmax { |a, b| b <=> a }] }
 t('include') { r = (1..10); [r.include?(5), r.include?(10), (1...10).include?(10), r.include?(0), r.include?(5.5), r.member?(3), r.include?(""a""), (1.0..2.0).include?(1.5), (1.0...2.0).include?(2), (1..2.0).include?(2), (1.0..2.0).include?(Float::NAN), (1..Float::INFINITY).include?(10**30)] }
 t('include str') { [('a'..'z').include?('m'), ('a'..'z').include?('cc'), ('a'..'z').member?('z')] }
+r = ('a'..'z'); x = ('a'...'z'); d = ('0'..'9'); w = ('A'..'z')
+p [r.include?('m'), r.include?('a'), r.include?('z'), x.include?('z'), r.include?('cc'), r.include?(''), r.include?('A'), r.member?('q'), d.include?('5'), w.include?('_'), w.include?('['), ('z'..'a').include?('m'), r.include?(""é""), ('a'..'e').include?(:c), r.include?('m'.b), Class.new(String).new('k').then { |s| r.include?(s) }, ('a'..'zz').include?('cc'), ('aa'..'b').include?('az')]
 t('include endless') { [(1..).include?(10**20), (..5).include?(3), (1..nil).include?(0)] }
 t('include obj') { (Time.at(0)..Time.at(10)).include?(Time.at(5)) }
 t('include beginless str') { (..'z').include?('a') }
@@ -3209,6 +3211,7 @@ float excl max: [TypeError, ""cannot exclude non Integer end value""]
 minmax: [[1, 10], [10, 1]]
 include: [true, true, false, false, true, true, false, true, false, true, false, true]
 include str: [true, false, true]
+[true, true, true, false, false, false, false, true, true, true, true, false, false, false, true, true, true, false]
 include endless: [true, true, false]
 include obj: true
 include beginless str: [TypeError, ""cannot determine inclusion in beginless/endless ranges""]
