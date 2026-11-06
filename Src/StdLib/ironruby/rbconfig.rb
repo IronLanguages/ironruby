@@ -77,8 +77,8 @@ module RbConfig
   CONFIG["sitearch"] = arch.dup
 
   # std lib
-  # Still 1.9.1: the version names the site directory, and site_ruby/1.9.1 is where
-  # IronRuby's readline (rb-readline) lives. The standard library itself is ruby/4.0
+  # Still 1.9.1: the version names the site directory (site_ruby/1.9.1, first on $LOAD_PATH
+  # and empty as shipped). The standard library itself is ruby/4.0
   # (rubylibdir below) and gems go under gems/4.0.0 (rubygems/defaults/ironruby.rb).
   CONFIG["ruby_version"] = stdlib_version = "1.9.1"
   CONFIG["RUBY_BASE_NAME"] = ruby_base_name = "ruby"              # directory name

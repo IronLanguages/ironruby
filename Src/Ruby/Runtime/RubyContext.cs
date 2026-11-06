@@ -79,7 +79,7 @@ namespace IronRuby.Runtime {
 
         private const string MriVersionString = "4.0.0";
 
-        // Names the site directory (ruby/site_ruby/1.9.1, where rb-readline lives), as
+        // Names the site directory (ruby/site_ruby/1.9.1, empty as shipped), as
         // RbConfig's ruby_version does. The standard library itself is ruby/4.0.
         public string/*!*/ StandardLibraryVersion {
             get { return "1.9.1"; }
