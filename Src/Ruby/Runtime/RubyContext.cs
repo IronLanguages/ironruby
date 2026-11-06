@@ -3519,7 +3519,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         public void ReportWarningAt(string/*!*/ path, int line, string/*!*/ message) {
             if (Verbose is bool) {
-                DispatchWarning(MutableString.Create(FormatErrorMessage(message, "warning", path, line, 0, null), RubyEncoding.UTF8), null);
+                DispatchWarning(MutableString.Create(FormatWarning(message, path, line), RubyEncoding.UTF8), null);
             }
         }
 
@@ -4567,19 +4567,6 @@ namespace IronRuby.Runtime {
         /// </code>
         /// </remarks>
         public override string/*!*/ FormatException(Exception/*!*/ exception) {
-            var syntaxError = exception as SyntaxError;
-            if (syntaxError != null && syntaxError.HasLineInfo) {
-                // The main script: "-e:1: expected a `}' ... (SyntaxError)" and the line, pointed
-                // at. One that require, load or eval raised is reported as any other error, at
-                // the frame that called it, with the location in its message.
-                RubyExceptionData data = RubyExceptionData.GetInstance(exception);
-                data.CaptureExceptionTrace(this);
-                if (data.Backtrace == null || data.Backtrace.Count == 0) {
-                    return FormatErrorMessage(syntaxError.Description + " (" + GetClassOf(exception).Name + ")", null,
-                        syntaxError.File, syntaxError.Line, syntaxError.Column, syntaxError.LineSourceCode);
-                }
-            }
-
             StringBuilder sb = new StringBuilder();
             AppendExceptionReport(sb, exception);
 
@@ -4636,13 +4623,23 @@ namespace IronRuby.Runtime {
             try {
                 var site = RubyUtils.GetCallSite(ref _detailedMessageSite, this, "__detailed__", 3);
                 var detailed = site.Target(site, _exceptionClass, exception, ScriptingRuntimeHelpers.False, new Hash(this)) as MutableString;
-                if (detailed != null && !detailed.IsBinary && !detailed.ContainsInvalidCharacters()) {
+                if (detailed != null && IsReportable(detailed)) {
                     return detailed.ToString();
                 }
             } catch (Exception) {
                 // no prelude, or a #detailed_message that raises: report #message
             }
             return null;
+        }
+
+        /// <summary>
+        /// Whether a message can be written as the text it is: it has no bytes that are not characters, and
+        /// held as bytes (a #byteslice, a string read from a file), they are ASCII or UTF-8 ones. Anything
+        /// else is shown escaped.
+        /// </summary>
+        private static bool IsReportable(MutableString/*!*/ message) {
+            return !message.ContainsInvalidCharacters() &&
+                (!message.IsBinary || message.Encoding == RubyEncoding.UTF8 || message.IsAscii());
         }
 
         private void AppendExceptionReport(StringBuilder/*!*/ sb, Exception/*!*/ exception) {
@@ -4659,7 +4656,7 @@ namespace IronRuby.Runtime {
             } else {
                 object reported = GetReportedMessage(exception, data);
                 var rawMessage = reported as MutableString;
-                message = (rawMessage != null && !rawMessage.IsBinary && !rawMessage.ContainsInvalidCharacters())
+                message = (rawMessage != null && IsReportable(rawMessage))
                     ? rawMessage.ToString()
                     : RubyExceptionData.GetClrMessage(this, reported);
             }
@@ -4700,27 +4697,14 @@ namespace IronRuby.Runtime {
             }
         }
 
-        internal static string/*!*/ FormatErrorMessage(string/*!*/ message, string prefix, string file, int line, int column, string lineSource) {
+        internal static string/*!*/ FormatWarning(string/*!*/ message, string file, int line) {
             var sb = new StringBuilder();
             sb.Append(file ?? "unknown");
             sb.Append(':');
             sb.Append(file != null ? line : 0);
-            sb.Append(": ");
-            if (prefix != null) {
-                sb.Append(prefix);
-                sb.Append(": ");
-            }
+            sb.Append(": warning: ");
             sb.Append(message);
             sb.AppendLine();
-            if (lineSource != null) {
-                sb.Append(lineSource);
-                sb.AppendLine();
-                if (column > 0) {
-                    sb.Append(' ', column - 1);
-                    sb.Append('^');
-                    sb.AppendLine();
-                }
-            }
             return sb.ToString();
         }
 

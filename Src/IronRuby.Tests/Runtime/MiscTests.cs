@@ -3130,16 +3130,17 @@ true
 true
 true
 []
-""q.rb:4: unexpected end-of-input; expected an expression after the operator""
+""q.rb:4: syntax errors found\n  3 | 1\n> 4 | 1 +\n    |    ^ unexpected end-of-input, assuming it is closing the parent top level context\n    |    ^ unexpected end-of-input; expected an expression after the operator\n""
 ""q.rb""
-""z.rb:-5: unexpected end-of-input; expected an expression after the operator""
+""z.rb:-5: syntax errors found\n> -5 | 1 +\n     |    ^ unexpected end-of-input, assuming it is closing the parent top level context\n     |    ^ unexpected end-of-input; expected an expression after the operator\n""
 ");
             try {
                 Engine.Execute("def syntax_error_location1; eval('x = )', nil, 'q.rb', 3); end; syntax_error_location1");
                 Assert(false);
             } catch (SyntaxError e) {
                 string report = Context.FormatException(e);
-                Assert(report.Contains("in 'Kernel#eval': q.rb:3: expected an expression after `=` (SyntaxError)"));
+                // MRI's report: prism's picture of the errors follows the first line
+                Assert(report.Replace("\r\n", "\n").Contains("in 'Kernel#eval': q.rb:3: syntax errors found (SyntaxError)\n> 3 | x = )\n    |   ^ expected an expression after `=`\n"));
                 Assert(!report.Contains("q.rb:3: q.rb:3:"));
             }
         }
