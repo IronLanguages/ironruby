@@ -84,7 +84,8 @@ namespace IronRuby.Builtins {
         // thread to cancel.
         private readonly List<IntPtr>/*!*/ _inProgress = new List<IntPtr>();
 
-        // Serialises the non-blocking writes, so that two of them cannot both take the same room.
+        // Held by a write for as long as it writes, and by a non-blocking write from measuring the
+        // room in the pipe to its WriteFile, so that no other write here takes that room first.
         private readonly object/*!*/ _writeLock = new object();
 
         // Held by a read for as long as it is in ReadFile, and by a non-blocking read from its
@@ -249,9 +250,13 @@ namespace IronRuby.Builtins {
         /// has gone is an IOException carrying EPIPE.
         /// </summary>
         public override void Write(ReadOnlySpan<byte> buffer) {
-            while (buffer.Length > 0) {
-                int written = WriteFileOnce(buffer, true);
-                buffer = buffer.Slice(written);
+            // Held for the whole write, so that a non-blocking write cannot measure room this one
+            // is about to take (see WriteNonBlocking).
+            lock (_writeLock) {
+                while (buffer.Length > 0) {
+                    int written = WriteFileOnce(buffer, true);
+                    buffer = buffer.Slice(written);
+                }
             }
         }
 
@@ -288,7 +293,16 @@ namespace IronRuby.Builtins {
             if (count == 0) {
                 return 0;
             }
-            lock (_writeLock) {
+            // Another writer in this process - a blocking write waiting for room, most likely -
+            // means the room is not ours to measure: would block, rather than wait for it.
+            // Holding the lock from the measuring to the WriteFile keeps any other write here from
+            // taking the room in between. A different process writing to the same pipe end (a
+            // child given it as its standard output) cannot be kept out like this; Windows has no
+            // other way to make one write not wait (see above).
+            if (!Monitor.TryEnter(_writeLock)) {
+                return -1;
+            }
+            try {
                 int room = WriteQuotaAvailable();
                 if (room == 0) {
                     // Full - or the reader is gone, which the write itself reports as EPIPE.
@@ -298,6 +312,8 @@ namespace IronRuby.Builtins {
                     room = count;
                 }
                 return WriteFileOnce(new ReadOnlySpan<byte>(buffer, offset, Math.Min(count, room)), false);
+            } finally {
+                Monitor.Exit(_writeLock);
             }
         }
 
