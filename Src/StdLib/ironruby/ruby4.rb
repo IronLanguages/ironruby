@@ -7374,9 +7374,11 @@ class Enumerator
       @exclude_end = exclude_end
       @source = source
       @inspect_str = inspect_str
-      initialize(nil) do |y|
-        __arith_each__ { |v| y << v }
-      end
+      # what Enumerator#initialize(nil) { } would set, without its `*args, &block' call
+      seq = self
+      @generator = ::Kernel.proc { |y| seq.__send__(:__arith_each__) { |v| y << v } }
+      @__initialized__ = true
+      self
     end
     private :__arith_init__
 

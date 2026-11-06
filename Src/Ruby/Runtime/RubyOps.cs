@@ -4425,11 +4425,24 @@ namespace IronRuby.Runtime {
                 if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
                     return value;
                 }
-            } else if (TrySetOwnedInstanceVariable(scope.RubyContext, self, value, site)) {
+            } else if (TrySetRubyObjectInstanceVariable(self, value, site) || TrySetOwnedInstanceVariable(scope.RubyContext, self, value, site)) {
                 return value;
             }
             scope.RubyContext.SetInstanceVariable(self, value, site);
             return value;
+        }
+
+        // The cached store of an instance of a Ruby subclass of a built-in CLR class - Array, Hash,
+        // Exception, Enumerator - which is an IRubyObject without being a RubyObject. Those went the
+        // slow way for every write: four `@x = v' in an Enumerator subclass's initialize cost ~0.6 us
+        // more than in a plain object's. The object keeps its frozen flag itself (IRubyObjectState),
+        // and a String also warns about a chilled literal, so a String is left to the slow path.
+        internal static bool TrySetRubyObjectInstanceVariable(object self, object value, InstanceVariableSite/*!*/ site) {
+            var obj = self as IRubyObject;
+            if (obj == null || obj.IsFrozen || self is MutableString) {
+                return false;
+            }
+            return obj.GetInstanceData().TrySetCached(site.Cache, value, obj.ImmediateClass);
         }
 
         // The cached store of a CLR object that keeps its own instance data (IRubyInstanceDataOwner);
@@ -4450,7 +4463,7 @@ namespace IronRuby.Runtime {
                 if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
                     return value;
                 }
-            } else if (TrySetOwnedInstanceVariable(context, self, value, site)) {
+            } else if (TrySetRubyObjectInstanceVariable(self, value, site) || TrySetOwnedInstanceVariable(context, self, value, site)) {
                 return value;
             }
             context.SetInstanceVariable(self, value, site);
