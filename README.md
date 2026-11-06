@@ -600,6 +600,10 @@ $ (cd Src/Prism && ruby generate.rb)                             # C# nodes + lo
 $ dotnet build Src/Console/Ruby.Console.csproj
 ```
 
+Once the DLR and prism are in place, `make`, `make test` (IronRuby's own C# tests) and
+`make spec` (ruby/spec's language suite) run the same `dotnet build` and test commands CI
+does; the [`Makefile`](Makefile) lists them.
+
 The prism revision is pinned: `Generated/` is produced from a particular `config.yml`, and
 a `libprism` built from a different one deserializes into the wrong fields. See
 [`Src/Prism/README.md`](Src/Prism/README.md) for the revision and how to check a checkout.
