@@ -1259,7 +1259,7 @@ namespace IronRuby.Runtime {
             int blockLevels;
             string baseLabel = targetScope.GetFrameBaseLabel(out blockLevels);
 
-            return new RubyCompilerOptions(targetScope.RubyContext.RubyOptions) {
+            return new RubyCompilerOptions() {
                 IsEval = true,
                 EvalFrameBaseLabel = baseLabel,
                 EvalFrameBlockLevels = blockLevels,

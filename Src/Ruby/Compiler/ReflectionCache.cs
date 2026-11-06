@@ -34,10 +34,6 @@ namespace IronRuby.Compiler {
     using Microsoft.Scripting.Interpreter;
 
     public static partial class Fields {
-        private static FieldInfo _StrongBox_Value;
-        
-        public static FieldInfo StrongBox_Value { get { return _StrongBox_Value ?? (_StrongBox_Value = GetField(typeof(StrongBox<object>), "Value")); } }
-        
         internal static FieldInfo/*!*/ GetField(Type/*!*/ type, string/*!*/ name) {
             var field = type.GetDeclaredField(name);
             Debug.Assert(field != null, type.Name + "::" + name);

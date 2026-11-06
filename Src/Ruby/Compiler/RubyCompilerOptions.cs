@@ -102,15 +102,5 @@ namespace IronRuby.Compiler {
         /// Used by dynamic variable look-up.
         /// </summary>
         internal List<string> LocalNames { get; set; }
-
-        internal RubyCompatibility Compatibility { get; set; }
-
-        public RubyCompilerOptions() {
-        }
-        
-        // copies relevant options from runtime options:
-        public RubyCompilerOptions(RubyOptions/*!*/ runtimeOptions) {
-            Compatibility = runtimeOptions.Compatibility;
-        }
     }
 }

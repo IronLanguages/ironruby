@@ -32,9 +32,7 @@ using IronRuby.Runtime.Calls;
 namespace IronRuby.Compiler.Generation {
 
     public abstract class ClsTypeEmitter {
-        public const string VtableNamesField = "#VTableNames#";
         public const string BaseMethodPrefix = "#base#";
-        public const string FieldGetterPrefix = "#field_get#", FieldSetterPrefix = "#field_set#";
 
         private ILGen _cctor;
         private readonly TypeBuilder _tb;
@@ -306,8 +304,6 @@ namespace IronRuby.Compiler.Generation {
             // TODO: Debugging support
             return new ILGen(il);
         }
-
-        protected const MethodAttributes MethodAttributesToEraseInOveride = MethodAttributes.Abstract | MethodAttributes.ReservedMask;
 
         protected ILGen DefineMethodOverride(MethodAttributes extra, MethodInfo decl, out MethodBuilder impl) {
             impl = ReflectionUtils.DefineMethodOverride(_tb, extra, decl);

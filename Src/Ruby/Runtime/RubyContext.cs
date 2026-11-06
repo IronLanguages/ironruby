@@ -4141,13 +4141,13 @@ namespace IronRuby.Runtime {
         }
 
         public override CompilerOptions/*!*/ GetCompilerOptions() {
-            return new RubyCompilerOptions(_options) {
+            return new RubyCompilerOptions() {
                 FactoryKind = TopScopeFactoryKind.Hosted,
             };
         }
 
         public override CompilerOptions/*!*/ GetCompilerOptions(Scope/*!*/ scope) {
-            var result = new RubyCompilerOptions(_options) {
+            var result = new RubyCompilerOptions() {
                 FactoryKind = TopScopeFactoryKind.Hosted
             };
 
@@ -4393,7 +4393,7 @@ namespace IronRuby.Runtime {
         public override int ExecuteProgram(SourceUnit/*!*/ program) {
             RegisterSourceFileLocation(program.Path);
             try {
-                RubyCompilerOptions options = new RubyCompilerOptions(_options) {
+                RubyCompilerOptions options = new RubyCompilerOptions() {
                     FactoryKind = TopScopeFactoryKind.Main
                 };
 

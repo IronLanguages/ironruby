@@ -34,20 +34,6 @@ namespace IronRuby.Compiler.Ast {
     using AstBlock = Microsoft.Scripting.Ast.BlockBuilder;
 
     public partial class CompoundLeftValue : LeftValue {
-        // TODO: 1.9
-        
-        /// <summary>
-        /// Empty LHS - used by blocks.
-        /// </summary>
-        internal static readonly CompoundLeftValue/*!*/ EmptyBlockSignature = new CompoundLeftValue(LeftValue.EmptyArray);
-
-        // TODO: 1.9
-
-        /// <summary>
-        /// Unspecified LHS - used by blocks.
-        /// </summary>
-        internal static readonly CompoundLeftValue/*!*/ UnspecifiedBlockSignature = new CompoundLeftValue(LeftValue.EmptyArray);
-
         /// <summary>
         /// List of l-values, possibly compound.
         /// </summary>

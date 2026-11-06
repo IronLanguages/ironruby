@@ -82,10 +82,6 @@ namespace IronRuby.Compiler.Ast {
             get { return _profiler; }
         }
 
-        public bool DebugCompiler {
-            get { return _debugCompiler; }
-        }
-
         public bool TraceEnabled {
             get { return _traceEnabled; }
         }
@@ -389,7 +385,6 @@ namespace IronRuby.Compiler.Ast {
         }
 
         public sealed class ModuleScope : VariableScope {
-            private readonly bool _isSingleton;
             private ModuleScope _parentModule;
 
             // The label of the body's frame, and the block the definition is written in - blocks
@@ -468,13 +463,8 @@ namespace IronRuby.Compiler.Ast {
                 set { _parentModule = value; }
             }
 
-            public bool IsSingleton {
-                get { return _isSingleton; }
-            }
-
-            public ModuleScope(ScopeBuilder/*!*/ builder, MSA.Expression/*!*/ selfVariable, MSA.ParameterExpression/*!*/ runtimeScopeVariable, bool isSingleton)
+            public ModuleScope(ScopeBuilder/*!*/ builder, MSA.Expression/*!*/ selfVariable, MSA.ParameterExpression/*!*/ runtimeScopeVariable)
                 : base(builder, selfVariable, runtimeScopeVariable) {
-                _isSingleton = isSingleton;
             }
         }
 
@@ -661,11 +651,10 @@ namespace IronRuby.Compiler.Ast {
             ScopeBuilder/*!*/ locals,
             MSA.Expression/*!*/ selfVariable,
             MSA.ParameterExpression/*!*/ runtimeScopeVariable, 
-            bool isSingleton,
             string frameLabel) {
             Assert.NotNull(locals, selfVariable, runtimeScopeVariable);
 
-            ModuleScope module = new ModuleScope(locals, selfVariable, runtimeScopeVariable, isSingleton);
+            ModuleScope module = new ModuleScope(locals, selfVariable, runtimeScopeVariable);
             module.FrameLabel = frameLabel;
             module.OuterBlock = _currentBlock;
             module.OuterLoop = _currentLoop;
@@ -1011,10 +1000,6 @@ namespace IronRuby.Compiler.Ast {
             }
 
             return result;
-        }
-
-        public MSA.Expression/*!*/ TransformToHashConstructor(IList<Maplet>/*!*/ maplets) {
-            return MakeHashOpCall(TransformMapletsToExpressions(maplets));
         }
 
         internal MSA.Expression/*!*/ MakeHashOpCall(IEnumerable<MSA.Expression>/*!*/ expressions) {
