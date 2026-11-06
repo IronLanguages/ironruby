@@ -4077,14 +4077,6 @@ p Inst.Foo(a) rescue p $!
             // meta-object conversions:
             var r1 = Engine.Execute<int>("Inst.delegate(Proc.new { |x| x + 1 }).invoke(123)");
             Assert(r1 == 124);
-
-            // foreign meta-object conversion:
-            if (!_driver.RunPython) return;
-            var py = Runtime.GetEngine("python");
-            var scope = Runtime.CreateScope();
-            py.Execute(@"def foo(x): return x + 2", scope);
-            var r2 = Engine.Execute<int>(@"Inst.delegate(foo).invoke(123)", scope);
-            Assert(r2 == 125);
         }
 
         #endregion

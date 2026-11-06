@@ -120,58 +120,6 @@ error
             }
         }
 
-        public void RequireInterop1() {
-            if (!_driver.RunPython) return;
-
-            try {
-                string temp = _driver.MakeTempDir();
-                Context.Loader.SetLoadPaths(new[] { temp });
-
-                File.WriteAllText(Path.Combine(temp, "a.py"), @"
-print 'Hello from Python'
-");
-                AssertExceptionThrown<LoadError>(() => CompilerTest(@"require('a')"));
-            } finally {
-                File.Delete("b.py");
-            }
-        }
-
-        public void RequireInterop2() {
-            if (!_driver.RunPython) return;
-
-            try {
-                string temp = _driver.MakeTempDir();
-                Context.Loader.SetLoadPaths(new[] { temp });
-
-                File.WriteAllText(Path.Combine(temp, "a.py"), @"
-def WhoIsThis():
-  print 'Python'
-
-Foo = 1
-
-class Bar(object):
-  def baz(self):
-    print Foo
-");
-
-                TestOutput(@"
-a = IronRuby.require('a')
-scopes = IronRuby.loaded_scripts.collect { |z| z.value }
-a.who_is_this
-a.foo += 1
-a.bar.baz             # a Python class is callable so we get Bar's instance from a.bar
-puts scopes[0].Foo
-", @"
-Python
-2
-2
-");
-
-            } finally {
-                File.Delete("b.py");
-            }
-        }
-
         public class TestLibraryInitializer1 : LibraryInitializer {
             protected override void LoadModules() {
                 Context.ObjectClass.SetConstant("TEST_LIBRARY", "hello from library");

@@ -134,8 +134,6 @@ namespace IronRuby.Tests {
         private static bool _displayList;
         private static bool _noAdaptiveCompilation;
         private static int _compilationThreshold;
-        private static bool _runPython = true;
-        private static bool? _isPythonConfigured;
         private readonly string/*!*/ _baseDirectory;
 
         public Driver(string/*!*/ baseDirectory) {
@@ -170,33 +168,6 @@ namespace IronRuby.Tests {
             get { return _compilationThreshold; }
         }
 
-        /// <summary>
-        /// Whether the Python interop tests run: not with /py-, and only when a "python" language
-        /// is configured at all. IronPython is not a dependency of this build and the .NET 8/10
-        /// DLR reads no app.config (no FEATURE_CONFIGURATION), so normally there is none, and
-        /// Runtime.GetEngine("python") would only fail with "Unknown language name".
-        /// </summary>
-        public bool RunPython {
-            get { return _runPython && IsPythonConfigured; }
-        }
-
-        private static bool IsPythonConfigured {
-            get {
-                if (_isPythonConfigured == null) {
-                    bool found = false;
-                    foreach (var language in ScriptRuntimeSetup.ReadConfiguration().LanguageSetups) {
-                        foreach (var name in language.Names) {
-                            found |= String.Equals(name, "python", StringComparison.OrdinalIgnoreCase);
-                        }
-                    }
-                    if (!found && _runPython) {
-                        Console.WriteLine("Python interop checks skipped: no \"python\" language is configured.");
-                    }
-                    _isPythonConfigured = found;
-                }
-                return _isPythonConfigured.Value;
-            }
-        }
 
         public string BaseDirectory {
             get { return _baseDirectory; }
@@ -210,7 +181,6 @@ namespace IronRuby.Tests {
                 Console.WriteLine("Synchronous compilation      : /sync1            (-X:CompilationThreshold 1)");
                 Console.WriteLine("Interpret only               : /interpret        (-X:CompilationThreshold Int32.MaxValue)");
                 Console.WriteLine("Debug Mode                   : /debug");
-                Console.WriteLine("Disable Python interop tests : /py-");
                 Console.WriteLine("Run Specific Tests           : [/exclude] [test_to_run ...]");
                 Console.WriteLine("List Tests                   : /list");
             }
@@ -258,16 +228,6 @@ namespace IronRuby.Tests {
             if (args.Contains("/interpret")) {
                 args.Remove("/interpret");
                 _compilationThreshold = Int32.MaxValue;
-            }
-
-            if (args.Contains("/py-")) {
-                args.Remove("/py-");
-                _runPython = false;
-            }
-
-            if (args.Contains("/py")) {
-                args.Remove("/py");
-                _runPython = true;
             }
 
             if (args.Contains("/exclude")) {

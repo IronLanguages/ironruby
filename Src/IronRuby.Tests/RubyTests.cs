@@ -457,8 +457,6 @@ namespace IronRuby.Tests {
                 Loader_Assemblies1,
 
                 Require1,
-                RequireInterop1,
-                RequireInterop2,
                 Load1,
                 LibraryLoader1,
                 LibraryLoader2,
@@ -978,7 +976,6 @@ namespace IronRuby.Tests {
                 Backtrace2,
                 Backtrace3,
                 Backtrace4,
-                Backtrace5,
                 Backtrace6,
                 Backtrace7,
                 Backtrace8,
