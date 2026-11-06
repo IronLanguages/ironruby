@@ -879,11 +879,6 @@ end");
             Assert(d is Hash);
         }
 
-        public void Dlr_Languages() {
-            //# Pass in ref/out params
-            //# Named arguments
-        }
-
         public class DynamicObject1 : DynamicObject {
             public string Test() {
                 return "Hello, Test";
