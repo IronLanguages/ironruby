@@ -174,6 +174,43 @@ end
             }
         }
 
+        /// <summary>
+        /// A non-seekable stream that hands its data back in the given pieces, the way a pipe does.
+        /// </summary>
+        private class ChunkedStream : MemoryStream {
+            private readonly int[] _chunks;
+            private int _next;
+
+            public ChunkedStream(byte[] data, params int[] chunks)
+                : base(data) {
+                _chunks = chunks;
+            }
+
+            public override bool CanSeek => false;
+
+            public override int Read(byte[] buffer, int offset, int count) {
+                int chunk = _next < _chunks.Length ? _chunks[_next++] : count;
+                return base.Read(buffer, offset, Math.Min(count, chunk));
+            }
+        }
+
+        /// <summary>
+        /// Topping up a buffer whose data no longer starts at its beginning: the new bytes go after
+        /// the buffered ones, not over the bytes the earlier reads have already consumed.
+        /// </summary>
+        [Options(NoRuntime = true)]
+        public void File_LoadBufferOffset1() {
+            var io = new RubyBufferedStream(new ChunkedStream(B("ab\n\r\ncd"), 4, 2), false, 16);
+
+            TestReadLine(io, true, "ab\n");
+            // "\r" is buffered after the consumed line; peeking past it reads the "\n" of the next chunk
+            Assert(io.PeekByteNormalizeEoln(false) == '\n');
+            Assert(io.ReadByteNormalizeEoln(false) == '\n');
+            Assert(io.ReadByte() == 'c');
+            Assert(io.ReadByte() == 'd');
+            Assert(io.ReadByte() == -1);
+        }
+
         private void TestReadLine(RubyBufferedStream/*!*/ io, bool preserveEolns, string expected) {
             var s = io.ReadLine(RubyEncoding.Binary, preserveEolns, -1);
             Assert(s == null && expected == null || s.ToString() == expected);

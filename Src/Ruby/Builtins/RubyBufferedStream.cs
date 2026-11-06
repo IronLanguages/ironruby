@@ -134,7 +134,8 @@ namespace IronRuby.Builtins {
                 _bufferStart = 0;
             }
 
-            bytesRead = BaseRead(_buffer, _bufferCount, count);
+            // the buffered bytes start at _bufferStart: the new ones go right after them
+            bytesRead = BaseRead(_buffer, _bufferStart + _bufferCount, count);
             _bufferCount += bytesRead;
             return bytesRead;
         }
