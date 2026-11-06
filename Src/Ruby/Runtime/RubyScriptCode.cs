@@ -120,24 +120,18 @@ namespace IronRuby.Runtime {
             int compilationThreshold) {
 
             if (debugMode) {
-                return CompileDebug(lambda);
-            } 
+                return lambda.Compile();
+            }
             long traceStart = StartupTrace.Now();
             try {
                 if (noAdaptiveCompilation) {
-                    Delegate result = lambda.Compile();
-                    return result;
+                    return lambda.Compile();
                 }
 
                 return lambda.LightCompile(compilationThreshold);
             } finally {
                 StartupTrace.Compiled(traceStart);
             }
-        }
-
-
-        private static Delegate/*!*/ CompileDebug(LambdaExpression/*!*/ lambda) {
-            return lambda.Compile();
         }
     }
 }

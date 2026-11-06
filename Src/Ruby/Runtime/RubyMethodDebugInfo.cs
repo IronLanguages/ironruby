@@ -18,6 +18,9 @@ using System.Collections.Generic;
 using System.Reflection;
 
 namespace IronRuby.Runtime {
+    /// <summary>
+    /// The IL offset to source line map of a precompiled startup-library method, which has no PDB.
+    /// </summary>
     internal sealed class RubyMethodDebugInfo {
         private readonly List<int>/*!*/ _offsets = new List<int>();
         private readonly List<int>/*!*/ _lines = new List<int>();
