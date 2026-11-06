@@ -223,6 +223,7 @@ namespace IronRuby.Builtins {
             Context.TrueClass = DefineGlobalClass("TrueClass", typeof(IronRuby.Builtins.TrueClass), 0x0000000F, Context.ObjectClass, LoadTrueClass_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalClass("UnboundMethod", typeof(IronRuby.Builtins.UnboundMethod), 0x0000000F, Context.ObjectClass, LoadUnboundMethod_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             // Skipped primitive: Class
+            DefineGlobalClass("Complex", typeof(IronRuby.Builtins.RubyComplex), 0x0000000F, def70, LoadComplex_Instance, LoadComplex_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyClass def42 = DefineGlobalClass("File", typeof(IronRuby.Builtins.RubyFile), 0x00000007, def45, LoadFile_Instance, LoadFile_Class, LoadFile_Constants, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Nullable<System.Int32>>, IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.RubyFile>(IronRuby.Builtins.RubyFileOps.CreateFile)
             );
@@ -818,6 +819,82 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ComparisonStorage, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.Comparable.Clamp), 
                 new Func<IronRuby.Runtime.ComparisonStorage, System.Object, IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.Comparable.Clamp), 
                 new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.Comparable.Clamp)
+            );
+            
+        }
+        
+        private static void LoadComplex_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_set_parts__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyComplex, System.Object, System.Object, IronRuby.Builtins.RubyComplex>(IronRuby.Builtins.RubyComplex.SetParts)
+            );
+            
+            DefineLibraryMethod(module, "-", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.RubyComplex, System.Object, System.Object>(IronRuby.Builtins.RubyComplex.Subtract)
+            );
+            
+            DefineLibraryMethod(module, "*", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.RubyComplex, System.Object, System.Object>(IronRuby.Builtins.RubyComplex.Multiply)
+            );
+            
+            DefineLibraryMethod(module, "/", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.RubyComplex, System.Object, System.Object>(IronRuby.Builtins.RubyComplex.Divide)
+            );
+            
+            DefineLibraryMethod(module, "+", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.RubyComplex, System.Object, System.Object>(IronRuby.Builtins.RubyComplex.Add)
+            );
+            
+            DefineLibraryMethod(module, "==", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.RubyComplex, System.Object, System.Object>(IronRuby.Builtins.RubyComplex.Equal)
+            );
+            
+            DefineLibraryMethod(module, "abs", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Builtins.RubyComplex, System.Object>(IronRuby.Builtins.RubyComplex.Abs)
+            );
+            
+            DefineLibraryMethod(module, "hash", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Builtins.RubyComplex, System.Object>(IronRuby.Builtins.RubyComplex.Hash)
+            );
+            
+            DefineLibraryMethod(module, "imag", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyComplex, System.Object>(IronRuby.Builtins.RubyComplex.GetImaginary)
+            );
+            
+            DefineLibraryMethod(module, "imaginary", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyComplex, System.Object>(IronRuby.Builtins.RubyComplex.GetImaginary)
+            );
+            
+            DefineLibraryMethod(module, "magnitude", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Builtins.RubyComplex, System.Object>(IronRuby.Builtins.RubyComplex.Abs)
+            );
+            
+            DefineLibraryMethod(module, "quo", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.RubyComplex, System.Object, System.Object>(IronRuby.Builtins.RubyComplex.Divide)
+            );
+            
+            DefineLibraryMethod(module, "real", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyComplex, System.Object>(IronRuby.Builtins.RubyComplex.GetReal)
+            );
+            
+        }
+        
+        private static void LoadComplex_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__raw__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.Builtins.RubyComplex>(IronRuby.Builtins.RubyComplex.Raw)
             );
             
         }
@@ -2934,6 +3011,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Double, System.Object, System.Boolean>(IronRuby.Builtins.FloatOps.Eql)
             );
             
+            DefineLibraryMethod(module, "to_c", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Double, IronRuby.Builtins.RubyComplex>(IronRuby.Builtins.FloatOps.ToComplex)
+            );
+            
         }
         
         private static void LoadFloat_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -3254,6 +3336,11 @@ namespace IronRuby.Builtins {
                 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Runtime.BlockParam, System.Int32, System.Object>(IronRuby.Builtins.Integer.Times), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.Integer.Times)
+            );
+            
+            DefineLibraryMethod(module, "to_c", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyComplex>(IronRuby.Builtins.Integer.ToComplex)
             );
             
             DefineLibraryMethod(module, "to_i", 0x51, 
@@ -4887,6 +4974,15 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.String, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.KernelOps.GetClrMember)
             );
             
+            DefineLibraryMethod(module, "Complex", 0x52, 
+                new[] { 0x00000000U, 0x00000000U, 0x00000000U, 0x80000000U, 0x00000000U}, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToComplex), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToComplex), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToComplex), 
+                new Func<System.Object, System.Object, System.Object, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.ToComplex), 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToComplex)
+            );
+            
             DefineLibraryMethod(module, "define_singleton_method", 0x51, 
                 new[] { 0x0002000cU, 0x0000000cU, 0x0002000cU, 0x0000000cU, 0x0004000aU, 0x0000000aU, 0x0002000cU, 0x0000000cU}, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.String, IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.KernelOps.DefineSingletonMethod), 
@@ -5441,6 +5537,15 @@ namespace IronRuby.Builtins {
                 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Catch), 
                 new Func<IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Catch)
+            );
+            
+            DefineLibraryMethod(module, "Complex", 0x61, 
+                new[] { 0x00000000U, 0x00000000U, 0x00000000U, 0x80000000U, 0x00000000U}, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToComplex), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToComplex), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToComplex), 
+                new Func<System.Object, System.Object, System.Object, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.ToComplex), 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToComplex)
             );
             
             DefineLibraryMethod(module, "eval", 0x61, 

@@ -23,6 +23,12 @@ namespace IronRuby.Builtins {
     [RubyClass("Float", Extends = typeof(double), Inherits = typeof(Numeric)), Includes(typeof(ClrFloat), Copy = true)]
     [UndefineMethod("new", IsStatic = true)]
     public static class FloatOps {
+        /// <summary>numeric_to_c: self + 0i (complex.rb's Numeric#to_c, for a Float).</summary>
+        [RubyMethod("to_c")]
+        public static RubyComplex/*!*/ ToComplex(RubyContext/*!*/ context, double self) {
+            return new RubyComplex(context.GetClass(typeof(RubyComplex)), self, ScriptingRuntimeHelpers.Int32ToObject(0));
+        }
+
         #region Constants
 
         /// <summary>
