@@ -113,30 +113,6 @@ end
 ");
         }
 
-#if OBSOLETE
-        /// <summary>
-        /// Alias in define_method.
-        /// </summary>
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void AliasMethodLookup2() {
-            TestOutput(@"
-class D
-end
-
-class E
-  D.send(:define_method, :bar) {
-    alias g f rescue p $!
-  }
-end
-
-d = D.new
-d.bar
-", @"
-<NameError: undefined method `f' for class `D'>
-");
-        }
-#endif
-
         /// <summary>
         /// Alias in define_method.
         /// </summary>

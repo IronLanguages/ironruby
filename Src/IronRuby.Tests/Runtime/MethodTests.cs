@@ -1152,18 +1152,7 @@ foo
 ");
         }
 
-#if OBSOLETE
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void DefineMethodVisibility2A() {
-            Test_DefineMethodVisibility2();
-        }
-#endif
-
         public void DefineMethodVisibility2B() {
-            Test_DefineMethodVisibility2();
-        }
-
-        public void Test_DefineMethodVisibility2() {
             TestOutput(@"
 module M                                              # the inner module is the same module we call define_method on
   1.times do  
@@ -1312,13 +1301,6 @@ puts A.send(:remove_method, :foo) rescue puts B.send(:remove_method, :foo)
             AssertOutput(() => CompilerTest(MethodDefinitionInDefineMethodCode1), "A");
         }
 
-#if OBSOLETE
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void MethodDefinitionInDefineMethod1B() {
-            AssertOutput(() => CompilerTest(MethodDefinitionInDefineMethodCode1), "B");
-        }
-#endif
-
         private string MethodDefinitionInDefineMethodCode2 = @"
 class B
   define_method :m do    
@@ -1337,16 +1319,6 @@ puts A.send(:remove_method, :foo) rescue puts B.send(:remove_method, :foo)
             AssertOutput(() => CompilerTest(MethodDefinitionInDefineMethodCode2), "B");
         }
 
-#if OBSOLETE
-        /// <summary>
-        /// MRI 1.8 actually prints A. We consider it a bug that we won't copy.
-        /// </summary>
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void MethodDefinitionInDefineMethod2B() {
-            AssertOutput(() => CompilerTest(MethodDefinitionInDefineMethodCode2), "B");
-        }
-#endif
-
         private string MethodDefinitionInModuleEvalCode = @"
 class A
   $p = lambda { |m| def foo; end }
@@ -1362,13 +1334,6 @@ puts A.send(:remove_method, :foo) rescue puts B.send(:remove_method, :foo)
         public void MethodDefinitionInModuleEval1A() {
             AssertOutput(() => CompilerTest(MethodDefinitionInModuleEvalCode), "B");
         }
-
-#if OBSOLETE
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void MethodDefinitionInModuleEval1B() {
-            AssertOutput(() => CompilerTest(MethodDefinitionInModuleEvalCode), "B");
-        }
-#endif
 
         public void Scenario_ModuleOps_Methods() {
             AssertOutput(delegate() {

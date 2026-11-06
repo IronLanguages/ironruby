@@ -70,8 +70,6 @@ namespace IronRuby.Tests {
         }
 
         public void Require1() {
-            if (_driver.PartialTrust) return;
-
             try {
                 string temp = _driver.MakeTempDir();
                 Context.Loader.SetLoadPaths(new[] { temp });
@@ -102,8 +100,6 @@ false
         }
 
         public void Load1() {
-            if (_driver.PartialTrust) return;
-
             try {
                 string temp = _driver.MakeTempDir();
                 Context.Loader.SetLoadPaths(new[] { temp });
@@ -125,7 +121,7 @@ error
         }
 
         public void RequireInterop1() {
-            if (_driver.PartialTrust || !_driver.RunPython) return;
+            if (!_driver.RunPython) return;
 
             try {
                 string temp = _driver.MakeTempDir();
@@ -141,7 +137,7 @@ print 'Hello from Python'
         }
 
         public void RequireInterop2() {
-            if (_driver.PartialTrust || !_driver.RunPython) return;
+            if (!_driver.RunPython) return;
 
             try {
                 string temp = _driver.MakeTempDir();
@@ -259,8 +255,6 @@ bar
         /// LoadError, as the handler looked for PathLoadedWidgets on $LOAD_PATH only.
         /// </summary>
         public void Require_PathLoadedDependency1() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(dir, "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(dir, "PathLoadedExtensions", "1.0.0.0", "1.0.0.0");
@@ -285,8 +279,6 @@ shout
         /// as .NET Framework's LoadFrom context did; the DLL found there is loaded as require would load it.
         /// </summary>
         public void Require_PathLoadedDependency2() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(dir, "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(dir, "PathLoadedExtensions", "1.0.0.0", "1.0.0.0");
@@ -309,8 +301,6 @@ PathLoadedWidgets
         /// would not take the Widgets Ruby made from the first.
         /// </summary>
         public void Require_PathLoadedDependency3() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(Path.Combine(dir, "a"), "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(Path.Combine(dir, "b"), "PathLoadedWidgets", "1.0.0.0", null);
@@ -338,8 +328,6 @@ shout
         /// application's assemblies do, and not a reference to a later version.
         /// </summary>
         public void Require_PathLoadedDependency4() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(Path.Combine(dir, "a"), "PathLoadedWidgets", "2.0.0.0", null);
             WriteFixtureAssembly(Path.Combine(dir, "b"), "PathLoadedOlderExtensions", "1.0.0.0", "1.0.0.0");
@@ -365,8 +353,6 @@ LoadError
         /// $LOAD_PATH is searched as it was, and before the directory of the DLL making the reference.
         /// </summary>
         public void Require_PathLoadedDependency5() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(Path.Combine(dir, "a"), "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(Path.Combine(dir, "b"), "PathLoadedWidgets", "1.0.0.0", null);
@@ -391,8 +377,6 @@ true
         /// runtime's Widgets and not the other's.
         /// </summary>
         public void Require_PathLoadedDependency6() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             foreach (string subdir in new[] { "a", "b", "c" }) {
                 WriteFixtureAssembly(Path.Combine(dir, subdir), "PathLoadedWidgets", "1.0.0.0", null);
@@ -430,8 +414,6 @@ PathLoadedFixture::Widget.new.shout
         /// return true without reading them, as the runtime had seen the assembly already.
         /// </summary>
         public void Require_UnreadableExtensions1() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(Path.Combine(dir, "a"), "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(Path.Combine(dir, "b"), "PathLoadedExtensions", "1.0.0.0", "1.0.0.0");
@@ -462,8 +444,6 @@ shout
         /// namespace tries it again.
         /// </summary>
         public void Require_UnreadableExtensions2() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(dir, "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(dir, "PathLoadedNewerExtensions", "1.0.0.0", "3.0.0.0");

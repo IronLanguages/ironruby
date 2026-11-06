@@ -372,10 +372,10 @@ p C.foo
         }
 
         /// <summary>
-        /// module_eval {} in Ruby 1.9 changes constant lookup chain.
+        /// module_eval {} does not change the constant lookup chain (it did in Ruby 1.9.1 only):
+        /// the constant is defined in the block's lexical scope, B, both times.
         /// </summary>
         public void ConstantCaching_Unqualified5() {
-#if TODO
             TestOutput(@"
 module A
  
@@ -383,22 +383,21 @@ end
 
 module B
   $q = Proc.new { X = 1 }
-  A.module_eval &$q
+  A.module_eval(&$q)
 end
 
 module C
-  module_eval &$q
+  module_eval(&$q)
 end
 
 p A.constants
 p B.constants
 p C.constants
 ", @"
-[:X]
 []
 [:X]
-");
-#endif
+[]
+", 0, 1);
         }
 
         /// <summary>
@@ -683,8 +682,6 @@ end
         }
 
         public void ConstantCaching_AutoUpdating1A() {
-            if (_driver.PartialTrust) return;
-
             var autoloaded = @"
 $C.const_set(:D, 1)
 $C.const_set(:E, 1)
@@ -722,8 +719,6 @@ end
         }
 
         public void ConstantCaching_AutoUpdating1B() {
-            if (_driver.PartialTrust) return;
-
             var autoloaded = @"
 class X
   D = 1

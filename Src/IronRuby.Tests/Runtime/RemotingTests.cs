@@ -27,8 +27,6 @@ namespace IronRuby.Tests {
     public partial class Tests {
         [Options(NoRuntime = true)]
         public void Serialization1() {
-            if (_driver.PartialTrust) return;
-
             // BinaryFormatter throws PlatformNotSupportedException from .NET 9 on; .NET 8 still
             // has it because this project sets EnableUnsafeBinaryFormatterSerialization.
             if (!BinaryFormatterAvailable) return;
@@ -46,22 +44,6 @@ namespace IronRuby.Tests {
             var s = MutableString.Create("foo", RubyEncoding.UTF8);
             var rs = Roundtrip(s);
             Assert(s.Equals(rs));
-
-            // The Ruby data of a CLR exception (its backtrace, ...) travelling with it, as it did
-            // when marshalled into another AppDomain. That needs the DLR to keep exception data in
-            // Exception.Data, which it does only with FEATURE_REMOTING; without it (.NET Core:
-            // no AppDomains, no remoting) the data sits in a ConditionalWeakTable that no
-            // serializer sees.
-#if FEATURE_REMOTING
-            var e = new Exception("msg");
-            var ed = RubyExceptionData.GetInstance(e);
-            ed.Backtrace = new RubyArray(new[] { 1, 2, 3 });
-
-            var re = Roundtrip(e);
-            var rde = RubyExceptionData.TryGetInstance(re);
-            Assert(rde != null);
-            Assert(ArrayUtils.ValueEquals(rde.Backtrace.ToArray(), new object[] { 1,2,3 }));
-#endif
         }
 
         private static bool BinaryFormatterAvailable {

@@ -310,7 +310,7 @@ namespace IronRuby.Tests {
                 ProcNew4,
                 MethodToProc1,
                 DefineMethod1,
-                // TODO: DefineMethod2,
+                DefineMethod2,
                 ProcPosition1,
                 
                 Scenario_RubyInitializers0,
@@ -327,7 +327,6 @@ namespace IronRuby.Tests {
                 RubyAllocators1,
 
                 RubyForLoop1,
-                // TODO: Python interop: Scenario_RubyForLoop2,
                 WhileLoop1,
                 LoopBreak1,
                 LoopBreak2,
@@ -438,16 +437,6 @@ namespace IronRuby.Tests {
                 Scenario_RubyConsole1,
                 ObjectOperations1,
                 ObjectOperations2,
-                //PythonInterop1,
-                //PythonInterop2,
-                //PythonInterop3,
-                //PythonInterop4,
-                //PythonInterop5,
-                //// TODO: PythonInterop_InvokeMember_Fallback1,
-                //PythonInterop_InvokeMember_Fallback2,
-                //// TODO: PythonInterop_Indexers_Fallback1,
-                //// TODO: PythonInterop_Operators_Fallback1,
-                //PythonInterop_NamedIndexers1,
 
                 CustomTypeDescriptor1,
                 CustomTypeDescriptor2,

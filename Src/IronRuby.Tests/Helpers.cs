@@ -125,18 +125,8 @@ namespace IronRuby.Tests {
 
         public void CompilerTest(string/*!*/ code, ErrorSink/*!*/ sink) {
             Debug.Assert(code != null && sink != null);
-            SourceUnit source;
-
             string name = _driver.TestRuntime.TestName;
-
-            if (_driver.SaveToAssemblies) {
-                string path = Path.Combine(Snippets.Shared.SnippetsDirectory, name + ".rb");
-                Directory.CreateDirectory(Snippets.Shared.SnippetsDirectory);
-                File.WriteAllText(path, code);
-                source = _driver.TestRuntime.Context.CreateFileUnit(path);
-            } else {
-                source = _driver.TestRuntime.Context.CreateSnippet(code, name + ".rb", SourceCodeKind.File);
-            }
+            SourceUnit source = _driver.TestRuntime.Context.CreateSnippet(code, name + ".rb", SourceCodeKind.File);
 
             ScriptCode compiledCode = source.Compile(new RubyCompilerOptions(Context.RubyOptions), sink);
             if (compiledCode != null) {
@@ -155,19 +145,6 @@ namespace IronRuby.Tests {
         private void AssertEquals<T>(object actual, T expected)
             where T : IEquatable<T> {
             Assert(actual is T && ((T)actual).Equals(expected));
-        }
-
-        [DebuggerHiddenAttribute]
-        private void XAssertOutput(Action f, string expectedOutput) {
-            Driver.ColorWrite(ConsoleColor.Yellow, "Assertion check skipped.");
-            // just run the code
-            f();
-        }
-
-        private void XAssertOutput(Action f, string expectedOutput, OutputFlags flags) {
-            Driver.ColorWrite(ConsoleColor.Yellow, "Assertion check skipped.");
-            // just run the code
-            f();
         }
 
         [DebuggerHiddenAttribute]
@@ -199,11 +176,6 @@ namespace IronRuby.Tests {
         }
 
         [DebuggerHiddenAttribute]
-        private void XTestOutput(string code, string expectedOutput) {
-            XAssertOutput(() => CompilerTest(code), expectedOutput);
-        }
-
-        [DebuggerHiddenAttribute]
         private void TestOutputWithEval(string code, string expectedOutput) {
             UsingEval((eval) => AssertOutput(() => CompilerTest(Eval(eval, code)), expectedOutput));
         }
@@ -211,11 +183,6 @@ namespace IronRuby.Tests {
         [DebuggerHiddenAttribute]
         private void TestOutputWithEval(string code, string expectedOutput, int expectedCompilerWarningCount) {
             UsingEval((eval) => AssertOutput(() => CompilerTest(Eval(eval, code), expectedCompilerWarningCount, 0), expectedOutput));
-        }
-
-        [DebuggerHiddenAttribute]
-        private void XTestOutputWithEval(string code, string expectedOutput) {
-            UsingEval((eval) => XAssertOutput(() => CompilerTest(Eval(eval, code)), expectedOutput));
         }
 
         [DebuggerHiddenAttribute]

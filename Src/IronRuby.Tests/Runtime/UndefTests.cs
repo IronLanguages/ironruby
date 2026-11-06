@@ -256,30 +256,6 @@ C
 ");
         }
 
-#if OBSOLETE
-        /// <summary>
-        /// Undef in define_method.
-        /// </summary>
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void UndefMethodLookup5() {
-            TestOutput(@"
-class D
-end
-
-class E
-  D.send(:define_method, :bar) {
-    undef f rescue p $!
-  }
-end
-
-d = D.new
-d.bar
-", @"
-<NameError: undefined method `f' for class `D'>
-");
-        }
-#endif
-
         /// <summary>
         /// Undef in define_method.
         /// </summary>

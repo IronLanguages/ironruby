@@ -794,14 +794,11 @@ end
 begin
   require 'non-existent'
 rescue SecurityError
-  puts 'Caught SecurityError'  # partial trust: current directory detection
+  puts 'Caught SecurityError'
 rescue LoadError
   puts 'Caught LoadError'
 end
-", _driver.PartialTrust ? @"
-initSE
-Caught SecurityError
-" : @"
+", @"
 initLE
 Caught LoadError
 ");
