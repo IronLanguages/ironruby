@@ -441,35 +441,6 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Whether the pattern opens a named group anywhere. Has to be known up front: Ruby
-        /// rejects (a)(?&lt;a&gt;a)\1 as well as (?&lt;a&gt;a)\1, so the decision cannot wait
-        /// until the named group is reached.
-        /// </summary>
-        private static bool HasNamedGroup(string/*!*/ pattern) {
-            bool inCharacterClass = false;
-            for (int i = 0; i < pattern.Length; i++) {
-                char c = pattern[i];
-                if (c == '\\') {
-                    i++;
-                } else if (inCharacterClass) {
-                    inCharacterClass = c != ']';
-                } else if (c == '[') {
-                    inCharacterClass = true;
-                } else if (c == '(' && i + 2 < pattern.Length && pattern[i + 1] == '?') {
-                    char d = pattern[i + 2];
-                    if (d == '\'') {
-                        return true;
-                    }
-                    // (?<= and (?<! are lookbehind, not a named group
-                    if (d == '<' && i + 3 < pattern.Length && pattern[i + 3] != '=' && pattern[i + 3] != '!') {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        /// <summary>
         /// A group name that carries a level specifier - anything with a '+' or a '-' in it - can
         /// be declared but not referenced; Ruby raises when one is used in \k&lt;&gt; or in a
         /// conditional. .NET rejects such names outright, so this only has to produce the error.

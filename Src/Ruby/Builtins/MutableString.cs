@@ -630,15 +630,6 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Prepares the string for mutation that combines its content with content of another mutable string.
-        /// </summary>
-        private void Mutate(MutableString/*!*/ other) {
-            RubyEncoding newEncoding = RequireCompatibleEncoding(other);
-            Mutate();
-            SetEncoding(newEncoding);
-        }
-
-        /// <summary>
         /// Operation only adds bytes or characters of unknown ascii-ness, keeping the encoding.
         /// A string known to contain a non-ASCII character still contains it afterwards, so that
         /// knowledge is kept rather than paying for a rescan of the whole content.
