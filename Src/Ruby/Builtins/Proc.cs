@@ -177,6 +177,17 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// A copy of the proc whose body runs with <paramref name="self"/> as self (Ractor.shareable_proc,
+        /// Ractor.shareable_lambda); a lambda if <paramref name="lambda"/> is set.
+        /// </summary>
+        public Proc/*!*/ CopyWithSelf(object self, bool lambda) {
+            var result = new Proc(lambda ? ProcKind.Lambda : Kind, self, _scope, _dispatcher);
+            result.Converter = Converter;
+            result.SymbolName = SymbolName;
+            return result;
+        }
+
+        /// <summary>
         /// Creates a copy of the proc that has the same target, context and self object as this block.
         /// </summary>
         public Proc/*!*/ Create(Proc/*!*/ proc) {

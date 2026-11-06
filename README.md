@@ -314,6 +314,37 @@ of the rbs C parser itself - the gem's `src/`, built unmodified into `librbs` by
 C# (`Src/Libraries/Rbs`).  The parser is tied to one rbs release, currently 4.0.0.dev.5, and
 `require "rbs"` under any other version raises a `LoadError` saying so.
 
+### Ractor
+
+`Ractor` has Ruby 4.0's API ([`RactorOps.cs`](Src/Libraries/Builtins/RactorOps.cs)): `Ractor.new`
+(with `name:`), `#join` and `#value`, `Ractor::Port` (`#send`/`<<` with `move:`, `#receive`,
+`#close`, `#closed?`), `Ractor.receive`, `#send`, `Ractor.select` over ports and Ractors,
+`#monitor`/`#unmonitor`, `Ractor.current`/`.main`/`.main?`/`.count`, Ractor-local storage
+(`Ractor[]`, `Ractor[]=`, `Ractor.store_if_absent`), `Ractor.shareable?`,
+`Ractor.make_shareable` (with `copy:`), `Ractor.shareable_proc`/`shareable_lambda`, and the
+error classes (`Ractor::RemoteError` with its `cause` and `ractor`, `IsolationError`,
+`MovedError`, `ClosedError`, `Ractor::MovedObject`).  A Ractor is a CLR thread - a Ruby
+thread in its own `ThreadGroup`, whose threads all answer the same `Ractor.current` - so
+Ractors really run in parallel.
+
+What crosses between Ractors behaves as in CRuby: a message is shared when it is shareable
+(frozen all the way down, or made so by `make_shareable`), deep-copied otherwise (cycles and
+shared references kept, `TypeError`/`Ractor::Error` for what CRuby cannot copy), and with
+`move: true` every object copied becomes a `Ractor::MovedObject`, whose every method raises
+`Ractor::MovedError`.  The block of `Ractor.new` is checked when it is created: one that reads
+or assigns a local variable of an enclosing scope raises `ArgumentError` ("can not isolate a
+Proc because it accesses outer variables (a)."), from the variables the compiler records
+for every block; `make_shareable` and `shareable_proc` check those variables' values.
+
+What is not enforced is the isolation of the Ractors from each other.  A non-main Ractor can
+read and write global variables, class variables, instance variables of classes and modules,
+and constants that refer to unshareable objects, all of which raise `Ractor::IsolationError`
+in CRuby; `require` in a non-main Ractor loads the file itself rather than asking the main
+Ractor to.  A block that reaches an outer variable without naming it - through `binding`,
+`eval` of a string, or `local_variable_get` - is not caught by the `Ractor.new` check, and
+a shareable Proc reads its outer variables live instead of from a copy taken when it was
+made (so CRuby's "may be reassigned" error is not raised either).
+
 ### Rails
 
 A Rails 8.1 application boots and serves HTTP requests through Rack:
