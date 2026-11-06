@@ -89,6 +89,13 @@ namespace IronRuby.Builtins {
         // the encodings other than the singletons below, created on first use (initialized before them, in textual order)
         private static readonly ConcurrentDictionary<int, RubyEncoding>/*!*/ _encodings = new ConcurrentDictionary<int, RubyEncoding>();
 
+        // all ASCII characters, U+0000 to U+007F; AsciiIdentity encodes them, so the singletons below need it
+        private static readonly string/*!*/ _allAscii = string.Create(0x80, 0, (chars, _) => {
+            for (int i = 0; i < chars.Length; i++) {
+                chars[i] = (char)i;
+            }
+        });
+
         public static readonly RubyEncoding/*!*/ Binary = new RubyEncoding(BinaryEncoding.Instance, BinaryEncoding.Instance, -4);
         public static readonly RubyEncoding/*!*/ UTF8 = new RubyEncoding(CreateEncoding(CodePageUTF8, false), CreateEncoding(CodePageUTF8, true), -3);
 
@@ -455,13 +462,6 @@ namespace IronRuby.Builtins {
 
             return IsAsciiIdentityFallback(encoding);
         }
-
-        // all ASCII characters, U+0000 to U+007F:
-        private static readonly string/*!*/ _allAscii = string.Create(0x80, 0, (chars, _) => {
-            for (int i = 0; i < chars.Length; i++) {
-                chars[i] = (char)i;
-            }
-        });
 
         /// <summary>
         /// Ruby's "dummy" encodings: stateful encodings that Ruby knows the name of but cannot
