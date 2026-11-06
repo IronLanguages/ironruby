@@ -11226,6 +11226,11 @@ namespace IronRuby.StandardLibrary.Threading {
                 new Func<IronRuby.StandardLibrary.Threading.RubyQueue, System.Int32>(IronRuby.StandardLibrary.Threading.RubyQueue.GetCount)
             );
             
+            DefineLibraryMethod(module, "marshal_dump", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Threading.RubyQueue, System.Object>(IronRuby.StandardLibrary.Threading.RubyQueue.MarshalDump)
+            );
+            
             DefineLibraryMethod(module, "num_waiting", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.Threading.RubyQueue, System.Int32>(IronRuby.StandardLibrary.Threading.RubyQueue.GetNumberOfWaitingThreads)

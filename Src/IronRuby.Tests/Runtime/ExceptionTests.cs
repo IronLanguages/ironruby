@@ -961,5 +961,28 @@ Errno::ECONNREFUSED
 [Socket::ResolutionError, ""getaddrinfo(3): "", true]
 ");
         }
+
+        /// <summary>
+        /// Objects Marshal cannot write are refused the way MRI words it: Queue and SizedQueue by name
+        /// ("can't dump Thread::Queue"), and a Fiber as native data rather than by the Proc it holds.
+        /// </summary>
+        public void Marshal_Undumpable1() {
+            TestOutput(@"
+require 'ruby4'
+[Thread::Queue.new, Thread::SizedQueue.new(1), Thread::ConditionVariable.new, Thread::Mutex.new, Fiber.new {}].each do |o|
+  begin
+    Marshal.dump(o)
+  rescue TypeError => e
+    puts e.message
+  end
+end
+", @"
+can't dump Thread::Queue
+can't dump Thread::SizedQueue
+can't dump Thread::ConditionVariable
+no _dump_data is defined for class Thread::Mutex
+no _dump_data is defined for class Fiber
+");
+        }
     }
 }

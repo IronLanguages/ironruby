@@ -12963,6 +12963,13 @@ class Fiber
     return caller_locations(*args) if equal?(Fiber.current)
     []
   end
+
+  # MRI's Fiber is native data Marshal cannot write; this one is a Ruby object, and
+  # Marshal.dump went on to fail on the first Proc among its instance variables.
+  def marshal_dump
+    ::Kernel.raise(::TypeError, "no _dump_data is defined for class #{self.class}")
+  end
+  private :marshal_dump
 end
 
 module GC

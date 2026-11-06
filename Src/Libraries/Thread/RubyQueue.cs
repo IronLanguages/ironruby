@@ -296,5 +296,11 @@ namespace IronRuby.StandardLibrary.Threading {
             throw RubyExceptions.CreateTypeError("cannot freeze {0}",
                 context.Inspect(self).ToString());
         }
+
+        /// <summary>MRI's Queue (and so SizedQueue) refuses Marshal by name.</summary>
+        [RubyMethod("marshal_dump")]
+        public static object MarshalDump(RubyContext/*!*/ context, RubyQueue/*!*/ self) {
+            throw RubyExceptions.CreateTypeError("can't dump {0}", context.GetClassDisplayName(self));
+        }
     }
 }
