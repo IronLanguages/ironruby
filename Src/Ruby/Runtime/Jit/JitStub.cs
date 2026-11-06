@@ -584,7 +584,7 @@ namespace IronRuby.Runtime.Jit {
             var spec = new Specialization(this);
             spec.ConstantVersion = constantVersion;
             spec.Entry = BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec).Compile();
-            if (_keywords != null && _keywords.OptionalPositionals == 0 && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
+            if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
                 _keywords.Count <= JitKeywordCall.MaxKeywords) {
                 spec.Direct = BuildDirectEntry(code, callee, version, spec).Compile();
             }

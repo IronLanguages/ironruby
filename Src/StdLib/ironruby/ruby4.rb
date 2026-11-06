@@ -12486,7 +12486,7 @@ class Range
   # in the #succ walk from begin to end, which is why ("a".."z") does not
   # include "cc". Anything else has to be walked, and a range with no beginning
   # or no end cannot be walked at all.
-  def include?(value)
+  def __include__(value)
     b = self.begin
     e = self.end
     # Integers all round: the comparison #cover? would make, without the class tests below.
@@ -12509,7 +12509,7 @@ class Range
     each { |x| return true if x == value }
     false
   end
-  alias :member? :include?
+  private :__include__
 
   def __linear__(x)
     x.is_a?(::Numeric) || x.is_a?(::Time)
@@ -12867,7 +12867,9 @@ class Range
   # MRI's range_max: a block, a count, or an exclusive end that is not a number means
   # Enumerable's walk (which a beginless range cannot do); otherwise the end answers, one
   # less for an exclusive Integer end - and only an Integer begin may exclude it.
-  def max(n = nil, &block)
+  # #min, #max, #include? and #member? are C# (RangeOps): an Integer or Float range without a
+  # block or count is answered there, and anything else comes here.
+  def __max__(n = nil, &block)
     e = self.end
     raise RangeError, "cannot get the maximum of endless range" if e.nil?
     b = self.begin
@@ -12892,7 +12894,7 @@ class Range
       if b.nil?
         raise RangeError, "cannot get the maximum of beginless range with custom comparison method"
       end
-      return super(&block)
+      return ::Enumerable.instance_method(:max).bind_call(self, &block)
     end
 
     c = b.nil? ? -1 : (b <=> e)
@@ -12908,7 +12910,7 @@ class Range
     e
   end
 
-  def min(n = nil, &block)
+  def __min__(n = nil, &block)
     b = self.begin
     raise RangeError, "cannot get the minimum of beginless range" if b.nil?
     if n
@@ -12920,7 +12922,7 @@ class Range
       if self.end.nil?
         raise RangeError, "cannot get the minimum of endless range with custom comparison method"
       end
-      return super(&block)
+      return ::Enumerable.instance_method(:min).bind_call(self, &block)
     end
 
     e = self.end
@@ -12928,6 +12930,8 @@ class Range
     return nil if c.nil? || c > 0 || (c == 0 && exclude_end?)
     b
   end
+
+  private :__min__, :__max__
 
   def minmax(&block)
     return super(&block) if block
