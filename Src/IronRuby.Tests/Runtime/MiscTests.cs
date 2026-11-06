@@ -3182,6 +3182,7 @@ t('zip') { [(1..5).zip(1..3), (1..5).zip(2...4), (1..4).zip(10..), (1..3).zip(5.
 t('zip block') { r = []; [(1..3).zip(4..6) { |x| r << x }, r] }
 t('zip subclass') { (1..2).zip(Class.new(Range) { def each; yield 42; end }.new(1, 5)) }
 t('zip singleton') { r = (1..3).dup; def r.each; yield 42; end; (1..2).zip(r) }
+t('zip readers') { [(r = (1..3).dup; def r.begin; 10; end; (0..1).zip(r)), (r = (1..3).dup; def r.end; 1; end; (0..2).zip(r)), (r = (1..3).dup; def r.exclude_end?; true; end; (0..3).zip(r))] }
 ", @"
 Integer ""123"": [123, 291, 123.0]
 Integer "" 0x1A "": [26, 26, 26.0]
@@ -3235,6 +3236,7 @@ zip: [[[1, 1], [2, 2], [3, 3], [4, nil], [5, nil]], [[1, 2], [2, 3], [3, nil], [
 zip block: [nil, [[1, 4], [2, 5], [3, 6]]]
 zip subclass: [[1, 42], [2, nil]]
 zip singleton: [[1, 42], [2, nil]]
+zip readers: [[[0, 1], [1, 2]], [[0, 1], [1, 2], [2, 3]], [[0, 1], [1, 2], [2, 3], [3, nil]]]
 ");
         }
 

@@ -796,6 +796,9 @@ module Enumerable
       end
     end
     RANGE_EACH__ = ::Range.instance_method(:each)
+    # the readers the indexed path asks; Range#each itself uses the stored endpoints, so a
+    # Range that overrides one of them - (1..3).dup can - has to be enumerated instead
+    RANGE_READERS__ = [:begin, :end, :exclude_end?].map { |name| [name, ::Range.instance_method(name)] }.freeze
 
     def __zip_source__(other)
       return other if other.is_a?(Array)
@@ -803,8 +806,9 @@ module Enumerable
         converted = other.to_ary
         return converted if converted.is_a?(Array)
       end
-      if other.instance_of?(::Range) && ::Integer === other.begin &&
-          (other.end.nil? || ::Integer === other.end) && other.method(:each).unbind == RANGE_EACH__
+      if other.instance_of?(::Range) && other.method(:each).unbind == RANGE_EACH__ &&
+          RANGE_READERS__.all? { |name, method| other.method(name).unbind == method } &&
+          ::Integer === other.begin && (other.end.nil? || ::Integer === other.end)
         last = other.end
         last -= 1 if last && other.exclude_end?
         return ZipIntegerRange__.new(other.begin, last)
