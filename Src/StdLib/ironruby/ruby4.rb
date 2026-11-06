@@ -5502,7 +5502,7 @@ class Enumerator
           size = @__size__
           unless block
             return ::Enumerator.new(size) { |y| generator.call(y, *args) }
-              .__set_inspect__(nil, :each, args, "#<Enumerator::Generator:#{'0x%07x' % (generator.object_id * 2)}>")
+              .__set_inspect__(nil, :each, args, "#<Enumerator::Generator:#{'0x%016x' % (generator.object_id * 2)}>")
           end
           return generator.call(Yielder.new(&block), *args)
         end
@@ -5767,7 +5767,7 @@ class Enumerator
     target = (@generator ? nil : __enum_target__)
     unless target
       if @generator
-        return "#<#{self.class}: #<Enumerator::Generator:#{'0x%07x' % (@generator.object_id * 2)}>:each>"
+        return "#<#{self.class}: #<Enumerator::Generator:#{'0x%016x' % (@generator.object_id * 2)}>:each>"
       end
       # A C#-built enumerator over a delegate keeps only its size descriptor,
       # which for these names the method it came from.
@@ -6696,7 +6696,7 @@ class Enumerator
         value = block.call(value)
       end
     end
-    enum.__set_inspect__(nil, :each, [], "#<Enumerator::Producer:#{'0x%07x' % (block.object_id * 2)}>")
+    enum.__set_inspect__(nil, :each, [], "#<Enumerator::Producer:#{'0x%016x' % (block.object_id * 2)}>")
   end unless respond_to?(:produce)
 end
 

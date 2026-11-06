@@ -2673,6 +2673,15 @@ namespace IronRuby.Builtins {
             PrintOps.Puts(writeStorage, tosConversion, tryToAry, writeStorage.Context.StandardOutput, args);
         }
 
+        /// <summary>
+        /// Ruby 4.0's hook for naming the instance variables #inspect shows: nil, all of them.
+        /// RubyUtils.InspectObject does not call this one, which would make every #inspect pay for a call.
+        /// </summary>
+        [RubyMethod("instance_variables_to_inspect", RubyMethodAttributes.PrivateInstance)]
+        public static object GetInstanceVariablesToInspect(object self) {
+            return null;
+        }
+
         [RubyMethod("display")]
         public static void Display(BinaryOpStorage/*!*/ writeStorage, object self) {
             Protocols.Write(writeStorage, writeStorage.Context.StandardOutput, self);

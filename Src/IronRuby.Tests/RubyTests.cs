@@ -134,6 +134,7 @@ namespace IronRuby.Tests {
                 Scenario_Globals2,
                 Scenario_Globals3,
                 Scenario_InspectRecursive1,
+                Scenario_InspectObjectId1,
 
                 Scenario_RubyMethodMissing1, 
                 Scenario_RubyMethodMissing2, 

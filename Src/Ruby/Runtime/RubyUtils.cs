@@ -169,8 +169,8 @@ namespace IronRuby.Runtime {
         /// Ruby 4.0 lets an object name the instance variables its #inspect shows, by answering an
         /// array of names from a private #instance_variables_to_inspect. A name that the object
         /// does not have is simply not shown; nil means "all of them", and anything else is an
-        /// error. Objects that do not define the method at all - which is nearly all of them -
-        /// pay one method lookup.
+        /// error. Objects that do not define the method - which is nearly all of them, they have
+        /// Kernel's - pay one method lookup.
         /// </summary>
         private static IEnumerable<KeyValuePair<string, object>>/*!*/ SelectInspectedVariables(
             RubyContext/*!*/ context, object obj, IEnumerable<KeyValuePair<string, object>>/*!*/ vars) {
@@ -186,7 +186,9 @@ namespace IronRuby.Runtime {
             }
             vars = visible;
 
-            if (!context.ResolveMethod(obj, "instance_variables_to_inspect", VisibilityContext.AllVisible).Found) {
+            // Kernel's own answers nil:
+            var hook = context.ResolveMethod(obj, "instance_variables_to_inspect", VisibilityContext.AllVisible);
+            if (!hook.Found || hook.Info is RubyLibraryMethodInfo && hook.Info.DeclaringModule == context.KernelModule) {
                 return vars;
             }
 
@@ -288,7 +290,7 @@ namespace IronRuby.Runtime {
         }
 
         public static MutableString/*!*/ AppendFormatHexObjectId(MutableString/*!*/ str, long objectId) {
-            return str.AppendFormat("0x{0:x7}", 2 * objectId);
+            return str.AppendFormat("0x{0:x16}", 2 * objectId);
         }
 
         public static MutableString/*!*/ ObjectToMutableString(IRubyObject/*!*/ self) {

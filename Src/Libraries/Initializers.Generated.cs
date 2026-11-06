@@ -4780,6 +4780,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetInstanceVariableNames)
             );
             
+            DefineLibraryMethod(module, "instance_variables_to_inspect", 0x52, 
+                0x00000000U, 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetInstanceVariablesToInspect)
+            );
+            
             DefineLibraryMethod(module, "Integer", 0x52, 
                 0x00000002U, 0x00020002U, 0x00000000U, 
                 new Func<System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
