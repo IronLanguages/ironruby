@@ -154,13 +154,9 @@ namespace IronRuby.Hosting {
         private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint mode);
 
         private static void SetHomeEnvironmentVariable() {
-            try {
-                PlatformAdaptationLayer platform = PlatformAdaptationLayer.Default;
-                string homeDir = RubyUtils.GetHomeDirectory(platform);
-                platform.SetEnvironmentVariable("HOME", homeDir);
-            } catch (System.Security.SecurityException) {
-                // Ignore EnvironmentPermission exception
-            }
+            PlatformAdaptationLayer platform = PlatformAdaptationLayer.Default;
+            string homeDir = RubyUtils.GetHomeDirectory(platform);
+            platform.SetEnvironmentVariable("HOME", homeDir);
         }
     }
 }
