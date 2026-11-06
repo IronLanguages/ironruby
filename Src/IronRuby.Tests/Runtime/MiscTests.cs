@@ -3290,6 +3290,7 @@ t('true radix') { Integer(""1"", true) }
 t('utf16') { Integer(""12"".encode(""UTF-16LE""), exception: false) }
 t('to_i') { r = Object.new; def r.to_i; 3; end; [Integer(r), Integer(Rational(7, 2)), Float(Rational(7, 2))] }
 t('round') { [12345.round(-2), 12350.round(-2), -12350.round(-2), 12350.round(-2, half: :even), 12350.round(-2, half: :down), 25.round(-1, half: :even), 2147483647.round(-9), -2147483648.floor(-9), 5.ceil(-18), 5.ceil(-19), -5.floor(-19), 5.round(-25), 12345.truncate(-3), -12345.truncate(-3), 7.round(2)] }
+t('round as a hash key') { {-3000000000 => :hit}[-2147483648.floor(-9)] }
 t('first/last') { [(1..10).first, (1...10).last, (1..10).first(3), (1..10).last(3), (..5).last(2), (...5).last(3), ('a'..'e').last(2)] }
 t('beginless first') { (..5).first }
 t('endless last') { (1..).last }
@@ -3321,6 +3322,7 @@ true radix: [TypeError, ""no implicit conversion of true into Integer""]
 utf16: [Encoding::CompatibilityError, ""ASCII incompatible encoding: UTF-16LE""]
 to_i: [3, 3, 3.5]
 round: [12300, 12400, -12400, 12400, 12300, 20, 2000000000, -3000000000, 1000000000000000000, 10000000000000000000, -10000000000000000000, 0, 12000, -12000, 7]
+round as a hash key: :hit
 first/last: [1, 10, [1, 2, 3], [8, 9, 10], [4, 5], [2, 3, 4], [""d"", ""e""]]
 beginless first: [RangeError, ""cannot get the first element of beginless range""]
 endless last: [RangeError, ""cannot get the last element of endless range""]

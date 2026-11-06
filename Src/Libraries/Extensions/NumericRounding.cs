@@ -426,9 +426,8 @@ namespace IronRuby.Builtins {
                     rounded = away ? (v < 0 ? down - f : down + f) : down;
                     break;
             }
-            result = (rounded >= Int32.MinValue && rounded <= Int32.MaxValue)
-                ? ScriptingRuntimeHelpers.Int32ToObject((int)rounded)
-                : (object)new BigInteger(rounded);
+            // an Int32 when it fits and an Int64 otherwise, as every other Integer is represented
+            result = Protocols.Normalize(rounded);
             return true;
         }
 
