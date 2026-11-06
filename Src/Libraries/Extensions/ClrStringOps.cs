@@ -415,7 +415,7 @@ namespace IronRuby.Builtins {
         #region to_f, to_s, to_str, to_clr_string, to_sym, intern
 
         [RubyMethod("to_f")]
-        public static double ToDouble(string/*!*/ self) {
+        public static double ToDouble(RubyContext/*!*/ context, string/*!*/ self) {
             // The tokenizer parses *literals*, where an underscore may sit anywhere between
             // digits and the whole string has to be consumed. #to_f is the lenient form: it
             // takes the longest valid prefix and answers 0.0 when there is none, and an
@@ -426,12 +426,12 @@ namespace IronRuby.Builtins {
             }
 
             double result;
-            if (Double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
-                return result;
+            if (!Double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
+                // Out of range: MRI answers +/-Infinity rather than failing.
+                result = cleaned[0] == '-' ? Double.NegativeInfinity : Double.PositiveInfinity;
             }
-
-            // Out of range: MRI answers +/-Infinity rather than failing.
-            return cleaned[0] == '-' ? Double.NegativeInfinity : Double.PositiveInfinity;
+            RubyOps.WarnIfFloatOutOfRange(context, cleaned, result);
+            return result;
         }
 
         /// <summary>

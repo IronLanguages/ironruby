@@ -4401,7 +4401,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "to_f", 0x51, 
                 0x00000000U, 
-                new Func<System.String, System.Double>(IronRuby.Builtins.ClrString.ToDouble)
+                new Func<IronRuby.Runtime.RubyContext, System.String, System.Double>(IronRuby.Builtins.ClrString.ToDouble)
             );
             
             DefineLibraryMethod(module, "to_i", 0x51, 
@@ -4993,10 +4993,11 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "sleep", 0x52, 
-                0x00000000U, 0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 
                 new Action<System.Object>(IronRuby.Builtins.KernelOps.Sleep), 
                 new Func<System.Object, System.Int32, System.Int32>(IronRuby.Builtins.KernelOps.Sleep), 
-                new Func<System.Object, System.Double, System.Int32>(IronRuby.Builtins.KernelOps.Sleep)
+                new Func<System.Object, System.Double, System.Int32>(IronRuby.Builtins.KernelOps.Sleep), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Int32>(IronRuby.Builtins.KernelOps.Sleep)
             );
             
             DefineLibraryMethod(module, "sprintf", 0x52, 
@@ -5316,10 +5317,11 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "sleep", 0x61, 
-                0x00000000U, 0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 
                 new Action<System.Object>(IronRuby.Builtins.KernelOps.Sleep), 
                 new Func<System.Object, System.Int32, System.Int32>(IronRuby.Builtins.KernelOps.Sleep), 
-                new Func<System.Object, System.Double, System.Int32>(IronRuby.Builtins.KernelOps.Sleep)
+                new Func<System.Object, System.Double, System.Int32>(IronRuby.Builtins.KernelOps.Sleep), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Int32>(IronRuby.Builtins.KernelOps.Sleep)
             );
             
             DefineLibraryMethod(module, "sprintf", 0x61, 
@@ -6128,12 +6130,12 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "class_eval", 0x51, 
                 0x80000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.Evaluate)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.ClassEval)
             );
             
             DefineLibraryMethod(module, "class_exec", 0x51, 
                 0x80000000U, 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.Execute)
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.ClassExec)
             );
             
             DefineLibraryMethod(module, "class_variable_defined?", 0x51, 
@@ -6295,12 +6297,12 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "module_eval", 0x51, 
                 0x80000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.Evaluate)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.ModuleEval)
             );
             
             DefineLibraryMethod(module, "module_exec", 0x51, 
                 0x80000000U, 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.Execute)
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.ModuleExec)
             );
             
             DefineLibraryMethod(module, "module_function", 0x52, 
@@ -8187,9 +8189,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "split", 0x51, 
-                0x00000000U, 0x000c0000U, 0x00080008U, 
+                0x00000000U, 0x00100000U, 0x00080008U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.Split), 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.Split), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.Split), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.Split)
             );
             
@@ -8219,18 +8221,23 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "sub", 0x51, 
-                new[] { 0x00000014U, 0x00000014U, 0x00100060U, 0x00000004U, 0x00000004U}, 
+                new[] { 0x00000014U, 0x00000014U, 0x00100060U, 0x00000004U, 0x00000004U, 0x00000000U, 0x80000000U}, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.Builtins.MutableStringOps.BlockReplaceFirst), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.BlockReplaceFirst), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ReplaceFirst), 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceFirst), 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceFirst)
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceFirst), 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceFirst), 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceFirst)
             );
             
             DefineLibraryMethod(module, "sub!", 0x51, 
-                0x00080014U, 0x00100060U, 
+                new[] { 0x00080014U, 0x00100060U, 0x00020004U, 0x00000000U, 0x80000000U}, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.Builtins.MutableStringOps.BlockReplaceFirstInPlace), 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ReplaceFirstInPlace)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ReplaceFirstInPlace), 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceFirstInPlace), 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceFirst), 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.MutableStringOps.ReplaceFirst)
             );
             
             DefineLibraryMethod(module, "succ", 0x51, 
@@ -8265,7 +8272,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "to_f", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.MutableString, System.Double>(IronRuby.Builtins.MutableStringOps.ToDouble)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.MutableString, System.Double>(IronRuby.Builtins.MutableStringOps.ToDouble)
             );
             
             DefineLibraryMethod(module, "to_i", 0x51, 

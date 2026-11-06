@@ -2472,7 +2472,7 @@ namespace IronRuby.Prism {
                 int minimum = node.Requireds.Length + postCount;
                 int maximum = node.Rest != null ? -1 : minimum + node.Optionals.Length;
                 if (minimum > 0 || maximum >= 0) {
-                    statements.Add(ArityCheck(args, minimum, maximum, span));
+                    statements.Add(SplatParameterRead.CheckArity(args, minimum, maximum, RequiredKeywordNames(node), span));
                 }
             }
 
@@ -2562,7 +2562,7 @@ namespace IronRuby.Prism {
             }
 
             if (strict) {
-                foreach (var check in KeywordSeparationChecks(kwVar, mandatory, true, span)) {
+                foreach (var check in KeywordSeparationChecks(kwVar, mandatory, true, RequiredKeywordNames(node), span)) {
                     prologue.Add(check);
                 }
             }
@@ -2584,7 +2584,7 @@ namespace IronRuby.Prism {
         ///   m("a" =&gt; 1, b: 2)   # the keywords landed in a:  given 0, expected 1
         /// </summary>
         private List<Expression>/*!*/ KeywordSeparationChecks(LocalVariable/*!*/ kwVar, List<LeftValue>/*!*/ mandatory,
-            bool acceptsKeywords, SourceSpan span) {
+            bool acceptsKeywords, string[]/*!*/ requiredKeywords, SourceSpan span) {
 
             var checks = new List<Expression>();
             int count = mandatory.Count;
@@ -2594,14 +2594,14 @@ namespace IronRuby.Prism {
                 checks.Add(new IfExpression(
                     new KeywordArgumentsTest(lastMandatory, span),
                     new Statements(acceptsKeywords
-                        ? RaiseArityError(count - 1, count, span)
+                        ? RaiseArityError(count - 1, count, requiredKeywords, span)
                         : RaiseError("ArgumentError", "no keywords accepted", span)),
                     new List<ElseIfClause>(), span));
             }
 
             checks.Add(new UnlessExpression(
                 new KeywordArgumentsTest(kwVar, span),
-                new Statements(RaiseArityError(count + 1, count, span)), null, span));
+                new Statements(RaiseArityError(count + 1, count, requiredKeywords, span)), null, span));
 
             if (!acceptsKeywords) {
                 checks.Add(new UnlessExpression(
@@ -2621,25 +2621,32 @@ namespace IronRuby.Prism {
             optional.Add(new SimpleAssignmentExpression(kwVar, new HashConstructor(new Maplet[0], true, span), null, span));
 
             var prologue = new Statements();
-            foreach (var check in KeywordSeparationChecks(kwVar, mandatory, false, span)) {
+            foreach (var check in KeywordSeparationChecks(kwVar, mandatory, false, new string[0], span)) {
                 prologue.Add(check);
             }
             return prologue;
         }
 
         /// <summary>
-        /// `raise ArgumentError, "wrong number of arguments (given N, expected ...)"` unless
-        /// the splat holding the positional arguments has between <paramref name="minimum"/>
-        /// and <paramref name="maximum"/> entries. A negative maximum means a rest parameter
-        /// took the cap off, which MRI reports as "expected N+".
+        /// MRI's arity error lists the required keywords, given or not:
+        /// "wrong number of arguments (given 2, expected 1; required keyword: k)".
         /// </summary>
-        private Expression/*!*/ ArityCheck(LocalVariable/*!*/ args, int minimum, int maximum, SourceSpan span) {
-            return SplatParameterRead.CheckArity(args, minimum, maximum, span);
+        private static string[]/*!*/ RequiredKeywordNames(Pm.ParametersNode node) {
+            var names = new List<string>();
+            if (node != null) {
+                foreach (var keyword in node.Keywords) {
+                    if (keyword is Pm.RequiredKeywordParameterNode required) {
+                        names.Add(required.Name);
+                    }
+                }
+            }
+            return names.ToArray();
         }
 
-        private Expression/*!*/ RaiseArityError(int given, int expected, SourceSpan span) {
+        private Expression/*!*/ RaiseArityError(int given, int expected, string[]/*!*/ requiredKeywords, SourceSpan span) {
             return RaiseError("ArgumentError",
-                "wrong number of arguments (given " + given + ", expected " + expected + ")", span);
+                "wrong number of arguments (given " + given + ", expected " + expected +
+                RubyParameterSignature.DescribeRequiredKeywords(requiredKeywords) + ")", span);
         }
 
         /// <summary>

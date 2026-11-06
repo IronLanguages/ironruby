@@ -523,6 +523,10 @@ namespace IronRuby.Builtins {
             object ndigits, [Optional]object options) {
 
             var opts = options as IDictionary<object, object>;
+            // round(ndigits, half: mode): the options only ever come as keywords
+            if (options != Missing.Value && opts == null) {
+                throw RubyOps.MakeWrongNumberOfArgumentsErrorN(2, "0..1");
+            }
             if (opts == null && options == Missing.Value) {
                 // round(half: :up) - the only argument is the options hash
                 opts = ndigits as IDictionary<object, object>;

@@ -1929,8 +1929,9 @@ namespace IronRuby.Builtins {
             return new Enumerator(self, "each_char");
         }
 
-        [RubyMethod("chars")]
+        // MRI's backtrace names the method by the first of these
         [RubyMethod("each_char")]
+        [RubyMethod("chars")]
         public static object EachChar([NotNull]BlockParam/*!*/ block, MutableString/*!*/ self) {
             var enumerator = self.GetCharacters();
             while (enumerator.MoveNext()) {
@@ -3179,12 +3180,37 @@ namespace IronRuby.Builtins {
         // sub with neither a replacement nor a block is MRI's arity error (gsub answers an enumerator).
         [RubyMethod("sub")]
         public static object ReplaceFirst(RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ pattern) {
-            throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 1, expected 2)");
+            throw SubArityError(null, 1);
         }
 
         [RubyMethod("sub")]
         public static object ReplaceFirst(RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]MutableString/*!*/ pattern) {
-            throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 1, expected 2)");
+            throw SubArityError(null, 1);
+        }
+
+        [RubyMethod("sub!")]
+        public static object ReplaceFirstInPlace(RubyScope/*!*/ scope, MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
+            throw SubArityError(null, 1);
+        }
+
+        // No argument or more than two: MRI's rb_str_sub_bang checks the arity against the block, so
+        // the binder's union over all overloads ("expected 1..2") is not what it says. (A catch-all
+        // params overload would also be picked for a 2-argument call that fails its conversions.)
+        [RubyMethod("sub")]
+        [RubyMethod("sub!")]
+        public static object ReplaceFirst(BlockParam block, MutableString/*!*/ self) {
+            throw SubArityError(block, 0);
+        }
+
+        [RubyMethod("sub")]
+        [RubyMethod("sub!")]
+        public static object ReplaceFirst(BlockParam block, MutableString/*!*/ self, object arg1, object arg2, object arg3,
+            params object[]/*!*/ rest) {
+            throw SubArityError(block, 3 + rest.Length);
+        }
+
+        private static Exception/*!*/ SubArityError(BlockParam block, int given) {
+            return block != null ? RubyOps.MakeWrongNumberOfArgumentsErrorN(given, "1..2") : RubyOps.MakeWrongNumberOfArgumentsError(given, 2);
         }
 
         // The pattern is converted - and a String one checked (RubyRegex.FromLiteralPattern) - when
@@ -4304,9 +4330,16 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("split")]
-        public static object Split(ConversionStorage<MutableString>/*!*/ stringCast, BlockParam block, MutableString/*!*/ self,
-            [DefaultProtocol]MutableString separator, [DefaultProtocol, Optional]int limit) {
-            return YieldSplit(block, self, Split(stringCast, self, separator, limit));
+        public static object Split(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<MutableString>/*!*/ stringTryCast,
+            BlockParam block, MutableString/*!*/ self, object separator, [DefaultProtocol, Optional]int limit) {
+            // MRI's get_pat_quoted: a String, something with #to_str, or nil for $; - anything else
+            // was meant to be a Regexp.
+            MutableString strSeparator = null;
+            if (separator != null) {
+                strSeparator = separator as MutableString ?? Protocols.TryCastToString(stringTryCast, separator) ??
+                    throw RubyExceptions.CreateUnexpectedTypeError(stringCast.Context, separator, "Regexp");
+            }
+            return YieldSplit(block, self, Split(stringCast, self, strSeparator, limit));
         }
 
         [RubyMethod("split")]
@@ -4569,13 +4602,13 @@ namespace IronRuby.Builtins {
         #region to_f, to_s, to_str, to_clr_string, to_sym, intern
 
         [RubyMethod("to_f")]
-        public static double ToDouble(MutableString/*!*/ self) {
+        public static double ToDouble(RubyContext/*!*/ context, MutableString/*!*/ self) {
             if (!self.Encoding.IsAsciiIdentity) {
                 throw new EncodingCompatibilityError(
                     String.Format("ASCII incompatible encoding: {0}", self.Encoding.Name)
                 );
             }
-            return ClrString.ToDouble(self.ConvertToString());
+            return ClrString.ToDouble(context, self.ConvertToString());
         }
 
         [RubyMethod("to_s")]

@@ -14,7 +14,7 @@ module Kernel
     return nil if converted.nil?
     return converted if klass === converted
     ::Kernel.raise(::TypeError,
-      "can't convert #{obj.class} into #{name} (#{obj.class}##{method} gives #{__ir_conversion_result_name__(converted)})")
+      "can't convert #{obj.class} to #{name} (#{obj.class}##{method} gives #{__ir_conversion_result_name__(converted)})")
   end
 
   # __ir_responds_to__(obj, method) is KernelOps.RespondsTo: it asks the class obj has
@@ -2992,7 +2992,7 @@ module Kernel
         value = arg.to_i
         unless value.is_a?(::Integer)
           raise ::TypeError,
-                "can't convert #{__conversion_class_name__(arg)} into Integer " \
+                "can't convert #{__conversion_class_name__(arg)} to Integer " \
                 "(#{arg.class}#to_i gives #{__ir_conversion_result_name__(value)})"
         end
         value
@@ -3457,7 +3457,7 @@ class String
         target_encoding = str.encoding
       elsif !str.ascii_only?
         ::Kernel.raise(::Encoding::CompatibilityError,
-          "incompatible character encodings: #{encoding} and #{str.encoding}")
+          "incompatible character encodings: #{encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : encoding} and #{str.encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : str.encoding}")
       end
     end
 
@@ -3764,7 +3764,7 @@ class String
     end
     if ::Encoding.compatible?(self, replacement).nil? && replacement.encoding != encoding
       ::Kernel.raise(::Encoding::CompatibilityError,
-                     "incompatible character encodings: #{encoding} and #{replacement.encoding}")
+                     "incompatible character encodings: #{encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : encoding} and #{replacement.encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : replacement.encoding}")
     end
     replacement
   end
@@ -6645,7 +6645,7 @@ class String
 
     unless encoding == stop.encoding || ascii_only? && stop.ascii_only?
       ::Kernel.raise(::Encoding::CompatibilityError,
-        "incompatible character encodings: #{encoding} and #{stop.encoding}")
+        "incompatible character encodings: #{encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : encoding} and #{stop.encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : stop.encoding}")
     end
 
     return to_enum(:upto, stop, exclusive) unless block
@@ -11510,7 +11510,7 @@ class Exception
     # rb_get_backtrace: whatever #backtrace answers, which has to be nil or an Array of Strings
     backtrace = exc.backtrace
     unless backtrace.nil? || (backtrace.is_a?(::Array) && backtrace.all? { |line| line.is_a?(::String) })
-      ::Kernel.raise(::TypeError, "backtrace must be Array of String")
+      ::Kernel.raise(::TypeError, "backtrace must be an Array of String or an Array of Thread::Backtrace::Location")
     end
     backtrace = fallback if backtrace.nil? || backtrace.empty?
     backtrace = [] if backtrace.nil?
@@ -12164,6 +12164,11 @@ module Kernel
     if !basic && object.respond_to?(:to_str)
       converted = object.to_str
       return converted if converted.is_a?(::String)
+      # rb_check_string_type: nil means "no conversion" and #to_s is tried; anything else is wrong
+      unless converted.nil?
+        ::Kernel.raise(::TypeError,
+          "can't convert #{object.class} to String (#{object.class}#to_str gives #{__ir_conversion_result_name__(converted)})")
+      end
     end
     # rb_check_funcall: a user-defined respond_to? can veto the call; otherwise a missing
     # #to_s still goes to method_missing, and only a NoMethodError for it means "cannot".

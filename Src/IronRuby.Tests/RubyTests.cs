@@ -931,6 +931,7 @@ namespace IronRuby.Tests {
                 ProtocolCaching3,
                 ProtocolCaching4,
                 CompositeConversionActions1,
+                ErrorMessages_Ruby40,
                 MethodAliasExpression,
                 AliasUndefWithQuotedSymbols,
                 BasicObject1,
