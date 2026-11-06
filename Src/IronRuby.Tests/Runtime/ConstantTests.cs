@@ -259,10 +259,35 @@ uninitialized constant M::W
         }
 
         /// <summary>
-        /// Global constants defined in loaded code are defined on the anonymous module created by the load.
+        /// Global constants defined in loaded code are defined on the anonymous module created by the load
+        /// (load(file, true)), or on the module given to it (load(file, module)); top-level methods of the
+        /// file are defined on the module, too, and they see its constants.
         /// </summary>
         public void LoadAndGlobalConstants() {
-            // TODO:
+            using (_driver.MakeTempFile("file", ".rb", @"
+X = 1
+class C; end
+def self.f; X; end
+p Module.nesting.size, f
+")) {
+                TestOutput(@"
+load $file, true
+p defined?(X), defined?(C)
+
+m = Module.new
+load $file, m
+p m.constants.sort, defined?(X)
+", @"
+1
+1
+nil
+nil
+1
+1
+[:C, :X]
+nil
+");
+            }
         }
 
         /// <summary>

@@ -2775,7 +2775,6 @@ false
         }
         
         public void ClrEventImpl1() {
-            // TODO: fix
             Context.ObjectClass.SetConstant("E", Context.GetClass(typeof(ClassWithVirtualEvent1)));
 
             var f = Engine.Execute<ClassWithVirtualEvent1>(@"
@@ -3118,10 +3117,6 @@ p D.new.report
             public sealed override int Goo() { return 30; }
 
             public override int Bar() { return 2; }
-        }
-
-        public class ClassWithVirtuals3 : ClassWithVirtuals2 {
-            public override int Bar() { return 3; }
         }
 
         public interface I1 { int f(); }

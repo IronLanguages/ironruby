@@ -282,10 +282,6 @@ bar
             Assert(Runtime.Globals.TryGetVariable("E", out value));
             Assert(((RubyModule)value).Name == "E");
 
-            // TODO:
-            // the library paths are incorrect (not combined with location of .exe file) in partial trust:
-            var searchPaths = Engine.GetSearchPaths();
-
             bool result = Engine.RequireFile("fcntl");
             Assert(result == true);
 
