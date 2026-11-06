@@ -636,6 +636,8 @@ namespace IronRuby.Tests {
                 ClrHashPatternScope1,
                 ClrGenericComparable1,
                 ClrGenericComparable2,
+                ClrRubyComparable1,
+                ClrRubyEnumerable1,
                 ClrTaskValue1,
                 ClrTaskValue2,
                 ClrBclArrays1,
