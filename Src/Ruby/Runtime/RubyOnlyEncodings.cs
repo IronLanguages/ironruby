@@ -105,6 +105,25 @@ namespace IronRuby.Runtime {
                 case RubyEncoding.CodePageISO8859_11: return new SingleByteTableEncoding(codepage, "ISO-8859-11", SingleByteTableEncoding.Iso8859_11, throwOnError);
                 case RubyEncoding.CodePageISO8859_14: return new SingleByteTableEncoding(codepage, "ISO-8859-14", SingleByteTableEncoding.Iso8859_14, throwOnError);
                 case RubyEncoding.CodePageISO8859_16: return new SingleByteTableEncoding(codepage, "ISO-8859-16", SingleByteTableEncoding.Iso8859_16, throwOnError);
+
+                // .NET's tables for these give every byte a character; Ruby's leave some out.
+                case 874: return SingleByteTableEncoding.FromCodePage(codepage, "Windows-874", "81 82 83 84 86 87 88 89 8A 8B 8C 8D 8E 8F 90 98 99 9A 9B 9C 9D 9E 9F DB DC DD DE FC FD FE FF", throwOnError);
+                case 1250: return SingleByteTableEncoding.FromCodePage(codepage, "Windows-1250", "81 83 88 90 98", throwOnError);
+                case 1251: return SingleByteTableEncoding.FromCodePage(codepage, "Windows-1251", "98", throwOnError);
+                case 1252: return SingleByteTableEncoding.FromCodePage(codepage, "Windows-1252", "81 8D 8F 90 9D", throwOnError);
+                case 1253: return SingleByteTableEncoding.FromCodePage(codepage, "Windows-1253", "81 88 8A 8C 8D 8E 8F 90 98 9A 9C 9D 9E 9F AA D2 FF", throwOnError);
+                case 1254: return SingleByteTableEncoding.FromCodePage(codepage, "Windows-1254", "81 8D 8E 8F 90 9D 9E", throwOnError);
+                case 1255: return SingleByteTableEncoding.FromCodePage(codepage, "Windows-1255", "81 8A 8C 8D 8E 8F 90 9A 9C 9D 9E 9F D9 DA DB DC DD DE DF FB FC FF", throwOnError);
+                case 1257: return SingleByteTableEncoding.FromCodePage(codepage, "Windows-1257", "81 83 88 8A 8C 90 98 9A 9C 9F A1 A5", throwOnError);
+                case 28593: return SingleByteTableEncoding.FromCodePage(codepage, "ISO-8859-3", "A5 AE BE C3 D0 E3 F0", throwOnError);
+                case 28596: return SingleByteTableEncoding.FromCodePage(codepage, "ISO-8859-6", "A1 A2 A3 A5 A6 A7 A8 A9 AA AB AE AF B0 B1 B2 B3 B4 B5 B6 B7 B8 B9 BA BC BD BE C0 DB DC DD DE DF F3 F4 F5 F6 F7 F8 F9 FA FB FC FD FE FF", throwOnError);
+                case 28597: return SingleByteTableEncoding.FromCodePage(codepage, "ISO-8859-7", "AE D2 FF", throwOnError);
+                case 28598: return SingleByteTableEncoding.FromCodePage(codepage, "ISO-8859-8", "A1 BF C0 C1 C2 C3 C4 C5 C6 C7 C8 C9 CA CB CC CD CE CF D0 D1 D2 D3 D4 D5 D6 D7 D8 D9 DA DB DC DD DE FB FC FF", throwOnError);
+                case 857: return SingleByteTableEncoding.FromCodePage(codepage, "IBM857", "D5 E7 F2", throwOnError);
+                case 864: return SingleByteTableEncoding.FromCodePage(codepage, "IBM864", "9B 9C A6 FF", throwOnError);
+                case 869: return SingleByteTableEncoding.FromCodePage(codepage, "IBM869", "80 81 82 83 84 85 87 93 94", throwOnError);
+                case 10000: return SingleByteTableEncoding.FromCodePage(codepage, "macRoman", "F0", throwOnError);
+                case 10006: return SingleByteTableEncoding.FromCodePage(codepage, "macGreek", "FF", throwOnError);
                 default: return null;
             }
         }
@@ -391,6 +410,24 @@ namespace IronRuby.Runtime {
         /// </summary>
         internal static readonly char[]/*!*/ Undefined = new string('￿', 128).ToCharArray();
 
+        /// <summary>
+        /// A .NET single byte code page with the bytes Ruby's table leaves undefined taken out:
+        /// .NET reads them as the C1 control or private use character of the same number, so
+        /// "\x81" in Windows-1252 would transcode where MRI refuses it as undefined.
+        /// <paramref name="undefined"/> lists them in hex.
+        /// </summary>
+        internal static SingleByteTableEncoding/*!*/ FromCodePage(int codepage, string/*!*/ name, string/*!*/ undefined, bool throwOnError) {
+            var bytes = new byte[128];
+            for (int i = 0; i < bytes.Length; i++) {
+                bytes[i] = (byte)(0x80 + i);
+            }
+            char[] table = Encoding.GetEncoding(codepage).GetChars(bytes);
+            foreach (var hex in undefined.Split(' ')) {
+                table[System.Convert.ToInt32(hex, 16) - 0x80] = '￿';
+            }
+            return new SingleByteTableEncoding(codepage, name, table, throwOnError);
+        }
+
         /// <summary>ISO-8859-11: TIS-620 plus the C1 controls and NBSP.</summary>
         internal static readonly char[]/*!*/ Iso8859_11 = CreateIso8859_11();
 
@@ -525,17 +562,70 @@ namespace IronRuby.Runtime {
             return written;
         }
 
+        // Three and four byte sequences (EUC-JP's JIS X 0212 0x8F b1 b2, EUC-TW's CNS planes
+        // 0x8E p b1 b2) do not fit a plane the way two bytes do, so they are numbered densely
+        // over the 94 x 94 cells of their table: the three byte ones from LosslessBase, the four
+        // byte ones from there too and on into plane 16. That covers the first eleven CNS planes;
+        // a sequence beyond them still reads as one escaped character per byte.
+        private const int CellCount = 94 * 94;
+        private const int ShortLosslessRange = 0x8000;
+        private const int LongLosslessBase = 0x100000;
+
+        private static int Cell(byte b1, byte b2) {
+            return (b1 - 0xa1) * 94 + (b2 - 0xa1);
+        }
+
+        /// <summary>
+        /// The plane 15 or 16 code point a well formed sequence the table has no character for
+        /// reads as in the lossless form, or -1 if it has none.
+        /// </summary>
+        private static int ToLosslessCodePoint(byte[]/*!*/ bytes, int index, int length) {
+            if (length == 2) {
+                return LosslessBase + (bytes[index] << 8 | bytes[index + 1]);
+            }
+            if (length == 3 && bytes[index] == 0x8f && IsGraphic(bytes[index + 1]) && IsGraphic(bytes[index + 2])) {
+                return LosslessBase + Cell(bytes[index + 1], bytes[index + 2]);
+            }
+            if (length == 4 && bytes[index] == 0x8e && bytes[index + 1] >= 0xa1 && IsGraphic(bytes[index + 2]) && IsGraphic(bytes[index + 3])) {
+                int cell = (bytes[index + 1] - 0xa1) * CellCount + Cell(bytes[index + 2], bytes[index + 3]);
+                if (cell < ShortLosslessRange) {
+                    return LosslessBase + cell;
+                }
+                cell -= ShortLosslessRange;
+                return (cell <= 0xffff) ? LongLosslessBase + cell : -1;
+            }
+            return -1;
+        }
+
         private int EncodeLossless(char[]/*!*/ chars, int index, int end, byte[]/*!*/ bytes, out int used) {
             used = 1;
             if (index + 1 < end && Char.IsSurrogatePair(chars[index], chars[index + 1])) {
                 int codepoint = Char.ConvertToUtf32(chars[index], chars[index + 1]);
+                int length = -1;
                 if (codepoint >= LosslessBase + 0x8000 && codepoint <= LosslessBase + 0xffff) {
                     bytes[0] = (byte)(codepoint >> 8);
                     bytes[1] = (byte)codepoint;
-                    if (Scan(bytes, 0, 2) == 2) {
-                        used = 2;
-                        return 2;
+                    length = 2;
+                } else if (codepoint >= LosslessBase && codepoint < LosslessBase + ShortLosslessRange || codepoint >= LongLosslessBase) {
+                    int cell = (codepoint >= LongLosslessBase) ? codepoint - LongLosslessBase + ShortLosslessRange : codepoint - LosslessBase;
+                    if (cell < CellCount) {
+                        // EUC-JP's three bytes, if this is an encoding that has them
+                        bytes[0] = 0x8f;
+                        bytes[1] = (byte)(0xa1 + cell / 94);
+                        bytes[2] = (byte)(0xa1 + cell % 94);
+                        length = 3;
                     }
+                    if (length < 0 || Scan(bytes, 0, 3) != 3) {
+                        bytes[0] = 0x8e;
+                        bytes[1] = (byte)(0xa1 + cell / CellCount);
+                        bytes[2] = (byte)(0xa1 + cell % CellCount / 94);
+                        bytes[3] = (byte)(0xa1 + cell % 94);
+                        length = 4;
+                    }
+                }
+                if (length > 0 && Scan(bytes, 0, length) == length) {
+                    used = 2;
+                    return length;
                 }
             }
             return -1;
@@ -624,8 +714,9 @@ namespace IronRuby.Runtime {
 
                     if (length > 0) {
                         int n = _encoding.DecodeSequence(input, i, length, decoded, 0);
-                        if (n < 0 && length == 2 && _encoding._lossless) {
-                            int codepoint = LosslessBase + (input[i] << 8 | input[i + 1]) - 0x10000;
+                        int codepoint;
+                        if (n < 0 && _encoding._lossless && (codepoint = ToLosslessCodePoint(input, i, length)) >= 0) {
+                            codepoint -= 0x10000;
                             decoded[0] = (char)(0xD800 + (codepoint >> 10));
                             decoded[1] = (char)(0xDC00 + (codepoint & 0x3ff));
                             n = 2;
@@ -1057,11 +1148,14 @@ namespace IronRuby.Runtime {
             return length;
         }
 
+        // Ruby has no converter for EUC-TW, so beyond ASCII its sequences name no character; the
+        // lossless form still reads each as one (see MultiByteEncoding.LosslessBase).
         protected override int DecodeSequence(byte[]/*!*/ bytes, int index, int length, char[]/*!*/ chars, int charIndex) {
-            for (int i = 0; i < length; i++) {
-                chars[charIndex + i] = (char)bytes[index + i];
+            if (length != 1) {
+                return -1;
             }
-            return length;
+            chars[charIndex] = (char)bytes[index];
+            return 1;
         }
 
         protected override int EncodeCharacter(char[]/*!*/ chars, int index, int end, byte[]/*!*/ bytes, int byteIndex, out int used) {

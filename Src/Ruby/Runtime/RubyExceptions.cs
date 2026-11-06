@@ -474,7 +474,7 @@ namespace IronRuby.Runtime {
             string stageSource = TranscoderName(path[stage]);
             string stageDestination = TranscoderName(path[stage + 1]);
 
-            if (stageSource == path[0].Name && stageDestination == path[path.Length - 1].Name) {
+            if (stage == 0 && stage + 2 == path.Length) {
                 return FormatMessage("{0} from {1} to {2}", dumped, stageSource, stageDestination);
             }
 
