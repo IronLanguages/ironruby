@@ -396,6 +396,61 @@ puts(/foo/ =~ 'xxxfoo')     # a literal calls a redefined Regexp#=~ too (MRI 1.9
 =~
 ");
         }
+
+        /// <summary>
+        /// Byte escapes in a regexp of a multibyte encoding spell characters of it (/\xa4\xa2/e is one
+        /// character), and every match operation answers character offsets: the regex runs on the
+        /// string's own characters rather than on a k-coded decoding of its bytes.
+        /// </summary>
+        public void Regex_ByteEscapes1() {
+            TestOutput(@"
+s = ""あaいbあ"".encode(""EUC-JP"")
+re = Regexp.new('\xa4\xa2'.force_encoding(""EUC-JP""))
+p s =~ re, s.index(re, 1), s.rindex(re), re.encoding
+m = s.match(re, 1)
+p [m.begin(0), m.end(0), m.byteoffset(0), m.pre_match.size, $~.begin(0)]
+p s.scan(re).size, s.gsub(re, ""x"").encode(""UTF-8""), s.index(/b/e, 2), s =~ /\xa4\xa4/e
+w = ""あaいb"".encode(""Windows-31J"")
+p w =~ /\x82\xa2/s, w.split(/\x82\xa2/s).map(&:bytesize)
+p ""ああ"".encode(""EUC-JP"") =~ Regexp.new('\xa4\xa2*'.force_encoding(""EUC-JP"")), $~[0].bytesize
+p ""あaいb"" =~ /\xe3\x81\x84/, ""あaいb"".match(/b/u).byteoffset(0), ""あaいb"".match(/[\xe3\x81\x82-\xe3\x81\x84]+/)[0].size
+p((Regexp.new('\xe3\x81') rescue $!), (Regexp.new('\xff', Regexp::IGNORECASE) rescue $!))
+require 'strscan'
+ss = StringScanner.new(s)
+p ss.scan(re).bytesize, ss.scan(/a/e), ss.scan(/./e).bytesize, ss.pos, ss.charpos
+p((""abc"".encode(""UTF-16LE"") =~ /b/ rescue $!), (""abc"".encode(""UTF-16LE"") =~ /b/n rescue $!))
+p((""\xff"".force_encoding(""BINARY"").sub(""é"", """") rescue $!), (""abc"".encode(""UTF-16LE"").sub(""b"", """") rescue $!))
+", @"
+0
+4
+4
+#<Encoding:EUC-JP>
+[4, 5, [6, 8], 4, 4]
+2
+""xaいbx""
+3
+2
+2
+[3, 1]
+0
+4
+2
+[7, 8]
+1
+#<RegexpError: too short escaped multibyte character: /\xe3\x81/>
+#<RegexpError: invalid multibyte escape: /\xff/i>
+2
+""a""
+2
+5
+3
+#<Encoding::CompatibilityError: incompatible encoding regexp match (US-ASCII regexp with UTF-16LE string)>
+#<Encoding::CompatibilityError: incompatible encoding regexp match (US-ASCII regexp with UTF-16LE string)>
+#<Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+");
+        }
+
         
     }
 }
