@@ -184,7 +184,7 @@ GEMS = {
                ["syslog", "syslog/"], check: "Syslog::VERSION", pinned: true],
 
   # --- vendored from the CRuby release in Src/StdLib/ruby/4.0 --------------
-  "bundler" => ["4.0.16", "The best way to manage a Ruby application's gems",
+  "bundler" => ["4.0.20", "The best way to manage a Ruby application's gems",
                 ["bundler", "bundler/"], require: false, bin: ["bundle", "bundler"]],
   "delegate" => ["0.6.1", "Delegation of method calls", ["delegate"]],
   "did_you_mean" => ["2.0.0", "Did you mean? experience",
@@ -193,7 +193,7 @@ GEMS = {
   # erb is here rather than under the vendored heading because ERB::Escape -
   # ERB::Util.html_escape - is a C extension upstream, so no release of the erb
   # gem installs here.  Everything else about it is the vendored Ruby.
-  "erb" => ["6.0.1.1", "An easy-to-use but powerful templating system",
+  "erb" => ["6.0.7", "An easy-to-use but powerful templating system",
             ["erb", "erb/"], check: "ERB::VERSION", pinned: true],
   # IronRuby answers the error_highlight API, but ErrorHighlight.spot always
   # returns nil - see Src/StdLib/ironruby/error_highlight.rb for why.
@@ -226,7 +226,7 @@ GEMS = {
   "pp" => ["0.6.3", "Pretty-prints Ruby objects", ["pp"]],
   "prettyprint" => ["0.2.0", "Implements a pretty printing algorithm for readable structure",
                     ["prettyprint"]],
-  "resolv" => ["0.7.0", "Thread-aware DNS resolver library", ["resolv"]],
+  "resolv" => ["0.7.2", "Thread-aware DNS resolver library", ["resolv"]],
   "ruby2_keywords" => ["0.0.5", "Shim library for Module#ruby2_keywords",
                        [["ruby2_keywords", :builtin]], require: false],
   "securerandom" => ["0.4.1", "Interface for secure random number generator", ["securerandom"]],
@@ -285,6 +285,16 @@ GEMS_DIR = File.join(STDLIB, "ruby", "gems", "4.0.0", "gems")
 SHARED_BIN_DIR = File.join(STDLIB, "bin")
 
 def write_executables(name, version, executables)
+  # The directory an earlier version of this default gem got here, when it
+  # holds nothing but those loaders.  A gem installed into this gem home under
+  # the same name has more than an exe/ directory, and is left alone.
+  Dir.glob(File.join(GEMS_DIR, "#{name}-*")).each do |old|
+    next unless File.basename(old) =~ /\A#{Regexp.escape(name)}-\d[^-]*\z/
+    next if File.basename(old) == "#{name}-#{version}"
+    next unless Dir.children(old) == [BIN_DIR]
+    FileUtils.rm_rf old
+  end
+
   dir = File.join(GEMS_DIR, "#{name}-#{version}", BIN_DIR)
   FileUtils.mkdir_p dir
 

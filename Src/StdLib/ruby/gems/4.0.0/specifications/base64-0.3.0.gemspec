@@ -19,5 +19,5 @@ Gem::Specification.new do |s|
   s.rubygems_version = "3.6.7".freeze
   s.summary = "Support for encoding and decoding binary data using a Base64 representation.".freeze
 
-  s.installed_by_version = "4.0.16".freeze
+  s.installed_by_version = "4.0.20".freeze
 end

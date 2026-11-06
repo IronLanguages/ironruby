@@ -10,6 +10,8 @@ bin/
 # ... and the bin/ directories of the gems installed in the standard library's gem home
 # (Util/install-bundled-gems.rb): minitest, racc and test-unit keep their executables there.
 !/Src/StdLib/ruby/gems/*/gems/*/bin/
+# ... and the templates `bundle gem` writes a new gem's bin/console and bin/setup from.
+!/Src/StdLib/ruby/4.0/bundler/templates/newgem/bin/
 # librbs, built by Util/build-librbs.sh
 /Src/Libraries/Rbs/native/build/
 # Util/package-release.sh output
