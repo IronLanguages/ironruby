@@ -2087,7 +2087,16 @@ class Socket
         if host.nil? || (host.respond_to?(:to_str) && host.to_str.empty?)
           fam == AF_INET6 ? [passive ? "::" : "::1"] : [passive ? "0.0.0.0" : "127.0.0.1"]
         else
-          found = __ir_raw_getaddrinfo(host, nil, 0, 0, 0, 0).map { |entry| entry[3] }
+          found = begin
+            __ir_raw_getaddrinfo(host, nil, 0, 0, 0, 0).map { |entry| entry[3] }
+          rescue ResolutionError
+            raise
+          rescue SocketError => e
+            # .NET's Dns failure is a plain SocketError; CRuby's is a ResolutionError.
+            code = { "HostNotFound" => EAI_NONAME, "NoData" => EAI_NONAME, "TryAgain" => EAI_AGAIN }[Socket.__ir_socket_error_code(e)]
+            raise unless code
+            raise __ir_resolution_error("getaddrinfo: #{e.message}", code)
+          end
           wanted = found.select { |a| a.include?(":") == (fam == AF_INET6) }
           fam == AF_UNSPEC || wanted.empty? ? found : wanted
         end
