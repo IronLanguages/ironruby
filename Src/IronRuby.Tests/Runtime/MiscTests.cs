@@ -88,6 +88,30 @@ puts o.inspect.gsub(/0x\h+/, 'X')
 ");
         }
 
+        /// <summary>
+        /// MRI prints an object's address as 16 hex digits on a 64-bit build, whatever the address.
+        /// Kernel#instance_variables_to_inspect is Ruby 4.0's private hook, nil by default.
+        /// </summary>
+        public void Scenario_InspectObjectId1() {
+            TestOutput(@"
+class Foo; end
+o = Foo.new
+p o.inspect =~ /\A#<Foo:0x\h{16}>\z/, o.to_s =~ /\A#<Foo:0x\h{16}>\z/
+p Class.new.inspect =~ /\A#<Class:0x\h{16}>\z/, Object.new.singleton_class.inspect =~ /\A#<Class:#<Object:0x\h{16}>>\z/
+p Kernel.private_method_defined?(:instance_variables_to_inspect), o.send(:instance_variables_to_inspect)
+o.instance_variable_set(:@a, 1)
+p o.inspect.sub(/0x\h+/, 'X')
+", @"
+0
+0
+0
+0
+true
+nil
+""#<Foo:X @a=1>""
+");
+        }
+
         public void Scenario_RubyLocals1() {
             AssertOutput(delegate() {
                 CompilerTest(@"

@@ -89,9 +89,6 @@ module Kernel
     yield(self)
     self
   end
-end
-
-class Object
 
   def itself
     self
@@ -315,12 +312,12 @@ module Enumerable
     self
   end unless method_defined?(:each_entry)
 
-  unless method_defined?(:each_with_index_without_args)
-    alias :each_with_index_without_args :each_with_index
+  unless method_defined?(:__each_with_index_without_args__)
+    alias :__each_with_index_without_args__ :each_with_index
 
     def each_with_index(*args, &block)
       return to_enum(:each_with_index, *args) { size if respond_to?(:size) } unless block
-      return each_with_index_without_args(&block) if args.empty?
+      return __each_with_index_without_args__(&block) if args.empty?
       index = 0
       each(*args) do |*values|
         block.call(__enum_item__(values), index)
@@ -333,11 +330,11 @@ module Enumerable
   # Ruby 2.5 gave the predicates an optional pattern, matched with #===.
   # The built-ins only know the block form, and because they are defined on
   # Enumerable they shadow rather than extend, so wrap them.
-  unless method_defined?(:all_without_pattern?)
-    alias :all_without_pattern? :all?
-    alias :any_without_pattern? :any?
-    alias :none_without_pattern? :none?
-    alias :one_without_pattern? :one?
+  unless method_defined?(:__all_without_pattern__?)
+    alias :__all_without_pattern__? :all?
+    alias :__any_without_pattern__? :any?
+    alias :__none_without_pattern__? :none?
+    alias :__one_without_pattern__? :one?
 
     def __check_pattern_args__(args, block = nil)
       if args.size > 1
@@ -353,7 +350,7 @@ module Enumerable
 
     def all?(*args, &block)
       __check_pattern_args__(args, block)
-      return all_without_pattern?(&block) if args.empty?
+      return __all_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return false unless pattern === __enum_item__(values) }
       true
@@ -361,7 +358,7 @@ module Enumerable
 
     def any?(*args, &block)
       __check_pattern_args__(args, block)
-      return any_without_pattern?(&block) if args.empty?
+      return __any_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return true if pattern === __enum_item__(values) }
       false
@@ -369,7 +366,7 @@ module Enumerable
 
     def none?(*args, &block)
       __check_pattern_args__(args, block)
-      return none_without_pattern?(&block) if args.empty?
+      return __none_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return false if pattern === __enum_item__(values) }
       true
@@ -377,7 +374,7 @@ module Enumerable
 
     def one?(*args, &block)
       __check_pattern_args__(args, block)
-      return one_without_pattern?(&block) if args.empty?
+      return __one_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       found = false
       each do |*values|
@@ -392,8 +389,8 @@ module Enumerable
   # The method-name form of #inject reports a bad name the way MRI does - by
   # inspecting the object rather than by naming its class - and takes at most
   # two arguments. A block alongside a method name is never called.
-  unless method_defined?(:inject_without_name_check)
-    alias :inject_without_name_check :inject
+  unless method_defined?(:__inject_without_name_check__)
+    alias :__inject_without_name_check__ :inject
 
     def inject(*args, &block)
       if args.size > 2 || (args.empty? && !block)
@@ -414,26 +411,26 @@ module Enumerable
           warn "given block not used", uplevel: 1
         end
       end
-      inject_without_name_check(*args, &block)
+      __inject_without_name_check__(*args, &block)
     end
     alias :reduce :inject
   end
 
   # min/max also grew an `n` form.
-  unless method_defined?(:min_without_count)
-    alias :min_without_count :min
-    alias :max_without_count :max
+  unless method_defined?(:__min_without_count__)
+    alias :__min_without_count__ :min
+    alias :__max_without_count__ :max
 
     def min(*args, &block)
       n = args.empty? ? nil : __count_arg__(args[0])
-      return min_without_count(&block) if n.nil?
+      return __min_without_count__(&block) if n.nil?
       sorted = block ? to_a.sort(&block) : to_a.sort
       sorted.first(n)
     end
 
     def max(*args, &block)
       n = args.empty? ? nil : __count_arg__(args[0])
-      return max_without_count(&block) if n.nil?
+      return __max_without_count__(&block) if n.nil?
       sorted = block ? to_a.sort(&block) : to_a.sort
       sorted.reverse.first(n)
     end
@@ -724,8 +721,8 @@ module Enumerable
 
   # #sort_by has to walk the receiver exactly once - the block may be expensive
   # or have side effects - which the decorate/sort/undecorate helper does.
-  unless method_defined?(:sort_by_without_enumerator)
-    alias :sort_by_without_enumerator :sort_by
+  unless method_defined?(:__sort_by_without_enumerator__)
+    alias :__sort_by_without_enumerator__ :sort_by
 
     def sort_by(&block)
       return to_enum(:sort_by) { size if respond_to?(:size) } unless block
@@ -735,26 +732,26 @@ module Enumerable
 
   # Neither of these can know how long the answer will be without running the
   # block, so their Enumerators report no size even when the receiver has one.
-  unless method_defined?(:take_while_without_enumerator)
-    alias :take_while_without_enumerator :take_while
-    alias :drop_while_without_enumerator :drop_while
+  unless method_defined?(:__take_while_without_enumerator__)
+    alias :__take_while_without_enumerator__ :take_while
+    alias :__drop_while_without_enumerator__ :drop_while
 
     def take_while(&block)
       return to_enum(:take_while) { nil } unless block
-      take_while_without_enumerator(&block)
+      __take_while_without_enumerator__(&block)
     end
 
     def drop_while(&block)
       return to_enum(:drop_while) { nil } unless block
-      drop_while_without_enumerator(&block)
+      __drop_while_without_enumerator__(&block)
     end
   end
 
   # Both return the receiver when they are given a block (they returned nil),
   # and both reject a slice size that cannot produce any slice at all.
-  unless method_defined?(:each_cons_without_self)
-    alias :each_cons_without_self :each_cons
-    alias :each_slice_without_self :each_slice
+  unless method_defined?(:__each_cons_without_self__)
+    alias :__each_cons_without_self__ :each_cons
+    alias :__each_slice_without_self__ :each_slice
 
     def __slice_size__(n, message)
       size = n
@@ -767,15 +764,15 @@ module Enumerable
 
     def each_cons(n, &block)
       n = __slice_size__(n, "invalid size")
-      return each_cons_without_self(n) unless block
-      each_cons_without_self(n, &block)
+      return __each_cons_without_self__(n) unless block
+      __each_cons_without_self__(n, &block)
       self
     end
 
     def each_slice(n, &block)
       n = __slice_size__(n, "invalid slice size")
-      return each_slice_without_self(n) unless block
-      each_slice_without_self(n, &block)
+      return __each_slice_without_self__(n) unless block
+      __each_slice_without_self__(n, &block)
       self
     end
   end
@@ -783,8 +780,8 @@ module Enumerable
   # An argument that is not an Array is taken by #to_ary if it has one and
   # otherwise iterated with #each - a Range or a lazy Enumerator zips fine.
   # Only something that can do neither is an error.
-  unless method_defined?(:zip_without_conversion)
-    alias :zip_without_conversion :zip
+  unless method_defined?(:__zip_without_conversion__)
+    alias :__zip_without_conversion__ :zip
 
     # An Integer Range whose #each is the built-in one yields begin, begin + 1, ... so the
     # element a row wants is worked out from its index. Going through Enumerator#next for
@@ -936,14 +933,14 @@ class Range
   # The built-in #first/#last only answer the no-argument form, and because they
   # are defined on Range they hide Enumerable#first(n) rather than falling
   # through to it - so `(0..Float::INFINITY).first(3)` was an ArgumentError.
-  unless method_defined?(:first_without_count)
-    alias :first_without_count :first
-    alias :last_without_count :last
+  unless method_defined?(:__first_without_count__)
+    alias :__first_without_count__ :first
+    alias :__last_without_count__ :last
 
     def first(*args)
       if args.empty?
         raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
-        return first_without_count
+        return __first_without_count__
       end
       raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
       n = __to_count__(args[0])
@@ -972,7 +969,7 @@ class Range
     def last(*args)
       if args.empty?
         raise RangeError, "cannot get the last element of endless range" if self.end.nil?
-        return last_without_count
+        return __last_without_count__
       end
       raise RangeError, "cannot get the last element of endless range" if self.end.nil?
       n = __to_count__(args[0])
@@ -1721,6 +1718,10 @@ module Ruby
 end unless defined?(Ruby)
 
 class IO
+  # What a blocking read or write raises once IO#timeout runs out (3.2). IronRuby has no IO#timeout
+  # yet, but code that rescues this one needs the constant.
+  class TimeoutError < IOError; end unless const_defined?(:TimeoutError, false)
+
   # Keyword arguments and a Hash in the last positional slot are different things,
   # and only a Ruby-level signature can tell them apart: the library method behind
   # this one takes options as an ordinary parameter and so sees them as the same.
@@ -2203,13 +2204,13 @@ end
 class Array
   # 1.9 added the count form of shift; the bundled core only has the no-arg one
   unless (begin; [1].shift(1); true; rescue ArgumentError; false; end)
-    alias :shift_without_count :shift
+    alias :__shift_without_count__ :shift
 
     def shift(*args)
       if args.size > 1
         raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
       end
-      return shift_without_count if args.empty?
+      return __shift_without_count__ if args.empty?
 
       # nil is an argument here, not the absence of one, and an object that is
       # not an Integer is asked for one exactly once - #self[0, count] would ask
@@ -2241,24 +2242,24 @@ end
 class Module
   # (method_defined? and its public_/private_/protected_ forms take `inherit' natively.)
   unless (begin; Module.const_defined?(:Module, true); true; rescue ArgumentError; false; end)
-    alias :const_defined_without_inherit? :const_defined?
+    alias :__const_defined_without_inherit__? :const_defined?
 
     def const_defined?(name, inherit = true)
-      return const_defined_without_inherit?(name) if inherit
+      return __const_defined_without_inherit__?(name) if inherit
       constants(false).include?(name.to_s.to_sym)
     end
   end
 
   unless (begin; Module.const_get(:Module, true); true; rescue ArgumentError; false; end)
-    alias :const_get_without_inherit :const_get
+    alias :__const_get_without_inherit__ :const_get
 
     def const_get(name, inherit = true)
-      return const_get_without_inherit(name) if inherit
+      return __const_get_without_inherit__(name) if inherit
       sym = name.to_s.to_sym
       unless constants(false).include?(sym)
         raise NameError, "uninitialized constant #{self}::#{sym}"
       end
-      const_get_without_inherit(name)
+      __const_get_without_inherit__(name)
     end
   end
 end
@@ -2545,7 +2546,7 @@ $LOAD_PATH.delete('.') if defined?($LOAD_PATH) && $LOAD_PATH.is_a?(Array)
 # argument-less #clone and refuse clone(freeze: false).
 module Kernel
   unless (begin; Object.new.clone(:freeze => nil); true; rescue ArgumentError; false; end)
-    alias :clone_without_options :clone
+    alias :__clone_without_options__ :clone
 
     # `clone(freeze: nil)` is the default (copy the frozen state), `freeze: true`
     # always freezes, `freeze: false` never does. The runtime's #clone always
@@ -2563,7 +2564,7 @@ module Kernel
 
       # A freeze: value that was actually given is handed on to #initialize_clone, and
       # decides whether the copy is frozen; without one the copy follows the original.
-      freeze.nil? ? clone_without_options : __ir_clone_with_freeze__(freeze)
+      freeze.nil? ? __clone_without_options__ : __ir_clone_with_freeze__(freeze)
     end
   end
 end
@@ -5502,7 +5503,7 @@ class Enumerator
           size = @__size__
           unless block
             return ::Enumerator.new(size) { |y| generator.call(y, *args) }
-              .__set_inspect__(nil, :each, args, "#<Enumerator::Generator:#{'0x%07x' % (generator.object_id * 2)}>")
+              .__set_inspect__(nil, :each, args, "#<Enumerator::Generator:#{'0x%016x' % (generator.object_id * 2)}>")
           end
           return generator.call(Yielder.new(&block), *args)
         end
@@ -5521,7 +5522,7 @@ class Enumerator
         # #next reports as StopIteration#result.
         @generator.call(Yielder.new(&block))
       else
-        each_without_generator(&block)
+        __each_without_generator__(&block)
       end
     end
     private :__ir_each_impl__
@@ -5767,7 +5768,7 @@ class Enumerator
     target = (@generator ? nil : __enum_target__)
     unless target
       if @generator
-        return "#<#{self.class}: #<Enumerator::Generator:#{'0x%07x' % (@generator.object_id * 2)}>:each>"
+        return "#<#{self.class}: #<Enumerator::Generator:#{'0x%016x' % (@generator.object_id * 2)}>:each>"
       end
       # A C#-built enumerator over a delegate keeps only its size descriptor,
       # which for these names the method it came from.
@@ -6696,7 +6697,7 @@ class Enumerator
         value = block.call(value)
       end
     end
-    enum.__set_inspect__(nil, :each, [], "#<Enumerator::Producer:#{'0x%07x' % (block.object_id * 2)}>")
+    enum.__set_inspect__(nil, :each, [], "#<Enumerator::Producer:#{'0x%016x' % (block.object_id * 2)}>")
   end unless respond_to?(:produce)
 end
 
@@ -6809,11 +6810,11 @@ class String
   # #chars and #bytes build the Array in C# (MutableStringOps); only #lines is still
   # an Enumerator there.
   unless "a".lines.is_a?(Array)
-    alias :lines_enumerator :lines
+    alias :__lines_enumerator__ :lines
 
     def lines(*args, &block)
-      return lines_enumerator(*args, &block) if block
-      lines_enumerator(*args).to_a
+      return __lines_enumerator__(*args, &block) if block
+      __lines_enumerator__(*args).to_a
     end
   end
 end
@@ -7832,261 +7833,6 @@ class Data
     end
   end
 end unless defined?(Data)
-
-# ARGF was a plain Object carrying singleton methods, so it had no class to
-# speak of: `ARGF.class` answered Object and `ARGF.class.new("a", "b")` - which
-# is how mspec's argf helper builds an instance it can close afterwards - made
-# a bare Object. The helper then died on #file, never reached the `@argf = nil`
-# in its ensure, and every later example in the file refused to run with
-# "Cannot nest calls to the argf helper": 103 of spec/core/argf's 115 errors
-# came from that one missing class.
-#
-# This is a real implementation over a list of filenames, with "-" meaning
-# standard input, and ARGF is rebound to an instance of it reading ARGV.
-class ARGFClass
-  include ::Enumerable
-
-  attr_accessor :lineno
-
-  def initialize(*argv)
-    @argv = argv.flatten
-    @current = nil
-    @current_path = nil
-    @lineno = 0
-    @finished = false
-    @binmode = false
-  end
-
-  def argv
-    @argv
-  end
-
-  # Opens the next file in the list, or returns false when there are none left.
-  def __advance__
-    return false if @finished
-    if @argv.empty?
-      return false if @current
-      @current = ::STDIN
-      @current_path = "-"
-      return true
-    end
-    name = @argv.shift
-    @current_path = name
-    @current = name == "-" ? ::STDIN : ::File.open(name, @binmode ? "rb" : "r")
-    true
-  end
-  private :__advance__
-
-  def __stream__
-    @current = nil if @current && @current != ::STDIN && @current.closed?
-    __advance__ unless @current
-    @current
-  end
-  private :__stream__
-
-  def file
-    __stream__
-    @current || ::STDIN
-  end
-
-  def filename
-    __stream__
-    @current_path || "-"
-  end
-  alias :path :filename
-
-  def to_io
-    file
-  end
-
-  def to_s
-    "ARGF"
-  end
-  alias :inspect :to_s
-
-  def fileno
-    file.fileno
-  end
-  alias :to_i :fileno
-
-  def binmode
-    @binmode = true
-    @current.binmode if @current.respond_to?(:binmode)
-    self
-  end
-
-  def binmode?
-    @binmode
-  end
-
-  def closed?
-    s = @current
-    s.nil? ? true : s.closed?
-  end
-
-  def close
-    s = file
-    ::Kernel.raise(::IOError, "closed stream") if s.closed?
-    s.close unless s == ::STDIN
-    @current = nil
-    @lineno = 0
-    self
-  end
-
-  def eof?
-    s = __stream__
-    return true if s.nil?
-    return false unless s.eof?
-    # The stream is done, but another file may follow.
-    while s && s.eof?
-      break if @argv.empty?
-      s.close unless s == ::STDIN
-      @current = nil
-      s = __stream__
-    end
-    s.nil? || s.eof?
-  end
-  alias :eof :eof?
-
-  def gets(*args)
-    loop do
-      s = __stream__
-      return nil if s.nil?
-      line = s.gets(*args)
-      if line
-        @lineno += 1
-        return line
-      end
-      s.close unless s == ::STDIN
-      @current = nil
-      if @argv.empty?
-        @finished = true
-        return nil
-      end
-    end
-  end
-
-  def readline(*args)
-    line = gets(*args)
-    ::Kernel.raise(::EOFError, "end of file reached") if line.nil?
-    line
-  end
-
-  def each_line(*args)
-    return ::Enumerator.new { |y| each_line(*args) { |l| y << l } } unless block_given?
-    while (line = gets(*args))
-      yield line
-    end
-    self
-  end
-  alias :each :each_line
-
-  def readlines(*args)
-    result = []
-    while (line = gets(*args))
-      result << line
-    end
-    result
-  end
-  alias :to_a :readlines
-
-  def read(length = nil, buffer = nil)
-    result = +""
-    loop do
-      s = __stream__
-      break if s.nil?
-      want = length.nil? ? nil : length - result.bytesize
-      break if want && want <= 0
-      piece = s.read(want)
-      result << piece if piece && !piece.empty?
-      break if length && result.bytesize >= length
-      s.close unless s == ::STDIN
-      @current = nil
-      if @argv.empty?
-        @finished = true
-        break
-      end
-    end
-    if length
-      return nil if result.empty?
-    end
-    buffer ? buffer.replace(result) : result
-  end
-
-  def getc
-    loop do
-      s = __stream__
-      return nil if s.nil?
-      c = s.getc
-      return c if c
-      s.close unless s == ::STDIN
-      @current = nil
-      if @argv.empty?
-        @finished = true
-        return nil
-      end
-    end
-  end
-
-  def readchar
-    c = getc
-    ::Kernel.raise(::EOFError, "end of file reached") if c.nil?
-    c
-  end
-
-  def each_char
-    return ::Enumerator.new { |y| each_char { |c| y << c } } unless block_given?
-    while (c = getc)
-      yield c
-    end
-    self
-  end
-  alias :chars :each_char
-
-  def each_byte
-    return ::Enumerator.new { |y| each_byte { |b| y << b } } unless block_given?
-    each_char { |c| c.each_byte { |b| yield b } }
-    self
-  end
-  alias :bytes :each_byte
-
-  def pos
-    file.pos
-  end
-  alias :tell :pos
-
-  def pos=(value)
-    file.pos = value
-  end
-
-  def seek(*args)
-    file.seek(*args)
-  end
-
-  def rewind
-    s = file
-    ::Kernel.raise(::ArgumentError, "no stream to rewind") if s.nil?
-    s.rewind
-    @lineno = 0
-    0
-  end
-
-  def skip
-    if @current && @current != ::STDIN
-      @current.close
-    end
-    @current = nil
-    self
-  end
-
-  def external_encoding
-    file.external_encoding
-  end
-
-  def internal_encoding
-    file.internal_encoding
-  end
-end
 
 # ENV is Hash-shaped but was missing a third of the shape. Everything here is
 # written in terms of the accessors it does have, so it stays in step with the
@@ -13055,15 +12801,6 @@ class Encoding
   def self._load(name)
     find(name)
   end
-end
-
-# Rebind ARGF to a real instance so ARGF.class is a class. Done at the very end
-# of the prelude so that the class above and File are both in place.
-begin
-  argf_instance = ARGFClass.new(*ARGV)
-  Object.send(:remove_const, :ARGF) if Object.const_defined?(:ARGF)
-  Object.const_set(:ARGF, argf_instance)
-rescue ::Exception
 end
 
 # Kernel#open, as MRI's rb_f_open has it since Ruby 4.0: an argument that

@@ -134,6 +134,7 @@ namespace IronRuby.Tests {
                 Scenario_Globals2,
                 Scenario_Globals3,
                 Scenario_InspectRecursive1,
+                Scenario_InspectObjectId1,
 
                 Scenario_RubyMethodMissing1, 
                 Scenario_RubyMethodMissing2, 
@@ -210,6 +211,7 @@ namespace IronRuby.Tests {
                 UnqualifiedConstants1,
                 LoadAndGlobalConstants,
                 GlobalConstants1,
+                GlobalConstants2,
                 ConstantCaching_Unqualified1,
                 ConstantCaching_Unqualified2,
                 ConstantCaching_Unqualified3,
@@ -821,6 +823,7 @@ namespace IronRuby.Tests {
 
                 Scenario_ModuleOps_Methods,
                 InstanceMethods_NotInherited1,
+                MethodLists_Unlisted1,
                 ConstantPaths1,
                 Scenario_MainSingleton,
                 Time_LoadZone1,
@@ -970,6 +973,7 @@ namespace IronRuby.Tests {
                 ModuleInstanceEvalProc3,
                 ModuleClassNew1,
                 ModuleClassNew2,
+                ModuleClassNew3,
                 ModuleEvalString1,
                 InstanceEvalString1,
                 ModuleEvalString2,

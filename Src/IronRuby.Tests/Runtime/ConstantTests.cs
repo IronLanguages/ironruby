@@ -309,6 +309,23 @@ nil
 ");
         }
 
+        /// <summary>
+        /// Ruby 1.9 dropped the unprefixed VERSION, PLATFORM and RELEASE_DATE; only the RUBY_ ones are left.
+        /// </summary>
+        public void GlobalConstants2() {
+            TestOutput(@"
+p defined?(VERSION), defined?(PLATFORM), defined?(RELEASE_DATE)
+p RUBY_VERSION.frozen?, RUBY_PLATFORM.frozen?, RUBY_RELEASE_DATE.frozen?
+", @"
+nil
+nil
+nil
+true
+true
+true
+");
+        }
+
         public void ConstantCaching_Unqualified1() {
             TestOutput(@"
 module M

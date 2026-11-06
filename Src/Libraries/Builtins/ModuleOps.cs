@@ -1718,6 +1718,10 @@ namespace IronRuby.Builtins {
             var listed = new HashSet<string>();
             using (self.Context.ClassHierarchyLocker()) {
                 self.ForEachMember(inherited, attributes, foreignMembers, objectMethods, (name, module, member) => {
+                    // (a foreign object's dynamic member is listed whatever its class is)
+                    if (RubyModule.IsUnlisted(module, name, member) && !(foreignMembers is ICollection<string> foreign && foreign.Contains(name))) {
+                        return;
+                    }
                     if (member.IsInteropMember && (module.Restrictions & ModuleRestrictions.NoNameMapping) == 0 && RubyUtils.HasMangledName(name)) {
                         if (Tokenizer.IsMethodName(name) || Tokenizer.IsOperatorName(name)) {
                             var clrName = new ClrName(name);
