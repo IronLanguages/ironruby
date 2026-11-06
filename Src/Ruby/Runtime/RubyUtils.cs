@@ -1149,31 +1149,24 @@ namespace IronRuby.Runtime {
             // comparing or inspecting arrays (RubyGems installs each gem on a thread of its
             // own) corrupted the dictionary and failed with IndexOutOfRangeException or
             // "a concurrent update was performed on this collection".
-            private readonly System.Threading.ThreadLocal<Dictionary<object, bool>>/*!*/ _infiniteTracker =
-                new System.Threading.ThreadLocal<Dictionary<object, bool>>(
-                    () => new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance)
-                );
+            private readonly System.Threading.ThreadLocal<HashSet<object>>/*!*/ _infiniteTracker =
+                new System.Threading.ThreadLocal<HashSet<object>>(() => new HashSet<object>(ReferenceEqualityComparer.Instance));
 
-            private Dictionary<object, bool> TryPushInfinite(object obj) {
-                Dictionary<object, bool> infinite = _infiniteTracker.Value;
-                if (infinite.ContainsKey(obj)) {
-                    return null;
-                }
-                infinite.Add(obj, true);
-                return infinite;
-            }
-
+            /// <summary>
+            /// Marks <paramref name="obj"/> as being inside the operation on this thread until the result is disposed.
+            /// Null if it already is: the operation has recursed into it.
+            /// </summary>
             public IDisposable TrackObject(object obj) {
                 obj = CustomStringDictionary.NullToObj(obj);
-                Dictionary<object, bool> tracker = TryPushInfinite(obj);
-                return (tracker == null) ? null : new RecursionHandle(tracker, obj);
+                HashSet<object> tracker = _infiniteTracker.Value;
+                return tracker.Add(obj) ? new RecursionHandle(tracker, obj) : null;
             }
 
-            private class RecursionHandle : IDisposable {
-                private readonly Dictionary<object, bool>/*!*/ _tracker;
+            private sealed class RecursionHandle : IDisposable {
+                private readonly HashSet<object>/*!*/ _tracker;
                 private readonly object _obj;
 
-                internal RecursionHandle(Dictionary<object, bool>/*!*/ tracker, object obj) {
+                internal RecursionHandle(HashSet<object>/*!*/ tracker, object obj) {
                     _tracker = tracker;
                     _obj = obj;
                 }
@@ -1736,12 +1729,6 @@ namespace IronRuby.Runtime {
                 }
             }
             return null;
-        }
-
-        public static bool HasPendingAsyncException(Thread/*!*/ thread) {
-            lock (_pendingAsyncExceptions) {
-                return _pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId);
-            }
         }
 
         /// <summary>The exception parked for a thread, left in place. Null when there is none.</summary>
