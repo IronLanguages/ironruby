@@ -2085,6 +2085,167 @@ format should have ASCII compatible encoding
 ");
         }
 
+        public void Encoding_List1() {
+            TestOutput(@"
+p Encoding.list.size, Encoding.list.first(4).map(&:name), Encoding.list.last.name
+p Encoding.name_list.size, Encoding.name_list.last(5)
+p Encoding.aliases.size, Encoding.aliases.first(3), Encoding.aliases[""CP951""], Encoding.aliases[""Big5-HKSCS:2008""]
+p Encoding::US_ASCII.names
+p [Encoding::EUCJP, Encoding::EucJP, Encoding::EBCDIC_CP_US, Encoding::BIG5_HKSCS_2008, Encoding::Stateless_ISO_2022_JP_KDDI].map(&:name)
+p Encoding.const_defined?(:Ebcdic_cp_us), Encoding.const_defined?(:Locale), Encoding.const_defined?(:IBM880)
+%w[ibm880 johab x-mac-arabic CP1026 CP20932].each { |n| begin; Encoding.find(n); rescue ArgumentError => e; puts e.message; end }
+p Encoding::CP950 == Encoding::Big5, Encoding::CP852 == Encoding::IBM852, Encoding::CP50220.dummy?
+p Encoding::MacThai.ascii_compatible?, Encoding::ISO_2022_JP_KDDI.ascii_compatible?, Encoding::UTF8_DoCoMo.dummy?
+p Encoding::Converter.asciicompat_encoding(""CP50220""), Encoding::Converter.asciicompat_encoding(""ISO-2022-JP-KDDI"")
+%w[Windows-1258 macThai macCentEuro GB1988].each do |n|
+  begin; ""é"".encode(n); rescue Encoding::ConverterNotFoundError => e; puts e.message; end
+  p ""abc"".encode(n).bytes, ""\xe0a"".force_encoding(n).upcase.bytes, ""\xe0"".force_encoding(n).ord
+end
+p ""\xC0\xE0\x81\x40\xA1\x40"".force_encoding(""Big5-HKSCS"").chars.map(&:bytesize)
+p ""\x80\x81\x40\xA1\x40\xFF"".force_encoding(""Windows-31J"").chars.map(&:valid_encoding?)
+p ""\x80\xFF\x81\x40"".force_encoding(""GBK"").chars.map(&:valid_encoding?)
+p ""\xA1\xA1\xA2\xE8\xFF"".force_encoding(""GB2312"").chars.map(&:bytesize)
+s = ""\x85\x40a"".force_encoding(""Windows-31J"")
+p s.valid_encoding?, s.length, s.codepoints, s.reverse.bytes, s.upcase.bytes
+begin; s.encode(""UTF-8""); rescue Encoding::UndefinedConversionError => e; puts e.message; end
+begin; ""\xDB"".force_encoding(""TIS-620"").encode(""UTF-16LE""); rescue Encoding::UndefinedConversionError => e; puts e.message; end
+p ""a\xDBb"".force_encoding(""TIS-620"").encode(""UTF-8"", undef: :replace)
+p ""\x80\xA0\xA1\xDF"".force_encoding(""ISO-8859-11"").encode(""UTF-8"").codepoints
+", @"
+103
+[""ASCII-8BIT"", ""UTF-8"", ""US-ASCII"", ""UTF-16BE""]
+""SJIS-SoftBank""
+175
+[""SJIS-SoftBank"", ""locale"", ""external"", ""filesystem"", ""internal""]
+71
+[[""BINARY"", ""ASCII-8BIT""], [""CP437"", ""IBM437""], [""CP720"", ""IBM720""]]
+nil
+""Big5-HKSCS""
+[""US-ASCII"", ""ASCII"", ""ANSI_X3.4-1968"", ""646""]
+[""EUC-JP"", ""EUC-JP"", ""IBM037"", ""Big5-HKSCS"", ""stateless-ISO-2022-JP-KDDI""]
+false
+false
+false
+unknown encoding name - ibm880
+unknown encoding name - johab
+unknown encoding name - x-mac-arabic
+unknown encoding name - CP1026
+unknown encoding name - CP20932
+false
+false
+true
+true
+false
+false
+#<Encoding:CP51932>
+#<Encoding:stateless-ISO-2022-JP-KDDI>
+code converter not found (UTF-8 to Windows-1258)
+[97, 98, 99]
+[224, 65]
+224
+code converter not found (UTF-8 to macThai)
+[97, 98, 99]
+[224, 65]
+224
+code converter not found (UTF-8 to macCentEuro)
+[97, 98, 99]
+[224, 65]
+224
+code converter not found (UTF-8 to GB1988)
+[97, 98, 99]
+[224, 65]
+224
+[2, 1, 1, 2]
+[false, true, true, true, false]
+[true, false, true]
+[2, 2, 1]
+true
+2
+[34112, 97]
+[97, 133, 64]
+[133, 64, 65]
+""\x85@"" from Windows-31J to UTF-8
+""\xDB"" to UTF-8 in conversion from TIS-620 to UTF-8 to UTF-16LE
+""a�b""
+[128, 160, 3585, 3647]
+");
+        }
+
+        public void Encoding_InvalidBytes1() {
+            TestOutput(@"
+def t
+  r = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+  puts r.inspect
+end
+s = ""\xffabc""
+t { s.count(""a"") }
+t { s.count("""") }
+t { """".count(""\xff"") }
+t { ""\x80a"".force_encoding(""Windows-31J"").count(""a"") }
+t { ""\xffa"".force_encoding(""BINARY"").count(""a"") }
+t { s.delete(""a"") }
+t { s.dup.delete!(""z"") }
+t { """".delete(""\xff"") }
+t { s.squeeze }
+t { s.squeeze(""a"") }
+t { """".squeeze(""\xff"") }
+t { ""abc"".tr(""\xff"", ""b"") }
+t { ""abc"".tr(""a"", ""\xff"") }
+t { """".tr(""\xff"", ""a"") }
+t { s.dup.upcase! }
+t { s.dup.capitalize! }
+t { s.upcase(:ascii) }
+t { ""abc"".force_encoding(""UTF-16"").upcase }
+t { ""abc"".force_encoding(""ISO-2022-JP"").downcase! }
+t { ""abc"".force_encoding(""UTF-7"").casecmp?(""abc"".force_encoding(""UTF-7"")) }
+t { s.gsub(""a"", ""b"") }
+t { s.sub(""a"") { ""X"" } }
+t { s.dup.gsub!(""b"", ""z"") }
+t { s.scan(""a"") }
+t { s.gsub(/a/, ""b"") }
+t { Regexp.union(""a"", s) }
+t { s.encode(xml: :text) }
+t { ""\xffa\n"".encode(crlf_newline: true) }
+t { ""\xff"".succ.bytes }
+t { ""\xe3\x81"".succ.bytes }
+t { ""\xffz"".succ }
+t { ""\xe0"".force_encoding(""macThai"").ord }
+", @"
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in Windows-31J""
+1
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""""
+""ArgumentError: input string invalid""
+""ArgumentError: input string invalid""
+""\xFFABC""
+""Encoding::CompatibilityError: incompatible encoding with this operation: UTF-16""
+""Encoding::CompatibilityError: incompatible encoding with this operation: ISO-2022-JP""
+""Encoding::CompatibilityError: incompatible encoding with this operation: UTF-7""
+""\xFFbbc""
+""\xFFXbc""
+""\xFFazc""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""RegexpError: invalid multibyte character: /a|\\xFFabc/""
+""\xFFabc""
+""\xFFa\r\n""
+[1, 255]
+[1, 227, 129]
+""\xFFaa""
+224
+");
+        }
+
         public void Io_Messages1() {
             TestOutput(@"
 r, w = IO.pipe

@@ -687,12 +687,12 @@ namespace IronRuby.Runtime {
             _defaultExternalEncoding = _options.DefaultEncoding ?? (windows ? RubyEncoding.UTF8 : _options.LocaleEncoding);
             // -E / --encoding, resolved here rather than in the options parser because looking an
             // encoding up by its Ruby name needs a context. It overrides both -K and the locale:
-            // that is the whole point of the option.
+            // that is the whole point of the option. A bad name is a startup error in MRI's wording.
             if (_options.ExternalEncodingName != null) {
-                _defaultExternalEncoding = GetCommandLineEncoding(_options.ExternalEncodingName);
+                _defaultExternalEncoding = GetRubyEncoding(_options.ExternalEncodingName);
             }
             if (_options.InternalEncodingName != null) {
-                DefaultInternalEncoding = GetCommandLineEncoding(_options.InternalEncodingName);
+                DefaultInternalEncoding = GetRubyEncoding(_options.InternalEncodingName);
             }
             _globalScope = DomainManager.Globals;
             _loader = new Loader(this);
@@ -997,6 +997,13 @@ namespace IronRuby.Runtime {
             StandardErrorOutput = new RubyIO(this, stream, AllocateFileDescriptor(stream), IOMode.WriteOnly | IOMode.WriteAppends);
             // STDERR.sync is true from the start in MRI: a diagnostic should not wait in a buffer
             ((RubyIO)StandardErrorOutput).AutoFlush = true;
+
+            // MRI's rb_stdio_set_default_encoding: the standard streams take the default encodings
+            // as the command line left them, so with a default internal encoding (-E ext:int, -U)
+            // they are pinned to the default external one and transcode to the internal one.
+            foreach (var stdio in new[] { StandardInput, StandardOutput, StandardErrorOutput }) {
+                ((RubyIO)stdio).SetEncodings(null, null);
+            }
         }
 
         // TODO: internal
@@ -4629,7 +4636,7 @@ namespace IronRuby.Runtime {
             ContractUtils.RequiresNotNull(defaultEncoding, "defaultEncoding");
             ContractUtils.Requires(stream.CanRead && stream.CanSeek, "stream", "The stream must support seeking and reading");
 
-            return GetSourceReader(stream, defaultEncoding);
+            return ReadSource(stream, defaultEncoding, path);
         }
 
         /// <summary>
@@ -4648,7 +4655,7 @@ namespace IronRuby.Runtime {
             return encoding.IsAsciiIdentity ? encoding.StrictEncoding : RubyEncoding.UTF8.StrictEncoding;
         }
 
-        private SourceCodeReader/*!*/ GetSourceReader(Stream/*!*/ stream, Encoding/*!*/ defaultEncoding) {
+        private SourceCodeReader/*!*/ ReadSource(Stream/*!*/ stream, Encoding/*!*/ defaultEncoding, string path) {
             long initialPosition = stream.Position;
             var reader = new StreamReader(stream, BinaryEncoding.Instance, true);
 
@@ -4669,14 +4676,15 @@ namespace IronRuby.Runtime {
 
             // header:
             string encodingName;
-            if (Tokenizer.TryParseEncodingHeader(reader, out encodingName)) {
-                rubyPreambleEncoding = GetEncodingByRubyName(encodingName);
-
-                // Check if the preamble encoding is an identity on preamble bytes.
-                // If not we shouldn't allow such encoding since the encoding of the preamble would be different from the encoding of the file.
-                if (!RubyEncoding.AsciiIdentity(rubyPreambleEncoding)) {
-                    throw new IOException(String.Format("Encoding '{0}' is not allowed in preamble.", rubyPreambleEncoding.WebName));
+            int line;
+            if (Tokenizer.TryParseEncodingHeader(reader, out encodingName, out line)) {
+                // A name Ruby does not know is as wrong as an encoding the comment itself could not
+                // be written in (UTF-16LE): MRI reports both as an ArgumentError, worded so.
+                var rubyEncoding = FindRubyEncoding(encodingName);
+                if (rubyEncoding == null || !rubyEncoding.IsAsciiIdentity) {
+                    throw new ArgumentException(String.Format("{0}:{1}: unknown or invalid encoding in the magic comment", path, line));
                 }
+                rubyPreambleEncoding = rubyEncoding.StrictEncoding;
             }
 
             // skip the encoding preamble, the resulting stream shouldn't detect the preamble again
@@ -4711,102 +4719,16 @@ namespace IronRuby.Runtime {
             return new SourceCodeReader(new StreamReader(stream, encoding, false), encoding);
         }
 
-        /// <exception cref="ArgumentException">Unknown encoding.</exception>
         /// <summary>
-        /// An encoding named on the command line by -E or --encoding. A bad name there is a
-        /// startup error, not a Ruby exception - there is no Ruby program running yet to rescue
-        /// it - so the .NET lookup failure is replaced by MRI's own wording.
+        /// The .NET encoding for a name: one of Ruby's encoding names first, and failing that the
+        /// name .NET gives one of its code pages. Only Iconv wants the latter - its names are
+        /// iconv's, not Ruby's; everything Ruby-facing goes through GetRubyEncoding.
         /// </summary>
-        private RubyEncoding/*!*/ GetCommandLineEncoding(string/*!*/ name) {
-            try {
-                return RubyEncoding.GetRubyEncoding(GetEncodingByRubyName(name));
-            } catch (ArgumentException) {
-                throw new ArgumentException("unknown encoding name - " + name);
-            } catch (NotSupportedException) {
-                throw new ArgumentException("unknown encoding name - " + name);
-            }
-        }
-
+        /// <exception cref="ArgumentException">Unknown encoding.</exception>
         public Encoding/*!*/ GetEncodingByRubyName(string/*!*/ name) {
             ContractUtils.RequiresNotNull(name, "name");
-
-            var upperName = name.ToUpperInvariant();
-            switch (upperName) {
-                case "BINARY":
-                case "ASCII-8BIT": return BinaryEncoding.Instance;
-                case "FILESYSTEM": return GetPathEncoding().StrictEncoding;
-                case "LOCALE": return _options.LocaleEncoding.StrictEncoding;
-                case "EXTERNAL": return _defaultExternalEncoding.StrictEncoding;
-                case "WINDOWS-31J": return Encoding.GetEncoding(RubyEncoding.CodePageSJIS);
-                case "MACCYRILLIC": return Encoding.GetEncoding(10007);
-
-                // encodings whose name only differs in casing are returned by Windows:
-                case "EUC-JP": return Encoding.GetEncoding(RubyEncoding.CodePageEUCJP);
-                case "ISO-2022-JP": return Encoding.GetEncoding(50220);
-
-                // the encoding name doesn't correspond to its code page:
-                case "CP1025": return Encoding.GetEncoding(21025);
-
-                // Ruby's names for code pages .NET spells differently - see GetRubySpecificName.
-                case "MACROMAN": return Encoding.GetEncoding(10000);
-                case "MACJAPANESE": return Encoding.GetEncoding(10001);
-                case "MACGREEK": return Encoding.GetEncoding(10006);
-                case "MACROMANIA": return Encoding.GetEncoding(10010);
-                case "MACUKRAINE": return Encoding.GetEncoding(10017);
-                case "MACTHAI": return Encoding.GetEncoding(10021);
-                case "MACCENTEURO": return Encoding.GetEncoding(10029);
-                case "MACICELAND": return Encoding.GetEncoding(10079);
-                case "MACTURKISH": return Encoding.GetEncoding(10081);
-                case "MACCROATIAN": return Encoding.GetEncoding(10082);
-                case "IBM720": return Encoding.GetEncoding(720);
-                case "IBM862": return Encoding.GetEncoding(862);
-                case "CP949": return Encoding.GetEncoding(949);
-                case "GBK": return Encoding.GetEncoding(936);
-                case "GB2312": return Encoding.GetEncoding(51936);
-                case "EUC-KR": return Encoding.GetEncoding(51949);
-                case "GB18030": return Encoding.GetEncoding(54936);
-
-                // Encodings Ruby has and .NET does not. Without these, "UTF-16" and "UTF-32"
-                // resolved to .NET's utf-16/utf-32, which are Ruby's UTF-16LE and UTF-32LE, and
-                // "TIS-620" resolved to Windows-874, which has a larger repertoire.
-                // Not through Encoding.GetEncoding("UTF-7"): that is refused unless the host enables
-                // System.Text.Encoding.EnableUnsafeUTF7Encoding (see RubyEncoding.CreateUTF7Encoding).
-                case "UTF-7": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF7).StrictEncoding;
-                case "UTF-16": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF16).StrictEncoding;
-                case "UTF-32": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF32).StrictEncoding;
-                case "CESU-8": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCESU8).StrictEncoding;
-                case "TIS-620": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageTIS620).StrictEncoding;
-                case "EMACS-MULE": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEmacsMule).StrictEncoding;
-                case "SHIFT_JIS": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageShiftJIS).StrictEncoding;
-                case "UTF8-MAC": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF8Mac).StrictEncoding;
-                case "CP51932": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCP51932).StrictEncoding;
-                case "EUCJP-MS": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEucJpMs).StrictEncoding;
-                case "STATELESS-ISO-2022-JP": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageStatelessISO2022JP).StrictEncoding;
-                case "ISO-2022-JP-2": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO2022JP2).StrictEncoding;
-                case "GB12345": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageGB12345).StrictEncoding;
-                case "EUC-TW": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEUCTW).StrictEncoding;
-                case "GB1988": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageGB1988).StrictEncoding;
-                case "ISO-8859-10": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO8859_10).StrictEncoding;
-                case "ISO-8859-14": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO8859_14).StrictEncoding;
-                case "ISO-8859-16": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO8859_16).StrictEncoding;
-
-                default:
-                    string alias;
-                    if (RubyEncoding.Aliases.TryGetValue(name, out alias)) {
-                        return GetEncodingByRubyName(alias);
-                    }
-                    if (upperName.StartsWith("CP", StringComparison.Ordinal)) {
-                        int codepage;
-                        if (Int32.TryParse(upperName.Substring(2), out codepage)) {
-                            try {
-                                return Encoding.GetEncoding(codepage);
-                            } catch (NotSupportedException) {
-                                // the encoding name is not correct
-                            }
-                        }
-                    }
-                    return Encoding.GetEncoding(name);
-            }
+            var encoding = FindRubyEncoding(name);
+            return encoding != null ? encoding.StrictEncoding : Encoding.GetEncoding(name);
         }
 
         /// <exception cref="ArgumentException">Unknown encoding.</exception>
@@ -4824,38 +4746,27 @@ namespace IronRuby.Runtime {
             }
         }
 
-        // Encoding names already resolved, case-insensitively as GetEncodingByRubyName matches
-        // them: the switch, the alias table and .NET's own lookup were most of the cost of
-        // Encoding.find and String#encode. Only names that resolved are kept, so the set stays
-        // as small as the names a program actually uses.
-        private const int MaxCachedEncodingNames = 256;
-        private const int MaxCachedEncodingNameLength = 64;
-
-        private readonly ConcurrentDictionary<string, RubyEncoding>/*!*/ _encodingsByName =
-            new ConcurrentDictionary<string, RubyEncoding>(StringComparer.OrdinalIgnoreCase);
-
         /// <exception cref="ArgumentException">Unknown encoding.</exception>
         public RubyEncoding/*!*/ GetRubyEncoding(string/*!*/ name) {
-            RubyEncoding result;
-            if (_encodingsByName.TryGetValue(name, out result)) {
-                return result;
-            }
-            result = RubyEncoding.GetRubyEncoding(GetEncodingByRubyName(name));
-            // Bounded, since names can come from input and many spellings resolve to the same
-            // encoding ("CP65001", "CP065001", ...): past the limits a name is resolved every time.
-            if (!IsMutableEncodingName(name) && name.Length <= MaxCachedEncodingNameLength &&
-                _encodingsByName.Count < MaxCachedEncodingNames) {
-                _encodingsByName[name] = result;
-            }
-            return result;
+            return FindRubyEncoding(name) ?? throw new ArgumentException("unknown encoding name - " + name);
         }
 
-        // The names whose encoding is a setting of the runtime rather than a fixed one.
-        private static bool IsMutableEncodingName(string/*!*/ name) {
-            return name.Equals("filesystem", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("locale", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("external", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("internal", StringComparison.OrdinalIgnoreCase);
+        /// <summary>
+        /// The encoding MRI knows by this name, or null. Besides the names and aliases of the
+        /// encodings themselves (RubyEncoding.FindByName), "locale", "external" and "filesystem"
+        /// name whatever the runtime currently uses for those.
+        /// </summary>
+        private RubyEncoding FindRubyEncoding(string/*!*/ name) {
+            if (name.Equals("filesystem", StringComparison.OrdinalIgnoreCase)) {
+                return GetPathEncoding();
+            }
+            if (name.Equals("locale", StringComparison.OrdinalIgnoreCase)) {
+                return _options.LocaleEncoding;
+            }
+            if (name.Equals("external", StringComparison.OrdinalIgnoreCase)) {
+                return _defaultExternalEncoding;
+            }
+            return RubyEncoding.FindByName(name);
         }
 
         public override string/*!*/ FormatObject(DynamicOperations/*!*/ operations, object obj) {

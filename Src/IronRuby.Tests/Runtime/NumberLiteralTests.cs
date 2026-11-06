@@ -168,7 +168,7 @@ __ENCODING__
             try {
                 var detectedEncoding = source.DetectEncoding();
                 Assert(encoding.WebName == detectedEncoding.WebName);
-            } catch (IOException) {
+            } catch (ArgumentException) {
                 Assert(!shouldSucceed);
             }
 
@@ -176,7 +176,7 @@ __ENCODING__
             try {
                 var code = source.GetCode();
                 Assert(StringComparer.Ordinal.Equals(code, preamble + src));
-            } catch (IOException) {
+            } catch (ArgumentException) {
                 Assert(!shouldSucceed);
             }
         }

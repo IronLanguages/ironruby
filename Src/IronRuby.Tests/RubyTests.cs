@@ -867,6 +867,8 @@ namespace IronRuby.Tests {
                 Enumerator_Copy1,
                 Io_Messages1,
                 Encoding_Misc1,
+                Encoding_List1,
+                Encoding_InvalidBytes1,
                 Marshal_Misc1,
                 Marshal_LoadFloat1,
                 Integer_SqrtPowDigits1,

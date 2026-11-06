@@ -1125,6 +1125,10 @@ namespace IronRuby.Builtins {
                     case 50220: // ISO-2022-JP
                         return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageStatelessISO2022JP);
 
+                    case RubyEncoding.CodePageISO2022JPKDDI:
+                        return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageStatelessISO2022JPKDDI);
+
+                    case RubyEncoding.CodePageCP50220:
                     case 50221: // CP50221
                         return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCP51932);
 
