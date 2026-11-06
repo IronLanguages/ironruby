@@ -1015,8 +1015,7 @@ namespace IronRuby.Runtime {
                     // 2) trace
                     //    Method call trace reports non-singleton module.
 
-                    // MRI 1.8: instance method owner is self -> it is possible (via define_method) to define m.f. on a class (bug)
-                    // MRI 1.9: instance method owner GetMethodDefinitionOwner
+                    // The instance method owner is GetMethodDefinitionOwner.
                     // MRI allows to define m.f. on classes but then doesn't work correctly with it.
                     instanceOwner = scope.GetMethodDefinitionOwner();
                     if (instanceOwner.IsClass) {

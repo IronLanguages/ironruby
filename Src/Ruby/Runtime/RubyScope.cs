@@ -875,12 +875,8 @@ namespace IronRuby.Runtime {
         }
 
         public RubyModule/*!*/ GetMethodDefinitionOwner() {
-            // MRI 1.9: 
-            // - define_method doesn't influence the definition owner (unlike MRI 1.8)
-            // - skips module_eval blocks above method scope 
-            // MRI 1.8: 
-            // - skips module_eval and define_method blocks above method scope.
-            // IronRuby: 
+            // - define_method doesn't influence the definition owner
+            // - module_eval blocks define into the module they evaluate in
             // - Fallback to the top-level singleton class when hosted.
 
             RubyScope scope = this;
@@ -897,17 +893,12 @@ namespace IronRuby.Runtime {
                         return scope.Module;
 
                     case ScopeKind.Method:
-                        // A `def` nested in a method body defines into the same place the
+                    case ScopeKind.BlockMethod:
+                        // A `def` nested in a method body (or a define_method block) defines into the same place the
                         // enclosing definition went, so keep walking the lexical chain - which
                         // may well end in a class_eval-like block scope (`Class.new { def m; def
                         // n; end; end }` defines n on the new class, not on Object).
                         break;
-
-                    case ScopeKind.BlockMethod:
-                        if (RubyContext.RubyOptions.Compatibility == RubyCompatibility.Ruby19) {
-                            break;
-                        }
-                        return ((RubyBlockScope)scope).BlockFlowControl.Proc.Method.DeclaringModule;
 
                     case ScopeKind.BlockModule:
                         BlockParam blockParam = ((RubyBlockScope)scope).BlockFlowControl;
