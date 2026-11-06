@@ -3172,6 +3172,53 @@ p r
         }
 
         /// <summary>
+        /// Range#min, #max, #include? and #member? in C#, with what they hand the prelude: an Integer or Float
+        /// range answered from its endpoints, Strings, blocks, counts, endless and beginless ranges, a break
+        /// from the block and a subclass's own #max. The expected output is CRuby's.
+        /// </summary>
+        public void Range_MinMaxInclude1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+t('max') { [(1..10).max, (1...10).max, (5..1).max, (1...1).max, (1..1).max, ('a'..'e').max, ('a'...'e').max, (1.0..2.5).max, (1..2.5).max, (..5).max, (...5).max] }
+t('min') { [(1..10).min, (1...10).min, (5..1).min, (1...1).min, ('a'..'e').min, (1.5..3).min, (1..).min] }
+t('max n') { [(1..10).max(3), (1...10).max(2), (1..10).min(3), ('a'..'e').max(2), (..5).max(2)] }
+t('max block') { [(1..10).max { |a, b| b <=> a }, (1..10).min { |a, b| b <=> a }, (1..10).max(2) { |a, b| b <=> a }] }
+t('break') { (1..10).max { |a, b| break :brk } }
+t('endless max') { (1..).max }
+t('beginless min') { (..5).min }
+t('float excl max') { (1.0...2.0).max }
+t('minmax') { [(1..10).minmax, (1..10).minmax { |a, b| b <=> a }] }
+t('include') { r = (1..10); [r.include?(5), r.include?(10), (1...10).include?(10), r.include?(0), r.include?(5.5), r.member?(3), r.include?(""a""), (1.0..2.0).include?(1.5), (1.0...2.0).include?(2), (1..2.0).include?(2), (1.0..2.0).include?(Float::NAN), (1..Float::INFINITY).include?(10**30)] }
+t('include str') { [('a'..'z').include?('m'), ('a'..'z').include?('cc'), ('a'..'z').member?('z')] }
+t('include endless') { [(1..).include?(10**20), (..5).include?(3), (1..nil).include?(0)] }
+t('include obj') { (Time.at(0)..Time.at(10)).include?(Time.at(5)) }
+t('include beginless str') { (..'z').include?('a') }
+t('case') { case 5 when 1..3 then :a when 4..6 then :b end }
+t('sub') { Class.new(Range) { def max; :mine; end }.new(1, 3).max }
+t('respond') { [(1..2).respond_to?(:__max__), (1..2).respond_to?(:include?), Range.instance_method(:max).arity, Range.instance_method(:include?).arity] }
+", @"
+max: [10, 9, nil, nil, 1, ""e"", ""d"", 2.5, 2.5, 5, 4]
+min: [1, 1, nil, nil, ""a"", 1.5, 1]
+max n: [[10, 9, 8], [9, 8], [1, 2, 3], [""e"", ""d""], [5, 4]]
+max block: [1, 10, [1, 2]]
+break: :brk
+endless max: [RangeError, ""cannot get the maximum of endless range""]
+beginless min: [RangeError, ""cannot get the minimum of beginless range""]
+float excl max: [TypeError, ""cannot exclude non Integer end value""]
+minmax: [[1, 10], [10, 1]]
+include: [true, true, false, false, true, true, false, true, false, true, false, true]
+include str: [true, false, true]
+include endless: [true, true, false]
+include obj: true
+include beginless str: [TypeError, ""cannot determine inclusion in beginless/endless ranges""]
+case: :b
+sub: :mine
+respond: [false, true, -1, 1]
+");
+        }
+
+        /// <summary>
         /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
         /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
         /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the

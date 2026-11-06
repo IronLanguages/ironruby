@@ -229,6 +229,68 @@ namespace IronRuby.Builtins {
 
         #region ===, member?, include?
 
+        // #include? and #member? of an Integer range asked about an Integer, or of a Float range asked
+        // about a number: the comparison, as the prelude's (ruby4.rb, __include__) would make it. That
+        // one handles everything else - Strings walked by #succ, other objects by #each - and was ~0.4 us
+        // a call for (1..100).include?(50).
+        [RubyMethod("include?"), RubyMethod("member?")]
+        public static object Include(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, [NotNull]Range/*!*/ self, object value) {
+            object b = self.Begin, e = self.End;
+            if (b is int && e is int && value is int) {
+                int v = (int)value;
+                return ScriptingRuntimeHelpers.BooleanToObject(v >= (int)b && (self.ExcludeEnd ? v < (int)e : v <= (int)e));
+            }
+            if ((b is double || b is int) && (e is double || e is int) && (value is double || value is int) && (b is double || e is double)) {
+                double lo = Convert.ToDouble(b), hi = Convert.ToDouble(e), v = Convert.ToDouble(value);
+                if (!Double.IsNaN(lo) && !Double.IsNaN(hi) && !Double.IsNaN(v)) {
+                    return ScriptingRuntimeHelpers.BooleanToObject(v >= lo && (self.ExcludeEnd ? v < hi : v <= hi));
+                }
+            }
+            var site = slow.GetCallSite("__include__", 1);
+            return site.Target(site, self, value);
+        }
+
+        // #min and #max of an Integer range without a block or a count: an endpoint, as MRI's range_min
+        // and range_max answer it. Everything else is the prelude's (__min__, __max__).
+
+        [RubyMethod("max")]
+        public static object Max(CallSiteStorage<Func<CallSite, object, Proc, object>>/*!*/ slow, BlockParam block, [NotNull]Range/*!*/ self) {
+            if (block == null && self.Begin is int && self.End is int) {
+                int b = (int)self.Begin, e = (int)self.End;
+                if (self.ExcludeEnd ? b >= e : b > e) {
+                    return null;
+                }
+                return ScriptingRuntimeHelpers.Int32ToObject(self.ExcludeEnd ? e - 1 : e);
+            }
+            var site = slow.GetCallSite("__max__", new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            return site.Target(site, self, (block != null) ? block.Proc : null);
+        }
+
+        [RubyMethod("max")]
+        public static object Max(CallSiteStorage<Func<CallSite, object, Proc, object, object>>/*!*/ slow, BlockParam block, [NotNull]Range/*!*/ self, object count) {
+            var site = slow.GetCallSite("__max__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            return site.Target(site, self, (block != null) ? block.Proc : null, count);
+        }
+
+        [RubyMethod("min")]
+        public static object Min(CallSiteStorage<Func<CallSite, object, Proc, object>>/*!*/ slow, BlockParam block, [NotNull]Range/*!*/ self) {
+            if (block == null && self.Begin is int && self.End is int) {
+                int b = (int)self.Begin, e = (int)self.End;
+                if (self.ExcludeEnd ? b >= e : b > e) {
+                    return null;
+                }
+                return self.Begin;
+            }
+            var site = slow.GetCallSite("__min__", new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            return site.Target(site, self, (block != null) ? block.Proc : null);
+        }
+
+        [RubyMethod("min")]
+        public static object Min(CallSiteStorage<Func<CallSite, object, Proc, object, object>>/*!*/ slow, BlockParam block, [NotNull]Range/*!*/ self, object count) {
+            var site = slow.GetCallSite("__min__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            return site.Target(site, self, (block != null) ? block.Proc : null, count);
+        }
+
         /// <summary>
         /// Returns true if other is an element of self, false otherwise.
         /// Conveniently, === is the comparison operator used by case statements. 
@@ -241,7 +303,7 @@ namespace IronRuby.Builtins {
         /// end
         /// => "high"
         /// </example>
-        [RubyMethod("==="), RubyMethod("member?"), RubyMethod("include?"), RubyMethod("cover?")]
+        [RubyMethod("==="), RubyMethod("cover?")]
         public static bool CaseEquals(ComparisonStorage/*!*/ comparisonStorage, [NotNull]Range/*!*/ self, object value) {
             var compare = comparisonStorage.CompareSite;
 
