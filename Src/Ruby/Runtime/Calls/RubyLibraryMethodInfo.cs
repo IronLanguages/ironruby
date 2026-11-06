@@ -70,6 +70,26 @@ namespace IronRuby.Runtime.Calls {
             get { return false; }
         }
 
+        /// <summary>
+        /// The arity of the C function MRI implements the method with: the number of arguments it takes if every overload
+        /// takes just that many (rb_define_method with an argc of 0 or more), -1 otherwise - for a method that takes optional
+        /// or keyword arguments, or overloads of different lengths (argc/argv). Integer#round is -1, not -1 less one per
+        /// mandatory parameter; #parameters follows: [[:req]] for Integer#+, [[:rest]] for Integer#round. (A core method MRI
+        /// writes in Ruby reports its Ruby parameters, see MethodReflection in the libraries.)
+        /// </summary>
+        protected override int ComputeArity() {
+            int count = -1;
+            foreach (OverloadInfo method in MethodBases) {
+                int mandatory, optional;
+                RubyOverloadResolver.GetParameterCount(method, CallConvention, out mandatory, out optional);
+                if (optional > 0 || count >= 0 && count != mandatory || RubyOverloadResolver.TakesKeywords(method)) {
+                    return -1;
+                }
+                count = mandatory;
+            }
+            return count;
+        }
+
         internal protected override OverloadInfo/*!*/[]/*!*/ MethodBases {
             get {
                 Debug.Assert(base.MethodBases != null || _overloads != null);

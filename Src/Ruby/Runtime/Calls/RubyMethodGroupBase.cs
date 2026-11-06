@@ -119,7 +119,7 @@ namespace IronRuby.Runtime.Calls {
             return arity;
         }
 
-        private int ComputeArity() {
+        protected virtual int ComputeArity() {
             int minParameters = Int32.MaxValue;
             int maxParameters = 0;
             bool hasOptional = false;

@@ -91,7 +91,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("arity")]
         public static int GetArity(UnboundMethod/*!*/ self) {
-            return self._isMethodMissing ? -1 : self.Info.GetArity();
+            return self._isMethodMissing ? -1 : MethodReflection.GetArity(self.Info, self.Name);
         }
 
         /// <summary>
@@ -256,15 +256,11 @@ namespace IronRuby.Builtins {
                 result.Append(')');
             }
 
-            var signature = isMissingMethod ? null : info.GetParameterSignature();
             if (isMissingMethod) {
                 result.Append("(*)");
-            } else if (signature != null) {
-                result.Append(signature.ToParameterListString());
             } else {
-                // a library method or an attribute accessor: MRI prints the parameter list
-                // from #parameters, "_" standing for a required parameter with no name
-                result.Append(FormatParameterArray(info.GetRubyParameterArray()));
+                // a core method or an attribute accessor: MRI prints the parameter list from #parameters
+                result.Append(MethodReflection.FormatParameters(context, info, methodName) ?? info.GetParameterSignature().ToParameterListString());
             }
 
             var location = isMissingMethod ? null : GetSourceLocation(info);
@@ -277,36 +273,6 @@ namespace IronRuby.Builtins {
 
             result.Append('>');
             return result; 
-        }
-
-        private static string/*!*/ FormatParameterArray(RubyArray/*!*/ parameters) {
-            var result = new StringBuilder("(");
-            foreach (object item in parameters) {
-                var parameter = item as RubyArray;
-                if (parameter == null || parameter.Count == 0) {
-                    continue;
-                }
-                string kind = parameter[0].ToString();
-                string name = parameter.Count > 1 ? parameter[1].ToString() : null;
-                string text;
-                switch (kind) {
-                    case "req": text = name ?? "_"; break;
-                    case "opt": text = (name ?? "_") + "=..."; break;
-                    case "rest": text = "*" + (name == "*" ? null : name); break;
-                    case "keyreq": text = (name ?? "_") + ":"; break;
-                    case "key": text = (name ?? "_") + ": ..."; break;
-                    case "keyrest": text = "**" + (name == "**" ? null : name); break;
-                    case "nokey": text = "**nil"; break;
-                    case "block": text = "&" + (name == "&" ? null : name); break;
-                    default: continue;
-                }
-                if (result.Length > 1) {
-                    result.Append(", ");
-                }
-                result.Append(text);
-            }
-            result.Append(')');
-            return result.ToString();
         }
 
         [RubyMethod("of")]
@@ -339,16 +305,7 @@ namespace IronRuby.Builtins {
             if (self._isMethodMissing) {
                 return new RubyArray(1) { new RubyArray(1) { context.CreateAsciiSymbol("rest") } };
             }
-            return self.Info.GetRubyParameterArray();
-        }
-
-        // "Kernel#tap", "Dir.glob": how InternalMethods.SourceFiles names a method.
-        private static string/*!*/ InternalMethodKey(RubyMethodInfo/*!*/ info) {
-            RubyModule owner = info.DeclaringModule;
-            var singleton = owner.IsSingletonClass ? ((RubyClass)owner).SingletonClassOf as RubyModule : null;
-            return (singleton != null)
-                ? singleton.Name + "." + info.DefinitionName
-                : owner.Name + "#" + info.DefinitionName;
+            return MethodReflection.GetParameters(context, self.Info, self.Name);
         }
 
         internal static RubyArray GetSourceLocation(RubyMemberInfo/*!*/ info) {
@@ -360,7 +317,7 @@ namespace IronRuby.Builtins {
                 // location at all, as a C method has none - method_source and pry rely on that.
                 if (RubyStackTraceBuilder.IsInternalFile(file)) {
                     string mriFile;
-                    if (!InternalMethods.SourceFiles.TryGetValue(InternalMethodKey(rubyInfo), out mriFile)) {
+                    if (!InternalMethods.SourceFiles.TryGetValue(MethodReflection.GetInternalMethodKey(rubyInfo.DeclaringModule, rubyInfo.DefinitionName), out mriFile)) {
                         return null;
                     }
                     file = mriFile;
@@ -372,8 +329,9 @@ namespace IronRuby.Builtins {
             }
 
             // a method define_method made out of a block is located where the block was written
+            // (unless that is the prelude, which stands in for C)
             var lambdaInfo = info as RubyLambdaMethodInfo;
-            if (lambdaInfo != null && lambdaInfo.Lambda.Dispatcher.SourcePath != null) {
+            if (lambdaInfo != null && lambdaInfo.Lambda.Dispatcher.SourcePath != null && !MethodReflection.IsPreludeMethod(lambdaInfo)) {
                 return new RubyArray(2) {
                     lambdaInfo.Context.EncodePath(lambdaInfo.Lambda.Dispatcher.SourcePath),
                     lambdaInfo.Lambda.Dispatcher.SourceLine

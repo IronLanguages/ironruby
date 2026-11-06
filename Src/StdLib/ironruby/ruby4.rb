@@ -683,9 +683,10 @@ module Enumerable
     end
   end unless method_defined?(:slice_after)
 
-  def reverse_each(&block)
-    return to_enum(:reverse_each) { size if respond_to?(:size) } unless block
-    to_a.reverse_each(&block)
+  # the arguments go to #each, as Enumerable#to_a's do
+  def reverse_each(*args, &block)
+    return to_enum(:reverse_each, *args) { size if respond_to?(:size) } unless block
+    to_a(*args).reverse_each(&block)
     self
   end unless method_defined?(:reverse_each)
 
@@ -950,6 +951,7 @@ class Range
         return __first_without_count__
       end
       raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size > 1
       n = __to_count__(args[0])
       raise ArgumentError, "negative array size (or size too big)" if n < 0
       b = self.begin
@@ -979,6 +981,7 @@ class Range
         return __last_without_count__
       end
       raise RangeError, "cannot get the last element of endless range" if self.end.nil?
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size > 1
       n = __to_count__(args[0])
       raise ArgumentError, "negative array size" if n < 0
       b = self.begin
@@ -2845,14 +2848,14 @@ end
 module Kernel
   # The built-in warn takes exactly one message and no keywords; 2.5 added
   # multiple messages plus uplevel:, and 3.0 added category:.
-  if private_method_defined?(:warn) && instance_method(:warn).arity == 1
+  if private_method_defined?(:warn) && !private_method_defined?(:__ir_warn__)
     alias :__ir_warn__ :warn
     private :__ir_warn__
 
-    def warn(*messages, **options)
+    def warn(*messages, uplevel: nil, category: nil)
       # The category gate runs before the $VERBOSE gate and before the message check,
       # matching warning.rb's Kernel#warn: it is the Ruby half of rb_warn_m.
-      category = options[:category]
+      # (category: and uplevel: are the only keywords, as in warning.rb)
       unless category.nil?
         unless ::Symbol === category
           unless category.respond_to?(:to_sym)
@@ -2865,7 +2868,6 @@ module Kernel
       return nil if messages.empty?
       return nil if $VERBOSE.nil?
 
-      uplevel = options[:uplevel]
       unless uplevel.nil?
         unless ::Integer === uplevel
           unless uplevel.respond_to?(:to_int)
@@ -7516,7 +7518,7 @@ module Process
   unless respond_to?(:clock_getres)
     # We have no way to ask the platform, so report the resolution the source we
     # actually use has: Stopwatch for the monotonic clocks, and Time for the rest.
-    def clock_getres(clock_id = CLOCK_MONOTONIC, unit = :float_second)
+    def clock_getres(clock_id, unit = :float_second)
       seconds = CLOCK_RESOLUTIONS__[clock_id.to_s] || 1.0 / System::Diagnostics::Stopwatch.frequency.to_f
       case unit
       when :float_second then seconds
@@ -9634,11 +9636,14 @@ class IO
     # IO.read opens the file itself, so mode:, encoding: and :open_args all get
     # their chance; the whole-file form is tagged with the stream's encoding and
     # the length form is bytes, which is MRI's split too.
-    def read(name, *args, **options)
-      if args.size > 2
-        ::Kernel.raise(::ArgumentError,
-                       "wrong number of arguments (given #{args.size + 1}, expected 1..3)")
+    def read(*args, **options)
+      # MRI's rb_scan_args("13:"); a fourth positional argument it takes, only to hand the three
+      # after the name on to open, which takes two
+      if args.empty? || args.size > 4
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..4)")
       end
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 3, expected 0..2)") if args.size == 4
+      name = args.shift
       options = options.empty? ? nil : options
       length = args[0]
       offset = args[1]
@@ -10442,11 +10447,19 @@ class Thread
   # caller_locations in that frame would start.  The block is yielded to rather than
   # called through a Proc so that a `break' in it breaks out of this method, which is
   # what MRI's C implementation does and what the specs check.
-  def self.each_caller_location
+  def self.each_caller_location(*args, **keywords)
+    # MRI's C function takes (start = 1, length = nil) and no keywords
+    unless keywords.empty?
+      ::Kernel.raise ::ArgumentError, "unknown keyword#{'s' if keywords.size > 1}: #{keywords.keys.map(&:inspect).join(', ')}"
+    end
+    ::Kernel.raise ::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..2)" if args.size > 2
+    start, length = args
+    start ||= 1
     ::Kernel.raise ::LocalJumpError, "no block given" unless block_given?
-    # Two frames up: this method's own and the block's that called it (see Thread#backtrace
-    # on why not through Kernel.send).
-    caller_locations(2).each { |l| yield l }
+    # Start 1 is two frames up: this method's own and the block's that called it (see
+    # Thread#backtrace on why not through Kernel.send).
+    locations = length.nil? ? caller_locations(start + 1) : caller_locations(start + 1, length)
+    locations&.each { |l| yield l }
     nil
   end unless respond_to?(:each_caller_location)
 
@@ -11521,9 +11534,11 @@ class Range
   # MRI's range_max: a block, a count, or an exclusive end that is not a number means
   # Enumerable's walk (which a beginless range cannot do); otherwise the end answers, one
   # less for an exclusive Integer end - and only an Integer begin may exclude it.
-  def max(n = nil, &block)
+  def max(*args, &block)
     e = self.end
     raise RangeError, "cannot get the maximum of endless range" if e.nil?
+    raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size > 1
+    n = args[0]
     b = self.begin
 
     if block || n || (exclude_end? && !e.is_a?(Numeric))
@@ -11562,9 +11577,11 @@ class Range
     e
   end
 
-  def min(n = nil, &block)
+  def min(*args, &block)
     b = self.begin
     raise RangeError, "cannot get the minimum of beginless range" if b.nil?
+    raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size > 1
+    n = args[0]
     if n
       n = __range_count__(n)
       return (block ? entries.sort(&block) : entries.sort).first(n) if block
@@ -11591,6 +11608,7 @@ class Range
   # Enumerable#count would walk an endless range forever. An Integer range is counted
   # without walking it at all, from #size, as CRuby's range_count does.
   def count(*args, &block)
+    raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size > 1
     return super if block || !args.empty?
     return Float::INFINITY if self.begin.nil? || self.end.nil?
     if self.begin.is_a?(Integer)
@@ -11761,7 +11779,7 @@ end
 # An Encoding marshals by name, as in MRI: Marshal.dump(Encoding::UTF_8) loads
 # back as the same Encoding object.
 class Encoding
-  def _dump(limit)
+  def _dump(limit = nil)
     name
   end
 
@@ -11796,6 +11814,12 @@ module Kernel
       end
     end
 
+    # FilePathValue: File.open would take an Integer as a file descriptor. MRI converts the
+    # path before File.open counts the arguments.
+    unless target.is_a?(::String) || target.respond_to?(:to_path) || target.respond_to?(:to_str)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{target.nil? ? 'nil' : target.class} into String")
+    end
+
     # Only the file-opening form is limited to (path, mode, permission); #to_open
     # above takes as many arguments as it likes.
     if args.size > 3
@@ -11805,11 +11829,6 @@ module Kernel
     # File.open's mode/permission parameters are typed, so an explicit nil is a
     # conversion error there where MRI treats it as "not given".
     rest.pop while !rest.empty? && rest.last.nil?
-
-    # FilePathValue: File.open would take an Integer as a file descriptor.
-    unless target.is_a?(::String) || target.respond_to?(:to_path) || target.respond_to?(:to_str)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{target.nil? ? 'nil' : target.class} into String")
-    end
 
     if options.empty?
       ::File.open(target, *rest, &block)
@@ -12103,8 +12122,14 @@ end
 }.each do |mod, names|
   names.each do |name|
     next if !mod.respond_to?(name) || mod.private_method_defined?(name, false) || mod.method_defined?(name, false)
+    # with the arity of the singleton method, as the copy MRI makes has (Process#egid is 0)
     mod.module_eval do
-      define_method(name) { |*args, **opts, &block| mod.__send__(name, *args, **opts, &block) }
+      case mod.method(name).arity
+      when 0 then define_method(name) { mod.__send__(name) }
+      when 1 then define_method(name) { |a| mod.__send__(name, a) }
+      when 2 then define_method(name) { |a, b| mod.__send__(name, a, b) }
+      else define_method(name) { |*args, **opts, &block| mod.__send__(name, *args, **opts, &block) }
+      end
       private name
     end
   end
