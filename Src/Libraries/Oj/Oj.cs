@@ -251,16 +251,6 @@ namespace IronRuby.StandardLibrary.Oj {
             return Constant(context, context.ObjectClass, "StringIO") as RubyClass;
         }
 
-        internal static object JsonStateClass(RubyContext/*!*/ context) {
-            var json = Constant(context, context.ObjectClass, "JSON") as RubyModule;
-            if (json == null) {
-                return null;
-            }
-            var ext = Constant(context, json, "Ext") as RubyModule;
-            var generator = ext != null ? Constant(context, ext, "Generator") as RubyModule : null;
-            return generator != null ? Constant(context, generator, "State") : null;
-        }
-
         internal bool IsComplex(RubyContext/*!*/ context, RubyClass/*!*/ cls) {
             return ReferenceEquals(cls, Constant(context, context.ObjectClass, "Complex"));
         }

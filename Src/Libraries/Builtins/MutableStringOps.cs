@@ -238,91 +238,6 @@ namespace IronRuby.Builtins {
                 return current;
             }
 
-            // TODO: refactor this and Parse()
-            public MutableString/*!*/ ParseSequence() {
-                _pos = 0;
-
-                MutableString result = MutableString.CreateBinary();
-                if (_range.Length == 0) {
-                    return result;
-                }
-
-                bool negate = false;
-                if (_range.StartsWith('^')) {
-                    // Special case of ^
-                    if (_range.GetLength() == 1) {
-                        result.Append('^');
-                        return result;
-                    }
-
-                    negate = true;
-                    _pos = 1;
-                }
-
-                BitArray array = new BitArray(256);
-                array.Not();
-
-                int c;
-                while ((c = NextToken()) != -1) {
-                    if (_rangeStarted) {
-                        // _startRange - c. ignore ranges which are the reverse sequence
-                        if (_startRange <= c) {
-                            for (int i = _startRange; i <= c; ++i) {
-                                if (negate) {
-                                    array.Set(i, false);
-                                } else {
-                                    result.Append((byte)i);
-                                }
-                            }
-                        }
-                        _rangeStarted = false;
-                    } else {
-                        int p = PeekChar();
-                        if (p == '-') {
-                            // z- is treated as a literal 'z', '-'
-                            if (_pos == _range.Length - 1) {
-                                if (negate) {
-                                    array.Set(c, false);
-                                    array.Set('-', false);
-                                } else {
-                                    result.Append((byte)c);
-                                    result.Append('-');
-                                }
-                                break;
-                            }
-
-                            _startRange = c;
-                            if (_rangeStarted) {
-                                if (negate) {
-                                    array.Set('-', false);
-                                } else {
-                                    result.Append('-');
-                                }
-                                _rangeStarted = false;
-                            } else {
-                                _rangeStarted = true;
-                            }
-                            _pos++; // consume -
-                        } else {
-                            if (negate) {
-                                array.Set(c, false);
-                            } else {
-                                result.Append((byte)c);
-                            }
-                        }
-                    }
-                }
-
-                if (negate) {
-                    for (int i = 0; i < 256; i++) {
-                        if (array.Get(i)) {
-                            result.Append((byte)i);
-                        }
-                    }
-                }
-                return result;
-            }
-
             public BitArray/*!*/ Parse() {
                 _pos = 0;
 
@@ -2355,13 +2270,6 @@ namespace IronRuby.Builtins {
             internal int XmlMode;           // 0 none, 't' text, 'a' attr
             internal int Newline;           // 0 none, 'u' universal, 'r' cr, 'c' crlf
 
-            internal bool IsPlain {
-                get {
-                    return !ReplaceInvalid && !ReplaceUndefined && Replacement == null
-                        && Fallback == null && XmlMode == 0 && Newline == 0;
-                }
-            }
-
             /// <summary>
             /// MRI's default replacement is U+FFFD when the target can hold it and "?" otherwise.
             /// </summary>
@@ -4129,8 +4037,6 @@ namespace IronRuby.Builtins {
             }
             return result;
         }
-        
-        private static char[] _WhiteSpaceSeparators = new char[] { ' ', '\n', '\r', '\t', '\v', '\f' };
 
         private static bool IsAwkWhiteSpace(char c) {
             return c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == '\v' || c == '\f';

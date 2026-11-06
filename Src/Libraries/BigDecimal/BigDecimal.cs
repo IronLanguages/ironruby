@@ -153,7 +153,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public static readonly BigDecimal NegativeZero = new BigDecimal(-1, Fraction.Zero, 1);
         public const uint BASE = Fraction.BASE;
         public const int BASE_FIG = Fraction.BASE_FIG;
-        public const int DOUBLE_FIG = 16;
 
         #endregion
 
@@ -215,7 +214,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         public int MaxPrecision { get { return _maxPrecision; } }
         public int Digits { get { return _fraction.DigitCount; } }
         public int MaxPrecisionDigits { get { return _maxPrecision * BASE_FIG; } }
-        public int PrecisionDigits { get { return _fraction.Precision * BASE_FIG; } }
         #endregion
 
         #region Create Methods
@@ -381,10 +379,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         public static bool IsPositiveOne(BigDecimal x) {
-            return IsOne(x) && IsPositive(x);
-        }
-
-        public static bool IsNegativeOne(BigDecimal x) {
             return IsOne(x) && IsPositive(x);
         }
 

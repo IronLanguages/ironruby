@@ -329,9 +329,6 @@ namespace IronRuby.Builtins {
         [DllImport("libc", EntryPoint = "access", SetLastError = true)]
         private static extern int sys_access(byte[] path, int mode);
 
-        [DllImport("libc", EntryPoint = "euidaccess", SetLastError = true)]
-        private static extern int sys_euidaccess(byte[] path, int mode);
-
         internal static byte[] ToPath(string path) {
             var bytes = Encoding.UTF8.GetBytes(path ?? "");
             var result = new byte[bytes.Length + 1];
@@ -546,19 +543,6 @@ namespace IronRuby.Builtins {
             }
             int errno;
             return Run(() => sys_access(ToPath(path), mode), out errno) == 0;
-        }
-
-        /// <summary>euidaccess(3) -- uses the effective uid/gid, like Ruby's readable?/writable?/executable?.</summary>
-        internal static bool AccessEffective(string path, int mode) {
-            if (!IsAvailable) {
-                return false;
-            }
-            int errno;
-            try {
-                return Run(() => sys_euidaccess(ToPath(path), mode), out errno) == 0;
-            } catch (EntryPointNotFoundException) {
-                return AccessReal(path, mode);
-            }
         }
 
         internal static string ReadLink(string path, out int errno) {

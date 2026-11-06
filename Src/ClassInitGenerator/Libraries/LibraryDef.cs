@@ -33,10 +33,8 @@ internal class LibraryDef {
 
     public static readonly string/*!*/ TypeAction = "Action";
     public static readonly string/*!*/ TypeFunction = "Func";
-    public static readonly string/*!*/ TypeDelegate = TypeName(typeof(Delegate));
     public static readonly string/*!*/ TypeRubyModule = TypeName(typeof(RubyModule));
     public static readonly string/*!*/ TypeRubyClass = TypeName(typeof(RubyClass));
-    public static readonly string/*!*/ TypeActionOfRubyModule = TypeName(typeof(Action<RubyModule>));
     public static readonly string/*!*/ TypeLibraryInitializer = TypeName(typeof(LibraryInitializer));
     public static readonly string/*!*/ TypeRubyLibraryAttribute = TypeName(typeof(RubyLibraryAttribute));
 
@@ -842,11 +840,6 @@ internal class LibraryDef {
         AnyErrors = true;
     }
 
-    private void LogWarning(string/*!*/ message, params object[] args) {
-        Console.Error.Write("Warning: ");
-        Console.Error.WriteLine(message, args);
-    }
-
     private void LogMethodError(string/*!*/ message, MethodDef methodDef, MethodBase/*!*/ overload, params object[] args) {
         string methodName = (methodDef != null) ? "method \"" + methodDef.Name + '"' : "factory";
         Console.Error.WriteLine("Error: {0}: {1}", methodName, String.Format(message, args));
@@ -1410,14 +1403,6 @@ internal class LibraryDef {
 
     private static string/*!*/ TypeArgs(params Type/*!*/[]/*!*/ types) {
         return ReflectionUtils.FormatTypeArgs(new StringBuilder(), types, Generator.TypeNameDispenser).ToString();
-    }
-
-    private static string/*!*/ GenericTypeName(Type/*!*/ type) {
-        if (type.IsGenericTypeDefinition) {
-            return String.Concat(type.Namespace, ".", type.Name.Substring(0, type.Name.IndexOf('`')));
-        } else {
-            return type.Name;
-        }
     }
 
     private class TypeComparer : IComparer<Type> {
