@@ -75,10 +75,6 @@ namespace IronRuby.Compiler.Ast {
         public virtual void Exit(CaseExpression/*!*/ node) { }
         public virtual bool Enter(ConditionalExpression/*!*/ node) { return true; }
         public virtual void Exit(ConditionalExpression/*!*/ node) { }
-        public virtual bool Enter(ConditionalJumpExpression/*!*/ node) { return true; }
-        public virtual void Exit(ConditionalJumpExpression/*!*/ node) { }
-        public virtual bool Enter(ErrorExpression/*!*/ node) { return true; }
-        public virtual void Exit(ErrorExpression/*!*/ node) { }
         public virtual bool Enter(ForLoopExpression/*!*/ node) { return true; }
         public virtual void Exit(ForLoopExpression/*!*/ node) { }
         public virtual bool Enter(HashConstructor/*!*/ node) { return true; }
@@ -91,8 +87,6 @@ namespace IronRuby.Compiler.Ast {
         public virtual void Exit(StringLiteral/*!*/ node) { }
         public virtual bool Enter(SymbolLiteral/*!*/ node) { return true; }
         public virtual void Exit(SymbolLiteral/*!*/ node) { }
-        public virtual bool Enter(FileLiteral/*!*/ node) { return true; }
-        public virtual void Exit(FileLiteral/*!*/ node) { }
         public virtual bool Enter(EncodingExpression/*!*/ node) { return true; }
         public virtual void Exit(EncodingExpression/*!*/ node) { }
         public virtual bool Enter(MethodCall/*!*/ node) { return true; }
@@ -159,12 +153,8 @@ namespace IronRuby.Compiler.Ast {
         // statements:
         public virtual bool Enter(AliasStatement/*!*/ node) { return true; }
         public virtual void Exit(AliasStatement/*!*/ node) { }
-        public virtual bool Enter(ConditionalStatement/*!*/ node) { return true; }
-        public virtual void Exit(ConditionalStatement/*!*/ node) { }
         public virtual bool Enter(ShutdownHandlerStatement/*!*/ node) { return true; }
         public virtual void Exit(ShutdownHandlerStatement/*!*/ node) { }
-        public virtual bool Enter(FileInitializerStatement/*!*/ node) { return true; }
-        public virtual void Exit(FileInitializerStatement/*!*/ node) { }
         public virtual bool Enter(UndefineStatement/*!*/ node) { return true; }
         public virtual void Exit(UndefineStatement/*!*/ node) { }
         

@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Diagnostics;
 using System.Dynamic;
@@ -61,27 +57,6 @@ namespace IronRuby.Compiler.Ast {
             _index = index;
         }
 
-        public RegexMatchReference/*!*/ CreateGroupReference(int index, SourceSpan location) {
-            ContractUtils.Requires(index >= 0);
-            return new RegexMatchReference(index, location);
-        }
-
-        public RegexMatchReference/*!*/ CreateLastGroupReference(SourceSpan location) {
-            return new RegexMatchReference(MatchLastGroup, location);
-        }
-
-        public RegexMatchReference/*!*/ CreatePrefixReference(SourceSpan location) {
-            return new RegexMatchReference(PreMatch, location);
-        }
-
-        public RegexMatchReference/*!*/ CreateSuffixReference(SourceSpan location) {
-            return new RegexMatchReference(PostMatch, location);
-        }
-
-        public RegexMatchReference/*!*/ CreateMatchReference(SourceSpan location) {
-            return new RegexMatchReference(MatchData, location);
-        }
-
         // TODO: keep only full names?
         public string/*!*/ VariableName {
             get {
@@ -99,13 +74,6 @@ namespace IronRuby.Compiler.Ast {
         public string/*!*/ FullName {
             get {
                 return "$" + VariableName;
-            }
-        }
-
-        // Numeric references cannot be aliased (alias _ $n doesn't work for some reason):
-        internal bool CanAlias {
-            get {
-                return _index <= 0;
             }
         }
 

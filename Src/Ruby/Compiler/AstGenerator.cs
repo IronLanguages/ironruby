@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -54,7 +50,6 @@ namespace IronRuby.Compiler.Ast {
         private readonly bool _traceable;
         private readonly bool _savingToDisk;
 
-        private IList<MSA.Expression> _fileInitializers; // lazy
         private MSA.Expression _sourcePathConstant; // lazy
 
         internal AstGenerator(RubyContext/*!*/ context, RubyCompilerOptions/*!*/ options, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding,
@@ -72,11 +67,7 @@ namespace IronRuby.Compiler.Ast {
             _profiler = context.RubyOptions.Profile ? Profiler.Instance : null;
             _savingToDisk = context.RubyOptions.SavePath != null;
             _printInteractiveResult = printInteractiveResult;
-#if FEATURE_REFEMIT && FEATURE_FILESYSTEM
             _debugCompiler = Snippets.Shared.SaveSnippets;
-#else
-            _debugCompiler = false;
-#endif
         }
 
         public RubyCompilerOptions/*!*/ CompilerOptions { 
@@ -159,19 +150,6 @@ namespace IronRuby.Compiler.Ast {
 
         internal RubyContext/*!*/ Context {
             get { return _context; }
-        }
-
-        internal void AddFileInitializer(MSA.Expression/*!*/ expression) {
-            if (_fileInitializers == null) {
-                _fileInitializers = new List<MSA.Expression>();
-            }
-            _fileInitializers.Add(expression);
-        }
-
-        internal IList<MSA.Expression>/*!*/ FileInitializers {
-            get {
-                return (IList<MSA.Expression>)_fileInitializers ?? AstFactory.EmptyExpressions;
-            }
         }
 
         #region Lexical Scopes
@@ -708,28 +686,6 @@ namespace IronRuby.Compiler.Ast {
             _currentElement = oldModule.Parent;
             _currentVariableScope = oldModule.ParentVariableScope;
             _currentModule = oldModule.ParentModule;
-        }
-
-        public void EnterFileInitializer(
-            ScopeBuilder/*!*/ locals,
-            MSA.Expression/*!*/ selfVariable,
-            MSA.ParameterExpression/*!*/ runtimeScopeVariable) {
-
-            VariableScope scope = new VariableScope(locals, selfVariable, runtimeScopeVariable);
-
-            scope.Parent = _currentElement;
-            scope.ParentVariableScope = _currentVariableScope;
-
-            _currentElement = scope;
-            _currentVariableScope = scope;
-        }
-
-        public void LeaveFileInitializer() {
-            Debug.Assert(_currentElement == _currentVariableScope);
-            VariableScope oldScope = _currentVariableScope;
-
-            _currentElement = oldScope.Parent;
-            _currentVariableScope = oldScope.ParentVariableScope;
         }
 
         /// <summary>

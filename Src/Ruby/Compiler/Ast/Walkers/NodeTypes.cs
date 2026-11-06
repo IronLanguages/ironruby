@@ -44,20 +44,16 @@ namespace IronRuby.Compiler.Ast {
         // expressions:
         AndExpression,
         ArrayConstructor,
-        AssignmentExpression,
         AstNodeDescriptionExpression,
         BlockExpression,
         CaseExpression,
         ConditionalExpression,
-        ConditionalJumpExpression,
-        ErrorExpression,
         ForLoopExpression,
         HashConstructor,
         IfExpression,
         Literal,
         StringLiteral,
         SymbolLiteral,
-        FileLiteral,
         EncodingExpression,
         MethodCall,
         MatchExpression,
@@ -94,10 +90,7 @@ namespace IronRuby.Compiler.Ast {
 
         // statements:
         AliasStatement,
-        ConditionalStatement,
-        ExpressionStatement,
         Finalizer,
-        Initializer,
         UndefineStatement,
 
         // jump statements:
@@ -138,15 +131,12 @@ namespace IronRuby.Compiler.Ast {
     public partial class BlockExpression { public override NodeTypes NodeType { get { return NodeTypes.BlockExpression; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class CaseExpression { public override NodeTypes NodeType { get { return NodeTypes.CaseExpression; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class ConditionalExpression { public override NodeTypes NodeType { get { return NodeTypes.ConditionalExpression; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
-    public partial class ConditionalJumpExpression { public override NodeTypes NodeType { get { return NodeTypes.ConditionalJumpExpression; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
-    public partial class ErrorExpression { public override NodeTypes NodeType { get { return NodeTypes.ErrorExpression; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class ForLoopExpression { public override NodeTypes NodeType { get { return NodeTypes.ForLoopExpression; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class HashConstructor { public override NodeTypes NodeType { get { return NodeTypes.HashConstructor; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class IfExpression { public override NodeTypes NodeType { get { return NodeTypes.IfExpression; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class Literal { public override NodeTypes NodeType { get { return NodeTypes.Literal; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class StringLiteral { public override NodeTypes NodeType { get { return NodeTypes.StringLiteral; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class SymbolLiteral { public override NodeTypes NodeType { get { return NodeTypes.SymbolLiteral; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
-    public partial class FileLiteral { public override NodeTypes NodeType { get { return NodeTypes.FileLiteral; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class EncodingExpression { public override NodeTypes NodeType { get { return NodeTypes.EncodingExpression; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class MethodCall { public override NodeTypes NodeType { get { return NodeTypes.MethodCall; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class MatchExpression { public override NodeTypes NodeType { get { return NodeTypes.MatchExpression; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
@@ -180,9 +170,7 @@ namespace IronRuby.Compiler.Ast {
     public partial class SimpleAssignmentExpression { public override NodeTypes NodeType { get { return NodeTypes.SimpleAssignmentExpression; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
 
     public partial class AliasStatement { public override NodeTypes NodeType { get { return NodeTypes.AliasStatement; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
-    public partial class ConditionalStatement { public override NodeTypes NodeType { get { return NodeTypes.ConditionalStatement; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class ShutdownHandlerStatement { public override NodeTypes NodeType { get { return NodeTypes.Finalizer; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
-    public partial class FileInitializerStatement { public override NodeTypes NodeType { get { return NodeTypes.Initializer; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class UndefineStatement { public override NodeTypes NodeType { get { return NodeTypes.UndefineStatement; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     
     public partial class BreakStatement { public override NodeTypes NodeType { get { return NodeTypes.BreakStatement; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }

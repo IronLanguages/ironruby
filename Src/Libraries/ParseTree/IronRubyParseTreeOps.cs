@@ -311,12 +311,6 @@ namespace IronRuby.StandardLibrary.ParseTree {
                     return false;
                 }
 
-                public override bool Enter(FileLiteral/*!*/ node) {
-                    // TODO:
-                    _result = MakeNode(NodeKind.lit, CreateSymbol("__FILE__"));
-                    return false;
-                }
-
                 public override bool Enter(StringConstructor/*!*/ node) {
                     StringLiteral lit;
                     if (node.Parts.Count == 1 && (lit = node.Parts[0] as StringLiteral) != null) {
@@ -948,11 +942,6 @@ namespace IronRuby.StandardLibrary.ParseTree {
                     return false;
                 }
 
-                public override bool Enter(FileInitializerStatement/*!*/ node) {
-                    // TODO:
-                    throw new NotImplementedException();
-                }
-
                 public override bool Enter(ShutdownHandlerStatement/*!*/ node) {
                     // TODO:
                     throw new NotImplementedException();
@@ -1268,30 +1257,6 @@ namespace IronRuby.StandardLibrary.ParseTree {
 
                 public override bool Enter(ConditionalExpression/*!*/ node) {
                     return EnterTernary(NodeKind.@if, node.Condition, node.TrueExpression, node.FalseExpression);
-                }
-
-                public override bool Enter(ConditionalJumpExpression/*!*/ node) {
-                    if (node.IsBooleanExpression) {
-                        if (node.NegateCondition) {
-                            return EnterBooleanExpression(node.Condition, node.JumpStatement, NodeKind.or);
-                        } else {
-                            return EnterBooleanExpression(node.Condition, node.JumpStatement, NodeKind.and);
-                        }
-                    }
-
-                    if (node.NegateCondition) {
-                        return EnterTernary(NodeKind.@if, node.Condition, node.Value, node.JumpStatement);
-                    } else {
-                        return EnterTernary(NodeKind.@if, node.Condition, node.JumpStatement, node.Value);
-                    }
-                }
-
-                public override bool Enter(ConditionalStatement/*!*/ node) {
-                    if (node.IsUnless) {
-                        return EnterTernary(NodeKind.@if, node.Condition, node.ElseStatement, node.Body);
-                    } else {
-                        return EnterTernary(NodeKind.@if, node.Condition, node.Body, node.ElseStatement);
-                    }
                 }
 
                 public override bool Enter(WhileLoopExpression/*!*/ node) {
