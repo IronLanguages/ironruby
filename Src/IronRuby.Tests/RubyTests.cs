@@ -234,6 +234,7 @@ namespace IronRuby.Tests {
                 Scenario_MethodAliases1,
                 Scenario_MethodAliases2,
                 Scenario_MethodAliases3,
+                Scenario_MethodAliases4,
                 Scenario_MethodUndef1,
                 Scenario_MethodUndef2,
                 MethodUndefExpression,

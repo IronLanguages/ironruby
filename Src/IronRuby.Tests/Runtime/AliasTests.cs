@@ -114,6 +114,29 @@ false
         }
 
         /// <summary>
+        /// Module#class_eval and #module_eval (and the _exec pair) are one method to Method#==, as in
+        /// MRI, though each is its own CLR method so that a backtrace names the one called.
+        /// </summary>
+        public void Scenario_MethodAliases4() {
+            TestOutput(@"
+p Module.instance_method(:class_eval) == Module.instance_method(:module_eval)
+p Module.instance_method(:class_exec) == Module.instance_method(:module_exec)
+p Module.instance_method(:class_eval) == Module.instance_method(:module_exec)
+p Module.instance_method(:class_eval).hash == Module.instance_method(:module_eval).hash
+p String.method(:class_eval) == String.method(:module_eval), String.method(:class_eval) == Array.method(:module_eval)
+puts((String.class_eval { raise 'x' } rescue $!.backtrace.grep(/Module#/).map { it[/'.*'/] }))
+", @"
+true
+true
+false
+true
+true
+false
+'Module#class_eval'
+");
+        }
+
+        /// <summary>
         /// Alias (unlike undef) looks up the method in Object.
         /// </summary>
         public void AliasMethodLookup1() {
