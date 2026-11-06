@@ -251,7 +251,7 @@ namespace IronRuby.Runtime {
         /// An object promised a conversion and then broke the promise: it answers #to_ary but what
         /// came back is not an Array. MRI names both ends of the failed conversion and what was
         /// actually handed over:
-        ///   "can't convert Foo into Array (Foo#to_ary gives NilClass)"
+        ///   "can't convert Foo to Array (Foo#to_ary gives NilClass)"
         /// The class of the returned value is spelled as the class, not by value, so a nil result
         /// reads NilClass - unlike the "no implicit conversion of nil into Array" message, which is
         /// about the argument rather than about what a conversion method gave back.
@@ -267,7 +267,7 @@ namespace IronRuby.Runtime {
                 resultClass = (context != null) ? context.GetClassDisplayName(result) : result.GetType().Name;
             }
 
-            return CreateTypeError("can't convert {0} into {1} ({0}#{2} gives {3})",
+            return CreateTypeError("can't convert {0} to {1} ({0}#{2} gives {3})",
                 MessageTypeName(className), returnTypeName, methodName, resultClass);
         }
 

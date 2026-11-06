@@ -324,7 +324,8 @@ end
         }
 
         /// <summary>
-        /// Order of evaluation inside rescue clauses.
+        /// Order of evaluation inside rescue clauses: each class is evaluated and compared before the next one
+        /// is evaluated, and the ones after a match are not evaluated (G here), as in MRI.
         /// </summary>
         public void Scenario_RubyExceptions12A() {
             AssertOutput(delegate() {
@@ -364,15 +365,14 @@ foo
 ");
             }, @"
 r(A)
-r(B)
-r(C)
 cmp(A, F)
+r(B)
 cmp(B, F)
+r(C)
 cmp(C, F)
 r(E)
-r(F)
-r(G)
 cmp(E, F)
+r(F)
 cmp(F, F)
 rescued 2
 ");
@@ -688,7 +688,7 @@ end
 ", @"
 ?to_a
 to_a
-#<TypeError: can't convert C into Array (C#to_a gives Integer)>
+#<TypeError: can't convert C to Array (C#to_a gives Integer)>
 ");
         }
 
