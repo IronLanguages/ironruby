@@ -124,7 +124,7 @@ namespace IronRuby.StandardLibrary.Threading {
         [RubyMethod("enq")]
         [RubyMethod("push")]
         [RubyMethod("<<")]
-        public static object Enqueue(RubyContext/*!*/ context, SizedQueue/*!*/ self, object value, [NotNull]Hash/*!*/ options) {
+        public static object Enqueue(RubyContext/*!*/ context, SizedQueue/*!*/ self, object value, [Keywords, NotNull]Hash/*!*/ options) {
             int ms = RubyQueue.GetTimeoutMilliseconds(context, RubyQueue.GetTimeoutOption(context, options));
             return self.Enqueue(value, ms) ? (object)self : null;
         }
@@ -133,7 +133,7 @@ namespace IronRuby.StandardLibrary.Threading {
         [RubyMethod("push")]
         [RubyMethod("<<")]
         public static object Enqueue(RubyContext/*!*/ context, SizedQueue/*!*/ self, object value, bool nonBlocking,
-            [NotNull]Hash/*!*/ options) {
+            [Keywords, NotNull]Hash/*!*/ options) {
 
             if (nonBlocking && options.Count > 0) {
                 throw RubyExceptions.CreateArgumentError("can't set a timeout if non_block is enabled");

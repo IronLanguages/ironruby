@@ -50,7 +50,7 @@ namespace IronRuby.Builtins {
         // about how much room to reserve, so it is accepted and ignored.
         [RubyConstructor]
         public static MutableString/*!*/ Create(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, RubyClass/*!*/ self,
-            [DefaultProtocol, Optional, NotNull]MutableString value, [NotNull]IDictionary<object, object>/*!*/ options) {
+            [DefaultProtocol, Optional, NotNull]MutableString value, [Keywords, NotNull]IDictionary<object, object>/*!*/ options) {
 
             MutableString result = (value != null) ? MutableString.Create(value) : MutableString.CreateEmpty();
             foreach (var entry in options) {
@@ -2202,7 +2202,7 @@ namespace IronRuby.Builtins {
             MutableString/*!*/ self,
             [Optional]object toEncoding,
             [Optional]object fromEncoding,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             // TODO: optimize
             return EncodeInPlace(fallbackStorage, toHash, toStr, self.Clone(), toEncoding, fromEncoding, options);
@@ -2216,7 +2216,7 @@ namespace IronRuby.Builtins {
             MutableString/*!*/ self,
             [Optional]object toEncoding,
             [Optional]object fromEncoding,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             Protocols.TryConvertToOptions(toHash, ref options, ref toEncoding, ref fromEncoding);
 
@@ -5125,7 +5125,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("unpack")]
         public static RubyArray/*!*/ Unpack(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, MutableString/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ format,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             return RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options));
         }
@@ -5133,7 +5133,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("unpack1")]
         public static object Unpack1(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, MutableString/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ format,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             var result = RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options), true);
             return result.Count > 0 ? result[0] : null;

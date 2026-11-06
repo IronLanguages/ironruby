@@ -63,7 +63,7 @@ namespace IronRuby.Builtins {
             object descriptorOrPath, 
             [Optional]object optionsOrMode, 
             [Optional]object optionsOrPermissions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             return Reinitialize(toInt, toHash, toPath, toStr, new RubyFile(self.Context), descriptorOrPath, optionsOrMode, optionsOrPermissions, options);
         }
@@ -78,7 +78,7 @@ namespace IronRuby.Builtins {
             object descriptorOrPath, 
             [Optional]object optionsOrMode, 
             [Optional]object optionsOrPermissions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             var context = self.Context;
             

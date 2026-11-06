@@ -72,6 +72,10 @@ namespace IronRuby.Runtime.Calls {
         // The call's block goes to the method as its last positional argument, a parameter of a delegate type.
         private bool _blockAsArgument;
 
+        // The overloads being resolved, for an error that counts the positional arguments of a library method that takes
+        // keywords (see GetPositionalArities).
+        internal IList<OverloadInfo> Overloads { get; set; }
+
         internal RubyContext/*!*/ Context {
             get { return _args.RubyContext; }
         }
@@ -267,6 +271,96 @@ namespace IronRuby.Runtime.Calls {
                     optional++;
                 }
             }
+        }
+
+        // Whether a library method's overload has a [Keywords] parameter; read once per method.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<MethodBase, bool>/*!*/ _takesKeywords =
+            new System.Collections.Concurrent.ConcurrentDictionary<MethodBase, bool>();
+
+        private static bool TakesKeywords(OverloadInfo/*!*/ overload) {
+            var method = overload.ReflectionInfo;
+            if (method == null) {
+                return false;
+            }
+            return _takesKeywords.GetOrAdd(method, m => {
+                foreach (var parameter in m.GetParameters()) {
+                    if (parameter.IsDefined(typeof(KeywordsAttribute), false)) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+        }
+
+        /// <summary>
+        /// The numbers of positional arguments the library method of <paramref name="overloads"/> takes, if one of them
+        /// receives keyword arguments in a [Keywords] parameter, else null: what MRI counts, which a keyword Hash is not
+        /// a part of. Each overload takes from its mandatory to all of its other parameters, any number more with a params
+        /// array; <paramref name="restFrom"/> is the least count from which on every count is taken (Int32.MaxValue if none).
+        /// </summary>
+        internal static List<int> GetPositionalArities(IList<OverloadInfo>/*!*/ overloads, SelfCallConvention callConvention,
+            out int restFrom) {
+
+            restFrom = Int32.MaxValue;
+            bool takesKeywords = false;
+            foreach (var overload in overloads) {
+                if (TakesKeywords(overload)) {
+                    takesKeywords = true;
+                    break;
+                }
+            }
+            if (!takesKeywords) {
+                return null;
+            }
+
+            var result = new List<int>();
+            foreach (var overload in overloads) {
+                int mandatory = 0, optional = 0;
+                bool rest = false;
+                for (int i = GetHiddenParameterCount(overload, callConvention); i < overload.ParameterCount; i++) {
+                    var info = overload.Parameters[i];
+                    if (overload.IsParamArray(i)) {
+                        rest = true;
+                    } else if (info.IsDefined(typeof(KeywordsAttribute), false)) {
+                        continue;
+                    } else if (info.IsMandatory()) {
+                        mandatory++;
+                    } else {
+                        optional++;
+                    }
+                }
+                for (int count = mandatory; count <= mandatory + optional; count++) {
+                    if (!result.Contains(count)) {
+                        result.Add(count);
+                    }
+                }
+                if (rest) {
+                    restFrom = Math.Min(restFrom, mandatory + optional);
+                }
+            }
+            return result;
+        }
+
+        internal static bool AcceptsPositionalCount(List<int>/*!*/ arities, int restFrom, int count) {
+            return count >= restFrom || arities.Contains(count);
+        }
+
+        /// <summary>
+        /// "1..2" for <see cref="GetPositionalArities"/>, as the error for a count it does not take says it.
+        /// </summary>
+        internal static string/*!*/ DescribePositionalArities(List<int>/*!*/ arities, int restFrom) {
+            if (restFrom == Int32.MaxValue) {
+                return DescribeExpectedArgumentCount(arities);
+            }
+            var counts = new List<int>();
+            foreach (int count in arities) {
+                if (count < restFrom) {
+                    counts.Add(count);
+                }
+            }
+            counts.Add(restFrom);
+            counts.Add(Int32.MaxValue);
+            return DescribeExpectedArgumentCount(counts);
         }
 
         #endregion
@@ -1445,10 +1539,35 @@ namespace IronRuby.Runtime.Calls {
         }
 
         private Expression MakeIncorrectArgumentCountError(BindingTarget target) {
-            return Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
-                AstUtils.Constant(target.ActualArgumentCount),
-                AstUtils.Constant(DescribeExpectedArgumentCount(target.ExpectedArgumentCount))
-            );
+            int restFrom = Int32.MaxValue;
+            var positional = (Overloads != null && !_implicitProtocolConversions) ?
+                GetPositionalArities(Overloads, _callConvention, out restFrom) : null;
+
+            if (positional == null) {
+                return Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                    AstUtils.Constant(target.ActualArgumentCount),
+                    AstUtils.Constant(DescribeExpectedArgumentCount(target.ExpectedArgumentCount))
+                );
+            }
+
+            // MRI counts the positional arguments alone, not a trailing Hash of keywords:
+            int count = target.ActualArgumentCount;
+            Expression given = AstUtils.Constant(count);
+            if (count > 0 && !_args.Signature.HasRhsArgument) {
+                if (!_args.Signature.HasSplattedArgument) {
+                    if (_args.SimpleArgumentCount > 0) {
+                        given = Ast.Condition(
+                            Methods.IsKeywordArgumentsHash.OpCall(AstUtils.Box(_args.GetSimpleArgumentExpression(_args.SimpleArgumentCount - 1))),
+                            AstUtils.Constant(count - 1),
+                            given
+                        );
+                    }
+                } else if (_list != null && _list.Count > 0 && RubyOps.IsKeywordArgumentsHash(_list[_list.Count - 1])) {
+                    given = AstUtils.Constant(count - 1);
+                }
+            }
+
+            return Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(given, AstUtils.Constant(DescribePositionalArities(positional, restFrom)));
         }
 
         /// <summary>

@@ -262,7 +262,7 @@ namespace IronRuby.Builtins {
             ConversionStorage<MutableString>/*!*/ stringCast,
             ConversionStorage<MutableString>/*!*/ tosConversion,
             RubyArray/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             RubyContext context = integerConversion.Context;
             if (!format.Encoding.IsAsciiIdentity) {

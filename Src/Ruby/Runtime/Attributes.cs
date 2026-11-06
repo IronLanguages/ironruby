@@ -317,5 +317,15 @@ namespace IronRuby.Runtime {
     public class DefaultProtocolAttribute : Attribute {
     }
 
+    /// <summary>
+    /// Marks the parameter of a library method that receives its keyword arguments (as a Hash). It is not one of the
+    /// positional parameters MRI counts: a call whose positional arguments - not counting a trailing keyword Hash - are
+    /// more or fewer than the method takes raises "wrong number of arguments" with the count MRI gives
+    /// (Integer() is "given 0, expected 1..2", not "expected 1..3").
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false)]
+    public sealed class KeywordsAttribute : Attribute {
+    }
+
 }
 

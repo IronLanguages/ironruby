@@ -82,13 +82,13 @@ namespace IronRuby.Builtins {
 
         [RubyConstructor]
         public static RubyDir/*!*/ Create(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options));
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static RubyDir/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ toPath, RubyDir/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             self._encoding = GetEncodingOption(self.ImmediateClass.Context, options);
             return Reinitialize(self, Protocols.CastToPath(toPath, dirname));
         }
@@ -265,14 +265,14 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("entries", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ GetEntries(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname, [Optional]IDictionary<object, object> options) {
+        public static RubyArray/*!*/ GetEntries(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname, [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options))
                 .GetEntries(self.Context);
         }
 
         [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
         public static object ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options))
                 .EnumerateEntries(self.Context, block, null);
         }
@@ -482,7 +482,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
         public static object Open(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             RubyDir rd = new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options));
 
             try {
@@ -496,7 +496,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
         public static RubyDir/*!*/ Open(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname));
         }
 

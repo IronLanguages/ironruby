@@ -76,12 +76,16 @@ namespace IronRuby.Runtime.Calls {
         private readonly int _positionalCount;
         private readonly Parameter _params;
 
+        // how many positional arguments a call without keywords (the only one made without a rule) passes: those before a
+        // [Keywords] parameter, which takes nothing else
+        private readonly int _positionalLimit;
+
         // the BlockParam parameter and its index, or null (the block is not passed to the overload):
         private readonly Parameter _block;
         private readonly int _blockIndex;
 
         private LibraryCallPlan(LibraryFunctionCall function, CallInstruction call, Parameter/*!*/[]/*!*/ parameters, Type/*!*/ returnType,
-            int mandatoryCount, int positionalCount, Parameter paramsParameter, Parameter block) {
+            int mandatoryCount, int positionalCount, int positionalLimit, Parameter paramsParameter, Parameter block) {
             Debug.Assert((function != null) != (call != null));
             _function = function;
             _call = call;
@@ -89,6 +93,7 @@ namespace IronRuby.Runtime.Calls {
             _returnType = returnType;
             _mandatoryCount = mandatoryCount;
             _positionalCount = positionalCount;
+            _positionalLimit = positionalLimit;
             _params = paramsParameter;
             _block = block;
             _blockIndex = Array.IndexOf(parameters, block);
@@ -327,6 +332,7 @@ namespace IronRuby.Runtime.Calls {
 
             int mandatoryCount = 0;
             int positionalCount = 0;
+            int positionalLimit = -1;
             Parameter paramsParameter = null;
             for (; i < infos.Count; i++) {
                 var info = infos[i];
@@ -365,6 +371,14 @@ namespace IronRuby.Runtime.Calls {
                 }
 
                 var p = new Parameter { Kind = Kind.Positional, Type = type, NotNull = overload.ProhibitsNull(i), Conversion = conversion };
+
+                if (info.IsDefined(typeof(KeywordsAttribute), false)) {
+                    // a call that passes no keywords leaves it out; one that must pass them is not made without a rule
+                    if (info.IsMandatory() || positionalLimit >= 0) {
+                        return null;
+                    }
+                    positionalLimit = positionalCount;
+                }
 
                 if (info.IsMandatory()) {
                     // a mandatory parameter after an optional one: let the resolver map it
@@ -420,7 +434,8 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
-            return new LibraryCallPlan(function, call, parameters, returnType, mandatoryCount, positionalCount, paramsParameter, block);
+            return new LibraryCallPlan(function, call, parameters, returnType, mandatoryCount, positionalCount,
+                (positionalLimit >= 0) ? positionalLimit : positionalCount, paramsParameter, block);
         }
 
         private static bool IsPlainParameterType(Type/*!*/ type) {
@@ -434,7 +449,7 @@ namespace IronRuby.Runtime.Calls {
         /// Whether the overload takes <paramref name="count"/> positional arguments and the block given, if it insists on one.
         /// </summary>
         internal bool AcceptsShape(int count, Proc block) {
-            return count >= _mandatoryCount && (_params != null || count <= _positionalCount) && (_block == null || !_block.NotNull || block != null);
+            return count >= _mandatoryCount && (_params != null || count <= _positionalLimit) && (_block == null || !_block.NotNull || block != null);
         }
 
         /// <summary>

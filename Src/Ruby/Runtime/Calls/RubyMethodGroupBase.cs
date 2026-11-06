@@ -16,6 +16,7 @@
 using System.Linq.Expressions;
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
@@ -320,6 +321,7 @@ namespace IronRuby.Runtime.Calls {
                 }
 
                 resolver = new RubyOverloadResolver(metaBuilder, args, callConvention, implicitProtocolConversions);
+                resolver.Overloads = overloads;
                 if (byName) {
                     resolver.BindKeywordsByName(keywords, overloads);
                 }
@@ -442,6 +444,10 @@ namespace IronRuby.Runtime.Calls {
         internal static void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name,
             IList<OverloadInfo>/*!*/ overloads, SelfCallConvention callConvention, bool implicitProtocolConversions) {
 
+            if (!implicitProtocolConversions && !TakesPositionalCount(metaBuilder, args, overloads, callConvention)) {
+                return;
+            }
+
             RubyOverloadResolver resolver;
             var bindingTarget = ResolveOverload(metaBuilder, args, name, overloads, callConvention, implicitProtocolConversions, out resolver);
             if (bindingTarget.Success) {
@@ -468,6 +474,68 @@ namespace IronRuby.Runtime.Calls {
             } else {
                 metaBuilder.SetError(resolver.MakeInvalidParametersError(bindingTarget).Expression);
             }
+        }
+
+        /// <summary>
+        /// A library method that takes keywords in a [Keywords] parameter is called with as many positional arguments - not
+        /// counting a trailing keyword Hash - as one of its overloads takes, or else it raises MRI's "wrong number of arguments"
+        /// that counts them (Integer(exception: false) is "given 0, expected 1..2"), not whatever binding the Hash to a
+        /// positional parameter would do. False if the error is set.
+        /// </summary>
+        private static bool TakesPositionalCount(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, IList<OverloadInfo>/*!*/ overloads,
+            SelfCallConvention callConvention) {
+
+            if (args.Signature.HasRhsArgument) {
+                return true;
+            }
+
+            int restFrom;
+            var arities = RubyOverloadResolver.GetPositionalArities(overloads, callConvention, out restFrom);
+            if (arities == null) {
+                return true;
+            }
+
+            // The arguments, the items of a splatted list among them - the way the resolver counts them (a ruby2_keywords
+            // hash at the end of the list is keywords again, see MetaObjectBuilder.AddSplattedArgumentTest):
+            int count = args.SimpleArgumentCount;
+            IList list = null;
+            if (args.Signature.HasSplattedArgument) {
+                list = RubyOps.SplatRuby2Keywords((IList)args.GetSplattedArgument());
+                count += list.Count;
+            }
+
+            object last = (list != null) ? (list.Count > 0 ? list[list.Count - 1] : null) : (count > 0 ? args.GetSimpleArgument(count - 1) : null);
+            bool isKeywords = RubyOps.IsKeywordArgumentsHash(last);
+            bool takes = RubyOverloadResolver.AcceptsPositionalCount(arities, restFrom, isKeywords ? count - 1 : count);
+
+            // Whether the last argument is a keyword Hash decides it, so the rule holds for calls that pass one, or for those
+            // that do not; a splatted call's for lists of this length.
+            bool keywordsDecide = count > 0 && takes != RubyOverloadResolver.AcceptsPositionalCount(arities, restFrom, isKeywords ? count : count - 1);
+            if (list != null && (keywordsDecide || !takes)) {
+                int listLength;
+                ParameterExpression listVariable;
+                metaBuilder.AddSplattedArgumentTest((IList)args.GetSplattedArgument(), args.GetSplattedMetaArgument().Expression, out listLength, out listVariable);
+                if (keywordsDecide && listLength > 0) {
+                    Expression test = Methods.IsKeywordArgumentsHash.OpCall(
+                        Ast.Call(listVariable, typeof(IList).GetMethod("get_Item"), AstUtils.Constant(listLength - 1))
+                    );
+                    metaBuilder.AddCondition(isKeywords ? test : Ast.Not(test));
+                    keywordsDecide = false;
+                }
+            }
+
+            if (keywordsDecide) {
+                Expression test = Methods.IsKeywordArgumentsHash.OpCall(AstUtils.Box(args.GetSimpleArgumentExpression(args.SimpleArgumentCount - 1)));
+                metaBuilder.AddRestriction(isKeywords ? test : Ast.Not(test));
+            }
+
+            if (!takes) {
+                metaBuilder.SetError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                    AstUtils.Constant(isKeywords ? count - 1 : count),
+                    AstUtils.Constant(RubyOverloadResolver.DescribePositionalArities(arities, restFrom))
+                ));
+            }
+            return takes;
         }
 
         /// <summary>

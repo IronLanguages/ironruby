@@ -45,6 +45,119 @@ namespace IronRuby.Tests {
 
     public partial class Tests {
         /// <summary>
+        /// A library method's [Keywords] parameter is not one MRI counts: a call with too few or too many positional
+        /// arguments - a trailing keyword Hash aside, a Hash passed positionally included - raises "wrong number of
+        /// arguments" with MRI's counts (Integer() was "expected 1..3", String.new("a", "b") a TypeError), whether the call
+        /// gets a rule, is splatted or would be made without a rule.
+        /// </summary>
+        public void LibraryKeywordsArity1() {
+            TestOutput(@"
+def t
+  r = yield
+  r.inspect
+rescue => e
+  ""#{e.class}: #{e.message}""
+end
+puts t { Integer() }, t { Integer(exception: false) }, t { Integer(""1"", 2, 3, exception: false) }, t { Integer(""1"", 2, {}) }
+puts t { Float() }, t { Float(1, {exception: false}) }, t { Float(""x"", exception: false) }, t { Integer(""z"", 36, exception: false) }
+puts t { String.new(""a"", ""b"") }, t { String.new(""a"", {encoding: ""BINARY""}) }, t { String.new(""a"", encoding: ""BINARY"").encoding }
+puts t { ""a"".encode(1, 2, 3) }, t { ""\xff"".encode(""UTF-8"", ""BINARY"", invalid: :replace, undef: :replace) == ""\uFFFD"" }
+puts t { [1].pack }, t { [1].pack(""C"", {buffer: +""""}) }, t { [1].pack(""C"", buffer: +""x"") }
+puts t { ""ab"".unpack }, t { ""ab"".unpack(""C"", {offset: 1}) }, t { ""ab"".unpack1(""C"", 1) }, t { ""ab"".unpack1(""C"", offset: 1) }
+puts t { 2.5.round(1, 2) }, t { 25.round(-1, half: :even) }, t { 2.5.round(half: :even) }
+puts t { Regexp.new(""a"", nil, ""n"") }, t { Regexp.new }, t { Regexp.new(""a"", ""i"", timeout: 2).timeout }, t { Regexp.new(/a/, timeout: 2).timeout }
+puts t { Regexp.new(""a"", foo: 1) }, t { Marshal.load }, t { Marshal.load(Marshal.dump(+""s""), freeze: true).frozen? }
+puts t { Hash.new(1, 2) }, t { Hash.new(1, capacity: 2)[0] }
+a = [""1"", 2, 3]
+puts t { Integer(*a) }, t { Integer(*[""zz""], **{exception: false}) }, t { Integer(*[""zz"", {exception: false}]) }
+def s(*a, **k) = String.new(*a, **k)
+puts t { s(""a"", ""b"") }, t { s(""a"", encoding: ""BINARY"").encoding }, t { s(""a"", ""b"") }
+def u(x) = ""ab"".unpack1(""C"", x)
+puts t { u(1) }, t { u(1) }, t { u(1) }
+", @"
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+ArgumentError: wrong number of arguments (given 3, expected 1..2)
+ArgumentError: wrong number of arguments (given 3, expected 1..2)
+ArgumentError: wrong number of arguments (given 0, expected 1)
+ArgumentError: wrong number of arguments (given 2, expected 1)
+nil
+35
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+#<Encoding:BINARY (ASCII-8BIT)>
+ArgumentError: wrong number of arguments (given 3, expected 0..2)
+true
+ArgumentError: wrong number of arguments (given 0, expected 1)
+ArgumentError: wrong number of arguments (given 2, expected 1)
+""x\u0001""
+ArgumentError: wrong number of arguments (given 0, expected 1)
+ArgumentError: wrong number of arguments (given 2, expected 1)
+ArgumentError: wrong number of arguments (given 2, expected 1)
+98
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+20
+2
+ArgumentError: wrong number of arguments (given 3, expected 1..2)
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+2.0
+2.0
+ArgumentError: unknown keyword: :foo
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+true
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+1
+ArgumentError: wrong number of arguments (given 3, expected 1..2)
+nil
+TypeError: no implicit conversion of Hash into Integer
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+#<Encoding:BINARY (ASCII-8BIT)>
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+ArgumentError: wrong number of arguments (given 2, expected 1)
+ArgumentError: wrong number of arguments (given 2, expected 1)
+ArgumentError: wrong number of arguments (given 2, expected 1)
+");
+        }
+
+        /// <summary>
+        /// The prelude's methods that take keywords count their positional arguments as MRI does: Enumerable#min_by(1, 2)
+        /// raised nothing (it made an Enumerator), and IO#set_encoding, IO.pipe and Dir.children took a Hash passed
+        /// positionally as their options.
+        /// </summary>
+        public void PreludeKeywordsArity1() {
+            TestOutput(@"
+require 'ruby4'
+def t
+  r = yield
+  r.inspect
+rescue => e
+  ""#{e.class}: #{e.message}""
+end
+puts t { [3, 1].min_by(1, 2) }, t { [3, 1].max_by(1, 2) { _1 } }, t { [3, 1, 2].min_by(2) { _1 } }, t { [3, 1].each.max_by(1, 2) }
+puts t { Dir.children(""."", ""x"") }, t { Dir.children(""."", encoding: ""UTF-8"").class }, t { Dir.each_child(""."", {}) }
+puts t { $stdout.set_encoding }, t { $stdout.set_encoding(""UTF-8"", nil, {}) }, t { $stdout.set_encoding(nil, nil, newline: :lf).class }
+puts t { IO.pipe(1, 2, 3) }, t { IO.pipe(""UTF-8"", ""UTF-16LE"", invalid: :replace).first.internal_encoding }, t { IO.popen }
+puts t { IO.readlines }, t { IO.readlines(1, 2, 3, 4) }
+", @"
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+[1, 2]
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+ArgumentError: wrong number of arguments (given 2, expected 1)
+Array
+#<Enumerator: Dir:each_child(""."", {})>
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+ArgumentError: wrong number of arguments (given 3, expected 1..2)
+IO
+ArgumentError: wrong number of arguments (given 3, expected 0..2)
+#<Encoding:UTF-16LE>
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+ArgumentError: wrong number of arguments (given 0, expected 1..3)
+ArgumentError: wrong number of arguments (given 4, expected 1..3)
+");
+        }
+
+        /// <summary>
         /// Kernel#Integer and #Float as MRI's rb_convert_to_integer and rb_convert_to_float: a base only with a
         /// String or #to_str, #to_int (whose errors and non-Integer answers are ignored) before #to_str before
         /// #to_i, private conversion methods called, exception: false answering nil for any failure but a bad

@@ -77,7 +77,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize_clone", RubyMethodAttributes.PrivateInstance)]
         public static object InitializeClone(
             CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage, object self, object source,
-            [Optional]object options) {
+            [Keywords, Optional]object options) {
 
             var site = initializeCopyStorage.GetCallSite("initialize_copy", 1);
             site.Target(site, self, source);
@@ -122,7 +122,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
         public static object ToInteger(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ toInt, UnaryOpStorage/*!*/ toStr,
-            UnaryOpStorage/*!*/ toI, object self, object value, [Optional]object radixOrOptions, [Optional]object options) {
+            UnaryOpStorage/*!*/ toI, object self, object value, [Optional]object radixOrOptions, [Keywords, Optional]object options) {
 
             // the common cases, without the keyword and protocol machinery
             if (radixOrOptions == Missing.Value) {
@@ -215,7 +215,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
-        public static object ToFloat(UnaryOpStorage/*!*/ toF, object self, object value, [Optional]object options) {
+        public static object ToFloat(UnaryOpStorage/*!*/ toF, object self, object value, [Keywords, Optional]object options) {
             if (value is double) {
                 return value;
             }
@@ -2948,7 +2948,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("gets", RubyMethodAttributes.PublicSingleton)]
         public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self,
-            MutableString separator, [NotNull]Hash/*!*/ options) {
+            MutableString separator, [Keywords, NotNull]Hash/*!*/ options) {
 
             if (!options.IsKeywordArguments) {
                 throw RubyExceptions.CreateImplicitConversionError("Hash", "Integer");
@@ -2967,7 +2967,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("gets", RubyMethodAttributes.PublicSingleton)]
         public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self,
-            [NotNull]Hash/*!*/ options) {
+            [Keywords, NotNull]Hash/*!*/ options) {
             return ReadInputLine(storage, scope, self, storage.Context.InputSeparator, options);
         }
 

@@ -2058,7 +2058,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("restore", RubyMethodAttributes.PublicSingleton)]
         public static object Load(ReaderSites/*!*/ sites, RubyScope/*!*/ scope, RubyModule/*!*/ self, [NotNull]MutableString/*!*/ source,
-            [Optional]object proc, [Optional]object options) {
+            [Optional]object proc, [Keywords, Optional]object options) {
 
             object block;
             bool freeze = ParseLoadOptions(self.Context, proc, options, out block);
@@ -2070,7 +2070,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("restore", RubyMethodAttributes.PublicSingleton)]
         public static object Load(ReaderSites/*!*/ sites, RubyScope/*!*/ scope, RubyModule/*!*/ self, [NotNull]RubyIO/*!*/ source,
-            [Optional]object proc, [Optional]object options) {
+            [Optional]object proc, [Keywords, Optional]object options) {
 
             object block;
             bool freeze = ParseLoadOptions(self.Context, proc, options, out block);
@@ -2082,7 +2082,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("restore", RubyMethodAttributes.PublicSingleton)]
         public static object Load(ReaderSites/*!*/ sites, RespondToStorage/*!*/ respondToStorage, ConversionStorage<MutableString>/*!*/ toStr,
-            RubyScope/*!*/ scope, RubyModule/*!*/ self, object source, [Optional]object proc, [Optional]object options) {
+            RubyScope/*!*/ scope, RubyModule/*!*/ self, object source, [Optional]object proc, [Keywords, Optional]object options) {
 
             // MRI: anything with #to_str is the dump itself; otherwise the source has to answer
             // both #getbyte and #read to count as an IO.

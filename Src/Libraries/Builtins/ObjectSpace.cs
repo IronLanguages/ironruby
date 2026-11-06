@@ -409,7 +409,7 @@ namespace IronRuby.Builtins {
 
         // GC.start's keywords (full_mark:, immediate_sweep:) have no CLR counterpart and are ignored
         [RubyMethod("garbage_collect", RubyMethodAttributes.PublicSingleton)]
-        public static void GarbageCollect(RubyModule/*!*/ self, [Optional]IDictionary<object, object> options) {
+        public static void GarbageCollect(RubyModule/*!*/ self, [Keywords, Optional]IDictionary<object, object> options) {
             GC.Collect();
         }
 

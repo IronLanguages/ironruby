@@ -214,14 +214,14 @@ namespace IronRuby.StandardLibrary.Threading {
         [RubyMethod("deq")]
         [RubyMethod("pop")]
         [RubyMethod("shift")]
-        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, [NotNull]Hash/*!*/ options) {
+        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, [Keywords, NotNull]Hash/*!*/ options) {
             return self.Dequeue(GetTimeoutMilliseconds(context, GetTimeoutOption(context, options)));
         }
 
         [RubyMethod("deq")]
         [RubyMethod("pop")]
         [RubyMethod("shift")]
-        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, bool nonBlocking, [NotNull]Hash/*!*/ options) {
+        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, bool nonBlocking, [Keywords, NotNull]Hash/*!*/ options) {
             if (nonBlocking && options.Count > 0) {
                 throw RubyExceptions.CreateArgumentError("can't set a timeout if non_block is enabled");
             }

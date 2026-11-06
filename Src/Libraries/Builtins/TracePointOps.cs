@@ -132,7 +132,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("enable")]
         public static object Enable(ConversionStorage<int>/*!*/ fixnumCast, BlockParam block, TracePoint/*!*/ self,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
 
             object target = null, targetLine = null, targetThread = null;
             bool defaultThread = true;

@@ -122,7 +122,7 @@ namespace IronRuby.Builtins {
             RubyClass/*!*/ self,
             object descriptor,
             [Optional]object optionsOrMode,
-            [Optional]object options) {
+            [Keywords, Optional]object options) {
 
             return Reinitialize(toInt, toHash, toStr, new RubyIO(self.Context), descriptor, optionsOrMode, options);
         }
@@ -135,7 +135,7 @@ namespace IronRuby.Builtins {
             RubyIO/*!*/ self,
             object descriptor,
             [Optional]object optionsOrMode,
-            [Optional]object optionsArgument) {
+            [Keywords, Optional]object optionsArgument) {
 
             var context = self.Context;
 
@@ -1485,7 +1485,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("set_encoding")]
         public static RubyIO/*!*/ SetEncodings(ConversionStorage<IDictionary<object, object>>/*!*/ toHash, ConversionStorage<MutableString>/*!*/ toStr,
-            RubyIO/*!*/ self, object external, [Optional]object @internal, [Optional]IDictionary<object, object> options) {
+            RubyIO/*!*/ self, object external, [Optional]object @internal, [Keywords, Optional]IDictionary<object, object> options) {
 
             self.RequireOpen();
             Protocols.TryConvertToOptions(toHash, ref options, ref external, ref @internal);
@@ -2005,7 +2005,7 @@ namespace IronRuby.Builtins {
             object path, 
             [Optional]object optionsOrLength, 
             [Optional]object optionsOrOffset,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             Protocols.TryConvertToOptions(toHash, ref options, ref optionsOrLength, ref optionsOrOffset);
             var site = fixnumCast.GetSite(ConvertToFixnumAction.Make(fixnumCast.Context));
