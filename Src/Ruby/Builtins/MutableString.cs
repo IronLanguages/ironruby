@@ -360,10 +360,15 @@ namespace IronRuby.Builtins {
         /// string anyway, and binary content has no such string to share.
         /// </summary>
         public MutableString/*!*/ CreateFrozenSnapshot() {
-            if (!(_content is CharArrayContent)) {
-                return new MutableString(this).Freeze();
+            // Like MRI's rb_str_new_frozen: a frozen string cannot change, so it is its own
+            // snapshot, and a copy keeps the class of a String subclass (md.string.class).
+            if (IsFrozen) {
+                return this;
             }
-            var result = new MutableString(new StringContent(_content.ConvertToString(), null), _encoding);
+            Content content = (_content is CharArrayContent)
+                ? new StringContent(_content.ConvertToString(), null)
+                : _content.Clone();
+            var result = CreateInstance(content, _encoding);
             result.IsTainted = IsTainted;
             result.IsUntrusted = IsUntrusted;
             const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
