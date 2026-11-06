@@ -16,10 +16,8 @@
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.BigDecimal'
 
 # As in MRI, Kernel#BigDecimal is the only way to make one: BigDecimal.new is undefined and there
-# is no allocator. The C# constructor stays reachable to Kernel#BigDecimal as __new__.
+# is no allocator.
 class << BigDecimal
-  alias_method :__new__, :new
-  private :__new__
   undef_method :new
 
   def allocate
@@ -28,57 +26,66 @@ class << BigDecimal
 end
 
 module Kernel
-  # Kernel#BigDecimal takes a good deal more than a String. Integer and BigDecimal convert
-  # exactly; Float and Rational have to be rounded to a number of significant digits, and a
-  # Rational insists on being told how many (its expansion may never end). `exception: false`
-  # turns every conversion failure into nil instead.
-  #
-  # The precision means different things per type, which is easy to get wrong by reasoning:
-  # for a String it is only a lower bound on the storage and the digits are all kept, for a
-  # BigDecimal it is ignored outright, and only for Float and Rational does it round.
-  def BigDecimal(value, precision = 0, exception: true)
-    precision = 0 if precision.nil?
-    precision = Integer(precision) unless precision.kind_of?(Integer)
-    raise ArgumentError, "negative precision" if precision < 0
-
-    case value
-    when BigDecimal
-      value
-    when Integer
-      BigDecimal.__send__(:__new__, value.to_s)
-    when Float
-      # MRI converts through the shortest round-tripping decimal form of the Float - not
-      # through its exact binary value - which is why BigDecimal(1.235, 3) is 1.24 and not
-      # the 1.23 that correctly rounding 1.2349999999999999866... would give.
-      raise ArgumentError, "precision too large." if precision > Float::DIG + 1
-      __bigdecimal_round(BigDecimal.__send__(:__new__, value.to_s), precision)
-    when Rational
-      raise ArgumentError, "can't omit precision for a Rational." if precision.zero?
-      BigDecimal.__send__(:__new__, value.numerator.to_s).div(value.denominator, precision)
-    when String
-      BigDecimal.__send__(:__new__, value)
-    when nil
-      raise TypeError, "can't convert nil into BigDecimal"
-    else
-      if value.respond_to?(:to_str)
-        BigDecimal.__send__(:__new__, value.to_str)
-      else
-        raise TypeError, "can't convert #{value.class} into BigDecimal"
+  # MRI's f_BigDecimal. Integer and BigDecimal convert exactly; a Float is rounded to the digits
+  # given (no more than 16), or takes its shortest round-tripping form without them; a Rational
+  # has to be told how many digits to divide out to. The digit count means nothing to a String,
+  # an Integer or a BigDecimal. `exception: false` makes nil of a value that cannot be
+  # converted, though not of a NaN or an infinity the exception mode objects to.
+  def BigDecimal(value, digits = (omitted = true; nil), exception: true)
+    unless exception == true || exception == false
+      raise ArgumentError, "expected true or false as exception: #{exception.inspect}"
+    end
+    unless omitted
+      unless Integer === digits
+        converted = digits.respond_to?(:to_int) ? digits.to_int : nil
+        unless Integer === converted
+          raise TypeError, digits.nil? ? "no implicit conversion from nil to integer" : "no implicit conversion of #{digits.class} into Integer"
+        end
+        digits = converted
+      end
+      if digits < 0
+        return nil unless exception
+        raise ArgumentError, "negative precision"
       end
     end
-  rescue ArgumentError, TypeError
-    raise if exception
-    nil
+
+    case value
+    when nil, true, false
+      return nil unless exception
+      raise TypeError, "can't convert #{value.inspect} into BigDecimal"
+    when BigDecimal
+      # a NaN or an infinity is checked against the exception mode again
+      value.finite? ? value : BigDecimal.__send__(:__from_string, value.to_s, true)
+    when Integer
+      BigDecimal.__send__(:__from_number, value, 0)
+    when Float
+      digits = 0 if omitted
+      if digits > BigDecimal.double_fig
+        return nil unless exception
+        raise ArgumentError, "precision too large."
+      end
+      BigDecimal.__send__(:__from_number, value, digits)
+    when Rational
+      if omitted
+        return nil unless exception
+        raise ArgumentError, "can't omit precision for a Rational."
+      end
+      BigDecimal.__send__(:__from_number, value.numerator, 0).div(value.denominator, digits)
+    when Complex
+      raise ArgumentError, "Unable to make a BigDecimal from non-zero imaginary number" unless value.imaginary.zero?
+      omitted ? BigDecimal(value.real, exception: exception) : BigDecimal(value.real, digits, exception: exception)
+    when String
+      BigDecimal.__send__(:__from_string, value, exception)
+    else
+      str = String.try_convert(value)
+      if str.nil?
+        return nil unless exception
+        raise TypeError, "can't convert #{value.class} into BigDecimal"
+      end
+      BigDecimal.__send__(:__from_string, str, exception)
+    end
   end
   module_function :BigDecimal
-
-  # Rounds to +precision+ significant digits. Zero, NaN and the infinities have no digits to
-  # round, and #mult would lose the sign of a negative zero.
-  def __bigdecimal_round(value, precision)
-    return value if precision.zero? || !value.finite? || value.zero?
-    value.mult(1, precision)
-  end
-  private :__bigdecimal_round
 end
 
 class BigDecimal
@@ -120,15 +127,12 @@ class BigDecimal
   # BigDecimal op Rational stays a BigDecimal.
   #
   # A Rational may not have a terminating expansion, so a digit count has to be chosen. MRI's
-  # GetCoercePrec takes as many digits as self's internal words hold - 9 per word, the words
-  # aligned at the decimal point - and at least 2 * BIGDECIMAL_DOUBLE_FIGURES (32).
-  def __bigdecimal_expand(other)
-    words = 1
-    if finite? && !zero?
-      _, digits, _, exponent = split
-      words = (exponent - 1).div(9) - (exponent - digits.size).div(9) + 1
-    end
-    BigDecimal(other, [words * 9, 32].max)
+  # GetCoercePrec takes the digit count of the operation, if it has one, or else as many digits
+  # as self's internal words hold (what #_dump writes before its colon), and at least
+  # 2 * BIGDECIMAL_DOUBLE_FIGURES (32).
+  def __bigdecimal_expand(other, digits = 0)
+    digits = _dump.to_i if digits.nil? || digits == 0
+    BigDecimal(other, [digits, 2 * BigDecimal.double_fig].max)
   end
   private :__bigdecimal_expand
 
@@ -157,10 +161,10 @@ class BigDecimal
     :divmod => "other", :remainder => "other" }.each do |name, params|
     alias_method :"__#{name}_method_without_rationals", name
     private :"__#{name}_method_without_rationals"
-    operand = params == "*args" ? "args[0]" : "other"
+    operand, digits = params == "*args" ? ["args[0]", "args[1]"] : ["other", params.include?("digits") ? "digits" : "0"]
     class_eval <<-RUBY, __FILE__, __LINE__ + 1
       def #{name}(#{params})
-        #{operand} = __bigdecimal_expand(#{operand}) if Rational === #{operand}
+        #{operand} = __bigdecimal_expand(#{operand}, #{digits}) if Rational === #{operand}
         __#{name}_method_without_rationals(#{params})
       end
     RUBY
@@ -172,7 +176,7 @@ class BigDecimal
     digits = Integer === digits ? digits : Internal.coerce_validate_prec(digits, :quo, accept_zero: true)
     raise ArgumentError, "negative precision" if digits < 0
     return self / other if digits.zero?
-    div(Rational === other ? __bigdecimal_expand(other) : other, digits)
+    div(other, digits)
   end
 
   # #modulo is #%, not a copy of it - redefining #% above left #modulo pointing at the old
@@ -181,9 +185,7 @@ class BigDecimal
 end
 
 # The pieces of bigdecimal 4.0.1 that bigdecimal/math, bigdecimal/jacobian and the rest of
-# its Ruby half build on. BigDecimal::Internal is the gem's own lib/bigdecimal.rb verbatim;
-# #n_significant_digits and #_decimal_shift are methods of its C extension, written here on
-# top of #split.
+# its Ruby half build on: BigDecimal::Internal is the gem's own lib/bigdecimal.rb verbatim.
 class BigDecimal
   module Internal # :nodoc:
 
@@ -235,25 +237,11 @@ class BigDecimal
       BigDecimal::NAN
     end
   end
-
-  # BigDecimal_n_significant_digits: the digits between the first and the last nonzero one.
-  def n_significant_digits
-    return 0 if zero? || !finite?
-    split[1].sub(/0+\z/, "").length
-  end unless method_defined?(:n_significant_digits)
-
-  # BigDecimal_decimal_shift: self * 10**n, exactly, at whatever precision that takes.
-  def _decimal_shift(n)
-    n = n.to_int unless Integer === n
-    return self if zero? || nan? || infinite? || n == 0
-    sign, digits, _base, exponent = split
-    BigDecimal("#{sign < 0 ? '-' : ''}0.#{digits}e#{exponent + n}")
-  end unless method_defined?(:_decimal_shift)
 end
 
-# bigdecimal 4.0.1's #**, #power, BigMath.log and BigMath.exp, which the gem writes in Ruby
-# (its lib/bigdecimal.rb) on top of the C extension's primitives - verbatim. #sqrt is the
-# extension's C# counterpart, which takes an exact BigInteger root.
+# bigdecimal 4.0.1's #**, #power, #sqrt, BigMath.log and BigMath.exp, which the gem writes in
+# Ruby (its lib/bigdecimal.rb) on top of the C extension's primitives - verbatim, but for the
+# body of #sqrt, whose iteration runs in C#.
 class BigDecimal
   #  call-seq:
   #    self ** other -> bigdecimal
@@ -397,6 +385,19 @@ class BigDecimal
       BigMath.exp(BigMath.log(x, prec2).mult(y, prec2), result_prec)
     end
   end
+
+  # call-seq:
+  #   sqrt(n)
+  #
+  # Returns the square root of the value.
+  #
+  # Result has at least n significant digits.
+  #
+  # (The gem's Newton iteration itself is BigDecimal.SquareRoot in C#, step for step the same.)
+  def sqrt(prec)
+    prec = Internal.coerce_validate_prec(prec, :sqrt, accept_zero: true)
+    __sqrt(prec)
+  end
 end
 
 # Core BigMath methods for BigDecimal (log, exp) are defined here.
@@ -523,19 +524,8 @@ module BigMath
   end
 end
 
-# bigdecimal 3.1's precision API that the C# class has no methods for, and the save_* blocks of
-# BigDecimal's class; all five were NoMethodErrors.
+# The save_* blocks of BigDecimal's class.
 class BigDecimal
-  # The digits after the decimal point - BigDecimal("123.456").scale is 3, BigDecimal("1e10").scale 0.
-  def scale
-    return 0 if zero? || !finite?
-    [n_significant_digits - exponent, 0].max
-  end unless method_defined?(:scale)
-
-  def precision_scale
-    [precision, scale]
-  end unless method_defined?(:precision_scale)
-
   class << self
     def save_rounding_mode
       mode = self.mode(ROUND_MODE)

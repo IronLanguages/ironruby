@@ -1,11 +1,11 @@
-﻿/* ****************************************************************************
+﻿﻿/* ****************************************************************************
  *
- * Copyright (c) Microsoft Corporation. 
+ * Copyright (c) Microsoft Corporation.
  *
- * This source code is subject to terms and conditions of the Apache License, Version 2.0. A 
- * copy of the license can be found in the License.html file at the root of this distribution. If 
- * you cannot locate the  Apache License, Version 2.0, please send an email to 
- * dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+ * copy of the license can be found in the License.html file at the root of this distribution. If
+ * you cannot locate the  Apache License, Version 2.0, please send an email to
+ * dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
  * by the terms of the Apache License, Version 2.0.
  *
  * You must not remove this notice, or any other, from this software.
@@ -15,102 +15,54 @@
 
 using System;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Numerics;
 using System.Text;
-using System.Text.RegularExpressions;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using System.Numerics;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.StandardLibrary.BigDecimal {
-    public class BigDecimal : IComparable<BigDecimal>, IEquatable<BigDecimal>, IRubyObjectState {
+    /// <summary>
+    /// An arbitrary-precision decimal number, as the bigdecimal 4.0.1 gem defines it: NaN, an infinity,
+    /// a signed zero, or sign * 0.d1d2...dn * 10**Exponent, with the digits d1...dn (d1 and dn non-zero)
+    /// held as a single BigInteger. MRI keeps the digits in base 10**9 words; nothing here depends on
+    /// that, except where MRI's results do (the ROUND_UP quirk of #round and #_dump's digit count),
+    /// and those places work the word layout out from the exponent.
+    /// </summary>
+    public class BigDecimal : IEquatable<BigDecimal>, IRubyObjectState {
 
         /// <summary>
-        /// This class holds the configuration information for the BigDecimal calculations
-        /// This information needs to be shared amongst all the instances of BigDecimal
-        /// but cannot be held in static variable storage since we need to scope more finely
-        /// than per assembly.
+        /// BigDecimal.limit, BigDecimal.mode(ROUND_MODE) and the exception flags. MRI keeps them per
+        /// thread; they are per RubyContext here.
         /// </summary>
-        public class Config {
-            public Config() {
-                Limit = 0;
-                RoundingMode = RoundingModes.HalfUp;
-                OverflowMode = OverflowExceptionModes.None;
-            }
+        public sealed class Config {
             public int Limit { get; set; }
-            public RoundingModes RoundingMode { get; set; }
-            public OverflowExceptionModes OverflowMode { get; set; }
+            public RoundingModes RoundingMode { get; set; } = RoundingModes.HalfUp;
+            public ExceptionModes ExceptionMode { get; set; }
+
+            internal bool Raises(ExceptionModes mode) {
+                return (ExceptionMode & mode) != 0;
+            }
         }
 
-        #region Instance Fields
-        private readonly NumberTypes _type;
-        private readonly int _sign;
-        private readonly Fraction _fraction;
-        private readonly int _exponent;
-        #endregion
-
-        #region Private Constants
-
-        private const string NaNString = "NaN";
-        private const string InfinityString = "Infinity";
-        private const string NegativeInfinityString = "-Infinity";
-        private const string ZeroString = "0.0";
-        private const string NegativeZeroString = "-0.0";
-
-        #endregion
-
-        #region Enumerations
-
         public enum RoundingModes {
-            /// <summary>
-            /// No rounding
-            /// </summary>
-            None = 0,
-            /// <summary>
-            /// Round away from zero
-            /// </summary>
             Up = 1,
-            /// <summary>
-            /// Round toward zero
-            /// </summary>
             Down = 2,
-            /// <summary>
-            /// Round towards "nearest neighbour" unless both neighbours are equidistant, in which case round up
-            /// </summary>
             HalfUp = 3,
-            /// <summary>
-            /// Round towards "nearest neighbour" unless both neighbours are equidistant, in which case round down
-            /// </summary>
             HalfDown = 4,
-            /// <summary>
-            /// Round toward positive infinity
-            /// </summary>
             Ceiling = 5,
-            /// <summary>
-            /// Round toward negative infinity
-            /// </summary>
             Floor = 6,
-            /// <summary>
-            /// Round towards "nearest neighbour" unless both neighbours are equidistant, in which case round to the even neighbour
-            /// </summary>
             HalfEven = 7
         }
 
-        /// <summary>
-        /// Flags of when exceptions should be thrown on special values
-        /// </summary>
-        /// <remarks>
-        /// Currently Infinity, Overflow and ZeroDivide are the same
-        /// </remarks>
+        /// <summary>The EXCEPTION_* flags. OVERFLOW is the same bit as INFINITY, as in MRI.</summary>
         [Flags]
-        public enum OverflowExceptionModes {
+        public enum ExceptionModes {
             None = 0,
-            NaN = 2,
             Infinity = 1,
-            Underflow = 4,
             Overflow = 1,
+            NaN = 2,
+            Underflow = 4,
             ZeroDivide = 16,
             All = 255
         }
@@ -121,62 +73,80 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             Infinite = 2
         }
 
-        private enum BasicOperations {
-            Add,
-            Multiply,
-            Divide
-        }
+        #region Representation
 
-        #endregion
+        private readonly NumberTypes _type;
+        private readonly int _sign;
+        // Positive and without trailing zeros for a non-zero finite value; zero otherwise.
+        private readonly BigInteger _digits;
+        private readonly int _digitCount;
+        private readonly long _exponent;
 
-        #region Special BigDecimal Values
-
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
-        public static readonly BigDecimal One = new BigDecimal(1, Fraction.One, 1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
-        public static readonly BigDecimal NaN = new BigDecimal(NumberTypes.NaN, 0);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
+        public static readonly BigDecimal NaN = new BigDecimal(NumberTypes.NaN, 1);
         public static readonly BigDecimal PositiveInfinity = new BigDecimal(NumberTypes.Infinite, 1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal NegativeInfinity = new BigDecimal(NumberTypes.Infinite, -1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
-        public static readonly BigDecimal PositiveZero = new BigDecimal(1, Fraction.Zero, 1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
-        public static readonly BigDecimal NegativeZero = new BigDecimal(-1, Fraction.Zero, 1);
-        public const uint BASE = Fraction.BASE;
-        public const int BASE_FIG = Fraction.BASE_FIG;
+        public static readonly BigDecimal PositiveZero = new BigDecimal(NumberTypes.Finite, 1);
+        public static readonly BigDecimal NegativeZero = new BigDecimal(NumberTypes.Finite, -1);
 
-        #endregion
+        /// <summary>MRI's word: BigDecimal::BASE is 10**9, and #_dump and #round count in its digits.</summary>
+        public const int BASE_FIG = 9;
+        public const int BASE = 1000000000;
 
-        #region Private Constructors
+        /// <summary>BIGDECIMAL_DOUBLE_FIGURES</summary>
+        public const int DoubleFig = 16;
 
-        public BigDecimal() : this(NumberTypes.NaN, 0) {
-        }
+        // MRI's exponent is a word count in a signed 64-bit value: EXPONENT_MAX and EXPONENT_MIN in digits.
+        private const long MaxExponent = long.MaxValue / BASE_FIG * BASE_FIG;
+        private const long MinExponent = long.MinValue;
 
-        private BigDecimal(int sign, Fraction/*!*/ fraction, int exponent) {
-            Debug.Assert(sign == 1 || sign == -1);
-            _type = NumberTypes.Finite;
-            _sign = sign;
-            _fraction = fraction;
-            _exponent = exponent;
+        // A subclass instance (AotSubclasses.Generated.cs) needs a parameterless constructor; nothing can
+        // make one, since BigDecimal has no allocator.
+        public BigDecimal() : this(NumberTypes.NaN, 1) {
         }
 
         private BigDecimal(NumberTypes type, int sign) {
-            Debug.Assert(type != NumberTypes.Finite);
             _type = type;
             _sign = sign;
-            _fraction = Fraction.Zero;
-            _exponent = 0;
         }
 
-        #endregion
+        private BigDecimal(int sign, BigInteger digits, int digitCount, long exponent) {
+            Debug.Assert((sign == 1 || sign == -1) && digits.Sign > 0 && digitCount > 0);
+            _type = NumberTypes.Finite;
+            _sign = sign;
+            _digits = digits;
+            _digitCount = digitCount;
+            _exponent = exponent;
+        }
 
-        #region Public Properties
-        public NumberTypes NumberType { get { return _type; } }
-        public int Sign { get { return _sign; } }
-        public int Exponent { get { return _exponent; } }
-        public int Precision { get { return _fraction.Precision; } }
-        public int Digits { get { return _fraction.DigitCount; } }
+        public NumberTypes NumberType => _type;
+        public int Sign => _sign;
+        public bool IsNaN => _type == NumberTypes.NaN;
+        public bool IsInfinite => _type == NumberTypes.Infinite;
+        public bool IsFinite => _type == NumberTypes.Finite;
+        public bool IsZero => _type == NumberTypes.Finite && _digitCount == 0;
+        public bool IsNonZeroFinite => _type == NumberTypes.Finite && _digitCount != 0;
+        public bool IsNegative => _sign < 0;
+
+        /// <summary>The decimal exponent: 0.1234e3 has 3. Zero and the special values have 0.</summary>
+        public long Exponent => _exponent;
+
+        /// <summary>The significant digits, without leading or trailing zeros. Zero has none.</summary>
+        public BigInteger Digits => _digits;
+        public int DigitCount => _digitCount;
+
+        /// <summary>The power of ten the last digit stands for: the value is ±Digits * 10**Scale.</summary>
+        private long Scale => _exponent - _digitCount;
+
+        /// <summary>MRI's #sign: the SIGN_* constants.</summary>
+        public int SignCode => _type switch {
+            NumberTypes.NaN => 0,
+            NumberTypes.Infinite => 3 * _sign,
+            _ => (_digitCount == 0 ? 1 : 2) * _sign,
+        };
+
+        public static BigDecimal/*!*/ Zero(int sign) => sign < 0 ? NegativeZero : PositiveZero;
+        public static BigDecimal/*!*/ Infinity(int sign) => sign < 0 ? NegativeInfinity : PositiveInfinity;
+
         #endregion
 
         #region IRubyObjectState
@@ -189,852 +159,1228 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #endregion
 
-        #region Create Methods
+        #region Digits and powers of ten
 
-        public static BigDecimal Create(Config/*!*/config, object value) {
-            Debug.Assert(!(value is double) && !(value is float)); // Need to use CultureInfo.InvariantCulture for double
-            return Create(config, value.ToString());
-        }
+        private static readonly BigInteger[] _powers = CreatePowers(64);
+        private static readonly ulong[] _ulongPowers = CreateULongPowers();
 
-        public static BigDecimal Create(Config/*!*/config, double value) {
-            return Create(config, value.ToString(CultureInfo.InvariantCulture));
-        }
-
-        public static BigDecimal Create(Config/*!*/config, string value) {
-            value = value.Trim();
-            BigDecimal result = CheckSpecialCases(value);
-
-            if (result == null) {
-                Match m = Regex.Match(value, @"^(?<sign>[-+]?)(?<integer>[\d_]*)\.?(?<fraction>[\d_]*)([eEdD](?<exponent>[-+]?[\d_]+))?", RegexOptions.ExplicitCapture);
-
-                int sign = m.Groups["sign"].Value == "-" ? -1 : 1;
-
-                // Get the integer part of the mantissa (stripping off leading zeros and any '_' chars)
-                string integerStr = (m.Groups["integer"].Value ?? "0").TrimStart('0').Replace("_", "");
-                // Get the fraction part of the mantissa (stripping off following zeros and any '_' chars)
-                string decimalStr = (m.Groups["fraction"].Value ?? "").TrimEnd('0').Replace("_", "");
-                // Build the whole of the mantissa string
-                string fractionStr = (integerStr + decimalStr);
-                string strippedFractionStr = fractionStr.TrimStart('0');
-
-                // Finally strip off any excess zeros left over
-                string trimmedFractionStr = strippedFractionStr.Trim('0');
-
-                Fraction fraction = Fraction.Create(trimmedFractionStr);
-
-                string exponentStr = m.Groups["exponent"].Value.Replace("_", "");
-                int exponent = 0;
-                if (!fraction.IsZero) {
-                    if (!string.IsNullOrEmpty(exponentStr)) {
-                        try {
-                            exponent = int.Parse(exponentStr, CultureInfo.InvariantCulture);
-                        } catch (OverflowException) {
-                            exponent = exponentStr.StartsWith("-", StringComparison.Ordinal) ? -1 : 1;
-                            return ExponentOverflow(config, sign, exponent);
-                        }
-                    }
-                    // Normalize exponent where mantissa > 1.0
-                    exponent += integerStr.Length;
-                    // Normalize exponent where mantissa < 1.0
-                    exponent -= (fractionStr.Length - strippedFractionStr.Length);
-                }
-                result = new BigDecimal(sign, fraction, exponent);
-            }
-            return CheckOverflowExceptions(config, result);
-        }
-
-        // A run of digits, which may be broken up by single underscores but may not start or
-        // end with one: 1_2_3 is fine, 1__2 and _123 are not.
-        private const string DigitRun = @"\d+(_\d+)*";
-
-        private static readonly Regex/*!*/ _strictNumber = new Regex(
-            @"^[-+]?(" + DigitRun + @"(\.(" + DigitRun + @")?)?|\.(" + DigitRun + @"))([eEdD][-+]?" + DigitRun + @")?$",
-            RegexOptions.ExplicitCapture);
-
-        // MRI tolerates one trailing underscore, but only on a bare integer and only at the
-        // very end of the string: "123_" and "1_2_" parse, while "123_.45", "1.23_" and
-        // "1E1_" are all rejected. Measured, not deduced - the general rule would have
-        // accepted all four.
-        private static readonly Regex/*!*/ _strictTrailingUnderscore = new Regex(
-            @"^[-+]?" + DigitRun + "_$", RegexOptions.ExplicitCapture);
-
-        /// <summary>
-        /// Whether Kernel#BigDecimal would accept this string. The parser itself is
-        /// deliberately forgiving (String#to_d wants a value out of "45.67 degrees"), so the
-        /// strictness lives here rather than in Create.
-        /// </summary>
-        public static bool IsValidNumericString(string value) {
-            if (value == null) {
-                return false;
-            }
-            value = value.Trim();
-            if (value == "NaN" || value == "Infinity" || value == "+Infinity" || value == "-Infinity") {
-                return true;
-            }
-            return _strictNumber.IsMatch(value) || _strictTrailingUnderscore.IsMatch(value);
-        }
-
-        private static BigDecimal CheckSpecialCases(string value) {
-            BigDecimal result = null;
-            if (value == null) {
-                result = PositiveZero;
-            } else {
-                value = value.Trim();
-                if (value == "NaN") {
-                    result = NaN;
-                } else if (value.Contains("Infinity")) {
-                    if (value == "+Infinity" || value == "Infinity") {
-                        result = PositiveInfinity;
-                    } else if (value == "-Infinity") {
-                        result = NegativeInfinity;
-                    } else {
-                        result = PositiveZero;
-                    }
-                }
+        private static BigInteger[] CreatePowers(int count) {
+            var result = new BigInteger[count];
+            result[0] = BigInteger.One;
+            for (int i = 1; i < count; i++) {
+                result[i] = result[i - 1] * 10;
             }
             return result;
         }
 
+        private static ulong[] CreateULongPowers() {
+            var result = new ulong[20];
+            result[0] = 1;
+            for (int i = 1; i < result.Length; i++) {
+                result[i] = result[i - 1] * 10;
+            }
+            return result;
+        }
+
+        internal static BigInteger Pow10(long n) {
+            Debug.Assert(n >= 0);
+            if (n < _powers.Length) {
+                return _powers[n];
+            }
+            if (n > Int32.MaxValue) {
+                throw new OutOfMemoryException("failed to allocate memory");
+            }
+            return BigInteger.Pow(10, (int)n);
+        }
+
+        /// <summary>The number of decimal digits of a positive value.</summary>
+        internal static int CountDigits(BigInteger n) {
+            Debug.Assert(n.Sign > 0);
+            if (n <= ulong.MaxValue) {
+                ulong value = (ulong)n;
+                int count = 1;
+                while (count < _ulongPowers.Length && value >= _ulongPowers[count]) {
+                    count++;
+                }
+                return count;
+            }
+            // 2**(bits-1) <= n < 2**bits, so n has this many digits or one more
+            long bits = (long)n.GetBitLength();
+            int estimate = (int)((bits - 1) * 0.30102999566398119521) + 1;
+            if (n >= Pow10(estimate)) {
+                return estimate + 1;
+            }
+            if (n < Pow10(estimate - 1)) {
+                return estimate - 1;
+            }
+            return estimate;
+        }
+
+        /// <summary>Removes the trailing zeros of a positive value, adding one to scale for each.</summary>
+        private static BigInteger StripTrailingZeros(BigInteger n, ref long scale) {
+            if (!n.IsEven) {
+                return n;
+            }
+            if (n <= ulong.MaxValue) {
+                ulong value = (ulong)n;
+                if (value % 10 != 0) {
+                    return n;
+                }
+                do {
+                    value /= 10;
+                    scale++;
+                } while (value % 10 == 0);
+                return value;
+            }
+            BigInteger remainder;
+            while (true) {
+                BigInteger quotient = BigInteger.DivRem(n, _powers[16], out remainder);
+                if (!remainder.IsZero) {
+                    break;
+                }
+                n = quotient;
+                scale += 16;
+            }
+            while (true) {
+                BigInteger quotient = BigInteger.DivRem(n, 10, out remainder);
+                if (!remainder.IsZero) {
+                    return n;
+                }
+                n = quotient;
+                scale++;
+            }
+        }
+
         #endregion
 
-        #region Special Value Tests
+        #region Creation
 
-        public static bool IsNaN(BigDecimal x) {
-            return x._type == NumberTypes.NaN;
-        }
-
-        public static bool IsInfinite(BigDecimal x) {
-            return (x._type == NumberTypes.Infinite);
-        }
-
-        public static bool IsFinite(BigDecimal x) {
-            return x._type == NumberTypes.Finite;
-        }
-
-        public static bool IsZero(BigDecimal/*!*/ x) {
-            return IsFinite(x) && x._fraction.IsZero;
-        }
-
-        public static bool IsNonZeroFinite(BigDecimal x) {
-            return IsFinite(x) && !x._fraction.IsZero;
-        }
-
-        public static bool IsPositive(BigDecimal x) {
-            return x._sign == 1;
-        }
-
-        public static bool IsNegative(BigDecimal x) {
-            return x._sign == -1;
-        }
-
-        public static bool IsPositiveInfinite(BigDecimal x) {
-            return IsInfinite(x) && IsPositive(x);
-        }
-
-        public static bool IsNegativeInfinite(BigDecimal x) {
-            return IsInfinite(x) && IsNegative(x);
-        }
-
-        public static bool IsPositiveZero(BigDecimal x) {
-            return IsZero(x) && IsPositive(x);
-        }
-
-        public static bool IsNegativeZero(BigDecimal x) {
-            return IsZero(x) && IsNegative(x);
-        }
-
-        public static bool IsOne(BigDecimal x) {
-            return x._fraction.IsOne && x._exponent == 1;
-        }
-
-        public static bool IsPositiveOne(BigDecimal x) {
-            return IsOne(x) && IsPositive(x);
-        }
-
-        #endregion
-
-        #region Public Static Operations
-
-        public static double ToFloat(Config config, BigDecimal/*!*/ x) {
-            try {
-                if (BigDecimal.IsNegativeZero(x)) {
-                    return -0.0;
-                }
-                return Double.Parse(x.ToString(0, "", true), CultureInfo.InvariantCulture);
-            } catch (OverflowException) {
-                return Double.PositiveInfinity;
+        /// <summary>
+        /// sign * magnitude * 10**scale, exactly: zero is the signed zero, and an exponent beyond MRI's
+        /// range overflows to an infinity or underflows to zero (raising, if the mode says so).
+        /// </summary>
+        internal static BigDecimal/*!*/ Create(Config/*!*/ config, int sign, BigInteger magnitude, long scale) {
+            Debug.Assert(magnitude.Sign >= 0);
+            if (magnitude.IsZero) {
+                return Zero(sign);
             }
-        }
-
-        public static object ToInteger(Config/*!*/ config, BigDecimal/*!*/ x) {
-            if (IsFinite(x)) {
-                BigDecimal i = IntegerPart(config, x);
-                BigInteger d = new BigInteger(0);
-                string digits = i._fraction.ToString();
-                foreach (char c in digits) {
-                    d *= 10;
-                    d += (c - '0');
-                }
-                if (IsNegative(x)) {
-                    d = BigInteger.Negate(d);
-                }
-                return ClrInteger.Multiply(d, new BigInteger(10).Power(i.Exponent - digits.Length));
-            } else {
-                return null;
+            magnitude = StripTrailingZeros(magnitude, ref scale);
+            int count = CountDigits(magnitude);
+            Int128 exponent = (Int128)scale + count;
+            if (exponent > MaxExponent) {
+                return ExponentOverflow(config, sign);
             }
-        }
-
-        public static BigDecimal Abs(Config config, BigDecimal x) {
-            if (IsNegative(x)) {
-                return Negate(config, x);
-            } else {
-                return x;
+            if (exponent < MinExponent) {
+                return ExponentUnderflow(config, sign);
             }
+            return new BigDecimal(sign, magnitude, count, (long)exponent);
         }
 
-        public static BigDecimal Negate(Config config, BigDecimal x) {
-            if (IsFinite(x)) {
-                return new BigDecimal(-x._sign, x._fraction, x._exponent);
-            } else {
-                return new BigDecimal(x.NumberType, -x.Sign);
-            }
+        /// <summary>An unscaled value carrying its own sign, times 10**scale; zero is +0.</summary>
+        internal static BigDecimal/*!*/ Create(Config/*!*/ config, BigInteger value, long scale) {
+            return Create(config, value.Sign < 0 ? -1 : 1, BigInteger.Abs(value), scale);
         }
 
-        public static BigDecimal/*!*/ Add(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y) {
-            return Add(config, x, y, 0);
+        internal static BigDecimal/*!*/ ExponentOverflow(Config/*!*/ config, int sign) {
+            Raise(config, ExceptionModes.Overflow, "Exponent overflow");
+            return Infinity(sign);
         }
 
-        public static BigDecimal/*!*/ Add(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, int limit) {
-            return InternalAdd(config, x, y, limit);
+        private static BigDecimal/*!*/ ExponentUnderflow(Config/*!*/ config, int sign) {
+            Raise(config, ExceptionModes.Underflow, "Exponent underflow");
+            return Zero(sign);
         }
 
-        public static BigDecimal/*!*/ Subtract(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y) {
-            return Subtract(config, x, y, 0);
+        public static BigDecimal/*!*/ Create(Config/*!*/ config, int value) {
+            return Create(config, (BigInteger)value, 0);
         }
 
-        public static BigDecimal/*!*/ Subtract(Config config, BigDecimal x, BigDecimal y, int limit) {
-            return InternalAdd(config, x, BigDecimal.Negate(config, y), limit);
+        public static BigDecimal/*!*/ Create(Config/*!*/ config, long value) {
+            return Create(config, (BigInteger)value, 0);
         }
 
-        public static BigDecimal Multiply(Config config, BigDecimal x, BigDecimal y) {
-            return Multiply(config, x, y, 0);
-        }
-
-        public static BigDecimal Multiply(Config config, BigDecimal x, BigDecimal y, int limit) {
-            BigDecimal result = CheckSpecialResult(config, x, y, BasicOperations.Multiply);
-            if (result != null) {
-                return result;
-            }
-
-            // The exact product, rounded to #mult's limit of significant digits, or to the global one.
-            System.Numerics.BigInteger a, b;
-            long ea, eb;
-            ToUnscaled(x, out a, out ea);
-            ToUnscaled(y, out b, out eb);
-            return RoundExact(config, a * b, ea + eb, limit != 0 ? limit : config.Limit);
-        }
-
-        /// <summary>A finite x as unscaled * 10**scale, the unscaled value carrying the sign.</summary>
-        // The fraction's words hold its digits left-aligned (0.w0 w1 ... * 10**exponent, w0's first digit
-        // non-zero), so the unscaled value is the words read as one base 10**9 number, 9 digits a word.
-        private static void ToUnscaled(BigDecimal/*!*/ x, out System.Numerics.BigInteger unscaled, out long scale) {
-            int precision = x._fraction.Precision;
-            if (precision <= 2) {
-                ulong value = x._fraction.GetWord(0);
-                if (precision == 2) {
-                    value = value * Fraction.BASE + x._fraction.GetWord(1);
-                }
-                unscaled = value;
-            } else {
-                System.Numerics.BigInteger value = System.Numerics.BigInteger.Zero;
-                for (int i = 0; i < precision; i++) {
-                    value = value * Fraction.BASE + x._fraction.GetWord(i);
-                }
-                unscaled = value;
-            }
-            if (x._sign < 0) {
-                unscaled = -unscaled;
-            }
-            scale = (long)x._exponent - (long)precision * Fraction.BASE_FIG;
-        }
-
-        /// <summary>The digit count of a positive value made by ToUnscaled: 9 for each word.</summary>
-        private static int UnscaledDigits(BigDecimal/*!*/ x) {
-            return x._fraction.Precision * Fraction.BASE_FIG;
-        }
-
-        private static BigDecimal/*!*/ FromUnscaled(Config/*!*/ config, System.Numerics.BigInteger unscaled, long scale) {
-            if (unscaled.IsZero) {
-                return PositiveZero;
-            }
-            int sign = unscaled.Sign;
-            string digits = System.Numerics.BigInteger.Abs(unscaled).ToString(CultureInfo.InvariantCulture);
-            int length = digits.Length;
-            while (length > 1 && digits[length - 1] == '0') {
-                length--;
-            }
-            long exponent = scale + digits.Length;
-            if (exponent > Int32.MaxValue || exponent < Int32.MinValue) {
-                return Create(config, (sign < 0 ? "-" : "") + digits + "e" + scale.ToString(CultureInfo.InvariantCulture));
-            }
-            int wordCount = (length + Fraction.BASE_FIG - 1) / Fraction.BASE_FIG;
-            var words = new uint[wordCount];
-            for (int w = 0; w < wordCount; w++) {
-                uint word = 0;
-                for (int d = 0; d < Fraction.BASE_FIG; d++) {
-                    int i = w * Fraction.BASE_FIG + d;
-                    word = word * 10 + (i < length ? (uint)(digits[i] - '0') : 0);
-                }
-                words[w] = word;
-            }
-            return new BigDecimal(sign, new Fraction(words), (int)exponent);
+        public static BigDecimal/*!*/ Create(Config/*!*/ config, BigInteger value) {
+            return Create(config, value, 0);
         }
 
         /// <summary>
-        /// x / y to <paramref name="digits"/> significant digits in <paramref name="mode"/>, as bigdecimal's
-        /// BigDecimal_div2 makes it: the quotient is worked out exactly to one digit more, the remainder
-        /// stands for everything beyond it (so that a quotient that is not exact never looks like a tie
-        /// or a stop), and that is rounded. Fraction.Divide was asked for 2 words, so x / y had 18 digits
-        /// where MRI's has max(x.precision, y.precision) + 16, and at least 32.
+        /// A Float as MRI's rb_float_convert_to_BigDecimal makes it. With no digit count it takes the
+        /// shortest digits that read back as the same Float, and keeps only the first 16 of them, unrounded
+        /// (so 0.1 + 0.2 becomes 0.3). Otherwise it takes as many digits as dtoa's mode 2 gives: the Float's
+        /// exact binary value rounded half to even (BigDecimal(1.25, 2) is 0.12e1) - nearly always.
+        /// NaN and the infinities raise when the exception mode says so.
         /// </summary>
-        public static BigDecimal/*!*/ DivideRounded(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, int digits, RoundingModes mode) {
-            BigDecimal special = CheckSpecialResult(config, x, y, BasicOperations.Divide);
-            if (special != null) {
-                return special;
+        public static BigDecimal/*!*/ Create(Config/*!*/ config, double value, int digits) {
+            if (Double.IsNaN(value)) {
+                return CheckResult(config, NaN);
             }
-            int sign = x._sign * y._sign;
-            if (IsZero(x)) {
-                return sign < 0 ? NegativeZero : PositiveZero;
+            if (Double.IsInfinity(value)) {
+                return CheckResult(config, Infinity(value > 0 ? 1 : -1));
             }
-
-            System.Numerics.BigInteger a, b;
-            long ea, eb;
-            ToUnscaled(x, out a, out ea);
-            ToUnscaled(y, out b, out eb);
-            a = System.Numerics.BigInteger.Abs(a);
-            b = System.Numerics.BigInteger.Abs(b);
-
-            int aDigits = UnscaledDigits(x);
-            int bDigits = UnscaledDigits(y);
-            long shift = Math.Max(0, (long)digits + 2 + bDigits - aDigits);
-            System.Numerics.BigInteger remainder;
-            System.Numerics.BigInteger quotient = System.Numerics.BigInteger.DivRem(a * System.Numerics.BigInteger.Pow(10, (int)shift), b, out remainder);
-            long scale = ea - eb - shift;
-            if (!remainder.IsZero) {
-                quotient = quotient * 10 + 1;
-                scale--;
+            int sign = value < 0 || (value == 0 && Double.IsNegative(value)) ? -1 : 1;
+            if (value == 0) {
+                return Zero(sign);
             }
 
-            BigDecimal exact = FromUnscaled(config, quotient, scale);
-            if (!IsFinite(exact)) {
-                return sign < 0 ? NegativeInfinity : PositiveInfinity;
+            if (digits == 0) {
+                return CreateFromShortest(config, sign, Math.Abs(value));
             }
-            int offset;
-            Fraction fraction = Fraction.LimitPrecision(sign, exact._fraction, digits, mode, out offset);
-            return new BigDecimal(sign, fraction, exact._exponent + offset);
+
+            string text = DtoaMode2(Math.Abs(value), digits, out int pointPosition);
+            return Create(config, sign, BigInteger.Parse(text, CultureInfo.InvariantCulture), pointPosition - text.Length);
         }
 
-        public static void DivMod(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, out BigDecimal/*!*/ div, out BigDecimal/*!*/ mod) {
-            div = BigDecimal.NaN;
-            mod = BigDecimal.NaN;
+        private static readonly double[] _tens = {
+            1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+        };
+        private static readonly double[] _bigTens = { 1e16, 1e32, 1e64, 1e128, 1e256 };
 
-            // Exactly, at the exponent of the finer of the two, however many digits that takes (as in MRI):
-            // the quotient of an 18-digit division, floored, was wrong whenever the true quotient needed
-            // more digits - BigDecimal("1e100") % 3 was 0.1e83.
-            if (BigDecimal.IsFinite(x) && BigDecimal.IsFinite(y) && !IsZero(y)) {
-                if (IsZero(x)) {
-                    div = PositiveZero;
-                    mod = x;
-                    return;
+        /// <summary>
+        /// The first <paramref name="ndigits"/> significant digits of d &gt; 0 as the dtoa.c in MRI's
+        /// bigdecimal makes them (mode 2), trailing zeros dropped; d is 0.digits * 10**pointPosition.
+        /// That is the correctly rounded value, but for one patch of Ruby's: when dtoa's quick
+        /// floating-point attempt cannot tell whether the discarded part is more or less than half
+        /// (it is within the attempt's error bound of half), it rounds an odd last digit up there and
+        /// then, and makes the exact computation that follows leave an even one alone - whichever side
+        /// of half the value really is. So BigDecimal(4.383733694592053e-09, 14), whose 15th digit is a
+        /// 5 followed by 2862..., is 0.4383733694592e-8. The quick attempt is reproduced step for step.
+        /// </summary>
+        private static string/*!*/ DtoaMode2(double d, int ndigits, out int pointPosition) {
+            long bits = BitConverter.DoubleToInt64Bits(d);
+            int biasedExponent = (int)((bits >> 52) & 0x7FF);
+            long fraction = bits & 0xFFFFFFFFFFFFFL;
+            BigInteger mantissa = biasedExponent == 0 ? fraction : fraction | (1L << 52);
+            int binaryExponent = (biasedExponent == 0 ? 1 : biasedExponent) - 1075;
+
+            // dtoa's estimate of floor(log10(d)), with d2 the mantissa scaled to [1, 2)
+            double d2 = BitConverter.Int64BitsToDouble((bits & 0xFFFFFFFFFFFFFL) | 0x3FF0000000000000L);
+            int i = biasedExponent - 1023;
+            if (biasedExponent == 0) {
+                // denormal: normalize the mantissa first
+                int shift = 53 - (int)mantissa.GetBitLength();
+                d2 = BitConverter.Int64BitsToDouble((((long)mantissa << shift) & 0xFFFFFFFFFFFFFL) | 0x3FF0000000000000L);
+                i = -1022 - shift;
+            }
+            double ds = (d2 - 1.5) * 0.289529654602168 + 0.1760912590558 + i * 0.301029995663981;
+            int k = (int)ds;
+            if (ds < 0.0 && ds != k) {
+                k--;
+            }
+            bool kCheck = true;
+            if (k >= 0 && k <= 22) {
+                if (d < _tens[k]) {
+                    k--;
                 }
-                System.Numerics.BigInteger a, b;
-                long ea, eb;
-                ToUnscaled(x, out a, out ea);
-                ToUnscaled(y, out b, out eb);
-                long e = Math.Min(ea, eb);
-                a *= System.Numerics.BigInteger.Pow(10, checked((int)(ea - e)));
-                b *= System.Numerics.BigInteger.Pow(10, checked((int)(eb - e)));
-                System.Numerics.BigInteger r;
-                System.Numerics.BigInteger q = System.Numerics.BigInteger.DivRem(a, b, out r);
-                if (!r.IsZero && (r.Sign < 0) != (b.Sign < 0)) {
-                    q -= 1;
-                    r += b;
-                }
-                div = FromUnscaled(config, q, 0);
-                mod = FromUnscaled(config, r, e);
-            }
-        }
-
-        public static BigDecimal/*!*/ SquareRoot(Config/*!*/ config, BigDecimal/*!*/ x, int limit) {
-            if (limit < 0) {
-                throw new ArgumentException("Negative precision for sqrt");
-            }
-            // Special cases
-            if (IsZero(x) || IsPositiveOne(x)) {
-                return x;
-            }
-            if (IsNaN(x)) {
-                throw new FloatDomainError("sqrt of 'NaN'(Not a Number)");
-            }
-            if (x.Sign < 0) {
-                throw new FloatDomainError("sqrt of negative value");
-            }
-            if (!IsFinite(x)) {
-                return CheckOverflowExceptions(config, x);
+                kCheck = false;
             }
 
-            // bigdecimal 4's sqrt (Ruby, Newton's method) works to the precision asked for plus some and
-            // rounds that to it: sqrt(n) has n digits, rounded in the current mode, and sqrt(0) has
-            // n_significant_digits + 16 (BigDecimal.double_fig) - no more than BigDecimal.limit. The
-            // computation this replaces kept a fixed number of words of whatever its iteration reached,
-            // so BigDecimal("0.1").sqrt(10) was 0.31622776600000000000000000093469343e0.
-            if (limit == 0) {
-                limit = x.Digits + 16;
-                if (config.Limit > 0 && config.Limit < limit) {
-                    limit = config.Limit;
-                }
-            }
-            return SquareRootRounded(config, x, limit);
-        }
-
-        private static System.Numerics.BigInteger IntegerSquareRoot(System.Numerics.BigInteger n) {
-            if (n.IsZero) {
-                return n;
-            }
-            // Newton's method from a power of two above the root
-            int bits = (int)((n.GetBitLength() + 1) / 2);
-            System.Numerics.BigInteger x = System.Numerics.BigInteger.One << bits;
-            while (true) {
-                System.Numerics.BigInteger y = (x + n / x) >> 1;
-                if (y >= x) {
-                    return x;
-                }
-                x = y;
-            }
-        }
-
-        /// <summary>The square root of a finite positive x to <paramref name="digits"/> significant digits.</summary>
-        private static BigDecimal/*!*/ SquareRootRounded(Config/*!*/ config, BigDecimal/*!*/ x, int digits) {
-            System.Numerics.BigInteger a;
-            long scale;
-            ToUnscaled(x, out a, out scale);
-            if ((scale & 1) != 0) {
-                a *= 10;
-                scale--;
-            }
-            int aDigits = a.ToString(CultureInfo.InvariantCulture).Length;
-            long k = Math.Max(0, (long)digits + 2 - aDigits / 2 + 1);
-            System.Numerics.BigInteger n = a * System.Numerics.BigInteger.Pow(10, (int)(2 * k));
-            System.Numerics.BigInteger root = IntegerSquareRoot(n);
-            long rootScale = scale / 2 - k;
-            if (root * root != n) {
-                root = root * 10 + 1;
-                rootScale--;
-            }
-            BigDecimal exact = FromUnscaled(config, root, rootScale);
-            int offset;
-            Fraction fraction = Fraction.LimitPrecision(1, exact._fraction, digits, config.RoundingMode, out offset);
-            return new BigDecimal(1, fraction, exact._exponent + offset);
-        }
-
-        public static BigDecimal/*!*/ FractionalPart(Config/*!*/ config, BigDecimal/*!*/ x) {
-            if (IsFinite(x)) {
-                if (x.Exponent > 0) {
-                    if (x.Exponent < x.Digits) {
-                        return new BigDecimal(x.Sign, Fraction.Create(x._fraction.ToString().Substring(x.Exponent)), 0);
-                    } else {
-                        return x.Sign > 0 ? BigDecimal.PositiveZero : BigDecimal.NegativeZero;
+            var s = new StringBuilder();
+            bool half = false;
+            int ilim = ndigits;
+            if (ilim <= 14) {
+                // Try to get by with floating-point arithmetic.
+                double dd = d;
+                int ieps = 2;
+                int kq = k;
+                if (k > 0) {
+                    double tens = _tens[k & 0xf];
+                    int j = k >> 4;
+                    if ((j & 0x10) != 0) {
+                        j &= 0xf;
+                        dd /= _bigTens[4];
+                        ieps++;
                     }
-                } else {
-                    return x;
+                    for (int b = 0; j != 0; j >>= 1, b++) {
+                        if ((j & 1) != 0) {
+                            ieps++;
+                            tens *= _bigTens[b];
+                        }
+                    }
+                    dd /= tens;
+                } else if (k < 0) {
+                    dd *= _tens[-k & 0xf];
+                    for (int j = -k >> 4, b = 0; j != 0; j >>= 1, b++) {
+                        if ((j & 1) != 0) {
+                            ieps++;
+                            dd *= _bigTens[b];
+                        }
+                    }
                 }
+                if (kCheck && dd < 1.0) {
+                    kq--;
+                    dd *= 10.0;
+                    ieps++;
+                }
+                double eps = (ieps * dd + 7.0) * (1.0 / (1L << 52)) * _tens[ilim - 1];
+                for (int n = 1; ; n++, dd *= 10.0) {
+                    long digit = (long)dd;
+                    dd -= digit;
+                    if (dd == 0) {
+                        ilim = n;
+                    }
+                    s.Append((char)('0' + digit));
+                    if (n == ilim) {
+                        if (dd > 0.5 + eps) {
+                            return RoundUpDigits(s, kq, out pointPosition);
+                        }
+                        if (dd < 0.5 - eps) {
+                            pointPosition = kq + 1;
+                            return s.ToString().TrimEnd('0');
+                        }
+                        half = true;
+                        if ((digit & 1) != 0) {
+                            return RoundUpDigits(s, kq, out pointPosition);
+                        }
+                        break;
+                    }
+                }
+                s.Clear();
+                ilim = ndigits;
+            }
+
+            // Exactly. (dtoa's own way for a small integer rounds the same, without the patch.)
+            bool smallInteger = k <= 14 && (binaryExponent >= 0 || (mantissa & ((BigInteger.One << -binaryExponent) - 1)).IsZero);
+            BigInteger numerator;
+            int scale;
+            if (binaryExponent >= 0) {
+                numerator = mantissa << binaryExponent;
+                scale = 0;
+            } else {
+                numerator = mantissa * BigInteger.Pow(5, -binaryExponent);
+                scale = binaryExponent;
+            }
+            int count = CountDigits(numerator);
+            int drop = count - ilim;
+            BigInteger quotient = numerator, remainder = BigInteger.Zero, unit = BigInteger.One;
+            if (drop > 0) {
+                unit = Pow10(drop);
+                quotient = BigInteger.DivRem(numerator, unit, out remainder);
+            }
+            string digits = quotient.ToString(CultureInfo.InvariantCulture);
+            int position = count + scale;
+            int compared = (remainder << 1).CompareTo(unit);
+            if (drop > 0 && (compared > 0 || (compared == 0 && !quotient.IsEven))) {
+                s.Append(digits);
+                if (smallInteger || !half) {
+                    return RoundUpDigits(s, position - 1, out pointPosition);
+                }
+                // roundoff with the patch: the trailing 9s go, and an even digit stays as it is
+                int last = s.Length - 1;
+                while (last >= 0 && s[last] == '9') {
+                    last--;
+                }
+                if (last < 0) {
+                    pointPosition = position + 1;
+                    return "1";
+                }
+                s.Length = last + 1;
+                if (((s[last] - '0') & 1) != 0) {
+                    s[last]++;
+                }
+                pointPosition = position;
+                return s.ToString();
+            }
+            pointPosition = position;
+            return digits.TrimEnd('0');
+        }
+
+        /// <summary>dtoa's bump_up: adds one to the last digit, carrying through 9s.</summary>
+        private static string/*!*/ RoundUpDigits(StringBuilder/*!*/ s, int k, out int pointPosition) {
+            int last = s.Length - 1;
+            while (last >= 0 && s[last] == '9') {
+                last--;
+            }
+            if (last < 0) {
+                pointPosition = k + 2;
+                return "1";
+            }
+            s.Length = last + 1;
+            s[last]++;
+            pointPosition = k + 1;
+            return s.ToString();
+        }
+
+        private static BigDecimal/*!*/ CreateFromShortest(Config/*!*/ config, int sign, double magnitude) {
+            // "R" is the shortest form that round-trips ("1.1805916207174113E+21", "0.0001", "1E-05")
+            string text = magnitude.ToString("R", CultureInfo.InvariantCulture);
+            int e = text.IndexOfAny(new[] { 'E', 'e' });
+            long exponent = 0;
+            if (e >= 0) {
+                exponent = Int64.Parse(text.Substring(e + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+                text = text.Substring(0, e);
+            }
+            int point = text.IndexOf('.');
+            if (point >= 0) {
+                exponent -= text.Length - point - 1;
+                text = text.Remove(point, 1);
+            }
+            text = text.TrimStart('0');
+            // dtoa's digits are at most 17; MRI keeps 16 and drops the rest
+            if (text.Length > DoubleFig) {
+                exponent += text.Length - DoubleFig;
+                text = text.Substring(0, DoubleFig);
+            }
+            return Create(config, sign, BigInteger.Parse(text, CultureInfo.InvariantCulture), exponent);
+        }
+
+        #endregion
+
+        #region Parsing
+
+        private static bool IsSpace(char c) {
+            return c == ' ' || (c >= '\t' && c <= '\r');
+        }
+
+        private static bool IsDigit(char c) {
+            return c >= '0' && c <= '9';
+        }
+
+        /// <summary>
+        /// MRI's VpAlloc. Strictly (Kernel#BigDecimal) the whole string must be a number, give or take
+        /// surrounding white space, and null is returned when it is not. Loosely (String#to_d) the number
+        /// ends at the first character that cannot continue it, and a string with no number is zero.
+        /// Underscores may separate digits: after the first digit of the integer part (where one may also
+        /// end it), and between two digits elsewhere.
+        /// </summary>
+        public static BigDecimal Parse(Config/*!*/ config, string/*!*/ str, bool strict) {
+            int length = str.Length;
+            int j = 0;
+            char Peek(int k) => k < length ? str[k] : '\0';
+
+            while (j < length && IsSpace(str[j])) {
+                j++;
+            }
+
+            BigDecimal special = ParseSpecial(str, j);
+            if (special != null) {
+                return CheckResult(config, special);
+            }
+
+            if (Peek(j) == '#') {
+                j++;
+            }
+
+            var integerDigits = new StringBuilder();
+            var fractionDigits = new StringBuilder();
+            var exponentDigits = new StringBuilder();
+            int sign = 1;
+            bool exponentNegative = false;
+            bool exponentSeen = false;
+
+            char v = Peek(j);
+            if (v == '-' || v == '+') {
+                sign = v == '-' ? -1 : 1;
+                j++;
+            }
+
+            // integer part
+            while ((v = Peek(j)) != '\0') {
+                if (!strict && IsSpace(v)) {
+                    v = '\0';
+                    break;
+                }
+                if (v == '_') {
+                    if (integerDigits.Length > 0) {
+                        char next = Peek(j + 1);
+                        if (next == '\0' || IsSpace(next) || IsDigit(next)) {
+                            j++;
+                            continue;
+                        }
+                        if (!strict) {
+                            v = '\0';
+                            break;
+                        }
+                    }
+                    return Invalid(strict);
+                }
+                if (!IsDigit(v)) {
+                    break;
+                }
+                integerDigits.Append(v);
+                j++;
+            }
+
+            if (v != '\0') {
+                // fraction part
+                if (Peek(j) == '.') {
+                    j++;
+                    while ((v = Peek(j)) != '\0') {
+                        if (!strict && IsSpace(v)) {
+                            v = '\0';
+                            break;
+                        }
+                        if (v == '_') {
+                            if (fractionDigits.Length > 0 && IsDigit(Peek(j + 1))) {
+                                j++;
+                                continue;
+                            }
+                            if (!strict) {
+                                v = '\0';
+                                break;
+                            }
+                            return Invalid(strict);
+                        }
+                        if (!IsDigit(v)) {
+                            break;
+                        }
+                        fractionDigits.Append(v);
+                        j++;
+                    }
+                }
+
+                // exponent part
+                if (v != '\0') {
+                    char marker = Peek(j);
+                    if (marker == 'e' || marker == 'E' || marker == 'd' || marker == 'D') {
+                        exponentSeen = true;
+                        j++;
+                        v = Peek(j);
+                        if (v == '-' || v == '+') {
+                            exponentNegative = v == '-';
+                            j++;
+                        }
+                        while ((v = Peek(j)) != '\0') {
+                            if (!strict && IsSpace(v)) {
+                                v = '\0';
+                                break;
+                            }
+                            if (v == '_') {
+                                if (exponentDigits.Length > 0 && IsDigit(Peek(j + 1))) {
+                                    j++;
+                                    continue;
+                                }
+                                if (!strict) {
+                                    v = '\0';
+                                    if (exponentDigits.Length == 0) {
+                                        exponentSeen = false;
+                                    }
+                                    break;
+                                }
+                                return Invalid(strict);
+                            }
+                            if (!IsDigit(v)) {
+                                break;
+                            }
+                            exponentDigits.Append(v);
+                            j++;
+                        }
+                    }
+                }
+
+                if (v != '\0') {
+                    while (j < length && IsSpace(str[j])) {
+                        j++;
+                    }
+                    if (j < length && strict) {
+                        return Invalid(strict);
+                    }
+                }
+            }
+
+            if (strict && ((integerDigits.Length == 0 && fractionDigits.Length == 0) || (exponentSeen && exponentDigits.Length == 0))) {
+                return null;
+            }
+
+            return CreateFromDigits(config, sign, integerDigits.ToString(), fractionDigits.ToString(), exponentNegative, exponentDigits.ToString());
+        }
+
+        private static BigDecimal Invalid(bool strict) {
+            return strict ? null : PositiveZero;
+        }
+
+        // "Infinity", "+Infinity", "-Infinity" or "NaN", followed by nothing but white space.
+        private static BigDecimal ParseSpecial(string/*!*/ str, int start) {
+            foreach (var (text, value) in _specialStrings) {
+                if (String.CompareOrdinal(str, start, text, 0, text.Length) != 0) {
+                    continue;
+                }
+                int i = start + text.Length;
+                while (i < str.Length && IsSpace(str[i])) {
+                    i++;
+                }
+                if (i == str.Length) {
+                    return value;
+                }
+            }
+            return null;
+        }
+
+        private static readonly (string, BigDecimal)[] _specialStrings = {
+            ("Infinity", PositiveInfinity), ("+Infinity", PositiveInfinity), ("-Infinity", NegativeInfinity), ("NaN", NaN)
+        };
+
+        /// <summary>MRI's VpCtoV: the value of integer.fraction * 10**exponent.</summary>
+        private static BigDecimal/*!*/ CreateFromDigits(Config/*!*/ config, int sign, string/*!*/ integer, string/*!*/ fraction,
+            bool exponentNegative, string/*!*/ exponentText) {
+
+            string digits = (integer + fraction).TrimStart('0');
+            if (digits.Length == 0) {
+                return Zero(sign);
+            }
+
+            // An exponent beyond MRI's 64-bit one makes an infinity of a positive exponent and zero of a
+            // negative one.
+            BigInteger exponent = exponentText.Length > 0 ? BigInteger.Parse(exponentText, CultureInfo.InvariantCulture) : BigInteger.Zero;
+            if (exponentNegative) {
+                exponent = -exponent;
+            }
+            BigInteger decimalExponent = exponent + digits.Length - fraction.Length;
+            if (decimalExponent > MaxExponent) {
+                Raise(config, ExceptionModes.Infinity, "exponent overflow");
+                return CheckResult(config, Infinity(sign));
+            }
+            BigInteger scale = exponent - fraction.Length;
+            if (decimalExponent < MinExponent || scale < long.MinValue) {
+                return Zero(sign);
+            }
+            return Create(config, sign, BigInteger.Parse(digits, CultureInfo.InvariantCulture), (long)scale);
+        }
+
+        #endregion
+
+        #region Exceptions
+
+        internal static void Raise(Config/*!*/ config, ExceptionModes mode, string/*!*/ message) {
+            if (config.Raises(mode)) {
+                throw new FloatDomainError(message);
+            }
+        }
+
+        /// <summary>MRI's CheckGetValue: a NaN or infinite result raises when the exception mode says so.</summary>
+        internal static BigDecimal/*!*/ CheckResult(Config/*!*/ config, BigDecimal/*!*/ x) {
+            if (x.IsNaN) {
+                Raise(config, ExceptionModes.NaN, "Computation results in 'NaN' (Not a Number)");
+            } else if (x.IsInfinite) {
+                Raise(config, ExceptionModes.Infinity, x._sign > 0 ? "Computation results in 'Infinity'" : "Computation results in '-Infinity'");
             }
             return x;
         }
 
-        public static BigDecimal/*!*/ IntegerPart(Config/*!*/ config, BigDecimal/*!*/ x) {
-            if (IsFinite(x)) {
-                if (x.Exponent > 0) {
-                    if (x.Exponent < x._fraction.DigitCount) {
-                        return new BigDecimal(x.Sign, Fraction.Create(x._fraction.ToString().Substring(0, x.Exponent)), x.Exponent);
-                    } else {
-                        return x;
-                    }
-                } else {
-                    return x.Sign > 0 ? BigDecimal.PositiveZero : BigDecimal.NegativeZero;
+        /// <summary>
+        /// The error of asking a special value for something only a finite number has (#to_i, #to_r): it
+        /// raises whatever the exception mode.
+        /// </summary>
+        internal static Exception/*!*/ CreateSpecialValueError(BigDecimal/*!*/ x) {
+            return new FloatDomainError(x.IsNaN
+                ? "Computation results in 'NaN' (Not a Number)"
+                : (x._sign > 0 ? "Computation results in 'Infinity'" : "Computation results in '-Infinity'"));
+        }
+
+        // MRI's VpIsDefOP reports a special result of an operation in its own words ("to", not "in").
+        private static BigDecimal/*!*/ OperationNaN(Config/*!*/ config) {
+            Raise(config, ExceptionModes.NaN, "Computation results to 'NaN'");
+            return NaN;
+        }
+
+        private static BigDecimal/*!*/ OperationInfinity(Config/*!*/ config, BigDecimal/*!*/ result) {
+            Raise(config, ExceptionModes.Infinity, result.IsInfinite && result._sign > 0
+                ? "Computation results to 'Infinity'"
+                : "Computation results to '-Infinity'");
+            return result;
+        }
+
+        #endregion
+
+        #region Rounding
+
+        private static bool RoundsAway(RoundingModes mode, int sign, int comparedToHalf, bool inexact, bool odd) {
+            switch (mode) {
+                case RoundingModes.Up: return inexact;
+                case RoundingModes.Down: return false;
+                case RoundingModes.HalfUp: return comparedToHalf >= 0;
+                case RoundingModes.HalfDown: return comparedToHalf > 0;
+                case RoundingModes.HalfEven: return comparedToHalf > 0 || (comparedToHalf == 0 && odd);
+                case RoundingModes.Ceiling: return inexact && sign > 0;
+                case RoundingModes.Floor: return inexact && sign < 0;
+                default: throw new ArgumentOutOfRangeException(nameof(mode));
+            }
+        }
+
+        /// <summary>
+        /// Rounds sign * magnitude * 10**scale to a multiple of 10**position in the given mode.
+        /// <paramref name="sticky"/> says that the true value is a little more than magnitude * 10**scale
+        /// in magnitude - a quotient or root that did not come out exactly - which turns a tie into
+        /// more than half and an exact value into an inexact one. A result of zero keeps the sign.
+        /// </summary>
+        internal static BigDecimal/*!*/ RoundAt(Config/*!*/ config, int sign, BigInteger magnitude, long scale, long position,
+            RoundingModes mode, bool sticky) {
+
+            if (position <= scale) {
+                if (!sticky) {
+                    return Create(config, sign, magnitude, scale);
                 }
+                magnitude *= Pow10(scale - position + 1);
+                scale = position - 1;
+            }
+
+            Int128 drop = (Int128)position - scale;
+            BigInteger quotient;
+            int comparedToHalf;
+            bool inexact;
+            if (magnitude.IsZero || drop > CountDigits(magnitude)) {
+                // everything goes, and it is less than half of the last place kept
+                quotient = BigInteger.Zero;
+                inexact = !magnitude.IsZero || sticky;
+                comparedToHalf = -1;
             } else {
+                BigInteger unit = Pow10((long)drop);
+                quotient = BigInteger.DivRem(magnitude, unit, out BigInteger remainder);
+                inexact = !remainder.IsZero || sticky;
+                comparedToHalf = (remainder << 1).CompareTo(unit);
+                if (comparedToHalf == 0 && sticky) {
+                    comparedToHalf = 1;
+                }
+            }
+            if (RoundsAway(mode, sign, comparedToHalf, inexact, !quotient.IsEven)) {
+                quotient += 1;
+            }
+            return Create(config, sign, quotient, position);
+        }
+
+        /// <summary>Rounds to <paramref name="digits"/> significant digits (MRI's VpLeftRound).</summary>
+        internal static BigDecimal/*!*/ RoundToDigits(Config/*!*/ config, int sign, BigInteger magnitude, long scale, int digits,
+            RoundingModes mode, bool sticky) {
+
+            if (magnitude.IsZero) {
+                return Zero(sign);
+            }
+            return RoundAt(config, sign, magnitude, scale, scale + CountDigits(magnitude) - digits, mode, sticky);
+        }
+
+        /// <summary>A finite x rounded to <paramref name="digits"/> significant digits; others as they are.</summary>
+        internal static BigDecimal/*!*/ RoundToDigits(Config/*!*/ config, BigDecimal/*!*/ x, int digits, RoundingModes mode) {
+            if (!x.IsNonZeroFinite || digits <= 0 || x._digitCount <= digits) {
                 return x;
             }
+            return RoundAt(config, x._sign, x._digits, x.Scale, x._exponent - digits, mode, false);
         }
 
-        public static BigDecimal/*!*/ LimitPrecision(Config/*!*/ config, BigDecimal/*!*/ x, int limit, RoundingModes mode) {
-            try {
-                checked {
-                    if (IsFinite(x)) {
-                        int diffDigits;
-                        Fraction fraction = Fraction.LimitPrecision(x._sign, x._fraction, limit + x.Exponent, mode, out diffDigits);
-                        return new BigDecimal(x._sign, fraction, x._exponent + diffDigits);
-                    } else {
-                        return x;
-                    }
-                }
-            } catch (OverflowException) {
-                return ExponentOverflow(config, x._sign, x._exponent);
+        /// <summary>The global limit applied to the result of an operation (MRI's VpLimitRound).</summary>
+        private static BigDecimal/*!*/ ApplyLimit(Config/*!*/ config, BigDecimal/*!*/ x, int limit) {
+            return RoundToDigits(config, x, limit, config.RoundingMode);
+        }
+
+        /// <summary>
+        /// #round, #truncate, #floor and #ceil: rounds to <paramref name="places"/> digits after the decimal
+        /// point (before it, for a negative count). Zero and the special values are left alone.
+        /// MRI's VpMidRound is exact but for one thing: in ROUND_UP mode, a position before the first of
+        /// the 9-digit words the number occupies rounds to zero, so BigDecimal("0.04").round(-1, :up) is 0.
+        /// </summary>
+        public static BigDecimal/*!*/ RoundDecimalPlaces(Config/*!*/ config, BigDecimal/*!*/ x, long places, RoundingModes mode) {
+            if (!x.IsNonZeroFinite) {
+                return x;
             }
+            if (mode == RoundingModes.Up && places + WordExponent(x._exponent) * BASE_FIG < 0) {
+                return Zero(x._sign);
+            }
+            return RoundAt(config, x._sign, x._digits, x.Scale, -places, mode, false);
+        }
+
+        /// <summary>MRI's exponent in 9-digit words: the number is 0.[w0 w1 ...] * 10**(9 * WordExponent).</summary>
+        private static long WordExponent(long exponent) {
+            return exponent > 0 ? (exponent + BASE_FIG - 1) / BASE_FIG : -(-exponent / BASE_FIG);
         }
 
         #endregion
 
-        #region Private Helpers
-
-        private static BigDecimal InternalAdd(Config config, BigDecimal x, BigDecimal y, int limit) {
-            if (limit < 0) {
-                throw new ArgumentException("limit must be positive");
-            }
-
-            // This method is used for both adding and subtracting, but the special cases are the same.
-            BigDecimal result = CheckSpecialResult(config, x, y, BasicOperations.Add);
-            if (result != null) {
-                return result;
-            }
-
-            // The exact sum, aligned at the finer of the two exponents, rounded to the limit if there is one.
-            System.Numerics.BigInteger a, b;
-            long ea, eb;
-            ToUnscaled(x, out a, out ea);
-            ToUnscaled(y, out b, out eb);
-            long e = Math.Min(ea, eb);
-            System.Numerics.BigInteger sum =
-                a * System.Numerics.BigInteger.Pow(10, checked((int)(ea - e))) +
-                b * System.Numerics.BigInteger.Pow(10, checked((int)(eb - e)));
-            return RoundExact(config, sum, e, limit != 0 ? limit : config.Limit);
-        }
+        #region Arithmetic
 
         /// <summary>
-        /// unscaled * 10**scale rounded to <paramref name="limit"/> significant digits in the current mode, or
-        /// exactly for a limit of 0. Zero is +0, and an exponent beyond our Int32 one overflows.
+        /// x + y, or x - y for an <paramref name="operation"/> of -1, rounded to <paramref name="limit"/>
+        /// significant digits, or to BigDecimal.limit for 0 (MRI's BigDecimal_addsub_with_coerce).
         /// </summary>
-        private static BigDecimal/*!*/ RoundExact(Config/*!*/ config, System.Numerics.BigInteger unscaled, long scale, int limit) {
-            if (unscaled.IsZero) {
+        public static BigDecimal/*!*/ Add(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, int operation, int limit) {
+            if (x.IsNaN) {
+                return CheckResult(config, x);
+            }
+            if (y.IsNaN) {
+                return CheckResult(config, y);
+            }
+            int ySign = operation * y._sign;
+            if (x.IsInfinite) {
+                return y.IsInfinite && x._sign != ySign ? OperationNaN(config) : OperationInfinity(config, x);
+            }
+            if (y.IsInfinite) {
+                return OperationInfinity(config, Infinity(ySign));
+            }
+            if (limit == 0) {
+                limit = config.Limit;
+            }
+            if (x.IsZero) {
+                if (y.IsZero) {
+                    return Zero(x._sign < 0 && ySign < 0 ? -1 : 1);
+                }
+                return ApplyLimit(config, operation < 0 ? Negate(y) : y, limit);
+            }
+            if (y.IsZero) {
+                return ApplyLimit(config, x, limit);
+            }
+
+            BigDecimal big = x, small = y;
+            int bigSign = x._sign, smallSign = ySign;
+            if (x._exponent < y._exponent) {
+                big = y;
+                small = x;
+                bigSign = ySign;
+                smallSign = x._sign;
+            }
+            BigInteger smallDigits = small._digits;
+            long smallScale = small.Scale;
+
+            // An operand that lies wholly below both the other's last digit and the rounding position
+            // only decides which way the rounding goes, as any smaller value of the same sign would; one
+            // a long way down is replaced by a single digit, so that 1e1000000000 + 1 rounds without first
+            // writing out a billion digits.
+            if (limit > 0) {
+                long floor = Math.Min(big.Scale, big._exponent - limit) - 2;
+                if (small._exponent < floor && floor - smallScale > 1000) {
+                    smallDigits = BigInteger.One;
+                    smallScale = floor - 1;
+                }
+            }
+
+            long scale = Math.Min(big.Scale, smallScale);
+            BigInteger sum = bigSign * big._digits * Pow10(big.Scale - scale) + smallSign * smallDigits * Pow10(smallScale - scale);
+            if (sum.IsZero) {
                 return PositiveZero;
             }
-            int sign = unscaled.Sign;
-            long exponent = scale + System.Numerics.BigInteger.Abs(unscaled).ToString(CultureInfo.InvariantCulture).Length;
-            if (exponent > Int32.MaxValue || exponent < Int32.MinValue) {
-                return ExponentOverflow(config, sign, exponent > 0 ? 1 : -1);
-            }
-            BigDecimal exact = FromUnscaled(config, unscaled, scale);
-            if (limit == 0) {
-                return exact;
-            }
-            int offset;
-            Fraction fraction = Fraction.LimitPrecision(sign, exact._fraction, limit, config.RoundingMode, out offset);
-            return new BigDecimal(sign, fraction, exact._exponent + offset);
+            BigDecimal result = Create(config, sum, scale);
+            return ApplyLimit(config, result, limit);
         }
 
-        private static BigDecimal ExponentOverflow(Config config, int sign, int exponent) {
-            if (exponent > 0) {
-                if ((config.OverflowMode & OverflowExceptionModes.Overflow) == OverflowExceptionModes.Overflow) {
-                    throw new FloatDomainError("Exponent overflow");
+        /// <summary>
+        /// x * y, rounded to <paramref name="digits"/> significant digits, or to BigDecimal.limit for 0
+        /// (MRI's BigDecimal_mult_with_coerce).
+        /// </summary>
+        public static BigDecimal/*!*/ Multiply(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, int digits) {
+            int sign = x._sign * y._sign;
+            if (x.IsNaN || y.IsNaN) {
+                return OperationNaN(config);
+            }
+            if (x.IsInfinite || y.IsInfinite) {
+                return x.IsZero || y.IsZero ? OperationNaN(config) : OperationInfinity(config, Infinity(sign));
+            }
+            if (x.IsZero || y.IsZero) {
+                return Zero(sign);
+            }
+            BigDecimal product = Create(config, sign, x._digits * y._digits, x.Scale + y.Scale);
+            return RoundToDigits(config, product, digits != 0 ? digits : config.Limit, config.RoundingMode);
+        }
+
+        /// <summary>
+        /// x / y to <paramref name="digits"/> significant digits in the current rounding mode, as MRI's
+        /// BigDecimal_div2 makes it: the quotient rounded as if it were known exactly.
+        /// </summary>
+        public static BigDecimal/*!*/ Divide(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, int digits) {
+            int sign = x._sign * y._sign;
+            if (x.IsNaN || y.IsNaN) {
+                return OperationNaN(config);
+            }
+            if (x.IsInfinite) {
+                return y.IsInfinite ? OperationNaN(config) : CheckResult(config, OperationInfinity(config, Infinity(sign)));
+            }
+            if (y.IsInfinite) {
+                // VpIsDefOP reports even this zero as an infinite result
+                return OperationInfinity(config, Zero(sign));
+            }
+            if (y.IsZero) {
+                if (x.IsZero) {
+                    return OperationNaN(config);
                 }
-                // Our exponent is an Int32 where MRI's is a 64-bit value, so we run out of
-                // room sooner - but the answer at the end of the road is the same one MRI
-                // gives when its own exponent overflows: Infinity, not zero.
-                return sign < 0 ? NegativeInfinity : PositiveInfinity;
+                Raise(config, ExceptionModes.ZeroDivide, "Divide by zero");
+                return CheckResult(config, Infinity(sign));
             }
-            if ((config.OverflowMode & OverflowExceptionModes.Underflow) == OverflowExceptionModes.Underflow) {
-                throw new FloatDomainError("Exponent underflow");
+            if (x.IsZero) {
+                return Zero(sign);
             }
-            // Underflow flushes to zero.
-            return PositiveZero;
+
+            // enough digits of the quotient for one more than asked, and a remainder to say whether it is exact
+            long shift = Math.Max(0, (long)digits + 2 - x._digitCount + y._digitCount);
+            BigInteger quotient = BigInteger.DivRem(x._digits * Pow10(shift), y._digits, out BigInteger remainder);
+            return RoundToDigits(config, sign, quotient, x.Scale - y.Scale - shift, digits, config.RoundingMode, !remainder.IsZero);
+        }
+
+        /// <summary>
+        /// The digits #/ (and #div(y, 0)) divides to: the precision of the more precise operand plus 16,
+        /// at least 32, and no more than BigDecimal.limit when one is set.
+        /// </summary>
+        public static int DivisionDigits(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y) {
+            long digits = Math.Max(x.Precision, y.Precision) + DoubleFig;
+            if (digits < 2 * DoubleFig) {
+                digits = 2 * DoubleFig;
+            }
+            if (config.Limit > 0 && config.Limit < digits) {
+                digits = config.Limit;
+            }
+            return (int)Math.Min(digits, Int32.MaxValue);
+        }
+
+        /// <summary>
+        /// MRI's BigDecimal_DoDivmod: the integral quotient and the remainder, the quotient floored
+        /// (#divmod, #%) or truncated (#remainder). The quotient is a BigDecimal still; NaN and the
+        /// infinities raise only when #divmod and #div make an Integer of it. A zero divisor raises.
+        /// </summary>
+        public static void DivMod(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, bool truncate,
+            out BigDecimal/*!*/ div, out BigDecimal/*!*/ mod) {
+
+            if (x.IsNaN || y.IsNaN || (x.IsInfinite && y.IsInfinite)) {
+                div = mod = NaN;
+                return;
+            }
+            if (y.IsZero) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            if (x.IsInfinite) {
+                div = Infinity(x._sign == y._sign ? 1 : -1);
+                mod = NaN;
+                return;
+            }
+            if (x.IsZero) {
+                div = PositiveZero;
+                mod = x;
+                return;
+            }
+            if (y.IsInfinite) {
+                if (!truncate && x._sign != y._sign) {
+                    div = Create(config, -1);
+                    mod = y;
+                } else {
+                    div = PositiveZero;
+                    mod = x;
+                }
+                return;
+            }
+
+            // exactly, at the exponent of the finer of the two
+            long scale = Math.Min(x.Scale, y.Scale);
+            BigInteger a = x._sign * x._digits * Pow10(x.Scale - scale);
+            BigInteger b = y._sign * y._digits * Pow10(y.Scale - scale);
+            BigInteger q = BigInteger.DivRem(a, b, out BigInteger r);
+            if (!truncate && !r.IsZero && (r.Sign < 0) != (b.Sign < 0)) {
+                q -= 1;
+                r += b;
+            }
+            div = Create(config, q, 0);
+            mod = Create(config, r, scale);
+        }
+
+        public static BigDecimal/*!*/ Negate(BigDecimal/*!*/ x) {
+            switch (x._type) {
+                case NumberTypes.NaN: return x;
+                case NumberTypes.Infinite: return Infinity(-x._sign);
+                default: return x.IsZero ? Zero(-x._sign) : new BigDecimal(-x._sign, x._digits, x._digitCount, x._exponent);
+            }
+        }
+
+        public static BigDecimal/*!*/ Abs(BigDecimal/*!*/ x) {
+            return x._sign < 0 && !x.IsNaN ? Negate(x) : x;
+        }
+
+        /// <summary>x * 10**n, exactly (MRI's _decimal_shift).</summary>
+        public static BigDecimal/*!*/ DecimalShift(Config/*!*/ config, BigDecimal/*!*/ x, long n) {
+            if (!x.IsNonZeroFinite || n == 0) {
+                return CheckResult(config, x);
+            }
+            Int128 exponent = (Int128)x._exponent + n;
+            if (exponent > MaxExponent) {
+                return ExponentOverflow(config, x._sign);
+            }
+            if (exponent < MinExponent) {
+                return ExponentUnderflow(config, x._sign);
+            }
+            return new BigDecimal(x._sign, x._digits, x._digitCount, (long)exponent);
+        }
+
+        /// <summary>
+        /// bigdecimal 4.0.1's #sqrt, which the gem writes in Ruby (lib/bigdecimal.rb), step for step: Newton's
+        /// iteration from the Float root, at a precision that doubles each time up to <paramref name="digits"/>
+        /// + 16, then rounded to <paramref name="digits"/> in the current mode. 0 digits means
+        /// n_significant_digits + 16, or BigDecimal.limit if that is less. It is not the correctly rounded
+        /// root in every mode - the iteration may stop a unit below an exact one - so it is not computed as one.
+        /// </summary>
+        public static BigDecimal/*!*/ SquareRoot(Config/*!*/ config, BigDecimal/*!*/ x, int digits) {
+            if (x.IsInfinite && x._sign > 0) {
+                Raise(config, ExceptionModes.Infinity, "Computation results in 'Infinity'");
+                return PositiveInfinity;
+            }
+            if (Compare(x, PositiveZero) < 0) {
+                throw new FloatDomainError("sqrt of negative value");
+            }
+            if (x.IsNaN) {
+                throw new FloatDomainError("sqrt of 'NaN'(Not a Number)");
+            }
+            if (x.IsZero) {
+                return x;
+            }
+            if (digits == 0) {
+                digits = x._digitCount + DoubleFig;
+                if (config.Limit != 0) {
+                    digits = Math.Min(config.Limit, digits);
+                }
+            }
+
+            long shift = x._exponent >= 0 ? x._exponent / 2 : -((1 - x._exponent) / 2);
+            BigDecimal a = DecimalShift(config, x, -2 * shift);
+            BigDecimal y = Create(config, Math.Sqrt(ToFloat(config, a)), 0);
+            BigDecimal two = Create(config, 2);
+            var precisions = new System.Collections.Generic.List<int> { digits + DoubleFig };
+            while (precisions[precisions.Count - 1] > DoubleFig) {
+                precisions.Add(2 + precisions[precisions.Count - 1] / 2);
+            }
+            for (int i = precisions.Count - 1; i >= 0; i--) {
+                int p = precisions[i];
+                y = Divide(config, Add(config, y, Divide(config, a, y, p), 1, p), two, p);
+            }
+            return Multiply(config, DecimalShift(config, y, shift), Create(config, 1), digits);
+        }
+
+        /// <summary>The integer part, truncated towards zero (#fix).</summary>
+        public static BigDecimal/*!*/ IntegerPart(Config/*!*/ config, BigDecimal/*!*/ x) {
+            if (!x.IsNonZeroFinite || x.Scale >= 0) {
+                return x;
+            }
+            return RoundAt(config, x._sign, x._digits, x.Scale, 0, RoundingModes.Down, false);
+        }
+
+        /// <summary>What #fix leaves out, with self's sign (#frac).</summary>
+        public static BigDecimal/*!*/ FractionalPart(Config/*!*/ config, BigDecimal/*!*/ x) {
+            if (!x.IsNonZeroFinite || x._exponent <= 0) {
+                return x;
+            }
+            if (x.Scale >= 0) {
+                return Zero(x._sign);
+            }
+            return Create(config, x._sign, x._digits % Pow10(-x.Scale), x.Scale);
         }
 
         #endregion
 
-        #region Special Comparisons and Results
+        #region Comparison
 
-        /// <summary>
-        /// x &lt;=&gt; y when one of them is not a non-zero finite number: nil with a NaN, and otherwise the
-        /// order -Infinity &lt; negative &lt; zero (either sign) &lt; positive &lt; Infinity.
-        /// </summary>
-        private static int? CheckSpecialComparison(BigDecimal x, BigDecimal y) {
-            Debug.Assert(!IsNonZeroFinite(x) || !IsNonZeroFinite(y));
-            if (IsNaN(x) || IsNaN(y)) {
+        /// <summary>x &lt;=&gt; y; null when either is NaN.</summary>
+        public static int? Compare(BigDecimal/*!*/ x, BigDecimal/*!*/ y) {
+            if (x.IsNaN || y.IsNaN) {
                 return null;
             }
-            return Rank(x).CompareTo(Rank(y));
+            int xRank = x.Rank, yRank = y.Rank;
+            if (xRank != yRank || xRank == 0 || !x.IsFinite) {
+                return xRank.CompareTo(yRank);
+            }
+            // two non-zero finite numbers of the same sign
+            int result;
+            if (x._exponent != y._exponent) {
+                result = x._exponent.CompareTo(y._exponent);
+            } else {
+                int shift = x._digitCount - y._digitCount;
+                result = shift >= 0
+                    ? x._digits.CompareTo(y._digits * Pow10(shift))
+                    : (x._digits * Pow10(-shift)).CompareTo(y._digits);
+            }
+            return x._sign * result;
         }
 
-        private static int Rank(BigDecimal/*!*/ x) {
-            return IsZero(x) ? 0 : (IsInfinite(x) ? 2 : 1) * x._sign;
+        // -Infinity < negative < zero (of either sign) < positive < Infinity
+        private int Rank => IsZero ? 0 : (IsInfinite ? 2 : 1) * _sign;
+
+        public bool Equals(BigDecimal other) {
+            return other != null && Compare(this, other) == 0;
+        }
+
+        public override bool Equals(object obj) {
+            return Equals(obj as BigDecimal);
         }
 
         /// <summary>
-        /// The result of x + y, x * y or x / y when it is decided by NaN, an infinity or a zero, as in MRI;
-        /// null when it has to be computed. (x - y is x + -y.) An infinite operand raises in the
-        /// EXCEPTION_INFINITY mode even when the result is finite, as MRI checks the operands too.
+        /// Equal numbers hash alike, whatever digits they were written with. As in MRI, the special values
+        /// and the zeros hash to their sign: so +0 and -0 hash apart though they are ==.
         /// </summary>
-        private static BigDecimal CheckSpecialResult(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, BasicOperations op) {
-            if (IsNonZeroFinite(x) && IsNonZeroFinite(y)) {
-                return null;
+        public override int GetHashCode() {
+            if (!IsNonZeroFinite) {
+                return SignCode;
             }
-            if (IsNaN(x) || IsNaN(y)) {
-                return CheckOverflowExceptions(config, NaN);
-            }
-            if (IsInfinite(x) || IsInfinite(y)) {
-                CheckOverflowExceptions(config, IsInfinite(x) ? x : y);
-            }
+            return HashCode.Combine(_sign, _digits, _exponent);
+        }
 
-            int sign = x._sign * y._sign;
-            switch (op) {
-                case BasicOperations.Add:
-                    if (IsInfinite(x) && IsInfinite(y)) {
-                        return x._sign == y._sign ? x : CheckOverflowExceptions(config, NaN);
-                    }
-                    if (IsInfinite(x) || IsInfinite(y)) {
-                        return IsInfinite(x) ? x : y;
-                    }
-                    if (IsZero(x) && IsZero(y)) {
-                        // -0 + -0 is -0; any other sum of zeros is +0
-                        return x._sign < 0 && y._sign < 0 ? NegativeZero : PositiveZero;
-                    }
-                    return null;
+        #endregion
 
-                case BasicOperations.Multiply:
-                    if (IsInfinite(x) || IsInfinite(y)) {
-                        return IsZero(x) || IsZero(y) ? CheckOverflowExceptions(config, NaN) : Infinity(sign);
-                    }
-                    return Zero(sign);
+        #region Precision
 
-                case BasicOperations.Divide:
-                    if (IsInfinite(x)) {
-                        return IsInfinite(y) ? CheckOverflowExceptions(config, NaN) : Infinity(sign);
-                    }
-                    if (IsInfinite(y)) {
-                        return Zero(sign);
-                    }
-                    if (IsZero(y)) {
-                        return IsZero(x) ? CheckOverflowExceptions(config, NaN) : CheckOverflowExceptions(config, Infinity(sign));
-                    }
-                    return Zero(sign);
-
-                default:
-                    throw Assert.Unreachable;
+        /// <summary>
+        /// The number of decimal digits it takes to write the number out in positional notation (MRI's
+        /// #precision): BigDecimal("1e2") has one significant digit but a precision of 3, and 0.001 has a
+        /// precision of 3 for the zeros after its decimal point. Zero and the special values have 0.
+        /// </summary>
+        public long Precision {
+            get {
+                if (!IsNonZeroFinite) {
+                    return 0;
+                }
+                return _exponent > 0 ? Math.Max(_digitCount, _exponent) : _digitCount - _exponent;
             }
         }
 
-        private static BigDecimal/*!*/ Infinity(int sign) {
-            return sign < 0 ? NegativeInfinity : PositiveInfinity;
-        }
+        /// <summary>The digits after the decimal point.</summary>
+        public long ScaleDigits => IsNonZeroFinite ? Math.Max(0, -Scale) : 0;
 
-        private static BigDecimal/*!*/ Zero(int sign) {
-            return sign < 0 ? NegativeZero : PositiveZero;
-        }
-
-        private static BigDecimal/*!*/ CheckOverflowExceptions(Config/*!*/ config, BigDecimal/*!*/ result) {
-            if (IsNaN(result) && (config.OverflowMode & OverflowExceptionModes.NaN) == OverflowExceptionModes.NaN) {
-                throw new FloatDomainError("Computation results to 'NaN'");
-            } else if (IsInfinite(result) && (config.OverflowMode & OverflowExceptionModes.Infinity) == OverflowExceptionModes.Infinity) {
-                throw new FloatDomainError(result.Sign > 0 ? "Computation results in 'Infinity'" : "Computation results in '-Infinity'");
+        /// <summary>
+        /// The digits MRI's representation holds, 9 to a word with the words aligned at the decimal point -
+        /// what #_dump writes before the colon.
+        /// </summary>
+        public long InternalDigits {
+            get {
+                if (!IsNonZeroFinite) {
+                    return BASE_FIG;
+                }
+                long words = Math.DivRem(_exponent - 1, BASE_FIG, out long r1) - (r1 < 0 ? 1 : 0)
+                    - (Math.DivRem(Scale, BASE_FIG, out long r2) - (r2 < 0 ? 1 : 0)) + 1;
+                return words * BASE_FIG;
             }
-            return result;
+        }
+
+        #endregion
+
+        #region Conversion
+
+        /// <summary>
+        /// MRI's #to_f: the nearest Float to the decimal value; one too big for a Float is an infinity and
+        /// one too small a zero, each of which raises when the mode for it (EXCEPTION_OVERFLOW,
+        /// EXCEPTION_UNDERFLOW) is set.
+        /// </summary>
+        public static double ToFloat(Config/*!*/ config, BigDecimal/*!*/ x) {
+            switch (x._type) {
+                case NumberTypes.NaN: return Double.NaN;
+                case NumberTypes.Infinite: return x._sign > 0 ? Double.PositiveInfinity : Double.NegativeInfinity;
+            }
+            if (x.IsZero) {
+                return x._sign > 0 ? 0.0 : -0.0;
+            }
+            double result;
+            if (x._exponent > 400) {
+                result = Double.PositiveInfinity;
+            } else if (x._exponent < -400) {
+                result = 0.0;
+            } else {
+                result = Double.Parse(x._digits.ToString(CultureInfo.InvariantCulture) + "E" + x.Scale.ToString(CultureInfo.InvariantCulture),
+                    NumberStyles.Float, CultureInfo.InvariantCulture);
+            }
+            if (Double.IsInfinity(result)) {
+                Raise(config, ExceptionModes.Overflow, "BigDecimal to Float conversion");
+            } else if (result == 0) {
+                Raise(config, ExceptionModes.Underflow, "BigDecimal to Float conversion");
+            }
+            return x._sign > 0 ? result : -result;
+        }
+
+        /// <summary>The integer part as an Integer (#to_i); a special value raises.</summary>
+        public static object/*!*/ ToInteger(BigDecimal/*!*/ x) {
+            if (!x.IsFinite) {
+                throw CreateSpecialValueError(x);
+            }
+            if (x.IsZero || x._exponent <= 0) {
+                return ClrInteger.Zero;
+            }
+            BigInteger value = x.Scale >= 0 ? x._digits * Pow10(x.Scale) : x._digits / Pow10(-x.Scale);
+            return Protocols.Normalize(x._sign < 0 ? -value : value);
         }
 
         #endregion
 
         #region ToString
-        public string GetFractionString() {
-            if (IsFinite(this)) {
-                return this._fraction.ToString();
-            } else if (IsInfinite(this)) {
-                return InfinityString;
-            } else {
-                return NaNString;
+
+        /// <summary>The digits as #split gives them: "0" for zero, "NaN" and "Infinity" for the others.</summary>
+        public string/*!*/ GetDigitString() {
+            switch (_type) {
+                case NumberTypes.NaN: return "NaN";
+                case NumberTypes.Infinite: return "Infinity";
             }
+            return IsZero ? "0" : _digits.ToString(CultureInfo.InvariantCulture);
         }
-        public override string ToString() {
-            return ToString(0);
+
+        public override string/*!*/ ToString() {
+            return ToString(0, "", false);
         }
-        public string ToString(int separateAt) {
-            return ToString(separateAt, "", false);
+
+        // MRI's VpToSpecialString
+        private string ToSpecialString(string/*!*/ plusSign) {
+            switch (_type) {
+                case NumberTypes.NaN: return "NaN";
+                case NumberTypes.Infinite: return _sign > 0 ? plusSign + "Infinity" : "-Infinity";
+            }
+            if (IsZero) {
+                return _sign > 0 ? plusSign + "0.0" : "-0.0";
+            }
+            return null;
         }
-        public string ToString(int separateAt, string plusSign, bool floatStyleFormat) {
-            if (separateAt < 0) {
-                throw new ArgumentException("argument must be positive");
+
+        /// <summary>
+        /// #to_s: "0.12345e3", or "123.45" in the F format; <paramref name="plusSign"/> (" " or "+") goes
+        /// before a positive number, and a non-zero <paramref name="group"/> puts a space between every that
+        /// many digits - counted from the decimal point, so the integer part is grouped from its right.
+        /// </summary>
+        public string/*!*/ ToString(int group, string/*!*/ plusSign, bool floatFormat) {
+            string special = ToSpecialString(plusSign);
+            if (special != null) {
+                return special;
             }
 
-            if (IsFinite(this) && !IsZero(this)) {
-                StringBuilder sb = new StringBuilder();
-                if (IsNegative(this)) {
-                    sb.Append("-");
-                } else {
-                    sb.Append(plusSign);
-                }
-                if (floatStyleFormat) {
-                    AppendFloatStyle(sb, separateAt);
-                } else {
-                    AppendEngineeringStyle(sb, separateAt);
-                }
+            var sb = new StringBuilder();
+            sb.Append(_sign < 0 ? "-" : plusSign);
+            string digits = _digits.ToString(CultureInfo.InvariantCulture);
+            if (!floatFormat) {
+                sb.Append("0.");
+                AppendGroupedFromLeft(sb, digits, group);
+                sb.Append('e').Append(_exponent.ToString(CultureInfo.InvariantCulture));
                 return sb.ToString();
             }
-            if (IsPositiveZero(this)) {
-                return plusSign + ZeroString;
-            }
-            if (IsNegativeZero(this)) {
-                return NegativeZeroString;
-            }
-            if (IsPositiveInfinite(this)) {
-                return plusSign + InfinityString;
-            }
-            if (IsNegativeInfinite(this)) {
-                return NegativeInfinityString;
-            }
-            return NaNString;
-        }
 
-        private void AppendFloatStyle(StringBuilder/*!*/ sb, int separateAt) {
-            if (_exponent <= 0) {
-                sb.Append("0.");
-                AppendDigits(sb, new string('0', -_exponent) + _fraction.ToString(), 0, Digits - _exponent, separateAt);
+            if (_exponent > 0) {
+                string integer = _exponent >= _digitCount
+                    ? digits + new string('0', checked((int)(_exponent - _digitCount)))
+                    : digits.Substring(0, (int)_exponent);
+                AppendGroupedFromRight(sb, integer, group);
             } else {
-                int expLenDiff = _exponent - Digits;
-                if (expLenDiff >= 0) {
-                    AppendIntegerDigits(sb, _fraction.ToString() + new string('0', expLenDiff), 0, _exponent, separateAt);
-                    sb.Append(".0");
-                } else {
-                    AppendIntegerDigits(sb, _fraction.ToString(), 0, _exponent, separateAt);
-                    sb.Append(".");
-                    AppendDigits(sb, _fraction.ToString(), _exponent, Digits - _exponent, separateAt);
-                }
+                sb.Append('0');
             }
-        }
-
-        private void AppendEngineeringStyle(StringBuilder/*!*/ sb, int separateAt) {
-            sb.Append("0.");
-            AppendDigits(sb, _fraction.ToString(), 0, Digits, separateAt);
-            sb.Append("e");
-            sb.AppendFormat("{0}", this._exponent);
-        }
-
-        /// <summary>
-        /// Groups the fractional digits, which run left to right: the short group, if any,
-        /// is the last one ("0.123 456 78").
-        /// </summary>
-        private void AppendDigits(StringBuilder/*!*/ sb, string digits, int start, int length, int separateAt) {
-            int current = start;
-            if (separateAt > 0) {
-                while (current + separateAt < start + length) {
-                    sb.Append(digits.Substring(current, separateAt));
-                    current += separateAt;
-                    sb.Append(" ");
-                }
+            sb.Append('.');
+            if (_exponent >= _digitCount) {
+                sb.Append('0');
+            } else {
+                string fraction = _exponent > 0
+                    ? digits.Substring((int)_exponent)
+                    : new string('0', checked((int)-_exponent)) + digits;
+                AppendGroupedFromLeft(sb, fraction, group);
             }
-            sb.Append(digits.Substring(current, length - (current - start)));
+            return sb.ToString();
         }
 
-        /// <summary>
-        /// Groups the digits of the integer part, which are counted from the decimal point
-        /// backwards, so the short group is the *first* one: 1000010 with a width of 5 is
-        /// "10 00010", not "10000 10".
-        /// </summary>
-        private void AppendIntegerDigits(StringBuilder/*!*/ sb, string digits, int start, int length, int separateAt) {
-            if (separateAt <= 0 || length <= separateAt) {
-                sb.Append(digits.Substring(start, length));
+        private static void AppendGroupedFromLeft(StringBuilder/*!*/ sb, string/*!*/ digits, int group) {
+            if (group <= 0) {
+                sb.Append(digits);
                 return;
             }
-            int firstGroup = length % separateAt;
-            int current = start;
-            if (firstGroup != 0) {
-                sb.Append(digits.Substring(current, firstGroup));
-                sb.Append(" ");
-                current += firstGroup;
-            }
-            while (current < start + length) {
-                sb.Append(digits.Substring(current, separateAt));
-                current += separateAt;
-                if (current < start + length) {
-                    sb.Append(" ");
+            for (int i = 0; i < digits.Length; i += group) {
+                if (i > 0) {
+                    sb.Append(' ');
                 }
+                sb.Append(digits, i, Math.Min(group, digits.Length - i));
             }
         }
-        #endregion
 
-        #region Comparison
-        #region IEquatable<BigDecimal> Members
-
-        public bool Equals(BigDecimal other) {
-            return CompareTo(other) == 0;
-        }
-
-        #endregion
-
-        public int? CompareBigDecimal(BigDecimal other) {
-            int? result;
-            if (other == null) {
-                result = null;
-            } else if (!IsNonZeroFinite(this) || !IsNonZeroFinite(other)) {
-                result = CheckSpecialComparison(this, other);
-            } else {
-                if (this._sign != other._sign) {
-                    // Different signs
-                    result = this._sign > other._sign ? 1 : -1;
-                } else {
-                    result = this._sign * (Fraction.Compare(this._fraction, other._fraction, this._exponent - other._exponent));
-                }
+        private static void AppendGroupedFromRight(StringBuilder/*!*/ sb, string/*!*/ digits, int group) {
+            if (group <= 0) {
+                sb.Append(digits);
+                return;
             }
-            return result;
-        }
-
-        #region IComparable<BigDecimal> Members
-        public int CompareTo(BigDecimal other) {
-            int? result = CompareBigDecimal(other);
-            if (result.HasValue) {
-                return result.Value;
-            } else {
-                // Must have NaNs so we map them to Double.CompareTo results
-                if (IsNaN(this)) {
-                    if (IsNaN(other)) {
-                        // Both NaN so 
-                        return 0;
-                    } else {
-                        // this == NaN && other != NaN
-                        return -1;
-                    }
-                } else {
-                    return 1;
-                }
+            int first = digits.Length % group;
+            if (first == 0) {
+                first = group;
+            }
+            sb.Append(digits, 0, Math.Min(first, digits.Length));
+            for (int i = first; i < digits.Length; i += group) {
+                sb.Append(' ').Append(digits, i, group);
             }
         }
-        #endregion
-        #endregion
 
-        #region Hash Code
-        public int GetSignCode() {
-            switch (this.NumberType) {
-                case BigDecimal.NumberTypes.NaN:
-                    return 0;
-                case BigDecimal.NumberTypes.Infinite:
-                    return this.Sign * 3;
-                default:
-                case BigDecimal.NumberTypes.Finite:
-                    if (BigDecimal.IsZero(this)) {
-                        return this.Sign;
-                    } else {
-                        return this.Sign * 2;
-                    }
-            }
-        }
-        public override int GetHashCode() {
-            int hash = this.GetSignCode();
-            // Special values have special hash codes
-            if (hash == 2) {
-                int fHash = _fraction.GetHashCode();
-                hash = (31 * hash + fHash) ^ fHash + Exponent;
-            }
-            return hash;
-        }
         #endregion
     }
-
 }

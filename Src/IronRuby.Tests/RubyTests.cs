@@ -894,6 +894,7 @@ namespace IronRuby.Tests {
                 Method_LightFrame1,
                 Method_LightFrame2,
                 BigDecimal_Ruby4_1,
+                BigDecimal_Engine1,
                 Hash_SelfKey1,
                 Thread_JoinSelf1,
                 Reflection_Misc1,

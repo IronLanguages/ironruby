@@ -3957,5 +3957,85 @@ specials: ""-1,1,NaN,0,1,-1,NaN,0,NaN,NaN,NaN,,Infinity,NaN,-1,-1,-Infinity,NaN,
 x/inf raises: FloatDomainError: Computation results in 'Infinity'
 ");
         }
+
+        /// <summary>
+        /// The BigDecimal engine (sign, BigInteger digits and exponent) against CRuby 4.0's bigdecimal 4.0.1:
+        /// Float conversion as MRI's dtoa does it (shortest digits cut to 16; mode 2's rounding quirk),
+        /// parsing, to_s formats, round's ROUND_UP quirk, BigDecimal.limit, division precision, divmod and
+        /// remainder, the exception modes, precision/scale, sqrt's Newton iteration, and an exponent beyond Int32.
+        /// </summary>
+        public void BigDecimal_Engine1() {
+            TestOutput(@"
+require 'ruby4'
+require 'bigdecimal'
+def t(label)
+  r = begin; v = yield; v.is_a?(BigDecimal) ? v.to_s : v.inspect; rescue => e; ""#{e.class}: #{e.message}""; end
+  puts ""#{label}: #{r}""
+end
+t('float') { [BigDecimal(0.1 + 0.2), BigDecimal(2.0**70), BigDecimal(1.25, 2), BigDecimal(4.383733694592053e-09, 14)].join(' ') }
+t('float+') { BigDecimal('1') + (0.1 + 0.2) }
+t('parse') { %w[1_000 1_ 5. .5 1e5 1E-5 1d2 +1.5 -0].map { |s| BigDecimal(s).to_s }.join(' ') }
+t('parse spaces') { BigDecimal(""  1.5  \n"") }
+t('invalid') { %w[_1 1__2 1.5x 1e . 1e_5].map { |s| BigDecimal(s, exception: false).inspect }.join(' ') }
+t('loose') { ['1.5x', '_1', '1 2', '12e', '0x1f'].map { |s| BigDecimal.interpret_loosely(s).to_s }.join(' ') }
+t('huge exponent') { [BigDecimal('1e3000000000').exponent, (BigDecimal('1e3000000000') * BigDecimal('1e3000000000')).exponent].inspect }
+t('exponent overflow') { BigDecimal('1e99999999999999999999') }
+t('to_s') { [BigDecimal('-1234567.891').to_s('3F'), BigDecimal('0.000123').to_s('+2F'), BigDecimal('1234.5').to_s(' 2E'), BigDecimal('1e10').to_s('F')].inspect }
+t('to_s 0') { BigDecimal('1').to_s(0) }
+t('round up') { [BigDecimal('0.04').round(-1, :up), BigDecimal('0.0004').round(1, :up), BigDecimal('-0.04').round(1)].join(' ') }
+t('round modes') { %w[up down half_up half_down half_even ceiling floor].map { |m| BigDecimal('-2.5').round(0, m.to_sym).to_s }.join(' ') }
+t('round nil') { BigDecimal('1.5').round(nil) }
+t('round string mode') { BigDecimal('1.5').round(0, 'up') }
+t('limit') { BigDecimal.save_limit { BigDecimal.limit(5); [BigDecimal('1.23456789') + 1, BigDecimal('1') / 3, BigDecimal('1.23456789') * 1, BigDecimal('1.23456789').add(0, 3)].join(' ') } }
+t('div') { [BigDecimal('1') / 3, BigDecimal('1').div(3, 5), BigDecimal('2').div(3, 0), BigDecimal('7').div(2), BigDecimal('-7').divmod(2)].map(&:to_s).join(' ') }
+t('remainder') { [BigDecimal('-7').remainder(2), BigDecimal('7') % -2, BigDecimal('1e100') % 3].join(' ') }
+t('mode') { BigDecimal.save_exception_mode { BigDecimal.mode(BigDecimal::EXCEPTION_INFINITY, true); BigDecimal.mode(BigDecimal::EXCEPTION_NaN) } }
+t('divmod nan mode') { BigDecimal.save_exception_mode { i = BigDecimal('-Infinity'); BigDecimal.mode(BigDecimal::EXCEPTION_NaN, true); i.divmod(1) } }
+t('precision') { %w[0 1e20 1e-20 123.456 -0.001].map { |s| x = BigDecimal(s); [x.precision, x.scale, x.n_significant_digits, x.exponent] }.inspect }
+t('shift') { [BigDecimal('1.5')._decimal_shift(3), BigDecimal('1.5')._decimal_shift(-12)].join(' ') }
+t('sqrt') { [BigDecimal('2').sqrt(20), BigDecimal('4').sqrt(0), BigDecimal('0.01').sqrt(5)].join(' ') }
+t('sqrt down') { BigDecimal.save_rounding_mode { BigDecimal.mode(BigDecimal::ROUND_MODE, :down); [BigDecimal('2').sqrt(10), BigDecimal('16').sqrt(3)].join(' ') } }
+t('frac fix') { [BigDecimal('-1.5').frac, BigDecimal('-0.5').fix, BigDecimal('12').frac, BigDecimal('123.456').fix].join(' ') }
+t('to_f') { [BigDecimal('1e400').to_f, BigDecimal('-1e-400').to_f, BigDecimal('0.1').to_f].inspect }
+t('to_i') { [BigDecimal('-12.9').to_i, BigDecimal('1e20').to_i, BigDecimal('0.5').to_i].inspect }
+t('hash') { [BigDecimal('0.1').hash == BigDecimal('0.10').hash, BigDecimal('1').eql?(BigDecimal('1.0'))].inspect }
+t('coerce') { BigDecimal('1').add('x', 3) }
+t('kernel') { [BigDecimal(Rational(1, 3), 0), BigDecimal(Complex(2, 0)), BigDecimal(nil, exception: false).inspect].join(' ') }
+t('precision too large') { BigDecimal(1.5, 17) }
+t('exception kwarg') { BigDecimal('1', exception: 1) }
+", @"
+float: ""0.3e0 0.1180591620717411e22 0.12e1 0.4383733694592e-8""
+float+: 0.13e1
+parse: ""0.1e4 0.1e1 0.5e1 0.5e0 0.1e6 0.1e-4 0.1e3 0.15e1 -0.0""
+parse spaces: 0.15e1
+invalid: ""nil nil nil nil nil nil""
+loose: ""0.15e1 0.0 0.1e1 0.12e2 0.0""
+huge exponent: ""[3000000001, 6000000001]""
+exponent overflow: Infinity
+to_s: ""[\""-1 234 567.891\"", \""+0.00 01 23\"", \"" 0.12 34 5e4\"", \""10000000000.0\""]""
+to_s 0: ArgumentError: argument must be positive
+round up: ""0.0 0.1e0 -0.0""
+round modes: ""-0.3e1 -0.2e1 -0.3e1 -0.2e1 -0.2e1 -0.2e1 -0.3e1""
+round nil: TypeError: no implicit conversion from nil to integer
+round string mode: TypeError: no implicit conversion of String into Integer
+limit: ""0.22346e1 0.33333e0 0.12346e1 0.123e1""
+div: ""0.33333333333333333333333333333333e0 0.33333e0 0.66666666666666666666666666666667e0 3 [-4, 0.1e1]""
+remainder: ""-0.1e1 -0.1e1 0.1e1""
+mode: 1
+divmod nan mode: FloatDomainError: Computation results in 'NaN' (Not a Number)
+precision: ""[[0, 0, 0, 0], [21, 0, 1, 21], [20, 20, 1, -19], [6, 3, 6, 3], [3, 3, 1, -2]]""
+shift: ""0.15e4 0.15e-11""
+sqrt: ""0.14142135623730950488e1 0.2e1 0.1e0""
+sqrt down: ""0.1414213562e1 0.4e1""
+frac fix: ""-0.5e0 -0.0 0.0 0.123e3""
+to_f: ""[Infinity, -0.0, 0.1]""
+to_i: ""[-12, 100000000000000000000, 0]""
+hash: ""[true, true]""
+coerce: TypeError: String can't be coerced into BigDecimal
+kernel: ""0.33333333333333333333333333333333e0 0.2e1 nil""
+precision too large: ArgumentError: precision too large.
+exception kwarg: ArgumentError: expected true or false as exception: 1
+");
+        }
     }
 }
