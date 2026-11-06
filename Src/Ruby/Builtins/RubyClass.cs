@@ -1638,14 +1638,15 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// A Ruby subclass of a class whose CLR type is sealed (Integer, Symbol, Float) has no CLR type of its own
-        /// to allocate - nor, in MRI, an allocator.
+        /// to allocate - nor, in MRI, an allocator. (Its type is made on first use, so this is where that fails.)
         /// </summary>
         private bool HasSealedClrBase() {
-            RubyClass c = this;
-            while (c.IsRubyClass && c._underlyingSystemType == null && c._superClass != null) {
-                c = c._superClass;
+            try {
+                GetUnderlyingSystemType();
+                return false;
+            } catch (NotSupportedException) {
+                return true;
             }
-            return c != this && c.GetUnderlyingSystemType().IsSealed;
         }
 
         /// <summary>
