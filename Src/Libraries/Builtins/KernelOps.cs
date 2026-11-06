@@ -642,6 +642,11 @@ namespace IronRuby.Builtins {
             // `?rest?', `?kw?' and the like are the compiler's: where anonymous and forwarded
             // parameters, and the argument list a zsuper passes on, are kept
             var names = scope.GetVisibleLocalNames();
+            // an isolated proc (Ractor.new's block, a shareable proc) sees none of the locals around it
+            var isolated = scope.GetIsolatedLocalNames();
+            if (isolated != null) {
+                names.RemoveAll(isolated.Contains);
+            }
             names.RemoveAll(name => name.Length > 0 && name[0] == '?');
             return new RubyArray(names.Count).AddRange(scope.RubyContext.StringifyIdentifiers(names));
         }
@@ -1544,9 +1549,9 @@ namespace IronRuby.Builtins {
             if (!context.TryGetInstanceVariable(self, name, out value)) {
                 // We didn't find it, check if the name is valid
                 RubyUtils.CheckInstanceVariableName(context, self, name, nameArg);
-                return null;
+                value = null;
             }
-            return value;
+            return context.RactorsStarted ? RactorIsolation.CheckInstanceVariableRead(context, self, name, value) : value;
         }
 
         [RubyMethod("instance_variable_set")]
@@ -1554,6 +1559,9 @@ namespace IronRuby.Builtins {
             RubyContext/*!*/ context, object self, object nameArg, object value) {
             string name = ToVariableName(stringCast, nameArg);
             RubyUtils.CheckInstanceVariableName(context, self, name, nameArg);
+            if (context.RactorsStarted) {
+                RactorIsolation.CheckInstanceVariableWrite(context, self);
+            }
             context.SetInstanceVariable(self, name, value);
             return value;
         }
@@ -1600,6 +1608,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("remove_instance_variable")]
         public static object RemoveInstanceVariable(RubyContext/*!*/ context, object/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
             RubyUtils.CheckInstanceVariableName(context, self, name);
+            if (context.RactorsStarted) {
+                RactorIsolation.CheckInstanceVariableWrite(context, self);
+            }
 
             object value;
             if (!context.TryRemoveInstanceVariable(self, name, out value)) {
@@ -1616,6 +1627,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("global_variables", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("global_variables", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ GetGlobalVariableNames(RubyContext/*!*/ context, object self) {
+            RactorIsolation.CheckGlobalVariables(context);
             RubyArray result = new RubyArray();
             lock (context.GlobalVariablesLock) {
                 foreach (KeyValuePair<string, GlobalVariable> global in context.GlobalVariables) {
@@ -2606,12 +2618,17 @@ namespace IronRuby.Builtins {
         [RubyMethod("require", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("require", RubyMethodAttributes.PublicSingleton)]
         public static bool Require(ConversionStorage<MutableString>/*!*/ toPath, RubyScope/*!*/ scope, object self, object libraryName) {
-            return scope.RubyContext.Loader.LoadFile(
-                scope.GlobalScope.Scope, 
-                self, 
-                Protocols.CastToPath(toPath, libraryName), 
-                LoadFlags.Require | LoadFlags.WarnCircular
-            );
+            var path = Protocols.CastToPath(toPath, libraryName);
+            // a non-main Ractor has the main Ractor load the file (Ractor._require)
+            return RactorIsolation.IsNonMain(scope.RubyContext) ? RequireInMainRactor(scope, self, path) : Require(scope, self, path);
+        }
+
+        private static bool Require(RubyScope/*!*/ scope, object self, MutableString/*!*/ path) {
+            return scope.RubyContext.Loader.LoadFile(scope.GlobalScope.Scope, self, path, LoadFlags.Require | LoadFlags.WarnCircular);
+        }
+
+        private static bool RequireInMainRactor(RubyScope/*!*/ scope, object self, MutableString/*!*/ path) {
+            return RubyRactor.RunAsMain(() => Require(scope, self, path));
         }
 
         [RubyMethod("load_assembly", RubyMethodAttributes.PrivateInstance)]

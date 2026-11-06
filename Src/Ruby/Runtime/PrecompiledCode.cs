@@ -154,6 +154,19 @@ namespace IronRuby.Runtime.Precompiled {
             return result;
         }
 
+        /// <summary>
+        /// As above, with the outer variables the scope assigns more than once
+        /// (BlockDispatcher.ReassignedOuterVariableNames), which a shareable proc may not read.
+        /// </summary>
+        public static BlockDispatcher/*!*/ CreateBlockDispatcher(int parameterCount, int postCount, int attributesAndArity,
+            string sourcePath, int sourceLine, RubyParameterSignature signature, string[] outerVariables, string[] assignedOuterVariables,
+            string[] reassignedOuterVariables) {
+            var result = CreateBlockDispatcher(parameterCount, postCount, attributesAndArity, sourcePath, sourceLine, signature,
+                outerVariables, assignedOuterVariables);
+            result.ReassignedOuterVariableNames = reassignedOuterVariables;
+            return result;
+        }
+
         public static RubyParameterSignature/*!*/ Signature(string[]/*!*/ kinds, string[]/*!*/ names, int leadingCount, int optionalCount,
             int postCount, bool hasRest, int requiredKeywordCount, bool hasKeywords, bool hasKeywordRest, string[] implicitParameterNames) {
             var ps = new RubyParameterSignature.Parameter[kinds.Length];

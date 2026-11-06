@@ -120,6 +120,19 @@ namespace IronRuby.Compiler.Ast {
             get { return _parent; }
         }
 
+        // how often the code assigns each local of the scope, by slot (AstGenerator.GetLocalAssignments)
+        private Dictionary<int, LocalAssignmentCount> _localAssignments;
+
+        internal LocalAssignmentCount/*!*/ GetLocalAssignments(int closureIndex) {
+            LocalAssignmentCount result;
+            if (_localAssignments == null) {
+                _localAssignments = new Dictionary<int, LocalAssignmentCount>();
+            } else if (_localAssignments.TryGetValue(closureIndex, out result)) {
+                return result;
+            }
+            return _localAssignments[closureIndex] = new LocalAssignmentCount();
+        }
+
         internal LexicalScope/*!*/ LexicalScope {
             get { return _lexicalScope; }
         }

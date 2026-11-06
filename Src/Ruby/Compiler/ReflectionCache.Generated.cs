@@ -558,6 +558,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ReadCachedGlobalVariable;
         public static MethodInfo/*!*/ ReadGlobalVariable { get { return _ReadGlobalVariable ?? (_ReadGlobalVariable = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.ReadGlobalVariable)); } }
         private static MethodInfo _ReadGlobalVariable;
+        public static MethodInfo/*!*/ ReadRactorCheckedConstant { get { return _ReadRactorCheckedConstant ?? (_ReadRactorCheckedConstant = CallInstruction.CacheFunc<System.Object, System.Object>(RubyOps.ReadRactorCheckedConstant)); } }
+        private static MethodInfo _ReadRactorCheckedConstant;
         public static MethodInfo/*!*/ RegisterShutdownHandler { get { return _RegisterShutdownHandler ?? (_RegisterShutdownHandler = CallInstruction.CacheAction<IronRuby.Builtins.Proc>(RubyOps.RegisterShutdownHandler)); } }
         private static MethodInfo _RegisterShutdownHandler;
         public static MethodInfo/*!*/ ReleaseScopeFrame { get { return _ReleaseScopeFrame ?? (_ReleaseScopeFrame = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope>(RubyOps.ReleaseScopeFrame)); } }

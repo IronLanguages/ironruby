@@ -395,5 +395,272 @@ RuntimeError: Cannot set ractor local storage for non-current ractor
 TypeError: 1 is not a symbol nor a string
 ");
         }
+
+        // Each runs its Ractor's block and prints its value, or the error that ended the Ractor.
+        private const string RactorIsolationPrologue = RactorPrologue + @"
+Thread.report_on_exception = false
+def rt(*args, &b) = t { r = Ractor.new(*args, &b); begin; p r.value; rescue Ractor::RemoteError => e; puts ""#{e.cause.class}: #{e.cause.message.sub(/\A\(eval at [^)]*\):\d+: /, '')}""; end }
+";
+
+        /// <summary>
+        /// A non-main Ractor may use only the globals CRuby makes Ractor-local ($stdin, $stdout,
+        /// $stderr, $VERBOSE, $DEBUG and aliases, which it has its own of) or that are per thread or
+        /// scope; any other global, global_variables and alias raise Ractor::IsolationError.
+        /// </summary>
+        public void Ractor_GlobalVariables1() {
+            TestOutput(RactorIsolationPrologue + @"
+$g = 1
+rt { $g }
+rt { $g = 2 }
+rt { defined?($g) }
+rt { $0 }
+rt { $LOAD_PATH }
+rt { global_variables }
+rt { eval('alias $ga $gb') }
+rt { [$~, $_, $!, $/, $-0, $$ == Process.pid, $?.class] }
+rt { /(b)/ =~ 'abc'; [$~[0], $1, $`, $', $&, $+] }
+p $g
+$VERBOSE = true
+$DEBUG = false
+rt { [$VERBOSE, $-v, $-w, $-W, $DEBUG, $-d] }
+rt { $VERBOSE = nil; $DEBUG = 1; [$VERBOSE, $-W, $DEBUG, $-d] }
+p [$VERBOSE, $DEBUG]
+$VERBOSE = false
+rt { [$stdin, $stdout, $stderr].map { |io| [io.class, io.fileno] } }
+rt { [$stdout.equal?(STDOUT), $stderr.equal?(STDERR), $stdin.equal?(STDIN)] }
+p Ractor.new { [$stdout.object_id, $stdout.object_id] }.value.uniq.size
+p Ractor.new { $stdout.object_id }.value != $stdout.object_id
+p $stdout.fileno
+rt { $> = 1 }
+Thread.report_on_exception = true
+Warning[:experimental] = true
+", @"
+Ractor::IsolationError: can not access global variable $g from non-main Ractor
+Ractor::IsolationError: can not access global variable $g from non-main Ractor
+Ractor::IsolationError: can not access global variable $g from non-main Ractor
+Ractor::IsolationError: can not access global variable $0 from non-main Ractor
+Ractor::IsolationError: can not access global variable $LOAD_PATH from non-main Ractor
+Ractor::IsolationError: can not access global variables from non-main Ractors
+Ractor::IsolationError: can not access global variables from non-main Ractors
+[nil, nil, nil, ""\n"", ""\n"", true, NilClass]
+[""b"", ""b"", ""a"", ""c"", ""b"", ""b""]
+1
+[true, true, true, 2, false, false]
+[nil, 0, 1, 1]
+[true, false]
+[[IO, 0], [IO, 1], [IO, 2]]
+Ractor::IsolationError: can not access non-shareable objects in constant Object::STDOUT by non-main Ractor.
+1
+true
+1
+TypeError: $> must have write method, Integer given
+");
+        }
+
+        /// <summary>
+        /// Class variables, class-level instance variables and constants in a non-main Ractor
+        /// (RactorIsolation): class variables are out of reach, a class or module only hands out
+        /// shareable values and takes no writes, and a constant must hold a shareable value -
+        /// whether read through a constant site's cache, Module#const_get or a method.
+        /// </summary>
+        public void Ractor_ClassState1() {
+            TestOutput(RactorIsolationPrologue + @"
+class RC
+  @@cv = 1
+  @str = 'str'.dup
+  @int = 7
+  @frozen = 'f'.freeze
+  CONST = 'mutable'.dup
+  FROZEN = ['a', 'b'].freeze
+  DEEP = Ractor.make_shareable(['x', {k: 'v'}])
+  NUM = 42
+  class << self
+    attr_accessor :str
+    def cv = @@cv
+    def int = @int
+    def frozen = @frozen
+    def const = CONST
+  end
+end
+module RM; X = 'x'.dup; def self.x = X; end
+TOP = 'top'.dup
+class Object; private def top = TOP; end
+rt { RC.cv }
+rt { class RC; @@cv = 2; end }
+rt { RC.class_variable_get(:@@cv) }
+rt { RC.class_variable_set(:@@cv, 3) }
+rt { RC.class_variable_defined?(:@@cv) }
+rt { RC.class_variables }
+rt { RC.str }
+rt { RC.int }
+rt { RC.frozen }
+rt { RC.str = 1 }
+rt { RC.instance_variable_get(:@str) }
+rt { RC.instance_variable_get(:@int) }
+rt { RC.instance_variable_set(:@int, 1) }
+rt { RC.instance_variables.size }
+rt { class RC; @nothing; end }
+rt { Ractor.current.instance_variable_get(:@x) }
+rt { Ractor.current.instance_variable_set(:@x, 1) }
+rt { o = Object.new; o.instance_variable_set(:@a, 1); o.instance_variable_get(:@a) }
+rt { RC::CONST }
+rt { RC::FROZEN }
+rt { RC::DEEP }
+rt { RC::NUM }
+rt { RC.const_get(:CONST) }
+rt { RC.const_get(:NUM) }
+rt { RC::NEW1 = 'new'.dup }
+rt { RC::NEW2 = 'new'.freeze; RC::NEW2 }
+rt { RC.const_set(:NEW3, [1]) }
+rt { class RactorDefinedClass; end; RactorDefinedClass.name }
+rt { defined?(RC::CONST) }
+p RC.cv, RC.str, RC::CONST, top
+Thread.report_on_exception = true
+Warning[:experimental] = true
+", @"
+Ractor::IsolationError: can not access class variables from non-main Ractors (@@cv from RC)
+Ractor::IsolationError: can not access class variables from non-main Ractors (@@cv from RC)
+Ractor::IsolationError: can not access class variables from non-main Ractors (@@cv from RC)
+Ractor::IsolationError: can not access class variables from non-main Ractors (@@cv from RC)
+Ractor::IsolationError: can not access class variables from non-main Ractors (@@cv from RC)
+[:@@cv]
+Ractor::IsolationError: can not get unshareable values from instance variables of classes/modules from non-main Ractors (@str from RC)
+7
+""f""
+Ractor::IsolationError: can not set instance variables of classes/modules by non-main Ractors
+Ractor::IsolationError: can not get unshareable values from instance variables of classes/modules from non-main Ractors (@str from RC)
+7
+Ractor::IsolationError: can not set instance variables of classes/modules by non-main Ractors
+3
+nil
+Ractor::IsolationError: can not access instance variables of shareable objects from non-main Ractors
+Ractor::IsolationError: can not access instance variables of shareable objects from non-main Ractors
+1
+Ractor::IsolationError: can not access non-shareable objects in constant RC::CONST by non-main Ractor.
+Ractor::IsolationError: can not access non-shareable objects in constant RC::FROZEN by non-main Ractor.
+[""x"", {k: ""v""}]
+42
+Ractor::IsolationError: can not access non-shareable objects in constant RC::CONST by non-main Ractor.
+42
+Ractor::IsolationError: can not set constants with non-shareable objects by non-main Ractors
+""new""
+Ractor::IsolationError: can not set constants with non-shareable objects by non-main Ractors
+""RactorDefinedClass""
+""constant""
+1
+""str""
+""mutable""
+""top""
+");
+        }
+
+        /// <summary>
+        /// The block of Ractor.new and a shareable proc are isolated: eval cannot reach the locals
+        /// around them (SyntaxError), Proc#binding refuses, and a shareable proc may not read an outer
+        /// variable its scope assigns more than once. A method define_method made of a block that is
+        /// not shareable runs only in the Ractor that defined it.
+        /// </summary>
+        public void Ractor_IsolatedProcs1() {
+            TestOutput(RactorIsolationPrologue + @"
+a = 42
+t { Ractor.shareable_proc { eval('a') }.call }
+p Ractor.shareable_proc { eval('1 + 1') }.call
+p Ractor.shareable_proc { b = 3; eval('b') }.call
+p Ractor.shareable_proc { [1].map { c = 2; eval('c') } }.call
+p Ractor.shareable_proc { binding }.call.class
+t { Ractor.shareable_proc { a }.binding }
+p Ractor.shareable_proc { local_variables }.call
+pr = nil.instance_exec { proc { eval('a') } }
+p pr.call
+Ractor.make_shareable(pr)
+t { pr.call }
+t { pr.binding }
+outer = 1
+rt { eval('outer') }
+d = 1
+t { Ractor.shareable_proc { d } }
+d = 2
+e1, e2 = 1, 2
+p Ractor.shareable_proc { e1 }.call
+f = 1 if true
+p Ractor.shareable_proc { f }.call
+g = 1
+g += 1 if outer == 2
+t { Ractor.shareable_proc { g } }
+t { Ractor.make_shareable(nil.instance_exec { proc { g } }) }
+->(z = 1) { p Ractor.shareable_proc { z }.call }.call
+->(z) { p Ractor.shareable_proc { z }.call }.call(1)
+->(z) { z += 1; t { Ractor.shareable_proc { z } } }.call(1)
+[1].each { |i| i = 2; t { Ractor.shareable_proc { i } } }
+def opt(o = 1) = Ractor.shareable_proc { o }.call
+p opt
+str = 'foo'.dup
+Object.send(:define_method, :buggy) { |i| str << i.to_s }
+rt { buggy(10) }
+p buggy(1)
+rt { self.class.send(:define_method, :mine) { 7 }; mine }
+Thread.report_on_exception = true
+Warning[:experimental] = true
+", @"
+SyntaxError: can not access variable 'a' from isolated Proc
+2
+3
+[2]
+Binding
+ArgumentError: Can't create Binding from isolated Proc
+[]
+42
+SyntaxError: can not access variable 'a' from isolated Proc
+ArgumentError: Can't create Binding from isolated Proc
+SyntaxError: can not access variable 'outer' from isolated Proc
+Ractor::IsolationError: cannot make a shareable Proc because the outer variable 'd' may be reassigned.
+1
+1
+Ractor::IsolationError: cannot make a shareable Proc because the outer variable 'g' may be reassigned.
+Ractor::IsolationError: cannot make a shareable Proc because the outer variable 'g' may be reassigned.
+1
+1
+Ractor::IsolationError: cannot make a shareable Proc because the outer variable 'z' may be reassigned.
+Ractor::IsolationError: cannot make a shareable Proc because the outer variable 'i' may be reassigned.
+1
+RuntimeError: defined with an un-shareable Proc in a different Ractor
+""foo1""
+7
+", 3);
+        }
+
+        /// <summary>
+        /// A non-main Ractor's require is the main Ractor's (Ractor._require): the file runs free of
+        /// the isolation checks. trap in a non-main Ractor isolates its block.
+        /// </summary>
+        public void Ractor_RequireInMain1() {
+            TestOutput(RactorIsolationPrologue + @"
+path = File.join(ENV['TMPDIR'] || '/tmp', ""ir_ractor_req_#{Process.pid}.rb"")
+File.open(path, ""w"") { |io| io.write(""RACTOR_REQ = 'loaded'.dup\n$ractor_req = Ractor.main?\n"") }
+rt(path) { |f| require f }
+p RACTOR_REQ, $ractor_req
+rt(path) { |f| require f }
+rt(path) { |f| Ractor._require(f) }
+rt { Ractor._require('ir_no_such_feature_x') }
+File.delete(path)
+Object.send(:define_method, :twice, &Ractor.shareable_proc { |i| i * 2 })
+rt { twice(4) }
+rt { trap(:USR2) { :ok } && :trapped }
+rt { s = 1; trap(:USR2) { s }; :trapped }
+trap(:USR2, 'DEFAULT')
+Thread.report_on_exception = true
+Warning[:experimental] = true
+", @"
+true
+""loaded""
+true
+false
+false
+LoadError: cannot load such file -- ir_no_such_feature_x
+8
+:trapped
+ArgumentError: can not isolate a Proc because it accesses outer variables (s).
+");
+        }
     }
 }

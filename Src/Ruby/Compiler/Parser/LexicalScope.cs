@@ -16,6 +16,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using Microsoft.Scripting;
+using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
 
 namespace IronRuby.Compiler {
@@ -116,6 +117,10 @@ namespace IronRuby.Compiler {
             while (true) {
                 LocalVariable result;
                 if (scope.TryGetValue(name, out result)) {
+                    var runtimeScope = scope as RuntimeLexicalScope;
+                    if (runtimeScope != null) {
+                        runtimeScope.RequireAccessible(name);
+                    }
                     return result;
                 }
 
@@ -247,11 +252,26 @@ namespace IronRuby.Compiler {
     // Scope contains variables defined outside of the current compilation unit. Used for assertion checks only.
     // (e.g. created for variables in the runtime scope of eval).
     internal sealed class RuntimeLexicalScope : LexicalScope {
+        // the names an isolated proc's eval may not use; null if any will do
+        private readonly ICollection<string> _isolatedNames;
+
         public RuntimeLexicalScope(List<string>/*!*/ names)
+            : this(names, null) {
+        }
+
+        public RuntimeLexicalScope(List<string>/*!*/ names, ICollection<string> isolatedNames)
             : base(null, -1) {
 
             for (int i = 0; i < names.Count; i++) {
                 AddVariable(names[i], SourceSpan.None);
+            }
+            _isolatedNames = isolatedNames;
+        }
+
+        /// <summary>CRuby's compile error for a use of an outer local in code an isolated proc evals.</summary>
+        internal void RequireAccessible(string/*!*/ name) {
+            if (_isolatedNames != null && _isolatedNames.Contains(name)) {
+                throw new SyntaxError("can not access variable '" + name + "' from isolated Proc");
             }
         }
 

@@ -129,8 +129,20 @@ namespace IronRuby.Runtime.Jit {
             if (value is double) { type = JT.Dbl; return Ast.Constant((double)value, typeof(double)); }
             if (value is bool) { type = JT.Bool; return Ast.Constant((bool)value, typeof(bool)); }
             type = JT.Obj;
+            if (!RactorIsolation.IsTriviallyShareable(value)) {
+                // what a non-main Ractor may not read: checked once the runtime has started Ractors
+                return Ast.Condition(
+                    Ast.Property(Ast.Constant(_context), typeof(RubyContext).GetProperty("RactorsStarted")),
+                    Ast.Call(typeof(RactorIsolation).GetMethod("CheckConstantRead"), Ast.Constant(_context),
+                        Ast.Constant(_resolvedConstantOwner, typeof(RubyModule)), Ast.Constant(node.Name), Ast.Constant(value, typeof(object))),
+                    Ast.Constant(value, typeof(object))
+                );
+            }
             return Ast.Constant(value, typeof(object));
         }
+
+        // the module the last constant ResolveConstant resolved was found in
+        private RubyModule _resolvedConstantOwner;
 
         /// <summary>
         /// What the constant resolves to right now, the way the generic code resolves it, or a bailout
@@ -158,6 +170,7 @@ namespace IronRuby.Runtime.Jit {
                         throw Bail("qualified constant not found: " + name);
                     }
                     RequireNotDeprecated(module.GetConstantOwnerNoLock(name), name);
+                    _resolvedConstantOwner = module.GetConstantOwnerNoLock(name) ?? module;
                     value = storage.Value;
                 }
             } else {
@@ -170,6 +183,7 @@ namespace IronRuby.Runtime.Jit {
                             throw Bail("constant not found: ::" + name);
                         }
                         RequireNotDeprecated(obj.GetConstantOwnerNoLock(name), name);
+                        _resolvedConstantOwner = obj.GetConstantOwnerNoLock(name) ?? obj;
                     } else {
                         RubyModule owner;
                         if (scope.TryResolveConstantNoLock(null, name, out storage, out owner) != null) {
@@ -177,6 +191,7 @@ namespace IronRuby.Runtime.Jit {
                         }
                         // the owner is only reported once some constant has been deprecated
                         RequireNotDeprecated(owner, name);
+                        _resolvedConstantOwner = owner;
                     }
                     value = storage.Value;
                 }

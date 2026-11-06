@@ -175,6 +175,32 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         public string[] AssignedOuterVariableNames { get; internal set; }
 
+        // for each of OuterVariableNames, how often its scope assigns it; final once the code is compiled
+        internal LocalAssignmentCount[] OuterVariableAssignments;
+        private string[] _reassignedOuterVariableNames;
+
+        /// <summary>
+        /// Those of <see cref="OuterVariableNames"/> their scope assigns more than once (a parameter
+        /// counts as one assignment): CRuby will not make a shareable proc read such a variable, as
+        /// it "may be reassigned". Null if none.
+        /// </summary>
+        public string[] ReassignedOuterVariableNames {
+            get {
+                if (_reassignedOuterVariableNames == null && OuterVariableAssignments != null) {
+                    var names = new System.Collections.Generic.List<string>();
+                    for (int i = 0; i < OuterVariableAssignments.Length; i++) {
+                        var assignments = OuterVariableAssignments[i];
+                        if (assignments != null && assignments.Count > 1) {
+                            names.Add(OuterVariableNames[i]);
+                        }
+                    }
+                    _reassignedOuterVariableNames = names.ToArray();
+                }
+                return (_reassignedOuterVariableNames != null && _reassignedOuterVariableNames.Length > 0) ? _reassignedOuterVariableNames : null;
+            }
+            internal set { _reassignedOuterVariableNames = value ?? Array.Empty<string>(); }
+        }
+
         private bool _wrapsMethod;
 
         /// <summary>

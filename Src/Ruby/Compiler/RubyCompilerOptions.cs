@@ -103,5 +103,12 @@ namespace IronRuby.Compiler {
         /// Used by dynamic variable look-up.
         /// </summary>
         internal List<string> LocalNames { get; set; }
+
+        /// <summary>
+        /// Eval in an isolated proc (Ractor.new's block, a shareable proc): those of
+        /// <see cref="LocalNames"/> that belong to the scopes around the proc, which the code may
+        /// not use (RubyScope.GetIsolatedLocalNames). Null otherwise.
+        /// </summary>
+        internal ICollection<string> IsolatedLocalNames { get; set; }
     }
 }
