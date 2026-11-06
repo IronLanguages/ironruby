@@ -177,10 +177,11 @@ namespace IronRuby.Runtime {
 
             // The runtime's own slots in the instance variable table - the finalizer that
             // ObjectSpace.define_finalizer attaches is one, spelled with angle brackets so that
-            // it cannot collide with a Ruby name - have no business in an #inspect.
+            // it cannot collide with a Ruby name - have no business in an #inspect, nor has the
+            // @__name__ state of the Ruby-written core classes.
             var visible = new List<KeyValuePair<string, object>>();
             foreach (KeyValuePair<string, object> var in vars) {
-                if (var.Key.Length == 0 || var.Key[0] != '<') {
+                if (RubyContext.IsVisibleInstanceVariableName(var.Key)) {
                     visible.Add(var);
                 }
             }
@@ -1322,7 +1323,8 @@ namespace IronRuby.Runtime {
                 Utils.Log(new String('-', 50), "EVAL_ERROR");
 
                 // MRI names the file and the line the error is on in front of the message, so
-                // that code which evaluated a string knows which string and where in it.
+                // that code which evaluated a string knows which string and where in it: the
+                // line the parser saw is not the one to name when eval started below line 1.
                 if (e.HasLineInfo && e.File != null) {
                     // A SourceLocation cannot start before line 1, so a zero or negative starting
                     // line was compiled from 1 and is put back here: eval with a line of -100
@@ -1330,10 +1332,7 @@ namespace IronRuby.Runtime {
                     int reportedLine = (line <= 0) ? e.Line - 1 + line : e.Line;
                     string errorFile = e.File;
                     DecodeEvalLineOffset(ref errorFile);
-                    throw new SyntaxError(
-                        String.Format("{0}:{1}: {2}", errorFile, reportedLine, e.Message),
-                        errorFile, reportedLine, e.Column, e.LineSourceCode
-                    );
+                    throw new SyntaxError(e.Description, errorFile, reportedLine, e.Column, e.LineSourceCode);
                 }
                 throw;
             }

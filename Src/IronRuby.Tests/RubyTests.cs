@@ -892,6 +892,8 @@ namespace IronRuby.Tests {
                 Prelude_DataStructErrors1,
                 Prelude_AliasNames1,
                 Prelude_HiddenHelpers1,
+                Prelude_HiddenState1,
+                SyntaxError_MessageLocation1,
                 Digest_Incremental1,
                 Digest_NonStringResult1,
                 Main_Initialize1,

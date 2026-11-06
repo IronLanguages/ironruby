@@ -672,7 +672,10 @@ namespace IronRuby.Runtime {
             if (type != null) {
                 if (type.Assembly == typeof(RubyOps).Assembly || type.Namespace != null && 
                     (type.Namespace.StartsWith("IronRuby.StandardLibrary", StringComparison.Ordinal) ||
-                    type.Namespace.StartsWith("IronRuby.Builtins", StringComparison.Ordinal))) {
+                    type.Namespace.StartsWith("IronRuby.Builtins", StringComparison.Ordinal) ||
+                    // the parser (PrismAstBridge.Parse): an error found reading a file, such as an
+                    // unknown magic-comment encoding, was reported as raised in ":0:in 'Parse'"
+                    type.Namespace.StartsWith("IronRuby.Prism", StringComparison.Ordinal))) {
                     return false;
                 }                
 

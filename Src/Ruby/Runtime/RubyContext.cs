@@ -2708,8 +2708,21 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        private static bool IsVisibleInstanceVariableName(string name) {
-            return name.Length == 0 || name[0] != '<';
+        /// <summary>
+        /// False for the runtime's angle-bracketed slots and for @__name__: the Ruby-written parts
+        /// of the core (the prelude, rational.rb, complex.rb) keep their state in ivars spelled the
+        /// way their helper methods are (see RubyModule.IsHelperName). MRI keeps the state of a
+        /// Rational, an Enumerator or a Random in a C struct, so neither #instance_variables nor
+        /// #inspect nor Marshal sees it.
+        /// </summary>
+        internal static bool IsVisibleInstanceVariableName(string/*!*/ name) {
+            if (name.Length == 0) {
+                return true;
+            }
+            if (name[0] == '<') {
+                return false;
+            }
+            return !(name.Length > 5 && name.StartsWith("@__", StringComparison.Ordinal) && name.EndsWith("__", StringComparison.Ordinal));
         }
 
         public bool TryGetInstanceVariable(object obj, string/*!*/ name, out object value) {
@@ -4161,11 +4174,12 @@ namespace IronRuby.Runtime {
             CommandLineProgramPath = (mainFile != null) ? EncodePath(mainFile, _options.LocaleEncoding) : null;
             _inputProvider.ReplaceCommandLineArguments(_options.Arguments, CommandLineArgumentEncoding);
 
-            // The prelude keeps the $0 the program started with for Process.argv0; it was nil then.
+            // The prelude keeps the $0 the program started with for Process.argv0 (in a hidden
+            // ivar of Process); it was nil then.
             object process;
             if (ObjectClass.TryGetConstant(null, "Process", out process) && process is RubyModule processModule &&
-                processModule.TryRemoveConstant("ORIGINAL_ARGV0", out _)) {
-                processModule.SetConstant("ORIGINAL_ARGV0",
+                TryGetInstanceVariable(processModule, "@__argv0__", out _)) {
+                SetInstanceVariable(processModule, "@__argv0__",
                     (CommandLineProgramPath != null) ? (object)CommandLineProgramPath.Clone().Freeze() : null);
             }
         }
@@ -4507,9 +4521,15 @@ namespace IronRuby.Runtime {
         public override string/*!*/ FormatException(Exception/*!*/ exception) {
             var syntaxError = exception as SyntaxError;
             if (syntaxError != null && syntaxError.HasLineInfo) {
-                // "-e:1: expected a `}' ... (SyntaxError)": MRI names the class, as for any other error
-                return FormatErrorMessage(syntaxError.Message + " (" + GetClassOf(exception).Name + ")", null,
-                    syntaxError.File, syntaxError.Line, syntaxError.Column, syntaxError.LineSourceCode);
+                // The main script: "-e:1: expected a `}' ... (SyntaxError)" and the line, pointed
+                // at. One that require, load or eval raised is reported as any other error, at
+                // the frame that called it, with the location in its message.
+                RubyExceptionData data = RubyExceptionData.GetInstance(exception);
+                data.CaptureExceptionTrace(this);
+                if (data.Backtrace == null || data.Backtrace.Count == 0) {
+                    return FormatErrorMessage(syntaxError.Description + " (" + GetClassOf(exception).Name + ")", null,
+                        syntaxError.File, syntaxError.Line, syntaxError.Column, syntaxError.LineSourceCode);
+                }
             }
 
             StringBuilder sb = new StringBuilder();
@@ -4593,7 +4613,10 @@ namespace IronRuby.Runtime {
                     sb.Append("\t ... ").Append(backtrace.Count - count).Append(" levels...").AppendLine();
                 }
             } else {
-                sb.AppendFormat("unknown: {0} ({1})", message, exceptionClass.Name).AppendLine();
+                // Raised before any Ruby frame ran - reading the main script, say, which has a magic
+                // comment naming an unknown encoding: MRI's error_pos names the script.
+                string where = (CommandLineProgramPath != null) ? CommandLineProgramPath.ToString() : "unknown";
+                sb.AppendFormat("{0}: {1} ({2})", where, message, exceptionClass.Name).AppendLine();
             }
         }
 

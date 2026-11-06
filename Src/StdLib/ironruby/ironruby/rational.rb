@@ -7,7 +7,8 @@
 # comment says nothing more, the method does what that function does, in the same order,
 # because ruby/spec watches which methods a mock operand is sent and in what order.
 #
-# A Rational is two Integers in @numerator and @denominator, the denominator positive,
+# A Rational is two Integers in @__numerator__ and @__denominator__ (hidden from
+# #instance_variables, as MRI keeps them in a C struct), the denominator positive,
 # frozen from birth. rational.c undefines Rational.new and Rational.allocate; instances
 # are made by __new_internal__ (nurat_s_new_internal), which takes no checks.
 
@@ -81,8 +82,8 @@ class Rational < Numeric
   end
 
   def __ir_set_parts__(num, den)
-    @numerator = num
-    @denominator = den
+    @__numerator__ = num
+    @__denominator__ = den
     freeze
   end
   private :__ir_set_parts__
@@ -168,11 +169,17 @@ class Rational < Numeric
     a > b ? 1 : -1
   end
 
-  attr_reader :numerator, :denominator
+  def numerator
+    @__numerator__
+  end
+
+  def denominator
+    @__denominator__
+  end
 
   # rb_rational_uminus
   def -@
-    ::Rational.__canonicalize__(-@numerator, @denominator)
+    ::Rational.__canonicalize__(-@__numerator__, @__denominator__)
   end
 
   # f_addsub
@@ -193,11 +200,11 @@ class Rational < Numeric
   # rb_rational_plus
   def +(other)
     if ::Integer === other
-      ::Rational.__canonicalize_no_reduce__(@numerator + other * @denominator, @denominator)
+      ::Rational.__canonicalize_no_reduce__(@__numerator__ + other * @__denominator__, @__denominator__)
     elsif ::Float === other
       to_f + other
     elsif ::Rational === other
-      __ir_addsub__(@numerator, @denominator, other.numerator, other.denominator, :+)
+      __ir_addsub__(@__numerator__, @__denominator__, other.numerator, other.denominator, :+)
     else
       __ir_num_coerce_bin__(other, :+)
     end
@@ -206,11 +213,11 @@ class Rational < Numeric
   # rb_rational_minus
   def -(other)
     if ::Integer === other
-      ::Rational.__canonicalize_no_reduce__(@numerator - other * @denominator, @denominator)
+      ::Rational.__canonicalize_no_reduce__(@__numerator__ - other * @__denominator__, @__denominator__)
     elsif ::Float === other
       to_f - other
     elsif ::Rational === other
-      __ir_addsub__(@numerator, @denominator, other.numerator, other.denominator, :-)
+      __ir_addsub__(@__numerator__, @__denominator__, other.numerator, other.denominator, :-)
     else
       __ir_num_coerce_bin__(other, :-)
     end
@@ -236,11 +243,11 @@ class Rational < Numeric
   # rb_rational_mul
   def *(other)
     if ::Integer === other
-      __ir_muldiv__(@numerator, @denominator, other, 1, :*)
+      __ir_muldiv__(@__numerator__, @__denominator__, other, 1, :*)
     elsif ::Float === other
       to_f * other
     elsif ::Rational === other
-      __ir_muldiv__(@numerator, @denominator, other.numerator, other.denominator, :*)
+      __ir_muldiv__(@__numerator__, @__denominator__, other.numerator, other.denominator, :*)
     else
       __ir_num_coerce_bin__(other, :*)
     end
@@ -250,15 +257,15 @@ class Rational < Numeric
   def /(other)
     if ::Integer === other
       ::Kernel.raise(::ZeroDivisionError, "divided by 0") if other == 0
-      __ir_muldiv__(@numerator, @denominator, other, 1, :/)
+      __ir_muldiv__(@__numerator__, @__denominator__, other, 1, :/)
     elsif ::Float === other
       to_f / other
     elsif ::Rational === other
       ::Kernel.raise(::ZeroDivisionError, "divided by 0") if other.numerator == 0
-      if @numerator == 1 && @denominator == 1
+      if @__numerator__ == 1 && @__denominator__ == 1
         return ::Rational.__canonicalize_no_reduce__(other.denominator, other.numerator)
       end
-      __ir_muldiv__(@numerator, @denominator, other.numerator, other.denominator, :/)
+      __ir_muldiv__(@__numerator__, @__denominator__, other.numerator, other.denominator, :/)
     else
       __ir_num_coerce_bin__(other, :/)
     end
@@ -283,12 +290,12 @@ class Rational < Numeric
     other = other.numerator if ::Rational === other && other.denominator == 1
 
     if ::Numeric === other && !(::Float === other)
-      if @denominator == 1
-        if @numerator == 1
+      if @__denominator__ == 1
+        if @__numerator__ == 1
           return ::Rational.__new_internal__(1, 1)
-        elsif @numerator == -1 && ::Integer === other
+        elsif @__numerator__ == -1 && ::Integer === other
           return ::Rational.__new_internal__(other.odd? ? -1 : 1, 1)
-        elsif @numerator == 0
+        elsif @__numerator__ == 0
           if ::Numeric.__ir_negative_p__(other)
             ::Kernel.raise(::ZeroDivisionError, "divided by 0")
           else
@@ -300,11 +307,11 @@ class Rational < Numeric
 
     if ::Integer === other && other.abs <= FIXNUM_MAX__
       if other > 0
-        num = @numerator ** other
-        den = @denominator ** other
+        num = @__numerator__ ** other
+        den = @__denominator__ ** other
       elsif other < 0
-        num = @denominator ** -other
-        den = @numerator ** -other
+        num = @__denominator__ ** -other
+        den = @__numerator__ ** -other
       else
         num = 1
         den = 1
@@ -337,10 +344,10 @@ class Rational < Numeric
   def <=>(other)
     case other
     when ::Integer
-      return @numerator <=> other if @denominator == 1
-      (@numerator - other * @denominator) <=> 0
+      return @__numerator__ <=> other if @__denominator__ == 1
+      (@__numerator__ - other * @__denominator__) <=> 0
     when ::Rational
-      (@numerator * other.denominator - other.numerator * @denominator) <=> 0
+      (@__numerator__ * other.denominator - other.numerator * @__denominator__) <=> 0
     when ::Float
       ::Rational.__dbl_cmp__(to_f, other)
     else
@@ -351,14 +358,14 @@ class Rational < Numeric
   # nurat_eqeq_p
   def ==(other)
     if ::Integer === other
-      return true if @numerator == 0 && other == 0
-      return false unless @denominator == 1
-      @numerator == other
+      return true if @__numerator__ == 0 && other == 0
+      return false unless @__denominator__ == 1
+      @__numerator__ == other
     elsif ::Float === other
       ::Rational.__dbl_cmp__(to_f, other) == 0
     elsif ::Rational === other
-      return true if @numerator == 0 && other.numerator == 0
-      @numerator == other.numerator && @denominator == other.denominator
+      return true if @__numerator__ == 0 && other.numerator == 0
+      @__numerator__ == other.numerator && @__denominator__ == other.denominator
     else
       other == self ? true : false
     end
@@ -387,41 +394,41 @@ class Rational < Numeric
 
   # nurat_positive_p / nurat_negative_p
   def positive?
-    @numerator > 0
+    @__numerator__ > 0
   end
 
   def negative?
-    @numerator < 0
+    @__numerator__ < 0
   end
 
   # rb_rational_abs
   def abs
-    return ::Rational.__new_internal__(-@numerator, @denominator) if @numerator < 0
+    return ::Rational.__new_internal__(-@__numerator__, @__denominator__) if @__numerator__ < 0
     self
   end
   alias magnitude abs
 
   # nurat_floor / nurat_ceil / nurat_truncate: the precision-free forms.
   def __ir_floor__
-    @numerator.div(@denominator)
+    @__numerator__.div(@__denominator__)
   end
   private :__ir_floor__
 
   def __ir_ceil__
-    -((-@numerator).div(@denominator))
+    -((-@__numerator__).div(@__denominator__))
   end
   private :__ir_ceil__
 
   def __ir_truncate__
-    return -((-@numerator).div(@denominator)) if @numerator < 0
-    @numerator.div(@denominator)
+    return -((-@__numerator__).div(@__denominator__)) if @__numerator__ < 0
+    @__numerator__.div(@__denominator__)
   end
   private :__ir_truncate__
 
   # nurat_round_half_up / _down / _even
   def __ir_round_half_up__
-    num = @numerator
-    den = @denominator
+    num = @__numerator__
+    den = @__denominator__
     neg = num < 0
     num = -num if neg
     num = (num * 2 + den).div(den * 2)
@@ -430,8 +437,8 @@ class Rational < Numeric
   private :__ir_round_half_up__
 
   def __ir_round_half_down__
-    num = @numerator
-    den = @denominator
+    num = @__numerator__
+    den = @__denominator__
     neg = num < 0
     num = -num if neg
     num = (num * 2 + den - 1).div(den * 2)
@@ -440,8 +447,8 @@ class Rational < Numeric
   private :__ir_round_half_down__
 
   def __ir_round_half_even__
-    num = @numerator
-    den = @denominator
+    num = @__numerator__
+    den = @__denominator__
     neg = num < 0
     num = -num if neg
     num, rem = (num * 2 + den).divmod(den * 2)
@@ -483,7 +490,7 @@ class Rational < Numeric
 
   # A denominator divides a power of ten only if it is made of twos and fives.
   def __ir_exact_at__(ndigits)
-    d = @denominator
+    d = @__denominator__
     twos = 0
     while d.even?
       d >>= 1
@@ -547,7 +554,7 @@ class Rational < Numeric
   # nurat_to_double: Integer#fdiv divides exactly before rounding, so a quotient of two
   # numbers past Float::MAX still comes out right.
   def to_f
-    @numerator.fdiv(@denominator)
+    @__numerator__.fdiv(@__denominator__)
   end
 
   def to_r
@@ -586,8 +593,8 @@ class Rational < Numeric
     end
     return self if args.empty?
     e = args[0].abs
-    neg = @numerator < 0
-    rat = neg ? ::Rational.__canonicalize__(-@numerator, @denominator) : self
+    neg = @__numerator__ < 0
+    rat = neg ? ::Rational.__canonicalize__(-@__numerator__, @__denominator__) : self
     zero = ::Integer === e && e == 0
     a = zero ? rat : rat - e
     b = zero ? rat : rat + e
@@ -599,16 +606,16 @@ class Rational < Numeric
 
   # nurat_hash
   def hash
-    [@numerator, @denominator, ::Rational].hash
+    [@__numerator__, @__denominator__, ::Rational].hash
   end
 
   # nurat_to_s / nurat_inspect
   def to_s
-    "#{@numerator}/#{@denominator}"
+    "#{@__numerator__}/#{@__denominator__}"
   end
 
   def inspect
-    "(#{@numerator.inspect}/#{@denominator.inspect})"
+    "(#{@__numerator__.inspect}/#{@__denominator__.inspect})"
   end
 
   # Rational and Complex are special objects in MRI's sense: #dup and #clone answer the
@@ -626,7 +633,7 @@ class Rational < Numeric
 
   # nurat_marshal_dump / nurat_marshal_load (by way of Rational::compatible in MRI).
   def marshal_dump
-    [@numerator, @denominator]
+    [@__numerator__, @__denominator__]
   end
   private :marshal_dump
 
@@ -644,8 +651,8 @@ class Rational < Numeric
     elsif den == 0
       ::Kernel.raise(::ZeroDivisionError, "divided by 0")
     end
-    @numerator = num
-    @denominator = den
+    @__numerator__ = num
+    @__denominator__ = den
     freeze
     self
   end
