@@ -227,8 +227,8 @@ namespace IronRuby.Builtins {
             // Since Ruby 3.0 none of these methods hand back the receiver's subclass:
             // MyArray[1, 2, 3].reverse, #uniq, #flatten, #[0, 2] and the rest are all
             // plain Arrays.
-            var array = list as RubyArray;
-            if (array != null) {
+            // A CLR array has no allocator and cannot grow: its #sort, #reverse, ... are Arrays too.
+            if (list is RubyArray || list is System.Array) {
                 return new RubyArray();
             }
             
@@ -261,6 +261,16 @@ namespace IronRuby.Builtins {
             // ARGV.replace(argv) where argv *is* ARGV, so `rails db:migrate db:seed` lost
             // every task after the first and railsbench served 404s from an unseeded database.
             if (ReferenceEquals(self, other)) {
+                return self;
+            }
+            if (self.IsFixedSize) {
+                // A CLR array (#sort!, #shuffle!, ...): Clear would zero it before Add failed.
+                if (self.Count != other.Count) {
+                    throw new NotSupportedException("Collection was of a fixed size.");
+                }
+                for (int i = 0; i < self.Count; i++) {
+                    self[i] = other[i];
+                }
                 return self;
             }
             self.Clear();

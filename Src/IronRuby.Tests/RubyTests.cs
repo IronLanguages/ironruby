@@ -571,6 +571,7 @@ namespace IronRuby.Tests {
                 ClrArrays1,
                 ClrArrays2,
                 ClrArrays3,
+                ClrArrays4,
                 ClrChar1,
                 ClrOperators1,
                 ClrOperators2,

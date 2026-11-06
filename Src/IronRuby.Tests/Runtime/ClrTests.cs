@@ -3734,6 +3734,36 @@ IndexError
 ");
         }
 
+        /// <summary>
+        /// The Array methods that answer a new list answer an Array for a CLR array, which cannot be allocated or grow;
+        /// those that reorder it in place (sort!) keep its items rather than clearing it first. IEnumerable#each without
+        /// a block is an Enumerator.
+        /// </summary>
+        public void ClrArrays4() {
+            TestOutput(@"
+a = System::Array[Integer].new([3, 1, 2, 3])
+p a.sort, a.reverse, a.uniq, a.flatten, a.sort { |x, y| y <=> x }
+p a.sort!.equal?(a), a
+p((a.replace([1]) rescue $!.class), a)
+e = System::Collections::Generic::List[Integer].new([5, 6]).each
+p e.class, e.first, e.to_a, System::Collections::ArrayList.new([7]).each.map { it * 2 }
+", @"
+[1, 2, 3, 3]
+[3, 2, 1, 3]
+[3, 1, 2]
+[3, 1, 2, 3]
+[3, 3, 2, 1]
+true
+[1, 2, 3, 3]
+System::NotSupportedException
+[1, 2, 3, 3]
+Enumerator
+5
+[5, 6]
+[14]
+");
+        }
+
         public void ClrChar1() {
             TestOutput(@"
 p System::Char.ancestors
