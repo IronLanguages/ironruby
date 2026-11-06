@@ -136,7 +136,7 @@ namespace IronRuby.Runtime {
         private static object _childProcessExitStatus;
 
         /// <summary>
-        /// $/, $-O
+        /// $/, $-0
         /// </summary>
         private MutableString _inputSeparator;
 
@@ -812,14 +812,12 @@ namespace IronRuby.Runtime {
 
             DefineGlobalVariableNoLock("stdin", Runtime.GlobalVariables.InputStream);
             DefineGlobalVariableNoLock("stdout", Runtime.GlobalVariables.OutputStream);
-            DefineGlobalVariableNoLock("defout", Runtime.GlobalVariables.OutputStream);
             DefineGlobalVariableNoLock("stderr", Runtime.GlobalVariables.ErrorOutputStream);
 
             DefineGlobalVariableNoLock("LOADED_FEATURES", Runtime.GlobalVariables.LoadedFiles);
             DefineGlobalVariableNoLock("LOAD_PATH", Runtime.GlobalVariables.LoadPath);
             DefineGlobalVariableNoLock("-I", Runtime.GlobalVariables.LoadPath);
             DefineGlobalVariableNoLock("-0", Runtime.GlobalVariables.InputSeparator);
-            DefineGlobalVariableNoLock("-O", Runtime.GlobalVariables.InputSeparator);
             DefineGlobalVariableNoLock("-a", new ReadOnlyGlobalVariableInfo(RubyOptions.AutoSplit));
             DefineGlobalVariableNoLock("-l", new ReadOnlyGlobalVariableInfo(RubyOptions.ChopLines));
             DefineGlobalVariableNoLock("-p", new ReadOnlyGlobalVariableInfo(RubyOptions.PrintEachLine));
@@ -835,23 +833,15 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("DEBUG", debug);
             DefineGlobalVariableNoLock("-d", debug);
 
+            // No $defout (gone since 1.9) or $-O (never an MRI global): ordinary globals, nil until assigned.
+
             // $=: removed from Ruby long ago, but still defined so that reading or writing it
             // produces the deprecation warning rather than an unknown-global nil.
             DefineGlobalVariableNoLock("=", Runtime.GlobalVariables.IgnoreCase);
 
             // $SAFE is an ordinary global since Ruby 3.0, so it is not defined here.
 
-            try {
-                TrySetCurrentProcessVariables();
-            } catch (SecurityException) {
-                // nop
-            }
-        }
-
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2122:DoNotIndirectlyExposeMethodsWithLinkDemands")]
-        private void TrySetCurrentProcessVariables() {
-            Process process = Process.GetCurrentProcess();
-            DefineGlobalVariableNoLock(Symbols.CurrentProcessId, new ReadOnlyGlobalVariableInfo(process.Id));
+            DefineGlobalVariableNoLock(Symbols.CurrentProcessId, new ReadOnlyGlobalVariableInfo(Environment.ProcessId));
         }
 
         private void InitializeGlobalConstants() {
