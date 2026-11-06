@@ -152,7 +152,8 @@ namespace IronRuby.Builtins {
                     RubyUtils.CheckAsyncException();
                     continue;
                 }
-                throw new IOException("read failed", Marshal.GetHRForLastWin32Error());
+                // The error ReadFile left, not the last one: Leave's CloseHandle has run since.
+                throw new IOException("read failed (error " + error + ")", unchecked((int)0x80070000) | error);
             }
         }
 
