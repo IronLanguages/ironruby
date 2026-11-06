@@ -570,6 +570,7 @@ namespace IronRuby.Tests {
                 ClrPrimitiveNumericTypes1,
                 ClrArrays1,
                 ClrArrays2,
+                ClrArrays3,
                 ClrChar1,
                 ClrOperators1,
                 ClrOperators2,

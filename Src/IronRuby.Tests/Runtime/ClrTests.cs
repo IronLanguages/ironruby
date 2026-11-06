@@ -3712,6 +3712,28 @@ p System::Array[System::Byte].new(3, 1)
 ");
         }
 
+        /// <summary>
+        /// A CLR array does not grow: an index out of its bounds raises System::IndexOutOfRangeException, which is an IndexError.
+        /// </summary>
+        public void ClrArrays3() {
+            TestOutput(@"
+a = System::Array[Integer].new(2)
+begin
+  a[10] = 1
+rescue IndexError => e
+  p e.class, e.is_a?(StandardError)
+end
+p((a[-3] rescue $!.class))
+p System::IndexOutOfRangeException.superclass, a.length
+", @"
+System::IndexOutOfRangeException
+true
+System::IndexOutOfRangeException
+IndexError
+2
+");
+        }
+
         public void ClrChar1() {
             TestOutput(@"
 p System::Char.ancestors
