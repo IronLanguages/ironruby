@@ -18,7 +18,6 @@ using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
@@ -730,10 +729,6 @@ namespace IronRuby.Runtime {
 
         public static Exception/*!*/ CreateSystemCallError(string/*!*/ message, params object[] args) {
             return new ExternalException(FormatMessage(message, args));
-        }
-
-        public static Exception/*!*/ CreateSecurityError(string/*!*/ message, params object[] args) {
-            throw new SecurityException(FormatMessage(message, args));
         }
 
         public static Exception/*!*/ CreateEncodingCompatibilityError(RubyEncoding/*!*/ encoding1, RubyEncoding/*!*/ encoding2) {
