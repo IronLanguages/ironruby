@@ -350,14 +350,14 @@ namespace IronRuby.Builtins {
 
         private int WriteFileOnce(ReadOnlySpan<byte> buffer, bool mayBlock) {
             while (true) {
-                IntPtr thread = mayBlock ? Enter() : IntPtr.Zero;
+                // Registered even when it is not expected to wait: the room a non-blocking write
+                // measured can be taken by a blocking write here, or by a child process writing to
+                // the same pipe, before its WriteFile runs - and a close must still reach it then.
+                IntPtr thread = Enter();
                 bool wasBlocked = mayBlock && RubyUtils.EnterNativeWait();
                 int written, error;
                 bool ok;
                 try {
-                    if (!mayBlock && _closed) {
-                        throw ClosedInAnotherThread();
-                    }
                     unsafe {
                         fixed (byte* p = buffer) {
                             ok = WriteFile(SafeFileHandle, p, buffer.Length, out written, IntPtr.Zero);
@@ -367,8 +367,8 @@ namespace IronRuby.Builtins {
                 } finally {
                     if (mayBlock) {
                         RubyUtils.ExitNativeWait(wasBlocked);
-                        Leave(thread);
                     }
+                    Leave(thread);
                 }
 
                 if (ok) {
