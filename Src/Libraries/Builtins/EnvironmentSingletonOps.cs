@@ -45,7 +45,9 @@ namespace IronRuby.Builtins {
                 encoding = null;
             }
 
-            return MutableString.Create(str, encoding ?? context.GetPathEncoding()).Freeze();
+            // (on Windows the environment is Unicode, and MRI reads it as UTF-8, the filesystem's)
+            return MutableString.Create(str, encoding ??
+                (System.IO.Path.DirectorySeparatorChar == '\\' ? context.GetPathEncoding() : context.RubyOptions.LocaleEncoding)).Freeze();
         }
 
         private static void SetEnvironmentVariable(RubyContext/*!*/ context, string/*!*/ name, string value) {

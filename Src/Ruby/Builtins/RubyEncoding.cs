@@ -383,6 +383,62 @@ namespace IronRuby.Builtins {
             }
         }
 
+        private static string _localeCharmap;
+        private static bool _localeCharmapRead;
+
+        /// <summary>
+        /// The codeset of the locale the environment names (LC_ALL, LC_CTYPE, LANG), as the C
+        /// library spells it - what MRI's Encoding.locale_charmap answers and its locale encoding
+        /// is named by. A locale that is not installed is the C locale, "ANSI_X3.4-1968" on glibc,
+        /// just as for MRI, which reads it the same way. Null where there is no nl_langinfo.
+        /// </summary>
+        public static string LocaleCharmap {
+            get {
+                if (!_localeCharmapRead) {
+                    _localeCharmap = ReadLocaleCharmap();
+                    _localeCharmapRead = true;
+                }
+                return _localeCharmap;
+            }
+        }
+
+        private static string ReadLocaleCharmap() {
+            int category, codeset;
+            if (OperatingSystem.IsLinux()) {
+                category = 0;    // LC_CTYPE
+                codeset = 14;    // CODESET
+            } else if (OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD()) {
+                category = 2;
+                codeset = 0;
+            } else {
+                return null;
+            }
+
+            try {
+                // The process's own locale is put back afterwards: MRI sets LC_CTYPE for good, but
+                // .NET has its own idea of culture and nothing else here reads the C locale.
+                string saved = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(setlocale(category, null));
+                if (setlocale(category, "") == IntPtr.Zero) {
+                    setlocale(category, "C");
+                }
+                string result = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(nl_langinfo(codeset));
+                if (saved != null) {
+                    setlocale(category, saved);
+                }
+                return String.IsNullOrEmpty(result) ? null : result;
+            } catch (DllNotFoundException) {
+                return null;
+            } catch (EntryPointNotFoundException) {
+                return null;
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("libc")]
+        private static extern IntPtr setlocale(int category, string locale);
+
+        [System.Runtime.InteropServices.DllImport("libc")]
+        private static extern IntPtr nl_langinfo(int item);
+
         private static NameFlags GetFlags(int codepage) {
             NameEntry entry;
             return _encodingsByCodePage.TryGetValue(codepage, out entry) ? entry.Flags : NameFlags.None;

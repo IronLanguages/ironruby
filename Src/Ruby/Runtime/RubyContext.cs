@@ -683,7 +683,6 @@ namespace IronRuby.Runtime {
             // code page, which stays the locale encoding - and ARGV is in it too; a .NET argument
             // is Unicode, so nothing is lost.
             bool windows = Path.DirectorySeparatorChar == '\\';
-            _inputProvider = new RubyInputProvider(this, _options.Arguments, windows ? RubyEncoding.UTF8 : _options.LocaleEncoding);
             _defaultExternalEncoding = _options.DefaultEncoding ?? (windows ? RubyEncoding.UTF8 : _options.LocaleEncoding);
             // -E / --encoding, resolved here rather than in the options parser because looking an
             // encoding up by its Ruby name needs a context. It overrides both -K and the locale:
@@ -694,6 +693,7 @@ namespace IronRuby.Runtime {
             if (_options.InternalEncodingName != null) {
                 DefaultInternalEncoding = GetRubyEncoding(_options.InternalEncodingName);
             }
+            _inputProvider = new RubyInputProvider(this, _options.Arguments, CommandLineArgumentEncoding);
             _globalScope = DomainManager.Globals;
             _loader = new Loader(this);
             _emptyScope = new RubyTopLevelScope(this);            
@@ -711,8 +711,9 @@ namespace IronRuby.Runtime {
             _itemSeparator = null;
             _mainThread = Thread.CurrentThread;
             
+            // $0 is in the locale's encoding, whatever -K and -E make of the filesystem's (MRI)
             if (_options.MainFile != null) {
-                CommandLineProgramPath = EncodePath(_options.MainFile);
+                CommandLineProgramPath = EncodePath(_options.MainFile, _options.LocaleEncoding);
             }
 
             if (_options.Verbosity <= 0) {
@@ -984,6 +985,17 @@ namespace IronRuby.Runtime {
                 case Architecture.Arm64: return darwin ? "arm64" : "aarch64";
                 case Architecture.Arm: return "arm";
                 default: return "i386";
+            }
+        }
+
+        /// <summary>
+        /// MRI makes ARGV of external strings: in the default external encoding, transcoded to the
+        /// default internal one when there is one - so -Ke makes them EUC-JP, though the locale
+        /// is not.
+        /// </summary>
+        private RubyEncoding/*!*/ CommandLineArgumentEncoding {
+            get {
+                return Path.DirectorySeparatorChar == '\\' ? RubyEncoding.UTF8 : (DefaultInternalEncoding ?? _defaultExternalEncoding);
             }
         }
 
@@ -3760,10 +3772,6 @@ namespace IronRuby.Runtime {
         }
 
         internal static MutableString/*!*/ EncodePath(string/*!*/ path, RubyEncoding/*!*/ encoding) {
-            var result = MutableString.Create(path, encoding);
-            if (result.ContainsInvalidCharacters()) {
-
-            }
             try {
                 return MutableString.Create(path, encoding).CheckEncoding();
             } catch (EncoderFallbackException e) {
@@ -4123,8 +4131,8 @@ namespace IronRuby.Runtime {
                 }
             }
 
-            CommandLineProgramPath = (mainFile != null) ? EncodePath(mainFile) : null;
-            _inputProvider.ReplaceCommandLineArguments(_options.Arguments, _options.LocaleEncoding);
+            CommandLineProgramPath = (mainFile != null) ? EncodePath(mainFile, _options.LocaleEncoding) : null;
+            _inputProvider.ReplaceCommandLineArguments(_options.Arguments, CommandLineArgumentEncoding);
 
             // The prelude keeps the $0 the program started with for Process.argv0; it was nil then.
             object process;
