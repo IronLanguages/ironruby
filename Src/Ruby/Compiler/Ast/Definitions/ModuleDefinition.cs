@@ -125,7 +125,8 @@ namespace IronRuby.Compiler.Ast {
             var bodyResult = Ast.Variable(typeof(object), "#result");
             var moduleFrame = gen.GetEnclosingModuleFrame();
 
-            var bodyLambda = Ast.Lambda<Func<RubyScope, RubyModule, object>>(
+            string encodedName = RubyStackTraceBuilder.EncodeMethodName(frameLabel, gen.SourcePath, Location, gen.DebugMode);
+            var bodyLambda = Ast.Lambda<Func<RubyScope, RubyModule, object>>(new CompiledFrameExpression(
                 Ast.Block(new[] { bodyResult },
                     scope.CreateScope(
                         scopeVariable,
@@ -148,8 +149,8 @@ namespace IronRuby.Compiler.Ast {
                         )
                     ),
                     bodyResult
-                ),
-                RubyStackTraceBuilder.EncodeMethodName(frameLabel, gen.SourcePath, Location, gen.DebugMode),
+                ), encodedName, Location.Start.Line),
+                encodedName,
                 new[] { parentParameter, selfParameter }
             );
             

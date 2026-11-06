@@ -314,13 +314,14 @@ namespace IronRuby.Compiler.Ast {
             }
 
             var dispatcher = Ast.Constant(blockDispatcher, typeof(BlockDispatcher));
+            string encodedName = RubyStackTraceBuilder.EncodeMethodName(BlockFrameLabel(gen), gen.SourcePath, Location, gen.DebugMode);
 
             return Ast.Coalesce(
                 (isLambda ? Methods.InstantiateLambda : Methods.InstantiateBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher),
                 (isLambda ? Methods.DefineLambda : Methods.DefineBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher,
                     BlockDispatcher.CreateLambda(
-                        body,
-                        RubyStackTraceBuilder.EncodeMethodName(BlockFrameLabel(gen), gen.SourcePath, Location, gen.DebugMode),
+                        new CompiledFrameExpression(body, encodedName, Location.Start.Line),
+                        encodedName,
                         parameters,
                         parameterCount,
                         PostParameterCount,
@@ -428,6 +429,12 @@ namespace IronRuby.Compiler.Ast {
                     } finally {
                         _inTraceHook--;
                     }
+                }
+                if (node is SourceLineMarker) {
+                    return node;
+                }
+                if (node is CompiledFrameExpression) {
+                    return base.VisitExtension(node);
                 }
                 NeedsScope = true;
                 return node;

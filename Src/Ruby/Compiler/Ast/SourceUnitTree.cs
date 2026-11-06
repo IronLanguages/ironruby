@@ -206,7 +206,8 @@ namespace IronRuby.Compiler.Ast {
 
             gen.LeaveSourceUnit();
 
-            return Ast.Lambda<T>(body, GetEncodedName(gen), parameters);
+            string encodedName = GetEncodedName(gen);
+            return Ast.Lambda<T>(new CompiledFrameExpression(body, encodedName, 0), encodedName, parameters);
         }
 
         private static string/*!*/ GetEncodedName(AstGenerator/*!*/ gen) {

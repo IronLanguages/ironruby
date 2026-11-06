@@ -493,6 +493,11 @@ namespace IronRuby.Runtime {
                 message = StripSystemCallErrorPrefix(exceptionClass, message);
             }
 
+            // The new exception is never thrown and has no trace of its own: it gets the one the thrown exception has come by
+            // so far (an Errno raised by a library method had none at all when rescued). Taken before "new" runs Ruby code,
+            // which would reuse the PrecompiledFrames slots of the compiled frames the exception left (and their lines).
+            bool captured = instanceData.CaptureTrace(scope);
+
             var site = exceptionClass.NewSite;
             Exception newException;
             try {
@@ -506,10 +511,6 @@ namespace IronRuby.Runtime {
             if (newException == null) {
                 newException = RubyExceptions.CreateTypeError("exception object expected");
             }
-
-            // The new exception was never thrown and has no trace of its own: it gets the one the thrown exception has come by
-            // so far (an Errno raised by a library method had none at all when rescued).
-            bool captured = instanceData.CaptureTrace(scope);
 
             var newInstanceData = GetInstance(newException);
             

@@ -33,6 +33,10 @@ namespace IronRuby.Runtime {
         private readonly RubyEncoding/*!*/ _encoding;
         private IList<InterpretedFrameInfo> _interpretedFrames;
         private int _interpretedFrameIndex;
+        // The lines of the compiled frames (see CompiledFrameExpression), outermost first; a compiled frame of the trace is
+        // matched with the innermost one of its name not matched yet.
+        private Precompiled.PrecompiledFrames.Frame[] _compiledFrames;
+        private int _compiledFrameIndex;
         // Frames reported with the source info of the next frame out that has its own: a library
         // method's, and a core method written in Ruby (see IsInternalFile). Innermost first.
         private readonly List<string>/*!*/ _deferredMethodNames = new List<string>();
@@ -63,12 +67,14 @@ namespace IronRuby.Runtime {
             // Compiled trace: contains frames starting with the throw site up to the first filter/catch that the exception was caught by:
             StackTrace throwSiteTrace = GetClrStackTrace(exception, _needsClrFileInfo);
             _interpretedFrames = GetInterpretedFrames(exception);
+            SetCompiledFrames(Precompiled.PrecompiledFrames.CaptureLines(true));
             AddExceptionBacktrace(throwSiteTrace, catchSiteTrace, isCatchSiteInterpreted);
         }
 
         private RubyStackTraceBuilder(CapturedTrace/*!*/ captured)
             : this(captured.Context, captured.Encoding) {
             _interpretedFrames = captured.InterpretedFrames;
+            SetCompiledFrames(captured.CompiledFrames);
             if (captured.IsCatchSiteClr) {
                 AddClrCaughtBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace);
             } else {
@@ -119,6 +125,7 @@ namespace IronRuby.Runtime {
             internal readonly StackTrace/*!*/ ThrowSiteTrace;
             internal readonly StackTrace CatchSiteTrace;
             internal readonly IList<InterpretedFrameInfo> InterpretedFrames;
+            internal readonly Precompiled.PrecompiledFrames.Frame[] CompiledFrames;
             internal readonly bool IsCatchSiteInterpreted;
             internal readonly bool IsCatchSiteClr;
 
@@ -129,6 +136,8 @@ namespace IronRuby.Runtime {
                 ThrowSiteTrace = GetClrStackTrace(exception, NeedsClrFileInfo(context));
                 // the interpreter's frames are saved on the exception once, and raise clears them:
                 InterpretedFrames = GetInterpretedFrames(exception);
+                // the compiled frames' lines change as they run on, and the frames it has left are reused by the next call:
+                CompiledFrames = Precompiled.PrecompiledFrames.CaptureLines(true);
                 CatchSiteTrace = catchSiteTrace;
                 IsCatchSiteInterpreted = isCatchSiteInterpreted;
             }
@@ -179,6 +188,7 @@ namespace IronRuby.Runtime {
             _interpretedFrames = InterpretedFrame.CurrentFrame.Value != null ?
                 new List<InterpretedFrameInfo>(InterpretedFrame.CurrentFrame.Value.GetStackTraceDebugInfo()) :
                 null;
+            SetCompiledFrames(Precompiled.PrecompiledFrames.CaptureLines(false));
 
             AddBacktrace(trace.GetFrames(), skipFrames, false);
         }
@@ -259,6 +269,25 @@ namespace IronRuby.Runtime {
         }
 
         private const int MaxThreadBacktraceDepth = 10000;
+
+        private void SetCompiledFrames(Precompiled.PrecompiledFrames.Frame[] frames) {
+            _compiledFrames = frames;
+            _compiledFrameIndex = (frames != null) ? frames.Length - 1 : -1;
+        }
+
+        /// <summary>
+        /// The line of a frame of a compiled lambda: of the innermost compiled frame of that name not matched yet, which
+        /// is the next one out, or 0 if there is none.
+        /// </summary>
+        private int TakeCompiledFrameLine(string/*!*/ encodedName) {
+            for (int i = _compiledFrameIndex; i >= 0; i--) {
+                if (String.Equals(_compiledFrames[i].Name, encodedName, StringComparison.Ordinal)) {
+                    _compiledFrameIndex = i - 1;
+                    return _compiledFrames[i].Line;
+                }
+            }
+            return 0;
+        }
 
         /// <summary>
         /// The file and line of the innermost Ruby frame, taken from the interpreter's own frame
@@ -388,6 +417,7 @@ namespace IronRuby.Runtime {
         // `require' of gem_compat.rb catching a LoadError dropped the frame of the code calling require, once that block was
         // compiled - from the start with the precompiled startup library).
         private void AddBacktrace(IEnumerable<StackFrame> stackTrace, int skipFrames, bool skipInterpreterRunMethod, bool skipCompiledCatchSite) {
+            bool skippedAny = false;
             if (stackTrace != null) {
                 foreach (var frame in InterpretedFrame.GroupStackFrames(stackTrace)) {
                     string methodName, file;
@@ -453,7 +483,13 @@ namespace IronRuby.Runtime {
                     }
 
                     if (!_keepInternalFrames && IsInternalFrameFile(file)) {
-                        AddInternalFrame(methodName);
+                        // Above the first frame reported, the frames it drops still count for caller(n): a method of the prelude
+                        // skips its own frame that way (Kernel#caller_locations calls caller(n + 1)), and Thread#backtrace, which
+                        // calls caller_locations, dropped that frame - so its caller's went instead.
+                        int dropped = AddInternalFrame(methodName);
+                        if (_trace.Count == 0 && !skippedAny) {
+                            skipFrames = Math.Max(0, skipFrames - dropped);
+                        }
                         continue;
                     }
 
@@ -462,6 +498,7 @@ namespace IronRuby.Runtime {
                             _trace.Add(MutableString.Create(FormatFrame(file, line, deferred), _encoding));
                         } else {
                             skipFrames--;
+                            skippedAny = true;
                         }
                     }
                     _deferredMethodNames.Clear();
@@ -471,6 +508,7 @@ namespace IronRuby.Runtime {
                         _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
                     } else {
                         skipFrames--;
+                        skippedAny = true;
                     }
                 }
             }
@@ -491,10 +529,12 @@ namespace IronRuby.Runtime {
         /// Enumerable#__extreme_by__, Math.__ir_sqrt__ - the Ruby half of a library method), which MRI writes as a C function
         /// the method calls directly.
         /// </summary>
-        private void AddInternalFrame(string methodName) {
+        // Returns how many of the deferred frames it dropped.
+        private int AddInternalFrame(string methodName) {
             if (!IsInternalMethodFrame(methodName)) {
-                return;
+                return 0;
             }
+            int deferred = _deferredMethodNames.Count;
             string owner, name;
             SplitLabel(methodName, out owner, out name);
 
@@ -512,9 +552,11 @@ namespace IronRuby.Runtime {
             }
             _libraryRun = 0;
 
+            int dropped = deferred - _deferredMethodNames.Count;
             if (!IsHelperMethodName(name)) {
                 _deferredMethodNames.Add(methodName);
             }
+            return dropped;
         }
 
         // "Enumerable#map" -> ("Enumerable", "map"); "Math.sqrt" -> ("Math", "sqrt"); "foo" -> (null, "foo")
@@ -594,14 +636,17 @@ namespace IronRuby.Runtime {
                 Precompiled.PrecompiledCode.RebaseFrameFile(method, ref fileName);
                 if (sourceLine == 0) {
                     RubyMethodDebugInfo debugInfo;
+                    int mappedLine = 0;
                     if (RubyMethodDebugInfo.TryGet(method, out debugInfo)) {
                         var ilOffset = frame.GetILOffset();
                         if (ilOffset >= 0) {
-                            var mappedLine = debugInfo.Map(ilOffset);
-                            if (mappedLine != 0) {
-                                line = mappedLine;
-                            }
+                            mappedLine = debugInfo.Map(ilOffset);
                         }
+                    } else if (_compiledFrames != null) {
+                        mappedLine = TakeCompiledFrameLine(method.Name);
+                    }
+                    if (mappedLine > 0) {
+                        line = mappedLine;
                     }
                 }
 
