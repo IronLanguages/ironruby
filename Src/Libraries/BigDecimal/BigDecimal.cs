@@ -2774,21 +2774,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return hash;
         }
         #endregion
-
-        //#region Conversion
-        //public static implicit operator BigDecimal/*!*/(int i) {
-        //    Config dummy = new Config();
-        //    return Create(dummy, i.ToString());
-        //}
-        //public static implicit operator BigDecimal/*!*/(BigInteger/*!*/ i) {
-        //    Config dummy = new Config();
-        //    return Create(dummy, i.ToString());
-        //}
-        //public static implicit operator BigDecimal/*!*/(double d) {
-        //    Config dummy = new Config();
-        //    return Create(dummy, d.ToString());
-        //}
-        //#endregion
     }
 
 }
