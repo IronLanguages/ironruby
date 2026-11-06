@@ -713,6 +713,7 @@ namespace IronRuby.Tests {
                 Errno_PlatformTable1,
                 Errno_SocketCalls1,
                 Marshal_Undumpable1,
+                Zlib_GunzipErrors1,
 
                 ClassVariables1,
                 UnqualifiedConstants2,

@@ -12573,11 +12573,6 @@ namespace IronRuby.StandardLibrary.Zlib {
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.DeflateString)
             );
             
-            DefineLibraryMethod(module, "gunzip", 0x21, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zlib.Zlib.Gunzip)
-            );
-            
             DefineLibraryMethod(module, "gzip", 0x21, 
                 0x00020004U, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zlib.Zlib.Gzip)

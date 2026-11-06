@@ -984,5 +984,52 @@ no _dump_data is defined for class Thread::Mutex
 no _dump_data is defined for class Fiber
 ");
         }
+
+        /// <summary>
+        /// Zlib.gunzip reports a bad gzip string with GzipFile's errors and MRI's messages, not the zlib
+        /// stream's ("incorrect header check", "buffer error"); Zlib::Inflate.inflate of a stream that
+        /// stops short is a BufError rather than the part that did inflate.
+        /// </summary>
+        public void Zlib_GunzipErrors1() {
+            TestOutput(@"
+require 'ruby4'
+require 'zlib'
+require 'stringio'
+good = Zlib.gzip('hello')
+def t
+  r = yield
+  puts ""ok #{r}""
+rescue Zlib::Error => e
+  puts ""#{e.class}: #{e.message}""
+end
+t { Zlib.gunzip('') }
+t { Zlib.gunzip('hello world, not gzip') }
+t { s = good.dup; s.setbyte(2, 7); Zlib.gunzip(s) }
+t { s = good.dup; s.setbyte(3, 0x02); Zlib.gunzip(s) }
+t { s = good.dup; s.setbyte(3, 0x20); Zlib.gunzip(s) }
+t { Zlib.gunzip(good[0, 15]) }
+t { Zlib.gunzip(good[0, good.size - 8]) }
+t { Zlib.gunzip(good[0, good.size - 4]) }
+t { s = good.dup; s.setbyte(s.size - 8, s.getbyte(s.size - 8) ^ 1); Zlib.gunzip(s) }
+t { s = good.dup; s.setbyte(s.size - 1, 1); Zlib.gunzip(s) }
+t { Zlib.gunzip(good + 'xyz') }
+t { s = good.dup; s.setbyte(3, 0x20); Zlib::GzipReader.new(StringIO.new(s)).read }
+t { Zlib::Inflate.inflate(Zlib::Deflate.deflate('hello')[0, 4]) }
+", @"
+Zlib::GzipFile::Error: unexpected end of string
+Zlib::GzipFile::Error: not in gzip format
+Zlib::GzipFile::Error: unsupported compression method 7
+Zlib::GzipFile::Error: multi-part gzip file is not supported
+Zlib::GzipFile::Error: encrypted gzip file is not supported
+Zlib::GzipFile::Error: unexpected end of file
+Zlib::GzipFile::NoFooter: footer is not found
+Zlib::GzipFile::Error: unexpected end of string
+Zlib::GzipFile::CRCError: invalid compressed data -- crc error
+Zlib::GzipFile::LengthError: invalid compressed data -- length error
+ok hello
+Zlib::GzipFile::Error: encrypted gzip file is not supported
+Zlib::BufError: buffer error
+");
+        }
     }
 }
