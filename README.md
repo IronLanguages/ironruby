@@ -515,9 +515,9 @@ Linux is the primary target and the one the numbers above are measured on. **Win
 `ir.cmd` and `iirb.cmd` run, and `spec/language` (2920 examples) and `spec/security` pass with
 **0 failures**. `spec/core` and `spec/library` are rougher there — symlinks/chmod/umask in
 `core/file`, fork and signals in `core/process`, and `IO.select`/`IO#wait` on pipes (which is
-`poll(2)`, so `core/io` and the socket suites hang rather than fail). Win32OLE and
-readline are not implemented on Windows; `IO.console` is nil, so irb falls back to its ANSI
-input path. Windows Forms and WPF (`require "System.Windows.Forms"`, `"PresentationFramework"`)
+`poll(2)`, so `core/io` and the socket suites hang rather than fail). Win32OLE is not
+implemented on Windows. `readline` is the readline gem over Reline, as on CRuby 4.0;
+`IO.console` is nil, so irb and Reline fall back to their ANSI input path. Windows Forms and WPF (`require "System.Windows.Forms"`, `"PresentationFramework"`)
 come from the Windows Desktop runtime, which `ir` references whenever it is built for Windows
 (`-p:IronRubyWindowsDesktop=false` leaves it out); on Linux and macOS they do not exist.
 [`Samples/Notepad`](Samples/Notepad/notepad.rb) is Windows Notepad written that way, in Ruby
@@ -672,8 +672,10 @@ below), which the whole-suite numbers on Linux do not need:
 
 Where the Windows errors are: `core/file` (113) and `core/filetest` (8) are symlinks,
 `chmod`/`umask` and the other Unix file metadata; `core/process` (36 failures, 15 errors) is
-`fork`, process groups, uid/gid and signals; `library/win32ole` (114) and `library/readline`
-(25) are libraries IronRuby does not implement and whose specs only run on Windows;
+`fork`, process groups, uid/gid and signals; `library/win32ole` (114) is a library IronRuby
+does not implement and whose specs only run on Windows; `library/readline` (25) was the
+old rb-readline, since replaced by the Reline-based readline gem CRuby ships, whose specs
+are skipped there as they are on CRuby;
 `library/zlib` (3 errors, and 2 failures on .NET 10) is the zlib below. `core/objectspace` needs
 `-X:ObjectSpace`, as on Linux.
 

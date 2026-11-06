@@ -75,10 +75,10 @@ namespace IronRuby.Runtime {
 
         private const string MriVersionString = "4.0.0";
 
-        // Names the site directory (ruby/site_ruby/1.9.1, empty as shipped), as
-        // RbConfig's ruby_version does. The standard library itself is ruby/4.0.
+        // RbConfig's ruby_version, "4.0.0" as in CRuby 4.0: names the site directory
+        // (ruby/site_ruby/4.0.0, empty as shipped). The standard library itself is ruby/4.0.
         public string/*!*/ StandardLibraryVersion {
-            get { return "1.9.1"; }
+            get { return "4.0.0"; }
         }
 
         public string/*!*/ MriReleaseDate {

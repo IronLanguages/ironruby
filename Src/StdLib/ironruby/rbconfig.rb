@@ -31,9 +31,13 @@ module RbConfig
   # (MRI: "These directories have no meanings before the installation").
   TOPDIR = File.basename(libdir) == "Lib" ? File.dirname(libdir) : nil
 
+  # DESTDIR on make install.
+  DESTDIR = '' unless defined? DESTDIR
+
   windows = RUBY_PLATFORM =~ /mswin|mingw/
 
   CONFIG = {}
+  CONFIG["DESTDIR"] = DESTDIR
   CONFIG["MAJOR"], CONFIG["MINOR"], CONFIG["TEENY"] = RUBY_VERSION.split('.')
   CONFIG["PATCHLEVEL"] = RUBY_PATCHLEVEL.to_s
   CONFIG["RUBY_PROGRAM_VERSION"] = RUBY_VERSION.dup
@@ -73,14 +77,17 @@ module RbConfig
 
   # architecture
   clr_version = "#{System::Environment.Version.Major}.#{System::Environment.Version.Minor}"
-  CONFIG["arch"] = arch = "universal-dotnet#{clr_version}" # Not strictly true. For example, while running a .NET 2.0 version of IronRuby on .NET 4
+  # The .NET runtime IronRuby is running on, not the framework it was compiled for: the
+  # net8.0 build answers "universal-dotnet10.0" under the .NET 10 runtime.
+  CONFIG["arch"] = arch = "universal-dotnet#{clr_version}"
   CONFIG["sitearch"] = arch.dup
 
   # std lib
-  # Still 1.9.1: the version names the site directory (site_ruby/1.9.1, first on $LOAD_PATH
-  # and empty as shipped). The standard library itself is ruby/4.0
-  # (rubylibdir below) and gems go under gems/4.0.0 (rubygems/defaults/ironruby.rb).
-  CONFIG["ruby_version"] = stdlib_version = "1.9.1"
+  # The API version, "4.0.0" as in CRuby 4.0. It names the site and vendor directories
+  # (site_ruby/4.0.0 is first on $LOAD_PATH - Loader.cs - and empty as shipped) and the
+  # gem trees (gems/4.0.0, ~/.gem/ironruby/4.0.0). The standard library itself is
+  # ruby/4.0 (rubylibdir below).
+  CONFIG["ruby_version"] = stdlib_version = "#{CONFIG["MAJOR"]}.#{CONFIG["MINOR"]}.0"
   CONFIG["RUBY_BASE_NAME"] = ruby_base_name = "ruby"              # directory name
   CONFIG["datadir"] = datadir = "#{prefix}/share"
   CONFIG["rubylibprefix"] = rubylibprefix = "#{libdir}/#{ruby_base_name}"
@@ -185,6 +192,24 @@ module RbConfig
     end
     val.replace(newval) unless newval == val
     val
+  end
+
+  # As in MRI: updates +key+ in +mkconf+ with +val+, and every value of +conf+ that
+  # depends on it. Returns the updated keys, or nil if nothing changed.
+  def RbConfig.fire_update!(key, val, mkconf = MAKEFILE_CONFIG, conf = CONFIG) # :nodoc:
+    return if mkconf[key] == val
+    mkconf[key] = val
+    keys = [key]
+    deps = []
+    begin
+      re = Regexp.new("\\$\\((?:%1$s)\\)|\\$\\{(?:%1$s)\\}" % keys.join('|'))
+      deps |= keys
+      keys.clear
+      mkconf.each {|k,v| keys << k if re =~ v}
+    end until keys.empty?
+    deps.each {|k| conf[k] = mkconf[k].dup}
+    deps.each {|k| expand(conf[k])}
+    deps
   end
 
   # returns the absolute pathname of the ruby command.
