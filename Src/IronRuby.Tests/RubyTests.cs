@@ -860,6 +860,7 @@ namespace IronRuby.Tests {
                 Dir_ChdirRelative1,
                 File_ExpandTildeOrder1,
                 File_FlockReadpartialRlimit1,
+                File_PlatformConstants1,
                 Json_ControlCharacters1,
                 NetHttp_Tls1,
                 NetHttp_TlsVerifyCallback1,

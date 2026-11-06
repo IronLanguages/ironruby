@@ -224,8 +224,26 @@ namespace IronRuby.Builtins {
 
         #region Constants
 
+        /// <summary>
+        /// The value of a [RubyConstant] field the platform has no such constant for (File::DIRECT
+        /// on macOS, Fcntl::F_GETPIPE_SZ outside Linux): MRI leaves those undefined, so that
+        /// const_defined? can tell, rather than defining them as 0 or nil.
+        /// </summary>
+        public static readonly object Undefined = System.Reflection.Missing.Value;
+
+        /// <summary>
+        /// <paramref name="value"/> as a [RubyConstant], or <see cref="Undefined"/> where it is 0 -
+        /// the open(2) flags IOModeNative has no value for on this platform.
+        /// </summary>
+        public static object PlatformConstant(int value) {
+            return value != 0 ? (object)value : Undefined;
+        }
+
         // thread-safe:
         public static void SetBuiltinConstant(RubyModule/*!*/ module, string/*!*/ name, object value) {
+            if (value == Undefined) {
+                return;
+            }
             // TODO: hoist the lock?
             using (module.Context.ClassHierarchyLocker()) {
                 module.SetConstantNoMutateNoLock(name, value);
@@ -234,6 +252,9 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         public static void SetConstant(RubyModule/*!*/ module, string/*!*/ name, object value) {
+            if (value == Undefined) {
+                return;
+            }
             module.SetConstant(name, value);
         }
 

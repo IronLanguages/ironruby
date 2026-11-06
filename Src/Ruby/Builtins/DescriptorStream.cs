@@ -63,8 +63,6 @@ namespace IronRuby.Builtins {
         private static extern int sys_open(string path, int flags);
 
         private const int O_RDONLY = 0;
-        private const int O_DIRECTORY = 0x10000;
-        private const int O_CLOEXEC = 0x80000;
 
         /// <summary>
         /// open(2) of a directory for reading - which FileStream refuses and MRI's File.open
@@ -76,7 +74,7 @@ namespace IronRuby.Builtins {
             }
             int fd;
             try {
-                fd = sys_open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                fd = sys_open(path, O_RDONLY | IOModeNative.Directory | IOModeNative.CloseOnExec);
             } catch (DllNotFoundException) {
                 return null;
             } catch (EntryPointNotFoundException) {
@@ -96,7 +94,6 @@ namespace IronRuby.Builtins {
         private const int EISDIR = 21;
         private const int F_GETFL = 3;
         private const int F_SETFL = 4;
-        private const int O_NONBLOCK = 0x800;
 
         private readonly System.Threading.ManualResetEvent _closing = new System.Threading.ManualResetEvent(false);
         private int _descriptor;
@@ -392,8 +389,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         private void SetNonBlocking() {
             int flags = sys_fcntl(_descriptor, F_GETFL, 0);
-            if (flags >= 0 && (flags & O_NONBLOCK) == 0) {
-                sys_fcntl(_descriptor, F_SETFL, flags | O_NONBLOCK);
+            if (flags >= 0 && (flags & IOModeNative.NonBlocking) == 0) {
+                sys_fcntl(_descriptor, F_SETFL, flags | IOModeNative.NonBlocking);
             }
         }
 

@@ -21,7 +21,8 @@ namespace IronRuby.StandardLibrary.FileControl {
     [RubyModule("Fcntl")]
     public class Fcntl {
 
-        // The commands are the Linux ones: IO#fcntl hands them to fcntl(2) as they are.
+        // The platform's own commands: IO#fcntl hands them to fcntl(2) as they are. The first five
+        // are the same on every Unix; the record locks are not.
         [RubyConstant]
         public const int F_DUPFD = 0;
 
@@ -38,25 +39,32 @@ namespace IronRuby.StandardLibrary.FileControl {
         public const int F_SETFL = 4;
 
         [RubyConstant]
-        public const int F_GETLK = 5;
+        public static readonly int F_GETLK = IOModeNative.Pick(5, 7, 11, 5);
 
         [RubyConstant]
-        public const int F_SETLK = 6;
+        public static readonly int F_SETLK = IOModeNative.Pick(6, 8, 12, 6);
 
         [RubyConstant]
-        public const int F_SETLKW = 7;
+        public static readonly int F_SETLKW = IOModeNative.Pick(7, 9, 13, 7);
 
         [RubyConstant]
         public const int FD_CLOEXEC = 1;
 
         [RubyConstant]
-        public const int F_RDLCK = 0;
+        public static readonly int F_RDLCK = IOModeNative.Pick(0, 1, 1, 0);
 
         [RubyConstant]
-        public const int F_WRLCK = 1;
+        public static readonly int F_WRLCK = IOModeNative.Pick(1, 3, 3, 1);
 
         [RubyConstant]
         public const int F_UNLCK = 2;
+
+        // Linux only.
+        [RubyConstant]
+        public static readonly object F_GETPIPE_SZ = LibraryInitializer.PlatformConstant(IOModeNative.Pick(1032, 0, 0, 0));
+
+        [RubyConstant]
+        public static readonly object F_SETPIPE_SZ = LibraryInitializer.PlatformConstant(IOModeNative.Pick(1031, 0, 0, 0));
 
         // The open(2) status flags, the platform's own values - fcntl(2) reads them back and
         // F_SETFL sets them, so they are the same numbers File::Constants uses.

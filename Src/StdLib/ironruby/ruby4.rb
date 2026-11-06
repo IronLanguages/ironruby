@@ -3847,13 +3847,6 @@ class UncaughtThrowError
 end
 class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)
 
-class IO
-  # Ruby defines NULL on IO; File inherits it. Defining it on File alone left
-  # IO::NULL undefined, which several specs and helpers reference. Windows has
-  # no /dev/null: there it is the NUL device, as in CRuby.
-  NULL = (File::ALT_SEPARATOR == "\\" ? "NUL" : "/dev/null") unless const_defined?(:NULL, false)
-end
-
 class << Dir
   # Dir.home / Dir.children / Dir.each_child / Dir.empty? postdate the 1.9 core.
   def home(user = nil)

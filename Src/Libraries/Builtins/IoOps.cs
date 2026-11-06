@@ -497,7 +497,7 @@ namespace IronRuby.Builtins {
                 int errno;
                 int fd = Posix.Open(directory, Posix.O_RDONLY | Posix.O_CLOEXEC, out errno);
                 if (fd < 0) {
-                    throw Posix.Error(errno, directory);
+                    throw Posix.Error(errno, directory, self.Context);
                 }
                 return self.Context.AllocateFileDescriptor(new DescriptorStream(fd, true, false, true));
             }
@@ -1322,7 +1322,7 @@ namespace IronRuby.Builtins {
                         throw error;
                     }
                 }
-                throw Posix.Error(errno, null);
+                throw Posix.Error(errno, null, self.Context);
             }
             if (str != null) {
                 str.Clear();

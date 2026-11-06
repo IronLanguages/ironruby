@@ -230,6 +230,22 @@ namespace IronRuby.Builtins {
             public readonly static int CREAT = IOModeNative.CreateIfNotExists;
             [RubyConstant]
             public readonly static int EXCL = IOModeNative.ErrorIfExists;
+            // The flags only some platforms have: undefined elsewhere, as in MRI.
+            [RubyConstant]
+            public readonly static object DIRECT = LibraryInitializer.PlatformConstant(IOModeNative.Direct);
+            [RubyConstant]
+            public readonly static object DSYNC = LibraryInitializer.PlatformConstant(IOModeNative.DataSync);
+            [RubyConstant]
+            public readonly static object NOATIME = LibraryInitializer.PlatformConstant(IOModeNative.NoAccessTime);
+            [RubyConstant]
+            public readonly static object NOFOLLOW = LibraryInitializer.PlatformConstant(IOModeNative.NoFollow);
+            [RubyConstant]
+            public readonly static object RSYNC = LibraryInitializer.PlatformConstant(IOModeNative.ReadSync);
+            [RubyConstant]
+            public readonly static object TMPFILE = LibraryInitializer.PlatformConstant(IOModeNative.TemporaryFile);
+            // IO and File see it through File::Constants, which both include.
+            [RubyConstant]
+            public readonly static MutableString NULL = MutableString.CreateAscii(IsWindows ? NUL_VALUE : "/dev/null").Freeze();
             [RubyConstant]
             public readonly static int FNM_CASEFOLD = 0x08;
             [RubyConstant]
@@ -291,7 +307,7 @@ namespace IronRuby.Builtins {
                 int errno;
                 if (fd >= 0) {
                     if (Posix.FChmod(fd, permission, out errno) != 0) {
-                        throw Posix.Error(errno, self.Path);
+                        throw Posix.Error(errno, self.Path, self.Context);
                     }
                     return 0;
                 }
@@ -313,11 +329,26 @@ namespace IronRuby.Builtins {
             return paths.Length;
         }
 
+        // MRI has lchmod wherever libc does: macOS changes a link's own mode, glibc 2.32+ changes
+        // anything else and raises ENOTSUP for a link. Windows has none (nor an older glibc).
         [RubyMethod("lchmod", RubyMethodAttributes.PublicSingleton)]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static int LChmod(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, [DefaultProtocol]int permission, params object[]/*!*/ paths) {
-            // Linux has no lchmod(2): the permission bits of a symbolic link are
-            // meaningless there, so there is nothing correct to do.
-            throw new IronRuby.Builtins.NotImplementedError("lchmod() function is unimplemented on this machine");
+            var context = self.Context;
+            if (IsWindows) {
+                throw new IronRuby.Builtins.NotImplementedError("lchmod() function is unimplemented on this machine");
+            }
+            foreach (var path in paths) {
+                string strPath = context.DecodePath(Protocols.CastToPath(toPath, path));
+                int errno;
+                if (Posix.LChmod(strPath, permission, out errno) != 0) {
+                    if (errno == RubyErrno.GetNumber("ENOSYS")) {
+                        throw new IronRuby.Builtins.NotImplementedError("lchmod() function is unimplemented on this machine");
+                    }
+                    throw Posix.Error(errno, strPath, context);
+                }
+            }
+            return paths.Length;
         }
 
         internal static void Chmod(string/*!*/ path, int permission) {
@@ -326,6 +357,11 @@ namespace IronRuby.Builtins {
                 if (Posix.Chmod(path, permission, out errno) != 0) {
                     throw Posix.Error(errno, path);
                 }
+                return;
+            }
+            if (!OperatingSystem.IsWindows()) {
+                // macOS, where Posix (statx, Linux errnos) is not available.
+                File.SetUnixFileMode(path, (UnixFileMode)(permission & 0xFFF));
                 return;
             }
             FileAttributes oldAttributes = File.GetAttributes(path);
@@ -357,7 +393,7 @@ namespace IronRuby.Builtins {
                 int errno;
                 if (fd >= 0) {
                     if (Posix.FChown(fd, uid, gid, out errno) != 0) {
-                        throw Posix.Error(errno, self.Path);
+                        throw Posix.Error(errno, self.Path, context);
                     }
                 }
             }
@@ -391,7 +427,7 @@ namespace IronRuby.Builtins {
                     int errno;
                     int rc = followLinks ? Posix.Chown(strPath, uid, gid, out errno) : Posix.LChown(strPath, uid, gid, out errno);
                     if (rc != 0) {
-                        throw Posix.Error(errno, strPath);
+                        throw Posix.Error(errno, strPath, self.Context);
                     }
                 } else if (!Exists(context, Protocols.CastToPath(toPath, path))) {
                     throw RubyExceptions.CreateENOENT("No such file or directory - {0}", strPath);
@@ -449,7 +485,7 @@ namespace IronRuby.Builtins {
                 // decide also gets EISDIR, EPERM and EACCES right without guessing.
                 int errno;
                 if (Posix.Unlink(strPath, out errno) != 0) {
-                    throw Posix.Error(errno, strPath);
+                    throw Posix.Error(errno, strPath, self.Context);
                 }
                 return 1;
             }
@@ -1186,7 +1222,7 @@ namespace IronRuby.Builtins {
                     return 0;
                 }
                 if (errno != Posix.EWouldBlock) {
-                    throw Posix.Error(errno, self.Path);
+                    throw Posix.Error(errno, self.Path, self.Context);
                 }
                 if (nonBlocking) {
                     // LOCK_NB on a locked file reports "would block" rather than raising
@@ -1376,7 +1412,7 @@ namespace IronRuby.Builtins {
             int errno;
             string target = Posix.ReadLink(strPath, out errno);
             if (target == null) {
-                throw Posix.Error(errno, strPath);
+                throw Posix.Error(errno, strPath, self.Context);
             }
             // MRI labels the link's bytes with the file system encoding even where they are not
             // valid in it (US-ASCII under the C locale), which other paths make BINARY
@@ -1406,7 +1442,7 @@ namespace IronRuby.Builtins {
             int errno;
             if (Posix.Link(strOld, strNew, out errno) != 0) {
                 // MRI: an existing target is reported by its own path, anything else by both paths.
-                throw Posix.Error(errno, errno == Posix.EEXIST ? strNew : "(" + strOld + ", " + strNew + ")");
+                throw Posix.Error(errno, errno == Posix.EEXIST ? strNew : "(" + strOld + ", " + strNew + ")", self.Context);
             }
             return 0;
         }
@@ -1425,7 +1461,7 @@ namespace IronRuby.Builtins {
 
             int errno;
             if (Posix.Symlink(strOld, strNew, out errno) != 0) {
-                throw Posix.Error(errno, errno == Posix.EEXIST ? strNew : "(" + strOld + ", " + strNew + ")");
+                throw Posix.Error(errno, errno == Posix.EEXIST ? strNew : "(" + strOld + ", " + strNew + ")", self.Context);
             }
             return 0;
         }
@@ -1443,7 +1479,7 @@ namespace IronRuby.Builtins {
 
             int errno;
             if (Posix.MkFifo(strPath, mode, out errno) != 0) {
-                throw Posix.Error(errno, strPath);
+                throw Posix.Error(errno, strPath, self.Context);
             }
             return 0;
         }
@@ -1491,23 +1527,23 @@ namespace IronRuby.Builtins {
                         if (last && !strict && errno == Posix.ENOENT) {
                             break;
                         }
-                        throw Posix.Error(errno, candidate);
+                        throw Posix.Error(errno, candidate, context);
                     }
 
                     if (data.FileType != Posix.S_IFLNK) {
                         if (!last && data.FileType != Posix.S_IFDIR) {
-                            throw Posix.Error(Posix.ENOTDIR, candidate);
+                            throw Posix.Error(Posix.ENOTDIR, candidate, context);
                         }
                         break;
                     }
 
                     if (++links > 32) {
-                        throw Posix.Error(Posix.ELOOP, candidate);
+                        throw Posix.Error(Posix.ELOOP, candidate, context);
                     }
 
                     string target = Posix.ReadLink(candidate, out errno);
                     if (target == null) {
-                        throw Posix.Error(errno, candidate);
+                        throw Posix.Error(errno, candidate, context);
                     }
 
                     if (target.StartsWith("/", StringComparison.Ordinal)) {
@@ -1674,7 +1710,7 @@ namespace IronRuby.Builtins {
 
                     int errno;
                     if (Posix.UTimes(strPath, times, followLinks, out errno) != 0) {
-                        throw Posix.Error(errno, strPath);
+                        throw Posix.Error(errno, strPath, self.Context);
                     }
                     continue;
                 }
@@ -1926,7 +1962,7 @@ namespace IronRuby.Builtins {
                 if (TryCreate(context, path, followLinks, out fsi, out errno)) {
                     return fsi;
                 }
-                throw Posix.Error(errno == 0 ? Posix.ENOENT : errno, path);
+                throw Posix.Error(errno == 0 ? Posix.ENOENT : errno, path, context);
             }
 
             internal static bool TryCreate(RubyContext/*!*/ context, string/*!*/ path, out FileSystemInfo result) {
