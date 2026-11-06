@@ -178,7 +178,7 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        [RubyMethod("each_without_generator")]
+        [RubyMethod("__each_without_generator__")]
         public static object Each(RubyScope/*!*/ scope, BlockParam/*!*/ block, Enumerator/*!*/ self) {
             return self._impl.Each(scope, block);
         }

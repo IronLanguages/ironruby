@@ -772,6 +772,44 @@ p D.new.public_methods(false), D.new.private_methods(false), D.new.methods(false
         }
 
         /// <summary>
+        /// The method lists come out as MRI's: the CLR members of a built-in's underlying type (Object.ReferenceEquals,
+        /// LocalJumpError#ExitValue, NilClass#GetType) and the __helpers__ a library defines are left out, though they
+        /// stay callable. A CLR type lists its members, and a program's own __foo__ is listed.
+        /// </summary>
+        public void MethodLists_Unlisted1() {
+            TestOutput(@"
+class A; end
+p A.singleton_methods, Object.singleton_methods(false)
+p LocalJumpError.instance_methods(false).sort, SystemExit.instance_methods(false).sort
+p Object.new.methods.grep(/\A[A-Z]/), nil.methods.grep(/\A[A-Z]/), A.methods.grep(/\A[A-Z]/)
+p Kernel.private_instance_methods.grep(/\A__ir/), Kernel.singleton_methods.grep(/\A__ir/)
+p Integer.singleton_methods.grep(/\A__/), Comparable.private_instance_methods.grep(/\A__/)
+class B; def __foo__; end; private def __bar__; end; end
+p B.instance_methods(false), B.private_instance_methods(false)
+p Object.new.GetHashCode.is_a?(Integer), nil.GetType.is_a?(System::Type), Object.ReferenceEquals(nil, nil)
+p System::Collections::ArrayList.instance_methods(false).include?(:add)
+", @"
+[]
+[]
+[:exit_value, :reason]
+[:status, :success?]
+[]
+[]
+[]
+[]
+[]
+[]
+[]
+[:__foo__]
+[:__bar__]
+true
+true
+true
+true
+");
+        }
+
+        /// <summary>
         /// const_get and friends walk a scoped name as MRI does: a malformed path names the whole
         /// path, a bad segment just that segment, each only once the segments before it resolve;
         /// a segment after the first does not see Object's constants through the module's

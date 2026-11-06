@@ -823,6 +823,7 @@ namespace IronRuby.Tests {
 
                 Scenario_ModuleOps_Methods,
                 InstanceMethods_NotInherited1,
+                MethodLists_Unlisted1,
                 ConstantPaths1,
                 Scenario_MainSingleton,
                 Time_LoadZone1,

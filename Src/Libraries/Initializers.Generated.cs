@@ -1472,6 +1472,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadEnumerator_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__each_without_generator__", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.Each)
+            );
+            
             DefineLibraryMethod(module, "__enum_init__", 0x52, 
                 0x0002000cU, 
                 new Func<IronRuby.Builtins.Enumerator, System.Object, System.String, IronRuby.Builtins.RubyArray, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.Enumerator.InitializeFrom)
@@ -1510,11 +1515,6 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "each", 0x51, 
                 0x80000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Collections.IList, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Enumerator, System.Object[], System.Object>(IronRuby.Builtins.Enumerator.EachFromCaller)
-            );
-            
-            DefineLibraryMethod(module, "each_without_generator", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.Each)
             );
             
             DefineLibraryMethod(module, "initialize", 0x52, 

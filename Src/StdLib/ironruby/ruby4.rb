@@ -312,12 +312,12 @@ module Enumerable
     self
   end unless method_defined?(:each_entry)
 
-  unless method_defined?(:each_with_index_without_args)
-    alias :each_with_index_without_args :each_with_index
+  unless method_defined?(:__each_with_index_without_args__)
+    alias :__each_with_index_without_args__ :each_with_index
 
     def each_with_index(*args, &block)
       return to_enum(:each_with_index, *args) { size if respond_to?(:size) } unless block
-      return each_with_index_without_args(&block) if args.empty?
+      return __each_with_index_without_args__(&block) if args.empty?
       index = 0
       each(*args) do |*values|
         block.call(__enum_item__(values), index)
@@ -330,11 +330,11 @@ module Enumerable
   # Ruby 2.5 gave the predicates an optional pattern, matched with #===.
   # The built-ins only know the block form, and because they are defined on
   # Enumerable they shadow rather than extend, so wrap them.
-  unless method_defined?(:all_without_pattern?)
-    alias :all_without_pattern? :all?
-    alias :any_without_pattern? :any?
-    alias :none_without_pattern? :none?
-    alias :one_without_pattern? :one?
+  unless method_defined?(:__all_without_pattern__?)
+    alias :__all_without_pattern__? :all?
+    alias :__any_without_pattern__? :any?
+    alias :__none_without_pattern__? :none?
+    alias :__one_without_pattern__? :one?
 
     def __check_pattern_args__(args, block = nil)
       if args.size > 1
@@ -350,7 +350,7 @@ module Enumerable
 
     def all?(*args, &block)
       __check_pattern_args__(args, block)
-      return all_without_pattern?(&block) if args.empty?
+      return __all_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return false unless pattern === __enum_item__(values) }
       true
@@ -358,7 +358,7 @@ module Enumerable
 
     def any?(*args, &block)
       __check_pattern_args__(args, block)
-      return any_without_pattern?(&block) if args.empty?
+      return __any_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return true if pattern === __enum_item__(values) }
       false
@@ -366,7 +366,7 @@ module Enumerable
 
     def none?(*args, &block)
       __check_pattern_args__(args, block)
-      return none_without_pattern?(&block) if args.empty?
+      return __none_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return false if pattern === __enum_item__(values) }
       true
@@ -374,7 +374,7 @@ module Enumerable
 
     def one?(*args, &block)
       __check_pattern_args__(args, block)
-      return one_without_pattern?(&block) if args.empty?
+      return __one_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       found = false
       each do |*values|
@@ -389,8 +389,8 @@ module Enumerable
   # The method-name form of #inject reports a bad name the way MRI does - by
   # inspecting the object rather than by naming its class - and takes at most
   # two arguments. A block alongside a method name is never called.
-  unless method_defined?(:inject_without_name_check)
-    alias :inject_without_name_check :inject
+  unless method_defined?(:__inject_without_name_check__)
+    alias :__inject_without_name_check__ :inject
 
     def inject(*args, &block)
       if args.size > 2 || (args.empty? && !block)
@@ -411,26 +411,26 @@ module Enumerable
           warn "given block not used", uplevel: 1
         end
       end
-      inject_without_name_check(*args, &block)
+      __inject_without_name_check__(*args, &block)
     end
     alias :reduce :inject
   end
 
   # min/max also grew an `n` form.
-  unless method_defined?(:min_without_count)
-    alias :min_without_count :min
-    alias :max_without_count :max
+  unless method_defined?(:__min_without_count__)
+    alias :__min_without_count__ :min
+    alias :__max_without_count__ :max
 
     def min(*args, &block)
       n = args.empty? ? nil : __count_arg__(args[0])
-      return min_without_count(&block) if n.nil?
+      return __min_without_count__(&block) if n.nil?
       sorted = block ? to_a.sort(&block) : to_a.sort
       sorted.first(n)
     end
 
     def max(*args, &block)
       n = args.empty? ? nil : __count_arg__(args[0])
-      return max_without_count(&block) if n.nil?
+      return __max_without_count__(&block) if n.nil?
       sorted = block ? to_a.sort(&block) : to_a.sort
       sorted.reverse.first(n)
     end
@@ -721,8 +721,8 @@ module Enumerable
 
   # #sort_by has to walk the receiver exactly once - the block may be expensive
   # or have side effects - which the decorate/sort/undecorate helper does.
-  unless method_defined?(:sort_by_without_enumerator)
-    alias :sort_by_without_enumerator :sort_by
+  unless method_defined?(:__sort_by_without_enumerator__)
+    alias :__sort_by_without_enumerator__ :sort_by
 
     def sort_by(&block)
       return to_enum(:sort_by) { size if respond_to?(:size) } unless block
@@ -732,26 +732,26 @@ module Enumerable
 
   # Neither of these can know how long the answer will be without running the
   # block, so their Enumerators report no size even when the receiver has one.
-  unless method_defined?(:take_while_without_enumerator)
-    alias :take_while_without_enumerator :take_while
-    alias :drop_while_without_enumerator :drop_while
+  unless method_defined?(:__take_while_without_enumerator__)
+    alias :__take_while_without_enumerator__ :take_while
+    alias :__drop_while_without_enumerator__ :drop_while
 
     def take_while(&block)
       return to_enum(:take_while) { nil } unless block
-      take_while_without_enumerator(&block)
+      __take_while_without_enumerator__(&block)
     end
 
     def drop_while(&block)
       return to_enum(:drop_while) { nil } unless block
-      drop_while_without_enumerator(&block)
+      __drop_while_without_enumerator__(&block)
     end
   end
 
   # Both return the receiver when they are given a block (they returned nil),
   # and both reject a slice size that cannot produce any slice at all.
-  unless method_defined?(:each_cons_without_self)
-    alias :each_cons_without_self :each_cons
-    alias :each_slice_without_self :each_slice
+  unless method_defined?(:__each_cons_without_self__)
+    alias :__each_cons_without_self__ :each_cons
+    alias :__each_slice_without_self__ :each_slice
 
     def __slice_size__(n, message)
       size = n
@@ -764,15 +764,15 @@ module Enumerable
 
     def each_cons(n, &block)
       n = __slice_size__(n, "invalid size")
-      return each_cons_without_self(n) unless block
-      each_cons_without_self(n, &block)
+      return __each_cons_without_self__(n) unless block
+      __each_cons_without_self__(n, &block)
       self
     end
 
     def each_slice(n, &block)
       n = __slice_size__(n, "invalid slice size")
-      return each_slice_without_self(n) unless block
-      each_slice_without_self(n, &block)
+      return __each_slice_without_self__(n) unless block
+      __each_slice_without_self__(n, &block)
       self
     end
   end
@@ -780,8 +780,8 @@ module Enumerable
   # An argument that is not an Array is taken by #to_ary if it has one and
   # otherwise iterated with #each - a Range or a lazy Enumerator zips fine.
   # Only something that can do neither is an error.
-  unless method_defined?(:zip_without_conversion)
-    alias :zip_without_conversion :zip
+  unless method_defined?(:__zip_without_conversion__)
+    alias :__zip_without_conversion__ :zip
 
     # An Integer Range whose #each is the built-in one yields begin, begin + 1, ... so the
     # element a row wants is worked out from its index. Going through Enumerator#next for
@@ -933,14 +933,14 @@ class Range
   # The built-in #first/#last only answer the no-argument form, and because they
   # are defined on Range they hide Enumerable#first(n) rather than falling
   # through to it - so `(0..Float::INFINITY).first(3)` was an ArgumentError.
-  unless method_defined?(:first_without_count)
-    alias :first_without_count :first
-    alias :last_without_count :last
+  unless method_defined?(:__first_without_count__)
+    alias :__first_without_count__ :first
+    alias :__last_without_count__ :last
 
     def first(*args)
       if args.empty?
         raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
-        return first_without_count
+        return __first_without_count__
       end
       raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
       n = __to_count__(args[0])
@@ -969,7 +969,7 @@ class Range
     def last(*args)
       if args.empty?
         raise RangeError, "cannot get the last element of endless range" if self.end.nil?
-        return last_without_count
+        return __last_without_count__
       end
       raise RangeError, "cannot get the last element of endless range" if self.end.nil?
       n = __to_count__(args[0])
@@ -2200,13 +2200,13 @@ end
 class Array
   # 1.9 added the count form of shift; the bundled core only has the no-arg one
   unless (begin; [1].shift(1); true; rescue ArgumentError; false; end)
-    alias :shift_without_count :shift
+    alias :__shift_without_count__ :shift
 
     def shift(*args)
       if args.size > 1
         raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
       end
-      return shift_without_count if args.empty?
+      return __shift_without_count__ if args.empty?
 
       # nil is an argument here, not the absence of one, and an object that is
       # not an Integer is asked for one exactly once - #self[0, count] would ask
@@ -2238,24 +2238,24 @@ end
 class Module
   # (method_defined? and its public_/private_/protected_ forms take `inherit' natively.)
   unless (begin; Module.const_defined?(:Module, true); true; rescue ArgumentError; false; end)
-    alias :const_defined_without_inherit? :const_defined?
+    alias :__const_defined_without_inherit__? :const_defined?
 
     def const_defined?(name, inherit = true)
-      return const_defined_without_inherit?(name) if inherit
+      return __const_defined_without_inherit__?(name) if inherit
       constants(false).include?(name.to_s.to_sym)
     end
   end
 
   unless (begin; Module.const_get(:Module, true); true; rescue ArgumentError; false; end)
-    alias :const_get_without_inherit :const_get
+    alias :__const_get_without_inherit__ :const_get
 
     def const_get(name, inherit = true)
-      return const_get_without_inherit(name) if inherit
+      return __const_get_without_inherit__(name) if inherit
       sym = name.to_s.to_sym
       unless constants(false).include?(sym)
         raise NameError, "uninitialized constant #{self}::#{sym}"
       end
-      const_get_without_inherit(name)
+      __const_get_without_inherit__(name)
     end
   end
 end
@@ -2542,7 +2542,7 @@ $LOAD_PATH.delete('.') if defined?($LOAD_PATH) && $LOAD_PATH.is_a?(Array)
 # argument-less #clone and refuse clone(freeze: false).
 module Kernel
   unless (begin; Object.new.clone(:freeze => nil); true; rescue ArgumentError; false; end)
-    alias :clone_without_options :clone
+    alias :__clone_without_options__ :clone
 
     # `clone(freeze: nil)` is the default (copy the frozen state), `freeze: true`
     # always freezes, `freeze: false` never does. The runtime's #clone always
@@ -2560,7 +2560,7 @@ module Kernel
 
       # A freeze: value that was actually given is handed on to #initialize_clone, and
       # decides whether the copy is frozen; without one the copy follows the original.
-      freeze.nil? ? clone_without_options : __ir_clone_with_freeze__(freeze)
+      freeze.nil? ? __clone_without_options__ : __ir_clone_with_freeze__(freeze)
     end
   end
 end
@@ -5518,7 +5518,7 @@ class Enumerator
         # #next reports as StopIteration#result.
         @generator.call(Yielder.new(&block))
       else
-        each_without_generator(&block)
+        __each_without_generator__(&block)
       end
     end
     private :__ir_each_impl__
@@ -6806,11 +6806,11 @@ class String
   # #chars and #bytes build the Array in C# (MutableStringOps); only #lines is still
   # an Enumerator there.
   unless "a".lines.is_a?(Array)
-    alias :lines_enumerator :lines
+    alias :__lines_enumerator__ :lines
 
     def lines(*args, &block)
-      return lines_enumerator(*args, &block) if block
-      lines_enumerator(*args).to_a
+      return __lines_enumerator__(*args, &block) if block
+      __lines_enumerator__(*args).to_a
     end
   end
 end

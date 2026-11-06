@@ -325,6 +325,9 @@ namespace IronRuby.Builtins {
         private Dictionary<string, RubyMemberInfo> _methods;
         private Action<RubyModule> _methodsInitializer;
 
+        // Names of the helpers the core prelude defines in this module for its own use (see IsUnlisted).
+        private HashSet<string> _preludeHelpers;
+
         // class variable table:
         private Dictionary<string, object> _classVariables;
 
@@ -2281,6 +2284,14 @@ namespace IronRuby.Builtins {
             InitializeMethodsNoLock();
             _methods[name] = method;
 
+            if (IsHelperName(name)) {
+                if (_context.Loader.IsLoadingCorePrelude) {
+                    (_preludeHelpers ??= new HashSet<string>()).Add(name);
+                } else {
+                    _preludeHelpers?.Remove(name);
+                }
+            }
+
             // A refinement is in no one's ancestors, so PrepareMethodUpdate reaches no class: the calls it
             // changes are those of the module it refines.
             if (_refinedModule != null) {
@@ -3280,6 +3291,56 @@ namespace IronRuby.Builtins {
 
                 return false;
             });
+        }
+
+        /// <summary>
+        /// Whether Module#instance_methods, Kernel#methods and the rest of that family leave out a member <paramref name="owner"/>
+        /// has - one that stays callable, but that MRI has no counterpart of, so that the lists come out as MRI's:
+        /// <list type="bullet">
+        /// <item>A CLR member of the type behind a Ruby built-in (a module that maps no names, see
+        /// <see cref="ModuleRestrictions.NoNameMapping"/>): Object#GetHashCode, Object.ReferenceEquals,
+        /// LocalJumpError#ExitValue - or a library method standing in for one (NilClass#GetType). A CLR type's own
+        /// members are listed: only the built-ins are Ruby's classes.</item>
+        /// <item>IronRuby's own helpers, whose names start with two underscores (__ir_inspect__, __cmp_operand__):
+        /// those a library defines with [RubyMethod], and those the core prelude (ruby4.rb and the files it
+        /// requires) defines, aliases or makes private while it loads. MRI's own methods of that shape are listed,
+        /// as is a method of that name that a program defines.</item>
+        /// </list>
+        /// </summary>
+        public static bool IsUnlisted(RubyModule/*!*/ owner, string/*!*/ name, RubyMemberInfo/*!*/ member) {
+            if (member.IsInteropMember || member is RubyLibraryMethodInfo && IsSystemObjectMethodName(name)) {
+                return (owner.Restrictions & ModuleRestrictions.NoNameMapping) != 0;
+            }
+
+            return IsHelperName(name) && (member is RubyLibraryMethodInfo || owner._preludeHelpers != null && owner._preludeHelpers.Contains(name));
+        }
+
+        private static bool IsSystemObjectMethodName(string/*!*/ name) {
+            switch (name) {
+                case "Equals":
+                case "GetHashCode":
+                case "GetType":
+                case "ToString":
+                case "ReferenceEquals":
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool IsHelperName(string/*!*/ name) {
+            if (!name.StartsWith("__", StringComparison.Ordinal)) {
+                return false;
+            }
+
+            switch (name) {
+                case "__send__":
+                case "__id__":
+                case "__method__":
+                case "__callee__":
+                case "__dir__":
+                    return false;
+            }
+            return true;
         }
 
         public void ForEachMember(bool inherited, RubyMethodAttributes attributes, Action<string/*!*/, RubyModule/*!*/, RubyMemberInfo/*!*/>/*!*/ action) {
