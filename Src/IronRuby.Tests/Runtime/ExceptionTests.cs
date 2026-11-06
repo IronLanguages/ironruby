@@ -810,6 +810,7 @@ Caught LoadError
         /// </summary>
         public void SystemCallErrorSubclass1() {
             TestOutput(@"
+require 'ruby4'
 class MyErr < SystemCallError; end
 class MyErr2 < SystemCallError; Errno = 7; end
 class E2 < Errno::ENOENT; end
