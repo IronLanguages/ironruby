@@ -1495,21 +1495,6 @@ class Hash
     raise TypeError, "no implicit conversion of #{args[0].nil? ? 'nil' : args[0].class} into Hash"
   end
 
-  def slice(*keys)
-    result = {}
-    keys.each { |k| result[k] = self[k] if key?(k) }
-    result
-  end unless method_defined?(:slice)
-
-  # #except builds a plain Hash: CRuby does not carry the default value or the
-  # default proc over to the result.
-  def except(*keys)
-    result = __result_hash__
-    each { |k, v| result[k] = v }
-    keys.each { |k| result.delete(k) }
-    result
-  end unless method_defined?(:except)
-
   def deconstruct_keys(keys)
     self
   end unless method_defined?(:deconstruct_keys)
@@ -1573,90 +1558,9 @@ module Math
   # MRI raises Math::DomainError out of Math.sqrt/log/... and Integer#digits.
   class DomainError < StandardError; end unless const_defined?(:DomainError)
 
-  class << self
-    alias :__ir_frexp__ :frexp
-
-    # frexp answered the magnitude for a negative argument - Math.frexp(-0.5)
-    # came back [0.5, 0] where MRI says [-0.5, 0] - and 0.0 came back with the
-    # smallest exponent instead of [0.0, 0].
-    def frexp(value)
-      value = ::Kernel.Float(value)
-      return [value, 0] if value == 0.0 || value.nan? || value.infinite?
-      fraction, exponent = __ir_frexp__(value.abs)
-      [value < 0 ? -fraction : fraction, exponent]
-    end
-  end
 end
 
 class Integer
-  # pow(n) is **, but pow(n, m) is modular exponentiation, which has to be done
-  # by squaring rather than by computing the full power and then taking it mod m.
-  # An explicit nil modulus is a TypeError like any other non-Integer one.
-  def pow(other, modulo = (no_modulo = true; nil))
-    return self**other if no_modulo
-    unless modulo.is_a?(::Integer) && other.is_a?(::Integer)
-      ::Kernel.raise(::TypeError, "Integer#pow() 2nd argument not allowed unless all arguments are integers")
-    end
-    ::Kernel.raise(::RangeError, "Integer#pow() 1st argument cannot be negative when 2nd argument specified") if other < 0
-    ::Kernel.raise(::ZeroDivisionError, "divided by 0") if modulo == 0
-    negative = modulo < 0
-    m = modulo.abs
-    result = 1
-    base = self % m
-    exponent = other
-    while exponent > 0
-      result = (result * base) % m if exponent.odd?
-      base = (base * base) % m
-      exponent >>= 1
-    end
-    result = result - m if negative && result != 0
-    result
-  end unless method_defined?(:pow)
-
-  def ceildiv(other)
-    -(-self / other)
-  end unless method_defined?(:ceildiv)
-
-  # Newton's method on integers: the largest i with i*i <= n.
-  def self.sqrt(n)
-    unless n.is_a?(::Integer)
-      unless n.respond_to?(:to_int)
-        ::Kernel.raise(::TypeError, "no implicit conversion of #{n.class} into Integer")
-      end
-      n = n.to_int
-    end
-    ::Kernel.raise(::Math::DomainError, 'Numerical argument is out of domain - "isqrt"') if n < 0
-    return n if n < 2
-    guess = 1 << ((n.bit_length + 1) / 2)
-    loop do
-      better = (guess + n / guess) / 2
-      break if better >= guess
-      guess = better
-    end
-    guess
-  end unless respond_to?(:sqrt)
-
-  def digits(base = 10)
-    unless base.is_a?(Integer)
-      unless base.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{base.nil? ? 'nil' : base.class} into Integer"
-      end
-      base = base.to_int
-    end
-    # MRI checks the receiver before the radix
-    raise Math::DomainError, "out of domain" if negative?
-    raise ArgumentError, "negative radix" if base < 0
-    raise ArgumentError, "invalid radix #{base}" if base < 2
-    return [0] if zero?
-    result = []
-    n = self
-    while n > 0
-      result << n % base
-      n /= base
-    end
-    result
-  end unless method_defined?(:digits)
-
   def positive?
     self > 0
   end unless method_defined?(:positive?)
@@ -1664,19 +1568,6 @@ class Integer
   def negative?
     self < 0
   end unless method_defined?(:negative?)
-
-end
-
-class Struct
-  def deconstruct
-    to_a
-  end unless method_defined?(:deconstruct)
-
-  def deconstruct_keys(keys)
-    result = {}
-    members.each { |m| result[m] = self[m] }
-    result
-  end unless method_defined?(:deconstruct_keys)
 end
 
 module Kernel
@@ -1700,7 +1591,6 @@ end
 # agrees with RUBY_VERSION up to IronRuby's own release counter, as it does in CRuby.
 RUBY_ENGINE_VERSION = IRONRUBY_VERSION[/\A\d+\.\d+\.\d+/].freeze unless defined?(RUBY_ENGINE_VERSION)
 RUBY_COPYRIGHT = "ironruby - Apache License, Version 2.0".freeze unless defined?(RUBY_COPYRIGHT)
-RUBY_DESCRIPTION = "ironruby #{RUBY_VERSION} (.NET)".freeze unless defined?(RUBY_DESCRIPTION)
 
 # Ruby 4.0 collects the RUBY_* constants into a module. Every member must be the
 # very same object as its RUBY_* counterpart -- ruby/spec asserts identity with
@@ -1778,12 +1668,6 @@ class IO
 end
 
 class File
-  # True when the path is absolute without consulting the filesystem. "~/x" is
-  # not absolute: MRI does no tilde expansion here.
-  def self.absolute_path?(path)
-    path = ::Kernel.String(path) unless path.is_a?(::String)
-    !!(path =~ %r{\A(?:[A-Za-z]:)?[/\\]})
-  end unless respond_to?(:absolute_path?)
 
   # File.size, File.size? and File.directory? take an IO, or anything that
   # converts to one with #to_io, as well as a path; the C# implementations only
@@ -1807,14 +1691,6 @@ class File
       end
     end
   end
-
-  def self.realpath(path, dir = nil)
-    expand_path(path, dir)
-  end unless respond_to?(:realpath)
-
-  def self.realdirpath(path, dir = nil)
-    expand_path(path, dir)
-  end unless respond_to?(:realdirpath)
 
   # IO.write/File.write and friends arrived in 1.9; the C# IO library only has
   # the instance-level operations.  offset nil means truncate, an integer seeks
@@ -1868,9 +1744,6 @@ class File
     end
   end unless respond_to?(:binread)
 
-  def self.empty?(name)
-    size(name) == 0
-  end unless respond_to?(:empty?)
 end
 
 class IO
@@ -1967,27 +1840,11 @@ module Kernel
 end
 
 class Hash
-  def compare_by_identity
-    self
-  end unless method_defined?(:compare_by_identity)
-
-  def compare_by_identity?
-    false
-  end unless method_defined?(:compare_by_identity?)
-
   # a fresh result hash for the non-mutating combinators, carrying the
   # compare_by_identity flag over the way CRuby does
   private def __result_hash__
     compare_by_identity? ? {}.compare_by_identity : {}
   end
-end
-
-class Object
-  def singleton_class
-    class << self
-      self
-    end
-  end unless method_defined?(:singleton_class)
 end
 
 class Module
@@ -2001,24 +1858,6 @@ module Process
   def self.last_status
     $?
   end unless respond_to?(:last_status)
-end
-
-class Process::Status
-  def signaled?
-    false
-  end unless method_defined?(:signaled?)
-
-  def termsig
-    nil
-  end unless method_defined?(:termsig)
-
-  def stopsig
-    nil
-  end unless method_defined?(:stopsig)
-
-  def stopped?
-    false
-  end unless method_defined?(:stopped?)
 end
 
 class IO
@@ -2191,79 +2030,6 @@ class << IO
   end
 end
 
-class File::Stat
-  def world_writable?
-    mode & 0002 == 0002 ? mode : nil
-  end unless method_defined?(:world_writable?)
-
-  def world_readable?
-    mode & 0004 == 0004 ? mode : nil
-  end unless method_defined?(:world_readable?)
-end
-
-class Array
-  # 1.9 added the count form of shift; the bundled core only has the no-arg one
-  unless (begin; [1].shift(1); true; rescue ArgumentError; false; end)
-    alias :__shift_without_count__ :shift
-
-    def shift(*args)
-      if args.size > 1
-        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
-      end
-      return __shift_without_count__ if args.empty?
-
-      # nil is an argument here, not the absence of one, and an object that is
-      # not an Integer is asked for one exactly once - #self[0, count] would ask
-      # again - before the count is checked for being negative.
-      count = args[0]
-      unless count.is_a?(Integer)
-        unless count.respond_to?(:to_int)
-          raise TypeError, "no implicit conversion of #{count.nil? ? 'nil' : count.class} into Integer"
-        end
-        count = count.to_int
-        unless count.is_a?(Integer)
-          raise TypeError, "can't convert #{args[0].class} into Integer (#{args[0].class}#to_int gives #{__ir_conversion_result_name__(count)})"
-        end
-      end
-      raise ArgumentError, "negative array size" if count < 0
-
-      __array_check_frozen__
-      taken = self[0, count] || []
-      self[0, count] = []
-      taken
-    end
-  end
-end
-
-# --------------------------------------------------------------------------
-# Module reflection: the `inherit` flag added in 1.9
-# --------------------------------------------------------------------------
-
-class Module
-  # (method_defined? and its public_/private_/protected_ forms take `inherit' natively.)
-  unless (begin; Module.const_defined?(:Module, true); true; rescue ArgumentError; false; end)
-    alias :__const_defined_without_inherit__? :const_defined?
-
-    def const_defined?(name, inherit = true)
-      return __const_defined_without_inherit__?(name) if inherit
-      constants(false).include?(name.to_s.to_sym)
-    end
-  end
-
-  unless (begin; Module.const_get(:Module, true); true; rescue ArgumentError; false; end)
-    alias :__const_get_without_inherit__ :const_get
-
-    def const_get(name, inherit = true)
-      return __const_get_without_inherit__(name) if inherit
-      sym = name.to_s.to_sym
-      unless constants(false).include?(sym)
-        raise NameError, "uninitialized constant #{self}::#{sym}"
-      end
-      __const_get_without_inherit__(name)
-    end
-  end
-end
-
 # --------------------------------------------------------------------------
 # Object#remove_instance_variable became public in 1.9
 # --------------------------------------------------------------------------
@@ -2291,10 +2057,6 @@ end
 # --------------------------------------------------------------------------
 
 module Warning
-  CATEGORIES = [
-    :deprecated, :experimental, :performance, :strict_unused_block
-  ] unless defined?(CATEGORIES)
-
   # Warning[] and Warning[]= are implemented in C# (WarningOps): the runtime reads
   # the categories itself - the chilled string literal warning is raised from
   # inside MutableString's mutation guard - and -W:category has to be able to set
@@ -2533,9 +2295,6 @@ if defined?($LOAD_PATH) && $LOAD_PATH.is_a?(Array) &&
     nil
   end
 end
-
-# `.` has not been on the default load path since 1.9.2.
-$LOAD_PATH.delete('.') if defined?($LOAD_PATH) && $LOAD_PATH.is_a?(Array)
 
 # --------------------------------------------------------------------------
 # Object#clone(freeze:) (2.4)
@@ -3348,99 +3107,6 @@ end
 class Float
   INFINITY = 1.0 / 0.0 unless const_defined?(:INFINITY)
   NAN = 0.0 / 0.0 unless const_defined?(:NAN)
-  EPSILON = 2.220446049250313e-16 unless const_defined?(:EPSILON)
-  DIG = 15 unless const_defined?(:DIG)
-  MANT_DIG = 53 unless const_defined?(:MANT_DIG)
-end
-
-class Integer
-  MAX = 2**62 - 1 unless const_defined?(:MAX)
-end
-
-# Float#round / Integer#round only take zero arguments in the 1.9 snapshot.
-# The ndigits form is what Matrix#round, Rational#round and a great deal of
-# ordinary code use.
-class Float
-  unless instance_method(:round).arity == -1
-    alias :__ir_round__ :round
-
-    def round(ndigits = 0)
-      n = ndigits.to_int
-      return __ir_round__ if n == 0
-      return self unless finite?
-      if n > 0
-        return self if n > 17
-        s = 10.0**n
-        f = (self * s).__ir_round__.to_f
-        # CRuby corrects for the binary representation error here (float.c,
-        # round_half_up), which is why 2.675.round(2) is 2.68 and not 2.67.
-        if self > 0
-          f += 1 if (f + 0.5) / s <= self
-        elsif self < 0
-          f -= 1 if (f - 0.5) / s >= self
-        end
-        f / s
-      else
-        s = 10.0**(-n)
-        f = (self / s).__ir_round__.to_f
-        if self > 0
-          f += 1 if (f + 0.5) * s <= self
-        elsif self < 0
-          f -= 1 if (f - 0.5) * s >= self
-        end
-        (f * s).to_i
-      end
-    end
-  end
-
-  def truncate(ndigits = 0)
-    n = ndigits.to_int
-    return to_i if n == 0
-    if n > 0
-      s = 10.0**n
-      (self * s).to_i / s
-    else
-      s = 10**(-n)
-      (to_i / s) * s
-    end
-  end unless instance_method(:truncate).arity == -1
-end
-
-class Integer
-  unless instance_method(:round).arity == -1
-    alias :__ir_round__ :round
-
-    def round(ndigits = 0)
-      n = ndigits.to_int
-      return self if n >= 0
-      s = 10**(-n)
-      half = s / 2
-      q, r = abs.divmod(s)
-      q += 1 if r >= half
-      self < 0 ? -(q * s) : q * s
-    end
-  end
-
-  def truncate(ndigits = 0)
-    n = ndigits.to_int
-    return self if n >= 0
-    s = 10**(-n)
-    (self / s) * s
-  end unless instance_method(:truncate).arity == -1
-
-  def floor(ndigits = 0)
-    n = ndigits.to_int
-    return self if n >= 0
-    s = 10**(-n)
-    (to_f / s).floor * s
-  end unless instance_method(:floor).arity == -1
-
-  def ceil(ndigits = 0)
-    n = ndigits.to_int
-    return self if n >= 0
-    s = 10**(-n)
-    (to_f / s).ceil * s
-  end unless instance_method(:ceil).arity == -1
 end
 
 # Numeric's generic arithmetic is written in terms of the operators the subclass
@@ -3597,19 +3263,6 @@ class String
     end
   end
   private :__ir_type_name__
-
-  # Byte-oriented slicing.  Done over a binary copy so that the indices really
-  # are byte indices, then tagged back with the receiver's encoding the way
-  # rb_str_byteslice does.
-  def byteslice(*args)
-    binary = dup
-    binary.force_encoding(Encoding::BINARY) if binary.respond_to?(:force_encoding)
-    result = binary[*args]
-    return nil if result.nil?
-    result.force_encoding(encoding) if result.respond_to?(:force_encoding)
-    result
-  end unless method_defined?(:byteslice)
-
 
   # ------------------------------------------------------------------
   # Byte-offset searching.
@@ -3906,19 +3559,6 @@ class String
     # building a copy and #replace-ing self with it.
     insert(0, others.size == 1 ? others[0] : others.join(""))
   end unless method_defined?(:prepend)
-
-  def casecmp?(other)
-    unless other.is_a?(::String)
-      return nil if other.is_a?(::Symbol) || !other.respond_to?(:to_str)
-      other = other.to_str
-      return nil unless other.is_a?(::String)
-    end
-    # Two strings in encodings that cannot be compared are not unequal, they are
-    # incomparable, and #casecmp? answers nil for them just as #casecmp does.
-    return nil if ::Encoding.compatible?(self, other).nil?
-    c = casecmp(other)
-    c.nil? ? nil : c == 0
-  end unless method_defined?(:casecmp?)
 
   # The frozen check happens before the affix is even looked at: MRI raises
   # FrozenError even when nothing would have been removed.
@@ -4288,7 +3928,6 @@ class String
 
   def each_grapheme_cluster(&block)
     clusters = __ir_grapheme_clusters__
-    return ::Enumerator.new(clusters.size) { |y| clusters.each { |g| y << g } } unless block
     clusters.each { |g| block.call(g) }
     self
   end unless method_defined?(:each_grapheme_cluster)
@@ -4324,17 +3963,6 @@ class String
   end
   private :__ir_grapheme_clusters__
 
-  # `str =~ x` is `x =~ str` for a Regexp and a TypeError for anything that is
-  # not, which is how MRI stops the common `"a" =~ "b"` mistake.
-  def =~(other)
-    if other.is_a?(::Regexp)
-      other =~ self
-    elsif other.respond_to?(:=~)
-      other =~ self
-    else
-      ::Kernel.raise(::TypeError, "type mismatch: #{other.class} given")
-    end
-  end unless method_defined?(:=~)
 end
 
 # Numeric#step: MRI's num_step, which the builtin only ever implemented as the
@@ -4467,15 +4095,11 @@ end
 
 class Symbol
   include ::Comparable unless ancestors.include?(::Comparable)
-
   def casecmp?(other)
     return nil unless other.is_a?(::Symbol)
     to_s.casecmp?(other.to_s)
   end unless method_defined?(:casecmp?)
 
-  def =~(other)
-    to_s =~ other
-  end unless method_defined?(:=~)
 end
 
 # The complex-number half of Numeric.  IronRuby's Complex has these, but the
@@ -4516,31 +4140,9 @@ class Numeric
     self < 0
   end unless method_defined?(:negative?)
 
-  def clamp(min, max = nil)
-    if max.nil? && min.kind_of?(Range)
-      lo, hi = min.begin, min.end
-    else
-      lo, hi = min, max
-    end
-    return lo if lo && self < lo
-    return hi if hi && self > hi
-    self
-  end unless method_defined?(:clamp)
 end
 
-unless defined?(KeyError)
-  class KeyError < IndexError
-    def initialize(message = nil, receiver: nil, key: nil)
-      # The C# core (Kernel#format's named references, Hash#fetch) sets @receiver/@key
-      # directly after constructing with just a message.
-      @receiver = receiver
-      @key = key
-      super(message)
-    end
-
-    attr_reader :receiver, :key
-  end
-end
+class KeyError < IndexError; end unless defined?(KeyError)
 class StopIteration < IndexError; end unless defined?(StopIteration)
 class UncaughtThrowError < ArgumentError; end unless defined?(UncaughtThrowError)
 
@@ -4649,16 +4251,6 @@ class Dir
     children.each(&block)
     self
   end unless method_defined?(:each_child)
-
-  def entries
-    result = []
-    rewind
-    while (entry = read)
-      result << entry
-    end
-    rewind
-    result
-  end unless method_defined?(:entries)
 
   # MRI changes to the open directory itself (fchdir), not to its path, where there are
   # descriptors to do it with.
@@ -4919,29 +4511,6 @@ end
 class Array
   # ---- the sixteen Array methods spec/core/array gets NoMethodError for ----
 
-  def sample(*args, random: ::Kernel)
-    rng = random
-    if args.size > 1
-      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
-    end
-    if args.empty?
-      return nil if empty?
-      return self[__sample_index__(rng, size)]
-    end
-    n = args[0]
-    ::Kernel.raise(::TypeError, "no implicit conversion of nil into Integer") if n.nil?
-    n = ::Kernel.Integer(n)
-    ::Kernel.raise(::ArgumentError, "negative sample number") if n < 0
-    n = size if n > size
-    pool = dup
-    result = []
-    n.times do
-      i = __sample_index__(rng, pool.size)
-      result << pool.delete_at(i)
-    end
-    result
-  end unless method_defined?(:sample)
-
   def __sample_index__(rng, limit)
     value = rng.rand(limit)
     value = value.to_int if value.respond_to?(:to_int) && !value.is_a?(::Integer)
@@ -4952,92 +4521,6 @@ class Array
     value
   end
   private :__sample_index__
-
-  def rotate(n = 1)
-    n = ::Kernel.Integer(n)
-    return dup if empty?
-    n %= size
-    self[n..-1] + self[0, n]
-  end unless method_defined?(:rotate)
-
-  def rotate!(n = 1)
-    replace(rotate(n))
-  end unless method_defined?(:rotate!)
-
-  def union(*others)
-    result = dup
-    others.each { |o| result |= ::Kernel.Array(o) }
-    result | []
-  end unless method_defined?(:union)
-
-  def difference(*others)
-    result = dup
-    others.each { |o| result -= ::Kernel.Array(o) }
-    result
-  end unless method_defined?(:difference)
-
-  def intersection(*others)
-    result = dup
-    others.each { |o| result &= ::Kernel.Array(o) }
-    result & []  == [] ? result : result
-  end unless method_defined?(:intersection)
-
-  def fetch_values(*keys, &block)
-    keys.map { |k| block ? (fetch(k) { |i| block.call(i) }) : fetch(k) }
-  end unless method_defined?(:fetch_values)
-
-  def rfind(&block)
-    return ::Enumerator.new { |y| reverse_each { |x| y << x } } unless block
-    reverse_each { |x| return x if block.call(x) }
-    nil
-  end unless method_defined?(:rfind)
-
-  def bsearch(&block)
-    i = bsearch_index(&block)
-    i.nil? ? nil : self[i]
-  end unless method_defined?(:bsearch)
-
-  def bsearch_index(&block)
-    return ::Enumerator.new { |y| each_index { |i| y << i } } unless block
-    low = 0
-    high = size - 1
-    result = nil
-    while low <= high
-      mid = low + (high - low) / 2
-      r = block.call(self[mid])
-      case r
-      when true then result = mid; high = mid - 1
-      when false, nil then low = mid + 1
-      when ::Integer
-        return mid if r == 0
-        if r < 0 then high = mid - 1 else low = mid + 1 end
-      else
-        ::Kernel.raise(::TypeError, "wrong argument type #{r.class} (must be numeric, true, false or nil)")
-      end
-    end
-    result
-  end unless method_defined?(:bsearch_index)
-
-  def repeated_permutation(n)
-    n = ::Kernel.Integer(n)
-    unless block_given?
-      count = n < 0 ? 0 : size**n
-      return ::Enumerator.new(count) { |y| repeated_permutation(n) { |p| y << p } }
-    end
-    return self if n < 0
-    __repeat__(n, false) { |combo| yield combo }
-    self
-  end unless method_defined?(:repeated_permutation)
-
-  def repeated_combination(n)
-    n = ::Kernel.Integer(n)
-    unless block_given?
-      return ::Enumerator.new { |y| repeated_combination(n) { |c| y << c } }
-    end
-    return self if n < 0
-    __repeat__(n, true) { |combo| yield combo }
-    self
-  end unless method_defined?(:repeated_combination)
 
   # Walks the n-fold product of the receiver's indices, optionally keeping only
   # the non-decreasing tuples, which is exactly repeated_combination.
@@ -5058,27 +4541,6 @@ class Array
     end
   end
   private :__repeat__
-
-  def select!(&block)
-    return ::Enumerator.new { |y| each { |x| y << x } } unless block
-    before = size
-    keep_if(&block)
-    size == before ? nil : self
-  end unless method_defined?(:select!)
-
-  alias :filter! :select! unless method_defined?(:filter!)
-
-  def keep_if(&block)
-    return ::Enumerator.new { |y| each { |x| y << x } } unless block
-    replace(select { |x| block.call(x) })
-    self
-  end unless method_defined?(:keep_if)
-
-  def sort_by!(&block)
-    return ::Enumerator.new { |y| each { |x| y << x } } unless block
-    replace(sort_by { |x| block.call(x) })
-    self
-  end unless method_defined?(:sort_by!)
 
   def to_h
     result = {}
@@ -5184,25 +4646,9 @@ class String
     pattern.match?(self, pos)
   end unless method_defined?(:match?)
 
-  def start_with?(*prefixes)
-    prefixes.any? { |p| p.is_a?(Regexp) ? !!(self =~ /\A(?:#{p.source})/) : self[0, p.length] == p }
-  end unless method_defined?(:start_with?)
 end
 
 class Hash
-  def key(value)
-    each { |k, v| return k if v == value }
-    nil
-  end unless method_defined?(:key)
-
-  def assoc(key)
-    key?(key) ? [key, self[key]] : nil
-  end unless method_defined?(:assoc)
-
-  def rassoc(value)
-    each { |k, v| return [k, v] if v == value }
-    nil
-  end unless method_defined?(:rassoc)
 
   def to_h(&block)
     unless block
@@ -5228,13 +4674,6 @@ class Hash
     # pair array instead of a key and a value.
   end unless instance_methods(false).include?(:to_h)
 
-  def keep_if
-    delete_if { |k, v| !yield(k, v) }
-  end unless method_defined?(:keep_if)
-
-  def fetch_values(*keys)
-    keys.map { |k| block_given? ? (key?(k) ? self[k] : yield(k)) : fetch(k) }
-  end unless method_defined?(:fetch_values)
 end
 
 # The CLR collector answers most of what MRI's GC module reports; the rest are
@@ -6799,26 +6238,6 @@ module Comparable
   end
 end
 
-# 1.9 returned Enumerators from these; Ruby 1.9.3+ returns Arrays.
-class String
-  # Ruby 2.4: the first element of #unpack, without building the whole array.
-  def unpack1(format, offset: 0)
-    # self[offset..] would be neater, but String#[] here rejects an endless range
-    (offset > 0 ? self[offset, bytesize - offset] : self).unpack(format).first
-  end unless method_defined?(:unpack1)
-
-  # #chars and #bytes build the Array in C# (MutableStringOps); only #lines is still
-  # an Enumerator there.
-  unless "a".lines.is_a?(Array)
-    alias :__lines_enumerator__ :lines
-
-    def lines(*args, &block)
-      return __lines_enumerator__(*args, &block) if block
-      __lines_enumerator__(*args).to_a
-    end
-  end
-end
-
 # String#each_line / String#lines.
 #
 # The C# implementation is frozen at Ruby 1.8: it has no `chomp:` keyword, its
@@ -6833,7 +6252,6 @@ class String
 
   def each_line(*args, chomp: false, &block)
     lines = __ir_split_lines__(args, chomp)
-    return ::Enumerator.new { |y| lines.each { |l| y << l } } unless block
     lines.each { |line| block.call(line) }
     self
   end
@@ -6979,13 +6397,6 @@ require "thread" unless Thread.const_defined?(:Mutex, false)
 %i[Mutex Queue SizedQueue ConditionVariable].each do |name|
   next if Object.const_defined?(name, false)
   Object.const_set(name, Thread.const_get(name, false)) if Thread.const_defined?(name, false)
-end
-
-class Regexp
-  def match?(str, pos = 0)
-    return false if str.nil?
-    !match(pos.zero? ? str : str.to_s[pos..-1].to_s).nil?
-  end unless method_defined?(:match?)
 end
 
 # MatchData knew nothing about named groups - m[:name] was a TypeError about
@@ -8098,17 +7509,6 @@ class << ENV
 end
 
 class Method
-  def name
-    self.Name.to_s.to_sym
-  end unless method_defined?(:name)
-
-  def receiver
-    self.Target
-  end unless method_defined?(:receiver)
-
-  def owner
-    self.GetTargetClass
-  end unless method_defined?(:owner)
 
   def curry(*arity)
     to_proc.curry(*arity)
@@ -8121,12 +7521,6 @@ class Method
   def <<(other)
     to_proc << other
   end unless method_defined?(:<<)
-end
-
-class UnboundMethod
-  def bind_call(receiver, *args, &block)
-    bind(receiver).call(*args, &block)
-  end unless method_defined?(:bind_call)
 end
 
 # --- Math ------------------------------------------------------------------
@@ -8460,17 +7854,6 @@ class << self
 end
 
 module Process
-  CLOCK_REALTIME = :CLOCK_REALTIME unless const_defined?(:CLOCK_REALTIME)
-  CLOCK_MONOTONIC = :CLOCK_MONOTONIC unless const_defined?(:CLOCK_MONOTONIC)
-  CLOCK_PROCESS_CPUTIME_ID = :CLOCK_PROCESS_CPUTIME_ID unless const_defined?(:CLOCK_PROCESS_CPUTIME_ID)
-
-  # The rest of the clocks this platform names. They are symbols like the three above
-  # because clock_gettime below dispatches on identity, not on a number.
-  %i[
-    CLOCK_MONOTONIC_RAW CLOCK_MONOTONIC_COARSE CLOCK_REALTIME_COARSE
-    CLOCK_THREAD_CPUTIME_ID CLOCK_BOOTTIME
-  ].each { |c| const_set(c, c) unless const_defined?(c) }
-
   # Linux wait flags, priority classes and resource limits. ruby/spec only asks that
   # they exist and are Integers, but the numbers are the real ones so that anything
   # passing them to a syscall later gets the right value.
@@ -8489,31 +7872,6 @@ module Process
     RLIMIT_MSGQUEUE: 12, RLIMIT_NICE: 13, RLIMIT_RTPRIO: 14, RLIMIT_RTTIME: 15,
     RLIM_INFINITY: 2**64 - 1, RLIM_SAVED_CUR: 2**64 - 1, RLIM_SAVED_MAX: 2**64 - 1,
   }.each { |name, value| const_set(name, value) unless const_defined?(name) } unless ::File::ALT_SEPARATOR == "\\"
-
-  # Process.clock_gettime is C# (RubyProcess.ClockGetTime); this is what a build without
-  # the C# Process module has.
-  unless respond_to?(:clock_gettime)
-    # .NET's Stopwatch is the monotonic source; Time.now covers the wall clock.
-    def self.clock_gettime(clock_id = CLOCK_MONOTONIC, unit = :float_second)
-      seconds =
-        case clock_id
-        when CLOCK_REALTIME then Time.now.to_f
-        else System::Diagnostics::Stopwatch.get_timestamp.to_f / System::Diagnostics::Stopwatch.frequency.to_f
-        end
-
-      case unit
-      when :float_second then seconds
-      when :float_millisecond then seconds * 1_000.0
-      when :float_microsecond then seconds * 1_000_000.0
-      when :second then seconds.to_i
-      when :millisecond then (seconds * 1_000).to_i
-      when :microsecond then (seconds * 1_000_000).to_i
-      when :nanosecond then (seconds * 1_000_000_000).to_i
-      when nil then seconds
-      else ::Kernel.raise(::ArgumentError, "unexpected unit: #{unit}")
-      end
-    end
-  end
 
   # NB SignalException#signo / #signm are defined just below this module.
   #
@@ -8567,13 +7925,6 @@ module Process
       ORIGINAL_ARGV0
     end
     module_function :argv0
-  end
-
-  unless respond_to?(:setproctitle)
-    def setproctitle(title)
-      title.to_s
-    end
-    module_function :setproctitle
   end
 
   unless respond_to?(:maxgroups)
@@ -9850,18 +9201,6 @@ class String
   end unless respond_to?(:try_convert)
 end
 
-class Array
-  def self.try_convert(obj)
-    __ir_try_convert__(obj, :to_ary, ::Array, "Array")
-  end unless respond_to?(:try_convert)
-end
-
-class Hash
-  def self.try_convert(obj)
-    __ir_try_convert__(obj, :to_hash, ::Hash, "Hash")
-  end unless respond_to?(:try_convert)
-end
-
 class Integer
   def self.try_convert(obj)
     __ir_try_convert__(obj, :to_int, ::Integer, "Integer")
@@ -10981,9 +10320,6 @@ class IO
 
   def each_line(*args, **opts, &block)
     args, chomp = __take_chomp__(args, opts)
-    unless block
-      return ::Enumerator.new { |y| each_line(*args, chomp: chomp) { |l| y << l } }
-    end
     chomp ? __each_line_chomp__(*args, &block) : __ir_each_line__(*args, &block)
   end
 
@@ -11369,28 +10705,6 @@ class IO
     end
   end unless method_defined?(:pwrite)
 
-  # select(2) on the descriptor, which is what makes the timeout mean anything: the
-  # previous answer here was "not at end of file", which blocks until data arrives and so
-  # never times out at all.  Bytes already in this IO's own buffer make it readable
-  # straight away - select cannot see those.  An IO with no descriptor behind it (an
-  # in-memory stream) falls back to the end-of-file answer, which is the best available.
-  def wait_readable(timeout = nil)
-    return self if __data_buffered__
-    ::IO.select([self], nil, nil, timeout) ? self : nil
-  rescue ::IOError
-    nil
-  rescue ::NotImplementedError, ::Errno::EBADF, ::ArgumentError, ::TypeError
-    eof? ? nil : self
-  end unless method_defined?(:wait_readable)
-
-  def wait_writable(timeout = nil)
-    return nil if closed?
-    ::IO.select(nil, [self], nil, timeout) ? self : nil
-  rescue ::IOError
-    nil
-  rescue ::NotImplementedError, ::Errno::EBADF, ::ArgumentError, ::TypeError
-    self
-  end unless method_defined?(:wait_writable)
 end
 
 # caller_locations (2.0) and the Location objects it yields. The runtime only
@@ -12219,22 +11533,6 @@ class Range
   # 109 of spec/core/range's errors were #cover? alone and 71 were #bsearch;
   # neither existed.
 
-  def cover?(value)
-    return __cover_range__(value) if value.is_a?(::Range)
-    b = self.begin
-    e = self.end
-    unless b.nil?
-      c = (b <=> value)
-      return false if c.nil? || c > 0
-    end
-    unless e.nil?
-      c = (value <=> e)
-      return false if c.nil?
-      return false if exclude_end? ? c >= 0 : c > 0
-    end
-    true
-  end unless method_defined?(:cover?)
-
   def __cover_range__(other)
     ob = other.begin
     oe = other.end
@@ -12344,26 +11642,6 @@ class Range
     found
   end
   private :__string_include__
-
-  def overlap?(other)
-    unless other.is_a?(::Range)
-      ::Kernel.raise(::TypeError, "wrong argument type #{other.class} (expected Range)")
-    end
-    return false if __empty_range__(self) || __empty_range__(other)
-    sb, se = self.begin, self.end
-    ob, oe = other.begin, other.end
-    unless se.nil? || ob.nil?
-      c = (ob <=> se)
-      return false if c.nil?
-      return false if exclude_end? ? c >= 0 : c > 0
-    end
-    unless oe.nil? || sb.nil?
-      c = (sb <=> oe)
-      return false if c.nil?
-      return false if other.exclude_end? ? c >= 0 : c > 0
-    end
-    true
-  end unless method_defined?(:overlap?)
 
   def __empty_range__(r)
     b, e = r.begin, r.end
