@@ -105,7 +105,8 @@ namespace IronRuby.Tests {
                 SimpleCall4, 
                 SimpleCall5, 
                 SimpleCall6, 
-                MethodParams1, 
+                MethodParams1,
+                MethodParamsKeywordArityError1,
 
                 MethodCallCaching1,
                 MethodCallCaching2,

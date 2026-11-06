@@ -115,6 +115,20 @@ namespace IronRuby.Runtime.Calls {
             get { return _hasRest ? -1 : _leadingCount + _optionalCount + _postCount; }
         }
 
+        /// <summary>
+        /// The "expected" part of MRI's argument_arity_error: the positional bounds ("1", "1..2" or
+        /// "1+"), then every required keyword, given or not: "1; required keyword: k".
+        /// </summary>
+        public string/*!*/ DescribeExpectedArguments() {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            int min = MinPositionalCount, max = MaxPositionalCount;
+            string expected = (min == max) ? min.ToString(inv) : min.ToString(inv) + (max < 0 ? "+" : ".." + max.ToString(inv));
+
+            string[] required = RequiredKeywordNames;
+            return required.Length == 0 ? expected
+                : expected + (required.Length == 1 ? "; required keyword: " : "; required keywords: ") + String.Join(", ", required);
+        }
+
         public static readonly RubyParameterSignature/*!*/ Empty =
             new RubyParameterSignature(new Parameter[0], 0, 0, 0, false, 0, false, false);
 

@@ -266,7 +266,8 @@ namespace IronRuby.Runtime.Calls {
             Assert.NotNull(metaBuilder, args, name);
 
             // 2 implicit args: self, block
-            var argsBuilder = new ArgsBuilder(2, Parameters.Mandatory.Length, Parameters.LeadingMandatoryCount, Parameters.Optional.Length, Parameters.Unsplat != null);
+            var argsBuilder = new ArgsBuilder(2, Parameters.Mandatory.Length, Parameters.LeadingMandatoryCount, Parameters.Optional.Length, Parameters.Unsplat != null,
+                TakesOrRefusesKeywords ? GetParameterSignature() : null);
             argsBuilder.SetImplicit(0, AstUtils.Box(args.TargetExpression));
             argsBuilder.SetImplicit(1, args.Signature.HasBlock ? AstUtils.Convert(args.GetBlockExpression(), typeof(Proc)) : AstFactory.NullOfProc);
             argsBuilder.AddCallArguments(metaBuilder, args);

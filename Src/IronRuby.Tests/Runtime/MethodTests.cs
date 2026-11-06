@@ -167,7 +167,38 @@ self[1,*[],*[]] = 6
 [:a, :b, 1]
 ");
         }
-        
+
+        /// <summary>
+        /// The arity error of a method whose keywords were lowered onto a trailing parameter describes the
+        /// declared positionals and names the required keywords, like MRI; a keyword hash is not counted.
+        /// </summary>
+        public void MethodParamsKeywordArityError1() {
+            TestOutput(@"
+def f1(a, k:); end
+def f2(a, k: 1); end
+def f3(a, **nil); end
+def f4(a, k:, j:); end
+
+f1 rescue p $!
+f1(1, 2, 3) rescue p $!
+f1(1, 2, 3, k: 1) rescue p $!
+f1(*[]) rescue p $!
+f2 rescue p $!
+f2(1, 2, 3) rescue p $!
+f3 rescue p $!
+f4 rescue p $!
+", @"
+#<ArgumentError: wrong number of arguments (given 0, expected 1; required keyword: k)>
+#<ArgumentError: wrong number of arguments (given 3, expected 1; required keyword: k)>
+#<ArgumentError: wrong number of arguments (given 3, expected 1; required keyword: k)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1; required keyword: k)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1)>
+#<ArgumentError: wrong number of arguments (given 3, expected 1)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1; required keywords: k, j)>
+");
+        }
+
         public void MethodCallCaching1() {
             AssertOutput(() => CompilerTest(@"
 module N
