@@ -215,19 +215,24 @@ false
 
         /// <summary>
         /// Block expressions propagate 'in-condition' property to the last statement.
+        /// A parenthesized statement list does not: its range is a Range (true..false: an ArgumentError),
+        /// and ruby -w warns about the literals in void context before it.
         /// </summary>
         public void RangeCondition2() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
-puts((TRUE..FALSE) ? 'true' : 'false')
-puts(begin TRUE..FALSE end ? 'true' : 'false')
+            TestOutput(@"
+puts((true..false) ? 'true' : 'false')
+puts(begin true..false end ? 'true' : 'false')
 
-#puts((0;1;TRUE..FALSE) ? 'true' : 'false')   # TODO: literals are removed with warning
-");
-            }, @"
+begin
+  puts((0;1;true..false) ? 'true' : 'false')
+rescue ArgumentError => e
+  puts e.message
+end
+", @"
 true
 true
-");
+bad value for range
+", 2);
         }
     }
 }

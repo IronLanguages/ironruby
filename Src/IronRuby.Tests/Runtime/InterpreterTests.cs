@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -91,27 +87,12 @@ namespace IronRuby.Tests {
             Assert(compiled.ValueEquals(sync));
         }
 
-        private void XTraceTestLambda(Expression<Action> lambda) {
+        private void TraceTestLambda(Expression<Action> lambda, object[] expectedTrace) {
             object[] compiled, interpreted, sync;
             RunTraceTest(lambda, null, out compiled, out interpreted, out sync);
-
-            Console.WriteLine("-- compiled --");
-
-            foreach (var obj in compiled) {
-                Console.WriteLine(obj);
-            }
-
-            Console.WriteLine("-- interpreted --");
-
-            foreach (var obj in interpreted) {
-                Console.WriteLine(obj);
-            }
-
-            Console.WriteLine("-- sync --");
-
-            foreach (var obj in sync) {
-                Console.WriteLine(obj);
-            }
+            Assert(compiled.ValueEquals(expectedTrace));
+            Assert(interpreted.ValueEquals(expectedTrace));
+            Assert(sync.ValueEquals(expectedTrace));
         }
 
         #endregion
@@ -692,7 +673,7 @@ namespace IronRuby.Tests {
                 )
             );
             
-            //XTraceTestLambda(l1);
+            TraceTestLambda(l1, new object[] { 1, 2, 3, 1 });
 
             var e_var = Ast.Parameter(typeof(Exception), "e");
             var ex1 = new Exception("ex1");
@@ -709,9 +690,7 @@ namespace IronRuby.Tests {
                 )
             );
 
-            l2.Compile()();
-
-            //XTraceTestLambda(l2);
+            TraceTestLambda(l2, new object[] { "ex1", null, "ex2", null });
 
             var l3 = Ast.Lambda<Action>(
                 Ast.Block(new[] { i_var },
@@ -724,9 +703,7 @@ namespace IronRuby.Tests {
                 )
             );
 
-            l3.Compile()();
-
-            //XTraceTestLambda(l2);
+            TraceTestLambda(l3, new object[] { 2 });
 
             // TODO: add tests for loop compiler
         }

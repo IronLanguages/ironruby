@@ -14,13 +14,8 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
-using System.Security;
-using System.Security.Permissions;
-using System.Security.Policy;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Hosting;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
@@ -72,10 +67,6 @@ namespace IronRuby.Tests {
 
             if (testCase.Options.NoRuntime) {
                 return;
-            }
-
-            if (_driver.SaveToAssemblies) {
-                Environment.SetEnvironmentVariable("DLR_AssembliesFileName", _testName);
             }
 
             var runtimeSetup = ScriptRuntimeSetup.ReadConfiguration();
@@ -140,9 +131,7 @@ namespace IronRuby.Tests {
         private static bool _excludeSelectedCases;
         private static bool _verbose;
         private static bool _isDebug;
-        private static bool _saveToAssemblies;
         private static bool _displayList;
-        private static bool _partialTrust;
         private static bool _noAdaptiveCompilation;
         private static int _compilationThreshold;
         private static bool _runPython = true;
@@ -171,14 +160,6 @@ namespace IronRuby.Tests {
 
         public bool IsDebug {
             get { return _isDebug; }
-        }
-
-        public bool SaveToAssemblies {
-            get { return _saveToAssemblies; }
-        }
-
-        public bool PartialTrust {
-            get { return _partialTrust; }
         }
 
         public bool NoAdaptiveCompilation {
@@ -224,12 +205,10 @@ namespace IronRuby.Tests {
         private static bool ParseArguments(List<string>/*!*/ args) {
             if (args.Contains("/help") || args.Contains("-?") || args.Contains("/?") || args.Contains("-help")) {
                 Console.WriteLine("Verbose                      : /verbose");
-                Console.WriteLine("Partial trust                : /partial");
                 Console.WriteLine("No adaptive compilation      : /noadaptive");
                 Console.WriteLine("Synchronous compilation      : /sync0            (-X:CompilationThreshold 0)");
                 Console.WriteLine("Synchronous compilation      : /sync1            (-X:CompilationThreshold 1)");
                 Console.WriteLine("Interpret only               : /interpret        (-X:CompilationThreshold Int32.MaxValue)");
-                Console.WriteLine("Save to assemblies           : /save");
                 Console.WriteLine("Debug Mode                   : /debug");
                 Console.WriteLine("Disable Python interop tests : /py-");
                 Console.WriteLine("Run Specific Tests           : [/exclude] [test_to_run ...]");
@@ -254,16 +233,6 @@ namespace IronRuby.Tests {
             if (args.Contains("-D")) {
                 args.Remove("-D");
                 _isDebug = true;
-            }
-
-            if (args.Contains("/save")) {
-                args.Remove("/save");
-                _saveToAssemblies = true;
-            }
-
-            if (args.Contains("/partial")) {
-                args.Remove("/partial");
-                _partialTrust = true;
             }
 
             if (args.Contains("-X:NoAdaptiveCompilation")) {
@@ -313,31 +282,10 @@ namespace IronRuby.Tests {
             List<string> args = new List<string>(arguments);
             string culture = Environment.GetEnvironmentVariable("IR_CULTURE");
 
-            if (args.Contains("/partial")) {
-                // partial trust requires CAS + secondary AppDomains, neither exists on .NET Core
-                Console.Error.WriteLine("/partial (partial trust) is not supported on .NET Core");
-                Environment.ExitCode = -1;
-            } else {
-                if (!String.IsNullOrEmpty(culture)) {
-                    Thread.CurrentThread.CurrentCulture = new CultureInfo(culture, false);
-                }
-                Environment.ExitCode = Run(args, AppDomain.CurrentDomain.BaseDirectory);
+            if (!String.IsNullOrEmpty(culture)) {
+                Thread.CurrentThread.CurrentCulture = new CultureInfo(culture, false);
             }
-        }
-
-        public sealed class Loader : MarshalByRefObject {
-            public int ExitCode;
-            public readonly List<string>/*!*/ Args;
-            public readonly string/*!*/ BaseDirectory;
-
-            public Loader(List<string>/*!*/ args, string/*!*/ baseDirectory) {
-                Args = args;
-                BaseDirectory = baseDirectory;
-            }
-
-            public void Run() {
-                ExitCode = Driver.Run(Args, BaseDirectory);
-            }
+            Environment.ExitCode = Run(args, AppContext.BaseDirectory);
         }
 
         public static int Run(List<string>/*!*/ args, string/*!*/ baseDirectory) {
@@ -351,7 +299,6 @@ namespace IronRuby.Tests {
 
             int status = 0;
 
-            InitializeDomain();
             Driver driver = new Driver(baseDirectory);
 
             if (Manual.TestCode.Trim().Length == 0) {
@@ -367,24 +314,6 @@ namespace IronRuby.Tests {
             return status;
         }
 
-        private static void InitializeDomain() {
-            if (_saveToAssemblies) {
-                string _dumpDir = Path.Combine(Path.GetTempPath(), "RubyTests");
-
-                if (Directory.Exists(_dumpDir)) {
-                    Array.ForEach(Directory.GetFiles(_dumpDir), delegate(string file) {
-                        try { File.Delete(Path.Combine(_dumpDir, file)); } catch { /* nop */ }
-                    });
-                } else {
-                    Directory.CreateDirectory(_dumpDir);
-                }
-                    
-                Console.WriteLine("Generating binaries to {0}", _dumpDir);
-
-                Snippets.SetSaveAssemblies(true, _dumpDir);
-            }
-        }
-        
         private void RunManualTest() {
             Console.WriteLine("Running hardcoded test case");
             
@@ -466,11 +395,7 @@ namespace IronRuby.Tests {
                     failedCases.Add(test);
 
                     Console.Error.WriteLine();
-                    if (_partialTrust) {
-                        ColorWrite(ConsoleColor.Red, "{0}) {1}", failedCases.Count, test);
-                    } else {
-                        ColorWrite(ConsoleColor.Red, "{0}) {1} {2} : {3}", failedCases.Count, test, frame.GetFileName(), frame.GetFileLineNumber());
-                    }
+                    ColorWrite(ConsoleColor.Red, "{0}) {1} {2} : {3}", failedCases.Count, test, frame.GetFileName(), frame.GetFileLineNumber());
                     Console.Error.WriteLine(message);
                 }
             }
@@ -491,14 +416,7 @@ namespace IronRuby.Tests {
                 ColorWrite(ConsoleColor.Green, "PASSED");
             } else {
                 Console.WriteLine();
-                // TODO:
-                if (!_partialTrust) { 
-                    Console.Write("Repro: {0}", Environment.CommandLine);
-                } else {
-                    Console.Write("Repro: IronRuby.Tests.exe /partial{0}{1}", 
-                        _noAdaptiveCompilation ? " /noadaptive" : "",
-                        _isDebug ? " /debug" : "");
-                }
+                Console.Write("Repro: {0}", Environment.CommandLine);
                 if (largs.Count == 0) {
                     Console.Write(" {0}", String.Join(" ", failedCases.ToArray()));
                 }
@@ -540,8 +458,6 @@ namespace IronRuby.Tests {
             } catch (Exception e) {
                 PrintTestCaseFailed();
                 _unexpectedExceptions.Add(new MutableTuple<string, Exception>(testCase.Name, e));
-            } finally {
-                Snippets.SaveAndVerifyAssemblies();
             }
         }
 

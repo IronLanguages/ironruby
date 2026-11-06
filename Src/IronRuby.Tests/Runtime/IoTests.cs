@@ -253,57 +253,6 @@ hello
             }
         }
 
-#if OBSOLETE // KCODE
-        [Options(Pal = typeof(Pal1))]
-        public void Dir1() {
-            RubyClass dir = Context.GetClass(typeof(RubyDir));
-            Pal1 pal = (Pal1)Context.Platform;
-            var sjis = RubyEncoding.KCodeSJIS.StrictEncoding.GetBytes("ﾎ");
-            var toPath = new ConversionStorage<MutableString>(Context);
-            
-            // transcode to UTF8 if no KCODE specified
-            Context.KCode = null;
-            RubyDir.MakeDirectory(toPath, dir, MutableString.CreateBinary(new byte[] { 0xce, 0xa3 }, RubyEncoding.Binary), null);
-            Assert(pal.Entries["Σ"]);
-            pal.Entries.Clear();
-
-            // transcode to UTF8 if no KCODE specified
-            Context.KCode = null;
-            RubyDir.MakeDirectory(toPath, dir, MutableString.CreateMutable("ﾎｱ", RubyEncoding.KCodeSJIS), null);
-            Assert(pal.Entries["α"]);
-            Assert(FileTest.IsDirectory(toPath, Context.KernelModule, MutableString.CreateMutable("ﾎｱ", RubyEncoding.KCodeSJIS)));
-            Assert(FileTest.IsDirectory(toPath, Context.KernelModule, MutableString.CreateMutable("α", RubyEncoding.KCodeUTF8)));
-            pal.Entries.Clear();
-
-            // transcode to KCODE if specified
-            Context.KCode = RubyEncoding.KCodeUTF8;
-            RubyDir.MakeDirectory(toPath, dir, MutableString.CreateBinary(new byte[] { 0xce, 0xa3 }, RubyEncoding.KCodeSJIS), null);
-            Assert(pal.Entries["Σ"]);
-            pal.Entries.Clear();
-
-            // transcode to KCODE if specified
-            Context.KCode = RubyEncoding.KCodeSJIS;
-            RubyDir.MakeDirectory(toPath, dir, MutableString.CreateBinary(sjis, RubyEncoding.Binary), null);
-            Assert(pal.Entries["ﾎ"]);
-            pal.Entries.Clear();
-
-            // ignore entries whose name cannot be encoded using the current KCODE
-            Context.KCode = RubyEncoding.KCodeSJIS;
-            AssertExceptionThrown<EncoderFallbackException>(() => RubyEncoding.KCodeSJIS.StrictEncoding.GetBytes("Ԋ"));
-            pal.Entries["Ԋ"] = true;
-            pal.Entries["ﾎ"] = true;
-            var entries = RubyDir.GetEntries(toPath, dir, MutableString.CreateEmpty());
-
-            Assert(entries.Count == 3);
-            foreach (MutableString entry in entries) {
-                Assert(entry.Encoding == RubyEncoding.KCodeSJIS);
-            }
-
-            Assert(((MutableString)entries[0]).Equals(MutableString.CreateAscii(".")));
-            Assert(((MutableString)entries[1]).Equals(MutableString.CreateAscii("..")));
-            Assert(((MutableString)entries[2]).Equals(MutableString.Create("ﾎ", RubyEncoding.KCodeSJIS)));
-        }
-#endif
         [Options(Pal = typeof(Pal1))]
         public void Dir2() {
             RubyClass dir = Context.GetClass(typeof(RubyDir));

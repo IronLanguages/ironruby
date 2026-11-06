@@ -52,7 +52,7 @@ y { |x0,x1,x2,x3,x4,x5,x6,x7,*z| print x0,x1,x2,x3,x4,x5,x6,x7,z[0],z[1]; }
         }
 
         public void RubyBlocks_Params3() {
-            XTestOutput(@"
+            TestOutput(@"
 l = lambda do |a,b=:b,*c,d,&e;f,g|
   p [a,b,c,d,e.class,f,g]
 end
@@ -1849,10 +1849,9 @@ D");
         /// define_method and class_eval change owner of the method definition.
         /// </summary>
         public void DefineMethod2() {
-            // TODO:
             TestOutput(@"
 module M
-  $p = lambda {    
+  $p = proc {    
     def goo
       def bar
         puts 'bar'
@@ -1874,18 +1873,17 @@ d = D.new
 
 d.goo
 c.foo
-c.goo
+c.goo rescue p $!.class
 
 p M.instance_methods(false).sort
 p C.instance_methods(false).sort
 p D.instance_methods(false).sort
 ", @"
-#<NoMethodError: undefined method `goo' for #<C:0x24c5a00>>
+NoMethodError
 [:goo]
 [:foo]
 [:bar, :goo]
 ");
-
         }
 
         public void ProcPosition1() {
@@ -2195,52 +2193,6 @@ puts '7'
 7
 ");
         }
-
-#if OBSOLETE
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void BEGIN3() {
-            TestOutput(@"
-def f1
-end
-
-BEGIN {
-  def f2
-  end
-}
-
-class C
-  private
-  while true
-    eval <<-END
-      BEGIN {
-        def f3
-        end
-      
-        private
-      
-        break
-        puts 'unreachable'
-      } 
-    END
-  end
-  
-  def f4
-  end
-end
-
-p self.private_methods(false).include?('f1')
-p self.public_methods(false).include?('f2')
-
-p C.public_instance_methods(false).include?('f3')
-p C.private_instance_methods(false).include?('f4')
-", @"
-true
-true
-true
-true
-");
-        }
-#endif
 
         public void SymbolToProc1() {
             TestOutput(@"

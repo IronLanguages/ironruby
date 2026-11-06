@@ -41,10 +41,10 @@ BO
         }
 
         /// <summary>
-        /// TODO: Unqualified constant lookup doesn't fallback to Object on BasicObject and its subclasses.
+        /// Unqualified constant lookup doesn't fallback to Object on BasicObject and its subclasses.
         /// </summary>
         public void BasicObject2() {
-            XTestOutput(@"
+            TestOutput(@"
 module M
   R = 1
 end
@@ -318,8 +318,6 @@ Meta
         /// Autoload removes the constant from the declaring module before it loads the target file.
         /// </summary>
         public void Autoload1() {
-            if (_driver.PartialTrust) return;
-
             var file = @"
 class D 
   p defined? X
@@ -350,8 +348,6 @@ nil
         /// way before it could touch the frozen Object. CRuby 4.0.6 prints the same three lines.
         /// </summary>
         public void ModuleFreezing1() {
-            if (_driver.PartialTrust) return;
-
             TestOutput(@"
 Float.freeze
 puts defined? Float::EPSILON         # this should work, Float is a builtin
@@ -595,7 +591,7 @@ c.clone.dreport
         /// Subclasses of builtin types and CLR types.
         /// </summary>
         public void InstanceVariables5() {
-            XTestOutput(@"
+            TestOutput(@"
 class R < Range
   def foo
     @a = 1
@@ -632,9 +628,8 @@ s.foo
 t.foo
 u.foo
 
-u.instance_variable_get(:@d)
-#p r.instance_variable_get(:@a), s.instance_variable_get(:@b), t.instance_variable_get(:@c), u.instance_variable_get(:@d)
-#p r.instance_variable_get(:@aa), s.instance_variable_get(:@bb), t.instance_variable_get(:@cc), u.instance_variable_get(:@dd)
+puts r.instance_variable_get(:@a), s.instance_variable_get(:@b), t.instance_variable_get(:@c), u.instance_variable_get(:@d)
+puts r.instance_variable_get(:@aa), s.instance_variable_get(:@bb), t.instance_variable_get(:@cc), u.instance_variable_get(:@dd)
 ", @"
 1
 2

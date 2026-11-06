@@ -150,7 +150,7 @@ NoMethodError
         /// </summary>
         public void ClrMethods2() {
             Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(ClassWithMethods1)));
-            XTestOutput(@"
+            TestOutput(@"
 class C
   def m; 2; end     # replace CLR method with Ruby method before we use the CLR one
   remove_method :m  # remove Ruby method
@@ -244,19 +244,7 @@ p c[0, 1]
 "), @"
 11
 ");
-            // non-default indexers:
-            // TODO: We need to use VB or generate IL to test this.
-            // TODO: improve access
-            //   If a property accessor with parameters is called without arguments the result is a PropertyAccessor object with [], []= defined.
-            //   Then the calls could look like c.foo[1,2] = 3. 
-
-            //            AssertOutput(() => CompilerTest(@"
-            //c = CI.new
-            //c.method(:foo=).call(1, 0, c.method(:foo).call(1, 0) + 5)
-            //p c.method(:foo).call(1, 0)
-            //"), @"
-            //25
-            //");
+            // TODO: non-default (named) indexers: C# cannot declare them, testing them needs VB or generated IL.
         }
 
         #endregion
@@ -366,7 +354,6 @@ puts b.prop2
         [Options(PrivateBinding = true)]
         public void ClrVisibility2() {
             Debug.Assert(Engine.Runtime.Setup.PrivateBinding);
-            if (_driver.PartialTrust) return;
             Context.ObjectClass.SetConstant("A", Context.GetClass(typeof(ProtectedA)));
             Context.ObjectClass.SetConstant("B", Context.GetClass(typeof(ProtectedB)));
 
@@ -734,13 +721,12 @@ p I.Where(a, 123)
 ambiguous
 7
 ");
-             // TODO:
-//             XTestOutput(@"
-//a = System::Array[Integer].new(1)
-//p I.Apply(a, lambda { |x| })
-//", @"
-//5
-//");
+            TestOutput(@"
+a = System::Array[Integer].new(1)
+p I.Apply(a, lambda { |x| })
+", @"
+8
+");
 
             // an inferred type is more specific than object:
             TestOutput(@"
@@ -2789,9 +2775,6 @@ false
         }
         
         public void ClrEventImpl1() {
-            // TODO: fix
-            if (_driver.PartialTrust) return;
-
             Context.ObjectClass.SetConstant("E", Context.GetClass(typeof(ClassWithVirtualEvent1)));
 
             var f = Engine.Execute<ClassWithVirtualEvent1>(@"
@@ -3134,10 +3117,6 @@ p D.new.report
             public sealed override int Goo() { return 30; }
 
             public override int Bar() { return 2; }
-        }
-
-        public class ClassWithVirtuals3 : ClassWithVirtuals2 {
-            public override int Bar() { return 3; }
         }
 
         public interface I1 { int f(); }

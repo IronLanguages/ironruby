@@ -132,15 +132,6 @@ namespace IronRuby.Tests {
             Assert(a.GetHashCode() == b.GetHashCode());
             Assert(a.GetHashCode() == c.GetHashCode());
             Assert(b.GetHashCode() == c.GetHashCode());
-
-            // TODO: do we need this property?
-            // non-ASCII characters:
-            // a = MutableString.Create("α", RubyEncoding.UTF8);
-            // b = MutableString.Create("α", RubyEncoding.SJIS);
-            // c = MutableString.CreateBinary(Encoding.UTF8.GetBytes("α"), RubyEncoding.Binary);
-            // Assert(a.GetHashCode() != b.GetHashCode());
-            // Assert(a.GetHashCode() != c.GetHashCode());
-            // Assert(b.GetHashCode() != c.GetHashCode());
         }
 
         [Options(NoRuntime = true)]
@@ -379,9 +370,9 @@ namespace IronRuby.Tests {
             x = MutableString.CreateBinary(b, RubyEncoding.UTF8);
             Assert(x.GetCharacterCount() == 6);
 
-            // TODO: throws an exception
-            //x = MutableString.CreateBinary(b, RubyEncoding.UTF8);
-            //Assert(x.GetCharCount() == 7);
+            // UTF-16 code units: the invalid bytes, a, b and a surrogate pair:
+            x = MutableString.CreateBinary(b, RubyEncoding.UTF8);
+            Assert(x.GetCharCount() == 7);
 
             x = MutableString.CreateBinary(b, RubyEncoding.UTF8);
             Assert(x.GetByteCount() == b.Length);
@@ -681,41 +672,6 @@ namespace IronRuby.Tests {
             Assert(x.Equals(MS("", e)));
         }
 
-        // ASCII <-> ASCII
-        // non-ASCII -> 0x80 -> '\u0080'
-        public class NonInvertibleEncoding : Encoding {
-            public override int GetBytes(char[] chars, int charIndex, int charCount, byte[] bytes, int byteIndex) {
-                for (int i = 0; i < charCount; i++) {
-                    char c = chars[charIndex + i];
-                    bytes[byteIndex + i] = c > '\u007f' ? (byte)0x80 : (byte)c;
-                }
-                return charCount;
-            }
-
-            public override int GetChars(byte[] bytes, int byteIndex, int byteCount, char[] chars, int charIndex) {
-                for (int i = 0; i < byteCount; i++) {
-                    chars[charIndex + i] = (char)bytes[i + byteIndex];
-                }
-                return byteCount;
-            }
-
-            public override int GetByteCount(char[] chars, int index, int count) {
-                return count;
-            }
-
-            public override int GetCharCount(byte[] bytes, int index, int count) {
-                return count;
-            }
-
-            public override int GetMaxByteCount(int charCount) {
-                return charCount;
-            }
-
-            public override int GetMaxCharCount(int byteCount) {
-                return byteCount;
-            }
-        }
-
         [Options(NoRuntime = true)]
         public void MutableString_SwitchRepr() {
             // \u{12345} in UTF-8:
@@ -735,45 +691,40 @@ namespace IronRuby.Tests {
             result = MutableString.AppendUnicodeRepresentation(new StringBuilder(), Encoding.UTF8.GetString(u215c), MutableString.Escape.NonAscii, -1, -1);
             Assert(result.ToString() == "\\u215C");
 
-            //var incompleteChar = MS(new byte[] { 0xF0, 0x92 }, RubyEncoding.UTF8);
-            //AssertExceptionThrown<DecoderFallbackException>(() => incompleteChar.Append('x'));
-
-            // TODO:
-            // var e = RubyEncoding.GetRubyEncoding(new NonInvertibleEncoding());
+            // appending to an incomplete character keeps the bytes, as "\xF0\x92" << "x" does:
+            var incompleteChar = MS(new byte[] { 0xF0, 0x92 }, RubyEncoding.UTF8);
+            incompleteChar.Append('x');
+            Assert(incompleteChar.ToByteArray().ValueEquals(new byte[] { 0xF0, 0x92, (byte)'x' }));
         }
         
         [Options(NoRuntime = true)]
         public void MutableString_Concatenate() {
-#if TODO
             var utf8 = new byte[] { 0xe2, 0x85, 0x9c };
             var sjis = new byte[] { 0x82, 0xA0 };
             var ascii = new byte[] { 0x20 };
 
+            // the same encoding:
             Test_Concatenate(utf8, RubyEncoding.Binary, utf8, RubyEncoding.Binary, RubyEncoding.Binary);
-            Test_Concatenate(utf8, RubyEncoding.Binary, sjis, RubyEncoding.KCodeSJIS, RubyEncoding.Binary);
-            Test_Concatenate(utf8, RubyEncoding.Binary, utf8, RubyEncoding.KCodeUTF8, RubyEncoding.Binary);
-
-            Test_Concatenate(sjis, RubyEncoding.KCodeSJIS, utf8, RubyEncoding.Binary, RubyEncoding.Binary);
-            Test_Concatenate(sjis, RubyEncoding.KCodeSJIS, sjis, RubyEncoding.KCodeSJIS, RubyEncoding.KCodeSJIS);
-            Test_Concatenate(sjis, RubyEncoding.KCodeSJIS, utf8, RubyEncoding.KCodeUTF8, RubyEncoding.Binary);
-            Test_Concatenate(sjis, RubyEncoding.KCodeSJIS, utf8, RubyEncoding.UTF8, RubyEncoding.Binary);
-
-            Test_Concatenate(utf8, RubyEncoding.KCodeUTF8, utf8, RubyEncoding.Binary, RubyEncoding.Binary);
-            Test_Concatenate(utf8, RubyEncoding.KCodeUTF8, sjis, RubyEncoding.KCodeSJIS, RubyEncoding.Binary);
-            Test_Concatenate(utf8, RubyEncoding.KCodeUTF8, utf8, RubyEncoding.KCodeUTF8, RubyEncoding.KCodeUTF8);
-            Test_Concatenate(utf8, RubyEncoding.KCodeUTF8, utf8, RubyEncoding.UTF8, RubyEncoding.KCodeUTF8);
-
-            Test_Concatenate(utf8, RubyEncoding.UTF8, sjis, RubyEncoding.KCodeSJIS, RubyEncoding.Binary);
-            Test_Concatenate(utf8, RubyEncoding.UTF8, utf8, RubyEncoding.KCodeUTF8, RubyEncoding.KCodeUTF8);
+            Test_Concatenate(sjis, RubyEncoding.SJIS, sjis, RubyEncoding.SJIS, RubyEncoding.SJIS);
             Test_Concatenate(utf8, RubyEncoding.UTF8, utf8, RubyEncoding.UTF8, RubyEncoding.UTF8);
 
+            // an ASCII-only side takes the encoding of the other one; two ASCII-only sides take the first one's:
             Test_Concatenate(utf8, RubyEncoding.UTF8, ascii, RubyEncoding.Binary, RubyEncoding.UTF8);
-            Test_Concatenate(ascii, RubyEncoding.Binary, ascii, RubyEncoding.UTF8, RubyEncoding.UTF8);
+            Test_Concatenate(ascii, RubyEncoding.Binary, utf8, RubyEncoding.UTF8, RubyEncoding.UTF8);
+            Test_Concatenate(sjis, RubyEncoding.SJIS, ascii, RubyEncoding.Binary, RubyEncoding.SJIS);
+            Test_Concatenate(ascii, RubyEncoding.Binary, ascii, RubyEncoding.UTF8, RubyEncoding.Binary);
+            Test_Concatenate(ascii, RubyEncoding.UTF8, ascii, RubyEncoding.Binary, RubyEncoding.UTF8);
 
+            // non-ASCII characters in different encodings:
             AssertExceptionThrown<EncodingCompatibilityError>(
                 () => Test_Concatenate(utf8, RubyEncoding.Binary, utf8, RubyEncoding.UTF8, RubyEncoding.Binary)
             );
-#endif
+            AssertExceptionThrown<EncodingCompatibilityError>(
+                () => Test_Concatenate(utf8, RubyEncoding.UTF8, utf8, RubyEncoding.Binary, RubyEncoding.UTF8)
+            );
+            AssertExceptionThrown<EncodingCompatibilityError>(
+                () => Test_Concatenate(sjis, RubyEncoding.SJIS, utf8, RubyEncoding.UTF8, RubyEncoding.SJIS)
+            );
         }
 
         private void Test_Concatenate(byte[]/*!*/ b1, RubyEncoding/*!*/ e1, byte[]/*!*/ b2, RubyEncoding/*!*/ e2, RubyEncoding/*!*/ resultEncoding) {
@@ -1357,28 +1308,28 @@ namespace IronRuby.Tests {
 
         [Options(NoRuntime = true)]
         public void MutableString_ChangeEncoding1() {
-#if TODO
-            var alpha = Encoding.UTF8.GetBytes("α");
-            MutableString s = MutableString.CreateBinary(alpha, RubyEncoding.UTF8);
-
             var SJIS = RubyEncoding.SJIS;
-            var hc2 = MutableString.Create("α", SJIS).GetHashCode();
-            var hc3 = MutableString.CreateBinary(alpha, SJIS).GetHashCode();
-            // TODO: hc2 should be equal to hc3
-            s.ChangeEncoding(SJIS, true);
-            Assert(s.ToString() == "ﾎｱ" && s.Encoding == SJIS && !s.IsBinaryEncoded && (s.GetHashCode() == hc2 || s.GetHashCode() == hc3));
+            var alpha = Encoding.UTF8.GetBytes("α");
+            var sjisAlpha = SJIS.StrictEncoding.GetBytes("α");
 
-            s = MutableString.CreateMutable("α", RubyEncoding.UTF8);
-            s.ChangeEncoding(SJIS, true);
-            Assert(s.ToByteArray().ValueEquals(SJIS.StrictEncoding.GetBytes("α")));
+            // "α".encode("Windows-31J") from either representation:
+            foreach (var s in new[] { MutableString.CreateBinary(alpha, RubyEncoding.UTF8), MutableString.CreateMutable("α", RubyEncoding.UTF8) }) {
+                s.Transcode(RubyEncoding.UTF8, SJIS);
+                Assert(s.Encoding == SJIS && s.ToString() == "α");
+                Assert(s.ToByteArray().ValueEquals(sjisAlpha));
 
-            hc = s.GetHashCode();
-            hc2 = MutableString.Create("α", RubyEncoding.SJIS).GetHashCode();
-            hc3 = MutableString.CreateBinary(alpha, RubyEncoding.SJIS).GetHashCode();
-            
-            s.ChangeEncoding(RubyEncoding.SJIS, true);
-            Assert(s.GetHashCode() == hc2 || s.GetHashCode() == hc3);
-#endif
+                // equal strings hash the same, whatever their representation:
+                var c = MutableString.Create("α", SJIS);
+                var b = MutableString.CreateBinary(sjisAlpha, SJIS);
+                Assert(s.Equals(c) && s.Equals(b));
+                Assert(s.GetHashCode() == c.GetHashCode() && s.GetHashCode() == b.GetHashCode());
+            }
+
+            // "\xCE\xB1".b.force_encoding("UTF-8") keeps the bytes:
+            var f = MutableString.CreateBinary(alpha, RubyEncoding.Binary);
+            f.ForceEncoding(RubyEncoding.UTF8);
+            Assert(f.Encoding == RubyEncoding.UTF8 && f.ToString() == "α");
+            Assert(f.ToByteArray().ValueEquals(alpha));
         }
 
         [Options(NoRuntime = true)]

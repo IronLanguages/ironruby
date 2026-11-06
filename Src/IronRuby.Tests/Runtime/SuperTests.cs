@@ -893,49 +893,6 @@ B::foo
 ");
         }
 
-#if OBSOLETE
-        /// <summary>
-        /// MRI 1.8: The self object captured by Kernel#binding is the receiver of the binding call.
-        /// Thus the self used in eval might be different from the one the scope holds on.
-        /// Super call uses the scope's self object.
-        /// </summary>
-        public void SuperCallInEvalWithBinding18() {
-            TestOutput(@"
-module Kernel
-  public :binding
-end
-
-class A
-  def m
-    puts 'A::m'
-  end
-end
-
-class D < A
-  def m
-    puts 'D::m'
-    p self.class
-    
-    cb = C.new.binding             # binding captures C.new as self
-    eval('
-        p self.class               # self is different from RubyScope.SelfObject here
-        super                      # super picks up RubyScope.SelfObject
-    ', cb)
-  end
-end
-
-class C
-end
-
-D.new.m", @"
-D::m
-D
-C
-A::m
-");
-        }
-#endif
-
         /// <summary>
         /// MRI 1.9: The self object captured by Kernel#binding is the one captured by the scope, not the receiver of the binding call.
         /// </summary>
