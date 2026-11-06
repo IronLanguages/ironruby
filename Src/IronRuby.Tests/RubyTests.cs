@@ -710,6 +710,7 @@ namespace IronRuby.Tests {
                 ExceptionMapping2,
                 ExceptionMapping3,
                 SystemCallErrorSubclass1,
+                Errno_PlatformTable1,
 
                 ClassVariables1,
                 UnqualifiedConstants2,

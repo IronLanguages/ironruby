@@ -888,5 +888,43 @@ class E2 < Errno::ENOENT; end
 #<Errno::ENOENT: No such file or directory>
 ");
         }
+
+        /// <summary>
+        /// Errno numbers and messages are the platform's, as MRI takes them from its C library: the
+        /// CLR-backed classes said ECONNREFUSED was 10061 "No connection could be made because the
+        /// target machine actively refused it." on Linux too, where MRI says 111 "Connection refused".
+        /// A name the platform has no error for is Errno::NOERROR. Errno::ENOEXEC.new made an EBADF.
+        /// </summary>
+        public void Errno_PlatformTable1() {
+            TestOutput(@"
+win = RUBY_PLATFORM =~ /mswin|mingw/
+mac = RUBY_PLATFORM =~ /darwin/
+# Without the prelude: the C# classes on their own.
+refused = win ? 10061 : mac ? 61 : 111
+e = Errno::ECONNREFUSED.new('x')
+p e.errno == refused, e.message == (win ? 'No connection could be made because the target machine actively refused it. - x' : 'Connection refused - x')
+p Errno::EINTR.new.message == (win ? 'Interrupted function call' : 'Interrupted system call')
+p Errno::EADDRINUSE.new.errno == (win ? 10048 : mac ? 48 : 98)
+p Errno::ENOEXEC.new.class
+
+require 'ruby4'
+p Errno::ECONNREFUSED::Errno == refused, SystemCallError.new(refused).class
+p Errno::EWOULDBLOCK.equal?(Errno::EAGAIN) == !win
+p Errno::EAUTH.equal?(Errno::NOERROR) == !mac, Errno::ENOKEY.equal?(Errno::NOERROR) == !!(win || mac)
+p Errno::ECONNRESET.new.message == SystemCallError.new(Errno::ECONNRESET::Errno).message
+", @"
+true
+true
+true
+true
+Errno::ENOEXEC
+true
+Errno::ECONNREFUSED
+true
+true
+true
+true
+");
+        }
     }
 }

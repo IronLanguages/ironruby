@@ -734,8 +734,6 @@ namespace IronRuby.Runtime {
 
         #region Errno
 
-        // TODO: initialize errno property
-
         public static string/*!*/ MakeMessage(string message, string/*!*/ baseMessage) {
             Assert.NotNull(baseMessage);
             if (message == null) {
@@ -784,7 +782,7 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateENOENT() {
-            return new FileNotFoundException("No such file or directory");
+            return new FileNotFoundException(RubyErrno.GetMessage("ENOENT"));
         }
 
         public static Exception/*!*/ CreateENOENT(string/*!*/ message, params object[] args) {

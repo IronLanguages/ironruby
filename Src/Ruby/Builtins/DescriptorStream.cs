@@ -82,7 +82,7 @@ namespace IronRuby.Builtins {
             } catch (EntryPointNotFoundException) {
                 return null;
             }
-            return (fd < 0) ? null : new DescriptorStream(fd, true, false, true);
+            return (fd < 0) ? null : new DescriptorStream(fd, true, false, true) { _directoryPath = path };
         }
 
         private const short POLLIN = 0x001;
@@ -91,7 +91,7 @@ namespace IronRuby.Builtins {
         private const short POLLHUP = 0x010;
         private const int EINTR = 4;
         private const int EIO = 5;
-        private const int EAGAIN = 11;   // == EWOULDBLOCK on Linux
+        private static readonly int EAGAIN = RubyErrno.GetNumber("EAGAIN");   // == EWOULDBLOCK on Unix
         public const int EPIPE = 32;
         private const int EISDIR = 21;
         private const int F_GETFL = 3;
@@ -117,6 +117,9 @@ namespace IronRuby.Builtins {
 
         // The stream that owns the descriptor, when it is not this one: disposed with it.
         private Stream _owner;
+
+        // The directory TryOpenDirectory opened, which a failed read names, as MRI does.
+        private string _directoryPath;
 
         /// <summary>
         /// A terminal opened as a file (File.open("/dev/tty")) on Unix, read and written through its
@@ -284,7 +287,7 @@ namespace IronRuby.Builtins {
                     }
                     if (error == EISDIR) {
                         // a directory opened by TryOpenDirectory
-                        throw RubyExceptions.CreateEISDIR("read");
+                        throw RubyExceptions.CreateEISDIR(_directoryPath ?? "read");
                     }
                     if (error == EIO) {
                         // a pty master whose slave side is all closed - see InputOutputError
