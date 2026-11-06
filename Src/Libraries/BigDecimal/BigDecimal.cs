@@ -29,7 +29,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
     /// that, except where MRI's results do (the ROUND_UP quirk of #round and #_dump's digit count),
     /// and those places work the word layout out from the exponent.
     /// </summary>
-    public class BigDecimal : IEquatable<BigDecimal>, IRubyObjectState {
+    public class BigDecimal : IRubyObjectState {
 
         /// <summary>
         /// BigDecimal.limit, BigDecimal.mode(ROUND_MODE) and the exception flags. MRI keeps them per
@@ -118,23 +118,20 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             _exponent = exponent;
         }
 
-        public NumberTypes NumberType => _type;
         public int Sign => _sign;
         public bool IsNaN => _type == NumberTypes.NaN;
         public bool IsInfinite => _type == NumberTypes.Infinite;
         public bool IsFinite => _type == NumberTypes.Finite;
         public bool IsZero => _type == NumberTypes.Finite && _digitCount == 0;
         public bool IsNonZeroFinite => _type == NumberTypes.Finite && _digitCount != 0;
-        public bool IsNegative => _sign < 0;
 
         /// <summary>The decimal exponent: 0.1234e3 has 3. Zero and the special values have 0.</summary>
         public long Exponent => _exponent;
 
-        /// <summary>The significant digits, without leading or trailing zeros. Zero has none.</summary>
-        public BigInteger Digits => _digits;
+        /// <summary>The number of significant digits, without leading or trailing zeros. Zero has none.</summary>
         public int DigitCount => _digitCount;
 
-        /// <summary>The power of ten the last digit stands for: the value is ±Digits * 10**Scale.</summary>
+        /// <summary>The power of ten the last digit stands for: the value is ±digits * 10**Scale.</summary>
         private long Scale => _exponent - _digitCount;
 
         /// <summary>MRI's #sign: the SIGN_* constants.</summary>
@@ -1182,17 +1179,10 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         // -Infinity < negative < zero (of either sign) < positive < Infinity
         private int Rank => IsZero ? 0 : (IsInfinite ? 2 : 1) * _sign;
 
-        public bool Equals(BigDecimal other) {
-            return other != null && Compare(this, other) == 0;
-        }
-
-        public override bool Equals(object obj) {
-            return Equals(obj as BigDecimal);
-        }
-
         /// <summary>
         /// Equal numbers hash alike, whatever digits they were written with. As in MRI, the special values
         /// and the zeros hash to their sign: so +0 and -0 hash apart though they are ==.
+        /// (Equals stays reference equality: IronRuby's #equal? is object.Equals for a CLR object.)
         /// </summary>
         public override int GetHashCode() {
             if (!IsNonZeroFinite) {

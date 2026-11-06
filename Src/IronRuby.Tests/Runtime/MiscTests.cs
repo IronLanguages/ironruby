@@ -4003,6 +4003,7 @@ t('coerce') { BigDecimal('1').add('x', 3) }
 t('kernel') { [BigDecimal(Rational(1, 3), 0), BigDecimal(Complex(2, 0)), BigDecimal(nil, exception: false).inspect].join(' ') }
 t('precision too large') { BigDecimal(1.5, 17) }
 t('exception kwarg') { BigDecimal('1', exception: 1) }
+t('identity') { a = BigDecimal('1.5'); [a.equal?(BigDecimal('1.50')), a.equal?(a), { a => 1 }[BigDecimal('1.50')]] }
 ", @"
 float: ""0.3e0 0.1180591620717411e22 0.12e1 0.4383733694592e-8""
 float+: 0.13e1
@@ -4035,6 +4036,7 @@ coerce: TypeError: String can't be coerced into BigDecimal
 kernel: ""0.33333333333333333333333333333333e0 0.2e1 nil""
 precision too large: ArgumentError: precision too large.
 exception kwarg: ArgumentError: expected true or false as exception: 1
+identity: [false, true, 1]
 ");
         }
     }
