@@ -1241,45 +1241,37 @@ namespace IronRuby.Builtins {
         public static bool IsConstantDefined(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self, object constantName,
             bool inherit) {
 
-            bool isTopLevel;
-            string[] parts = SplitConstantName(stringCast, constantName, out isTopLevel);
+            var path = new ConstantPath(stringCast, constantName);
             var context = self.Context;
-            RubyModule owner = isTopLevel ? context.ObjectClass : self;
+            RubyModule owner = path.IsTopLevel ? context.ObjectClass : self;
 
             // MRI searches Object for the first segment only (rb_const_defined vs
             // rb_const_defined_from), and only for a module: a class already has Object among its
             // ancestors, unless it is BasicObject - which is exactly the class MRI does not want
             // answering for Object's constants.
-            bool lookupObject = inherit && !isTopLevel && !owner.IsClass;
+            bool lookupObject = inherit && !path.IsTopLevel && !owner.IsClass;
 
-            for (int i = 0; i < parts.Length; i++) {
-                object value;
+            object value = null;
+            for (int i = 0; i < path.Count; i++) {
+                owner = path.Enter(i, owner, value);
+                string name = path[i];
 
                 // Passing null as the autoload scope so that a registered autoload answers true
                 // without running: MRI reports the constant as defined but does not trigger it here.
                 bool found = inherit
-                    ? owner.TryResolveConstant(null, parts[i], out value)
-                    : owner.TryGetConstant(null, parts[i], out value);
+                    ? owner.TryResolveConstant(null, name, out value) && (i == 0 || IsVisibleFromScope(owner, name))
+                    : owner.TryGetConstant(null, name, out value);
 
                 if (!found && lookupObject && !owner.IsObjectClass) {
-                    found = context.ObjectClass.TryResolveConstant(null, parts[i], out value);
+                    found = context.ObjectClass.TryResolveConstant(null, name, out value);
                 }
                 lookupObject = false;
 
                 if (!found) {
                     return false;
                 }
-                if (i == parts.Length - 1) {
-                    return true;
-                }
-
-                owner = value as RubyModule;
-                if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
-                }
             }
-
-            return false;
+            return true;
         }
 
         // thread-safe:
@@ -1294,37 +1286,29 @@ namespace IronRuby.Builtins {
         public static object GetConstantValue(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
             RubyModule/*!*/ self, object constantName, bool inherit) {
 
-            bool isTopLevel;
-            string[] parts = SplitConstantName(stringCast, constantName, out isTopLevel);
+            var path = new ConstantPath(stringCast, constantName);
             var context = self.Context;
-            RubyModule owner = isTopLevel ? context.ObjectClass : self;
+            RubyModule owner = path.IsTopLevel ? context.ObjectClass : self;
 
             // MRI searches Object for the first segment only (rb_const_get vs rb_const_get_from).
-            bool lookupObject = inherit && !isTopLevel;
+            bool lookupObject = inherit && !path.IsTopLevel;
 
             object value = null;
-            for (int i = 0; i < parts.Length; i++) {
-                if (inherit) {
-                    value = RubyUtils.GetConstant(scope.GlobalScope, owner, parts[i], lookupObject);
-                } else if (owner.TryGetConstant(scope.GlobalScope, parts[i], out value)) {
-                    if (owner.IsDeprecatedConstant(parts[i])) {
-                        context.ReportConstantDeprecation(owner, parts[i]);
+            for (int i = 0; i < path.Count; i++) {
+                owner = path.Enter(i, owner, value);
+                string name = path[i];
+
+                if (inherit && (i == 0 || IsVisibleFromScope(owner, name))) {
+                    value = RubyUtils.GetConstant(scope.GlobalScope, owner, name, lookupObject);
+                } else if (!inherit && owner.TryGetConstant(scope.GlobalScope, name, out value)) {
+                    if (owner.IsDeprecatedConstant(name)) {
+                        context.ReportConstantDeprecation(owner, name);
                     }
                 } else {
-                    value = ConstantMissing(owner, parts[i]);
+                    value = ConstantMissing(owner, name);
                 }
                 lookupObject = false;
-
-                if (i == parts.Length - 1) {
-                    break;
-                }
-
-                owner = value as RubyModule;
-                if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
-                }
             }
-
             return value;
         }
 
@@ -1363,7 +1347,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("private_constant")]
         public static RubyModule/*!*/ PrivateConstant(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
             [NotNull]params object[]/*!*/ constantNames) {
-            SetConstantVisibility(stringCast, self, constantNames, true);
+            foreach (var name in ConstantNamesToChange(stringCast, self, "private_constant", constantNames)) {
+                self.SetConstantVisibility(name, true);
+            }
             return self;
         }
 
@@ -1371,7 +1357,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("public_constant")]
         public static RubyModule/*!*/ PublicConstant(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
             [NotNull]params object[]/*!*/ constantNames) {
-            SetConstantVisibility(stringCast, self, constantNames, false);
+            foreach (var name in ConstantNamesToChange(stringCast, self, "public_constant", constantNames)) {
+                self.SetConstantVisibility(name, false);
+            }
             return self;
         }
 
@@ -1379,22 +1367,29 @@ namespace IronRuby.Builtins {
         [RubyMethod("deprecate_constant")]
         public static RubyModule/*!*/ DeprecateConstant(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
             [NotNull]params object[]/*!*/ constantNames) {
-
-            foreach (var constantName in constantNames) {
-                var name = Protocols.CastToSymbol(stringCast, constantName);
-                RubyUtils.CheckConstantName(name);
+            foreach (var name in ConstantNamesToChange(stringCast, self, "deprecate_constant", constantNames)) {
                 self.SetConstantDeprecated(name);
             }
             return self;
         }
 
-        private static void SetConstantVisibility(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
-            object[]/*!*/ constantNames, bool isPrivate) {
-            foreach (var constantName in constantNames) {
-                var name = Protocols.CastToSymbol(stringCast, constantName);
-                RubyUtils.CheckConstantName(name);
-                self.SetConstantVisibility(name, isPrivate);
+        /// <summary>
+        /// MRI's set_const_visibility / rb_mod_deprecate_constant: a frozen module refuses first,
+        /// even with no names; no names at all is a -W warning; a name that is not one of the
+        /// module's constants - a lower-case one included - is "constant M::x not defined",
+        /// which the RubyModule setters raise.
+        /// </summary>
+        private static string/*!*/[]/*!*/ ConstantNamesToChange(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
+            string/*!*/ methodName, object[]/*!*/ constantNames) {
+            RequireMutable(self);
+            if (constantNames.Length == 0) {
+                self.Context.ReportWarning(methodName + " with no argument is just ignored", true);
             }
+            var names = new string[constantNames.Length];
+            for (int i = 0; i < names.Length; i++) {
+                names[i] = Protocols.CastToSymbol(stringCast, constantNames[i]);
+            }
+            return names;
         }
 
         [RubyMethod("const_missing")]
@@ -1407,31 +1402,94 @@ namespace IronRuby.Builtins {
         /// A Symbol must be a plain constant name; a String may be a scoped path ("A::B") and may be
         /// rooted at Object ("::A::B"), in which case <paramref name="isTopLevel"/> is set.
         /// </summary>
-        private static string/*!*/[]/*!*/ SplitConstantName(ConversionStorage<MutableString>/*!*/ stringCast, object name, out bool isTopLevel) {
-            isTopLevel = false;
+        /// <summary>
+        /// A constant name given to const_get, const_defined? or const_source_location: a Symbol
+        /// is a single constant name, a String may be a scoped path ("A::B"), rooted at Object
+        /// ("::A::B"). MRI's loop (rb_mod_const_get) checks the path as it walks it, so the
+        /// errors come in its order: a malformed path ("A::", "A:B", "") is a wrong constant name
+        /// naming the whole path, a segment that is not a constant name ("A::b") names just that
+        /// segment, and either is only raised once the segments before it have been looked up.
+        /// </summary>
+        private sealed class ConstantPath {
+            private readonly string/*!*/ _name;
+            private readonly List<string>/*!*/ _segments = new List<string>();
+            // the segment before whose lookup the whole path is reported as malformed, or -1
+            private readonly int _malformedAt = -1;
 
-            var symbol = name as RubySymbol;
-            string str;
-            if (symbol != null) {
-                str = symbol.ToString();
-            } else {
-                var mstr = name as MutableString ?? Protocols.CastToString(stringCast, name);
-                str = mstr.ToString();
-            }
+            public bool IsTopLevel { get; }
+            public int Count => Math.Max(_segments.Count, 1);
+            public string/*!*/ this[int index] => _segments[index];
 
-            if (symbol == null && str.StartsWith("::", StringComparison.Ordinal)) {
-                isTopLevel = true;
-                str = str.Substring(2);
-            }
+            public ConstantPath(ConversionStorage<MutableString>/*!*/ stringCast, object name) {
+                var symbol = name as RubySymbol;
+                if (symbol != null) {
+                    _name = symbol.ToString();
+                    _segments.Add(_name);
+                    return;
+                }
 
-            string[] parts = (symbol == null) ? str.Split(new[] { "::" }, StringSplitOptions.None) : new[] { str };
-            foreach (string part in parts) {
-                if (!Tokenizer.IsConstantName(part)) {
-                    // MRI names the whole path: "wrong constant name Foo::".
-                    throw RubyExceptions.CreateNameError(String.Format("wrong constant name {0}", (isTopLevel ? "::" : "") + str));
+                _name = (name as MutableString ?? Protocols.CastToString(stringCast, name)).ToString();
+                int p = 0, end = _name.Length;
+                if (end > 2 && _name.StartsWith("::", StringComparison.Ordinal)) {
+                    IsTopLevel = true;
+                    p = 2;
+                }
+                if (p == end) {
+                    _malformedAt = 0;
+                }
+                while (p < end) {
+                    int start = p;
+                    while (p < end && _name[p] != ':') {
+                        p++;
+                    }
+                    _segments.Add(_name.Substring(start, p - start));
+                    if (start == p || p < end && (p + 2 >= end || _name[p + 1] != ':')) {
+                        _malformedAt = _segments.Count - 1;
+                        break;
+                    }
+                    p += 2;
                 }
             }
-            return parts;
+
+            /// <summary>
+            /// Checks segment <paramref name="index"/> before it is looked up and returns the
+            /// module to look it up in: <paramref name="owner"/> for the first segment, the value
+            /// the previous segment named for the others.
+            /// </summary>
+            public RubyModule/*!*/ Enter(int index, RubyModule/*!*/ owner, object previous) {
+                if (index == _malformedAt) {
+                    throw RubyExceptions.CreateNameError(String.Format("wrong constant name {0}", _name));
+                }
+                if (index > 0) {
+                    owner = previous as RubyModule;
+                    if (owner == null) {
+                        throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", _name);
+                    }
+                }
+                if (!Tokenizer.IsConstantName(_segments[index])) {
+                    throw RubyExceptions.CreateNameError(String.Format("wrong constant name {0}", _segments[index]));
+                }
+                return owner;
+            }
+        }
+
+        /// <summary>
+        /// A segment after the first of a scoped name is looked up with rb_const_get_from: in the
+        /// module and its ancestors, but only as far as Object - so "C::String" is not String even
+        /// though Object is an ancestor of C. True if <paramref name="name"/> is found before that.
+        /// </summary>
+        private static bool IsVisibleFromScope(RubyModule/*!*/ owner, string/*!*/ name) {
+            if (owner.IsObjectClass) {
+                return true;
+            }
+            bool found = false;
+            using (owner.Context.ClassHierarchyLocker()) {
+                owner.ForEachConstant(true, (module, constantName, value) =>
+                    // a null name announces the next module: stop on reaching Object
+                    constantName == null ? module.IsObjectClass : (found = constantName == name)
+                );
+            }
+            return found;
         }
 
         // thread-safe:
@@ -1446,36 +1504,37 @@ namespace IronRuby.Builtins {
         public static object GetConstantSourceLocation(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
             RubyModule/*!*/ self, object constantName, bool inherit) {
 
-            bool isTopLevel;
-            string[] parts = SplitConstantName(stringCast, constantName, out isTopLevel);
+            var path = new ConstantPath(stringCast, constantName);
             var context = self.Context;
 
-            RubyModule owner = isTopLevel ? context.ObjectClass : self;
-            bool lookupObject = inherit && !isTopLevel;
+            RubyModule owner = path.IsTopLevel ? context.ObjectClass : self;
+            bool lookupObject = inherit && !path.IsTopLevel;
 
             // Resolve everything but the last segment; only the last one's location is reported.
-            for (int i = 0; i < parts.Length - 1; i++) {
-                object value;
+            object value = null;
+            int last = path.Count - 1;
+            for (int i = 0; i < last; i++) {
+                owner = path.Enter(i, owner, value);
                 bool found = inherit
-                    ? owner.TryResolveConstant(scope.GlobalScope, parts[i], out value)
-                    : owner.TryGetConstant(scope.GlobalScope, parts[i], out value);
+                    ? owner.TryResolveConstant(scope.GlobalScope, path[i], out value) && (i == 0 || IsVisibleFromScope(owner, path[i]))
+                    : owner.TryGetConstant(scope.GlobalScope, path[i], out value);
 
                 if (!found && lookupObject && !owner.IsObjectClass) {
-                    found = context.ObjectClass.TryResolveConstant(scope.GlobalScope, parts[i], out value);
+                    found = context.ObjectClass.TryResolveConstant(scope.GlobalScope, path[i], out value);
                 }
                 lookupObject = false;
 
                 if (!found) {
                     return null;
                 }
-                owner = value as RubyModule;
-                if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
-                }
                 inherit = true;
             }
 
-            string lastName = parts[parts.Length - 1];
+            owner = path.Enter(last, owner, value);
+            string lastName = path[last];
+            if (last > 0 && !IsVisibleFromScope(owner, lastName)) {
+                return null;
+            }
             RubyModule definingModule = FindConstantOwner(context, scope, owner, lastName, inherit, lookupObject);
             if (definingModule == null) {
                 return null;
