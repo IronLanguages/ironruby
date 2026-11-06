@@ -957,6 +957,62 @@ a b 3 [2]
 ");
         }
 
+        /// <summary>
+        /// The CLR type of a subclass that mixes in Comparable or Enumerable (or includes a CLR interface) under a plain Ruby
+        /// class keeps one set of instance data: what the superclass's initialize sets is there after super, dup copies it.
+        /// Whether or not the superclass's type exists already; and a subclass of a class that got IComparable is one too.
+        /// </summary>
+        public void ClrRubyImpliedInterfaces2() {
+            Context.ObjectClass.SetConstant("Caller", Context.GetClass(typeof(ProtocolClrCaller1)));
+            TestOutput(@"
+class Base; def initialize(io) = @io = io; attr_reader :io; end
+class En < Base
+  include Enumerable
+  def initialize(io); super(io); p @io; end
+  def each = yield(@io)
+end
+class Base2; def initialize(io) = @io = io; attr_reader :io; end
+Base2.new(0)
+class Co < Base2
+  include Comparable
+  def initialize(io); super(io); p instance_variables; end
+  def <=>(o) = io <=> o.io
+end
+class Di < Base; include System::IDisposable; def dispose; end; end
+
+p En.new(1).to_a, Caller.each(En.new(2)), En.new(3).dup.io
+p Caller.compare(Co.new(1), Co.new(2)), Co.new(4).clone.io, Di.new(5).dup.io
+
+class Sub < Co
+  def initialize(io); super; @w = io * 2; end
+  attr_reader :w
+end
+s = Sub.new(6)
+p [s.io, s.w], Caller.compare(Sub.new(2), Sub.new(1)), Caller.default_compare(Sub.new(1), Co.new(1))
+", @"
+1
+2
+3
+[1]
+'2'
+3
+[:@io]
+[:@io]
+[:@io]
+-1
+4
+5
+[:@io]
+[:@io]
+[:@io]
+[:@io]
+[:@io]
+[6, 12]
+1
+0
+");
+        }
+
         #endregion
 
         #region Tasks and async streams
