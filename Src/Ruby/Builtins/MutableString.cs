@@ -1075,10 +1075,6 @@ namespace IronRuby.Builtins {
             return this;
         }
 
-        public bool IsTemporarilyLocked {
-            get { return (_flags & IsTemporarilyLockedFlag) != 0; }
-        }
-
         /// <summary>
         /// Makes this string tainted if the specified string is tainted.
         /// </summary>
@@ -1410,10 +1406,6 @@ namespace IronRuby.Builtins {
             return _content.GetCharacterCount();
         }
 
-        public void SetCharCount(int value) {
-            PrepareForCharacterRead().SetLength(value);
-        }
-
         public int GetByteCount() {
             return _content.GetByteCount();
         }
@@ -1694,31 +1686,17 @@ namespace IronRuby.Builtins {
             }
         }
 
-        internal sealed class CompositeCharacterEnumerator : CharacterEnumerator {
+        internal sealed class CharArrayCharacterEnumerator : CharacterEnumerator {
             private readonly char[]/*!*/ _data;
             private readonly int _count;
-            private readonly List<byte[]> _invalid;
-            private int _invalidIndex;
 
-            internal CompositeCharacterEnumerator(RubyEncoding/*!*/ encoding, char[]/*!*/ data, int count, List<byte[]> invalid) 
+            internal CharArrayCharacterEnumerator(RubyEncoding/*!*/ encoding, char[]/*!*/ data, int count) 
                 : base(encoding) {
                 _data = data;
                 _count = count;
-                _invalid = invalid;
-            }
-
-            private int InvalidCount {
-                get { return _invalid != null ? _invalid.Count : 0; }
             }
 
             internal override void AppendDataTo(MutableString/*!*/ str) {
-                int i;
-                while (_index < _count && _invalidIndex < InvalidCount) {
-                    i = Array.IndexOf(_data, LosslessDecoderFallback.InvalidCharacterPlaceholder, _index);
-                    str.Append(_data, _index, i - _index);
-                    _index = i + 1;
-                    str.Append(_invalid[_invalidIndex++]);
-                }
                 str.Append(_data, _index, _count - _index);
             }
 
@@ -1738,53 +1716,23 @@ namespace IronRuby.Builtins {
                 }
 
                 char c = _data[index];
-                if (c != LosslessDecoderFallback.InvalidCharacterPlaceholder) {
                 char d;
-                    if (Tokenizer.IsHighSurrogate(c) && index + 1 < _data.Length && Tokenizer.IsLowSurrogate(d = _data[index + 1])) {
-                        _current = new Character(c, d);
-                        _index = index + 2;
-                    } else if (EscapingEncoding.IsEscapedByte(c)) {
-                        // See StringCharacterEnumerator: a byte that is not valid in the string's
-                        // encoding is a character, but not a valid one.
-                        _current = new Character(new byte[] { (byte)(c - EscapingEncoding.EscapeBase) });
-                        _index = index + 1;
-                    } else {
-                        _current = new Character(c);
-                        _index = index + 1;
-                    }
-                } else if (_invalidIndex < InvalidCount) {
-                    _current = new Character(_invalid[_invalidIndex++]);
+                if (Tokenizer.IsHighSurrogate(c) && index + 1 < _count && Tokenizer.IsLowSurrogate(d = _data[index + 1])) {
+                    _current = new Character(c, d);
+                    _index = index + 2;
+                } else if (EscapingEncoding.IsEscapedByte(c)) {
+                    // See StringCharacterEnumerator: a byte that is not valid in the string's
+                    // encoding is a character, but not a valid one.
+                    _current = new Character(new byte[] { (byte)(c - EscapingEncoding.EscapeBase) });
                     _index = index + 1;
                 } else {
-                    // this can only happen if the decoder produces invalid characters \uFFFF, which it should not:
-                    throw new InvalidOperationException("Decoder produced an invalid chracter \uFFFF.");
+                    _current = new Character(c);
+                    _index = index + 1;
                 }
                 return true;
             }
-
-            public override void Reset() {
-                base.Reset();
-                _invalidIndex = -1;
-            }
         }
 
-        internal static CharacterEnumerator/*!*/ EnumerateAsCharacters(byte[]/*!*/ data, int count, RubyEncoding/*!*/ encoding, out char[] allValid) {
-            Decoder decoder = encoding.Encoding.GetDecoder();
-            var fallback = new LosslessDecoderFallback();
-            decoder.Fallback = fallback;
-
-            fallback.Track = true;
-            char[] chars = new char[decoder.GetCharCount(data, 0, count, true)];
-
-            // TODO: we can use singleton lossless non-tracking decoder for counting characters and tracking for getting the actual chars
-            decoder.Reset();
-            fallback.Track = false;
-            decoder.GetChars(data, 0, count, chars, 0, true);
-
-            allValid = (fallback.InvalidCharacters == null) ? chars : null;
-            return new CompositeCharacterEnumerator(encoding, chars, chars.Length, fallback.InvalidCharacters);
-        }
-        
         /// <summary>
         /// Enumerates over characters contained in the string. 
         /// Yields both valid characters and invalid byte sequences.

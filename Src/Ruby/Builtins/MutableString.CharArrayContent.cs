@@ -84,11 +84,6 @@ namespace IronRuby.Builtins {
                 _owner._encoding.EscapingEncoding.GetBytes(_data, 0, _count, bytes, start);
             }
 
-            public char DataGetChar(int index) {
-                Debug.Assert(index < _count);
-                return _data[index];
-            }
-
             public void DataSetChar(int index, char c) {
                 Debug.Assert(index < _count);
                 _data[index] = c;
@@ -102,10 +97,6 @@ namespace IronRuby.Builtins {
 
             public override int CalculateHashCode() {
                 return ConvertToString().GetHashCode();
-            }
-
-            public int DataLength {
-                get { return _count; }
             }
 
             public override int Count {
@@ -290,7 +281,7 @@ namespace IronRuby.Builtins {
             }
 
             public override CharacterEnumerator/*!*/ GetCharacters() {
-                return new MutableString.CompositeCharacterEnumerator(_owner.Encoding, _data, _count, null);
+                return new MutableString.CharArrayCharacterEnumerator(_owner.Encoding, _data, _count);
             }
 
             public override IEnumerable<byte>/*!*/ GetBytes() {

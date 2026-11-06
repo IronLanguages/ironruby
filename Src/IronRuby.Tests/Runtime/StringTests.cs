@@ -388,6 +388,27 @@ p [""abc"".sum, ""abc"".sum(0), ""abc"".sum(1), (""\xFF"" * 1000).b.sum(8), (""\
         }
 
         /// <summary>
+        /// U+FFFF is an ordinary character once a string has been mutated into its char-array form;
+        /// it used to be mistaken for a decoder placeholder and #chars raised.
+        /// </summary>
+        public void String_NonCharacter1() {
+            TestOutput(@"
+s = ""a\uFFFFb"".dup
+s << ""c""
+s[0] = ""x""
+p s.length, s.chars.map(&:ord), s.each_char.count
+t = ""ab\u{1F600}"".dup
+t[0] = ""Z""
+p t.chars.map(&:ord)
+", @"
+4
+[120, 65535, 98, 99]
+4
+[90, 98, 128512]
+");
+        }
+
+        /// <summary>
         /// #count, #delete and #squeeze answer an ASCII character from a bitmask CharacterSelector
         /// computes when it is parsed, negation and intersection included; anything else goes
         /// through the selector's sets and ranges as before.
