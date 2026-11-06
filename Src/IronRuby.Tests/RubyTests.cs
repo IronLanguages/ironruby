@@ -488,6 +488,7 @@ namespace IronRuby.Tests {
                 ComparableEqual1,
                 Hooks1,
                 Hooks2,
+                Hooks2b,
                 Hooks3,
                 MethodLookupCacheFull1,
                 Hooks4,
