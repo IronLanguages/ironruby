@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System.Linq.Expressions;
+using System.Dynamic;
 
 using System;
 using System.Collections;
@@ -477,10 +478,10 @@ namespace IronRuby.Runtime.Calls {
                     // The rule's tests have read it already.
                     if (!RubyOverloadResolver.ReceivesKeywordArguments(bindingTarget.Overload.ReflectionInfo)) {
                         var last = resolver.GetLastArgumentExpression();
-                        if (last != null && last.Type.IsAssignableFrom(typeof(Hash))) {
+                        if (last != null && last.Type.IsAssignableFrom(typeof(Hash)) && !RestrictsToNonHash(bindingTarget, last)) {
                             last = AstUtils.Box(last);
                             metaBuilder.Result = Ast.Block(
-                                Ast.IfThen(Ast.TypeIs(last, typeof(Hash)), Methods.ClearKeywordArguments.OpCall(last)),
+                                Ast.IfThen(Ast.TypeEqual(last, typeof(Hash)), Methods.ClearKeywordArguments.OpCall(last)),
                                 metaBuilder.Result
                             );
                         }
@@ -491,6 +492,29 @@ namespace IronRuby.Runtime.Calls {
             } else {
                 metaBuilder.SetError(resolver.MakeInvalidParametersError(bindingTarget).Expression);
             }
+        }
+
+        /// <summary>
+        /// Whether the rule only applies when the argument <paramref name="expression"/> is of a class other than Hash: the
+        /// overloads told its class apart, so the rule tests it exactly. Then the keyword mark need not be looked for - the
+        /// test would be one more step on every call of a rule while it is interpreted.
+        /// </summary>
+        private static bool RestrictsToNonHash(BindingTarget/*!*/ bindingTarget, Expression/*!*/ expression) {
+            foreach (var arg in bindingTarget.RestrictedArguments.GetObjects()) {
+                if (arg.Expression == expression) {
+                    return arg.Restrictions != BindingRestrictions.Empty && ExcludesHash(arg.Restrictions.ToExpression(), expression);
+                }
+            }
+            return false;
+        }
+
+        private static bool ExcludesHash(Expression/*!*/ test, Expression/*!*/ expression) {
+            if (test.NodeType == ExpressionType.AndAlso) {
+                var and = (BinaryExpression)test;
+                return ExcludesHash(and.Left, expression) || ExcludesHash(and.Right, expression);
+            }
+            return test.NodeType == ExpressionType.TypeEqual && ((TypeBinaryExpression)test).Expression == expression &&
+                !typeof(Hash).IsAssignableFrom(((TypeBinaryExpression)test).TypeOperand);
         }
 
         /// <summary>
