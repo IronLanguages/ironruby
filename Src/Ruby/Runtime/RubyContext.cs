@@ -458,6 +458,10 @@ namespace IronRuby.Runtime {
         private RubyClass _comObjectClass;
         private RubyClass _integerClass;
 
+        // The classes the System::Int64 and System::Numerics::BigInteger constants stand for (see GetClrTypeModule).
+        private RubyClass _int64InteropClass;
+        private RubyClass _bigIntegerInteropClass;
+
         private Action<RubyModule>/*!*/ _mainSingletonTrait;
 
         // internally set by Initializer:
@@ -735,9 +739,12 @@ namespace IronRuby.Runtime {
                         // does not fit in an Int32 but still fits in CRuby's 63-bit Fixnum range
                         // (and a little beyond).  It is aliased the same way, so a long answers
                         // Integer too.  This overwrites the System::Int64 class the Int64Ops
-                        // library registered; that class object is still reachable through the
-                        // System::Int64 constant for CLR interop, it just no longer claims
-                        // instances.
+                        // library registered; that class object is kept as the System::Int64
+                        // constant (see GetClrTypeModule), it just no longer claims instances.
+                        RubyClass int64Class;
+                        if (TryGetClassNoLock(typeof(long), out int64Class) && int64Class != integerClass) {
+                            _int64InteropClass = int64Class;
+                        }
                         ReplaceModuleInCacheNoLock(typeof(long), integerClass);
                         _integerClass = integerClass;
                     }
@@ -2024,6 +2031,35 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// The module that stands for a CLR type itself - what a CLR type constant (System::Int64), Type#to_class
+        /// and TypeTracker#to_class answer - as opposed to GetModule/GetClassOf, the class of the type's instances.
+        /// The two differ only for Int64 and BigInteger: their instances are Integers, but the class that names
+        /// the type must carry it, or System::Int64.MaxValue, List[System::Int64] and to_clr_type would all see the
+        /// Int32 that Integer's underlying type is. Each gets a subclass of Integer whose CLR type is its own.
+        /// </summary>
+        public RubyModule/*!*/ GetClrTypeModule(Type/*!*/ type) {
+            if (type == typeof(long) && _int64InteropClass != null) {
+                return _int64InteropClass;
+            }
+
+            if (type == typeof(BigInteger) && _integerClass != null) {
+                if (_bigIntegerInteropClass == null) {
+                    lock (ModuleCacheLock) {
+                        if (_bigIntegerInteropClass == null) {
+                            _bigIntegerInteropClass = CreateClass(
+                                GetQualifiedNameNoLock(type), type, null, null, null, null, null,
+                                _integerClass, RubyModule.EmptyArray, TypeTracker.GetTypeTracker(type), null, false, false, ModuleRestrictions.None
+                            );
+                        }
+                    }
+                }
+                return _bigIntegerInteropClass;
+            }
+
+            return GetModule(type);
+        }
+
         public RubyModule/*!*/ GetModule(NamespaceTracker/*!*/ namespaceTracker) {
             return GetOrCreateModule(namespaceTracker);
         }
@@ -2492,7 +2528,7 @@ namespace IronRuby.Runtime {
             // TypeTracker retrieved from namespace tracker should behave like a RubyClass/RubyModule:
             TypeTracker typeTracker = value as TypeTracker;
             if (typeTracker != null) {
-                return GetModule(typeTracker.Type);
+                return GetClrTypeModule(typeTracker.Type);
             }
 
             // NamespaceTracker retrieved from namespace tracker should behave like a RubyModule:

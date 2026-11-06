@@ -3612,8 +3612,8 @@ init
         /// </summary>
         public void ClrPrimitiveNumericTypes1() {
             TestOutput(@"
-# System::Int64 is not in this list: Int64 is one of the CLR types the Integer class itself
-# extends (alongside Int32 and BigInteger), so it has no separate Ruby class to probe.
+# System::Int64 is not in this list: a long is an Integer (like an Int32 or a BigInteger), so
+# System::Int64.new(i) is not an instance of System::Int64 (see ClrInt64AndBigInteger1).
 [System::Byte, System::SByte, System::UInt16, System::Int16, System::UInt32, System::UInt64, System::Single].each_with_index do |t,i|
   p t.ancestors
   p t.new(i).class
@@ -3657,6 +3657,113 @@ System::Single
 7.0
 Float
 no size method
+");
+        }
+
+        public static class IntegerOverloads {
+            public static string Pick(int x) { return "int " + x; }
+            public static string Pick(long x) { return "long " + x; }
+            public static string Pick(BigInt x) { return "BigInteger " + x; }
+            public static string Wide(long x) { return "long " + x; }
+        }
+
+        /// <summary>
+        /// An Int64 or BigInteger is an Integer, but the System::Int64 and System::Numerics::BigInteger constants still name
+        /// those CLR types: they are subclasses of Integer whose CLR type is their own, not Integer (whose CLR type is Int32).
+        /// </summary>
+        public void ClrInt64AndBigInteger1() {
+            Context.ObjectClass.SetConstant("IO", Context.GetClass(typeof(IntegerOverloads)));
+            TestOutput(@"
+include System::Collections::Generic
+I64 = System::Int64
+BI = System::Numerics::BigInteger
+
+# the type constants
+p I64.to_clr_type, BI.to_clr_type, System::Int32.to_clr_type
+p I64.equal?(Integer), BI.equal?(Integer), System::Int32.equal?(Integer)
+p I64.superclass, BI.superclass, I64.name
+p I64.to_clr_type.to_class.equal?(I64), System::Int32.to_clr_type.to_class.equal?(Integer)
+
+# static members
+p I64.MaxValue, I64.MinValue, I64.MaxValue.class
+p I64.Parse('9223372036854775807'), I64.TryParse('123456789012')
+p BI.Parse('123456789012345678901234567890'), BI.One, BI.Pow(2, 70)
+p System::Int16.TryParse('12'), System::Int32.TryParse('12')
+
+# generic instantiation and arrays
+l = List[I64].new
+l.Add(2**40)
+l.Add(5)
+p l.GetType, l[0], l[0].class
+b = List[BI].new
+b.Add(2**100)
+p b.GetType, b[0]
+p List[System::Int32].new.GetType, List[Integer].new.GetType
+a = System::Array[I64].new(2)
+a[0] = 2**62
+p a.GetType, a[0]
+p System::Array[BI].new([2**80]).GetType
+
+# overload resolution
+p IO.Pick(1), IO.Pick(2**40), IO.Pick(2**80)
+p IO.method(:Pick).overload(I64).call(1), IO.Wide(2**40)
+p System::Math.method(:Max).overload(I64, I64).call(2**40, 1)
+
+# instance CLR methods of a long and of a bignum are their own type's
+p 7.ToString, (2**40).ToString, (2**100).ToString, (2**40).CompareTo(5), (2**40).GetType
+
+# Integer semantics are unchanged
+x = 2**40
+p x.class, Integer === x, x.is_a?(Integer), x + 1, x * x, (x * x).class
+", @"
+System.Int64
+System.Numerics.BigInteger
+System.Int32
+false
+false
+true
+Integer
+Integer
+""System::Int64""
+true
+true
+9223372036854775807
+-9223372036854775808
+Integer
+9223372036854775807
+[true, 123456789012]
+123456789012345678901234567890
+1
+1180591620717411303424
+[true, 12 (Int16)]
+[true, 12]
+System.Collections.Generic.List`1[System.Int64]
+1099511627776
+Integer
+System.Collections.Generic.List`1[System.Numerics.BigInteger]
+1267650600228229401496703205376
+System.Collections.Generic.List`1[System.Int32]
+System.Collections.Generic.List`1[System.Int32]
+System.Int64[]
+4611686018427387904
+System.Numerics.BigInteger[]
+'int 1'
+'long 1099511627776'
+'BigInteger 1208925819614629174706176'
+'long 1'
+'long 1099511627776'
+1099511627776
+'7'
+'1099511627776'
+'1267650600228229401496703205376'
+1
+System.Int64
+Integer
+true
+true
+1099511627777
+1208925819614629174706176
+Integer
 ");
         }
 

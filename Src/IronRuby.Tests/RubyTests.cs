@@ -571,6 +571,7 @@ namespace IronRuby.Tests {
                 ClrConstructor4,
                 ClrConstructor5,
                 ClrPrimitiveNumericTypes1,
+                ClrInt64AndBigInteger1,
                 ClrArrays1,
                 ClrArrays2,
                 ClrArrays3,

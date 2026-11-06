@@ -1286,7 +1286,9 @@ namespace IronRuby.Builtins {
                     // Skip classes that have no tracker, e.g. Fixnum(tracker) <: Integer(null) <: Numeric(null) <: Object(tracker).
                     // Skip CLR modules, their methods are not callable => do not include them into a method group.
                     // Skip all classes once hidden sentinel is encountered (no CLR overloads are visible since then).
-                    if (!skipHidden && module.TypeTracker != null && module.IsClass) {
+                    // Skip classes whose CLR type is not a CLR base of the type: System::Int16 <: Integer(Int32) must not merge
+                    // Int32.Parse/TryParse into Int16's overloads (that made Int16.TryParse("1") ambiguous).
+                    if (!skipHidden && module.TypeTracker != null && module.IsClass && module.TypeTracker.Type.IsAssignableFrom(type)) {
                         ancestors.Add((RubyClass)module);
                     }
                 }
@@ -1303,7 +1305,20 @@ namespace IronRuby.Builtins {
                 var inheritedGroup = inheritedRubyMember as RubyOverloadGroupInfo;
 
                 if (inheritedGroup != null) {
-                    AddMethodsOverwriteExisting(ref allMethods, inheritedGroup.MethodBases, inheritedGroup.OverloadOwners, specialNameOnly);
+                    // the same rule as for the ancestors above: only overloads that a CLR base of the type declares
+                    var owners = inheritedGroup.OverloadOwners;
+                    var methodBases = inheritedGroup.MethodBases;
+                    var inheritedOverloads = new List<OverloadInfo>(methodBases.Length);
+                    var inheritedOwners = new List<RubyOverloadGroupInfo>(methodBases.Length);
+                    for (int i = 0; i < methodBases.Length; i++) {
+                        var owner = (owners != null ? owners[i] : null) ?? inheritedGroup;
+                        var ownerTracker = owner.DeclaringModule.TypeTracker;
+                        if (ownerTracker == null || ownerTracker.Type.IsAssignableFrom(type)) {
+                            inheritedOverloads.Add(methodBases[i]);
+                            inheritedOwners.Add(owners != null ? owners[i] : null);
+                        }
+                    }
+                    AddMethodsOverwriteExisting(ref allMethods, inheritedOverloads, inheritedOwners.ToArray(), specialNameOnly);
                 } else if (inheritedRubyMember.IsRemovable) {
                     // The groups created below won't contain overloads defined above (if there are any).
                     // If this method is removed we need to invalidate them.

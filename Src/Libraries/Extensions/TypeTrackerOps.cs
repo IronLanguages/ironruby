@@ -21,7 +21,7 @@ namespace IronRuby.Builtins {
     public static class TypeTrackerOps {
         [RubyMethod("to_module")]
         public static RubyModule/*!*/ ToModule(RubyContext/*!*/ context, TypeTracker/*!*/ self) {
-            return context.GetModule(self.Type);
+            return context.GetClrTypeModule(self.Type);
         }
 
         [RubyMethod("to_class")]
@@ -29,7 +29,7 @@ namespace IronRuby.Builtins {
             if (self.Type.IsInterface) {
                 RubyExceptions.CreateTypeError("Cannot convert a CLR interface to a Ruby class");
             }
-            return context.GetClass(self.Type);
+            return context.GetClrTypeModule(self.Type) as RubyClass ?? context.GetClass(self.Type);
         }
     }
 }
