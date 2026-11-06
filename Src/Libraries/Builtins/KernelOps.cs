@@ -679,6 +679,56 @@ namespace IronRuby.Builtins {
             throw ConversionArity(0, "1..2");
         }
 
+        // Kernel#Complex(x[, y], exception: true) (MRI's nucomp_f_complex): Integers and Floats make
+        // their Complex here; anything else - Strings, Rationals, a Complex, objects, exception: - is
+        // complex.rb's __ir_Complex_slow__, whose `*args, exception:' cost ~1.7 us a call.
+
+        private static bool IsIntegerOrFloat(object value) {
+            return value is int || value is long || value is double;
+        }
+
+        [RubyMethod("Complex", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Complex", RubyMethodAttributes.PublicSingleton)]
+        public static object ToComplex(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, RubyContext/*!*/ context,
+            object self, object value) {
+            if (IsIntegerOrFloat(value)) {
+                return new RubyComplex(context.GetClass(typeof(RubyComplex)), value, ScriptingRuntimeHelpers.Int32ToObject(0));
+            }
+            var site = slow.GetCallSite("__ir_Complex_slow__", 1);
+            return site.Target(site, self, value);
+        }
+
+        [RubyMethod("Complex", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Complex", RubyMethodAttributes.PublicSingleton)]
+        public static object ToComplex(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow, RubyContext/*!*/ context,
+            object self, object real, object imaginary) {
+            if (IsIntegerOrFloat(real) && IsIntegerOrFloat(imaginary)) {
+                return new RubyComplex(context.GetClass(typeof(RubyComplex)), real, imaginary);
+            }
+            var site = slow.GetCallSite("__ir_Complex_slow__", 2);
+            return site.Target(site, self, real, imaginary);
+        }
+
+        [RubyMethod("Complex", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Complex", RubyMethodAttributes.PublicSingleton)]
+        public static object ToComplex(CallSiteStorage<Func<CallSite, object, object, object, object, object>>/*!*/ slow,
+            object self, object real, object imaginary, object options) {
+            var site = slow.GetCallSite("__ir_Complex_slow__", 3);
+            return site.Target(site, self, real, imaginary, options);
+        }
+
+        [RubyMethod("Complex", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Complex", RubyMethodAttributes.PublicSingleton)]
+        public static object ToComplex(object self, object a, object b, object c, object d, params object[]/*!*/ more) {
+            throw ConversionArity(4 + more.Length, "1..2");
+        }
+
+        [RubyMethod("Complex", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Complex", RubyMethodAttributes.PublicSingleton)]
+        public static object ToComplex(object self) {
+            throw ConversionArity(0, "1..2");
+        }
+
         // The Rational class of the context that last asked (one per process in practice).
         private static RubyClass _rationalClass;
 

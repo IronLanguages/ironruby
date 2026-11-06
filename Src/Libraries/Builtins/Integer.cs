@@ -216,6 +216,12 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        /// <summary>numeric_to_c: self + 0i (complex.rb's Numeric#to_c, for the commonest receivers).</summary>
+        [RubyMethod("to_c")]
+        public static RubyComplex/*!*/ ToComplex(RubyContext/*!*/ context, object/*!*/ self) {
+            return new RubyComplex(context.GetClass(typeof(RubyComplex)), self, ScriptingRuntimeHelpers.Int32ToObject(0));
+        }
+
         #region numerator/ord, denominator
 
         [RubyMethod("numerator")]

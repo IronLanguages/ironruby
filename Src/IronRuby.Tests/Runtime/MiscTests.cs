@@ -3172,6 +3172,63 @@ p r
         }
 
         /// <summary>
+        /// Complex as a C# type (RubyComplex) with +, -, *, /, ==, #hash and #abs in C# for Integer and Float
+        /// parts, Kernel#Complex and #to_c; Rational parts, coercion and the rest left to complex.rb; Math.hypot
+        /// rounded as libm's is. The expected output is CRuby's.
+        /// </summary>
+        public void Complex_CSharp1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+a = Complex(1, 2); b = Complex(3.5, -1); r = Complex(Rational(1, 2), 3); z = Complex(0, 0)
+t('basic') { [a, a.real, a.imaginary, a.imag, a.frozen?, a.instance_variables, a.class.superclass, Complex(1), Complex(1.5), Complex(""1+2i"")] }
+t('add') { [a + b, a + 1, a + 2.5, a + r, a - b, a - 1, a + Rational(1, 3), -a, a + Complex(0, 0)] }
+t('mul') { [a * b, a * 2, a * 0.5, a * r, a * Complex(0, 1), Complex(Float::INFINITY, 0) * 0, a * z] }
+t('div') { [a / b, a / 2, a / 0.5, a.quo(a), a / r, a.fdiv(2), Complex(1, 1) / Complex(1, -1)] }
+t('div0') { a / 0 }
+t('div0f') { a / 0.0 }
+t('pow') { [a ** 2, a ** -1, a ** 0.5, a ** a, a ** Rational(1, 2), Complex(0, 1) ** 2] }
+t('eq') { [a == Complex(1, 2), a == b, Complex(3) == 3, Complex(3, 0.0) == 3, a == ""x"", a.eql?(Complex(1, 2)), a.eql?(Complex(1.0, 2)), Complex(1, 0) <=> 2, a <=> 1] }
+t('hash') { [a.hash == Complex(1, 2).hash, {a => 1}[Complex(1, 2)], a.hash == Complex(1.0, 2).hash] }
+t('abs') { [a.abs, a.abs2, a.arg, a.polar, a.rectangular, a.conjugate, b.abs, Complex(3, 4).abs, Complex(-0.0, 0).arg] }
+t('fmt') { [a.to_s, a.inspect, b.to_s, r.inspect, Complex(1, Float::NAN).to_s, Complex(1, -0.0).inspect] }
+t('marshal') { [Marshal.load(Marshal.dump(a)), Marshal.load(Marshal.dump(r))] }
+o = Object.new; def o.coerce(x) = [x, Complex(1, 1)]
+t('coerce') { [a + o, a * o] }
+t('bad') { a + ""x"" }
+t('int ops') { [1 + a, 2 * a, 3 - a, 4 / a, 1.5 * a, Rational(1, 2) + a, 2 ** a] }
+t('misc') { [a.real?, 1.real?, a.to_c, 5.to_c, 2.5.to_c, Rational(1, 2).to_c, a.finite?, Complex(Float::INFINITY, 0).infinite?, Complex.polar(1, Math::PI / 2).real.round(10), Complex.rectangular(1, 2)] }
+t('Complex()') { [Complex(1, 2), Complex(""3""), Complex(nil, exception: false), Complex(""x"", exception: false), Complex(1, 2.0)] }
+t('cerr') { Complex(nil) }
+t('hypot') { [Math.hypot(3.5, 1), Math.hypot(3, 4), Math.hypot(1e300, 1e300), Math.hypot(1e-300, 1e-300), Math.hypot(-0.0, 0), Math.hypot(Float::INFINITY, Float::NAN), Math.hypot(5e-324, 5e-324)] }
+t('undef') { [Complex.instance_method(:==).owner, (Complex(1) < 2 rescue $!.class)] }
+t('int32 edge') { m = -2147483648; x = 2147483647; [Complex(m, m) * Complex(m, m), Complex(x, x) * Complex(x, -x), Complex(m, x) * Complex(x, m), Complex(m, 0) * m + Complex(m, 0) * m, Complex(x, x) + Complex(x, x), Complex(m, m) - Complex(x, x)] }
+", @"
+basic: [(1+2i), 1, 2, 2, true, [], Numeric, (1+0i), (1.5+0i), (1+2i)]
+add: [(4.5+1i), (2+2i), (3.5+2i), ((3/2)+5i), (-2.5+3i), (0+2i), ((4/3)+2i), (-1-2i), (1+2i)]
+mul: [(5.5+6.0i), (2+4i), (0.5+1.0i), ((-11/2)+(4/1)*i), (-2+1i), (NaN+0i), (0+0i)]
+div: [(0.11320754716981132+0.6037735849056602i), ((1/2)+1i), (2.0+4.0i), (1+0i), ((26/37)-(8/37)*i), (0.5+1.0i), (0+1i)]
+div0: [ZeroDivisionError, ""divided by 0""]
+div0f: (Infinity+Infinity*i)
+pow: [(-3+4i), ((1/5)-(2/5)*i), (1.272019649514069+0.7861513777574233i), (-0.22251715680177267+0.10070913113607541i), (1.272019649514069+0.7861513777574233i), (-1+0i)]
+eq: [true, false, true, true, false, true, false, -1, nil]
+hash: [true, 1, false]
+abs: [2.23606797749979, 5, 1.1071487177940904, [2.23606797749979, 1.1071487177940904], [1, 2], (1-2i), 3.640054944640259, 5.0, 3.141592653589793]
+fmt: [""1+2i"", ""(1+2i)"", ""3.5-1i"", ""((1/2)+3i)"", ""1+NaN*i"", ""(1-0.0i)""]
+marshal: [(1+2i), ((1/2)+3i)]
+coerce: [(2+3i), (-1+3i)]
+bad: [TypeError, ""String can't be coerced into Complex""]
+int ops: [(2+2i), (2+4i), (2-2i), ((4/5)-(8/5)*i), (1.5+3.0i), ((3/2)+2i), (0.36691394948660344+1.9660554808224875i)]
+misc: [false, true, (1+2i), (5+0i), (2.5+0i), ((1/2)+0i), true, 1, 0.0, (1+2i)]
+Complex(): [(1+2i), (3+0i), nil, nil, (1+2.0i)]
+cerr: [TypeError, ""can't convert nil into Complex""]
+hypot: [3.640054944640259, 5.0, 1.4142135623730952e+300, 1.414213562373095e-300, 0.0, Infinity, 5.0e-324]
+undef: [Complex, NoMethodError]
+int32 edge: [(0+9223372036854775808i), (9223372028264841218+0i), (0+9223372032559808513i), (9223372036854775808+0i), (4294967294+4294967294i), (-4294967295-4294967295i)]
+");
+        }
+
+        /// <summary>
         /// Rational as a C# type (RubyRational) with its arithmetic, comparison, #to_f and #hash in C#, and
         /// Kernel#Rational: Integer, Float, Rational and big operands, coercion, division by zero, NaN,
         /// Marshal, hash keys, the conversions and errors left to rational.rb. The expected output is CRuby's.
@@ -3211,6 +3268,7 @@ t('kw') { [Rational(1, 2, exception: false), Rational(""1/2"", exception: true)]
 t('badkw') { Rational(1, exception: 1) }
 t('Kernel.') { Kernel.Rational(3, 9) }
 t('arity') { method(:Rational).arity }
+t('int32 edge') { [Rational(2**31 - 1, 2**31 - 2) + Rational(-2**31, 2**31 - 1), Rational(-2**31, 1) * Rational(-2**31, 1), Rational(2**31, 3) / Rational(-2**31, 7), Rational(-2**31, 2**31 - 1) <=> Rational(2**31 - 1, 2**31 - 2), Rational(2**31 - 1) + (2**31 - 1), Rational(2**31, 1) + 1, Rational(-2**31, 3) - Rational(2**31 - 1, 5), Rational(2**31 - 1, -(2**31)), (-2**31) ** -1, (-2**31) ** -2] }
 t('class') { [Rational(1, 3).class, Rational(4, 2).denominator.class] }
 ", @"
 add: [(-1/15), (4/3), (3541774862152233910273/3), 0.8333333333333333, (1180591620717411303425/3), (2361183241434822606848/3), (11/15), (-8/3), (-11/15), (0/1)]
@@ -3242,6 +3300,7 @@ kw: [(1/2), (1/2)]
 badkw: [ArgumentError, ""expected true or false as exception: 1""]
 Kernel.: (1/3)
 arity: -1
+int32 edge: [(1/4611686011984936962), (4611686018427387904/1), (-7/3), -1, (4294967294/1), (2147483649/1), (-17179869181/15), (-2147483647/2147483648), (-1/2147483648), (1/4611686018427387904)]
 class: [Rational, Integer]
 ");
         }
