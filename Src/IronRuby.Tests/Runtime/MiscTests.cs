@@ -1639,6 +1639,35 @@ Integer
 ");
         }
 
+        /// <summary>
+        /// Process.maxgroups= is read back by Process.maxgroups (it set an ivar the getter did not read), takes a positive
+        /// Integer by implicit conversion and caps it at 65536, as MRI's does.
+        /// </summary>
+        public void Process_MaxGroups1() {
+            TestOutput(@"
+require 'ruby4'
+def t; p yield; rescue => e; p e; end
+n = Process.maxgroups
+t { Process.maxgroups = n - 1; Process.maxgroups }
+t { Process.maxgroups = 70000; Process.maxgroups }
+t { Process.maxgroups = 0 }
+t { Process.maxgroups = nil }
+t { Process.maxgroups = 'a' }
+t { Process.maxgroups = 3.7; Process.maxgroups }
+Process.maxgroups = n
+p Process.instance_variables, Process.maxgroups == n
+", @"
+65535
+65536
+#<ArgumentError: maxgroups 0 should be positive>
+#<TypeError: no implicit conversion from nil to integer>
+#<TypeError: no implicit conversion of String into Integer>
+3
+[]
+true
+");
+        }
+
         // Nine "Integer out of Float range" warnings, as MRI gives under -w: one for each Bignum
         // that meets a Float in an operator - on either side of it - except fdiv and <=>/>/==.
         public void Numeric_BignumFloatOverflow1() {

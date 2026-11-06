@@ -7561,8 +7561,12 @@ module Process
     end
     module_function :maxgroups
 
+    # MRI's: a positive Integer (implicitly converted), capped at RB_MAX_GROUPS
     def maxgroups=(value)
-      @maxgroups = value.to_int
+      ::Kernel.raise TypeError, "no implicit conversion from nil to integer" if value.nil?
+      n = Integer.try_convert(value) || ::Kernel.raise(TypeError, "no implicit conversion of #{value.class} into Integer")
+      ::Kernel.raise ArgumentError, "maxgroups #{n} should be positive" if n <= 0
+      @__maxgroups__ = n > 65536 ? 65536 : n
     end
     module_function :maxgroups=
   end
