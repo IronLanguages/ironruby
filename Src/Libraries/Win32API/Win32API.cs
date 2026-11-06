@@ -388,7 +388,6 @@ namespace IronRuby.StandardLibrary.Win32API {
         /// <summary>
         /// Gets the ModuleBuilder used to generate our unsafe call stubs into.
         /// </summary>
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Portability", "CA1903:UseOnlyApiFromTargetedFramework", MessageId = "System.AppDomain.#DefineDynamicAssembly(System.Reflection.AssemblyName,System.Reflection.Emit.AssemblyBuilderAccess,System.Collections.Generic.IEnumerable`1<System.Reflection.Emit.CustomAttributeBuilder>)")]
         private static ModuleBuilder DynamicModule {
             get {
                 if (_dynamicModule == null) {

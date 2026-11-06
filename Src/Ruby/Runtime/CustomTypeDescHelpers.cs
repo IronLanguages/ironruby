@@ -42,7 +42,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self")]
         public static AttributeCollection GetAttributes(object self) {
             return AttributeCollection.Empty;
         }
@@ -53,7 +52,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self")]
         public static string GetComponentName(object self) {
             return null;
         }
@@ -64,19 +62,16 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self")]
         public static EventDescriptor GetDefaultEvent(object self) {
             return null;
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self")]
         public static PropertyDescriptor GetDefaultProperty(object self) {
             return null;
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self"), System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "editorBaseType")]
         public static object GetEditor(object self, Type editorBaseType) {
             return null;
         }
@@ -93,7 +88,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self")]
         public static EventDescriptorCollection GetEvents(object self) {
             return EventDescriptorCollection.Empty;
         }
@@ -167,7 +161,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "pd")]
         public static object GetPropertyOwner(object self, PropertyDescriptor pd) {
             return self;
         }

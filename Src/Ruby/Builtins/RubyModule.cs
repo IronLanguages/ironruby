@@ -86,7 +86,6 @@ namespace IronRuby.Builtins {
     [DebuggerTypeProxy(typeof(RubyModule.DebugView))]
     [ReflectionCached]
     public partial class RubyModule : IDuplicable, IRubyObject {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
         public static readonly RubyModule[]/*!*/ EmptyArray = new RubyModule[0];
 
         // interlocked
