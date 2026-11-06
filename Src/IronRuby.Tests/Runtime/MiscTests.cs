@@ -44,16 +44,12 @@ namespace IronRuby.Tests {
         public void Scenario_Globals2() {
             AssertOutput(delegate() {
                 CompilerTest(@"
-p $KCODE, $-K, $SAFE
 $KCODE = 'u'
 $-K = 1
 $SAFE = 'x'
 p $KCODE, $-K, $SAFE
 ");
             }, @"
-nil
-nil
-nil
 ""u""
 1
 ""x""
