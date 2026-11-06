@@ -656,6 +656,7 @@ internal class LibraryDef {
             } else {
 
                 bool hasContext = false;
+                bool hasCalledName = false;
                 bool hasBlock = false;
                 bool hasSelf = false;
                 int storageCount = 0;
@@ -681,6 +682,12 @@ internal class LibraryDef {
                         }
 
                         hasContext = true;
+                    } else if (type == typeof(string) && parameterInfos[i].IsDefined(typeof(CalledNameAttribute), false)) {
+                        if (hasCalledName || hasBlock || hasSelf || i - storageCount != (hasContext ? 1 : 0)) {
+                            LogMethodError("[CalledName] parameter must follow the optional RubyCallSiteStorage and context parameters", methodDef, overload);
+                        }
+
+                        hasCalledName = true;
                     } else if (type == typeof(BlockParam)) {
                         if (hasBlock) {
                             LogMethodError("has multiple block parameters.", methodDef, overload);
@@ -688,12 +695,8 @@ internal class LibraryDef {
 
                         // TODO: sites
 
-                        if (hasContext && i - storageCount != 1) {
-                            LogMethodError("Block parameter must be the first parameter after context parameter", methodDef, overload);
-                        }
-
-                        if (!hasContext && i - storageCount != 0) {
-                            LogMethodError("Block parameter must be the first parameter following optional RubyCallSiteStorage", methodDef, overload);
+                        if (i - storageCount != (hasContext ? 1 : 0) + (hasCalledName ? 1 : 0)) {
+                            LogMethodError("Block parameter must be the first parameter following optional RubyCallSiteStorage, context and [CalledName] parameters", methodDef, overload);
                         }
 
                         hasBlock = true;

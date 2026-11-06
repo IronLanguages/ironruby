@@ -308,6 +308,11 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
+            // The name the method was called by is the rule's to pass (a plan is per method, not per name):
+            if (i < infos.Count && CalledNameAttribute.IsDefinedOn(infos[i])) {
+                return null;
+            }
+
             Parameter block = null;
             if (i < infos.Count && infos[i].ParameterType == typeof(BlockParam)) {
                 parameters[i] = block = new Parameter { Kind = Kind.Block, Type = typeof(BlockParam), NotNull = overload.ProhibitsNull(i) };
