@@ -39,6 +39,21 @@ namespace IronRuby.Runtime.Calls {
     }
 
     internal static class InteropBinder {
+        /// <summary>
+        /// The BindDelegate of every interop binder: an interpreted rule that compiles after the context's threshold,
+        /// or none (the DLR then compiles the rule right away) when adaptive compilation is off.
+        /// </summary>
+        private static T LightBind<T>(DynamicMetaObjectBinder/*!*/ binder, RubyContext/*!*/ context, object[]/*!*/ args, Action<T>/*!*/ cacheTarget)
+            where T : class {
+            if (context.Options.NoAdaptiveCompilation) {
+                return null;
+            }
+
+            var result = binder.LightBind<T>(args, context.CompilationThreshold);
+            cacheTarget(result);
+            return result;
+        }
+
         internal sealed class CreateInstance : CreateInstanceBinder, IInteropBinder {
             private readonly RubyContext/*!*/ _context;
 
@@ -52,15 +67,7 @@ namespace IronRuby.Runtime.Calls {
                 get { return _context; }
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             public override DynamicMetaObject/*!*/ FallbackCreateInstance(DynamicMetaObject/*!*/ target, DynamicMetaObject/*!*/[]/*!*/ args,
                 DynamicMetaObject errorSuggestion) {
@@ -89,15 +96,7 @@ namespace IronRuby.Runtime.Calls {
                 get { return _context; }
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             public override DynamicMetaObject/*!*/ FallbackInvoke(DynamicMetaObject/*!*/ target, DynamicMetaObject/*!*/[]/*!*/ args, 
                 DynamicMetaObject errorSuggestion) {
@@ -139,15 +138,7 @@ namespace IronRuby.Runtime.Calls {
                 get { return _context; }
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             public override DynamicMetaObject/*!*/ FallbackInvoke(DynamicMetaObject/*!*/ target, DynamicMetaObject/*!*/[]/*!*/ args, 
                 DynamicMetaObject errorSuggestion) {
@@ -202,15 +193,7 @@ namespace IronRuby.Runtime.Calls {
                 get { return _context; }
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             #region Ruby -> DLR
 
@@ -358,15 +341,7 @@ namespace IronRuby.Runtime.Calls {
                 get { return false; }
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             #region Ruby -> DLR
 
@@ -437,15 +412,7 @@ namespace IronRuby.Runtime.Calls {
                 get { return false; }
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             #region Ruby -> DLR
 
@@ -491,15 +458,7 @@ namespace IronRuby.Runtime.Calls {
                 get { return _context; }
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             #region Ruby -> DLR
 
@@ -576,15 +535,7 @@ namespace IronRuby.Runtime.Calls {
                 _context = context;
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             public override DynamicMetaObject/*!*/ FallbackSetMember(DynamicMetaObject/*!*/ target, DynamicMetaObject/*!*/ value,
                 DynamicMetaObject errorSuggestion) {
@@ -617,15 +568,7 @@ namespace IronRuby.Runtime.Calls {
                 _context = context;
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             #region Ruby -> DLR
 
@@ -674,15 +617,7 @@ namespace IronRuby.Runtime.Calls {
                 _context = context;
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             #region Ruby -> DLR
 
@@ -740,15 +675,7 @@ namespace IronRuby.Runtime.Calls {
                 _setIndex = context.MetaBinderFactory.InteropSetIndex(callInfo);
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             #region Ruby -> DLR
 
@@ -784,15 +711,7 @@ namespace IronRuby.Runtime.Calls {
                 _context = context;
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             public override DynamicMetaObject/*!*/ FallbackBinaryOperation(DynamicMetaObject/*!*/ target, DynamicMetaObject/*!*/ arg, DynamicMetaObject errorSuggestion) {
                 string methodName = RubyUtils.MapOperator(Operation);
@@ -833,15 +752,7 @@ namespace IronRuby.Runtime.Calls {
                 _context = context;
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             public override DynamicMetaObject/*!*/ FallbackUnaryOperation(DynamicMetaObject/*!*/ target, DynamicMetaObject errorSuggestion) {
                 string methodName = RubyUtils.MapOperator(Operation);
@@ -899,15 +810,7 @@ namespace IronRuby.Runtime.Calls {
                 _context = context;
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             public override DynamicMetaObject/*!*/ FallbackConvert(DynamicMetaObject/*!*/ target, DynamicMetaObject errorSuggestion) {
                 var metaBuilder = new MetaObjectBuilder(this, target, DynamicMetaObject.EmptyMetaObjects);
@@ -943,15 +846,7 @@ namespace IronRuby.Runtime.Calls {
                 _context = context;
             }
 
-            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) {
-                if (_context.Options.NoAdaptiveCompilation) {
-                    return null;
-                }
-
-                var result = this.LightBind<T>(args, _context.CompilationThreshold);
-                CacheTarget(result);
-                return result;
-            }
+            public override T BindDelegate<T>(CallSite<T>/*!*/ site, object[]/*!*/ args) => LightBind<T>(this, _context, args, CacheTarget);
 
             public override DynamicMetaObject/*!*/ FallbackConvert(DynamicMetaObject/*!*/ target, DynamicMetaObject errorSuggestion) {
                 return target.Clone(Ast.NewArrayInit(typeof(object), target.Expression));
