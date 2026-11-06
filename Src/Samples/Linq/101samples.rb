@@ -170,10 +170,24 @@ customers.
   each { |entry| p entry }
 
 
-#puts '-- SelectMany: Compound from 3'
+puts '-- SelectMany: Compound from 3'
+s = Struct.new(:customer_id, :order_id, :order_date)
+customers.
+  select_many(->(c) { c.orders }, make_pair).
+  where { |(c,o)| o.order_date >= 2000 }.
+  select { |(c,o)| s[c.id, o.id, o.order_date] }.
+  each { |entry| p entry }
 
 
-#puts '-- SelectMany: from Assignment'
+puts '-- SelectMany: from Assignment'
+# C#'s `let total = o.Total` is a projection to [order, total] ahead of the filter.
+s = Struct.new(:customer_id, :order_id, :total)
+customers.
+  select_many(->(c) { c.orders }, make_pair).
+  select { |(c,o)| [c, o, o.total] }.
+  where { |(c,o,total)| total >= 1000.0 }.
+  select { |(c,o,total)| s[c.id, o.id, total] }.
+  each { |entry| p entry }
 
 
 puts '-- SelectMany: Multiple from'
@@ -193,14 +207,21 @@ customers.
   each { |s| puts s }
 
 #####################
-### Parititioning ###
+### Partitioning ###
 #####################
 
 puts '-- Take: Simple'
 p numbers.take(3).to_a
 
 
-#puts '-- Take: Nested'
+puts '-- Take: Nested'
+s = Struct.new(:customer_id, :order_id, :order_date)
+customers.
+  select_many(->(c) { c.orders }, make_pair).
+  where { |(c,o)| c.region == "WA" }.
+  select { |(c,o)| s[c.id, o.id, o.order_date] }.
+  take(3).
+  each { |entry| p entry }
 
 
 puts '-- Skip: Simple'
@@ -248,15 +269,44 @@ class Comparer
   end
 end
 
-# puts '-- OrderBy - Simple 1'
-# puts '-- OrderBy - Simple 2'
-# puts '-- OrderBy - Simple 3'
-# puts '-- OrderBy - Comparer'
-# puts '-- OrderByDescending - Simple 1'
-# puts '-- OrderByDescending - Simple 2'
-# puts '-- OrderByDescending - Comparer'
-# puts '-- ThenBy - Simple'
-# puts '-- ThenBy - Comparer'
+case_insensitive = Comparer.new { |x, y| x.casecmp y }
+mixed_case_words = [ "aPPLE", "AbAcUs", "bRaNcH", "BlUeBeRrY", "ClOvEr", "cHeRry" ].to_seq
+
+puts '-- OrderBy: Simple 1'
+words = [ "cherry", "apple", "blueberry" ].to_seq
+p words.order_by(identity).to_a
+
+
+puts '-- OrderBy: Simple 2'
+p words.order_by { |w| w.size }.to_a
+
+
+puts '-- OrderBy: Simple 3'
+products.order_by { |p| p.product_name }.each { |product| p product }
+
+
+puts '-- OrderBy: Comparer'
+p mixed_case_words.order_by(identity, case_insensitive).to_a
+
+
+puts '-- OrderByDescending: Simple 1'
+p [ 1.7, 2.3, 1.9, 4.1, 2.9 ].to_seq.order_by_descending(identity).to_a
+
+
+puts '-- OrderByDescending: Simple 2'
+products.order_by_descending { |p| p.units_in_stock }.each { |product| p product }
+
+
+puts '-- OrderByDescending: Comparer'
+p mixed_case_words.order_by_descending(identity, case_insensitive).to_a
+
+
+puts '-- ThenBy: Simple'
+p digits.order_by { |d| d.size }.then_by(identity).to_a
+
+
+puts '-- ThenBy: Comparer'
+p mixed_case_words.order_by { |w| w.size }.then_by(identity, case_insensitive).to_a
 
 puts '-- ThenByDescending: Simple'
 products.order_by { |p| p.category }.then_by_descending { |p| p.unit_price }.each { |product| p product }
@@ -288,10 +338,18 @@ words.
   each { |g| puts "Words that start with the letter '#{g.key.chr}': #{g.to_a.join(', ')}" }
 
 
-#puts '-- Grouping: Simple 3'
+puts '-- Grouping: Simple 3'
+products.
+  group_by { |p| p.category }.
+  each { |g| puts "#{g.key}: #{g.select { |p| p.product_name }.to_a.join(', ')}" }
 
 
-#puts '-- GroupBy: Nested'
+puts '-- GroupBy: Nested'
+customers.
+  select { |c| [c.company_name, c.orders.to_seq.group_by { |o| o.order_date >= 2000 ? "2000s" : "1990s" }] }.
+  each do |company, decades|
+    puts "#{company}: " + decades.select { |d| "#{d.key} #{d.select { |o| o.id }.to_a.inspect}" }.to_a.join(", ")
+  end
 
 
 puts '-- GroupBy: Comparer'
@@ -333,22 +391,29 @@ anagrams.
 puts '-- Distinct 1'
 p [ 2, 2, 3, 5, 5 ].to_seq.distinct.to_a
 
-#puts '-- Distinct 2'
+puts '-- Distinct 2'
+p products.select { |p| p.category }.distinct.to_a
+
+product_first_chars = products.select { |p| p.product_name[0] }
+customer_first_chars = customers.select { |c| c.company_name[0] }
 
 puts '-- Union 1'
 p numbersA.union(numbersB).to_a
 
-#puts '-- Union 2'
+puts '-- Union 2'
+p product_first_chars.union(customer_first_chars).to_a
 
 puts '-- Intersect 1'
 p numbersA.intersect(numbersB).to_a
 
-#puts '-- Intersect 2'
+puts '-- Intersect 2'
+p product_first_chars.intersect(customer_first_chars).to_a
 
 puts '-- Except 1'
 p numbersA.except(numbersB).to_a
 
-#puts '-- Except 2'
+puts '-- Except 2'
+p product_first_chars.except(customer_first_chars).to_a
 
 ############################
 ### Conversion Operators ###
@@ -507,10 +572,13 @@ products.
   each { |entry| puts "Cheapest products in category #{entry.category}: #{entry.cheapest_products.select {|p| p.product_name }.to_a}" }
 
 
-# Max samples are similar to Min 
+# The other Max and Average samples are the Min and Sum ones with the method renamed.
+puts '-- Max: Simple'
+p numbers.to_seq(Integer).max
 
 
-# Average samples are similar to Sum
+puts '-- Average: Simple'
+p numbers.to_seq(Integer).average
 
 
 puts '-- Aggregate: Simple'
@@ -563,7 +631,20 @@ p wordsA.sequence_equal(wordsB)
 ### Query Execution ###
 #######################
 
-# ...
+puts '-- Deferred Execution'
+# The query runs when it is enumerated, not when it is built: each element bumps i then.
+i = 0
+q = numbers.select { |n| i += 1 }
+q.each { |v| print "v = #{v}, i = #{i}; " }
+puts
+
+
+puts '-- Immediate Execution'
+# to_list runs the query once, up front.
+i = 0
+q = numbers.select { |n| i += 1 }.to_list
+q.each { |v| print "v = #{v}, i = #{i}; " }
+puts
 
 ######################
 ### Join Operators ###
