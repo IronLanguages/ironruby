@@ -256,6 +256,34 @@ Backtrace8.rb:N:in 'f'
 ");
         }
 
+        /// <summary>
+        /// The interpreter calls a method with this many parameters through reflection (DLR patch 0103): what the method
+        /// raised kept its frames, the caller's and those below the rescuing one, and the reflection frames do not show.
+        /// </summary>
+        public void Backtrace9() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+def many(a, b, c, d, e, f, g, h, i, j, k)
+  raise ArgumentError, 'x'
+end
+
+def caller_of_many
+  many(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+end
+
+begin
+  caller_of_many
+rescue => e
+  puts e.backtrace.first(3).map { |f| f[/in '(.*)'/, 1] || f[/\w+\.rb/] }
+end
+");
+            }, @"
+many
+caller_of_many
+Backtrace9.rb
+");
+        }
+
         public void Backtrace7() {
             // TODO: start name by \0 -> bug in reflection?
             StringBuilder sb = new StringBuilder();
