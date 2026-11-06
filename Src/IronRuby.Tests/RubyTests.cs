@@ -316,6 +316,7 @@ namespace IronRuby.Tests {
                 MethodToProc1,
                 DefineMethod1,
                 DefineMethod2,
+                DefineMethodBlockBreak1,
                 ProcPosition1,
                 
                 Scenario_RubyInitializers0,

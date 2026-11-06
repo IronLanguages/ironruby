@@ -148,6 +148,12 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
+            if (args.Signature.HasBlock) {
+                // The call is the flow-control frame of a literal block given to it, as a def method's is (its
+                // RubyMethodScope): a break from the block, wherever the body passes it on to, ends this call.
+                metaBuilder.ControlFlowBuilder = RubyMethodInfo.RuleControlFlowBuilder;
+            }
+
             Proc.BuildCall(
                 metaBuilder,
                 AstUtils.Constant(_lambda),            // proc object

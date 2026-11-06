@@ -1897,6 +1897,41 @@ NoMethodError
 ");
         }
 
+        /// <summary>
+        /// A call of a define_method method is the frame a break from its literal block ends, wherever the
+        /// body passes the block on to - as a def method's call is - on the first calls and on later ones.
+        /// </summary>
+        public void DefineMethodBlockBreak1() {
+            TestOutput(@"
+class Object; def yielder; yield 1; :done; end; end
+o = Object.new
+o.define_singleton_method(:each) { |&b| yielder(&b); :after }
+r = []
+4.times { |i| r << o.each { |x| break x * 10 + i } }
+p r
+class C; define_method(:each) { |&b| [1].each(&b); :after }; end
+p C.new.each { |x| break 20 }
+o.define_singleton_method(:call_it) { |&b| b.call(1); :after }
+p o.call_it { |x| break 30 }
+o.define_singleton_method(:ens) { |&b| begin; yielder(&b); ensure; puts 'ensure'; end; :after }
+p o.ens { break 40 }
+o.define_singleton_method(:keep) { |&b| $saved = b; :kept }
+p o.keep { break 50 }
+$saved.call rescue p $!.class
+p o.send(:each) { break 60 }, o.method(:each).call { break 70 }
+", @"
+[10, 11, 12, 13]
+20
+30
+ensure
+40
+:kept
+LocalJumpError
+60
+70
+");
+        }
+
         public void ProcPosition1() {
              AssertOutput(() => CompilerTest(@"
 def foo &q 
