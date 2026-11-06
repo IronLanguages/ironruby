@@ -2523,7 +2523,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object GetCachedGlobalVariable(RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
             var context = scope.RubyContext;
-            if (context.RactorsStarted && !site.IsCoreLibrary) {
+            if (context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
                 return GetGlobalVariable(scope, site.Name);
             }
             var variable = site.GetVariable(context);
@@ -2538,7 +2538,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object ReadCachedGlobalVariable(RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
             var context = scope.RubyContext;
-            if (context.RactorsStarted && !site.IsCoreLibrary) {
+            if (context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
                 return ReadGlobalVariable(scope, site.Name);
             }
             var variable = site.GetVariable(context);
@@ -2563,7 +2563,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object SetCachedGlobalVariable(object value, RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
             var context = scope.RubyContext;
-            if (context.RactorsStarted && !site.IsCoreLibrary) {
+            if (context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
                 return SetGlobalVariable(value, scope, site.Name);
             }
             var plain = site.GetVariable(context) as GlobalVariableInfo;
@@ -4300,7 +4300,7 @@ namespace IronRuby.Runtime {
                 if (module == null) {
                     return GetInstanceVariableSlow(scope.RubyContext, self, site);
                 }
-                if (module.Context.RactorsStarted && !site.IsCoreLibrary) {
+                if (module.Context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(module.Context)) {
                     return GetModuleInstanceVariableChecked(module, site);
                 }
                 data = module._instanceData;
@@ -4328,7 +4328,7 @@ namespace IronRuby.Runtime {
                 if (module == null) {
                     return GetInstanceVariableSlow(context, self, site);
                 }
-                if (module.Context.RactorsStarted && !site.IsCoreLibrary) {
+                if (module.Context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(module.Context)) {
                     return GetModuleInstanceVariableChecked(module, site);
                 }
                 data = module._instanceData;
