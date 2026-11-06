@@ -120,7 +120,6 @@ namespace IronRuby.Builtins {
         /// encoding still raises.
         /// </summary>
         [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
         public static object ToInteger(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ toInt, UnaryOpStorage/*!*/ toStr,
             UnaryOpStorage/*!*/ toI, object self, object value, [Optional]object radixOrOptions, [Keywords, Optional]object options) {
 
@@ -213,8 +212,24 @@ namespace IronRuby.Builtins {
         /// handed back as it is if it is a Float. With exception: false a failure answers nil, including
         /// an error raised by the object's own #to_f.
         /// </summary>
-        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
+        // Kernel.Integer and Kernel.Float: methods of their own, which a backtrace names "Kernel.Integer" as MRI's does
+        // (see Format and SingletonFormat).
+        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("ToInteger")]
+        public static object SingletonToInteger(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ toInt, UnaryOpStorage/*!*/ toStr,
+            UnaryOpStorage/*!*/ toI, object self, object value, [Optional]object radixOrOptions, [Keywords, Optional]object options) {
+            return ToInteger(fixnumCast, toInt, toStr, toI, self, value, radixOrOptions, options);
+        }
+
         [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("ToFloat")]
+        public static object SingletonToFloat(UnaryOpStorage/*!*/ toF, object self, object value, [Keywords, Optional]object options) {
+            return ToFloat(toF, self, value, options);
+        }
+
+        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
         public static object ToFloat(UnaryOpStorage/*!*/ toF, object self, object value, [Keywords, Optional]object options) {
             if (value is double) {
                 return value;
@@ -236,9 +251,9 @@ namespace IronRuby.Builtins {
                 }
                 if (!raise) {
                     double parsed;
-                    return RubyOps.TryParseRubyFloat(str.ConvertToString(), out parsed) ? (object)parsed : null;
+                    return RubyOps.TryConvertKernelFloat(context, str, out parsed) ? (object)parsed : null;
                 }
-                return RubyOps.ConvertMutableStringToFloat(context, str);
+                return RubyOps.ConvertKernelFloat(context, str);
             }
             if (value == null || value is bool) {
                 if (!raise) {

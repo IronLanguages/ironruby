@@ -467,6 +467,20 @@ namespace IronRuby.Builtins {
             return lambda != null && lambda.TrySetRuby2Keywords();
         }
 
+        /// <summary>
+        /// Makes one method the same as another to Method#== (see RubyMethodInfo.MakeEquivalentTo): the prelude's way of
+        /// writing a core method MRI defines under two names, each with frames of its own name.
+        /// </summary>
+        [RubyMethod("__ir_same_method__", RubyMethodAttributes.PrivateInstance)]
+        public static void MakeSameMethod(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+            [DefaultProtocol, NotNull]string/*!*/ sameAs) {
+            var method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info as RubyMethodInfo;
+            var other = self.ResolveMethod(sameAs, VisibilityContext.AllVisible).Info as RubyMethodInfo;
+            if (method != null && other != null) {
+                method.MakeEquivalentTo(other);
+            }
+        }
+
         // Anything that is not a Proc, Method or UnboundMethod: MRI names the three acceptable
         // types rather than reporting a failed conversion to one of them.
         [RubyMethod("define_method")]

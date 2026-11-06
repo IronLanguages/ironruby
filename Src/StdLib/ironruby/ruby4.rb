@@ -392,7 +392,9 @@ module Enumerable
   unless method_defined?(:__inject_without_name_check__)
     alias :__inject_without_name_check__ :inject
 
-    def inject(*args, &block)
+    # inject and reduce are one C function in MRI, which a backtrace names by
+    # the method called - so each is a method here, not an alias.
+    def __enum_inject__(args, block)
       if args.size > 2 || (args.empty? && !block)
         raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)"
       end
@@ -413,7 +415,16 @@ module Enumerable
       end
       __inject_without_name_check__(*args, &block)
     end
-    alias :reduce :inject
+    private :__enum_inject__
+
+    def inject(*args, &block)
+      __enum_inject__(args, block)
+    end
+
+    def reduce(*args, &block)
+      __enum_inject__(args, block)
+    end
+    __ir_same_method__(:reduce, :inject)
   end
 
   # min/max also grew an `n` form.
@@ -531,8 +542,10 @@ module Enumerable
     [min_by(&block), max_by(&block)]
   end unless method_defined?(:minmax_by)
 
-  def flat_map
-    return to_enum(__callee__) { size if respond_to?(:size) } unless block_given?
+  # flat_map and collect_concat are one C function in MRI, which a backtrace names by
+  # the method called - so each is a method here, not an alias.
+  def __enum_flat_map__(name)
+    return to_enum(name) { size if respond_to?(:size) } unless block_given?
     result = []
     each do |*values|
       # Like #map, #flat_map hands the yielded values straight to the block
@@ -553,8 +566,21 @@ module Enumerable
       array.is_a?(Array) ? result.concat(array) : result << mapped
     end
     result
-  end unless method_defined?(:flat_map)
-  alias :collect_concat :flat_map unless method_defined?(:collect_concat)
+  end
+  private :__enum_flat_map__
+
+  unless method_defined?(:flat_map)
+    def flat_map(&block)
+      __enum_flat_map__(:flat_map, &block)
+    end
+  end
+
+  unless method_defined?(:collect_concat)
+    def collect_concat(&block)
+      __enum_flat_map__(:collect_concat, &block)
+    end
+    __ir_same_method__(:collect_concat, :flat_map)
+  end
 
   def uniq
     seen = {}
@@ -1180,8 +1206,10 @@ class Array
 
   # The deletions have to be visible if the block raises part way through, so
   # this compacts in place rather than building a new array and swapping it in.
-  def select!(&block)
-    return to_enum(__callee__) { size } unless block
+  # select!, filter! and keep_if are one C function in MRI, which a backtrace
+  # names by the method called - so each is a method here, not an alias.
+  def __array_select_bang__(name, block)
+    return to_enum(name) { size } unless block
     __array_check_frozen__
     original = size
     kept = 0
@@ -1201,11 +1229,23 @@ class Array
       slice!(kept, index - kept) if index > kept
     end
     original == size ? nil : self
+  end
+  private :__array_select_bang__
+
+  def select!(&block)
+    __array_select_bang__(:select!, block)
   end unless method_defined?(:select!)
+
+  unless method_defined?(:filter!)
+    def filter!(&block)
+      __array_select_bang__(:filter!, block)
+    end
+    __ir_same_method__(:filter!, :select!)
+  end
 
   def keep_if(&block)
     return to_enum(:keep_if) { size } unless block
-    select!(&block)
+    __array_select_bang__(:keep_if, block)
     self
   end unless method_defined?(:keep_if)
 
@@ -1428,7 +1468,6 @@ class Array
   public
 
   alias :filter :select unless method_defined?(:filter)
-  alias :filter! :select! if method_defined?(:select!) && !method_defined?(:filter!)
   alias :append :push unless method_defined?(:append)
   alias :prepend :unshift unless method_defined?(:prepend)
 end
@@ -9956,17 +9995,25 @@ class IO
 
   alias :__ir_each_line__ :each_line
 
-  def each_line(*args, **opts, &block)
-    return to_enum(__callee__, *args, **opts) unless block
+  def __io_each_line__(name, args, opts, block)
+    return to_enum(name, *args, **opts) unless block
     args, chomp = __take_chomp__(args, opts)
     chomp ? __each_line_chomp__(*args, &block) : __ir_each_line__(*args, &block)
   end
+  private :__io_each_line__
 
-  # #each is #each_line under another name, so it is aliased rather than defined to
-  # call it: the two are one method in MRI and a spec compares them.
+  def each_line(*args, **opts, &block)
+    __io_each_line__(:each_line, args, opts, block)
+  end
+
+  # #each is #each_line under another name: one method in MRI, which a spec compares, and
+  # which a backtrace names by the name called.
   if method_defined?(:each)
     alias :__ir_each__ :each
-    alias :each :each_line
+    def each(*args, **opts, &block)
+      __io_each_line__(:each, args, opts, block)
+    end
+    __ir_same_method__(:each, :each_line)
   end
 
   class << self

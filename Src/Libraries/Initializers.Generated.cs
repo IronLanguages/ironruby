@@ -5172,7 +5172,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "Float", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.UnaryOpStorage, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat)
+                new Func<IronRuby.Runtime.UnaryOpStorage, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.SingletonToFloat)
             );
             
             DefineLibraryMethod(module, "fork", 0x61, 
@@ -5203,7 +5203,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "Integer", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger)
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.SingletonToInteger)
             );
             
             DefineLibraryMethod(module, "iterator?", 0x61, 
@@ -6022,6 +6022,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__ir_mark_ruby2_keywords__", 0x52, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.MarkRuby2Keywords)
+            );
+            
+            DefineLibraryMethod(module, "__ir_same_method__", 0x52, 
+                0x00030006U, 
+                new Action<IronRuby.Builtins.RubyModule, System.String, System.String>(IronRuby.Builtins.ModuleOps.MakeSameMethod)
             );
             
             DefineLibraryMethod(module, "[]", 0x51, 

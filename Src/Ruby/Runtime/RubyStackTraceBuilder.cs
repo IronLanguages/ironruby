@@ -36,7 +36,11 @@ namespace IronRuby.Runtime {
         // Frames reported with the source info of the next frame out that has its own: a library
         // method's, and a core method written in Ruby (see IsInternalFile). Innermost first.
         private readonly List<string>/*!*/ _deferredMethodNames = new List<string>();
-        private bool _lastDeferredIsLibrary;
+        // How many of the last deferred frames are library methods' (the methods a core method written in Ruby has called).
+        private int _libraryRun;
+        // Whether a call site has been seen since the library frame last deferred: it called the method that is still on top
+        // as a Ruby method.
+        private bool _callSiteSinceLastLibrary;
         private readonly RubyContext/*!*/ _context;
         // TracePoint's c_call location needs the frame that really made the call, which inside a
         // core method written in Ruby is that method's own, not its caller's.
@@ -240,10 +244,8 @@ namespace IronRuby.Runtime {
                     }
                 }
 
-                if (IsInternalFile(file)) {
-                    if (IsInternalMethodFrame(methodName)) {
-                        _deferredMethodNames.Add(methodName);
-                    }
+                if (IsInternalFrameFile(file)) {
+                    AddInternalFrame(methodName);
                     continue;
                 }
 
@@ -295,7 +297,7 @@ namespace IronRuby.Runtime {
 
                 // A frame of the Ruby half of the core library is reported at its caller's location,
                 // so it is not the answer either - keep walking out.
-                if (IsInternalFile(frameFile)) {
+                if (IsInternalFrameFile(frameFile)) {
                     continue;
                 }
 
@@ -414,7 +416,11 @@ namespace IronRuby.Runtime {
                         TryParseRubyMethodName(ref methodName, ref file, ref line);
 
                         if (methodName == InterpretedCallSiteName) {
-                            // ignore ruby interpreted call sites
+                            // ignore ruby interpreted call sites - the rule of a site a library method calls through
+                            // when the DLR interprets it
+                            if (_libraryRun > 0) {
+                                _callSiteSinceLastLibrary = true;
+                            }
                             continue;
                         }
                     } else if (skipCompiledCatchSite && IsRubyMethodFrame(frame)) {
@@ -423,29 +429,31 @@ namespace IronRuby.Runtime {
                     } else if (TryGetStackFrameInfo(frame, out methodName, out file, out line)) {
                         // special case: the frame will be added with the next frame's source info:
                         if (line == NextFrameLine) {
-                            // of library methods calling one another only the outermost is reported
-                            if (_lastDeferredIsLibrary) {
+                            // MRI gives a C function a frame when it is called as a method - by method dispatch,
+                            // rb_funcall, rb_block_call - and none when another C function calls it directly.
+                            // Here the first is a library method calling a Ruby method through a call site, the
+                            // second one library method calling another as a CLR method, which is reported as
+                            // the outermost of them: Array#keep_if, not the Array#select! it is written with.
+                            // A method of the same class called through a site is one MRI calls directly unless it has been
+                            // redefined: Hash#[] calling Hash#default.
+                            if (_libraryRun > 0 && (!_callSiteSinceLastLibrary || HaveSameOwner(_deferredMethodNames[_deferredMethodNames.Count - 1], methodName))) {
                                 _deferredMethodNames[_deferredMethodNames.Count - 1] = methodName;
                             } else {
                                 _deferredMethodNames.Add(methodName);
+                                _libraryRun++;
                             }
-                            _lastDeferredIsLibrary = true;
+                            _callSiteSinceLastLibrary = false;
                             continue;
                         }
                     } else {
+                        if (_libraryRun > 0 && IsCallSiteFrame(frame.GetMethod())) {
+                            _callSiteSinceLastLibrary = true;
+                        }
                         continue;
                     }
 
-                    if (!_keepInternalFrames && IsInternalFile(file)) {
-                        // A core method written in Ruby that wraps the library method of the same
-                        // name (Kernel#sleep, Kernel#require) is one method to Ruby: one frame.
-                        if (_lastDeferredIsLibrary && _deferredMethodNames[_deferredMethodNames.Count - 1] == methodName) {
-                            _deferredMethodNames.RemoveAt(_deferredMethodNames.Count - 1);
-                        }
-                        if (IsInternalMethodFrame(methodName)) {
-                            _deferredMethodNames.Add(methodName);
-                            _lastDeferredIsLibrary = false;
-                        }
+                    if (!_keepInternalFrames && IsInternalFrameFile(file)) {
+                        AddInternalFrame(methodName);
                         continue;
                     }
 
@@ -457,7 +465,7 @@ namespace IronRuby.Runtime {
                         }
                     }
                     _deferredMethodNames.Clear();
-                    _lastDeferredIsLibrary = false;
+                    _libraryRun = 0;
 
                     if (skipFrames == 0) {
                         _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
@@ -475,6 +483,92 @@ namespace IronRuby.Runtime {
 
         private static bool IsInternalMethodFrame(string methodName) {
             return !String.IsNullOrEmpty(methodName) && !methodName.StartsWith("block ", StringComparison.Ordinal) && methodName[0] != '<';
+        }
+
+        /// <summary>
+        /// A frame of the Ruby half of the core library (see <see cref="IsInternalFrameFile"/>), innermost first. A core method's
+        /// frame is reported with its caller's location; a block of one is not reported, nor is a helper method (Math.__dom__,
+        /// Enumerable#__extreme_by__, Math.__ir_sqrt__ - the Ruby half of a library method), which MRI writes as a C function
+        /// the method calls directly.
+        /// </summary>
+        private void AddInternalFrame(string methodName) {
+            if (!IsInternalMethodFrame(methodName)) {
+                return;
+            }
+            string owner, name;
+            SplitLabel(methodName, out owner, out name);
+
+            // Every frame deferred since the last one reported was called by this method, directly or not. MRI's own method
+            // would be C calling them directly, which gives them no frame (Kernel#sleep and Kernel#require wrapping the library
+            // method of the same name, Array#uniq calling Array#each, Array#sum calling Enumerable#sum) - except for the generic
+            // methods of Enumerable and the like, which call #each and #<=> as methods, so MRI reports those (Array#each below
+            // Enumerable#min_by).
+            if (!IsGenericModule(owner)) {
+                _deferredMethodNames.Clear();
+            } else if (_deferredMethodNames.Count > 0 && HaveSameOwner(_deferredMethodNames[_deferredMethodNames.Count - 1], methodName)) {
+                // a method of its own module it is written with (Enumerator#next with #next_values), or the library method it
+                // wraps (Enumerable#each_with_index): one method to MRI
+                _deferredMethodNames.RemoveAt(_deferredMethodNames.Count - 1);
+            }
+            _libraryRun = 0;
+
+            if (!IsHelperMethodName(name)) {
+                _deferredMethodNames.Add(methodName);
+            }
+        }
+
+        // "Enumerable#map" -> ("Enumerable", "map"); "Math.sqrt" -> ("Math", "sqrt"); "foo" -> (null, "foo")
+        private static void SplitLabel(string/*!*/ label, out string owner, out string/*!*/ name) {
+            int i = label.LastIndexOfAny(_LabelSeparators);
+            if (i <= 0) {
+                owner = null;
+                name = label;
+            } else {
+                owner = label.Substring(0, i);
+                name = label.Substring(i + 1);
+            }
+        }
+
+        private static readonly char[]/*!*/ _LabelSeparators = { '#', '.' };
+
+        private static bool HaveSameOwner(string/*!*/ label1, string/*!*/ label2) {
+            string owner1, owner2, name;
+            SplitLabel(label1, out owner1, out name);
+            SplitLabel(label2, out owner2, out name);
+            return owner1 != null && owner1 == owner2;
+        }
+
+        // The modules whose methods work on any object that has #each (or #<=>) by calling it as a method.
+        private static bool IsGenericModule(string owner) {
+            return owner == "Enumerable" || owner == "Comparable" || owner == "Enumerator";
+        }
+
+        // __foo__ - but not the ones that are Ruby methods: BasicObject#__send__ and friends.
+        private static bool IsHelperMethodName(string/*!*/ name) {
+            return name.Length > 4 && name.StartsWith("__", StringComparison.Ordinal) && name.EndsWith("__", StringComparison.Ordinal) &&
+                name != "__send__" && name != "__id__" && name != "__method__" && name != "__dir__" && name != "__callee__";
+        }
+
+        // The modules whose methods MRI defines with module_function and that code calls on the module: Math.sqrt. Kernel's are
+        // usually called as instance methods (Integer("1")), so they keep "Kernel#Integer".
+        private static bool IsModuleFunctionModule(string owner) {
+            return owner == "Math" || owner == "Process" || owner == "FileTest" || owner == "GC" || owner == "ObjectSpace" ||
+                owner == "Signal" || owner == "Marshal";
+        }
+
+        // A frame of method dispatch: what a library method calls a Ruby method through - the call site's rule, or the
+        // dispatcher a call site's target is (IronRuby.Runtime.Calls.LibraryDispatcher and the like).
+        private static bool IsCallSiteFrame(MethodBase method) {
+            return method != null && (System.Runtime.CompilerServices.CallSiteHelpers.IsInternalFrame(method) ||
+                method.DeclaringType != null && method.DeclaringType.Namespace == "IronRuby.Runtime.Calls");
+        }
+
+        /// <summary>
+        /// A file whose frames are reported the way MRI reports a C method's (see <see cref="IsInternalFile"/>): also any file
+        /// named "&lt;internal:...&gt;", as MRI does - RubyGems' Kernel#require is evaluated so.
+        /// </summary>
+        private static bool IsInternalFrameFile(string file) {
+            return file != null && (file.StartsWith("<internal:", StringComparison.Ordinal) || IsInternalFile(file));
         }
 
         private static string/*!*/ FormatFrame(string file, int line, string methodName) {
@@ -556,8 +650,6 @@ namespace IronRuby.Runtime {
                 return label;
             }
 
-            // a module function is registered twice, as an instance method and a singleton one, and
-            // MRI reports the instance method
             RubyMethodAttribute chosen = null;
             foreach (RubyMethodAttribute attr in attrs) {
                 if ((attr.MethodAttributes & RubyMethodAttributes.Instance) != 0) {
@@ -569,6 +661,16 @@ namespace IronRuby.Runtime {
             chosen = chosen ?? (RubyMethodAttribute)attrs[0];
 
             string owner = GetLibraryModuleName(method.DeclaringType);
+
+            // a module function is both an instance method and a singleton one, and MRI names the one called, which a frame
+            // here cannot tell: Math.sqrt, but Kernel#Integer
+            if (!singleton && IsModuleFunctionModule(owner)) {
+                foreach (RubyMethodAttribute attr in attrs) {
+                    if ((attr.MethodAttributes & RubyMethodAttributes.Singleton) != 0 && attr.Name == chosen.Name) {
+                        singleton = true;
+                    }
+                }
+            }
             label = (owner != null) ? owner + (singleton ? "." : "#") + chosen.Name : chosen.Name;
             _libraryMethodLabels.TryAdd(method, label);
             return label;
@@ -703,6 +805,13 @@ namespace IronRuby.Runtime {
                     return false;
                 }
 
+                // The runtime's helper for a tail call it cannot make directly (a compiled method's `tail.' call into a
+                // library method with more arguments than its caller), which put "in 'DispatchTailCalls'" under the frame
+                // of Kernel#Integer called from compiled code.
+                if (type == typeof(RuntimeHelpers)) {
+                    return false;
+                }
+
                 // MethodInfo.Invoke's own frames (RuntimeMethodHandle.InvokeMethod, MethodBaseInvoker): the interpreter
                 // calls a delegate with more parameters than it has call instructions for (a Ruby method with more than
                 // a dozen) through reflection, and rethrows what it raised from where it was raised.
@@ -733,9 +842,10 @@ namespace IronRuby.Runtime {
             return ns != null && (ns.StartsWith("System.Linq.Expressions", StringComparison.Ordinal) ||
                 ns == "System.Dynamic.Utils" || ns == "System.Reflection");
         }
-        // stringio.rb: MRI's StringIO is a C extension, so a method written here has no frame of its own either.
+        // stringio.rb: MRI's StringIO is a C extension, so a method written here has no frame of its own either; nor
+        // has a method of set.rb, which is the core class Set in MRI 4.0.
         private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb", "/ironruby/gem_compat.rb",
-            "/ironruby/ironruby/rational.rb", "/ironruby/ironruby/complex.rb", "/ironruby/stringio.rb" };
+            "/ironruby/ironruby/rational.rb", "/ironruby/ironruby/complex.rb", "/ironruby/stringio.rb", "/ironruby/set.rb" };
 
         /// <summary>
         /// The Ruby half of the core library. MRI 3.4+ reports a frame of a core method written in

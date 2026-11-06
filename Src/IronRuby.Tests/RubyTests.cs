@@ -1052,6 +1052,8 @@ namespace IronRuby.Tests {
                 Backtrace7,
                 Backtrace8,
                 Backtrace_CalledNameLabels1,
+                Backtrace_LibraryFrames1,
+                Backtrace_RescuedErrno1,
                 Enumerator_CalledName1,
                 StringIO_IteratorNames1,
                 Backtrace9,

@@ -3131,7 +3131,7 @@ namespace IronRuby.Runtime {
             }
 
             // calls "new" on the exception class if it hasn't been called yet:
-            exception = RubyExceptionData.HandleException(scope.RubyContext, exception);
+            exception = RubyExceptionData.HandleException(scope, exception);
 
             // Exception#cause: the exception that was being handled when this one was raised.
             // $! still holds it here - we are about to overwrite it below. Kernel#raise has
@@ -3823,10 +3823,29 @@ namespace IronRuby.Runtime {
             return ConvertStringToFloat(context, value, null);
         }
 
-        private static double ConvertStringToFloat(RubyContext/*!*/ context, string/*!*/ value, MutableString original) {
+        // MRI's Kernel#Float is written in Ruby, so its warning about a number out of range names the line of <internal:kernel>
+        // that converts it rather than the caller's: the one for Float(x), or the one for Float(x, exception: false).
+        private const int KernelFloatLine = 196, KernelFloatNoExceptionLine = 198;
+
+        /// <summary>Kernel#Float's conversion of a String.</summary>
+        public static double ConvertKernelFloat(RubyContext/*!*/ context, MutableString/*!*/ value) {
+            return ConvertStringToFloat(context, value.ConvertToString(), value, KernelFloatLine);
+        }
+
+        /// <summary>Kernel#Float's conversion of a String with exception: false.</summary>
+        public static bool TryConvertKernelFloat(RubyContext/*!*/ context, MutableString/*!*/ value, out double result) {
+            string text = value.ConvertToString();
+            if (!TryParseRubyFloat(text, out result)) {
+                return false;
+            }
+            WarnIfFloatOutOfRange(context, text.Trim(_FloatWhitespace).Replace("_", ""), result, KernelFloatNoExceptionLine);
+            return true;
+        }
+
+        private static double ConvertStringToFloat(RubyContext/*!*/ context, string/*!*/ value, MutableString original, int kernelFloatLine = 0) {
             double result;
             if (TryParseRubyFloat(value, out result)) {
-                WarnIfFloatOutOfRange(context, value.Trim(_FloatWhitespace).Replace("_", ""), result);
+                WarnIfFloatOutOfRange(context, value.Trim(_FloatWhitespace).Replace("_", ""), result, kernelFloatLine);
                 return result;
             }
 
@@ -3841,6 +3860,10 @@ namespace IronRuby.Runtime {
         ///   "Float 1e400 out of range"
         /// </summary>
         public static void WarnIfFloatOutOfRange(RubyContext/*!*/ context, string/*!*/ number, double result) {
+            WarnIfFloatOutOfRange(context, number, result, 0);
+        }
+
+        private static void WarnIfFloatOutOfRange(RubyContext/*!*/ context, string/*!*/ number, double result, int kernelFloatLine) {
             if (!(context.Verbose is bool verbose && verbose)) {
                 return;
             }
@@ -3850,7 +3873,11 @@ namespace IronRuby.Runtime {
             if (number.Length > 20) {
                 number = number.Substring(0, 20) + "...";
             }
-            context.ReportWarning("Float " + number + " out of range", true);
+            if (kernelFloatLine != 0) {
+                context.ReportWarningAt("<internal:kernel>", kernelFloatLine, "Float " + number + " out of range");
+            } else {
+                context.ReportWarning("Float " + number + " out of range", true);
+            }
         }
 
         private static bool HasNonZeroMantissa(string/*!*/ number) {
