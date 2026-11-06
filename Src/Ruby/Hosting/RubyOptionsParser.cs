@@ -649,14 +649,6 @@ namespace IronRuby.Hosting {
                     RubyOptions.ShowRules = true;
                     break;
 
-                case "-save":
-                    LanguageSetup.Options["SavePath"] = optionValue ?? AppDomain.CurrentDomain.BaseDirectory;
-                    break;
-
-                case "-load":
-                    LanguageSetup.Options["LoadFromDisk"] = ScriptingRuntimeHelpers.True;
-                    break;
-
                 case "-useThreadAbortForSyncRaise":
                     RubyOptions.UseThreadAbortForSyncRaise = true;
                     break;
@@ -958,8 +950,6 @@ namespace IronRuby.Hosting {
                 { "-DT*",                        "disables tracing of all events [debug only]" },
                 { "-ET",                         "enables tracing of specified events [debug only]" },
                 { "-ET*",                        "enables tracing of all events [debug only]" },
-                { "-save [path]",                "save generated code to given path [debug only]" },
-                { "-load",                       "load pre-compiled code [debug only]" },
                 { "-useThreadAbortForSyncRaise", "for testing purposes [debug only]" },
                 { "-compileRegexps",             "faster throughput, slower startup [debug only]" },
                 { "-X:AssembliesDir <dir>",      "set the directory for saving generated assemblies [debug only]" },

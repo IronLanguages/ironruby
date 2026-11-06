@@ -53,7 +53,6 @@ namespace IronRuby.Runtime {
         private readonly int _verbosity;
         private readonly bool _debugVariable;
         private readonly string _savePath;
-        private readonly bool _loadFromDisk;
         private readonly bool _profile;
         private readonly bool _hasSearchPaths;
         private readonly bool _noAssemblyResolveHook;
@@ -206,10 +205,6 @@ namespace IronRuby.Runtime {
             get { return _savePath; }
         }
 
-        public bool LoadFromDisk {
-            get { return _loadFromDisk; }
-        }
-
         public bool Profile {
             get { return _profile; }
         }
@@ -302,7 +297,6 @@ namespace IronRuby.Runtime {
             _debugVariable = GetOption(options, "DebugVariable", false);
             _enableTracing = GetOption(options, "EnableTracing", false);
             _savePath = GetOption(options, "SavePath", (string)null);
-            _loadFromDisk = GetOption(options, "LoadFromDisk", false);
             _profile = GetOption(options, "Profile", false);
             _noAssemblyResolveHook = GetOption(options, "NoAssemblyResolveHook", false);
             _objectSpace = GetOption(options, "ObjectSpace", false);
