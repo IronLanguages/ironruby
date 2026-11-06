@@ -353,10 +353,22 @@ namespace IronRuby.Builtins {
                     ReturnKind = 3, RaiseKind = 4, ErrorKind = 5, KillKind = 6;
                 public int Kind { get; }
                 public object Payload { get; }
+                /// <summary>
+                /// What Fiber.yield (or the transfer that suspended the fiber) returns. Keywords given
+                /// to resume/transfer travel as a ruby2_keywords-marked Hash, so that they reach a
+                /// fiber's block as keywords; as a return value they are a plain Hash, as in MRI.
+                /// </summary>
                 public object Value {
                     get {
-                        return Kind == ResumeKind || Kind == TransferKind
-                            ? PackArguments((RubyArray)Payload) : Payload;
+                        if (Kind != ResumeKind && Kind != TransferKind) {
+                            return Payload;
+                        }
+                        var args = (RubyArray)Payload;
+                        if (args.Count > 0 && args[args.Count - 1] is Hash hash && hash.IsRuby2KeywordsHash) {
+                            args = new RubyArray(args);
+                            args[args.Count - 1] = new Hash(hash);
+                        }
+                        return PackArguments(args);
                     }
                 }
 
