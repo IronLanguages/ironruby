@@ -2056,6 +2056,16 @@ namespace IronRuby.Builtins {
 
             var pipe = DescriptorStream.Of(stream.BaseStream);
             if (pipe == null) {
+                // A Windows pipe has no descriptor, and a ReadFile on an empty one waits for the
+                // writer however long that is, but PeekNamedPipe says whether anything is there.
+                var windowsPipe = IoReadiness.GetWindowsPipe(io);
+                if (windowsPipe != null && !IoReadiness.IsWindowsPipeReadable(windowsPipe)) {
+                    if (buffered > 0) {
+                        return buffer;
+                    }
+                    throw NonBlockingError(io.Context, true, "read would block");
+                }
+
                 // No non-blocking read primitive for this stream - a socket, or something with no
                 // descriptor at all.  With bytes already in hand, poll(2) decides whether to ask
                 // for more: an ordinary read that would block raises EAGAIN out of here, and the

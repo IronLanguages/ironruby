@@ -3124,7 +3124,7 @@ require 'ruby4'
 p Integer.const_defined?(:MAX), Process.constants.grep(/SPAWN|NOT_IMPL|LOCKS/), Errno.constants.reject { |c| Errno.const_get(c).is_a?(Class) }
 p Enumerable.constants, Fiber.constants.grep(/KILL|SCHEDULER/), GC.singleton_methods.include?(:major_count), Warning.constants
 p Enumerable.public_instance_methods.grep(/without/), Kernel.public_instance_methods.grep(/without/), Range.public_instance_methods.grep(/without/), String.public_instance_methods.grep(/lines_enum/)
-p((Process.getrlimit(:LOCKS) rescue $!))
+p(begin; Process.getrlimit(:LOCKS); rescue ArgumentError, NotImplementedError; $!; end)
 p KeyError.ancestors.include?(IndexError), KeyError.new('x', receiver: 1, key: 2).key
 p(({a: 1}.fetch_values(:a, :b) rescue $!))
 p SystemCallError.new('x', 2).class, SystemCallError.new('x', 99999).message
@@ -3146,7 +3146,8 @@ false
 []
 []
 " + (Environment.OSVersion.Platform == PlatformID.Win32NT
-    // CRuby on Windows has no resource limits: Process.getrlimit is rb_f_notimplement there.
+    // CRuby on Windows has no resource limits: Process.getrlimit is rb_f_notimplement there. Its
+    // NotImplementedError is a ScriptError, which a rescue modifier does not catch.
     ? "#<NotImplementedError: getrlimit() function is unimplemented on this machine>"
     : "#<ArgumentError: invalid resource name: LOCKS>") + @"
 true
