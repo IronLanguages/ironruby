@@ -425,7 +425,8 @@ module Random::Formatter
   def __random_in_range__(range)
     low = range.begin
     high = range.end
-    return __random_float__ if low.nil? || high.nil?
+    # MRI: an endless or beginless range has no width to draw from
+    raise ::Errno::EDOM if low.nil? || high.nil?
 
     unless low.is_a?(::Numeric) && high.is_a?(::Numeric)
       raise ::ArgumentError, "invalid argument - #{range}"

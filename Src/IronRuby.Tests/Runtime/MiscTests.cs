@@ -4267,6 +4267,35 @@ method: [1, Integer]
         }
 
         /// <summary>
+        /// Random::Formatter#random_number (SecureRandom's) with a range: an endless or beginless one is
+        /// Errno::EDOM, as random.c has it (it answered a Float in [0, 1)); a backwards one still falls back
+        /// to a Float, a non-numeric one is ArgumentError.
+        /// </summary>
+        public void Random_FormatterRanges1() {
+            TestOutput(@"
+require 'ruby4'
+require 'securerandom'
+[1.., ..1, 1.0.., (nil..nil), ('a'..), (1..0), (2..2), ('a'..'b')].each do |r|
+  begin
+    v = SecureRandom.random_number(r)
+    p [r, v.class]
+  rescue => e
+    p [r, e.class]
+  end
+end
+", @"
+[1.., Errno::EDOM]
+[..1, Errno::EDOM]
+[1.0.., Errno::EDOM]
+[nil..nil, Errno::EDOM]
+[""a"".., Errno::EDOM]
+[1..0, Float]
+[2..2, Integer]
+[""a""..""b"", ArgumentError]
+");
+        }
+
+        /// <summary>
         /// Range#min, #max, #include? and #member? in C#, with what they hand the prelude: an Integer or Float
         /// range answered from its endpoints, Strings, blocks, counts, endless and beginless ranges, a break
         /// from the block and a subclass's own #max. The expected output is CRuby's.

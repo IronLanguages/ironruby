@@ -957,6 +957,7 @@ namespace IronRuby.Tests {
                 Range_MinMaxInclude1,
                 Integer_StepMatchString1,
                 Integer_Power1,
+                Random_FormatterRanges1,
                 Rational_CSharp1,
                 Complex_CSharp1,
                 Rational_ComplexConventions1,
