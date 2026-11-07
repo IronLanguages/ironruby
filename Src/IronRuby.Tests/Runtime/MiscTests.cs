@@ -2916,6 +2916,34 @@ true
         }
 
         /// <summary>
+        /// A Set's instance variables of its own go in an "I" wrapper around the 'o' record that holds its table, as
+        /// MRI 4.0 writes them, and an 'o' record of a Set holding anything besides "@hash" loses it, as in MRI.
+        /// </summary>
+        public void Marshal_SetIVars1() {
+            TestOutput(@"
+require 'ruby4'
+s = Set[1]; s.instance_variable_set(:@x, 5)
+d = Marshal.dump(s); p d
+o = Marshal.load(d); p o, o.instance_variables, o.instance_variable_get(:@x)
+o = Marshal.load(""\x04\bo:\bSet\a:\n@hash}\x06i\x06TF:\a@xi\n"".b); p o, o.instance_variables
+class MySet < Set; end
+m = MySet[2]; m.instance_variable_set(:@y, [m]); d = Marshal.dump(m); p d
+o = Marshal.load(d); p o.class, o.instance_variable_get(:@y)[0].equal?(o), Marshal.dump(Set[1])
+", @"
+""\x04\bIo:\bSet\x06:\n@hash}\x06i\x06TF\x06:\a@xi\n""
+Set[1]
+[:@x]
+5
+Set[1]
+[]
+""\x04\bIo:\nMySet\x06:\n@hash}\x06i\aTF\x06:\a@y[\x06@\x00""
+MySet
+true
+""\x04\bo:\bSet\x06:\n@hash}\x06i\x06TF""
+");
+        }
+
+        /// <summary>
         /// Data.new reports a missing member before an unknown keyword, as MRI's rb_data_initialize_m does, and Data.define
         /// and Struct.new refuse only setter names (rb_is_attrset_id) as members, so `[]=` is allowed. All in the prelude.
         /// </summary>

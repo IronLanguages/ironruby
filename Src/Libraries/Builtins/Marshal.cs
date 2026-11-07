@@ -679,13 +679,13 @@ namespace IronRuby.Builtins {
 
             /// <summary>
             /// A Set: MRI 4.0 writes its table as the "@hash" instance variable the Set of set.rb had, which
-            /// the prelude's Set keeps in a hidden one.
+            /// the prelude's Set keeps in a hidden one. Any instance variables of the set's own go in an
+            /// "I" wrapper around this record.
             /// </summary>
-            private void WriteSetObject(object/*!*/ obj, object setTable, string[]/*!*/ names) {
-                WriteInt32(names.Length + 1);
+            private void WriteSetObject(object setTable) {
+                WriteInt32(1);
                 WriteSymbol("@hash", _context.GetIdentifierEncoding());
                 WriteAnObject(setTable);
-                WriteIVarPairs(obj, names);
             }
 
             private void WriteIVarPairs(object/*!*/ obj, string[]/*!*/ names) {
@@ -897,6 +897,15 @@ namespace IronRuby.Builtins {
                                   obj is RubyArray || obj is Hash || obj is RubyRegex || obj is RubyModule ||
                                   obj is RubyStruct || isData);
 
+                            // Except a Set's: MRI 4.0 writes the 'o' record of the Set of set.rb, holding only
+                            // its table, and the instance variables of its own behind an "I" wrapper.
+                            object setTable = null;
+                            bool isSet = isObjectRecord && !(obj is Range || obj is Exception) &&
+                                IsSet(_context, theClass) && _context.TryGetInstanceVariable(obj, SetTableIVar, out setTable);
+                            if (isSet) {
+                                isObjectRecord = false;
+                            }
+
                             bool writeInstanceData = !isObjectRecord && !(obj is RubyModule) &&
                                 (instanceNames.Length > 0 || NeedsEncodingIVar(encoding));
 
@@ -937,9 +946,8 @@ namespace IronRuby.Builtins {
                             } else {
                                 RequireDumpableAsObject(theClass);
                                 WriteObject(obj);
-                                object setTable;
-                                if (IsSet(_context, theClass) && _context.TryGetInstanceVariable(obj, SetTableIVar, out setTable)) {
-                                    WriteSetObject(obj, setTable, instanceNames);
+                                if (isSet) {
+                                    WriteSetObject(setTable);
                                 } else {
                                     WriteIVars(obj, instanceNames, encoding);
                                 }
@@ -1466,13 +1474,19 @@ namespace IronRuby.Builtins {
                 if (objectRef >= 0) {
                     _objects[objectRef] = obj;
                 }
+                // A Set's record holds its table and nothing else MRI 4.0 keeps: its own instance
+                // variables come in an "I" wrapper, and any others in the record are dropped.
                 bool isSet = IsSet(Context, theClass);
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
-                    if (isSet && name == "@hash") {
+                    object value = ReadAnObject(false);
+                    if (isSet) {
+                        if (name != "@hash") {
+                            continue;
+                        }
                         name = SetTableIVar;
                     }
-                    Context.SetInstanceVariable(obj, name, ReadAnObject(false));
+                    Context.SetInstanceVariable(obj, name, value);
                 }
                 return obj;
             }

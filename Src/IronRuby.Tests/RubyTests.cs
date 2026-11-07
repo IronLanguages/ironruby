@@ -910,6 +910,7 @@ namespace IronRuby.Tests {
                 Encoding_AsciiIncompatibleLines1,
                 Marshal_Misc1,
                 Marshal_LoadFloat1,
+                Marshal_SetIVars1,
                 Integer_SqrtPowDigits1,
                 Prelude_DataStructErrors1,
                 Prelude_AliasNames1,
