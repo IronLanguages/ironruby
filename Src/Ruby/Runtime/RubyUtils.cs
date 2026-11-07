@@ -1651,13 +1651,30 @@ namespace IronRuby.Runtime {
                 throw e;
             }
 
+            ParkAsyncException(thread, e);
+            NudgeThread(thread);
+        }
+
+        /// <summary>
+        /// The first half of RaiseAsyncException: parks <paramref name="e"/> for <paramref name="thread"/>
+        /// (another thread) without waking it. For a caller that parks under a lock of its own, and
+        /// wakes the thread with <see cref="NudgeThread"/> once it has let go of it: an interrupt that
+        /// finds the thread waiting for that lock would break the wait off with a
+        /// ThreadInterruptedException where nothing expects one.
+        /// </summary>
+        public static void ParkAsyncException(Thread/*!*/ thread, Exception/*!*/ e) {
             lock (_pendingAsyncExceptions) {
                 if (!_pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId)) {
                     RequestSafePoint();
                 }
                 _pendingAsyncExceptions[thread.ManagedThreadId] = e;
             }
+        }
 
+        /// <summary>
+        /// Wakes <paramref name="thread"/> if it is blocked, so that it picks up what is parked for it.
+        /// </summary>
+        public static void NudgeThread(Thread/*!*/ thread) {
             try {
                 if ((thread.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0) {
                     thread.Interrupt();
@@ -1709,6 +1726,16 @@ namespace IronRuby.Runtime {
             RaiseAsyncException(thread, e);
         }
 
+        /// <summary>
+        /// <see cref="ParkAsyncException(Thread, Exception)"/> with a finisher, as for RaiseAsyncException.
+        /// </summary>
+        public static void ParkAsyncException(Thread/*!*/ thread, Exception/*!*/ e, Func<Exception, Exception> finisher) {
+            if (finisher != null) {
+                _asyncExceptionFinishers.AddOrUpdate(e, finisher);
+            }
+            ParkAsyncException(thread, e);
+        }
+
         /// <summary>The exception to throw for a parked one, on the thread it was parked for.</summary>
         public static Exception/*!*/ FinishAsyncException(Exception/*!*/ e) {
             Func<Exception, Exception> finisher;
@@ -1758,6 +1785,69 @@ namespace IronRuby.Runtime {
                 return _pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId);
             }
         }
+
+        /// <summary>
+        /// Moves the Thread#raise exception parked for <paramref name="from"/> to <paramref name="to"/>
+        /// and nudges <paramref name="to"/> if it is blocked. All fibers of a Ruby thread share it, but
+        /// each runs on a CLR thread of its own, and an interrupt belongs to whichever of them is
+        /// running (MRI checks the thread's interrupt flag in the current fiber). A Thread#kill stays
+        /// where it is: it ends the CLR thread it was meant for. Answers whether anything moved.
+        /// </summary>
+        public static bool ForwardAsyncException(Thread/*!*/ from, Thread/*!*/ to) {
+            if (!MoveAsyncException(from, to)) {
+                return false;
+            }
+            NudgeThread(to);
+            return true;
+        }
+
+        /// <summary>
+        /// <see cref="ForwardAsyncException"/> without waking <paramref name="to"/>: for a caller that is
+        /// about to hand <paramref name="to"/> control, which wakes it anyway.
+        /// </summary>
+        public static bool MoveAsyncException(Thread/*!*/ from, Thread/*!*/ to) {
+            if (ReferenceEquals(from, to)) {
+                return false;
+            }
+            lock (_pendingAsyncExceptions) {
+                Exception e;
+                int key = from.ManagedThreadId;
+                if (!_pendingAsyncExceptions.TryGetValue(key, out e) || e is ThreadExitSignal) {
+                    return false;
+                }
+                _pendingAsyncExceptions.Remove(key);
+                if (_pendingAsyncExceptions.ContainsKey(to.ManagedThreadId)) {
+                    // two parked exceptions become one; the later raise wins, as in RaiseAsyncException
+                    SafePointRequestDone();
+                }
+                _pendingAsyncExceptions[to.ManagedThreadId] = e;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Drops <paramref name="e"/> if it is still what is parked for <paramref name="thread"/>.
+        /// </summary>
+        public static bool RetractAsyncException(Thread/*!*/ thread, Exception/*!*/ e) {
+            lock (_pendingAsyncExceptions) {
+                Exception parked;
+                int key = thread.ManagedThreadId;
+                if (_pendingAsyncExceptions.TryGetValue(key, out parked) && ReferenceEquals(parked, e)) {
+                    _pendingAsyncExceptions.Remove(key);
+                    SafePointRequestDone();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Installed by the thread library: called on a thread that has an exception parked for it
+        /// (other than a Thread#kill) before it is delivered there. True means it is not to be raised
+        /// there: it belonged to another fiber of the same Ruby thread - the one now running - and
+        /// has been moved there, or the thread is a fiber thread outside its fiber and keeps it.
+        /// </summary>
+        public static Func<bool> AsyncExceptionRedirectHook;
 
         /// <summary>The exception parked for a thread, left in place. Null when there is none.</summary>
         public static Exception PeekPendingAsyncException(Thread/*!*/ thread) {
@@ -1811,16 +1901,24 @@ namespace IronRuby.Runtime {
                 return InterruptImmediate;
             }
 
-            var context = RubyContext._Default;
-            if (context == null) {
-                return InterruptImmediate;
-            }
-
-            RubyClass cls = context.GetClassOf(e);
+            // The exception's class is looked up in the runtime the mask's classes belong to - not in
+            // the process's first runtime, which a host with several of them (IronRuby.Tests) would
+            // have answer for all of them: no class of another runtime is an ancestor of its classes,
+            // so every mask let everything through.
+            RubyContext context = null;
+            RubyClass cls = null;
             for (int i = masks.Count - 1; i >= 0; i--) {
                 InterruptMask mask = masks[i];
                 for (int j = mask.Classes.Length - 1; j >= 0; j--) {
-                    if (mask.Classes[j] != null && cls.HasAncestor(mask.Classes[j])) {
+                    RubyModule maskClass = mask.Classes[j];
+                    if (maskClass == null) {
+                        continue;
+                    }
+                    if (!ReferenceEquals(maskClass.Context, context)) {
+                        context = maskClass.Context;
+                        cls = context.GetClassOf(e);
+                    }
+                    if (cls.HasAncestor(maskClass)) {
                         return mask.Timings[j];
                     }
                 }
@@ -1924,6 +2022,21 @@ namespace IronRuby.Runtime {
         /// blocks on nothing.  Thread.handle_interrupt's :on_blocking only delivers at the former.
         /// </summary>
         public static void CheckAsyncException(bool atBlockingCall) {
+            CheckAsyncException(atBlockingCall, false);
+        }
+
+        /// <summary>
+        /// For a wait that hands control between the fibers of a thread (ThreadOps.FiberMailbox), which
+        /// a Thread#raise must not break off: the fiber waiting there is not the thread's running one,
+        /// or is about to become it - the message that makes it so is on the way. The exception goes
+        /// to the running fiber or stays parked until control has arrived. Thread#kill still ends the
+        /// thread there.
+        /// </summary>
+        public static void TranslateFiberWaitInterrupt() {
+            CheckAsyncException(true, true);
+        }
+
+        private static void CheckAsyncException(bool atBlockingCall, bool killOnly) {
             // Everything below - a fiber being reclaimed, a parked signal, a parked finalizer, an
             // exception parked by Thread#raise / #kill - is counted in _safePointRequests while it is
             // outstanding, so with none of it there is nothing to look up. Mutex#lock and Monitor#enter
@@ -1957,6 +2070,15 @@ namespace IronRuby.Runtime {
             Exception e = PeekPendingAsyncException(Thread.CurrentThread);
             if (e == null) {
                 return;
+            }
+
+            // A fiber that is not the running one of its thread - waiting for the fiber it resumed,
+            // finishing, parked in the pool - hands the exception on instead of raising it.
+            if (!(e is ThreadExitSignal)) {
+                Func<bool> redirect = AsyncExceptionRedirectHook;
+                if ((redirect != null && redirect()) || killOnly) {
+                    return;
+                }
             }
 
             int timing = GetInterruptTiming(e);

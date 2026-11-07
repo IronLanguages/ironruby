@@ -67,6 +67,9 @@ namespace IronRuby.Builtins {
             private int _misses;
             private int _pausedTakes;
 
+            // A fiber's own mailbox, whose take a Thread#raise does not break off (FiberCore).
+            internal bool HandsOverControl;
+
             // The fiber group's owner, and its RubyThreadInfo, cached for FiberTake.
             private Thread _owner;
             private RubyThreadInfo _ownerInfo;
@@ -115,7 +118,11 @@ namespace IronRuby.Builtins {
                             }
                         }
 
-                        if (!interrupted && _count != 0) {
+                        // A message that is already here wins over an interrupt: control has arrived,
+                        // and the parked exception is raised once this side runs (FiberCore.Switch).
+                        // Raising it instead would leave the message for the next take - a later
+                        // Fiber#resume would return at once, with the fiber it resumed still running.
+                        if (_count != 0) {
                             object message = _message;
                             int count = _count - 1;
                             _message = (count > 0) ? _overflow.Dequeue() : null;
@@ -126,8 +133,17 @@ namespace IronRuby.Builtins {
 
                     if (interrupted) {
                         // Thread#kill / Thread#raise nudged us: deliver the parked exception (outside the
-                        // lock, it runs Ruby code). If nothing is parked the wait simply goes on.
-                        RubyUtils.TranslateThreadInterrupt();
+                        // lock, it runs Ruby code), or hand it on to the fiber that is running instead
+                        // of us (RubyThreadInfo.ForwardToActiveFiber). If nothing is parked the wait
+                        // simply goes on. A fiber waiting for control raises a Thread#raise only once
+                        // control is here (FiberCore.Switch): it may be the running fiber already, its
+                        // message posted a moment from now, and raising now would leave that message
+                        // for the next take.
+                        if (HandsOverControl) {
+                            RubyUtils.TranslateFiberWaitInterrupt();
+                        } else {
+                            RubyUtils.TranslateThreadInterrupt();
+                        }
                     }
                 }
             }
@@ -156,7 +172,7 @@ namespace IronRuby.Builtins {
                             }
                         }
 
-                        if (!interrupted && _count != 0) {
+                        if (_count != 0) {
                             message = _message;
                             int count = _count - 1;
                             _message = (count > 0) ? _overflow.Dequeue() : null;
@@ -214,7 +230,10 @@ namespace IronRuby.Builtins {
             private readonly bool _root;
             private readonly RubySymbol _currentKey;
             private readonly RubySymbol _parentKey;
+            private readonly RubyThreadInfo/*!*/ _ownerInfo;
             private RubyThreadInfo _threadInfo;
+            // The CLR thread this fiber runs on: known once the fiber has one (Attach, Activate).
+            private volatile Thread _thread;
             private volatile bool _completed;
             // A resumer is part of an active call chain until its child hands control back.
             private object _pinnedHandle;
@@ -236,13 +255,29 @@ namespace IronRuby.Builtins {
 
             internal FiberCore(RubyContext context, object handle, Thread owner, bool root) {
                 _mailbox = new FiberMailbox();
+                _mailbox.HandsOverControl = true;
                 _owner = owner;
                 _context = context;
                 _handle = new WeakReference<object>(handle);
                 _root = root;
                 _currentKey = context.CreateAsciiSymbol("__ir_fiber_current__");
                 _parentKey = context.CreateAsciiSymbol("__ir_fiber_parent__");
+                _ownerInfo = RubyThreadInfo.FromThread(owner);
+                if (root) {
+                    // a root fiber is the thread it is created on
+                    _thread = Thread.CurrentThread;
+                }
                 Status = root ? "resumed" : "created";
+            }
+
+            /// <summary>
+            /// Records the CLR thread the fiber is going to run on, before anybody hands it control
+            /// (Fiber#__start__): from then on a switch to it can make it the running fiber at once.
+            /// </summary>
+            public void Attach(Thread thread) {
+                // a fiber thread from now on: it may be told to raise before it gets to Run
+                RubyThreadInfo.FromThread(thread).IsFiberWorker = true;
+                _thread = thread;
             }
 
             public void Terminate() {
@@ -258,7 +293,7 @@ namespace IronRuby.Builtins {
 
             // Keep the temporary strong reference out of Run/Await's suspended CLR frames.
             [MethodImpl(MethodImplOptions.NoInlining)]
-            private void Activate() {
+            private void Activate(bool running) {
                 object handle = Handle;
                 if (handle == null) {
                     RubyUtils.BeginFiberReclamation();
@@ -275,7 +310,38 @@ namespace IronRuby.Builtins {
                     info.IsFiberWorker = true;
                 }
                 RubyUtils.SetFiberOwnerThread(_owner);
-                _mailbox.GetOwnerInfo(_owner).ActiveFiberThread = Thread.CurrentThread;
+                _thread = Thread.CurrentThread;
+                if (running && !ReferenceEquals(_ownerInfo.ActiveFiberThread, Thread.CurrentThread)) {
+                    // normally already done by the fiber that handed us control (MakeRunning)
+                    lock (_ownerInfo.FiberSwitchLock) {
+                        _ownerInfo.ActiveFiberThread = Thread.CurrentThread;
+                    }
+                }
+            }
+
+            /// <summary>
+            /// Called by the fiber that hands control to this one, before it posts the message:
+            /// this fiber is the thread's running fiber from now on, for Thread#raise. Setting that
+            /// only once this fiber has woken up (Activate) left a window in which an interrupt went
+            /// to the fiber handing over - which raised it on its way back, in Fiber#resume, while
+            /// this one went on running - or, for a fiber that had finished, to a thread on its way
+            /// into the pool. Whatever is already parked for the fiber handing over moves too.
+            /// </summary>
+            private void MakeRunning() {
+                Thread thread = _thread;
+                if (thread == null) {
+                    return;
+                }
+                Thread current = Thread.CurrentThread;
+                // Atomic with respect to Thread#raise (RubyThreadInfo.FiberSwitchLock).
+                lock (_ownerInfo.FiberSwitchLock) {
+                    _ownerInfo.ActiveFiberThread = thread;
+                    if (RubyUtils.IsSafePointRequested && !ReferenceEquals(current, thread)) {
+                        // no nudge: the message we are about to post wakes the thread, which raises
+                        // the exception once it runs
+                        RubyUtils.MoveAsyncException(current, thread);
+                    }
+                }
             }
 
             private void Deactivate() {
@@ -287,9 +353,18 @@ namespace IronRuby.Builtins {
             // Catch only at the execution boundary, after all user frames have unwound.
             // In particular, Ruby rescue Exception cannot intercept the reclaim signal.
             public void Run(object state) {
+                RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
+                info.IsFiberWorker = true;
+                info.InFiberRun = true;
+                // Interrupts wait until __run__ opens Thread.handle_interrupt(Object => :immediate)
+                // around the fiber's block. Its own handle_interrupt(Object => :never) is not up
+                // yet at the safe point of the call to __run__: one raised there, before the
+                // fiber's first message, would escape the fiber altogether.
+                RubyUtils.PushInterruptMask(new RubyModule[] { _context.ObjectClass }, new[] { RubyUtils.InterruptNever });
                 try {
-                    RubyThreadInfo.FromThread(Thread.CurrentThread)[_parentKey] = null;
-                    Activate();
+                    info[_parentKey] = null;
+                    // Not the running fiber yet: it waits for its first message (__run__).
+                    Activate(false);
                     var site = _context.GetOrCreateSendSite<Func<CallSite, object, object>>("__run__", RubyCallSignature.Simple(0));
                     site.Target(site, state);
                 } catch (Exception) when (RubyUtils.IsReclaimingFiber) {
@@ -298,11 +373,14 @@ namespace IronRuby.Builtins {
                     Terminate();
                     IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(Thread.CurrentThread);
                 } finally {
+                    RubyUtils.PopInterruptMask();
+                    info.InFiberRun = false;
                     RubyUtils.EndFiberReclamation();
                 }
             }
 
             public void Post(int kind, object payload) {
+                MakeRunning();
                 _mailbox.Post(new FiberMessage(kind, payload));
             }
 
@@ -316,7 +394,7 @@ namespace IronRuby.Builtins {
                 if (message.Kind == ReclaimKind) {
                     RubyUtils.BeginFiberReclamation();
                 }
-                Activate();
+                Activate(true);
                 Status = "resumed";
                 return message;
             }
@@ -332,7 +410,12 @@ namespace IronRuby.Builtins {
                     Status = "suspended";
                     Deactivate();
                     target.Post(kind, payload);
-                    return Take();
+                    FiberMessage message = Take();
+                    // MRI checks for interrupts as soon as control is back (fiber_switch): one that
+                    // reached the thread while the other fiber ran, and was handed back with control,
+                    // is raised by #resume / Fiber.yield / #transfer, not at some later safe point.
+                    RubyUtils.CheckAsyncException(false);
+                    return message;
                 } finally {
                     // Take restores the running handle before releasing this pin. Also drop it
                     // when an interrupt unwinds the wait instead of delivering a message.
@@ -461,6 +544,9 @@ namespace IronRuby.Builtins {
         public static object ParkFiberThread(object self) {
             Thread current = Thread.CurrentThread;
             IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(current);
+            // A Thread#raise that reached the fiber as it finished belongs to the fiber now running
+            // in its thread; anything else parked here dies with the fiber.
+            HandOffParkedInterrupt();
             RubyUtils.GetPendingAsyncException(current);
             RubyThreadInfo info = RubyThreadInfo.FromThread(current);
             info.ClearLocals();
@@ -483,6 +569,8 @@ namespace IronRuby.Builtins {
                 object fiber;
                 if (worker.Jobs.TryTake(FiberWorkerIdleMilliseconds, out fiber)) {
                     parked = false;
+                    // not to the next fiber, which may well be another thread's
+                    HandOffParkedInterrupt();
                     return fiber;
                 }
                 lock (_idleFiberWorkers) {
@@ -494,7 +582,9 @@ namespace IronRuby.Builtins {
                 }
                 // ReuseFiberThread took this thread just now: its fiber is on the way
                 parked = false;
-                return worker.Jobs.Take();
+                object next = worker.Jobs.Take();
+                HandOffParkedInterrupt();
+                return next;
             } finally {
                 if (parked) {
                     // left by an exception (Thread#kill): nobody may hand this thread a fiber now
@@ -502,6 +592,21 @@ namespace IronRuby.Builtins {
                         _idleFiberWorkers.Remove(worker);
                     }
                 }
+            }
+        }
+
+        // Moves a Thread#raise parked for this fiber thread, whose fiber is done, to the fiber that
+        // runs in the thread the finished fiber belonged to (still RubyUtils.CurrentRubyThread here).
+        // When there is none - that thread has ended - the raise is dropped: it must not reach the
+        // next fiber to run here, which may well be another thread's.
+        private static void HandOffParkedInterrupt() {
+            if (!RubyUtils.IsSafePointRequested) {
+                return;
+            }
+            Thread current = Thread.CurrentThread;
+            Exception e = RubyUtils.PeekPendingAsyncException(current);
+            if (e != null && !RubyUtils.IsRubyThreadExit(e) && !RubyThreadInfo.TryForwardToActiveFiber()) {
+                RubyUtils.RetractAsyncException(current, e);
             }
         }
 
