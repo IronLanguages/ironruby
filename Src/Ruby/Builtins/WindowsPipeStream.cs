@@ -248,16 +248,61 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Writes all of the buffer, waiting for room in the pipe as often as it takes. A reader that
         /// has gone is an IOException carrying EPIPE.
+        ///
+        /// With a <see cref="WriteTimeout"/> (IO#timeout, which RubyIO applies to a stream that can
+        /// time out) it writes no more than the pipe has room for at a time, waits for room in
+        /// between, and gives up with a TimeoutException at the deadline, which RubyBufferedStream
+        /// turns into IO::TimeoutError. A blocking WriteFile into a full pipe would wait until the
+        /// reader takes the bytes, however long that is.
         /// </summary>
         public override void Write(ReadOnlySpan<byte> buffer) {
             // Held for the whole write, so that a non-blocking write cannot measure room this one
             // is about to take (see WriteNonBlocking).
             lock (_writeLock) {
+                int timeout = _writeTimeout;
+                long deadline = (timeout == Timeout.Infinite) ? 0 : Environment.TickCount64 + timeout;
                 while (buffer.Length > 0) {
-                    int written = WriteFileOnce(buffer, true);
+                    int chunk = buffer.Length;
+                    if (timeout != Timeout.Infinite) {
+                        if (_closed) {
+                            throw ClosedInAnotherThread();
+                        }
+                        int room = WriteQuotaAvailable();
+                        if (room == 0 && !IsReaderGone()) {
+                            if (Environment.TickCount64 >= deadline) {
+                                throw new TimeoutException();
+                            }
+                            Thread.Sleep(1);
+                            continue;
+                        }
+                        if (room > 0) {
+                            chunk = Math.Min(room, chunk);
+                        }
+                    }
+                    int written = WriteFileOnce(buffer.Slice(0, chunk), true);
                     buffer = buffer.Slice(written);
                 }
             }
+        }
+
+        private int _writeTimeout = Timeout.Infinite;
+        private int _readTimeout = Timeout.Infinite;
+
+        /// <summary>True: IO#timeout bounds a write (see <see cref="Write(ReadOnlySpan{byte})"/>).</summary>
+        public override bool CanTimeout {
+            get { return true; }
+        }
+
+        public override int WriteTimeout {
+            get { return _writeTimeout; }
+            set { _writeTimeout = value; }
+        }
+
+        // RubyIO sets both on a stream that can time out. A read waits for data before it starts
+        // (RubyIO.WaitForStream, PeekNamedPipe), so the read itself needs no deadline.
+        public override int ReadTimeout {
+            get { return _readTimeout; }
+            set { _readTimeout = value; }
         }
 
         /// <summary>One byte, written as Write does.</summary>
