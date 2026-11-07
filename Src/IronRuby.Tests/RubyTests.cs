@@ -1000,6 +1000,7 @@ namespace IronRuby.Tests {
                 MethodDef_SymbolInBody1,
                 ToIntegerConversion1,
                 Kernel_IntegerFloat1,
+                Kernel_FloatOptions1,
                 LibraryKeywordsArity1,
                 PreludeKeywordsArity1,
                 LibraryKeywordsStored1,
