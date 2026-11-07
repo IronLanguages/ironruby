@@ -1146,6 +1146,10 @@ namespace IronRuby.Builtins {
                         if (c == ')') {
                             break;
                         }
+                        if (c == '\\') {
+                            // an escaped ) does not end the comment
+                            Read();
+                        }
                     }
                     return;
                 }

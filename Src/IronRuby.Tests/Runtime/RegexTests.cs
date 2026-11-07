@@ -451,6 +451,30 @@ p((""\xff"".force_encoding(""BINARY"").sub(""é"", """") rescue $!), (""abc"".en
 ");
         }
 
+        /// <summary>
+        /// Onigmo reads no escape inside a comment, so a byte escape that spells no character there
+        /// is no error: (?#...), and under /x, or (?x) for the rest of a group, # to the end of the line.
+        /// </summary>
+        public void Regex_ByteEscapeComments1() {
+            TestOutput(@"
+p Regexp.new(""a(?#\\xff)b"") =~ ""ab"", Regexp.new(""a # \\xff\nb"", Regexp::EXTENDED) =~ ""ab""
+p Regexp.new(""(?x)a # \\xff\nb"") =~ ""ab"", Regexp.new(""(?x:a # \\xff\n)b"") =~ ""ab"", Regexp.new(""a(?#\\)\\xff)b"") =~ ""ab""
+p /a#\xff/x =~ ""a"", /a(?#\xff)/ =~ ""a"", Regexp.new(""a # caf\\xc3\\xa9\n\\xc3\\xa9"", Regexp::EXTENDED) =~ ""aé""
+p((Regexp.new(""(?x:a)# \\xff"") rescue $!), (Regexp.new(""[#\\xff]"", Regexp::EXTENDED) rescue $!))
+", @"
+0
+0
+0
+0
+0
+0
+0
+0
+#<RegexpError: invalid multibyte escape: /(?x:a)# \xff/>
+#<RegexpError: invalid multibyte escape: /[#\xff]/x>
+");
+        }
+
         
     }
 }
