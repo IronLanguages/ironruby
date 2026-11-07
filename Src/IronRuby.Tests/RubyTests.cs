@@ -909,6 +909,7 @@ namespace IronRuby.Tests {
                 Encoding_StatelessIso2022Jp1,
                 Encoding_AsciiIncompatible1,
                 Encoding_AsciiIncompatibleLines1,
+                Encoding_AsciiIncompatibleGsub1,
                 Encoding_AsciiIncompatibleChomp1,
                 Marshal_Misc1,
                 Marshal_LoadFloat1,

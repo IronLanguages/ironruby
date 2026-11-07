@@ -3072,9 +3072,13 @@ namespace IronRuby.Builtins {
             // receiver takes on the replacement's encoding, and an incompatible pair raises.
             // Appending it a char at a time would encode the chars in the receiver's encoding
             // ("ab".b.sub("a", "\u00e9") was "\xE9b").
+            // Read as characters throughout: Length counts bytes while the content is binary - a
+            // UTF-16 or UTF-32 replacement, say - but GetChar indexes characters.
+            replacement.PrepareForCharacterRead();
+            int replacementLength = replacement.GetCharCount();
             int backslashCount = 0;
             int runStart = 0;
-            for (int i = 0; i < replacement.Length; i++) {
+            for (int i = 0; i < replacementLength; i++) {
                 char c = replacement.GetChar(i);
                 if (c == '\\') {
                     if (backslashCount == 0) {
@@ -3120,7 +3124,7 @@ namespace IronRuby.Builtins {
                 }
             }
             if (backslashCount == 0) {
-                AppendReplacementPiece(result, replacement, runStart, replacement.Length - runStart);
+                AppendReplacementPiece(result, replacement, runStart, replacementLength - runStart);
             } else {
                 AppendBackslashes(backslashCount, result, 1);
             }

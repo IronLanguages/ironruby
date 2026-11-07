@@ -268,6 +268,13 @@ namespace IronRuby.Builtins {
             }
 
             public override Content/*!*/ EscapeRegularExpression() {
+                if (!_owner._encoding.IsAsciiIdentity && !ContainsInvalidCharacters()) {
+                    // UTF-16 and UTF-32: a byte is not a character there, and escaping the bytes
+                    // one by one put a lone '\' byte in the middle of the code units ("." became
+                    // the three bytes "\\.\0", which no longer matched a ".").
+                    StringBuilder sb = RubyRegex.EscapeToStringBuilder(_owner._encoding.StrictEncoding.GetString(_data, 0, _count));
+                    return (sb != null) ? new StringContent(sb.ToString(), _owner) : Clone();
+                }
                 // TODO:
                 var a = ToByteArray();
                 return Create(
