@@ -5956,8 +5956,9 @@ end
 class String
   alias :__ir_each_line__ :each_line
 
-  def each_line(*args, chomp: false, &block)
-    return to_enum(:each_line, *args, **(chomp ? { chomp: chomp } : {})) unless block
+  def each_line(*args, chomp: (no_chomp = true; false), &block)
+    # the enumerator shows the chomp: given, false and nil too, as MRI's does
+    return to_enum(:each_line, *args, **(no_chomp ? {} : { chomp: chomp })) unless block
     lines = __ir_split_lines__(args, chomp)
     lines.each { |line| block.call(line) }
     self
@@ -8913,6 +8914,12 @@ module ObjectSpace
     def inspect
       "#<ObjectSpace::WeakKeyMap:0x#{(object_id << 1).to_s(16).rjust(16, '0')} size=#{@__table__.size}>"
     end
+
+    # MRI's map is native data Marshal cannot write; this one dumped its table.
+    def marshal_dump
+      ::Kernel.raise(::TypeError, "no _dump_data is defined for class #{self.class}")
+    end
+    private :marshal_dump
   end unless const_defined?(:WeakKeyMap)
 end
 

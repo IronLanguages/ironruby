@@ -158,6 +158,51 @@ nil
         }
 
         /// <summary>
+        /// Messages asked for on many threads at once, about errors in more files than error_highlight
+        /// keeps parsed: its cache of parsed files is shared by every thread, and a Hash changed by
+        /// two threads at once threw IndexOutOfRangeException out of #detailed_message (or failed
+        /// an assertion in the Hash's compaction).
+        /// </summary>
+        public void ErrorHighlight_Threads1() {
+            Engine.Execute("require 'ruby4'; require 'ironruby/error_highlight'");
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ir_eh_threads1_" + Environment.ProcessId);
+            System.IO.Directory.CreateDirectory(dir);
+            try {
+                for (int i = 0; i < 8; i++) {
+                    System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "f" + i + ".rb"), "def eh_threads_f" + i + "(x) = x.zz\n");
+                }
+                TestOutput(@"
+dir = '" + dir.Replace("\\", "/") + @"'
+8.times { |i| load File.join(dir, ""f#{i}.rb"") }
+(nil.zz rescue $!.detailed_message)
+bad = Queue.new
+8.times.map { |t|
+  Thread.new {
+    120.times { |k|
+      i = (t + k) % 8
+      begin
+        send(""eh_threads_f#{i}"", nil)
+      rescue NoMethodError => e
+        begin
+          m = e.detailed_message(highlight: false)
+          bad << ""no snippet"" unless m.include?(""^^^"")
+        rescue Exception => x
+          bad << x.class.name
+        end
+      end
+    }
+  }
+}.each(&:join)
+p bad.size
+", @"
+0
+");
+            } finally {
+                System.IO.Directory.Delete(dir, true);
+            }
+        }
+
+        /// <summary>
         /// NameError#local_variables: those of the scope an undefined local variable or method was named
         /// in, or NameError.new was called in, which did_you_mean suggests. A struct's missing member
         /// carries its name and the struct, for did_you_mean to suggest the members.

@@ -4316,6 +4316,79 @@ method: [1, Integer]
         }
 
         /// <summary>
+        /// Random::Formatter#random_number (SecureRandom's) with a range: an endless or beginless one is
+        /// Errno::EDOM, as random.c has it (it answered a Float in [0, 1)); a backwards one still falls back
+        /// to a Float, a non-numeric one is ArgumentError.
+        /// </summary>
+        public void Random_FormatterRanges1() {
+            TestOutput(@"
+require 'ruby4'
+require 'securerandom'
+[1.., ..1, 1.0.., (nil..nil), ('a'..), (1..0), (2..2), ('a'..'b')].each do |r|
+  begin
+    v = SecureRandom.random_number(r)
+    p [r, v.class]
+  rescue => e
+    p [r, e.class]
+  end
+end
+", @"
+[1.., Errno::EDOM]
+[..1, Errno::EDOM]
+[1.0.., Errno::EDOM]
+[nil..nil, Errno::EDOM]
+[""a"".., Errno::EDOM]
+[1..0, Float]
+[2..2, Integer]
+[""a""..""b"", ArgumentError]
+");
+        }
+
+        /// <summary>
+        /// The URI parser IronRuby patches (its \g calls written out) has MRI's constants and no others: the
+        /// pieces the patch builds its host pattern from were public constants of URI::RFC3986_Parser.
+        /// </summary>
+        public void URI_PatchedParserConstants1() {
+            TestOutput(@"
+require 'ruby4'
+require 'uri'
+p URI::RFC3986_Parser.constants.sort
+p URI('http://[::1.2.3.4]:80/x').host, URI('http://10.0.0.255/').host, URI('//[v1.x]/').host
+", @"
+[:FRAGMENT, :HOST, :RFC3986_URI, :RFC3986_relative_ref, :SCHEME, :SEG, :SEG_NC, :USERINFO]
+""[::1.2.3.4]""
+""10.0.0.255""
+""[v1.x]""
+");
+        }
+
+        /// <summary>
+        /// Two corners of ruby4.rb's Ruby versions of what MRI writes in C: ObjectSpace::WeakKeyMap is not
+        /// Marshal-able (it dumped its table), and String#each_line's enumerator shows the chomp: it was given
+        /// even when it is false (it left `(chomp: false)` out).
+        /// </summary>
+        public void Ruby4_WeakKeyMapMarshalEachLine1() {
+            TestOutput(@"
+require 'ruby4'
+m = ObjectSpace::WeakKeyMap.new
+m['k'] = 1
+begin; Marshal.dump(m); rescue TypeError => e; p e.message; end
+p m.respond_to?(:marshal_dump)
+p ""a\nb"".each_line(chomp: false), ""a\nb"".each_line(chomp: true), ""a"".each_line, ""a"".each_line('x', chomp: true)
+p ""a\nb"".each_line(chomp: false).to_a, ""a\nb"".each_line(chomp: true).to_a
+", @"
+""no _dump_data is defined for class ObjectSpace::WeakKeyMap""
+false
+#<Enumerator: ""a\nb"":each_line(chomp: false)>
+#<Enumerator: ""a\nb"":each_line(chomp: true)>
+#<Enumerator: ""a"":each_line>
+#<Enumerator: ""a"":each_line(""x"", chomp: true)>
+[""a\n"", ""b""]
+[""a"", ""b""]
+");
+        }
+
+        /// <summary>
         /// Range#min, #max, #include? and #member? in C#, with what they hand the prelude: an Integer or Float
         /// range answered from its endpoints, Strings, blocks, counts, endless and beginless ranges, a break
         /// from the block and a subclass's own #max. The expected output is CRuby's.

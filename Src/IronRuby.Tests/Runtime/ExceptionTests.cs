@@ -963,6 +963,44 @@ Errno::ECONNREFUSED
         }
 
         /// <summary>
+        /// Socket.getaddrinfo and Addrinfo.getaddrinfo name the call once (it was "getaddrinfo: getaddrinfo: ..."),
+        /// and a service that is not one is Socket::ResolutionError with EAI_SERVICE, as in MRI, not a plain
+        /// SocketError - nor port 0 for Addrinfo, which also reads a service name for Addrinfo.tcp.
+        /// </summary>
+        public void Errno_SocketResolution1() {
+            TestOutput(@"
+require 'ruby4'
+require 'socket'
+[-> { Socket.getaddrinfo('no.such.host.invalid', 80) }, -> { Addrinfo.getaddrinfo('no.such.host.invalid', 80) }].each do |l|
+  begin
+    l.call
+  rescue SocketError => e
+    p [e.class, e.message.scan('getaddrinfo').size]
+  end
+end
+[-> { Socket.getaddrinfo('localhost', 'nosuchservice') }, -> { Socket.getaddrinfo(nil, 'nosuchservice', nil, :STREAM) },
+ -> { Addrinfo.getaddrinfo('localhost', 'nosuchservice') }, -> { Addrinfo.tcp('localhost', 'nosuchservice') }].each do |l|
+  begin
+    l.call
+  rescue SocketError => e
+    p [e.class, e.message, e.error_code == Socket::EAI_SERVICE]
+  end
+end
+p Addrinfo.tcp('localhost', 'http').ip_port, Addrinfo.udp('localhost', '53').ip_port, Addrinfo.getaddrinfo('localhost', 'http').first.ip_port
+", @"
+[Socket::ResolutionError, 1]
+[Socket::ResolutionError, 1]
+[Socket::ResolutionError, ""getaddrinfo: Servname not supported for ai_socktype"", true]
+[Socket::ResolutionError, ""getaddrinfo: Servname not supported for ai_socktype"", true]
+[Socket::ResolutionError, ""getaddrinfo: Servname not supported for ai_socktype"", true]
+[Socket::ResolutionError, ""getaddrinfo: Servname not supported for ai_socktype"", true]
+80
+53
+80
+");
+        }
+
+        /// <summary>
         /// Socket#connect and #bind name the address, a would-block read names its call, and a socket
         /// option on a closed socket is IOError before anything reaches the kernel (it was EBADF).
         /// </summary>
