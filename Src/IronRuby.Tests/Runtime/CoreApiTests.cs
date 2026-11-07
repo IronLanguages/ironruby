@@ -297,5 +297,25 @@ Module
                 Assert(operations.FormatException(e).Contains(": custom report"));
             }
         }
+
+        /// <summary>
+        /// The first messages, asked for on several threads at once, all have the suggestion: a thread
+        /// that comes while another one is loading did_you_mean waits for it. The first thread used to
+        /// mark them loaded before they were, and the others went on without.
+        /// </summary>
+        public void DidYouMean_LazyThreads1() {
+            TestOutput(@"
+require 'ruby4'
+require 'ironruby/did_you_mean'
+q = Queue.new
+4.times.map {
+  Thread.new { begin; [].lenght; rescue NameError => e; q << e.detailed_message(highlight: false).include?('Did you mean?'); end }
+}.each(&:join)
+a = []; a << q.pop until q.empty?
+p a
+", @"
+[true, true, true, true]
+");
+        }
     }
 }

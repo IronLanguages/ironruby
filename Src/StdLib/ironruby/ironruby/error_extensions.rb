@@ -25,6 +25,8 @@ module IronRuby
 
     @enabled = {}
     @loaded = false
+    # held while they load: a thread whose message is asked for meanwhile waits for them
+    @loading = ::Thread::Mutex.new
     @syntax_suggest_loaded = false
 
     def self.enable(feature)
@@ -37,17 +39,23 @@ module IronRuby
     # `autoloading`: called by the autoload of ::DidYouMean, which did_you_mean is to define
     def self.load(autoloading = false)
       return false if @loaded
-      @loaded = true
-      [:error_highlight, :did_you_mean].each do |feature|
-        next unless @enabled[feature]
-        begin
-          if feature == :did_you_mean && !autoloading && ::Object.autoload?(:DidYouMean)
-            ::Object.send(:remove_const, :DidYouMean)
+      # an error this thread's loading of them raised and rescued goes without them
+      return false if @loading.owned?
+      @loading.synchronize do
+        # loaded by another thread while this one waited: the message is asked for again
+        return true if @loaded
+        [:error_highlight, :did_you_mean].each do |feature|
+          next unless @enabled[feature]
+          begin
+            if feature == :did_you_mean && !autoloading && ::Object.autoload?(:DidYouMean)
+              ::Object.send(:remove_const, :DidYouMean)
+            end
+            require feature.to_s
+          rescue ::LoadError, ::StandardError
+            # an error report goes on without it
           end
-          require feature.to_s
-        rescue ::LoadError, ::StandardError
-          # an error report goes on without it
         end
+        @loaded = true
       end
       true
     end
