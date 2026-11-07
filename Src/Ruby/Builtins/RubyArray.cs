@@ -22,9 +22,7 @@ using System.Diagnostics;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
-using System.Runtime.Serialization;
 
 namespace IronRuby.Builtins {
 
@@ -42,8 +40,6 @@ namespace IronRuby.Builtins {
 
         private uint _flags;
         private const uint IsFrozenFlag = 1;
-        private const uint IsTaintedFlag = 2;
-        private const uint IsUntrustedFlag = 4;
 
         [Conditional("DEBUG")]
         private void ObjectInvariant() {
@@ -161,26 +157,6 @@ namespace IronRuby.Builtins {
 
         private void Mutate() {
             RequireNotFrozen();
-        }
-
-        public bool IsTainted {
-            get {
-                return (_flags & IsTaintedFlag) != 0;
-            }
-            set {
-                Mutate();
-                _flags = (_flags & ~IsTaintedFlag) | (value ? IsTaintedFlag : 0);
-            }
-        }
-
-        public bool IsUntrusted {
-            get {
-                return (_flags & IsUntrustedFlag) != 0;
-            }
-            set {
-                Mutate();
-                _flags = (_flags & ~IsUntrustedFlag) | (value ? IsUntrustedFlag : 0);
-            }
         }
 
         public bool IsFrozen {

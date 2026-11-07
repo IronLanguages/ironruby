@@ -173,10 +173,12 @@ namespace IronRuby.Runtime.Calls {
     /// the rule (which raises), as is a splatted call (whose arguments the rule doesn't count).
     /// </summary>
     internal sealed class LambdaMethodCall : RubyMemberCall {
+        private readonly RubyLambdaMethodInfo/*!*/ _method;
         private readonly Proc/*!*/ _lambda;
 
-        private LambdaMethodCall(Proc/*!*/ lambda) {
-            _lambda = lambda;
+        private LambdaMethodCall(RubyLambdaMethodInfo/*!*/ method) {
+            _method = method;
+            _lambda = method.Lambda;
         }
 
         internal static LambdaMethodCall TryCreate(RubyLambdaMethodInfo/*!*/ method, int count) {
@@ -188,10 +190,29 @@ namespace IronRuby.Runtime.Calls {
             if (maximum == Int32.MaxValue && signature != null && signature.MaxArgumentCount >= 0) {
                 maximum = signature.MaxArgumentCount;
             }
-            return (count >= mandatory && count <= maximum) ? new LambdaMethodCall(method.Lambda) : null;
+            return (count >= mandatory && count <= maximum) ? new LambdaMethodCall(method) : null;
         }
 
         internal override object Invoke(object self, Proc block, object[]/*!*/ args) {
+            if (_method.DeclaringModule.Context.RactorsStarted) {
+                RubyLambdaMethodInfo.CheckRactor(_method);
+            }
+            if (block == null) {
+                return InvokeLambda(self, null, args);
+            }
+
+            // RubyMethodInfo.RuleControlFlowBuilder: the call is the flow-control frame of a literal block given to it
+            var rfc = RubyOps.CreateRfcForMethod(block);
+            try {
+                return InvokeLambda(self, block, args);
+            } catch (MethodUnwinder unwinder) when (unwinder.TargetFrame == rfc) {
+                return unwinder.ReturnValue;
+            } finally {
+                RubyOps.LeaveMethodFrame(rfc);
+            }
+        }
+
+        private object InvokeLambda(object self, Proc block, object[]/*!*/ args) {
             var bfc = RubyOps.CreateBfcForProcCall(_lambda);
             try {
                 object result;

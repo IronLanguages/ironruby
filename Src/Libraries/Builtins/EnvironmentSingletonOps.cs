@@ -13,14 +13,9 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections;
-using System.Collections.Generic;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
-using System.Globalization;
 
 namespace IronRuby.Builtins {
     /// <summary>
@@ -45,7 +40,16 @@ namespace IronRuby.Builtins {
                 encoding = null;
             }
 
-            return MutableString.Create(str, encoding ?? context.GetPathEncoding()).Freeze();
+            // (on Windows the environment is Unicode, and MRI reads it as UTF-8, the filesystem's)
+            encoding = encoding ??
+                (System.IO.Path.DirectorySeparatorChar == '\\' ? context.GetPathEncoding() : context.RubyOptions.LocaleEncoding);
+
+            // A value that is not seven bit cannot be US-ASCII, the C locale's encoding, so MRI
+            // hands its bytes back as ASCII-8BIT (rb_external_str_new_with_enc).
+            if (encoding == RubyEncoding.Ascii && !Utils.IsAscii(str)) {
+                return MutableString.CreateBinary(System.Text.Encoding.UTF8.GetBytes(str)).Freeze();
+            }
+            return MutableString.Create(str, encoding).Freeze();
         }
 
         private static void SetEnvironmentVariable(RubyContext/*!*/ context, string/*!*/ name, string value) {
@@ -221,20 +225,6 @@ namespace IronRuby.Builtins {
                 }
             }
             return null;
-        }
-
-        [RubyMethod("indices")]
-        public static RubyArray/*!*/ Indices(RubyContext/*!*/ context, object/*!*/ self,
-            [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ keys) {
-            context.ReportWarning("ENV.indices is deprecated; use ENV.values_at");
-            return ValuesAt(context, self, keys);
-        }
-
-        [RubyMethod("indexes")]
-        public static RubyArray/*!*/ Index(RubyContext/*!*/ context, object/*!*/ self,
-            [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ keys) {
-            context.ReportWarning("ENV.indexes is deprecated; use ENV.values_at");
-            return ValuesAt(context, self, keys);
         }
 
         [RubyMethod("inspect")]

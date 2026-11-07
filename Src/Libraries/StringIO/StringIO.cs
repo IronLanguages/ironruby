@@ -15,15 +15,12 @@
 
 using System.Runtime.InteropServices;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Actions;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Utils;
 using System;
 using System.IO;
-using System.Numerics;
-using System.Diagnostics;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
@@ -138,7 +135,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<int?>/*!*/ toInt, ConversionStorage<MutableString>/*!*/ toStr,
             BlockParam block, RubyClass/*!*/ self,
             [Optional]object content, [Optional]object mode,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             // MRI does not yield to a block here and says so rather than swallowing it.
             if (block != null) {
@@ -155,7 +152,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<int?>/*!*/ toInt, ConversionStorage<MutableString>/*!*/ toStr,
             RubyContext/*!*/ context, StringIO/*!*/ self,
             [Optional]object content, [Optional]object mode,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             Initialize(toHash, toInt, toStr, context, self, content, mode, options);
             return self;
@@ -287,10 +284,6 @@ namespace IronRuby.StandardLibrary.StringIO {
             self._initialMode = other._initialMode;
             self._lineNumber = other._lineNumber;
             self._position = other._position;
-
-            // TODO: this seems to be MRI bug
-            // Shouldn't StringIO's taint be always same as the underlying string's taint?
-            context.TaintObjectBy(self, other);
             return self;
         }
 
@@ -576,7 +569,6 @@ namespace IronRuby.StandardLibrary.StringIO {
                     throw RubyExceptions.CreateIOError("not modifiable string");
                 }
 
-                content.TaintBy(value);
                 self._position = pos + bytesWritten;
             }
             return bytesWritten;
@@ -656,7 +648,7 @@ namespace IronRuby.StandardLibrary.StringIO {
 
             if (start < length) {
                 self._position = length;
-                buffer.Append(content, start, length - start).TaintBy(content);
+                buffer.Append(content, start, length - start);
             } else if (eofError) {
                 throw new EOFError("end of file reached");
             }
@@ -711,7 +703,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             }
 
             int bytesRead = Math.Min(count, length - self._position);
-            buffer.Append(content, self._position, bytesRead).TaintBy(content);
+            buffer.Append(content, self._position, bytesRead);
             buffer.ForceEncoding(encoding);
             self._position += bytesRead;
             return buffer;
@@ -1062,7 +1054,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyScope/*!*/ scope, StringIO/*!*/ self,
             [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             MutableString separator;
             int limit;
@@ -1077,7 +1069,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyScope/*!*/ scope, StringIO/*!*/ self,
             [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             // no dynamic call, modifies $_ scope variable:
             MutableString result = Gets(toHash, toStr, toInt, scope, self, separatorOrLimit, limitOrOptions, options);
@@ -1093,7 +1085,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyContext/*!*/ context, StringIO/*!*/ self,
             [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             MutableString separator;
             int limit;
@@ -1191,13 +1183,15 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         #region each, each_line, each_byte, each_char (1.9)
 
-        [RubyMethod("each")]
+        // #each_line first: a backtrace names the frame by it, which makes it one frame with the Ruby
+        // #each_line that wraps it (stringio.rb)
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object EachLine(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self,
             [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             MutableString separator;
             int limit;
@@ -1325,7 +1319,7 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyMethod("set_encoding")]
         public static StringIO/*!*/ SetEncoding(ConversionStorage<MutableString>/*!*/ toStr, StringIO/*!*/ self,
-            object external, object @internal, object options) {
+            object external, object @internal, [Keywords]object options) {
             return SetExternalEncoding(toStr, self, external);
         }
 

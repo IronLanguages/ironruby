@@ -230,6 +230,62 @@ namespace IronRuby.Builtins {
             return available > 0;
         }
 
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct IO_STATUS_BLOCK {
+            public IntPtr Status;
+            public UIntPtr Information;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct FILE_PIPE_LOCAL_INFORMATION {
+            public uint NamedPipeType;
+            public uint NamedPipeConfiguration;
+            public uint MaximumInstances;
+            public uint CurrentInstances;
+            public uint InboundQuota;
+            public uint ReadDataAvailable;
+            public uint OutboundQuota;
+            public uint WriteQuotaAvailable;
+            public uint NamedPipeState;
+            public uint NamedPipeEnd;
+        }
+
+        private const int FilePipeLocalInformation = 24;
+        private const uint FILE_PIPE_CLOSING_STATE = 4;
+
+        [System.Runtime.InteropServices.DllImport("ntdll.dll")]
+        private static extern int NtQueryInformationFile(Microsoft.Win32.SafeHandles.SafeFileHandle handle,
+            out IO_STATUS_BLOCK status, out FILE_PIPE_LOCAL_INFORMATION info, int length, int informationClass);
+
+        /// <summary>
+        /// The room left in a Windows pipe for a write, in bytes: Int32.MaxValue when the pipe cannot
+        /// say (or its reader is gone, so the write fails at once with EPIPE rather than wait), 0 when
+        /// a write would wait for the reader. A write of no more than this completes without waiting
+        /// (WriteQuotaAvailable, as libuv asks it). Windows has no poll(2) to ask whether a pipe is
+        /// writable, and a blocking WriteFile on a full pipe waits until the reader takes the bytes.
+        /// </summary>
+        internal static int GetWindowsPipeRoom(Microsoft.Win32.SafeHandles.SafeFileHandle/*!*/ handle) {
+            IO_STATUS_BLOCK status;
+            FILE_PIPE_LOCAL_INFORMATION info;
+            try {
+                if (NtQueryInformationFile(handle, out status, out info,
+                    System.Runtime.InteropServices.Marshal.SizeOf(typeof(FILE_PIPE_LOCAL_INFORMATION)), FilePipeLocalInformation) < 0) {
+                    return Int32.MaxValue;
+                }
+            } catch (Exception) {
+                return Int32.MaxValue;
+            }
+            if (info.WriteQuotaAvailable == 0 && info.NamedPipeState == FILE_PIPE_CLOSING_STATE) {
+                return Int32.MaxValue;
+            }
+            return (int)Math.Min(info.WriteQuotaAvailable, (uint)Int32.MaxValue);
+        }
+
+        /// <summary>Whether a write to a Windows pipe would go in at once (see GetWindowsPipeRoom).</summary>
+        internal static bool IsWindowsPipeWritable(System.IO.FileStream/*!*/ pipe) {
+            return GetWindowsPipeRoom(pipe.SafeFileHandle) > 0;
+        }
+
         #endregion
 
         /// <summary>

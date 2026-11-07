@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting.Utils;
 
@@ -31,7 +27,6 @@ namespace IronRuby.Compiler {
         private bool _doReturn;
 
         public MSA.Expression Variable { get { return _variable; } }
-        public bool DoReturn { get { return _doReturn; } }
         public bool IsIgnore { get { return _variable == null && !_doReturn; } } 
 
         public ResultOperation(MSA.Expression variable, bool doReturn) {

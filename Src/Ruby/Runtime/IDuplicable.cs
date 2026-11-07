@@ -16,11 +16,11 @@
 namespace IronRuby.Runtime {
 
     // Naming conventions:
-    // method            | tainted | Ruby instance variables | frozen |  singleton members  | internal state of the object  
-    // Copy              |    NO   |            NO           |   NO   |          NO         |            YES               
-    // Clone             |   YES   |            NO           |   NO   |          NO         |            YES               
-    // Duplicate(false)  |   YES   |           YES           |   NO   |          NO         |          PARTIAL              
-    // Duplicate(true)   |   YES   |           YES           |   NO   |         YES         |          PARTIAL             
+    // method            | Ruby instance variables | frozen |  singleton members  | internal state of the object
+    // Copy              |            NO           |   NO   |          NO         |            YES
+    // Clone             |            NO           |   NO   |          NO         |            YES
+    // Duplicate(false)  |           YES           |   NO   |          NO         |          PARTIAL
+    // Duplicate(true)   |           YES           |   NO   |         YES         |          PARTIAL
     //
     // PARTIAL - part of the state is initialized by "initialize_copy"
     // 

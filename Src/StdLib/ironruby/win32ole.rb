@@ -72,7 +72,7 @@ class WIN32OLE
       result = @com_object.send(name, *converted_args)
     rescue => e
       # Make sure the method name is in the exception message (useful for COMException)
-      raise e if e.message =~ /#{name}/
+      raise e if e.message.include?(name.to_s)
       raise e.class, e.message + " while calling #{name}"
     end
     
@@ -158,15 +158,10 @@ class WIN32OLE
   
 end
 
+# COM events (connection points) are not supported, so there is never an instance to
+# call #on_event on.
 class WIN32OLE_EVENT
-  def initialize(ole_object, out_interface_name)
-    # Events are not supported even outside of win32ole
+  def initialize(ole_object, event_interface = nil)
     raise NotImplementedError, "Events are not supported on COM objects"
-    @ole_object = ole_object
-  end
-  
-  def on_event(method_name = nil, &b)
-    event = @ole_object.com_object.send method_name.to_sym
-    event.add b
   end
 end

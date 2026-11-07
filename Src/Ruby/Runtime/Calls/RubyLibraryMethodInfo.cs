@@ -13,30 +13,18 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
-using System.Reflection.Emit;
-using System.Dynamic;
 using System.Threading;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Actions.Calls;
-using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
-using IronRuby.Compiler.Generation;
 using IronRuby.Compiler;
 
-using AstFactory = IronRuby.Compiler.Ast.AstFactory;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Calls {
@@ -80,6 +68,26 @@ namespace IronRuby.Runtime.Calls {
 
         internal override bool ImplicitProtocolConversions {
             get { return false; }
+        }
+
+        /// <summary>
+        /// The arity of the C function MRI implements the method with: the number of arguments it takes if every overload
+        /// takes just that many (rb_define_method with an argc of 0 or more), -1 otherwise - for a method that takes optional
+        /// or keyword arguments, or overloads of different lengths (argc/argv). Integer#round is -1, not -1 less one per
+        /// mandatory parameter; #parameters follows: [[:req]] for Integer#+, [[:rest]] for Integer#round. (A core method MRI
+        /// writes in Ruby reports its Ruby parameters, see MethodReflection in the libraries.)
+        /// </summary>
+        protected override int ComputeArity() {
+            int count = -1;
+            foreach (OverloadInfo method in MethodBases) {
+                int mandatory, optional;
+                RubyOverloadResolver.GetParameterCount(method, CallConvention, out mandatory, out optional);
+                if (optional > 0 || count >= 0 && count != mandatory || RubyOverloadResolver.TakesKeywords(method)) {
+                    return -1;
+                }
+                count = mandatory;
+            }
+            return count;
         }
 
         internal protected override OverloadInfo/*!*/[]/*!*/ MethodBases {
@@ -233,7 +241,8 @@ namespace IronRuby.Runtime.Calls {
         #endregion
 
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
-            BuildCallNoFlow(metaBuilder, args, name, MethodBases, CallConvention, ImplicitProtocolConversions);
+            // An alias calls the method it aliases: a [CalledName] parameter gets that one's name, as in MRI.
+            BuildCallNoFlow(metaBuilder, args, OriginalName ?? name, MethodBases, CallConvention, ImplicitProtocolConversions);
 
             // Rules are rebound when c_call tracing is switched on or off, so a rule bound without it costs nothing.
             if (TracePoint.CCallTracing && !metaBuilder.Error && metaBuilder.Result != null) {

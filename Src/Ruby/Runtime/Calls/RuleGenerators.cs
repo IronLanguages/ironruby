@@ -13,12 +13,7 @@
  *
  * ***************************************************************************/
 
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Builtins;
-using IronRuby.Compiler;
-using System.Diagnostics;
-using System;
 
 namespace IronRuby.Runtime.Calls {
 

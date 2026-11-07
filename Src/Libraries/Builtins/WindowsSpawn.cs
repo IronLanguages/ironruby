@@ -19,7 +19,6 @@
  * rather than silently dropped.
  *
  * ***************************************************************************/
-#if FEATURE_PROCESS
 
 using System;
 using System.Collections.Generic;
@@ -62,7 +61,6 @@ namespace IronRuby.Builtins {
         private const int ERROR_LOCK_VIOLATION = 33;
         private const int ERROR_INVALID_NAME = 123;
         private const int ERROR_BAD_EXE_FORMAT = 193;
-        private const int ERROR_BROKEN_PIPE = 109;
 
         // Linux errno values, which is what the prelude's Errno:: table is built from.
         private const int ENOENT = 2;
@@ -796,8 +794,8 @@ namespace IronRuby.Builtins {
             SetHandleInformation(write, HANDLE_FLAG_INHERIT, 0);
 
             // Not plain FileStreams: a blocked read has to look blocked to Thread#status and give
-            // way to a close from another thread, and #read_nonblock / #write_nonblock must not
-            // wait - see WindowsPipeStream.
+            // way to a close from another thread, #read_nonblock / #write_nonblock must not wait,
+            // and IO#timeout must bound a write into a full pipe - see WindowsPipeStream.
             var reader = new WindowsPipeStream(new SafeFileHandle(read, true), FileAccess.Read);
             var writer = new WindowsPipeStream(new SafeFileHandle(write, true), FileAccess.Write);
 
@@ -937,4 +935,3 @@ namespace IronRuby.Builtins {
         #endregion
     }
 }
-#endif

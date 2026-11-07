@@ -19,7 +19,6 @@ using System.Globalization;
 using System.Numerics;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
     /// <summary>
@@ -213,7 +212,6 @@ namespace IronRuby.Builtins {
         #region MRI's float_round_overflow / float_round_underflow
 
         private const int FloatDig = 17; // DBL_DIG + 2
-        private const int DblMantDig = 53;
 
         // frexp's exponent: number = mantissa * 2**binexp with 0.5 <= |mantissa| < 1
         private static int BinaryExponent(double x) {
@@ -365,6 +363,70 @@ namespace IronRuby.Builtins {
             // number of decimal digits, erring on the high side
             int digits = (int)Math.Floor(BigInteger.Log10(BigInteger.Abs(value))) + 2;
             return -(long)ndigits > digits;
+        }
+
+        // ---- a Fixnum and a negative ndigits, in long arithmetic -------------------------------
+        //
+        // What RoundInteger and its siblings answer, without a BigInteger in sight: 12345.round(-2)
+        // cost ~0.5 us, nearly all of it BigInteger arithmetic on numbers that fit in a long. A
+        // power of ten past 10**18 does not fit, and the BigInteger versions take that.
+
+        internal enum IntegerRounding { Round, Floor, Ceil, Truncate }
+
+        private static readonly long[] _powersOf10 = BuildPowersOf10();
+
+        private static long[] BuildPowersOf10() {
+            var result = new long[19];
+            long p = 1;
+            for (int i = 0; i < result.Length; i++) {
+                result[i] = p;
+                p *= 10;
+            }
+            return result;
+        }
+
+        internal static bool TryRoundFixnum(int value, int ndigits, IntegerRounding kind, Half mode, out object result) {
+            if (ndigits >= 0) {
+                result = ScriptingRuntimeHelpers.Int32ToObject(value);
+                return true;
+            }
+            if (ndigits < -18) {
+                result = null;
+                return false;
+            }
+            long f = _powersOf10[-ndigits];
+            long v = value;
+            long r = v % f;                         // the sign of v, as C#'s % has it
+            long down = v - r;                      // towards zero
+            long rounded;
+            switch (kind) {
+                case IntegerRounding.Truncate:
+                    rounded = down;
+                    break;
+                case IntegerRounding.Floor:
+                    rounded = (r < 0) ? down - f : down;
+                    break;
+                case IntegerRounding.Ceil:
+                    rounded = (r > 0) ? down + f : down;
+                    break;
+                default:
+                    long twice = 2 * Math.Abs(r);
+                    bool away;
+                    if (twice != f) {
+                        away = twice > f;
+                    } else {
+                        switch (mode) {
+                            case Half.Down: away = false; break;
+                            case Half.Even: away = ((down / f) & 1) != 0; break;
+                            default: away = true; break;
+                        }
+                    }
+                    rounded = away ? (v < 0 ? down - f : down + f) : down;
+                    break;
+            }
+            // an Int32 when it fits and an Int64 otherwise, as every other Integer is represented
+            result = Protocols.Normalize(rounded);
+            return true;
         }
 
         private static BigInteger Pow10(int exponent) {

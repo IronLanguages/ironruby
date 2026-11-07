@@ -149,23 +149,25 @@ namespace IronRuby.Runtime.Jit {
             // one, then the optional ones, whose defaults the entry has already filled in (JitStub) -
             // or, for a method with keywords, the mandatory ones and then its keyword locals.
             var optional = ast.Parameters.Optional;
-            int expected = mandatory.Length + ((keywords != null) ? keywords.Count : (_supplied >= 0) ? _supplied : optional.Length);
+            // the positionals of a keyword method: the mandatory ones, then any optional ones before the keywords
+            int positional = mandatory.Length + ((keywords != null) ? keywords.OptionalPositionals : 0);
+            int expected = (keywords != null) ? positional + keywords.Count : mandatory.Length + ((_supplied >= 0) ? _supplied : optional.Length);
             _paramNames = new string[paramTypes.Length];
             _paramExprs = new MSA.ParameterExpression[paramTypes.Length];
             _resolvedTypes = (JT[])paramTypes.Clone();
             if (paramTypes.Length != expected) { throw JitBailout.Instance; }
             for (int i = 0; i < paramTypes.Length; i++) {
                 string name;
-                if (i < mandatory.Length || keywords == null) {
+                if (i < positional || keywords == null) {
                     var lv = (i < mandatory.Length) ? mandatory[i] as LocalVariable : optional[i - mandatory.Length].Left as LocalVariable;
                     if (lv == null) { throw JitBailout.Instance; }
                     name = lv.Name;
                 } else {
-                    name = keywords.LocalNames[i - mandatory.Length];
+                    name = keywords.LocalNames[i - positional];
                 }
                 if (_vars[0].ContainsKey(name)) { throw JitBailout.Instance; }
                 _paramNames[i] = name;
-                if (keywords != null && i >= mandatory.Length && keywords.HasDefaultExpr(i - mandatory.Length)) {
+                if (keywords != null && i >= positional && keywords.HasDefaultExpr(i - positional)) {
                     // the boxed value or RubyOps.DefaultArgument; the local is bound by EmitKeywordDefaults
                     _paramExprs[i] = Ast.Parameter(typeof(object), "?" + name);
                     continue;
@@ -565,7 +567,7 @@ namespace IronRuby.Runtime.Jit {
         private static JT[]/*!*/ LambdaParameterTypes(JT[]/*!*/ paramTypes, JitKeywords keywords, MethodDeclaration/*!*/ ast) {
             if (keywords == null || keywords.DefaultExprs == null) { return paramTypes; }
             var result = (JT[])paramTypes.Clone();
-            int first = ast.Parameters.Mandatory.Length;
+            int first = ast.Parameters.Mandatory.Length + keywords.OptionalPositionals;
             for (int j = 0; j < keywords.Count && first + j < result.Length; j++) {
                 if (keywords.HasDefaultExpr(j)) { result[first + j] = JT.Obj; }
             }
@@ -645,7 +647,7 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private List<MSA.Expression> EmitKeywordDefaults() {
             if (_keywords.DefaultExprs == null) { return null; }
-            int first = _ast.Parameters.Mandatory.Length;
+            int first = _ast.Parameters.Mandatory.Length + _keywords.OptionalPositionals;
             var parts = new List<MSA.Expression>();
             var defaultArgument = Ast.Field(null, typeof(RubyOps).GetField("DefaultArgument"));
             for (int j = 0; j < _keywords.Count; j++) {
@@ -1868,8 +1870,6 @@ namespace IronRuby.Runtime.Jit {
         // best carried boxed: unboxing it on entry would only mean boxing it again for each store.
         private readonly HashSet<string>/*!*/ _otherUses = new HashSet<string>();
 
-        private readonly JitKeywords _keywords;
-
         // walking a keyword default, which may not assign a local (JitCompiler.EmitKeywordDefaults)
         private bool _inKeywordDefault;
 
@@ -1878,7 +1878,6 @@ namespace IronRuby.Runtime.Jit {
             _methodName = ast.Name;
             // a method with keywords is never called directly from its typed body (EmitCall)
             _arity = (keywords != null) ? -1 : ast.Parameters.Mandatory.Length + ast.Parameters.Optional.Length;
-            _keywords = keywords;
         }
 
         /// <summary>

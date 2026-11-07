@@ -33,10 +33,8 @@ internal class LibraryDef {
 
     public static readonly string/*!*/ TypeAction = "Action";
     public static readonly string/*!*/ TypeFunction = "Func";
-    public static readonly string/*!*/ TypeDelegate = TypeName(typeof(Delegate));
     public static readonly string/*!*/ TypeRubyModule = TypeName(typeof(RubyModule));
     public static readonly string/*!*/ TypeRubyClass = TypeName(typeof(RubyClass));
-    public static readonly string/*!*/ TypeActionOfRubyModule = TypeName(typeof(Action<RubyModule>));
     public static readonly string/*!*/ TypeLibraryInitializer = TypeName(typeof(LibraryInitializer));
     public static readonly string/*!*/ TypeRubyLibraryAttribute = TypeName(typeof(RubyLibraryAttribute));
 
@@ -164,8 +162,6 @@ internal class LibraryDef {
         public string Definition;
 
 
-        public string BuildConfig;
-        public RubyCompatibility Compatibility;
         public ModuleRestrictions Restrictions;
         
         private int _dependencyOrder;
@@ -269,8 +265,6 @@ internal class LibraryDef {
     private class MethodDef {
         public string/*!*/ Name;
         public List<MethodInfo>/*!*/ Overloads = new List<MethodInfo>();
-        public string BuildConfig;
-        public RubyCompatibility Compatibility;
         public RubyMethodAttributes/*!*/ Attributes;
 
         public bool IsRuleGenerator {
@@ -287,28 +281,14 @@ internal class LibraryDef {
     private class ConstantDef {
         public readonly string/*!*/ Name;
         public readonly MemberInfo/*!*/ Member;
-        public readonly string/*!*/ BuildConfig;
 
-        public ConstantDef(string/*!*/ name, MemberInfo/*!*/ member, string/*!*/ buildConfig) {
+        public ConstantDef(string/*!*/ name, MemberInfo/*!*/ member) {
             Name = name;
             Member = member;
-            BuildConfig = buildConfig;
         }
     }
 
     #endregion
-
-    private void WriteRubyCompatibilityCheck(RubyCompatibility compatibility) {
-        if (compatibility != RubyCompatibility.Default) {
-            _output.WriteLine("if (Context.RubyOptions.Compatibility >= RubyCompatibility.{0}) {{", compatibility.ToString());
-        }
-    }
-
-    private void WriteRubyCompatibilityCheckEnd(RubyCompatibility compatibility) {
-        if (compatibility != RubyCompatibility.Default) {
-            _output.WriteLine("}");
-        }
-    }
 
     #region Reflection
 
@@ -385,8 +365,6 @@ internal class LibraryDef {
                 def.Trait = trait;
                 def.Extends = (module.Extends != null) ? module.Extends : trait;
                 def.DefineIn = module.DefineIn;
-                def.BuildConfig = module.BuildConfig;
-                def.Compatibility = module.Compatibility;
                 def.Restrictions = module.GetRestrictions(Builtins);
 
                 def.Super = null;
@@ -452,7 +430,7 @@ internal class LibraryDef {
 
         int defVariableId = 1;
 
-        // declaring modules, build configurations:
+        // declaring modules:
         foreach (ModuleDef def in _moduleDefs.Values) {
             if (!def.IsExtension) {
                 if (def.Extends.IsGenericTypeDefinition) {
@@ -464,19 +442,6 @@ internal class LibraryDef {
                 if (declaringDef != null) {
                     def.DeclaringModule = declaringDef;
                     def.IsGlobal = false;
-
-                    // inherits build config:
-                    if (declaringDef.BuildConfig != null) {
-                        if (def.BuildConfig != null) {
-                            def.BuildConfig = declaringDef.BuildConfig + " && " + def.BuildConfig;
-                        } else {
-                            def.BuildConfig = declaringDef.BuildConfig;
-                        }
-                    }
-
-                    if (declaringDef.Compatibility != RubyCompatibility.Default) {
-                        def.Compatibility = (RubyCompatibility)Math.Max((int)declaringDef.Compatibility, (int)def.Compatibility);
-                    }
 
                     // we will need a reference for setting the constant:
                     def.DeclaringTypeRef = declaringDef.GetReference(ref defVariableId);
@@ -632,9 +597,6 @@ internal class LibraryDef {
                             def.Attributes |= RubyMethodAttributes.NoEvent;
                         }
 
-                        def.BuildConfig = attr.BuildConfig;
-                        def.Compatibility = attr.Compatibility;
-
                         methods.Add(attr.Name, def);
                     }
                     def.Overloads.Add(method);
@@ -694,6 +656,7 @@ internal class LibraryDef {
             } else {
 
                 bool hasContext = false;
+                bool hasCalledName = false;
                 bool hasBlock = false;
                 bool hasSelf = false;
                 int storageCount = 0;
@@ -719,6 +682,12 @@ internal class LibraryDef {
                         }
 
                         hasContext = true;
+                    } else if (type == typeof(string) && parameterInfos[i].IsDefined(typeof(CalledNameAttribute), false)) {
+                        if (hasCalledName || hasBlock || hasSelf || i - storageCount != (hasContext ? 1 : 0)) {
+                            LogMethodError("[CalledName] parameter must follow the optional RubyCallSiteStorage and context parameters", methodDef, overload);
+                        }
+
+                        hasCalledName = true;
                     } else if (type == typeof(BlockParam)) {
                         if (hasBlock) {
                             LogMethodError("has multiple block parameters.", methodDef, overload);
@@ -726,29 +695,15 @@ internal class LibraryDef {
 
                         // TODO: sites
 
-                        if (hasContext && i - storageCount != 1) {
-                            LogMethodError("Block parameter must be the first parameter after context parameter", methodDef, overload);
+                        if (i - storageCount != (hasContext ? 1 : 0) + (hasCalledName ? 1 : 0)) {
+                            LogMethodError("Block parameter must be the first parameter following optional RubyCallSiteStorage, context and [CalledName] parameters", methodDef, overload);
                         }
-
-                        if (!hasContext && i - storageCount != 0) {
-                            LogMethodError("Block parameter must be the first parameter following optional RubyCallSiteStorage", methodDef, overload);
-                        }
-
-                        // TODO: we should detect a call to the BlockParam.Yield:
-                        //if (overload.ReturnType != typeof(object)) {
-                        //    LogMethodWarning("A method that yields to a block must return Object.", methodDef, overload);
-                        //}
 
                         hasBlock = true;
                     } else if (!hasSelf) {
                         // self
                         if (isInstance) {
                             Debug.Assert(methodDef != null);
-
-                            // TODO:
-                            //if (parameterInfos[i].Name != "self") {
-                            //    LogMethodWarning("Self parameter should be named 'self'.", methodDef, overload);
-                            //}
                         } else {
                             Type requiredType;
 
@@ -800,13 +755,12 @@ internal class LibraryDef {
                 continue;
             }
 
-            if (String.IsNullOrEmpty(name) || name[0] < 'A' && name[0] > 'Z') {
-                LogError("Invalid constant name: '{0}' ({1}::{2})", name, existing.Member.DeclaringType.FullName, existing.Member.Name);
+            if (String.IsNullOrEmpty(name) || name[0] < 'A' || name[0] > 'Z') {
+                LogError("Invalid constant name: '{0}' ({1}::{2})", name, member.DeclaringType.FullName, member.Name);
                 continue;
             }
 
-            Debug.Assert(attr.Compatibility == RubyCompatibility.Default);
-            moduleDef.Constants.Add(name, new ConstantDef(name, member, attr.BuildConfig));
+            moduleDef.Constants.Add(name, new ConstantDef(name, member));
         }
     }
 
@@ -840,11 +794,6 @@ internal class LibraryDef {
         Console.Error.Write("Error: ");
         Console.Error.WriteLine(message, args);
         AnyErrors = true;
-    }
-
-    private void LogWarning(string/*!*/ message, params object[] args) {
-        Console.Error.Write("Warning: ");
-        Console.Error.WriteLine(message, args);
     }
 
     private void LogMethodError(string/*!*/ message, MethodDef methodDef, MethodBase/*!*/ overload, params object[] args) {
@@ -946,23 +895,11 @@ internal class LibraryDef {
 
         // add constants for non-global nested modules, adds aliases:
         foreach (ModuleDef def in worklist) {
-            if (def.IsGlobal && def.Aliases.Count > 0 || def.DeclaringTypeRef != null) {
-                if (def.BuildConfig != null) {
-                    _output.WriteLine("#if " + def.BuildConfig);
-                }
-                WriteRubyCompatibilityCheck(def.Compatibility);
-
-                if (def.IsGlobal) {
-                    GenerateAliases(def, ModuleDef.ObjectClassRef);
-                } else if (def.DeclaringTypeRef != null) {
-                    GenerateAliases(def, def.DeclaringTypeRef);
-                    GenerateSetConstant(def.DeclaringTypeRef, def.SimpleName, def.Reference);
-                }
-
-                WriteRubyCompatibilityCheckEnd(def.Compatibility);
-                if (def.BuildConfig != null) {
-                    _output.WriteLine("#endif");
-                }
+            if (def.IsGlobal) {
+                GenerateAliases(def, ModuleDef.ObjectClassRef);
+            } else if (def.DeclaringTypeRef != null) {
+                GenerateAliases(def, def.DeclaringTypeRef);
+                GenerateSetConstant(def.DeclaringTypeRef, def.SimpleName, def.Reference);
             }
         }
     }
@@ -982,11 +919,6 @@ internal class LibraryDef {
             _output.WriteLine("// Skipped primitive: {0}", def.QualifiedName);
             return;
         }
-
-        if (def.BuildConfig != null) {
-            _output.WriteLine("#if " + def.BuildConfig);
-        }
-        WriteRubyCompatibilityCheck(def.Compatibility);
 
 
         switch (def.Kind) {
@@ -1009,13 +941,6 @@ internal class LibraryDef {
                     }
                 }
 
-#if TODO
-                string extensionType = "null";
-                if (def.Trait != def.Extends) {
-                    extensionType = string.Format("typeof({0})", TypeName(def.Trait));
-                }
-                pass:    extensionType,
-#endif
 
                 if (def.IsExtension) {
                     _output.Write("ExtendClass(typeof({0}), {1}, {2}, {3}, ",
@@ -1089,11 +1014,6 @@ internal class LibraryDef {
             default:
                 throw Assert.Unreachable;
         }
-
-        WriteRubyCompatibilityCheckEnd(def.Compatibility);
-        if (def.BuildConfig != null) {
-            _output.WriteLine("#endif");
-        }
     }
 
     private void GenerateInclusions(ModuleDef/*!*/ def, bool makeArray) {
@@ -1157,9 +1077,6 @@ internal class LibraryDef {
 
     private void GenerateTraitInitialization(ModuleDef/*!*/ moduleDef, bool isInstance) {
         if (isInstance ? moduleDef.HasInstanceInitializer : moduleDef.HasClassInitializer) {
-            if (moduleDef.BuildConfig != null) {
-                _output.WriteLine("#if " + moduleDef.BuildConfig);
-            }
             _output.WriteLine("private static void Load{0}_{2}({1}/*!*/ module) {{", moduleDef.Id, TypeRubyModule, isInstance ? "Instance" : "Class");
             _output.Indent++;
 
@@ -1170,20 +1087,12 @@ internal class LibraryDef {
 
             _output.Indent--;
             _output.WriteLine("}");
-            if (moduleDef.BuildConfig != null) {
-                _output.WriteLine("#endif");
-            }
             _output.WriteLine();
         }
     }
 
     private void GenerateConstantsInitialization(ModuleDef/*!*/ moduleDef) {
         if (moduleDef.HasConstantsInitializer) {
-            if (moduleDef.BuildConfig != null) {
-                _output.WriteLine("#if " + moduleDef.BuildConfig);
-            }
-            WriteRubyCompatibilityCheck(moduleDef.Compatibility);
-
             _output.WriteLine("private static void Load{0}_Constants({1}/*!*/ module) {{", moduleDef.Id, TypeRubyModule);
             _output.Indent++;
 
@@ -1192,10 +1101,6 @@ internal class LibraryDef {
 
             _output.Indent--;
             _output.WriteLine("}");
-            WriteRubyCompatibilityCheckEnd(moduleDef.Compatibility);
-            if (moduleDef.BuildConfig != null) {
-                _output.WriteLine("#endif");
-            }
             _output.WriteLine();
         }
     }
@@ -1203,19 +1108,11 @@ internal class LibraryDef {
     private void GenerateConstants(ModuleDef/*!*/ moduleDef) {
         // add constants on module
         foreach (var constantDef in moduleDef.Constants.Values) {
-            if (constantDef.BuildConfig != null) {
-                _output.WriteLine("#if " + constantDef.BuildConfig);
-            }
-
             GenerateSetConstant("module",  constantDef.Name, String.Format("{0}.{1}{2}",
                 TypeName(constantDef.Member.DeclaringType), 
                 constantDef.Member.Name,
                 constantDef.Member is MethodInfo ? "(module)" : null
             ));
-
-            if (constantDef.BuildConfig != null) {
-                _output.WriteLine("#endif");
-            }
         }
         _output.WriteLine();
     }
@@ -1259,16 +1156,7 @@ internal class LibraryDef {
 
     private void GenerateMethods(Type/*!*/ type, IDictionary<string, MethodDef>/*!*/ methods) {
         foreach (MethodDef def in methods.Values) {
-            if (def.BuildConfig != null) {
-                _output.WriteLine("#if " + def.BuildConfig);
-            }
-
             int attributes = (int)def.Attributes;
-            if (def.Compatibility != RubyCompatibility.Default) {
-                int encodedCompat = ((int)def.Compatibility) << RubyMethodAttribute.CompatibilityEncodingShift;
-                Debug.Assert((encodedCompat & attributes) == 0);
-                attributes |= encodedCompat;
-            }
 
             if (def.IsRuleGenerator) {
                 _output.WriteLine("DefineRuleGenerator(module, \"{0}\", 0x{1:x}, {2}.{3}());",
@@ -1290,10 +1178,6 @@ internal class LibraryDef {
             }
 
             _output.WriteLine();
-
-            if (def.BuildConfig != null) {
-                _output.WriteLine("#endif");
-            }
         }
     }
 
@@ -1349,11 +1233,6 @@ internal class LibraryDef {
         // TODO: sort by name
         foreach (var moduleDef in moduleDefs.Values) {
             if (moduleDef.IsException) {
-                if (moduleDef.BuildConfig != null) {
-                    _output.WriteLine("#if " + moduleDef.BuildConfig);
-                }
-                WriteRubyCompatibilityCheck(moduleDef.Compatibility);
-
                 // public static Exception/*!*/ Factory(RubyClass/*!*/ self, [DefaultParameterValue(null)]object message) {
                 //     return InitializeException(new Exception(GetClrMessage(self, message)), message);
                 // }
@@ -1378,11 +1257,6 @@ internal class LibraryDef {
                 _output.Indent--;
                 _output.WriteLine("}");
                 _output.WriteLine();
-
-                WriteRubyCompatibilityCheckEnd(moduleDef.Compatibility);
-                if (moduleDef.BuildConfig != null) {
-                    _output.WriteLine("#endif");
-                }
             }
         }
     }
@@ -1417,14 +1291,6 @@ internal class LibraryDef {
 
     private static string/*!*/ TypeArgs(params Type/*!*/[]/*!*/ types) {
         return ReflectionUtils.FormatTypeArgs(new StringBuilder(), types, Generator.TypeNameDispenser).ToString();
-    }
-
-    private static string/*!*/ GenericTypeName(Type/*!*/ type) {
-        if (type.IsGenericTypeDefinition) {
-            return String.Concat(type.Namespace, ".", type.Name.Substring(0, type.Name.IndexOf('`')));
-        } else {
-            return type.Name;
-        }
     }
 
     private class TypeComparer : IComparer<Type> {

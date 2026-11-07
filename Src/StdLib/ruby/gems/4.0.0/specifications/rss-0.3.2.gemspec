@@ -16,7 +16,7 @@ Gem::Specification.new do |s|
   s.rubygems_version = "4.0.2".freeze
   s.summary = "Family of libraries that support various formats of XML \"feeds\".".freeze
 
-  s.installed_by_version = "4.0.16".freeze
+  s.installed_by_version = "4.0.20".freeze
 
   s.specification_version = 4
 

@@ -17,16 +17,11 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.Diagnostics;
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Utils;
 
 using IronRuby.Builtins;
-using IronRuby.Runtime.Calls;
-using IronRuby.Runtime;
-using System.Runtime.CompilerServices;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -53,20 +48,6 @@ namespace IronRuby.Tests {
             Assert(func5(1) == 6);
 
             AssertExceptionThrown<ArgumentException>(() => Engine.Execute(@"F1.to_class.new(*[])"));
-
-            if (_driver.RunPython) {
-                var py = Runtime.GetEngine("python");
-
-                Engine.Runtime.Globals.SetVariable("F2", typeof(Func<string[], string[], string[]>));
-                var pyAdd = py.Execute(@"
-def py_add(a, b): 
-  return a + b
-py_add
-");
-                Engine.Runtime.Globals.SetVariable("PyAdd", pyAdd);
-                var pyFunc = (Func<string[], string[], string[]>)Engine.Execute(@"F2.to_class.new PyAdd");
-                Assert(String.Join(";", pyFunc(new[] { "x" }, new[] { "y" })) == "x;y");
-            }
         }
 
         public void RubyHosting1A() {
@@ -143,7 +124,8 @@ py_add
             scope.SetVariable("some_variable", 123);
             Assert(compiled.Execute<int>(scope) == 123);
             
-            AssertExceptionThrown<MissingMethodException>(() => compiled.Execute());
+            // NameError: undefined local variable or method 'some_variable'
+            AssertExceptionThrown<MemberAccessException>(() => compiled.Execute());
 
             scope.SetVariable("some_variable", "foo");
             Assert(compiled.Execute<string>(scope) == "foo");
@@ -242,6 +224,31 @@ puts method_missing(:bar) rescue p $!
 ");
         }
 
+        /// <summary>
+        /// A name the scope does not have goes on to the method_missing above main's, with the name and
+        /// the arguments - and a call signature that counts them right, which a define_method body checks.
+        /// </summary>
+        public void RubyHosting1G() {
+            var scope = Engine.CreateScope();
+            scope.SetVariable("bar", 1);
+
+            AssertOutput(() =>
+                Engine.Execute(@"
+class Object
+  define_method(:method_missing) { |name, arg| $stdout.write(name.to_s + ' ' + arg.to_s + ""\n"") }
+end
+begin
+  foo 2
+  p bar
+ensure
+  class Object; remove_method :method_missing; end
+end
+", scope), @"
+foo 2
+1
+");
+        }
+
         public void RubyHosting2() {
             Hashtable hash = new Hashtable();
             hash.Add("foo", "bar");
@@ -281,12 +288,6 @@ bar
             Engine.Execute("E = Module.new");
             Assert(Runtime.Globals.TryGetVariable("E", out value));
             Assert(((RubyModule)value).Name == "E");
-
-            // TODO:
-            // the library paths are incorrect (not combined with location of .exe file) in partial trust:
-            if (_driver.PartialTrust) return;
-
-            var searchPaths = Engine.GetSearchPaths();
 
             bool result = Engine.RequireFile("fcntl");
             Assert(result == true);
@@ -328,8 +329,6 @@ IronRuby.globals.z = IronRuby.globals.x + FooBar
 
         public void RubyHosting5() {
             // app-domain creation:
-            if (_driver.PartialTrust) return;
-
             Assert(Engine.RequireFile("fcntl") == true);
             Assert(Engine.Execute<bool>("Object.constants.include?(:Fcntl)") == true);
         }
@@ -400,6 +399,18 @@ a = 'ba'.gsub /b/, '1'
             AssertExceptionThrown<SyntaxErrorException>(() => Engine.Execute("}"));
         }
 
+        /// <summary>
+        /// -E takes "locale" besides the names of real encodings, as MRI's does; "external" and
+        /// "filesystem", which Encoding.find knows, are unknown encoding names there.
+        /// </summary>
+        public void HostingEncodingOption1() {
+            foreach (var arg in new[] { "-Eexternal", "-Efilesystem", "-Eutf-8:external", "--external-encoding=filesystem" }) {
+                AssertExceptionThrown<Microsoft.Scripting.Hosting.Shell.InvalidOptionException>(() =>
+                    new IronRuby.Hosting.RubyOptionsParser().Parse(new[] { arg, "-e", "1" }, new ScriptRuntimeSetup(), Ruby.CreateRubySetup(), PlatformAdaptationLayer.Default));
+            }
+            new IronRuby.Hosting.RubyOptionsParser().Parse(new[] { "-Elocale:locale", "-e", "1" }, new ScriptRuntimeSetup(), Ruby.CreateRubySetup(), PlatformAdaptationLayer.Default);
+        }
+
         public void Interactive1() {
             ScriptScope scope = Runtime.CreateScope();
             AssertOutput(() => Engine.CreateScriptSourceFromString("", SourceCodeKind.InteractiveCode).Execute(scope), "");
@@ -424,7 +435,7 @@ a = 'ba'.gsub /b/, '1'
             var scope = Engine.CreateScope();
             scope.SetVariable("ops", Engine.Operations);
             s = Engine.Execute<string>(@"ops.format({1 => 2, 3 => 4})", scope);
-            Assert(s == "{1=>2, 3=>4}");
+            Assert(s == "{1 => 2, 3 => 4}");
         }
 
         public void Scenario_RubyConsole1() {
@@ -536,333 +547,6 @@ end
             Assert(names.Contains("instance_variables"));
             Assert(!names.Contains("freeze"));
             Assert(!names.Contains("bar"));
-        }
-
-        public void PythonInterop1() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-            Engine.Execute(@"
-class C
-  def foo
-    123
-  end
-end
-");
-
-            var result = py.Execute<int>(@"
-import C
-C().foo()
-");
-            Assert(result == 123);
-        }
-
-        public void PythonInterop2() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-
-            py.Execute(@"
-class C(object):
-  def foo(self, a, b):
-    return a + b
-", Runtime.Globals);
-
-            Assert(Engine.Execute<int>("C.new.foo(3,4)") == 7);
-        }
-
-        public void PythonInterop3() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-
-            var scope = py.CreateScope();
-            py.Execute(@"
-def python():
-  return 'Python'
-", scope);
-
-            Engine.Execute(@"
-def ruby
-  python.call + ' + Ruby'
-end
-", scope);
-
-            AssertOutput(() => py.Execute(@"
-print ruby()
-", scope), @"
-Python + Ruby
-");
-        }
-
-        public void PythonInterop4() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-
-            var scope = py.CreateScope();
-            py.Execute(@"
-def get_python_class():
-  class C(object): 
-    x = 123  
-    def __str__(self):
-      return 'this is C'
-    
-
-  return C()
-", scope);
-
-            Engine.Execute(@"self.c = get_python_class.call", scope);
-
-            var s = Engine.Execute<MutableString>(@"c.to_str", scope);
-            Assert(s.ToString() == @"this is C");
-
-            var i = Engine.Execute<int>(@"c.x", scope);
-            Assert(i == 123);
-
-            // TODO: test
-            // c.y, where y is a delegate
-            // c.p, where p is a Ruby Proc
-        }
-
-        public void PythonInterop5() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-
-            var scope = py.CreateScope();
-            py.Execute(@"
-from System.Collections import ArrayList
-class A(ArrayList):
-  def Count(self): return 123
-", scope);
-
-            Assert(Engine.Execute<int>(@"
-a = A().new
-a.Count
-", scope) == 123);
-            
-        }
-
-        /// <summary>
-        /// Python falls back if the member is not defined and Ruby then invokes the member with original casing.
-        /// </summary>
-        public void PythonInterop_InvokeMember_Fallback1() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-            ScriptScope scope = py.CreateScope();
-            py.Execute(@"class C: pass", scope);
-
-            XAssertOutput(() => 
-                Engine.Execute(@"
-class Object
-  def Foo 
-    puts 'Object::Foo'
-  end
-
-  def bar
-    puts 'Object::bar'
-  end
-end
-
-#c.new.foo rescue p $!
-c.new.bar
-", scope), @"
-
-"
- );
-        }
-
-        /// <summary>
-        /// Python falls back if the member is not defined and Ruby then invokes the member with original casing.
-        /// </summary>
-        public void PythonInterop_InvokeMember_Fallback2() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-            ScriptScope scope = py.CreateScope();
-            py.Execute(@"class C: pass", scope);
-
-            AssertOutput(() => 
-                Engine.Execute(@"
-module Kernel
-  def foo
-    Kernel.puts 'Kernel::foo'                  # TODO: puts should work w/o specifying the module
-  end
-end
-
-class Object
-  def foo
-    Kernel.puts 'Object::foo'
-    super
-  end
-end
-
-c.new.foo
-", scope), @"
-Object::foo
-Kernel::foo
-");
-        }
-
-        public class ClrIndexable1 {
-            public int Value;
-
-            public int this[int a, int b] {
-                get { return a + b; }
-                set { Value = a + b * value; }
-            }
-        }
-
-        // TODO: this is broken in both Python and Ruby InteropBinder
-        public void PythonInterop_Indexers_Fallback1() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-            ScriptScope scope = py.CreateScope();
-            scope.SetVariable("ClrIndexable", typeof(ClrIndexable1));
-            py.Execute(@"
-import clr
-class C(clr.GetPythonType(ClrIndexable)): pass
-", scope);
-
-            XAssertOutput(() =>
-                Engine.Execute(@"
-clr_indexable.to_class.module_eval do
-  def [](*args)
-    p args
-  end
-
-  def []=(*args)
-    p args
-  end
-end
-
-c = C().new
-p c[1, 2]
-
-c[3, 4] = 5
-p c.Value
-", scope), @"
-3
-23
-");
-        }
-
-        public class ClassWithOperators1 {
-            public static ClassWithOperators1 operator -(ClassWithOperators1 a) { return null; }
-            public static ClassWithOperators1 operator +(ClassWithOperators1 a) { return null; }
-            public static ClassWithOperators1 operator ~(ClassWithOperators1 a) { return null; }
-
-            public static ClassWithOperators1 operator +(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator -(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator /(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator *(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator %(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-
-            public static ClassWithOperators1 operator <<(ClassWithOperators1 a, int b) { return null; }
-            public static ClassWithOperators1 operator >>(ClassWithOperators1 a, int b) { return null; }
-            public static ClassWithOperators1 operator &(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator |(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator ^(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-
-            public static bool operator ==(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-            public static bool operator !=(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-            public static bool operator >(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-            public static bool operator >=(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-            public static bool operator <(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-            public static bool operator <=(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-
-            [SpecialName] 
-            public static ClassWithOperators1 Power(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-
-            public override bool Equals(object obj) { return base.Equals(obj); }
-            public override int GetHashCode() { return base.GetHashCode(); }
-        }
-
-        // TODO: bug in IPy
-        public void PythonInterop_Operators_Fallback1() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-            ScriptScope scope = py.CreateScope();
-            scope.SetVariable("ClassWithOperators", typeof(ClassWithOperators1));
-            py.Execute(@"
-import clr
-class C(clr.GetPythonType(ClassWithOperators)): pass
-", scope);
-
-            XAssertOutput(() =>
-                Engine.Execute(@"
-BinaryOperators = [:+, :-, :/, :*, :%, :==, :>, :>=, :<, :<=, :&, :|, :^, :<<, :>>, :**]
-UnaryOperators = [:-@, :+@, :~]
-Operators = BinaryOperators + UnaryOperators
-
-class_with_operators.to_class.module_eval do
-  Operators.each do |op|
-    define_method(op) do
-      Kernel.print op, ' '
-    end
-  end
-end
-
-c = C().new
-p(c + c)
-p(c - c)
-p(c / c)
-p(c * c)
-p(c % c)
-p(c == c)
-p(c > c)
-p(c >= c)
-p(c < c)
-p(c <= c)
-p(c & c)
-p(c | c)
-p(c ^ c)
-p(c << 1)
-p(c >> 1)
-p(c ** c)
-p(-c)
-p(+c)
-p(~c)
-", scope), @"
-");
-        }
-
-        /// <summary>
-        /// We convert a call to a setter with multiple parameters to a GetMember + SetIndex.
-        /// This makes indexed properties on foreign meta-objects work.
-        /// </summary>
-        public void PythonInterop_NamedIndexers1() {
-            if (!_driver.RunPython) return;
-            
-            var py = Runtime.GetEngine("python");
-            ScriptScope scope = py.CreateScope();
-            py.Execute(@"
-class C:
-  def __init__(self):
-    self.Foo = Indexable()
-  
-class Indexable:
-  def __setitem__(self, index, value):
-    print index, value
-", scope);
-
-            AssertOutput(() =>
-                Engine.Execute(@"
-c = C().new
-c.foo[1, 2] = 3
-c.Foo[4, 5] = 6
-c.send(:foo=, 7, 8, 9)
-c.send(:Foo=, 10, 11, 12)
-", scope), @"
-(1, 2) 3
-(4, 5) 6
-(7, 8) 9
-(10, 11) 12
-");
         }
 
         public void CustomTypeDescriptor1() {

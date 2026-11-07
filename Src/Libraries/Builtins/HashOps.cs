@@ -21,9 +21,6 @@ using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Diagnostics;
-using Microsoft.Scripting.Generation;
-using System.Threading;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Builtins {
@@ -45,13 +42,14 @@ namespace IronRuby.Builtins {
         }
 
         [RubyConstructor]
+        [ReceivesKeywords]
         public static Hash/*!*/ CreateHash(BlockParam block, RubyClass/*!*/ self, object defaultValue) {
             var result = new Hash(self.Context.EqualityComparer);
             return Initialize(self.Context, block, result, defaultValue);
         }
 
         [RubyConstructor]
-        public static Hash/*!*/ CreateHash(BlockParam block, RubyClass/*!*/ self, object defaultValue, object options) {
+        public static Hash/*!*/ CreateHash(BlockParam block, RubyClass/*!*/ self, object defaultValue, [Keywords]object options) {
             var result = new Hash(self.Context.EqualityComparer);
             return Initialize(self.Context, block, result, defaultValue, options);
         }
@@ -172,6 +170,7 @@ namespace IronRuby.Builtins {
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static Hash/*!*/ Initialize(RubyContext/*!*/ context, BlockParam block, Hash/*!*/ self, object defaultValue) {
             Assert.NotNull(self);
             if (IsOptions(defaultValue)) {
@@ -189,7 +188,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static Hash/*!*/ Initialize(RubyContext/*!*/ context, BlockParam block, Hash/*!*/ self, object defaultValue, object options) {
+        public static Hash/*!*/ Initialize(RubyContext/*!*/ context, BlockParam block, Hash/*!*/ self, object defaultValue, [Keywords]object options) {
             // a second argument is only allowed as keywords
             if (!IsOptions(options)) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 2, expected 0..1)");
@@ -320,23 +319,6 @@ namespace IronRuby.Builtins {
                 self.SetComparesByIdentity(otherHash.ComparesByIdentity, context.EqualityComparer);
             }
             return IDictionaryOps.ReplaceData(self, other);
-        }
-
-        [RubyMethod("shift")]
-        public static object Shift(CallSiteStorage<Func<CallSite, Hash, object, object>>/*!*/ storage, Hash/*!*/ self) {
-            self.RequireNotFrozen();
-            
-            if (self.Count == 0) {
-                var site = storage.GetCallSite("default", 1);
-                return site.Target(site, self, null);
-            }
-
-            IEnumerator<KeyValuePair<object, object>> e = self.GetEnumerator();
-            e.MoveNext();
-            KeyValuePair<object, object> pair = e.Current;
-            self.Remove(pair.Key);
-
-            return IDictionaryOps.MakeArray(pair);
         }
 
         #endregion

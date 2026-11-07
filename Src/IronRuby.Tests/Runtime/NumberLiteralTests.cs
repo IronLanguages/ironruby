@@ -14,7 +14,6 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -22,11 +21,8 @@ using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Hosting;
 using System.Numerics;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Tests {
@@ -168,7 +164,7 @@ __ENCODING__
             try {
                 var detectedEncoding = source.DetectEncoding();
                 Assert(encoding.WebName == detectedEncoding.WebName);
-            } catch (IOException) {
+            } catch (ArgumentException) {
                 Assert(!shouldSucceed);
             }
 
@@ -176,7 +172,7 @@ __ENCODING__
             try {
                 var code = source.GetCode();
                 Assert(StringComparer.Ordinal.Equals(code, preamble + src));
-            } catch (IOException) {
+            } catch (ArgumentException) {
                 Assert(!shouldSucceed);
             }
         }
@@ -204,8 +200,7 @@ __ENCODING__
         }
 
         private void TestBigInt(string/*!*/ number, int @base, int repeat) {
-            Stopwatch optimizedTime = new Stopwatch();
-            Stopwatch universalTime = new Stopwatch();
+            Stopwatch time = new Stopwatch();
 
             StringBuilder n = new StringBuilder(number);
             for (int j = 0; j < repeat; j++) {
@@ -216,31 +211,16 @@ __ENCODING__
             for (int i = 0; i < number.Length - 1; i++) {
                 string sub = number.Substring(i);
                 string s = sub.Replace("_", "").ToUpper();
-                BigInteger b;
-                Tokenizer.BignumParser p = new Tokenizer.BignumParser();
-                p.Position = 0;
-                p.Buffer = s.ToCharArray();
 
-                optimizedTime.Start();
-                b = p.Parse(s.Length, @base);
-                optimizedTime.Stop();
-
-                Assert(b.ToString(@base) == s.TrimStart('0'));
-
-                p.Position = 0;
-
-                universalTime.Start();
-                b = p.ParseDefault(s.Length, (uint)@base);
-                universalTime.Stop();
-
+                // with the underscores, as a literal or String#to_i has them:
+                time.Start();
+                BigInteger b = Tokenizer.ParseBigInteger(sub, 0, s.Length, @base);
+                time.Stop();
                 Assert(b.ToString(@base) == s.TrimStart('0'));
             }
 
             if (repeat != 0) {
-                Console.WriteLine("{0}: optimized = {1}ms, universal = {2}ms",
-                    @base,
-                    optimizedTime.ElapsedMilliseconds,
-                    universalTime.ElapsedMilliseconds);
+                Console.WriteLine("{0}: {1}ms", @base, time.ElapsedMilliseconds);
             }
         }
     }

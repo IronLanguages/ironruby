@@ -19,7 +19,6 @@
  * bad byte, exactly as CRuby does.
  *
  * ***************************************************************************/
-#if FEATURE_ENCODING
 
 using System;
 using System.Collections.Generic;
@@ -37,7 +36,7 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Encoding::Converter
         /// </summary>
-        [RubyClass("Converter", Inherits = typeof(Object), BuildConfig = "FEATURE_ENCODING")]
+        [RubyClass("Converter", Inherits = typeof(Object))]
         public class RubyConverter {
             #region Flags and constants
 
@@ -105,6 +104,7 @@ namespace IronRuby.Builtins {
             #region State
 
             private RubyEncoding/*!*/[]/*!*/ _path;
+            private readonly bool _noConversion;
             private int _flags;
             private int _sourceUnitSize;
 
@@ -136,12 +136,19 @@ namespace IronRuby.Builtins {
 
             #region Construction
 
-            internal RubyConverter(RubyEncoding/*!*/[]/*!*/ path, int flags) {
+            /// <summary>
+            /// A null path is a converter that changes no encoding and only runs its decorators:
+            /// MRI's Encoding::Converter.new("", "", ...). It works on bytes, which it hands back
+            /// as ASCII-8BIT.
+            /// </summary>
+            internal RubyConverter(RubyEncoding/*!*/[] path, int flags) {
+                _noConversion = (path == null);
+                path = path ?? new[] { RubyEncoding.Binary, RubyEncoding.Binary };
                 _path = path;
                 _flags = flags;
                 _sourceUnitSize = GetUnitSize(path[0]);
-                _decoder = DecodeStageSource.StrictEncoding.GetDecoder();
-                _encoder = EncodeStageDestination.StrictEncoding.GetEncoder();
+                _decoder = DecodeStageSource.TranscodingEncoding.GetDecoder();
+                _encoder = EncodeStageDestination.TranscodingEncoding.GetEncoder();
                 _replacement = DefaultReplacement(EncodeStageDestination);
                 _replacementBytes = EncodeReplacement(_replacement);
             }
@@ -194,6 +201,7 @@ namespace IronRuby.Builtins {
             internal RubyEncoding/*!*/ EncodeStageDestination { get { return _path[_path.Length - 1]; } }
 
             internal RubyEncoding/*!*/ SourceEncoding { get { return _path[0]; } }
+            internal bool IsNoConversion { get { return _noConversion; } }
             internal RubyEncoding/*!*/ DestinationEncoding { get { return _path[_path.Length - 1]; } }
 
             #endregion
@@ -204,7 +212,7 @@ namespace IronRuby.Builtins {
             /// The decorators a flag word asks for, in the order MRI lists them when it complains
             /// that it cannot build the converter.
             /// </summary>
-            private static string/*!*/ DecoratorSuffix(int flags) {
+            private static string/*!*/ DecoratorNames(int flags) {
                 var names = new List<string>();
                 if ((flags & UniversalNewlineFlag) != 0) { names.Add("universal_newline"); }
                 if ((flags & CrlfNewlineFlag) != 0) { names.Add("crlf_newline"); }
@@ -212,7 +220,22 @@ namespace IronRuby.Builtins {
                 if ((flags & XmlTextFlag) != 0) { names.Add("xml_text"); }
                 if ((flags & XmlAttrContentFlag) != 0) { names.Add("xml_attr_content"); }
                 if ((flags & XmlAttrQuoteFlag) != 0) { names.Add("xml_attr_quote"); }
-                return names.Count == 0 ? "" : " with " + String.Join(",", names.ToArray());
+                return String.Join(",", names);
+            }
+
+            /// <summary>
+            /// How MRI describes a converter, in #inspect and when it cannot build one: "UTF-8 to
+            /// EUC-JP with crlf_newline", just the encoding named when the other is "", and just
+            /// the decorators - or "no-conversion" - when both are.
+            /// </summary>
+            private static string/*!*/ Describe(string/*!*/ source, string/*!*/ destination, int flags) {
+                string decorators = DecoratorNames(flags);
+                string encodings = (source.Length == 0) ? destination :
+                    (destination.Length == 0) ? source : source + " to " + destination;
+                if (encodings.Length == 0) {
+                    return decorators.Length == 0 ? "no-conversion" : decorators;
+                }
+                return decorators.Length == 0 ? encodings : encodings + " with " + decorators;
             }
 
             /// <summary>
@@ -221,8 +244,7 @@ namespace IronRuby.Builtins {
             /// converter.  So the names are reported as they were given, unresolved.
             /// </summary>
             private static Exception/*!*/ ConverterNotFound(string/*!*/ source, string/*!*/ destination, int flags) {
-                return new ConverterNotFoundError(String.Format(CultureInfo.InvariantCulture,
-                    "code converter not found ({0} to {1}{2})", source, destination, DecoratorSuffix(flags)));
+                return new ConverterNotFoundError("code converter not found (" + Describe(source, destination, flags) + ")");
             }
 
             internal static RubyEncoding/*!*/[]/*!*/ SearchPath(RubyEncoding/*!*/ source, RubyEncoding/*!*/ destination) {
@@ -237,11 +259,21 @@ namespace IronRuby.Builtins {
             /// Resolves both ends of a conversion together. Neither end can be resolved on its own
             /// because the error for an unresolvable one names them both.
             /// </summary>
-            private static RubyEncoding/*!*/[]/*!*/ ResolvePath(ConversionStorage<MutableString>/*!*/ toStr,
-                object source, object destination, int flags) {
+            /// <remarks>
+            /// Two empty names ask for no conversion at all, only the decorators: a converter can
+            /// be made of that (null here), but there is no path to search.
+            /// </remarks>
+            private static RubyEncoding[] ResolvePath(ConversionStorage<MutableString>/*!*/ toStr,
+                object source, object destination, int flags, bool allowNoConversion) {
 
                 string sourceName = EncodingName(toStr, source);
                 string destinationName = EncodingName(toStr, destination);
+                if (sourceName.Length == 0 && destinationName.Length == 0 && allowNoConversion) {
+                    return null;
+                }
+                if (sourceName.Length == 0 || destinationName.Length == 0) {
+                    throw ConverterNotFound(sourceName, destinationName, flags);
+                }
                 RubyEncoding from = FindEncoding(toStr.Context, source, sourceName);
                 RubyEncoding to = FindEncoding(toStr.Context, destination, destinationName);
 
@@ -281,9 +313,9 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            internal static RubyArray/*!*/ MakeConvPath(RubyEncoding/*!*/[]/*!*/ path, int flags) {
-                var result = new RubyArray(path.Length);
-                for (int i = 0; i < path.Length - 1; i++) {
+            internal static RubyArray/*!*/ MakeConvPath(RubyEncoding/*!*/[] path, int flags) {
+                var result = new RubyArray();
+                for (int i = 0; path != null && i < path.Length - 1; i++) {
                     var pair = new RubyArray(2);
                     pair.Add(path[i]);
                     pair.Add(path[i + 1]);
@@ -314,7 +346,7 @@ namespace IronRuby.Builtins {
             }
 
             internal RubyArray/*!*/ ConvPath() {
-                return MakeConvPath(_path, _flags);
+                return MakeConvPath(_noConversion ? null : _path, _flags);
             }
 
             #endregion
@@ -328,7 +360,7 @@ namespace IronRuby.Builtins {
             private byte[]/*!*/ EncodeReplacement(MutableString/*!*/ value) {
                 string chars = value.ToString();
                 try {
-                    return EncodeStageDestination.StrictEncoding.GetBytes(chars);
+                    return EncodeStageDestination.TranscodingEncoding.GetBytes(chars);
                 } catch (EncoderFallbackException) {
                     throw new UndefinedConversionError("replacement character setup failed");
                 }
@@ -385,9 +417,27 @@ namespace IronRuby.Builtins {
                 _readAgainBytes = EmptyBytes;
                 _errorAtEncodeStage = true;
 
-                var error = new UndefinedConversionError(UndefinedConversionMessage(codepoint));
+                // a leg out of EUC-JP (on the way to stateless-ISO-2022-JP) names the character by its bytes
+                var error = new UndefinedConversionError(EncodeStageSource == RubyEncoding.EUCJP
+                    ? RubyExceptions.UndefinedConversionMessage(RubyExceptions.InspectTranscodingBytes(errorBytes), _path, _path.Length - 2)
+                    : UndefinedConversionMessage(codepoint));
                 error.SourceEncoding = EncodeStageSource;
                 error.DestinationEncoding = EncodeStageDestination;
+                error.ErrorCharBytes = errorBytes;
+                _lastError = error;
+            }
+
+            /// <summary>An undefined conversion on the first leg, which MRI names by its bytes.</summary>
+            private void RecordUndefinedSourceCharacter(byte[]/*!*/ errorBytes) {
+                _status = "undefined_conversion";
+                _errorBytes = errorBytes;
+                _readAgainBytes = EmptyBytes;
+                _errorAtEncodeStage = false;
+
+                var error = new UndefinedConversionError(
+                    RubyExceptions.UndefinedConversionMessage(RubyExceptions.InspectTranscodingBytes(errorBytes), _path, 0));
+                error.SourceEncoding = DecodeStageSource;
+                error.DestinationEncoding = DecodeStageDestination;
                 error.ErrorCharBytes = errorBytes;
                 _lastError = error;
             }
@@ -407,8 +457,8 @@ namespace IronRuby.Builtins {
                 } else {
                     RubyEncoding from = _errorAtEncodeStage ? EncodeStageSource : DecodeStageSource;
                     RubyEncoding to = _errorAtEncodeStage ? EncodeStageDestination : DecodeStageDestination;
-                    result.Add(MutableString.CreateBinary(Encoding.ASCII.GetBytes(from.Name)));
-                    result.Add(MutableString.CreateBinary(Encoding.ASCII.GetBytes(to.Name)));
+                    result.Add(MutableString.CreateBinary(Encoding.ASCII.GetBytes(RubyExceptions.TranscoderName(from))));
+                    result.Add(MutableString.CreateBinary(Encoding.ASCII.GetBytes(RubyExceptions.TranscoderName(to))));
                     result.Add(MutableString.CreateBinary(_errorBytes));
                     result.Add(MutableString.CreateBinary(_readAgainBytes ?? EmptyBytes));
                 }
@@ -437,7 +487,7 @@ namespace IronRuby.Builtins {
                     bytes = str.ToByteArray();
                 } else {
                     try {
-                        bytes = DestinationEncoding.StrictEncoding.GetBytes(str.ToString());
+                        bytes = DestinationEncoding.TranscodingEncoding.GetBytes(str.ToString());
                     } catch (EncoderFallbackException e) {
                         int codepoint = e.CharUnknownHigh != '\0' ?
                             Char.ConvertToUtf32(e.CharUnknownHigh, e.CharUnknownLow) : e.CharUnknown;
@@ -472,6 +522,9 @@ namespace IronRuby.Builtins {
                 }
                 if (offset < 0) {
                     throw RubyExceptions.CreateArgumentError("negative output_byteoffset");
+                }
+                if (_finished) {
+                    return "finished";
                 }
 
                 int limit = byteLimit.HasValue ? Math.Max(byteLimit.Value, 0) : Int32.MaxValue;
@@ -530,6 +583,27 @@ namespace IronRuby.Builtins {
                             _decoder.Convert(input, consumed, unit, chars, 0, chars.Length, false,
                                 out bytesUsed, out charsUsed, out completed);
                         } catch (DecoderFallbackException) {
+                            // A character of the right shape that the table leaves out (0x81 in
+                            // Windows-1252, 0xA2AF in EUC-JP) is an undefined conversion on the
+                            // first leg, not an invalid byte sequence.
+                            var character = new byte[_incomplete.Count + unit];
+                            _incomplete.CopyTo(character, 0);
+                            Array.Copy(input, consumed, character, _incomplete.Count, unit);
+                            if (!MutableString.CreateBinary(character, DecodeStageSource).ContainsInvalidCharacters()) {
+                                consumed += unit;
+                                ResetDecoder();
+                                if ((_flags & UndefMaskFlag) == UndefReplaceFlag) {
+                                    if (!Emit(_replacementBytes, written, limit)) {
+                                        status = "destination_buffer_full";
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                RecordUndefinedSourceCharacter(character);
+                                status = "undefined_conversion";
+                                break;
+                            }
+
                             byte[] errorBytes, readAgain;
                             if (_incomplete.Count != 0) {
                                 errorBytes = _incomplete.ToArray();
@@ -572,6 +646,21 @@ namespace IronRuby.Builtins {
 
                         _incomplete.Clear();
 
+                        // ASCII-8BIT's bytes above 0x7F are characters that mean nothing in any
+                        // other encoding: MRI's first leg out of it refuses them as undefined.
+                        if (DecodeStageSource == RubyEncoding.Binary && !_noConversion && chars[0] > 0x7f) {
+                            if ((_flags & UndefMaskFlag) == UndefReplaceFlag) {
+                                if (!Emit(_replacementBytes, written, limit)) {
+                                    status = "destination_buffer_full";
+                                    break;
+                                }
+                                continue;
+                            }
+                            RecordUndefinedSourceCharacter(new[] { (byte)chars[0] });
+                            status = "undefined_conversion";
+                            break;
+                        }
+
                         string encodeStatus = EncodeChars(chars, charsUsed, written, limit);
                         if (encodeStatus != null) {
                             status = encodeStatus;
@@ -587,6 +676,11 @@ namespace IronRuby.Builtins {
 
                 if (status != "invalid_byte_sequence" && status != "incomplete_input" && status != "undefined_conversion") {
                     RecordSuccess(status);
+                }
+                // a conversion that has seen the end of its input is over: #convert refuses to go
+                // on, and #finish has nothing left to give
+                if (status == "finished") {
+                    _finished = true;
                 }
 
                 // consume from the caller's source buffer
@@ -691,7 +785,7 @@ namespace IronRuby.Builtins {
             /// <summary>The offending character, expressed in the source encoding of the failing stage.</summary>
             private byte[]/*!*/ ErrorCharBytes(char[]/*!*/ chars, int index, int size) {
                 try {
-                    return EncodeStageSource.StrictEncoding.GetBytes(chars, index, size);
+                    return EncodeStageSource.TranscodingEncoding.GetBytes(chars, index, size);
                 } catch (EncoderFallbackException) {
                     return Encoding.UTF8.GetBytes(new String(chars, index, size));
                 }
@@ -737,11 +831,11 @@ namespace IronRuby.Builtins {
 
             private void ResetDecoder() {
                 _incomplete.Clear();
-                _decoder = DecodeStageSource.StrictEncoding.GetDecoder();
+                _decoder = DecodeStageSource.TranscodingEncoding.GetDecoder();
             }
 
             private void ResetEncoder() {
-                _encoder = EncodeStageDestination.StrictEncoding.GetEncoder();
+                _encoder = EncodeStageDestination.TranscodingEncoding.GetEncoder();
             }
 
             /// <summary>
@@ -878,14 +972,23 @@ namespace IronRuby.Builtins {
                     throw _lastError ?? RubyExceptions.CreateArgumentError("conversion failed");
                 }
 
-                // flush the encoder's shift state (e.g. the closing ESC ( B of ISO-2022-JP)
-                var buffer = new byte[64];
-                int charsUsed, bytesUsed;
-                bool completed;
-                _encoder.Convert(EmptyChars, 0, 0, buffer, 0, buffer.Length, true, out charsUsed, out bytesUsed, out completed);
-                if (bytesUsed > 0) {
-                    destination.Append(buffer, 0, bytesUsed);
-                    destination.ForceEncoding(DestinationEncoding);
+                // flush the encoder's shift state (e.g. the closing ESC ( B of ISO-2022-JP); only the
+                // stateful (dummy) encodings have one, and the Encoder an Encoding gets by default
+                // - most of RubyOnlyEncodings' - throws "Conversion buffer overflow" when asked to
+                // convert nothing, having nothing to flush
+                if (EncodeStageDestination.IsDummy) {
+                    var buffer = new byte[64];
+                    int charsUsed, bytesUsed = 0;
+                    bool completed;
+                    try {
+                        _encoder.Convert(EmptyChars, 0, 0, buffer, 0, buffer.Length, true, out charsUsed, out bytesUsed, out completed);
+                    } catch (ArgumentException) {
+                        bytesUsed = 0;
+                    }
+                    if (bytesUsed > 0) {
+                        destination.Append(buffer, 0, bytesUsed);
+                        destination.ForceEncoding(DestinationEncoding);
+                    }
                 }
 
                 var tail = FinishDecorators();
@@ -901,13 +1004,6 @@ namespace IronRuby.Builtins {
             #endregion
 
             #region Argument coercion
-
-            private static RubyEncoding/*!*/ ToEncoding(ConversionStorage<MutableString>/*!*/ toStr, object obj) {
-                if (obj == null) {
-                    throw RubyExceptions.CreateTypeError("no implicit conversion of nil into String");
-                }
-                return Protocols.ConvertToEncoding(toStr, obj);
-            }
 
             private static MutableString/*!*/ ToReplacementString(ConversionStorage<MutableString>/*!*/ toStr, object obj) {
                 var str = obj as MutableString;
@@ -1070,7 +1166,7 @@ namespace IronRuby.Builtins {
 
                 object replacement;
                 int flags = ParseOptions(toHash, options, out replacement);
-                var path = ResolvePath(toStr, source, destination, flags);
+                var path = ResolvePath(toStr, source, destination, flags, true);
 
                 var result = new RubyConverter(path, flags);
                 if (replacement != null && replacement != DefaultReplacementMarker) {
@@ -1086,7 +1182,7 @@ namespace IronRuby.Builtins {
 
                 object replacement;
                 int flags = ParseOptions(toHash, options, out replacement);
-                var path = ResolvePath(toStr, source, destination, flags);
+                var path = ResolvePath(toStr, source, destination, flags, false);
                 return MakeConvPath(path, flags);
             }
 
@@ -1126,6 +1222,10 @@ namespace IronRuby.Builtins {
                     case 50220: // ISO-2022-JP
                         return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageStatelessISO2022JP);
 
+                    case RubyEncoding.CodePageISO2022JPKDDI:
+                        return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageStatelessISO2022JPKDDI);
+
+                    case RubyEncoding.CodePageCP50220:
                     case 50221: // CP50221
                         return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCP51932);
 
@@ -1135,19 +1235,20 @@ namespace IronRuby.Builtins {
             }
 
             [RubyMethod("source_encoding")]
-            public static RubyEncoding/*!*/ GetSourceEncoding(RubyConverter/*!*/ self) {
-                return self.SourceEncoding;
+            public static RubyEncoding GetSourceEncoding(RubyConverter/*!*/ self) {
+                return self.IsNoConversion ? null : self.SourceEncoding;
             }
 
             [RubyMethod("destination_encoding")]
-            public static RubyEncoding/*!*/ GetDestinationEncoding(RubyConverter/*!*/ self) {
-                return self.DestinationEncoding;
+            public static RubyEncoding GetDestinationEncoding(RubyConverter/*!*/ self) {
+                return self.IsNoConversion ? null : self.DestinationEncoding;
             }
 
             [RubyMethod("inspect")]
             public static MutableString/*!*/ Inspect(RubyConverter/*!*/ self) {
-                return MutableString.CreateBinary(Encoding.ASCII.GetBytes(String.Format(CultureInfo.InvariantCulture,
-                    "#<Encoding::Converter: {0} to {1}>", self.SourceEncoding.Name, self.DestinationEncoding.Name)));
+                string description = self.IsNoConversion ? Describe("", "", self._flags) :
+                    Describe(self.SourceEncoding.Name, self.DestinationEncoding.Name, self._flags);
+                return MutableString.CreateBinary(Encoding.ASCII.GetBytes("#<Encoding::Converter: " + description + ">"));
             }
 
             [RubyMethod("convpath")]
@@ -1226,4 +1327,3 @@ namespace IronRuby.Builtins {
         }
     }
 }
-#endif

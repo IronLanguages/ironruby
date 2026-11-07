@@ -17,7 +17,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Threading;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
 
@@ -46,6 +45,19 @@ namespace IronRuby.Builtins {
 
         private bool _autoFlush;
         private IOMode _mode;
+
+        // IO#timeout (3.2): the value as given, and what waits for the stream to be ready for a
+        // read (true) or a write (false) until then, answering false if it is not.
+        private object _timeout;
+        private Func<bool, bool> _waitForStream;
+        private int _timeoutMilliseconds = System.Threading.Timeout.Infinite;
+
+        // Another IO reads and writes the same buffered stream (CreateSharedView: a Ractor's $stdin).
+        private bool _sharesStream;
+
+        // #read_nonblock and #write_nonblock fail at once rather than wait out the timeout.
+        [ThreadStatic]
+        private static bool _inNonBlockingOperation;
         public int LineNumber { get; set; }
 
         #region Constants
@@ -53,15 +65,6 @@ namespace IronRuby.Builtins {
         public const int SEEK_SET = 0;
         public const int SEEK_CUR = 1;
         public const int SEEK_END = 2;
-
-        public static SeekOrigin ToSeekOrigin(int rubySeekOrigin) {
-            switch (rubySeekOrigin) {
-                case SEEK_SET: return SeekOrigin.Begin;
-                case SEEK_END: return SeekOrigin.End;
-                case SEEK_CUR: return SeekOrigin.Current;
-                default: throw RubyExceptions.CreateArgumentError("Invalid argument");
-            }
-        }
 
         public static long GetSeekPosition(long length, long position, long seekOffset, SeekOrigin origin) {
             switch (origin) {
@@ -101,6 +104,25 @@ namespace IronRuby.Builtins {
             _fileDescriptor = descriptor;
         }
 
+        /// <summary>
+        /// Another IO object over this one's stream, buffer and descriptor: a non-main Ractor's
+        /// $stdin, $stdout and $stderr, which CRuby makes anew for the same descriptors.
+        /// </summary>
+        public RubyIO/*!*/ CreateSharedView() {
+            var result = new RubyIO(_context);
+            // IO#timeout stays each IO's own: the stream binds to the timeout of whichever of the two
+            // uses it (GetStream).
+            _sharesStream = result._sharesStream = true;
+            result._stream = _stream;
+            result._fileDescriptor = _fileDescriptor;
+            result._mode = _mode;
+            result._enc = _enc;
+            result._enc2 = _enc2;
+            result._conversionOptions = _conversionOptions;
+            result._autoFlush = _autoFlush;
+            return result;
+        }
+
         public void Reset(Stream/*!*/ stream, IOMode mode) {
             _mode = mode;
             SetStream(stream);
@@ -128,15 +150,6 @@ namespace IronRuby.Builtins {
         /// </summary>
         public RubyEncoding Enc2 {
             get { return _enc2; }
-        }
-
-        /// <summary>
-        /// Whether an encoding was actually pinned onto this stream - in the mode string, in
-        /// the options hash, or through #set_encoding - as opposed to being left to follow
-        /// the context defaults.
-        /// </summary>
-        public bool EncodingSpecified {
-            get { return _enc != null || _enc2 != null; }
         }
 
         /// <summary>
@@ -286,12 +299,92 @@ namespace IronRuby.Builtins {
             }
 
             RequireInitialized();
+            if (_sharesStream && _stream.TimeoutOwner != (_waitForStream != null ? this : null)) {
+                // the other IO over this stream used it last, with its own timeout (or none)
+                ApplyTimeout(_stream);
+            }
             return _stream;
         }
 
         public void SetStream(Stream/*!*/ stream) {
             ContractUtils.RequiresNotNull(stream, "stream");
-            _stream = new RubyBufferedStream(stream, _context.RubyOptions.Compatibility >= RubyCompatibility.Ruby19);
+            _stream = new RubyBufferedStream(stream, true);
+            if (_waitForStream != null) {
+                ApplyTimeout(_stream);
+            }
+        }
+
+        /// <summary>IO#timeout: the value it was set to, nil if none.</summary>
+        public object Timeout {
+            get { return _timeout; }
+        }
+
+        /// <summary>IO#timeout in milliseconds, Timeout.Infinite if none.</summary>
+        public int TimeoutMilliseconds {
+            get { return _timeoutMilliseconds; }
+        }
+
+        /// <summary>
+        /// Sets IO#timeout. <paramref name="waitForStream"/> waits up to the timeout for the stream
+        /// to be ready for a read (true) or a write (false) and tells whether it came ready; null
+        /// together with a nil <paramref name="timeout"/> removes it.
+        /// </summary>
+        public void SetTimeout(object timeout, int milliseconds, Func<bool, bool> waitForStream) {
+            _timeout = timeout;
+            _timeoutMilliseconds = (waitForStream != null) ? milliseconds : System.Threading.Timeout.Infinite;
+            _waitForStream = waitForStream;
+            if (_stream != null) {
+                ApplyTimeout(_stream);
+            }
+        }
+
+        private void ApplyTimeout(RubyBufferedStream/*!*/ stream) {
+            stream.TimeoutOwner = (_waitForStream != null) ? this : null;
+            // A stream that bounds its own waits (IO.pipe) also bounds the rest of a write too big
+            // to go in at once, which the readiness check before it cannot.
+            Stream baseStream = stream.BaseStream;
+            if (baseStream.CanTimeout) {
+                baseStream.ReadTimeout = _timeoutMilliseconds;
+                baseStream.WriteTimeout = _timeoutMilliseconds;
+            }
+        }
+
+        /// <summary>
+        /// Waits for the stream to be ready for a read or a write that would block, for at most
+        /// IO#timeout; IO::TimeoutError when it is not ready by then. Returns at once without a timeout.
+        /// </summary>
+        public void WaitForStream(bool isRead) {
+            var wait = _waitForStream;
+            if (wait != null && !_inNonBlockingOperation && !wait(isRead)) {
+                throw CreateTimeoutError();
+            }
+        }
+
+        /// <summary>IO::TimeoutError, which the prelude defines.</summary>
+        internal Exception/*!*/ CreateTimeoutError() {
+            const string message = "Blocking operation timed out!";
+            object ioClass;
+            if (_context.ObjectClass.TryGetConstant(null, "IO", out ioClass) && ioClass is RubyModule) {
+                var error = _context.CreateLibraryException((RubyModule)ioClass, "TimeoutError", message);
+                if (error != null) {
+                    return error;
+                }
+            }
+            return new TimeoutException(message);
+        }
+
+        /// <summary>
+        /// Runs a #read_nonblock or #write_nonblock: it reports a stream that is not ready as EAGAIN
+        /// and never waits for IO#timeout.
+        /// </summary>
+        public void RunNonBlocking(Action/*!*/ operation, bool isRead) {
+            bool saved = _inNonBlockingOperation;
+            _inNonBlockingOperation = true;
+            try {
+                NonBlockingOperation(operation, isRead);
+            } finally {
+                _inNonBlockingOperation = saved;
+            }
         }
 
         public void RequireInitialized() {
@@ -587,21 +680,6 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region Operations
-
-        public virtual WaitHandle/*!*/ CreateReadWaitHandle() {
-            // TODO:
-            throw new NotSupportedException();
-        }
-
-        public virtual WaitHandle/*!*/ CreateWriteWaitHandle() {
-            // TODO:
-            throw new NotSupportedException();
-        }
-
-        public virtual WaitHandle/*!*/ CreateErrorWaitHandle() {
-            // TODO:
-            throw new NotSupportedException();
-        }
 
         public virtual int SetReadTimeout(int timeout) {
             if (timeout > 0) {
@@ -929,10 +1007,9 @@ namespace IronRuby.Builtins {
 
         #region fcntl
 
-        // Linux values. fcntl is variadic; for F_GETFL and F_SETFL the third argument is an int.
+        // The same on every Unix. fcntl is variadic; for F_GETFL and F_SETFL the third argument is an int.
         public const int F_GETFL = 3;
         public const int F_SETFL = 4;
-        public const int O_NONBLOCK = 0x800;
 
         private static readonly bool _hasFileControl = System.IO.Path.DirectorySeparatorChar == '/';
 

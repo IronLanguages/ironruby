@@ -13,21 +13,14 @@
  *
  * ***************************************************************************/
 
-using System;
 using System.Runtime.Serialization;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
-using System.Runtime.CompilerServices;
-using IronRuby.Runtime.Calls;
 using System.Text;
 
 namespace IronRuby.Builtins {
 
     public partial class Range : IDuplicable, ISerializable, IRubyObjectState {
         private const int FrozenFlag = 1;
-        private const int TaintedFlag = 2;
-        private const int UntrustedFlag = 4;
 
         private int _flags;
         private object _begin;
@@ -100,6 +93,20 @@ namespace IronRuby.Builtins {
             _flags |= FrozenFlag;
         }
         
+        /// <summary>
+        /// A range of endpoints already known to be valid together: a copy of an existing range
+        /// with copies of its endpoints (a Ractor message).
+        /// </summary>
+        public static Range/*!*/ CreateValidated(object begin, object end, bool excludeEnd) {
+            var result = new Range();
+            result._begin = begin;
+            result._end = end;
+            result._excludeEnd = excludeEnd;
+            result._initialized = true;
+            result._flags |= FrozenFlag;
+            return result;
+        }
+
         // Convience function for constructing from C#, calls initialize
         public Range(BinaryOpStorage/*!*/ comparisonStorage, 
             RubyContext/*!*/ context, object begin, object end, bool excludeEnd) {
@@ -143,16 +150,6 @@ namespace IronRuby.Builtins {
 
         public bool IsFrozen {
             get { return (_flags & FrozenFlag) != 0; }
-        }
-
-        public bool IsTainted {
-            get { return (_flags & TaintedFlag) != 0; }
-            set { _flags = (_flags & ~TaintedFlag) | (value ? TaintedFlag : 0); }
-        }
-
-        public bool IsUntrusted {
-            get { return (_flags & UntrustedFlag) != 0; }
-            set { _flags = (_flags & ~UntrustedFlag) | (value ? UntrustedFlag : 0); }
         }
 
         public void Freeze() {

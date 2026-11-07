@@ -12,20 +12,17 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
-using System.Threading;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 
 namespace IronRuby.StandardLibrary.Sockets {
 
-    [RubyClass("UNIXSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("UNIXSocket")]
     public class UNIXSocket : RubyBasicSocket {
 
         /// <summary>
@@ -75,9 +72,9 @@ namespace IronRuby.StandardLibrary.Sockets {
         internal static Exception/*!*/ ToConnectException(Exception/*!*/ e, string/*!*/ path) {
             SocketException se = e as SocketException;
             if (se != null && se.SocketErrorCode == SocketError.AddressNotAvailable) {
-                return RubyExceptions.CreateENOENT("{0}", path);
+                return RubyExceptions.CreateENOENT("connect(2) for {0}", path);
             }
-            return SocketErrorOps.ToRubyException(e);
+            return SocketErrorOps.ToRubyException(e, "connect(2) for " + path);
         }
 
         internal static Socket/*!*/ NewUnixSocket(SocketType type) {
@@ -206,7 +203,6 @@ namespace IronRuby.StandardLibrary.Sockets {
 
             MutableString str = MutableString.CreateBinary();
             str.Append(buffer, 0, received);
-            str.IsTainted = true;
             return RubyOps.MakeArray2(str, AddressArray(self.Context, from));
         }
 
@@ -229,7 +225,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             io.Flush();
             int errno;
             if (PosixMessages.SendDescriptor((int)self.Socket.Handle, descriptor, out errno) < 0) {
-                throw Posix.Error(errno, null);
+                throw Posix.Error(errno, null, self.Context);
             }
         }
 
@@ -240,7 +236,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             int descriptor = Blocking(socket, SelectMode.SelectRead,
                 () => PosixMessages.ReceiveDescriptor((int)socket.Handle, out errno));
             if (errno != 0) {
-                throw Posix.Error(errno, null);
+                throw Posix.Error(errno, null, context);
             }
             if (descriptor < 0) {
                 // The peer sent data but no descriptor, which is what CRuby reports this way.
@@ -259,7 +255,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         #endregion
     }
 
-    [RubyClass("UNIXServer", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("UNIXServer")]
     public class UNIXServer : UNIXSocket {
 
         public UNIXServer(RubyContext/*!*/ context)
@@ -291,7 +287,8 @@ namespace IronRuby.StandardLibrary.Sockets {
                 socket.Listen(128);
             } catch (Exception e) {
                 socket.Close();
-                throw SocketErrorOps.ToRubyException(e);
+                // MRI's init_unixsock says "connect(2)" for the server's bind(2) too.
+                throw SocketErrorOps.ToRubyException(e, "connect(2) for " + pathStr);
             }
             return socket;
         }
@@ -329,4 +326,3 @@ namespace IronRuby.StandardLibrary.Sockets {
 
 }
 
-#endif

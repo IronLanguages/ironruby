@@ -45,7 +45,6 @@ using AstUtils = Microsoft.Scripting.Ast.Utils;
 namespace IronRuby.Runtime.Jit {
     using MSA = System.Linq.Expressions;
     using Ast = System.Linq.Expressions.Expression;
-    using RExpr = IronRuby.Compiler.Ast.Expression;
 
     public sealed class JitKeywordCall {
         internal const int MaxPositional = 2;
@@ -89,6 +88,9 @@ namespace IronRuby.Runtime.Jit {
             internal int Version;
             internal JitStub Stub;          // null: the name does not resolve to a method this site can call directly
             internal int[] Slots;           // per declared keyword: the call's argument holding it, or -1 for its default
+            // The literal defaults of the optional positionals the call leaves out (`def m(a, b = 2, k: 1)'
+            // called as `m(1, k: 2)'), in the positional slots after the ones it passes; null if none.
+            internal object[] OmittedPositionals;
         }
 
         private volatile State _state;
@@ -171,6 +173,16 @@ namespace IronRuby.Runtime.Jit {
                 case 2: d1 = Pick(stub, 1, slots[1], k0, k1, k2); goto case 1;
                 case 1: d0 = Pick(stub, 0, slots[0], k0, k1, k2); break;
             }
+            object[] omitted = state.OmittedPositionals;
+            if (omitted != null) {
+                // the positional slots are p0, p1; the call filled the first _positional of them
+                if (_positional == 0) {
+                    p0 = omitted[0];
+                    if (omitted.Length > 1) { p1 = omitted[1]; }
+                } else {
+                    p1 = omitted[0];
+                }
+            }
             return direct(self, p0, p1, d0, d1, d2);
         }
 
@@ -210,11 +222,23 @@ namespace IronRuby.Runtime.Jit {
                 if (info == null) { return state; }
 
                 var stub = info.GetDelegate().Target as JitStub;
-                if (stub == null || stub.Keywords == null || stub.Positional != _positional) { return state; }
+                if (stub == null || stub.Keywords == null) { return state; }
+
+                // The call passes every mandatory positional and, of the optional ones, a leading run;
+                // the rest get their literal defaults here, as the entry would fill them in.
+                var keywords = stub.Keywords;
+                int mandatory = stub.Positional - keywords.OptionalPositionals;
+                if (_positional < mandatory || _positional > stub.Positional || stub.Positional > MaxPositional) { return state; }
+                if (_positional < stub.Positional) {
+                    var omitted = new object[stub.Positional - _positional];
+                    for (int i = 0; i < omitted.Length; i++) {
+                        omitted[i] = keywords.OptionalDefaults[_positional + i - mandatory];
+                    }
+                    state.OmittedPositionals = omitted;
+                }
 
                 // The keywords this call passes must be ones the method's prologue binds without
                 // raising: each a declared one, and every required one among them.
-                var keywords = stub.Keywords;
                 var slots = new int[keywords.Count];
                 int matched = 0;
                 for (int j = 0; j < slots.Length; j++) {

@@ -14,11 +14,11 @@
  * ***************************************************************************/
 
 using System;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using System.Numerics;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Generation;
 using System.Runtime.CompilerServices;
 
@@ -363,8 +363,22 @@ namespace IronRuby.Builtins {
         /// Integer (Bignum or Fixnum) if other is positive
         /// Float otherwise.
         /// </returns>
+        // Integer#** answers here what it can, and leaves to rational.rb's __ir_pow_slow__ (MRI's
+        // rb_int_pow) what makes a Rational or a Complex - a negative exponent, a negative base to a
+        // fractional power - and what has to be coerced. A Ruby `def **' in front of every power
+        // cost ~0.1-0.9 us a call. Without the prelude the CLR answers stand, as they always did.
+        internal static object/*!*/ PowerSlow(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, object/*!*/ self, object other,
+            Func<object>/*!*/ withoutPrelude) {
+            var context = slow.Context;
+            if (!context.GetClassOf(self).ResolveMethod("__ir_pow_slow__", VisibilityContext.AllVisible).Found) {
+                return withoutPrelude();
+            }
+            var site = slow.GetCallSite("__ir_pow_slow__", 1);
+            return site.Target(site, self, other);
+        }
+
         [RubyMethod("**")]
-        public static object/*!*/ Power(int self, int other) {
+        public static object/*!*/ Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, int self, int other) {
             if (other >= 0) {
                 // in a long while it fits: going through BigInteger.Pow and back was most of the
                 // cost of a small power
@@ -375,9 +389,29 @@ namespace IronRuby.Builtins {
                 return ClrInteger.PowerNonNegative(self, other);
             } else if (self == 1) {
                 return One;
-            } else {
-                return Math.Pow(self, other);
+            } else if (self == -1) {
+                return ScriptingRuntimeHelpers.Int32ToObject((other & 1) == 0 ? 1 : -1);
+            } else if (self != 0 && other != Int32.MinValue) {
+                // rb_int_pow's Rational: 1/(self ** -other), already in lowest terms, the sign moved
+                // onto the numerator (rational.rb's __ir_pow_slow__ makes the same one, slower)
+                RubyClass cls = KernelOps.GetRationalClass(slow.Context);
+                if (cls != null) {
+                    // PowerNonNegative refuses a result too large to make, as MRI does
+                    object power = PowerNonNegative(new BigInteger(Math.Abs((long)self)), new BigInteger(-(long)other));
+                    bool negative = self < 0 && (other & 1) != 0;
+                    return new RubyRational(cls, ScriptingRuntimeHelpers.Int32ToObject(negative ? -1 : 1), power);
+                }
             }
+            return PowerSlow(slow, self, other, () => Math.Pow(self, other));
+        }
+
+        // a Fixnum to a non-negative Fixnum power (Integer#pow)
+        internal static object/*!*/ PowerNonNegativeFixnum(int self, int other) {
+            long result;
+            if (TryPowerInt64(self, other, out result)) {
+                return Narrow(result);
+            }
+            return ClrInteger.PowerNonNegative(self, other);
         }
 
         // b ** e by squaring, false as soon as a step would overflow a long
@@ -410,8 +444,23 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>Float</returns>
         [RubyMethod("**")]
-        public static double Power(int self, double other) {
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, int self, double other) {
+            if (self < 0 && IsFractional(other)) {
+                // a Complex
+                return PowerSlow(slow, self, other, () => Math.Pow(self, other));
+            }
+            // MRI's 0 ** NaN is 0.0; Math.Pow's is NaN
+            if (self == 0 && Double.IsNaN(other)) {
+                return 0.0;
+            }
             return Math.Pow(self, other);
+        }
+
+        // rational.rb's Float.__ir_fractional__: NaN is, an infinity is not, and otherwise not whole
+        internal static bool IsFractional(double y) {
+            if (Double.IsNaN(y)) { return true; }
+            if (Double.IsInfinity(y)) { return false; }
+            return y != Math.Round(y);
         }
 
         /// <summary>
@@ -420,8 +469,9 @@ namespace IronRuby.Builtins {
         /// not choose between Bignum#** and the coercing fallback.
         /// </summary>
         [RubyMethod("**")]
-        public static object Power(RubyContext/*!*/ context, int self, [NotNull]BigInteger/*!*/ other) {
-            return Power(context, (BigInteger)self, other);
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, RubyContext/*!*/ context, int self,
+            [NotNull]BigInteger/*!*/ other) {
+            return Power(slow, context, (BigInteger)self, other);
         }
 
         #endregion
@@ -515,7 +565,7 @@ namespace IronRuby.Builtins {
 
         // A Fixnum is exactly a double, so its quotient is the division of the two, as MRI's
         // fix_fdiv_double does; without these the binder made both of them Bignums first.
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(int self, int other) {
             return (double)self / (double)other;
         }
@@ -524,22 +574,22 @@ namespace IronRuby.Builtins {
         // and fdiv(Bignum, Float) both took the long as a Float, which the binder could not choose
         // between - 1.fdiv(2**40), and with it 0.5 * 10**-15 and Rational#to_f, raised
         // AmbiguousMatchException.
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(int self, long other) {
             return FDivExact(self, other);
         }
 
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(long self, long other) {
             return FDivExact(self, other);
         }
 
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(long self, int other) {
             return FDivExact(self, other);
         }
 
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(long self, double other) {
             return (double)self / other;
         }
@@ -567,12 +617,12 @@ namespace IronRuby.Builtins {
             return FDiv(new BigInteger(self), new BigInteger(other));
         }
 
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(int self, double other) {
             return (double)self / other;
         }
 
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv([NotNull]BigInteger/*!*/ self, double other) {
             return Protocols.ToDouble(self) / other;
         }
@@ -587,7 +637,7 @@ namespace IronRuby.Builtins {
         /// that is not a number at all gets "String can't be coerced into Integer" rather than
         /// "no implicit conversion of String into Integer".
         /// </remarks>
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static object FDiv(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
             object/*!*/ self, object other) {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "fdiv", self, other);

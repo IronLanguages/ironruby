@@ -19,7 +19,6 @@
 
 using System;
 using System.Collections;
-using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -56,13 +55,11 @@ namespace IronRuby.StandardLibrary.Date {
             _sg = DateMath.ITALY;
         }
 
-#if FEATURE_SERIALIZATION
         protected RubyDate(SerializationInfo/*!*/ info, StreamingContext context)
             : base(info, context) {
             _sf = Frac.Zero;
             _sg = DateMath.ITALY;
         }
-#endif
 
         protected override RubyObject/*!*/ CreateInstance() {
             return new RubyDate(ImmediateClass.NominalClass);

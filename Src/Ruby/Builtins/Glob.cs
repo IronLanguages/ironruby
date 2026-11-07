@@ -909,7 +909,7 @@ namespace IronRuby.Builtins {
                 if (name.ContainsInvalidCharacters()) {
                     name = context.EncodePath(strFileName);
                 }
-                yield return name.TaintBy(pattern);
+                yield return name;
             }
         }
     }

@@ -13,18 +13,11 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Collections;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -77,7 +70,7 @@ namespace IronRuby.Compiler.Ast {
         public CaseExpression(Expression value, WhenClause/*!*/[] whenClauses, Statements elseStatements, SourceSpan location)
             : base(location) {
             _value = value;
-            _whenClauses = whenClauses ?? WhenClause.EmptyArray;
+            _whenClauses = whenClauses ?? Array.Empty<WhenClause>();
             _elseStatements = elseStatements;
         }
 

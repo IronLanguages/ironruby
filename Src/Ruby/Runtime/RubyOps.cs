@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -42,7 +38,6 @@ using Microsoft.Scripting.Interpreter;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using IronRuby.Compiler.Ast;
 using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Runtime {
@@ -331,6 +326,20 @@ namespace IronRuby.Runtime {
 
             // Block entry too: `n.times { }` and `each { }` loop in C#, where no back edge is emitted.
             RubyUtils.SafePoint();
+            return CreateBlockScopeSafePointInBody(locals, variableNames, blockParam, selfObject, interpretedFrame);
+        }
+
+        /// <summary>
+        /// <see cref="CreateBlockScope"/> for a block whose whole body is `begin ... rescue ... end`
+        /// (`n.times do ... rescue ... end`): its entry safe point is the first thing inside the
+        /// rescued statements (Body.SafePointFirst). At the entry, a Thread#raise that came in while
+        /// the previous call was returning would be raised outside the rescue written for it - MRI
+        /// has no check there, only at the block's `leave` and the loop's back edge, which leaves it
+        /// a window of a few instructions where IronRuby's was a block return and a C# loop step.
+        /// </summary>
+        [Emitted]
+        public static RubyBlockScope/*!*/ CreateBlockScopeSafePointInBody(MutableTuple locals, string[] variableNames,
+            BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
 
             var scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
             if ((TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0) {
@@ -371,7 +380,17 @@ namespace IronRuby.Runtime {
         public static RubyBlockScope TakeReusableBlockScope(BlockParam/*!*/ blockParam) {
             // Block entry too: `n.times { }` and `each { }` loop in C#, where no back edge is emitted.
             RubyUtils.SafePoint();
+            return TakeReusableBlockScopeSafePointInBody(blockParam);
+        }
 
+        /// <summary>
+        /// <see cref="TakeReusableBlockScope"/> for a block whose safe point is inside its body (see
+        /// <see cref="CreateBlockScopeSafePointInBody"/>). Whatever that safe point runs - a trap
+        /// handler, a finalizer - runs after the scope is taken, so a call of the block it makes finds
+        /// nothing kept and makes a scope of its own.
+        /// </summary>
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static RubyBlockScope TakeReusableBlockScopeSafePointInBody(BlockParam/*!*/ blockParam) {
             if (blockParam.MayHaveReusableScope) {
                 var scope = blockParam.ReusableScope;
                 if (scope != null && !scope.IsCaptured) {
@@ -456,37 +475,6 @@ namespace IronRuby.Runtime {
         public static void TraceClassEvent(RubyScope scope, string path, int line) {
             if ((TracePoint.ActiveEvents & (int)TraceEvents.Class) != 0) {
                 TracePoint.OnClass(scope, path, line);
-            }
-        }
-
-        [Emitted]
-        public static void TraceMethodCall(RubyMethodScope/*!*/ scope, string fileName, int lineNumber) {
-            // MRI: 
-            // Reports DeclaringModule even though an aliased method in a sub-module is called.
-            // Also works for singleton module-function, which shares DeclaringModule with instance module-function.
-            RubyModule module = scope.DeclaringModule;
-            scope.RubyContext.ReportTraceEvent("call", scope, module, scope.DefinitionName, fileName, lineNumber);
-        }
-
-        [Emitted]
-        public static void TraceMethodReturn(RubyMethodScope/*!*/ scope, string fileName, int lineNumber) {
-            RubyModule module = scope.DeclaringModule;
-            scope.RubyContext.ReportTraceEvent("return", scope, module, scope.DefinitionName, fileName, lineNumber);
-        }
-
-        [Emitted]
-        public static void TraceBlockCall(RubyBlockScope/*!*/ scope, BlockParam/*!*/ block, string fileName, int lineNumber) {
-            var method = block.Proc.Method;
-            if (method != null) {
-                scope.RubyContext.ReportTraceEvent("call", scope, method.DeclaringModule, method.DefinitionName, fileName, lineNumber);
-            }
-        }
-
-        [Emitted]
-        public static void TraceBlockReturn(RubyBlockScope/*!*/ scope, BlockParam/*!*/ block, string fileName, int lineNumber) {
-            var method = block.Proc.Method;
-            if (method != null) {
-                scope.RubyContext.ReportTraceEvent("return", scope, method.DeclaringModule, method.DefinitionName, fileName, lineNumber);
             }
         }
 
@@ -635,11 +623,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        public static RubyScope/*!*/ GetEmptyScope(RubyContext/*!*/ context) {
-            return context.EmptyScope;
-        }
-
-        [Emitted]
         public static Scope/*!*/ GetGlobalScopeFromScope(RubyScope/*!*/ scope) {
             return scope.GlobalScope.Scope;
         }
@@ -659,19 +642,11 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Proc/*!*/ DefineBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
-#if NETFRAMEWORK
-            // DLR closures should not be used:
-            Debug.Assert(!(((Delegate)clrMethod).Target is Closure) || ((Closure)((Delegate)clrMethod).Target).Locals == null);
-#endif
             return new Proc(ProcKind.Block, self, scope, dispatcher.SetMethod(clrMethod));
         }
 
         [Emitted]
         public static Proc/*!*/ DefineLambda(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
-#if NETFRAMEWORK
-            // DLR closures should not be used:
-            Debug.Assert(!(((Delegate)clrMethod).Target is Closure) || ((Closure)((Delegate)clrMethod).Target).Locals == null);
-#endif
             return new Proc(ProcKind.Lambda, self, scope, dispatcher.SetMethod(clrMethod));
         }
 
@@ -758,10 +733,7 @@ namespace IronRuby.Runtime {
                 int positional = argCount - (keywords != null ? 1 : 0);
                 int min = signature.MinPositionalCount, max = signature.MaxPositionalCount;
                 if (positional < min || (max >= 0 && positional > max)) {
-                    var inv = System.Globalization.CultureInfo.InvariantCulture;
-                    string expected = (min == max) ? min.ToString(inv)
-                        : min.ToString(inv) + (max < 0 ? "+" : ".." + max.ToString(inv));
-                    throw MakeWrongNumberOfArgumentsErrorN(positional, expected + MissingRequiredKeywordsNote(signature, keywords));
+                    throw MakeWrongNumberOfArgumentsErrorN(positional, signature.DescribeExpectedArguments());
                 }
                 return;
             }
@@ -783,18 +755,6 @@ namespace IronRuby.Runtime {
                 throw MakeWrongNumberOfArgumentsErrorN(argCount,
                     (-arity - 1).ToString(System.Globalization.CultureInfo.InvariantCulture) + "+");
             }
-        }
-
-        /// <summary>
-        /// MRI's argument_arity_error names every required keyword, given or not:
-        /// "wrong number of arguments (given 2, expected 1; required keyword: b)".
-        /// </summary>
-        private static string/*!*/ MissingRequiredKeywordsNote(RubyParameterSignature/*!*/ signature, Hash keywords) {
-            string[] required = signature.RequiredKeywordNames;
-            if (required.Length == 0) {
-                return "";
-            }
-            return (required.Length == 1 ? "; required keyword: " : "; required keywords: ") + String.Join(", ", required);
         }
 
         [Emitted]
@@ -1027,8 +987,7 @@ namespace IronRuby.Runtime {
                     // 2) trace
                     //    Method call trace reports non-singleton module.
 
-                    // MRI 1.8: instance method owner is self -> it is possible (via define_method) to define m.f. on a class (bug)
-                    // MRI 1.9: instance method owner GetMethodDefinitionOwner
+                    // The instance method owner is GetMethodDefinitionOwner.
                     // MRI allows to define m.f. on classes but then doesn't work correctly with it.
                     instanceOwner = scope.GetMethodDefinitionOwner();
                     if (instanceOwner.IsClass) {
@@ -1336,21 +1295,7 @@ namespace IronRuby.Runtime {
         }
 
         private static RubyClass/*!*/ ToSuperClass(RubyContext/*!*/ ec, object superClassObject) {
-            if (superClassObject != null) {
-                RubyClass superClass = superClassObject as RubyClass;
-                if (superClass == null) {
-                    throw RubyExceptions.CreateTypeError("superclass must be an instance of Class (given an instance of {0})",
-                        ec.GetClassDisplayName(superClassObject));
-                }
-
-                if (superClass.IsSingletonClass) {
-                    throw RubyExceptions.CreateTypeError("can't make subclass of singleton class");
-                }
-
-                return superClass;
-            } else {
-                return ec.ObjectClass;
-            }
+            return (superClassObject != null) ? RubyClass.CheckInheritable(ec, superClassObject) : ec.ObjectClass;
         }
 
         #endregion
@@ -1365,6 +1310,7 @@ namespace IronRuby.Runtime {
         public static object GetUnqualifiedConstant(RubyScope/*!*/ scope, ConstantSiteCache/*!*/ cache, string/*!*/ name, bool isGlobal) {
             object result = null;
             RubyModule missingConstantOwner;
+            RubyModule owner = null;
             var context = scope.RubyContext;
             using (context.ClassHierarchyLocker()) {
                 // Thread safety:
@@ -1388,7 +1334,6 @@ namespace IronRuby.Runtime {
                 int newVersion = context.ConstantAccessVersion;
 
                 ConstantStorage storage;
-                RubyModule owner = null;
                 bool isPrivateGlobal = false;
                 if (!isGlobal) {
                     missingConstantOwner = scope.TryResolveConstantNoLock(scope.GlobalScope, name, out storage, out owner);
@@ -1411,12 +1356,8 @@ namespace IronRuby.Runtime {
                 object newCacheValue;
                 bool deprecated = false;
                 if (missingConstantOwner == null) {
-                    if (storage.WeakValue != null) {
-                        result = storage.Value;
-                        newCacheValue = storage.WeakValue;
-                    } else {
-                        result = newCacheValue = storage.Value;
-                    }
+                    result = storage.Value;
+                    newCacheValue = MakeConstantCacheValue(context, storage, owner, name, cache.IsCoreLibrary);
                     deprecated = ReportConstantDeprecation(context, owner, name);
                 } else {
                     newCacheValue = ConstantSiteCache.WeakMissingConstant;
@@ -1429,9 +1370,37 @@ namespace IronRuby.Runtime {
 
             if (missingConstantOwner != null) {
                 result = missingConstantOwner.ConstantMissing(name);
+            } else if (context.RactorsStarted && !cache.IsCoreLibrary) {
+                RactorIsolation.CheckConstantRead(context, owner, name, result);
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// What a constant site caches for a constant's value: its weak reference if it has one.
+        /// Once the runtime has started Ractors, a value a non-main Ractor might not be allowed
+        /// to see is wrapped, so that a cached read checks (<see cref="ReadRactorCheckedConstant"/>).
+        /// </summary>
+        private static object/*!*/ MakeConstantCacheValue(RubyContext/*!*/ context, ConstantStorage storage, RubyModule owner, string/*!*/ name,
+            bool isCoreLibrary) {
+            object cached = storage.WeakValue ?? storage.Value;
+            if (context.RactorsStarted && !isCoreLibrary && !RactorIsolation.IsTriviallyShareable(storage.Value)) {
+                return new RactorCheckedConstant(context, cached, owner, name);
+            }
+            return cached;
+        }
+
+        /// <summary>
+        /// A cached constant read of a value <see cref="MakeConstantCacheValue"/> wrapped: the value,
+        /// if the current Ractor may see it.
+        /// </summary>
+        [Emitted]
+        public static object ReadRactorCheckedConstant(object/*!*/ cached) {
+            var constant = (RactorCheckedConstant)cached;
+            var weak = constant.Value as WeakReference;
+            object value = (weak != null) ? weak.Target : constant.Value;
+            return RactorIsolation.CheckConstantRead(constant.Context, constant.Owner, constant.Name, value);
         }
 
         /// <summary>
@@ -1449,15 +1418,17 @@ namespace IronRuby.Runtime {
                 ConstantStorage storage;
                 bool anyMissing;
                 RubyModule topModule = isGlobal ? context.ObjectClass : null;
-                object result = ResolveQualifiedConstant(scope, qualifiedName, topModule, true, out storage, out anyMissing);
+                RubyModule owner;
+                object result = ResolveQualifiedConstant(scope, qualifiedName, topModule, true, out storage, out anyMissing, out owner);
+                string name = qualifiedName[qualifiedName.Length - 1];
 
                 // cache result only if no constant was missing:
                 if (!anyMissing && !context.IsAutoloadInProgress && (isGlobal || !IsLexicallyInObjectSingleton(scope))) {
                     Debug.Assert(result == storage.Value);
-                    cache.Update(storage.WeakValue ?? result, newVersion);
+                    cache.Update(MakeConstantCacheValue(context, storage, owner, name, cache.IsCoreLibrary), newVersion);
                 }
 
-                return result;
+                return (context.RactorsStarted && !cache.IsCoreLibrary) ? RactorIsolation.CheckConstantRead(context, owner, name, result) : result;
             }
         }
 
@@ -1480,6 +1451,8 @@ namespace IronRuby.Runtime {
                 object value = cache.Value;
                 if (value.GetType() == typeof(WeakReference)) {
                     return ((WeakReference)value).Target;
+                } else if (value.GetType() == typeof(RactorCheckedConstant)) {
+                    return ReadRactorCheckedConstant(value);
                 } else {
                     return value;
                 }
@@ -1490,15 +1463,17 @@ namespace IronRuby.Runtime {
                 
                 ConstantStorage storage;
                 bool anyMissing;
-                object result = ResolveQualifiedConstant(scope, qualifiedName, module, true, out storage, out anyMissing);
+                RubyModule owner;
+                object result = ResolveQualifiedConstant(scope, qualifiedName, module, true, out storage, out anyMissing, out owner);
+                string name = qualifiedName[qualifiedName.Length - 1];
 
                 // cache result only if no constant was missing:
                 if (!anyMissing && !context.IsAutoloadInProgress) {
                     Debug.Assert(result == storage.Value);
-                    cache.Update(storage.WeakValue ?? result, newVersion, module);
+                    cache.Update(MakeConstantCacheValue(context, storage, owner, name, cache.IsCoreLibrary), newVersion, module);
                 }
 
-                return result;
+                return (context.RactorsStarted && !cache.IsCoreLibrary) ? RactorIsolation.CheckConstantRead(context, owner, name, result) : result;
             }
         }
 
@@ -1572,7 +1547,7 @@ namespace IronRuby.Runtime {
                 RubyModule topModule = isGlobal ? context.ObjectClass : null;
                 RubyModule owner;
                 try {
-                    owner = ResolveQualifiedConstant(scope, qualifiedName, topModule, false, out storage, out anyMissing) as RubyModule;
+                    owner = ResolveQualifiedConstant(scope, qualifiedName, topModule, false, out storage, out anyMissing, out _) as RubyModule;
                 } catch {
                     // autoload can raise an exception
                     scope.RubyContext.SetCurrentException(null);
@@ -1624,7 +1599,7 @@ namespace IronRuby.Runtime {
                     bool anyMissing;
                     RubyModule owner;
                     try {
-                        owner = ResolveQualifiedConstant(scope, qualifiedName, module, false, out storage, out anyMissing) as RubyModule;
+                        owner = ResolveQualifiedConstant(scope, qualifiedName, module, false, out storage, out anyMissing, out _) as RubyModule;
                     } catch {
                         // autoload can raise an exception:
                         return false;
@@ -1647,7 +1622,7 @@ namespace IronRuby.Runtime {
         }
 
         private static object ResolveQualifiedConstant(RubyScope/*!*/ scope, string/*!*/[]/*!*/ qualifiedName, RubyModule topModule, bool isGet,
-            out ConstantStorage storage, out bool anyMissing) {
+            out ConstantStorage storage, out bool anyMissing, out RubyModule resultOwner) {
 
             Debug.Assert(qualifiedName.Length >= 2 || qualifiedName.Length == 1 && isGet);
             RubyContext context = scope.RubyContext;
@@ -1673,6 +1648,7 @@ namespace IronRuby.Runtime {
             // defined?(A::B::C) never calls const_missing (MRI): a name that is not there makes the
             // whole path undefined. Only the get does what evaluating A::B would.
             object result;
+            resultOwner = firstOwner ?? missingConstantOwner;
             if (missingConstantOwner == null) {
                 result = storage.Value;
                 anyMissing = ReportConstantDeprecation(context, firstOwner, name);
@@ -1689,6 +1665,7 @@ namespace IronRuby.Runtime {
 
             for (int i = 1; i < nameCount; i++) {
                 RubyModule owner = RubyUtils.GetModuleFromObject(scope, result);
+                resultOwner = owner;
                 // Note that the owner could be another runtime's module:
                 name = qualifiedName[i];
                 if (TryResolveVisibleConstant(owner, context, globalScope, name, out storage)) {
@@ -2190,15 +2167,17 @@ namespace IronRuby.Runtime {
 
         /// <summary>
         /// The arity check of a method or lambda whose positionals are in the splat. A negative
-        /// <paramref name="maximum"/> means a rest parameter took the cap off.
+        /// <paramref name="maximum"/> means a rest parameter took the cap off. <paramref name="requiredKeywords"/>
+        /// is the "; required keyword: k" MRI appends.
         /// </summary>
         [Emitted]
-        public static void CheckSplatArity(object args, int minimum, int maximum) {
+        public static void CheckSplatArity(object args, int minimum, int maximum, string/*!*/ requiredKeywords) {
             int count = ((RubyArray)args).Count;
             if (count < minimum || (maximum >= 0 && count > maximum)) {
                 var inv = System.Globalization.CultureInfo.InvariantCulture;
-                throw (minimum == maximum) ? MakeWrongNumberOfArgumentsError(count, minimum)
-                    : MakeWrongNumberOfArgumentsErrorN(count, minimum.ToString(inv) + (maximum < 0 ? "+" : ".." + maximum.ToString(inv)));
+                string expected = (minimum == maximum) ? minimum.ToString(inv)
+                    : minimum.ToString(inv) + (maximum < 0 ? "+" : ".." + maximum.ToString(inv));
+                throw MakeWrongNumberOfArgumentsErrorN(count, expected + requiredKeywords);
             }
         }
 
@@ -2256,13 +2235,17 @@ namespace IronRuby.Runtime {
         ///
         /// The hash is always one the call site made for this call (see
         /// <see cref="MakeKeywordArgumentsHash"/> and the copies the splat paths take), so it can
-        /// be cleared in place.
+        /// be cleared in place. Being one of those, it is a Hash and not an instance of a subclass:
+        /// the test is of the exact class, which for anything else is a compare, where `is Hash'
+        /// walks the class's base types on every call made with an argument that is not a Hash.
         /// </summary>
-        [Emitted]
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object ClearKeywordArguments(object obj) {
-            var hash = obj as Hash;
-            if (hash != null && hash.IsKeywordArguments) {
-                hash.IsKeywordArguments = false;
+            if (obj != null && obj.GetType() == typeof(Hash)) {
+                var hash = Unsafe.As<Hash>(obj);
+                if (hash.IsKeywordArguments) {
+                    hash.IsKeywordArguments = false;
+                }
             }
             return obj;
         }
@@ -2377,34 +2360,6 @@ namespace IronRuby.Runtime {
             var result = new RubyArray(list.Count + 1);
             result.AddRange(list);
             result.Add(item);
-            return result;
-        }
-
-        [Emitted]
-        public static IList/*!*/ SplatAppend(IList/*!*/ array, IList/*!*/ list) {
-            Utils.AddRange(array, list);
-            return array;
-        }
-
-        [Emitted]
-        public static object Splat(IList/*!*/ list) {
-            if (list.Count <= 1) {
-                return (list.Count > 0) ? list[0] : null;
-            }
-
-            return list;
-        }
-
-        // 1.8 behavior
-        [Emitted]
-        public static object SplatPair(object value, IList/*!*/ list) {
-            if (list.Count == 0) {
-                return value;
-            }
-
-            RubyArray result = new RubyArray(list.Count + 1);
-            result.Add(value);
-            result.AddRange(list);
             return result;
         }
 
@@ -2563,8 +2518,12 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object GetGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             object value;
+            var context = scope.RubyContext;
+            if (context.RactorsStarted && TryGetRactorLocalGlobal(context, name, out value)) {
+                return value;
+            }
             // no error reported if the variable doesn't exist:
-            scope.RubyContext.TryGetGlobalVariable(scope, name, out value);
+            context.TryGetGlobalVariable(scope, name, out value);
             return value;
         }
 
@@ -2576,6 +2535,9 @@ namespace IronRuby.Runtime {
         public static object ReadGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             object value;
             var context = scope.RubyContext;
+            if (context.RactorsStarted && TryGetRactorLocalGlobal(context, name, out value)) {
+                return value;
+            }
             if (!context.TryGetGlobalVariable(scope, name, out value) && context.Verbose is bool && (bool)context.Verbose) {
                 context.ReportWarning(String.Format("global variable '${0}' not initialized", name), true);
             }
@@ -2589,6 +2551,9 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object GetCachedGlobalVariable(RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
             var context = scope.RubyContext;
+            if (context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
+                return GetGlobalVariable(scope, site.Name);
+            }
             var variable = site.GetVariable(context);
             var plain = variable as GlobalVariableInfo;
             if (plain != null) {
@@ -2601,6 +2566,9 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object ReadCachedGlobalVariable(RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
             var context = scope.RubyContext;
+            if (context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
+                return ReadGlobalVariable(scope, site.Name);
+            }
             var variable = site.GetVariable(context);
             var plain = variable as GlobalVariableInfo;
             if (plain != null) {
@@ -2623,6 +2591,9 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object SetCachedGlobalVariable(object value, RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
             var context = scope.RubyContext;
+            if (context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
+                return SetGlobalVariable(value, scope, site.Name);
+            }
             var plain = site.GetVariable(context) as GlobalVariableInfo;
             if (plain != null) {
                 plain.Assign(value);
@@ -2636,18 +2607,48 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static bool IsDefinedGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             GlobalVariable variable;
-            return scope.RubyContext.TryGetGlobalVariable(name, out variable) && variable.IsDefined;
+            var context = scope.RubyContext;
+            if (context.RactorsStarted) {
+                RactorIsolation.CheckGlobalVariable(context, name);
+            }
+            return context.TryGetGlobalVariable(name, out variable) && variable.IsDefined;
         }
 
         [Emitted]
         public static object SetGlobalVariable(object value, RubyScope/*!*/ scope, string/*!*/ name) {
-            scope.RubyContext.SetGlobalVariable(scope, name, value);
+            var context = scope.RubyContext;
+            if (context.RactorsStarted) {
+                var ractor = RactorIsolation.CheckGlobalVariable(context, name);
+                if (ractor != null && RactorIsolation.IsDebugVariable(name)) {
+                    ractor.Debug = value;
+                    return value;
+                }
+            }
+            context.SetGlobalVariable(scope, name, value);
             return value;
         }
 
         [Emitted]
         public static void AliasGlobalVariable(RubyScope/*!*/ scope, string/*!*/ newName, string/*!*/ oldName) {
-            scope.RubyContext.AliasGlobalVariable(newName, oldName);
+            var context = scope.RubyContext;
+            if (context.RactorsStarted) {
+                RactorIsolation.CheckGlobalVariables(context);
+            }
+            context.AliasGlobalVariable(newName, oldName);
+        }
+
+        /// <summary>
+        /// A global read in a runtime that has started Ractors: one a non-main Ractor may not
+        /// use raises, and $DEBUG is the Ractor's own. False for the rest, which read as usual.
+        /// </summary>
+        private static bool TryGetRactorLocalGlobal(RubyContext/*!*/ context, string/*!*/ name, out object value) {
+            var ractor = RactorIsolation.CheckGlobalVariable(context, name);
+            if (ractor != null && RactorIsolation.IsDebugVariable(name)) {
+                value = ractor.Debug;
+                return true;
+            }
+            value = null;
+            return false;
         }
 
         #endregion
@@ -2708,28 +2709,6 @@ namespace IronRuby.Runtime {
             throw new NotImplementedException();
         }
 
-        // TODO:
-        internal static IList<KeyValuePair<string, object>> ScopeGetItems(Scope scope) {
-            object storage = (object)scope.Storage;
-
-            var scopeStorage = storage as ScopeStorage;
-            if (scopeStorage != null) {
-                return scopeStorage.GetItems();
-            }
-
-            var stringDict = storage as StringDictionaryExpando;
-            if (stringDict != null) {
-                var list = new KeyValuePair<string, object>[stringDict.Dictionary.Count];
-                int i = 0;
-                foreach (var entry in stringDict.Dictionary) {
-                    list[i++] = entry;
-                }
-                return list;
-            }
-
-            throw new NotImplementedException();
-        }
-
         #endregion
 
         #region Regex
@@ -2773,9 +2752,6 @@ namespace IronRuby.Runtime {
         }
 
         #endregion
-
-        public const char SuffixLiteral = 'L';       // Repr: literal string
-        public const char SuffixMutable = 'M';       // non-literal "...#{expr}..."
 
         /// <summary>
         /// Specialized signatures exist for upto the following number of string parts
@@ -3246,13 +3222,11 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static bool CanRescue(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
             // A CLR finally may replace the reclaim signal with an ordinary exception.
             // That still belongs to a discarded stack and must not enter a Ruby rescue.
             if (RubyUtils.IsReclaimingFiber) {
                 return false;
             }
-#endif
             if (exception is StackUnwinder) {
                 return false;
             }
@@ -3263,7 +3237,7 @@ namespace IronRuby.Runtime {
             }
 
             // calls "new" on the exception class if it hasn't been called yet:
-            exception = RubyExceptionData.HandleException(scope.RubyContext, exception);
+            exception = RubyExceptionData.HandleException(scope, exception);
 
             // Exception#cause: the exception that was being handled when this one was raised.
             // $! still holds it here - we are about to overwrite it below. Kernel#raise has
@@ -3307,7 +3281,8 @@ namespace IronRuby.Runtime {
             var site = comparisonStorage.GetCallSite("===");
             bool result = IsTrue(site.Target(site, classObject, context.CurrentException));
             if (result) {
-                RubyExceptionData.ActiveExceptionHandled(context.CurrentException);
+                // the frames the exception unwound to get here are no part of what is raised from here on
+                Precompiled.PrecompiledFrames.ForgetLeft();
                 TraceRescue(scope, context.CurrentException);
             }
             return result;
@@ -3324,16 +3299,9 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted] //RescueClause:
-        public static bool CompareDefaultException(RubyScope/*!*/ scope) {
-            RubyContext ec = scope.RubyContext;
-
-            // MRI doesn't call === here;
-            bool result = ec.IsInstanceOf(ec.CurrentException, ec.StandardErrorClass);
-            if (result) {
-                RubyExceptionData.ActiveExceptionHandled(ec.CurrentException);
-                TraceRescue(scope, ec.CurrentException);
-            }
-            return result;
+        public static bool CompareDefaultException(BinaryOpStorage/*!*/ comparisonStorage, RubyScope/*!*/ scope) {
+            // a bare rescue is "rescue StandardError": CRuby calls StandardError.=== too
+            return CompareException(comparisonStorage, scope, scope.RubyContext.StandardErrorClass);
         }
 
         private static void TraceRescue(RubyScope/*!*/ scope, Exception exception) {
@@ -3395,17 +3363,6 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static Exception/*!*/ MakeUninitializedClassInstantiatedError() {
             return RubyExceptions.CreateTypeError("can't instantiate uninitialized class");
-        }
-
-        [Emitted]
-        public static Exception/*!*/ MakeAbstractMethodCalledError(RuntimeMethodHandle/*!*/ method) {
-            return new NotImplementedException(String.Format("Abstract method '{0}' not implemented", MethodInfo.GetMethodFromHandle(method)));
-        }
-
-        [Emitted]
-        public static Exception/*!*/ MakeInvalidArgumentTypesError(string/*!*/ methodName) {
-            // TODO:
-            return new ArgumentException(String.Format("wrong number or type of arguments for '{0}'", methodName));
         }
 
         [Emitted]
@@ -3478,19 +3435,29 @@ namespace IronRuby.Runtime {
         }
 
         // MRI's method_missing_reason: whether the call that is about to reach a user-defined
-        // method_missing had an implicit receiver, read back by BasicObject#method_missing when
-        // that definition calls super, so that NoMethodError#private_call? can answer.
+        // method_missing had an implicit receiver, and whether it was a bare name that could have
+        // been a local variable, read back by BasicObject#method_missing when that definition
+        // calls super, so that NoMethodError#private_call? can answer and a bare name raises
+        // NameError ("undefined local variable or method").
         [ThreadStatic]
         private static bool _methodMissingPrivateCall;
+        [ThreadStatic]
+        private static bool _methodMissingVariableCall;
 
         public static bool MethodMissingPrivateCall {
             get { return _methodMissingPrivateCall; }
             set { _methodMissingPrivateCall = value; }
         }
 
+        public static bool MethodMissingVariableCall {
+            get { return _methodMissingVariableCall; }
+            set { _methodMissingVariableCall = value; }
+        }
+
         [Emitted]
-        public static void SetMethodMissingReason(bool privateCall) {
+        public static void SetMethodMissingReason(bool privateCall, bool variableCall) {
             _methodMissingPrivateCall = privateCall;
+            _methodMissingVariableCall = variableCall;
         }
 
         [Emitted]
@@ -3508,9 +3475,23 @@ namespace IronRuby.Runtime {
             return error;
         }
 
+        /// <summary>
+        /// The frame of the method an ArgumentError for the wrong number of arguments was raised for:
+        /// the backtrace starts with it, as MRI's does (see MetaObjectBuilder.AddCalleeFrame). No file
+        /// for a library method, whose frame is at the call.
+        /// </summary>
         [Emitted]
-        public static Exception/*!*/ MakeUndefinedLocalOrMethodError(RubyContext/*!*/ context, object self, string/*!*/ methodName) {
-            return RubyExceptions.CreateUndefinedLocalOrMethod(context, self, methodName);
+        public static Exception/*!*/ SetCalleeFrame(Exception/*!*/ error, string file, int line, string/*!*/ label) {
+            RubyExceptionData.GetInstance(error).SetCalleeFrame(file, line, label);
+            return error;
+        }
+
+        [Emitted]
+        public static Exception/*!*/ MakeUndefinedLocalOrMethodError(RubyContext/*!*/ context, RubyScope/*!*/ scope, object self, string/*!*/ methodName) {
+            var error = RubyExceptions.CreateUndefinedLocalOrMethod(context, self, methodName);
+            // NameError#local_variables: the locals the name might have been meant as (did_you_mean)
+            RubyExceptionData.GetInstance(error).LocalVariables = scope.GetLocalVariableSymbols();
+            return error;
         }
 
         [Emitted]
@@ -3530,16 +3511,6 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static Range/*!*/ CreateExclusiveRange(object begin, object end, RubyScope/*!*/ scope, BinaryOpStorage/*!*/ comparisonStorage) {
             return new Range(comparisonStorage, scope.RubyContext, begin, end, true);
-        }
-
-        [Emitted]
-        public static Range/*!*/ CreateInclusiveIntegerRange(int begin, int end) {
-            return new Range(begin, end, false);
-        }
-
-        [Emitted]
-        public static Range/*!*/ CreateExclusiveIntegerRange(int begin, int end) {
-            return new Range(begin, end, true);
         }
 
         #endregion
@@ -3712,28 +3683,10 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted] // ProtocolConversionAction
-        public static string/*!*/ ConvertRubySymbolToClrString(RubyContext/*!*/ context, int value) {
-            context.ReportWarning("do not use Integers as Symbols");
-
-            RubySymbol result = context.FindSymbol(value);
-            if (result != null) {
-                return result.ToString();
-            } else {
-                throw RubyExceptions.CreateArgumentError(String.Format("{0} is not a symbol", value));
-            }
-        }
-
-        [Emitted] // ProtocolConversionAction
         public static string/*!*/ ConvertMutableStringToClrString(MutableString/*!*/ value) {
             return value.ConvertToString();
         }
 
-        [Emitted] // ProtocolConversionAction
-        public static MutableString/*!*/ ConvertSymbolToMutableString(RubySymbol/*!*/ value) {
-            // TODO: this is used for DefaultProtocol conversions; we might avoid clonning in some (many?) cases
-            return value.String.Clone();
-        }
-        
         [Emitted] // ProtocolConversionAction
         public static RubyRegex/*!*/ ToRegexValidator(string/*!*/ className, object obj) {
             return RubyRegex.FromLiteralPattern(ToStringValidator(className, obj));
@@ -3887,7 +3840,7 @@ namespace IronRuby.Runtime {
                 return Converter.ToUInt32(bignum);
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_int/to_i", "Integer");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_int", "Integer", obj);
         }
 
         [Emitted] // ProtocolConversionAction
@@ -3904,7 +3857,7 @@ namespace IronRuby.Runtime {
                 return Converter.ToInt64(bignum);
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_int/to_i", "Integer");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_int", "Integer", obj);
         }
 
         [Emitted] // ProtocolConversionAction
@@ -3921,7 +3874,7 @@ namespace IronRuby.Runtime {
                 return Converter.ToUInt64(bignum);
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_int/to_i", "Integer");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_int", "Integer", obj);
         }
 
         [Emitted] // ProtocolConversionAction
@@ -3938,24 +3891,26 @@ namespace IronRuby.Runtime {
                 return bignum;
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_int/to_i", "Integer");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_int", "Integer", obj);
         }
 
         [Emitted] // ProtocolConversionAction
         public static IntegerValue ToIntegerValidator(string/*!*/ className, object obj) {
-            if (obj is int) {
-                return new IntegerValue((int)obj);
-            }
+            return ToIntegerValue(className, "to_int", obj);
+        }
 
-            if (obj is long wide) {
-                return new IntegerValue((BigInteger)wide);
-            }
+        [Emitted] // ProtocolConversionAction (Kernel#Integer's #to_i step)
+        public static IntegerValue ToIValidator(string/*!*/ className, object obj) {
+            return ToIntegerValue(className, "to_i", obj);
+        }
 
-            if (obj is BigInteger bignum) {
-                return new IntegerValue(bignum);
-            }
-
-            throw RubyExceptions.CreateReturnTypeError(className, "to_int/to_i", "Integer");
+        private static IntegerValue ToIntegerValue(string/*!*/ className, string/*!*/ methodName, object obj) {
+            return obj switch {
+                int fixnum => new IntegerValue(fixnum),
+                long wide => new IntegerValue((BigInteger)wide),
+                BigInteger bignum => new IntegerValue(bignum),
+                _ => throw RubyExceptions.CreateReturnTypeError(className, methodName, "Integer", obj)
+            };
         }
 
         [Emitted] // ProtocolConversionAction
@@ -3968,7 +3923,7 @@ namespace IronRuby.Runtime {
                 return (double)(float)obj;
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_f", "Float");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_f", "Float", obj);
         }
 
         [Emitted] // ProtocolConversionAction
@@ -3981,7 +3936,7 @@ namespace IronRuby.Runtime {
                 return (float)obj;
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_f", "System::Single");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_f", "System::Single", obj);
         }
 
         [Emitted]
@@ -3992,22 +3947,84 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static double ConvertMutableStringToFloat(RubyContext/*!*/ context, MutableString/*!*/ value) {
-            double result;
-            if (TryParseRubyFloat(value.ConvertToString(), out result)) {
-                return result;
-            }
-
-            throw InvalidFloatValue(value.ToByteArray());
+            return ConvertStringToFloat(context, value.ConvertToString(), value);
         }
 
         [Emitted]
         public static double ConvertStringToFloat(RubyContext/*!*/ context, string/*!*/ value) {
+            return ConvertStringToFloat(context, value, null);
+        }
+
+        // MRI's Kernel#Float is written in Ruby, so its warning about a number out of range names the line of <internal:kernel>
+        // that converts it rather than the caller's: the one for Float(x), or the one for Float(x, exception: false).
+        private const int KernelFloatLine = 196, KernelFloatNoExceptionLine = 198;
+
+        /// <summary>Kernel#Float's conversion of a String.</summary>
+        public static double ConvertKernelFloat(RubyContext/*!*/ context, MutableString/*!*/ value) {
+            return ConvertStringToFloat(context, value.ConvertToString(), value, KernelFloatLine);
+        }
+
+        /// <summary>Kernel#Float's conversion of a String with exception: false.</summary>
+        public static bool TryConvertKernelFloat(RubyContext/*!*/ context, MutableString/*!*/ value, out double result) {
+            string text = value.ConvertToString();
+            if (!TryParseRubyFloat(text, out result)) {
+                return false;
+            }
+            WarnIfFloatOutOfRange(context, text.Trim(_FloatWhitespace).Replace("_", ""), result, KernelFloatNoExceptionLine);
+            return true;
+        }
+
+        private static double ConvertStringToFloat(RubyContext/*!*/ context, string/*!*/ value, MutableString original, int kernelFloatLine = 0) {
             double result;
             if (TryParseRubyFloat(value, out result)) {
+                WarnIfFloatOutOfRange(context, value.Trim(_FloatWhitespace).Replace("_", ""), result, kernelFloatLine);
                 return result;
             }
 
-            throw InvalidFloatValue(Encoding.UTF8.GetBytes(value));
+            throw InvalidFloatValue(original != null ? original.ToByteArray() : Encoding.UTF8.GetBytes(value));
+        }
+
+        private static readonly char[] _FloatWhitespace = { ' ', '\t', '\n', '\v', '\f', '\r' };
+
+        /// <summary>
+        /// MRI's rb_cstr_to_dbl warns (verbose only) when strtod over- or underflows, quoting at
+        /// most 20 characters of the number it parsed, underscores taken out:
+        ///   "Float 1e400 out of range"
+        /// </summary>
+        public static void WarnIfFloatOutOfRange(RubyContext/*!*/ context, string/*!*/ number, double result) {
+            WarnIfFloatOutOfRange(context, number, result, 0);
+        }
+
+        private static void WarnIfFloatOutOfRange(RubyContext/*!*/ context, string/*!*/ number, double result, int kernelFloatLine) {
+            if (!(context.Verbose is bool verbose && verbose)) {
+                return;
+            }
+            if (!Double.IsInfinity(result) && !(result == 0 && HasNonZeroMantissa(number))) {
+                return;
+            }
+            if (number.Length > 20) {
+                number = number.Substring(0, 20) + "...";
+            }
+            if (kernelFloatLine != 0) {
+                context.ReportWarningAt("<internal:kernel>", kernelFloatLine, "Float " + number + " out of range");
+            } else {
+                context.ReportWarning("Float " + number + " out of range", true);
+            }
+        }
+
+        private static bool HasNonZeroMantissa(string/*!*/ number) {
+            int i = (number.Length > 0 && (number[0] == '+' || number[0] == '-')) ? 1 : 0;
+            bool hex = i + 1 < number.Length && number[i] == '0' && (number[i + 1] == 'x' || number[i + 1] == 'X');
+            for (i += hex ? 2 : 0; i < number.Length; i++) {
+                char c = number[i];
+                if (hex ? (c == 'p' || c == 'P') : (c == 'e' || c == 'E')) {
+                    break;
+                }
+                if ((c >= '1' && c <= '9') || (hex && ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>
@@ -4261,6 +4278,12 @@ namespace IronRuby.Runtime {
             return RubyExceptions.CreateImplicitConversionError(fromType, toType);
         }
 
+        [Emitted] // ConvertToRegexAction
+        public static Exception/*!*/ CreateWrongArgumentTypeError(string/*!*/ fromType, string/*!*/ toType) {
+            return RubyExceptions.CreateTypeError("wrong argument type {0} (expected {1})",
+                RubyExceptions.MessageTypeName(fromType), toType);
+        }
+
         /// <summary>
         /// A method name that is neither a Symbol nor a String gets its own wording in MRI, naming
         /// the value rather than its class: "[] is not a symbol nor a string". Kernel#send,
@@ -4331,6 +4354,9 @@ namespace IronRuby.Runtime {
                 if (module == null) {
                     return GetInstanceVariableSlow(scope.RubyContext, self, site);
                 }
+                if (module.Context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(module.Context)) {
+                    return GetModuleInstanceVariableChecked(module, site);
+                }
                 data = module._instanceData;
             }
 
@@ -4356,6 +4382,9 @@ namespace IronRuby.Runtime {
                 if (module == null) {
                     return GetInstanceVariableSlow(context, self, site);
                 }
+                if (module.Context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(module.Context)) {
+                    return GetModuleInstanceVariableChecked(module, site);
+                }
                 data = module._instanceData;
             }
 
@@ -4370,7 +4399,20 @@ namespace IronRuby.Runtime {
             return data.GetInstanceVariable(site);
         }
 
+        /// <summary>
+        /// A class-level `@x` once the runtime has started Ractors: a non-main Ractor may only
+        /// read a shareable value (RactorIsolation).
+        /// </summary>
+        private static object GetModuleInstanceVariableChecked(RubyModule/*!*/ module, InstanceVariableSite/*!*/ site) {
+            RubyInstanceData data = module._instanceData;
+            object value = (data != null) ? data.GetInstanceVariable(site) : null;
+            return RactorIsolation.CheckInstanceVariableRead(module.Context, module, site.Name, value);
+        }
+
         private static object GetInstanceVariableSlow(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            if (context.RactorsStarted && !site.IsCoreLibrary) {
+                RactorIsolation.CheckInstanceVariableRead(context, self, site.Name, null);
+            }
             var owner = self as IRubyInstanceDataOwner;
             RubyInstanceData data;
             if (owner == null || !owner.TryGetInstanceData(context, out data)) {
@@ -4405,11 +4447,40 @@ namespace IronRuby.Runtime {
                 if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
                     return value;
                 }
-            } else if (TrySetOwnedInstanceVariable(scope.RubyContext, self, value, site)) {
-                return value;
+            } else {
+                var context = scope.RubyContext;
+                if (context.RactorsStarted && !site.IsCoreLibrary) {
+                    RactorIsolation.CheckInstanceVariableWrite(context, self);
+                }
+                if (TrySetRubyObjectInstanceVariable(self, value, site) || TrySetOwnedInstanceVariable(context, self, value, site)) {
+                    return value;
+                }
             }
             scope.RubyContext.SetInstanceVariable(self, value, site);
             return value;
+        }
+
+        /// <summary>
+        /// An attribute writer (attr_writer, attr_accessor): <see cref="SetInstanceVariable"/> of a value that is a positional
+        /// argument, even a Hash passed as keywords (o.send(:x=, k: 1)) - kept, it stops saying so (<see cref="ClearKeywordArguments"/>).
+        /// Here rather than in the writer's rule, which is interpreted for its first calls.
+        /// </summary>
+        [Emitted]
+        public static object SetAttribute(object self, object value, RubyScope/*!*/ scope, InstanceVariableSite/*!*/ site) {
+            return SetInstanceVariable(self, ClearKeywordArguments(value), scope, site);
+        }
+
+        // The cached store of an instance of a Ruby subclass of a built-in CLR class - Array, Hash,
+        // Exception, Enumerator - which is an IRubyObject without being a RubyObject. Those went the
+        // slow way for every write: four `@x = v' in an Enumerator subclass's initialize cost ~0.6 us
+        // more than in a plain object's. The object keeps its frozen flag itself (IRubyObjectState),
+        // and a String also warns about a chilled literal, so a String is left to the slow path.
+        internal static bool TrySetRubyObjectInstanceVariable(object self, object value, InstanceVariableSite/*!*/ site) {
+            var obj = self as IRubyObject;
+            if (obj == null || obj.IsFrozen || self is MutableString) {
+                return false;
+            }
+            return obj.GetInstanceData().TrySetCached(site.Cache, value, obj.ImmediateClass);
         }
 
         // The cached store of a CLR object that keeps its own instance data (IRubyInstanceDataOwner);
@@ -4430,8 +4501,13 @@ namespace IronRuby.Runtime {
                 if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
                     return value;
                 }
-            } else if (TrySetOwnedInstanceVariable(context, self, value, site)) {
-                return value;
+            } else {
+                if (context.RactorsStarted && !site.IsCoreLibrary) {
+                    RactorIsolation.CheckInstanceVariableWrite(context, self);
+                }
+                if (TrySetRubyObjectInstanceVariable(self, value, site) || TrySetOwnedInstanceVariable(context, self, value, site)) {
+                    return value;
+                }
             }
             context.SetInstanceVariable(self, value, site);
             return value;
@@ -4445,10 +4521,13 @@ namespace IronRuby.Runtime {
         /// The module whose class variables @@x names: the innermost class or module body. MRI
         /// refuses the access where there is none - the top level, a method or block defined there.
         /// </summary>
-        private static RubyModule/*!*/ GetClassVariableOwner(RubyScope/*!*/ scope) {
+        private static RubyModule/*!*/ GetClassVariableOwner(RubyScope/*!*/ scope, string/*!*/ name) {
             RubyModule owner = scope.GetInnerMostModuleForClassVariableAccess();
             if (owner == null) {
                 throw new RuntimeError("class variable access from toplevel");
+            }
+            if (owner.Context.RactorsStarted) {
+                RactorIsolation.CheckClassVariable(owner, name);
             }
             return owner;
         }
@@ -4456,7 +4535,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object GetClassVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             // owner is the first module in scope:
-            RubyModule owner = GetClassVariableOwner(scope);
+            RubyModule owner = GetClassVariableOwner(scope, name);
             return GetClassVariableInternal(owner, name);
         }
 
@@ -4474,7 +4553,7 @@ namespace IronRuby.Runtime {
         public static object TryGetClassVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             object value;
             // owner is the first module in scope:
-            GetClassVariableOwner(scope).TryResolveClassVariable(name, out value);
+            GetClassVariableOwner(scope, name).TryResolveClassVariable(name, out value);
             return value;
         }
 
@@ -4482,13 +4561,16 @@ namespace IronRuby.Runtime {
         public static bool IsDefinedClassVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             // owner is the first module in scope:
             RubyModule owner = scope.GetInnerMostModuleForClassVariableLookup();
+            if (owner.Context.RactorsStarted) {
+                RactorIsolation.CheckClassVariable(owner, name);
+            }
             object value;
             return owner.TryResolveClassVariable(name, out value) != null;
         }
 
         [Emitted]
         public static object SetClassVariable(object value, RubyScope/*!*/ scope, string/*!*/ name) {
-            return SetClassVariableInternal(GetClassVariableOwner(scope), name, value);
+            return SetClassVariableInternal(GetClassVariableOwner(scope, name), name, value);
         }
 
         private static object SetClassVariableInternal(RubyModule/*!*/ lexicalOwner, string/*!*/ name, object value) {
@@ -4521,28 +4603,8 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        public static bool IsObjectTainted(RubyInstanceData instanceData) {
-            return instanceData != null && instanceData.IsTainted;
-        }
-
-        [Emitted]
-        public static bool IsObjectUntrusted(RubyInstanceData instanceData) {
-            return instanceData != null && instanceData.IsUntrusted;
-        }
-
-        [Emitted]
         public static void FreezeObject(ref RubyInstanceData instanceData) {
             RubyOps.GetInstanceData(ref instanceData).Freeze();
-        }
-
-        [Emitted]
-        public static void SetObjectTaint(ref RubyInstanceData instanceData, bool value) {
-            RubyOps.GetInstanceData(ref instanceData).IsTainted = value;
-        }
-
-        [Emitted]
-        public static void SetObjectTrustiness(ref RubyInstanceData instanceData, bool untrusted) {
-            RubyOps.GetInstanceData(ref instanceData).IsUntrusted = untrusted;
         }
 
         [Emitted(UseReflection = true)] //RubyTypeBuilder
@@ -4658,9 +4720,10 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// The constructor of a value type that declares no parameterless one: T.new is default(T).
         /// Instantiated for the type, it returns T, so keywords passed to new can set the new value's
-        /// fields and properties like those passed to a real constructor.
+        /// fields and properties like those passed to a real constructor. (Not constrained to struct: Nullable&lt;T&gt;
+        /// is a value type that does not satisfy that constraint, and System::Nullable[Integer].new is nil.)
         /// </summary>
-        public static T CreateDefaultValue<T>() where T : struct {
+        public static T CreateDefaultValue<T>() {
             return default(T);
         }
 
@@ -4809,6 +4872,30 @@ namespace IronRuby.Runtime {
             return (str != null) ? str.ConvertToString() : value;
         }
 
+        /// <summary>
+        /// The test of a rule whose overload was chosen by the items of a Ruby Array argument (see
+        /// RubyOverloadResolver.SelectBestItemConversion): whether <paramref name="itemTypes"/> are the distinct CLR types of
+        /// the items, typeof(DynamicNull) for nil - each item has one of them, and each is some item's. Linear in the items,
+        /// as is the conversion of the Array that follows.
+        /// </summary>
+        public static bool HasItemTypes(IList/*!*/ list, Type/*!*/[]/*!*/ itemTypes) {
+            Span<bool> seen = itemTypes.Length <= 32 ? stackalloc bool[itemTypes.Length] : new bool[itemTypes.Length];
+            int seenCount = 0;
+            for (int i = 0; i < list.Count; i++) {
+                object item = list[i];
+                int index = Array.IndexOf(itemTypes, (item != null) ? item.GetType() : typeof(DynamicNull));
+                if (index < 0) {
+                    return false;
+                }
+                if (!seen[index]) {
+                    seen[index] = true;
+                    seenCount++;
+                }
+            }
+            return seenCount == itemTypes.Length;
+        }
+
+        internal static readonly MethodInfo/*!*/ HasItemTypesMethod = typeof(RubyOps).GetMethod(nameof(HasItemTypes));
         internal static readonly MethodInfo/*!*/ ToClrArgumentMethod = typeof(RubyOps).GetMethod(nameof(ToClrArgument));
         internal static readonly MethodInfo/*!*/ AllocateUnconstructedMethod = typeof(RubyOps).GetMethod(nameof(AllocateUnconstructed));
         internal static readonly MethodInfo/*!*/ EnsureConstructedMethod = typeof(RubyOps).GetMethod(nameof(EnsureConstructed));

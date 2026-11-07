@@ -62,7 +62,9 @@ namespace IronRuby.Compiler.Generation {
         }
 
         public static bool FeatureSetsMatch(IList<ITypeFeature/*!*/>/*!*/ f1, IList<ITypeFeature/*!*/>/*!*/ f2) {
-            if (f1.Count != f2.Count || f1.GetHashCode() != f2.GetHashCode()) {
+            // (not the lists' hash codes: an array's is its identity, and every class that implements interfaces makes a new one
+            // - see RubyTypeDispenser.GetOrCreateType - which emitted a type for each such class instead of sharing one)
+            if (f1.Count != f2.Count) {
                 return false;
             }
 

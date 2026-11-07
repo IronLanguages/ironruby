@@ -44,6 +44,12 @@ namespace IronRuby.Builtins {
 
         #region Public Instance Methods
 
+        // MRI defines #=== on nil, true and false themselves; it is Kernel#=== (rb_equal) all the same.
+        [RubyMethodAttribute("===")]
+        public static bool CaseEquals(BinaryOpStorage/*!*/ equals, object self, object other) {
+            return Protocols.IsEqual(equals, self, other);
+        }
+
         [RubyMethodAttribute("&")]
         public static bool And(object self, object obj) {
             Debug.Assert(self == null);

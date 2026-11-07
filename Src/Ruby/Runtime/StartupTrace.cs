@@ -17,9 +17,11 @@ namespace IronRuby.Runtime {
     /// at exit. Milestones since the process started; for the Ruby files it loaded, the time
     /// spent parsing (prism), transforming (to the DLR tree), compiling (the interpreter's
     /// instructions) and running each file's own code, without the files it required.
+    /// IRONRUBY_STARTUP_TRACE=all lists every file loaded rather than the slowest 15.
     /// </summary>
     internal static class StartupTrace {
-        internal static readonly bool Enabled = Environment.GetEnvironmentVariable("IRONRUBY_STARTUP_TRACE") == "1";
+        private static readonly string _setting = Environment.GetEnvironmentVariable("IRONRUBY_STARTUP_TRACE");
+        internal static readonly bool Enabled = _setting == "1" || _setting == "all";
 
         private static readonly DateTime _processStart = Enabled ? Process.GetCurrentProcess().StartTime : default(DateTime);
         private static readonly List<KeyValuePair<double, string>> _marks = new List<KeyValuePair<double, string>>();
@@ -98,7 +100,7 @@ namespace IronRuby.Runtime {
             err.WriteLine("{0} Ruby files: parse {1:F0}, transform {2:F0}, compile {3:F0}, run their own code {4:F0} ms",
                 _files.Count, Ms(_parse), Ms(_transform), Ms(_compile), Ms(run));
             err.WriteLine("slowest files, own time (parse/transform/compile/run):");
-            foreach (var f in _files.OrderByDescending(p => p.Value[3] - p.Value[4]).Take(15)) {
+            foreach (var f in _files.OrderByDescending(p => p.Value[3] - p.Value[4]).Take(_setting == "all" ? int.MaxValue : 15)) {
                 long[] v = f.Value;
                 err.WriteLine("  {0,6:F0}  ({1:F0}/{2:F0}/{3:F0}/{4:F0})  {5}", Ms(v[3] - v[4]), Ms(v[0]), Ms(v[1]), Ms(v[2]),
                     Ms(v[3] - v[4] - v[0] - v[1] - v[2]), f.Key);

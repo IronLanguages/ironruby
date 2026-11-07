@@ -13,25 +13,15 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
-using System;
-using System.Diagnostics;
 using System.Dynamic;
-using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using AstUtils = Microsoft.Scripting.Ast.Utils;
 using IronRuby.Compiler;
 using System.Reflection;
 
 namespace IronRuby.Builtins {
-    using Ast = Expression;
 
     public partial class RubyEvent : IRubyDynamicMetaObjectProvider {
         public DynamicMetaObject/*!*/ GetMetaObject(Expression/*!*/ parameter) {

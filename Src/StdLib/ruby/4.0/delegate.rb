@@ -52,7 +52,7 @@ class Delegator < BasicObject
       if /\Ablock_given\?\z|\Aiterator\?\z|\A__.*__\z/ =~ m
         next
       end
-      # A visibility-only forwarder can lose its inherited target after a long-lived spec or
+      # IronRuby: a visibility-only forwarder can lose its inherited target after a long-lived spec or
       # application mutates Object. It is still listed, but there is then nothing to undefine.
       begin
         undef_method m

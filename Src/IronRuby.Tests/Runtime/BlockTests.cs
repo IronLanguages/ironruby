@@ -52,7 +52,7 @@ y { |x0,x1,x2,x3,x4,x5,x6,x7,*z| print x0,x1,x2,x3,x4,x5,x6,x7,z[0],z[1]; }
         }
 
         public void RubyBlocks_Params3() {
-            XTestOutput(@"
+            TestOutput(@"
 l = lambda do |a,b=:b,*c,d,&e;f,g|
   p [a,b,c,d,e.class,f,g]
 end
@@ -125,7 +125,8 @@ end
         }
 
         public void RubyBlocks2() {
-            AssertExceptionThrown<MissingMethodException>(delegate() {
+            // NameError: undefined local variable or method 'z'
+            AssertExceptionThrown<MemberAccessException>(delegate() {
                 CompilerTest(@"
 3.times { |x| z = 1 }
 puts z # undef z
@@ -1568,7 +1569,7 @@ end
 baz { |a,b| p b }
 ", @"
 nil
-#<TypeError: can't convert C into Array (C#to_ary gives Integer)>
+#<TypeError: can't convert C to Array (C#to_ary gives Integer)>
 4
 ");
         }
@@ -1655,7 +1656,7 @@ end
 ");
             }, @"
 ok1
-can't convert C into Proc (C#to_proc gives Integer)
+can't convert C to Proc (C#to_proc gives Integer)
 ok2
 ");
         }
@@ -1672,11 +1673,14 @@ foo(&nil)
             }, @"nil");
         }
 
+        /// <summary>
+        /// &amp;obj calls a #to_proc the object defines without asking respond_to? (MRI's vm_to_proc);
+        /// an overridden respond_to? is only asked when there is no #to_proc.
+        /// </summary>
         public void RubyProcArgConversion4() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
+            TestOutput(@"
 class C
-  def respond_to? name
+  def respond_to? name, include_all = false
     puts name
     $has_to_proc
   end
@@ -1686,19 +1690,27 @@ class C
   end
 end
 
+class D
+  def respond_to? name, include_all = false
+    puts name
+    false
+  end
+end
+
 c = C.new
 
 $has_to_proc = false
-1.times(&c) rescue puts 'error'
+1.times(&c)
 
 $has_to_proc = true
 1.times(&c)
-");
-            }, @"
-to_proc
-error
-to_proc
+
+1.times(&D.new) rescue p $!
+", @"
 ok
+ok
+to_proc
+#<TypeError: no implicit conversion of D into Proc>
 ");
         }
 
@@ -1772,9 +1784,6 @@ tried to create Proc object without a block
 ", 0, 1);
         }
         
-        /// <summary>
-        /// TODO: 1.9 actually doesn't allow proc.binding
-        /// </summary>
         public void MethodToProc1() {
             AssertOutput(() => CompilerTest(@"
 class C
@@ -1849,10 +1858,9 @@ D");
         /// define_method and class_eval change owner of the method definition.
         /// </summary>
         public void DefineMethod2() {
-            // TODO:
             TestOutput(@"
 module M
-  $p = lambda {    
+  $p = proc {    
     def goo
       def bar
         puts 'bar'
@@ -1874,18 +1882,52 @@ d = D.new
 
 d.goo
 c.foo
-c.goo
+c.goo rescue p $!.class
 
 p M.instance_methods(false).sort
 p C.instance_methods(false).sort
 p D.instance_methods(false).sort
 ", @"
-#<NoMethodError: undefined method `goo' for #<C:0x24c5a00>>
+NoMethodError
 [:goo]
 [:foo]
 [:bar, :goo]
 ");
+        }
 
+        /// <summary>
+        /// A call of a define_method method is the frame a break from its literal block ends, wherever the
+        /// body passes the block on to - as a def method's call is - on the first calls and on later ones.
+        /// </summary>
+        public void DefineMethodBlockBreak1() {
+            TestOutput(@"
+class Object; def yielder; yield 1; :done; end; end
+o = Object.new
+o.define_singleton_method(:each) { |&b| yielder(&b); :after }
+r = []
+4.times { |i| r << o.each { |x| break x * 10 + i } }
+p r
+class C; define_method(:each) { |&b| [1].each(&b); :after }; end
+p C.new.each { |x| break 20 }
+o.define_singleton_method(:call_it) { |&b| b.call(1); :after }
+p o.call_it { |x| break 30 }
+o.define_singleton_method(:ens) { |&b| begin; yielder(&b); ensure; puts 'ensure'; end; :after }
+p o.ens { break 40 }
+o.define_singleton_method(:keep) { |&b| $saved = b; :kept }
+p o.keep { break 50 }
+$saved.call rescue p $!.class
+p o.send(:each) { break 60 }, o.method(:each).call { break 70 }
+", @"
+[10, 11, 12, 13]
+20
+30
+ensure
+40
+:kept
+LocalJumpError
+60
+70
+");
         }
 
         public void ProcPosition1() {
@@ -2195,52 +2237,6 @@ puts '7'
 7
 ");
         }
-
-#if OBSOLETE
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void BEGIN3() {
-            TestOutput(@"
-def f1
-end
-
-BEGIN {
-  def f2
-  end
-}
-
-class C
-  private
-  while true
-    eval <<-END
-      BEGIN {
-        def f3
-        end
-      
-        private
-      
-        break
-        puts 'unreachable'
-      } 
-    END
-  end
-  
-  def f4
-  end
-end
-
-p self.private_methods(false).include?('f1')
-p self.public_methods(false).include?('f2')
-
-p C.public_instance_methods(false).include?('f3')
-p C.private_instance_methods(false).include?('f4')
-", @"
-true
-true
-true
-true
-");
-        }
-#endif
 
         public void SymbolToProc1() {
             TestOutput(@"

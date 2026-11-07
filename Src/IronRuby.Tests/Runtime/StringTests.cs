@@ -16,11 +16,6 @@
 using System;
 using IronRuby.Builtins;
 using System.Text;
-using System.Diagnostics;
-using System.Collections.Generic;
-using IronRuby.Runtime;
-using Microsoft.Scripting;
-using System.Runtime.CompilerServices;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -182,13 +177,24 @@ bar
 ");
         }
 
+        /// <summary>
+        /// Mixing incompatible encodings: a \u escape makes a literal UTF-8, so a non-ASCII byte of
+        /// a binary source cannot join it in the same literal (a syntax error) or later (+).
+        /// </summary>
         public void Strings9() {
-            // TODO:
-#if TODO
-            var source = Engine.CreateScriptSource(new BinaryContentProvider(BinaryEncoding.Instance.GetBytes(@"""\u03a3""")), null, BinaryEncoding.Instance);
-            AssertExceptionThrown<SyntaxErrorException>(() => source.Execute<MutableString>());
-#endif
-            // TODO: mixing incompatible encodings at compile time (literals "foo" "bar") or runtime "foo" + "bar"
+            var log = new LoggingErrorSink();
+            CompilerTest("# encoding: ascii-8bit\n\"\\u03a3\\xff\"", log);
+            Assert(log.Errors.Count == 1 && log.Errors[0].Message.Contains("UTF-8 mixed within ASCII-8BIT source"), DescribeLog(log));
+
+            TestOutput(@"
+begin
+  ""\xff"".force_encoding(Encoding::BINARY) + ""\u03a3""
+rescue => e
+  p e.class
+end
+", @"
+Encoding::CompatibilityError
+");
         }
 
         /// <summary>
@@ -238,76 +244,13 @@ SUB
         }
 
         public void Symbols1() {
-            byte[] bytes = Encoding.UTF8.GetBytes("α");
 
             RubySymbol a, b;
-#if OBSOLTE
-            a = Context.CreateSymbolInternal(MutableString.CreateBinary(bytes, RubyEncoding.Binary));
-            b = Context.CreateSymbolInternal(MutableString.CreateBinary(bytes, RubyEncoding.KCodeSJIS));
-            c = Context.CreateSymbolInternal(MutableString.CreateBinary(bytes, RubyEncoding.KCodeUTF8));
-            d = Context.CreateSymbolInternal(MutableString.Create("α", RubyEncoding.KCodeUTF8));
-
-            Assert(a.Equals(b));
-            Assert(a.Equals(c));
-            Assert(a.Equals(d));
-#endif
             a = Context.CreateSymbol(MutableString.CreateBinary(Encoding.ASCII.GetBytes("foo"), RubyEncoding.Binary), false);
             b = Context.CreateSymbol(MutableString.CreateMutable("foo", RubyEncoding.UTF8), false);
             Assert(a.Equals(b));
         }
         
-#if OBSOLETE
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        private void Inspect1() {
-            const char sq = '\'';
-
-            var sjisEncoding = RubyEncoding.KCodeSJIS.StrictEncoding;
-            // あ
-            var sjisWide = new byte[] { 0x82, 0xa0 };
-            // \u{12345} in UTF-8:
-            var utf8 = new byte[] { 0xF0, 0x92, 0x8D, 0x85 };
-            // surrogates: U+d808 U+df45 
-            var utf16 = Encoding.UTF8.GetString(utf8);
-
-            string s;
-
-            s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(utf8, RubyEncoding.Binary), Context, false, sq).ToString();
-            Assert(s == @"'\360\222\215\205'");
-
-            s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(utf8, RubyEncoding.Binary), Context, true, sq).ToString();
-            Assert(s == @"'\360\222\215\205'");
-
-            Context.KCode = RubyEncoding.KCodeUTF8;
-            s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(utf8, RubyEncoding.KCodeUTF8), Context, false, sq).ToString();
-            Assert(s == "'" + utf16 + "'");
-
-            // incomplete character:
-            Context.KCode = RubyEncoding.KCodeUTF8;
-            s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(new byte[] { 0xF0, 0x92 }, RubyEncoding.KCodeUTF8), Context, false, sq).ToString();
-            Assert(s == @"'\360\222'");
-
-            Context.KCode = RubyEncoding.KCodeUTF8;
-            s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(utf8, RubyEncoding.KCodeSJIS), Context, false, sq).ToString();
-            Assert(s == "'" + utf16 + "'");
-
-            Context.KCode = RubyEncoding.KCodeUTF8;
-            s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(utf8, RubyEncoding.KCodeUTF8), Context, true, sq).ToString();
-            Assert(s == @"'\360\222\215\205'");
-
-            Context.KCode = RubyEncoding.KCodeSJIS;
-            s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(sjisWide, RubyEncoding.KCodeSJIS), Context, false, sq).ToString();
-            Assert(s == @"'あ'");
-
-            Context.KCode = RubyEncoding.KCodeSJIS;
-            s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(sjisWide, RubyEncoding.Binary), Context, false, sq).ToString();
-            Assert(s == @"'あ'");
-            
-            Context.KCode = RubyEncoding.KCodeSJIS;
-            s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(sjisWide, RubyEncoding.KCodeUTF8), Context, true, sq).ToString();
-            Assert(s == @"'\202\240'");
-        }
-
-#endif
         [Options(NoRuntime = true)]
         private void Inspect2() {
             const char sq = '\'';
@@ -388,10 +331,50 @@ p [""abc"".sum, ""abc"".sum(0), ""abc"".sum(1), (""\xFF"" * 1000).b.sum(8), (""\
         }
 
         /// <summary>
+        /// U+FFFF is an ordinary character once a string has been mutated into its char-array form;
+        /// it used to be mistaken for a decoder placeholder and #chars raised.
+        /// </summary>
+        public void String_NonCharacter1() {
+            TestOutput(@"
+s = ""a\uFFFFb"".dup
+s << ""c""
+s[0] = ""x""
+p s.length, s.chars.map(&:ord), s.each_char.count
+t = ""ab\u{1F600}"".dup
+t[0] = ""Z""
+p t.chars.map(&:ord)
+", @"
+4
+[120, 65535, 98, 99]
+4
+[90, 98, 128512]
+");
+        }
+
+        /// <summary>
         /// #count, #delete and #squeeze answer an ASCII character from a bitmask CharacterSelector
         /// computes when it is parsed, negation and intersection included; anything else goes
         /// through the selector's sets and ranges as before.
         /// </summary>
+        /// <summary>
+        /// A carry out of a wrapped digit or letter skips over a separator to the next
+        /// alphanumeric only when the two are of the same kind (rb_str_succ).
+        /// </summary>
+        public void String_SuccSeparators1() {
+            TestOutput(@"
+p ""a-9"".succ, ""1.9"".succ, ""a.z"".succ, ""9-z"".succ, ""Az-9"".succ, ""Zz"".succ, ""zz-99"".succ, ""a-b-9"".succ
+", @"
+""a-10""
+""2.0""
+""b.a""
+""9-aa""
+""Az-10""
+""AAa""
+""zz-100""
+""a-b-10""
+");
+        }
+
         public void String_CountDeleteSqueeze1() {
             TestOutput(@"
 require 'ruby4'

@@ -49,7 +49,7 @@ module URI
     # ; RFC3986
     # unreserved   = ALPHA / DIGIT / "-" / "." / "_" / "~"
     # pct-encoded  = "%" HEXDIG HEXDIG
-    # PATCHED in this fork: upstream writes the repeated field as (?:&\g<hfield>)*,
+    # IronRuby: upstream writes the repeated field as (?:&\g<hfield>)*,
     # and .NET's regex engine has no \g subexpression call. The reference is not
     # recursive, so the group body is simply written out again.
     HEADER_REGEXP  = /\A(?<hfield>(?:%\h\h|[!$'-.0-;@-Z_a-z~])*=(?:%\h\h|[!$'-.0-;@-Z_a-z~])*)(?:&(?:%\h\h|[!$'-.0-;@-Z_a-z~])*=(?:%\h\h|[!$'-.0-;@-Z_a-z~])*)*\z/

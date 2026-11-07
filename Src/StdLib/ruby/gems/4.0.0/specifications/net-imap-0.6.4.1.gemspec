@@ -19,7 +19,7 @@ Gem::Specification.new do |s|
   s.rubygems_version = "4.0.13".freeze
   s.summary = "Ruby client api for Internet Message Access Protocol".freeze
 
-  s.installed_by_version = "4.0.16".freeze
+  s.installed_by_version = "4.0.20".freeze
 
   s.specification_version = 4
 

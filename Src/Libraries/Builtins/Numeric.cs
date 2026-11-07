@@ -18,12 +18,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
 
@@ -34,11 +29,9 @@ namespace IronRuby.Builtins {
             : base(cls) { 
         }
 
-#if FEATURE_SERIALIZATION
         protected Numeric(SerializationInfo/*!*/ info, StreamingContext context) 
             : base(info, context) {
         }
-#endif
 
         #region +@, -@
 
@@ -246,7 +239,29 @@ namespace IronRuby.Builtins {
         public static object Truncate([DefaultProtocol]double self) {
             return ClrFloat.ToInt(self);
         }
-        
+
+        // With a number of digits (and for #round, half:) too, as Float's: MRI's are flo_round & co. on self.to_f.
+        [RubyMethod("round")]
+        public static object Round(ConversionStorage<IntegerValue>/*!*/ integerCast, [DefaultProtocol]double self,
+            object ndigits, [Keywords, Optional]object options) {
+            return ClrFloat.Round(integerCast, self, ndigits, options);
+        }
+
+        [RubyMethod("floor")]
+        public static object Floor(ConversionStorage<IntegerValue>/*!*/ integerCast, [DefaultProtocol]double self, object ndigits) {
+            return ClrFloat.Floor(integerCast, self, ndigits);
+        }
+
+        [RubyMethod("ceil")]
+        public static object Ceil(ConversionStorage<IntegerValue>/*!*/ integerCast, [DefaultProtocol]double self, object ndigits) {
+            return ClrFloat.Ceil(integerCast, self, ndigits);
+        }
+
+        [RubyMethod("truncate")]
+        public static object Truncate(ConversionStorage<IntegerValue>/*!*/ integerCast, [DefaultProtocol]double self, object ndigits) {
+            return ClrFloat.Truncate(integerCast, self, ndigits);
+        }
+
         #endregion
 
         #region integer?

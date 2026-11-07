@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Diagnostics;
@@ -248,24 +244,6 @@ namespace IronRuby.Compiler.Ast {
                 profileEnd = Methods.UpdateProfileTicks.OpCall(AstUtils.Constant(profileTickIndex), stampVariable);
             }
 
-            // tracing:
-            MSA.Expression traceCall, traceReturn;
-            if (gen.TraceEnabled) {
-                traceCall = Methods.TraceMethodCall.OpCall(
-                    scopeVariable, 
-                    gen.SourcePathConstant, 
-                    AstUtils.Constant(Location.Start.Line)
-                );
-
-                traceReturn = Methods.TraceMethodReturn.OpCall(
-                    gen.CurrentScopeVariable,
-                    gen.SourcePathConstant,
-                    AstUtils.Constant(Location.End.Line)
-                );
-            } else {
-                traceCall = traceReturn = AstUtils.Empty();
-            }
-
             MSA.ParameterExpression unwinder;
             
             // see RubyScope.GetActiveRefinements:
@@ -284,7 +262,10 @@ namespace IronRuby.Compiler.Ast {
                 countCall = AstUtils.Empty();
             }
 
+            gen.BindingParameters = true;
             MSA.Expression optionalsInitialization = _parameters.TransformOptionalsInitialization(gen);
+            gen.BindingParameters = false;
+            gen.CountParameterAssignments(_parameters);
             MSA.Expression statements = methodBody.TransformResult(gen, ResultOperation.Return);
 
             // A body that never needs its scope makes none (see TransformLightFrame).
@@ -307,7 +288,6 @@ namespace IronRuby.Compiler.Ast {
                 recordRefinements,
                 profileStart,
                 optionalsInitialization,
-                traceCall,
                 statements
             ).Filter(unwinder = Ast.Parameter(typeof(MethodUnwinder), "#u"),
                 // a light frame makes a scope for the filter only when a MethodUnwinder passes:
@@ -317,8 +297,7 @@ namespace IronRuby.Compiler.Ast {
                 // leave frame:
                 (light != null) ? Methods.LeaveLightMethodFrame.OpCall(light.Rfc, scopeVariable) : Methods.LeaveMethodFrame.OpCall(scopeVariable),
                 Ast.Empty(),
-                profileEnd,
-                traceReturn
+                profileEnd
             );
 
             // TracePoint :return: falling off the end reports the line of `end'; an explicit
@@ -332,11 +311,20 @@ namespace IronRuby.Compiler.Ast {
                 body = gen.AddReturnTarget(body);
             }
 
+            // A body with keyword parameters is never a light frame (IsLightFrameCandidate).
+            MSA.Expression variableNames = null;
+            if (light == null) {
+                variableNames = scope.GetVariableNamesExpression();
+                if (variableNames is MSA.ConstantExpression names) {
+                    SuperCall.RecordKeywordSignature((string[])names.Value, _parameters.Signature);
+                }
+            }
+
             body = scope.CreateScope(
                 scopeVariable,
                 (light != null) ? light.Enter(scope) : Methods.CreateMethodScope.OpCall(new AstExpressions {
                     scope.MakeLocalsStorage(),
-                    scope.GetVariableNamesExpression(),
+                    variableNames,
                     Ast.Constant(visiblePrameterCountAndSignatureFlags),
                     declaringScope,
                     declaringModule,
@@ -349,7 +337,7 @@ namespace IronRuby.Compiler.Ast {
 
             gen.LeaveMethodDefinition();
 
-            return CreateLambda(encodedName, parameters, body);
+            return CreateLambda(encodedName, parameters, new CompiledFrameExpression(body, encodedName, Location.Start.Line));
         }
 
         #region Light frames
@@ -610,8 +598,11 @@ namespace IronRuby.Compiler.Ast {
                     }
                     return traceReturn.Update(hookScope, Visit(traceReturn.Value));
                 }
-                if (node is EnterInterpretedFrameExpression) {
+                if (node is EnterInterpretedFrameExpression || node is SourceLineMarker) {
                     return node;
+                }
+                if (node is CompiledFrameExpression) {
+                    return base.VisitExtension(node);
                 }
                 NeedsScope = true;
                 return node;

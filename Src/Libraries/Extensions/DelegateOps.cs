@@ -21,7 +21,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
     using InvokeStorage = CallSiteStorage<Func<CallSite, object, Proc, RubyArray, object>>;
@@ -51,6 +50,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("call"), RubyMethod("[]"), RubyMethod("==="), RubyMethod("yield")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object Call(InvokeStorage/*!*/ invokeStorage, BlockParam block, Delegate/*!*/ self, params object[]/*!*/ args) {
             return Invoke(invokeStorage, self, block != null ? block.Proc : null, RubyOps.MakeArrayN(args));
         }

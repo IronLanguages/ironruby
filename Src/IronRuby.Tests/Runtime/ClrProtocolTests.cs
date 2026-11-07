@@ -553,7 +553,7 @@ true
 true
 nil
 true
-{:a=>1, :b=>2}
+{a: 1, b: 2}
 false
 ");
         }
@@ -617,7 +617,7 @@ false
 false
 false
 false
-{:y=>2}
+{y: 2}
 false
 false
 ");
@@ -651,17 +651,17 @@ p Throws.new.deconstruct_keys([:ok])
 p((Throws.new.deconstruct_keys([:bad]) rescue [$!.class, $!.message]))
 p((Throws.new.deconstruct_keys(nil) rescue $!.message))
 ", @"
-{:x=>1, :y=>2}
-{:x=>1, :Y=>2, ""x""=>1}
+{x: 1, y: 2}
+{x: 1, Y: 2, ""x"" => 1}
 {}
 #<TypeError: wrong argument type Integer (expected Array or nil)>
 #<TypeError: wrong argument type Symbol (expected Array or nil)>
-{:first_name=>""Ann"", :age=>30, :nick=>nil}
-{:name=>""tri"", :sides=>3}
+{first_name: ""Ann"", age: 30, nick: nil}
+{name: ""tri"", sides: 3}
 {}
-{:name=>""derived"", :sides=>0}
-{:name=>""derived""}
-{:ok=>1}
+{name: ""derived"", sides: 0}
+{name: ""derived""}
+{ok: 1}
 [TypeError, ""bad getter""]
 ""bad getter""
 ");
@@ -850,6 +850,238 @@ true
 -1
 nil
 nil
+");
+        }
+
+        public static class ProtocolClrCaller1 {
+            public static int Compare(IComparable a, object b) { return a.CompareTo(b); }
+            public static int DefaultCompare(object a, object b) { return Comparer<object>.Default.Compare(a, b); }
+
+            public static string Sort(IList items) {
+                var list = new List<object>();
+                foreach (object item in items) {
+                    list.Add(item);
+                }
+                list.Sort();
+                return String.Join(" ", list);
+            }
+
+            public static string Each(IEnumerable items) {
+                var result = new List<string>();
+                foreach (object item in items) {
+                    result.Add(item is IList ? "[" + ((IList)item).Count + "]" : item.ToString());
+                }
+                return String.Join(" ", result);
+            }
+
+            public static string Str(object obj) { return obj.ToString(); }
+        }
+
+        /// <summary>
+        /// A Ruby class that mixes in Comparable is an IComparable to CLR code: CompareTo calls &lt;=&gt;, and nil from it is the
+        /// ArgumentError Comparable raises. A class that includes System::IComparable gets CompareTo from compare_to, or &lt;=&gt;.
+        /// </summary>
+        public void ClrRubyComparable1() {
+            Context.ObjectClass.SetConstant("Caller", Context.GetClass(typeof(ProtocolClrCaller1)));
+            TestOutput(@"
+class V
+  include Comparable
+  attr_reader :v
+  def initialize(v) = @v = v
+  def <=>(o) = o.is_a?(V) ? v <=> o.v : nil
+  def to_s = ""V#{v}""
+end
+class SubV < V; end
+
+p Caller.compare(V.new(1), V.new(2)), Caller.compare(V.new(2), V.new(2)), Caller.default_compare(SubV.new(5), V.new(2))
+puts Caller.sort([V.new(3), SubV.new(1), V.new(2)])
+begin
+  Caller.compare(V.new(1), 1)
+rescue ArgumentError => e
+  puts e.message
+end
+
+class W
+  include System::IComparable
+  def initialize(v) = @v = v
+  def <=>(o) = (@v <=> o.instance_variable_get(:@v)) * 10
+end
+p Caller.compare(W.new(1), W.new(2)), Caller.compare(W.new(2), W.new(1))
+
+class X
+  include System::IComparable
+  def compare_to(o) = 5
+  def <=>(o) = -1
+end
+p Caller.compare(X.new, X.new)
+
+S = Struct.new(:a) { include Comparable; def <=>(o) = a <=> o.a }
+p S.new(1) < S.new(2)
+puts Caller.str(V.new(7)), Caller.str(W.new(1)) =~ /\A#<W:0x\h+>\z/
+", @"
+-1
+0
+1
+V1 V2 V3
+comparison of V with 1 failed
+-1
+1
+1
+true
+V7
+0
+");
+        }
+
+        /// <summary>
+        /// A Ruby class that mixes in Enumerable is an IEnumerable to CLR code, enumerating what its each yields (Enumerable#to_a).
+        /// </summary>
+        public void ClrRubyEnumerable1() {
+            Context.ObjectClass.SetConstant("Caller", Context.GetClass(typeof(ProtocolClrCaller1)));
+            TestOutput(@"
+class E
+  include Enumerable
+  def initialize(*a) = @a = a
+  def each
+    @a.each { yield it }
+    yield 1, 2
+  end
+end
+puts Caller.each(E.new(:a, 'b', 3))
+puts Caller.each(E.new)
+p E.new(1).to_a
+", @"
+a b 3 [2]
+[2]
+[1, [1, 2]]
+");
+        }
+
+        /// <summary>
+        /// A class whose CLR type implements IEnumerable or IComparable because it mixes in Enumerable or
+        /// Comparable keeps BasicObject#equal? an identity test (it called the type's own Equals, so eql?/==),
+        /// and Kernel#hash and #to_s their defaults.
+        /// </summary>
+        public void ClrRubyEnumerableIdentity1() {
+            TestOutput(@"
+class E
+  include Enumerable
+  def each = yield(1)
+  def ==(o) = true
+  def eql?(o) = true
+  def hash = 1
+end
+class C
+  include Comparable
+  def <=>(o) = 0
+end
+class P; include Enumerable; def each; end; end
+a, b = E.new, E.new
+p a.equal?(b), a.equal?(a), a == b, a.clone.equal?(a)
+c = C.new
+p c.equal?(C.new), c == C.new, c.equal?(c)
+p P.new.hash.is_a?(Integer), P.new.to_s.start_with?('#<P:')
+", @"
+false
+true
+true
+false
+false
+true
+true
+true
+true
+");
+        }
+
+        /// <summary>
+        /// The CLR type of a subclass that mixes in Comparable or Enumerable (or includes a CLR interface) under a plain Ruby
+        /// class keeps one set of instance data: what the superclass's initialize sets is there after super, dup copies it.
+        /// Whether or not the superclass's type exists already; and a subclass of a class that got IComparable is one too.
+        /// </summary>
+        public void ClrRubyImpliedInterfaces2() {
+            Context.ObjectClass.SetConstant("Caller", Context.GetClass(typeof(ProtocolClrCaller1)));
+            TestOutput(@"
+class Base; def initialize(io) = @io = io; attr_reader :io; end
+class En < Base
+  include Enumerable
+  def initialize(io); super(io); p @io; end
+  def each = yield(@io)
+end
+class Base2; def initialize(io) = @io = io; attr_reader :io; end
+Base2.new(0)
+class Co < Base2
+  include Comparable
+  def initialize(io); super(io); p instance_variables; end
+  def <=>(o) = io <=> o.io
+end
+class Di < Base; include System::IDisposable; def dispose; end; end
+
+p En.new(1).to_a, Caller.each(En.new(2)), En.new(3).dup.io
+p Caller.compare(Co.new(1), Co.new(2)), Co.new(4).clone.io, Di.new(5).dup.io
+
+class Sub < Co
+  def initialize(io); super; @w = io * 2; end
+  attr_reader :w
+end
+s = Sub.new(6)
+p [s.io, s.w], Caller.compare(Sub.new(2), Sub.new(1)), Caller.default_compare(Sub.new(1), Co.new(1))
+", @"
+1
+2
+3
+[1]
+'2'
+3
+[:@io]
+[:@io]
+[:@io]
+-1
+4
+5
+[:@io]
+[:@io]
+[:@io]
+[:@io]
+[:@io]
+[6, 12]
+1
+0
+");
+        }
+
+        /// <summary>
+        /// Class#new of a class that mixes in Comparable or Enumerable (whose CLR type implements IComparable or IEnumerable) is
+        /// made without a rule as a plain Ruby class's is (RubyClass.TryGetObjectConstruction), and such classes share one generated
+        /// type: a type emitted, and a rule built, for the first new of each made it ~60 times slower than a plain class's.
+        /// </summary>
+        public void ClrRubyImpliedInterfaces3() {
+            Context.ObjectClass.SetConstant("Caller", Context.GetClass(typeof(ProtocolClrCaller1)));
+            Engine.Execute(@"
+class Co; include Comparable; attr_reader :v; def initialize(v) = @v = v; def <=>(o) = v <=> o.v; end
+class En; include Enumerable; def initialize(*a, &b) = (@a = a; b&.call); def each(&) = @a.each(&); end
+class Pl; include Comparable; def <=>(o) = 0; end
+");
+            var co = Engine.Execute<IronRuby.Builtins.RubyClass>("Co");
+            var en = Engine.Execute<IronRuby.Builtins.RubyClass>("En");
+            var pl = Engine.Execute<IronRuby.Builtins.RubyClass>("Pl");
+            Assert(co.TryGetObjectConstruction(1) != null && en.TryGetObjectConstruction(2) != null && pl.TryGetObjectConstruction(0) != null);
+            Assert(co.GetUnderlyingSystemType() == pl.GetUnderlyingSystemType() && typeof(IComparable).IsAssignableFrom(pl.GetUnderlyingSystemType()));
+
+            TestOutput(@"
+a = (1..3).map { Co.new(4 - it) }
+x = Pl.new
+p Caller.compare(a[0], a[1]), Caller.default_compare(a[2], a[0]), Caller.compare(x, x)
+p Caller.each(En.new(1, 2)), En.new(3) { p :b }.to_a, En.new { break :br }, Caller.each(En.new(5))
+", @"
+1
+-1
+0
+:b
+'1 2'
+[3]
+:br
+'5'
 ");
         }
 

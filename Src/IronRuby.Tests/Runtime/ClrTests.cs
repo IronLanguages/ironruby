@@ -17,16 +17,13 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Builtins;
 using Range = IronRuby.Builtins.Range;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Hosting;
 using System.Numerics;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Actions;
 using BigInt = System.Numerics.BigInteger;
@@ -146,17 +143,25 @@ NoMethodError
         }
 
         /// <summary>
-        /// Order of initialization of CLR methods.
+        /// Order of initialization of CLR methods: a Ruby method defined before the CLR one has been
+        /// looked up still hides it, removing the Ruby method shows the CLR method again (as removing
+        /// an overload barrier does in ClrOverloadInheritance4), and removing that hides it.
         /// </summary>
         public void ClrMethods2() {
             Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(ClassWithMethods1)));
-            XTestOutput(@"
+            TestOutput(@"
 class C
-  def m; 2; end     # replace CLR method with Ruby method before we use the CLR one
-  remove_method :m  # remove Ruby method
-  new.m rescue p $! # we shouldn't call the CLR method 
+  def m; 2; end
+  p new.m
+  remove_method :m
+  p new.m
+  remove_method :m
+  new.m rescue p $!.class
 end
 ", @"
+2
+1
+NoMethodError
 ");
         }
 
@@ -244,19 +249,7 @@ p c[0, 1]
 "), @"
 11
 ");
-            // non-default indexers:
-            // TODO: We need to use VB or generate IL to test this.
-            // TODO: improve access
-            //   If a property accessor with parameters is called without arguments the result is a PropertyAccessor object with [], []= defined.
-            //   Then the calls could look like c.foo[1,2] = 3. 
-
-            //            AssertOutput(() => CompilerTest(@"
-            //c = CI.new
-            //c.method(:foo=).call(1, 0, c.method(:foo).call(1, 0) + 5)
-            //p c.method(:foo).call(1, 0)
-            //"), @"
-            //25
-            //");
+            // TODO: non-default (named) indexers: C# cannot declare them, testing them needs VB or generated IL.
         }
 
         #endregion
@@ -366,7 +359,6 @@ puts b.prop2
         [Options(PrivateBinding = true)]
         public void ClrVisibility2() {
             Debug.Assert(Engine.Runtime.Setup.PrivateBinding);
-            if (_driver.PartialTrust) return;
             Context.ObjectClass.SetConstant("A", Context.GetClass(typeof(ProtectedA)));
             Context.ObjectClass.SetConstant("B", Context.GetClass(typeof(ProtectedB)));
 
@@ -734,13 +726,12 @@ p I.Where(a, 123)
 ambiguous
 7
 ");
-             // TODO:
-//             XTestOutput(@"
-//a = System::Array[Integer].new(1)
-//p I.Apply(a, lambda { |x| })
-//", @"
-//5
-//");
+            TestOutput(@"
+a = System::Array[Integer].new(1)
+p I.Apply(a, lambda { |x| })
+", @"
+8
+");
 
             // an inferred type is more specific than object:
             TestOutput(@"
@@ -944,41 +935,6 @@ f6
 f6
 !f6
 ");
-        }
-
-        /// <summary>
-        /// Extension methods are available on CLR interfaces implemented by Ruby classes.
-        /// </summary>
-        public void ClrExtensionMethods5() {
-#if TODO
-            Runtime.LoadAssembly(typeof(System.Linq.Enumerable).Assembly);
-            XTestOutput(@"
-using_clr_extensions System::Linq
-
-class Sequence
-  include System::Collections::Generic::IEnumerable[Object]
-  
-  def initialize array
-    @array = array
-  end
-  
-  def get_enumerator
-    @array.GetEnumerator()
-  end
-end
-
-class Array
-  def to_seq
-    Sequence.new self
-  end
-end
-
-a = Sequence.new [1, 2, 3]
-p a.select(lambda { |n| n * 2 })
-", @"
-[2, 3, 6]
-");
-#endif
         }
 
         /// <summary>
@@ -2789,9 +2745,6 @@ false
         }
         
         public void ClrEventImpl1() {
-            // TODO: fix
-            if (_driver.PartialTrust) return;
-
             Context.ObjectClass.SetConstant("E", Context.GetClass(typeof(ClassWithVirtualEvent1)));
 
             var f = Engine.Execute<ClassWithVirtualEvent1>(@"
@@ -3136,10 +3089,6 @@ p D.new.report
             public override int Bar() { return 2; }
         }
 
-        public class ClassWithVirtuals3 : ClassWithVirtuals2 {
-            public override int Bar() { return 3; }
-        }
-
         public interface I1 { int f(); }
         public interface I2 { int g(); }
 
@@ -3343,6 +3292,31 @@ p D.new, E.new, F.new
 #<E:0x*>
 #<F:0x*>
 ", OutputFlags.Match);
+        }
+
+        /// <summary>
+        /// A CLR dictionary inspects in Ruby 3.4's Hash#inspect format, generic over object or not.
+        /// </summary>
+        public void ClrDictionaryInspect1() {
+            TestOutput(@"
+d = System::Collections::Generic::Dictionary[Object, Object].new
+d[:foo] = 'bar'
+d[1] = 2
+d[:'a b'] = nil
+d[:a=] = 3
+d[:k] = d
+p d
+puts d.to_s
+s = System::Collections::Generic::Dictionary[System::String, Integer].new
+s['x'] = 1
+p s
+p System::Collections::Hashtable.new
+", @"
+{foo: 'bar', 1 => 2, ""a b"": nil, ""a="": 3, k: {...}}
+{foo: 'bar', 1 => 2, ""a b"": nil, ""a="": 3, k: {...}}
+{'x' => 1}
+{}
+");
         }
 
         public void ClrHashEquals4() {
@@ -3638,8 +3612,8 @@ init
         /// </summary>
         public void ClrPrimitiveNumericTypes1() {
             TestOutput(@"
-# System::Int64 is not in this list: Int64 is one of the CLR types the Integer class itself
-# extends (alongside Int32 and BigInteger), so it has no separate Ruby class to probe.
+# System::Int64 is not in this list: a long is an Integer (like an Int32 or a BigInteger), so
+# System::Int64.new(i) is not an instance of System::Int64 (see ClrInt64AndBigInteger1).
 [System::Byte, System::SByte, System::UInt16, System::Int16, System::UInt32, System::UInt64, System::Single].each_with_index do |t,i|
   p t.ancestors
   p t.new(i).class
@@ -3678,11 +3652,173 @@ System::UInt64
 6
 Integer
 8
-[System::Single, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::Single, Numeric, Comparable, Object, Kernel, BasicObject]
 System::Single
 7.0
 Float
 no size method
+");
+        }
+
+        public static class IntegerOverloads {
+            public static string Pick(int x) { return "int " + x; }
+            public static string Pick(long x) { return "long " + x; }
+            public static string Pick(BigInt x) { return "BigInteger " + x; }
+            public static string Wide(long x) { return "long " + x; }
+        }
+
+        /// <summary>
+        /// An Int64 or BigInteger is an Integer, but the System::Int64 and System::Numerics::BigInteger constants still name
+        /// those CLR types: they are subclasses of Integer whose CLR type is their own, not Integer (whose CLR type is Int32).
+        /// </summary>
+        public void ClrInt64AndBigInteger1() {
+            Context.ObjectClass.SetConstant("IO", Context.GetClass(typeof(IntegerOverloads)));
+            TestOutput(@"
+include System::Collections::Generic
+I64 = System::Int64
+BI = System::Numerics::BigInteger
+
+# the type constants
+p I64.to_clr_type, BI.to_clr_type, System::Int32.to_clr_type
+p I64.equal?(Integer), BI.equal?(Integer), System::Int32.equal?(Integer)
+p I64.superclass, BI.superclass, I64.name
+p I64.to_clr_type.to_class.equal?(I64), System::Int32.to_clr_type.to_class.equal?(Integer)
+
+# static members
+p I64.MaxValue, I64.MinValue, I64.MaxValue.class
+p I64.Parse('9223372036854775807'), I64.TryParse('123456789012')
+p BI.Parse('123456789012345678901234567890'), BI.One, BI.Pow(2, 70)
+p System::Int16.TryParse('12'), System::Int32.TryParse('12')
+
+# generic instantiation and arrays
+l = List[I64].new
+l.Add(2**40)
+l.Add(5)
+p l.GetType, l[0], l[0].class
+b = List[BI].new
+b.Add(2**100)
+p b.GetType, b[0]
+p List[System::Int32].new.GetType, List[Integer].new.GetType
+a = System::Array[I64].new(2)
+a[0] = 2**62
+p a.GetType, a[0]
+p System::Array[BI].new([2**80]).GetType
+
+# overload resolution
+p IO.Pick(1), IO.Pick(2**40), IO.Pick(2**80)
+p IO.method(:Pick).overload(I64).call(1), IO.Wide(2**40)
+p System::Math.method(:Max).overload(I64, I64).call(2**40, 1)
+
+# instance CLR methods of a long and of a bignum are their own type's
+p 7.ToString, (2**40).ToString, (2**100).ToString, (2**40).CompareTo(5), (2**40).GetType
+
+# Integer semantics are unchanged
+x = 2**40
+p x.class, Integer === x, x.is_a?(Integer), x + 1, x * x, (x * x).class
+", @"
+System.Int64
+System.Numerics.BigInteger
+System.Int32
+false
+false
+true
+Integer
+Integer
+""System::Int64""
+true
+true
+9223372036854775807
+-9223372036854775808
+Integer
+9223372036854775807
+[true, 123456789012]
+123456789012345678901234567890
+1
+1180591620717411303424
+[true, 12 (Int16)]
+[true, 12]
+System.Collections.Generic.List`1[System.Int64]
+1099511627776
+Integer
+System.Collections.Generic.List`1[System.Numerics.BigInteger]
+1267650600228229401496703205376
+System.Collections.Generic.List`1[System.Int32]
+System.Collections.Generic.List`1[System.Int32]
+System.Int64[]
+4611686018427387904
+System.Numerics.BigInteger[]
+'int 1'
+'long 1099511627776'
+'BigInteger 1208925819614629174706176'
+'long 1'
+'long 1099511627776'
+1099511627776
+'7'
+'1099511627776'
+'1267650600228229401496703205376'
+1
+System.Int64
+Integer
+true
+true
+1099511627777
+1208925819614629174706176
+Integer
+");
+        }
+
+        /// <summary>
+        /// A CLR member only an Int64's or a BigInteger's own type has is reachable on such an Integer, by its CLR or its
+        /// snake_case name. The CLR instance methods of Integer and Float (Int32's, Double's) take snake_case names too,
+        /// though, as Ruby built-ins, they stay out of the method lists.
+        /// </summary>
+        public void ClrIntegerClrMembers1() {
+            TestOutput(@"
+big = 2**70
+p big.IsEven, big.is_even, (big + 1).IsEven, big.Sign, (-big).sign
+p((2**40).IsEven) rescue p $!.class
+p 5.to_string, 255.to_string('X'), (2**40).to_string, big.to_string, 5.compare_to(3), 1.5.to_string, 1.5.compare_to(2.0)
+p 5.respond_to?(:to_string), 5.methods.include?(:to_string), Integer.instance_methods.include?(:compare_to)
+p((5.foo_bar rescue $!.class), (big.foo_bar rescue $!.class))
+", @"
+true
+true
+false
+1
+-1
+NoMethodError
+'5'
+'FF'
+'1099511627776'
+'1180591620717411303424'
+1
+'1.5'
+-1
+true
+false
+false
+NoMethodError
+NoMethodError
+");
+        }
+
+        /// <summary>
+        /// Nullable&lt;T&gt; is constructed like other value types: with a value it is that value, without one nil.
+        /// Type#to_class of an interface is a TypeError.
+        /// </summary>
+        public void ClrNullable1() {
+            TestOutput(@"
+p System::Nullable[Integer].new(3), System::Nullable[Integer].new
+p System::Nullable[System::DateTime].new(System::DateTime.new(2020, 1, 2)).Day
+p System::Collections::Generic::List[System::Nullable[Integer]].new([1, nil]).to_a
+p((System::IComparable.to_clr_type.to_class rescue $!.class), System::IComparable.to_clr_type.to_module)
+", @"
+3
+nil
+2
+[1, nil]
+TypeError
+System::IComparable
 ");
         }
 
@@ -3732,6 +3868,58 @@ p System::Array[System::Byte].new(3, 1)
 ['c', 'c']
 [0 (Byte), 1 (Byte), 2 (Byte)]
 [1 (Byte), 1 (Byte), 1 (Byte)]
+");
+        }
+
+        /// <summary>
+        /// A CLR array does not grow: an index out of its bounds raises System::IndexOutOfRangeException, which is an IndexError.
+        /// </summary>
+        public void ClrArrays3() {
+            TestOutput(@"
+a = System::Array[Integer].new(2)
+begin
+  a[10] = 1
+rescue IndexError => e
+  p e.class, e.is_a?(StandardError)
+end
+p((a[-3] rescue $!.class))
+p System::IndexOutOfRangeException.superclass, a.length
+", @"
+System::IndexOutOfRangeException
+true
+System::IndexOutOfRangeException
+IndexError
+2
+");
+        }
+
+        /// <summary>
+        /// The Array methods that answer a new list answer an Array for a CLR array, which cannot be allocated or grow;
+        /// those that reorder it in place (sort!) keep its items rather than clearing it first. IEnumerable#each without
+        /// a block is an Enumerator.
+        /// </summary>
+        public void ClrArrays4() {
+            TestOutput(@"
+a = System::Array[Integer].new([3, 1, 2, 3])
+p a.sort, a.reverse, a.uniq, a.flatten, a.sort { |x, y| y <=> x }
+p a.sort!.equal?(a), a
+p((a.replace([1]) rescue $!.class), a)
+e = System::Collections::Generic::List[Integer].new([5, 6]).each
+p e.class, e.first, e.to_a, System::Collections::ArrayList.new([7]).each.map { it * 2 }
+", @"
+[1, 2, 3, 3]
+[3, 2, 1, 3]
+[3, 1, 2]
+[3, 1, 2, 3]
+[3, 3, 2, 1]
+true
+[1, 2, 3, 3]
+System::NotSupportedException
+[1, 2, 3, 3]
+Enumerator
+5
+[5, 6]
+[14]
 ");
         }
 
@@ -4098,14 +4286,6 @@ p Inst.Foo(a) rescue p $!
             // meta-object conversions:
             var r1 = Engine.Execute<int>("Inst.delegate(Proc.new { |x| x + 1 }).invoke(123)");
             Assert(r1 == 124);
-
-            // foreign meta-object conversion:
-            if (!_driver.RunPython) return;
-            var py = Runtime.GetEngine("python");
-            var scope = Runtime.CreateScope();
-            py.Execute(@"def foo(x): return x + 2", scope);
-            var r2 = Engine.Execute<int>(@"Inst.delegate(foo).invoke(123)", scope);
-            Assert(r2 == 125);
         }
 
         #endregion

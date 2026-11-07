@@ -13,16 +13,19 @@
  *
  * ***************************************************************************/
 
-using System;
-using Microsoft.Scripting.Runtime;
-using System.Numerics;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
+using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
     [RubyClass("Float", Extends = typeof(double), Inherits = typeof(Numeric)), Includes(typeof(ClrFloat), Copy = true)]
     [UndefineMethod("new", IsStatic = true)]
     public static class FloatOps {
+        /// <summary>numeric_to_c: self + 0i (complex.rb's Numeric#to_c, for a Float).</summary>
+        [RubyMethod("to_c")]
+        public static RubyComplex/*!*/ ToComplex(RubyContext/*!*/ context, double self) {
+            return new RubyComplex(context.GetClass(typeof(RubyComplex)), self, ScriptingRuntimeHelpers.Int32ToObject(0));
+        }
+
         #region Constants
 
         /// <summary>
@@ -88,12 +91,6 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyConstant]
         public const int RADIX = 2;
-
-        /// <summary>
-        /// Rounding mode used by Float
-        /// </summary>
-        [RubyConstant]
-        public const int ROUNDS = 1;
 
         #endregion
 

@@ -419,6 +419,80 @@ p s(C.new.w(1)), s(C.new.w(1, x: 1))
         }
 
         /// <summary>
+        /// eval('super') passes what a parameterless super in the method itself does - the current
+        /// values of the positional and keyword parameters - also where the keywords' lowering takes
+        /// the positionals in one splat (optional, rest and post parameters).
+        /// </summary>
+        public void SuperParameterlessEval1() {
+            TestOutput(@"
+class P
+  def m(*a, **k, &b) = [a, k.to_a, b&.call]
+end
+class C1 < P; def m(*c, d:); eval('super'); end; end
+class C2 < P; def m(a, b = 2, d:); eval('super'); end; end
+class C3 < P; def m(a, b = 2, *c, d:, e: 5); eval('super'); end; end
+class C4 < P; def m(a, *c, d:, **r); eval('super'); end; end
+class C5 < P; def m(*c, d:); c << 9; d = 10; eval('super'); end; end
+class C6 < P; def m(a, *c, z, d:); eval('super'); end; end
+class C7 < P; def m(a, d: 1); d = 7; eval('super'); end; end
+p C1.new.m(1, 2, d: 3), C1.new.m(d: 3)
+p C2.new.m(1, d: 4), C2.new.m(1, 5, d: 4)
+p C3.new.m(1, 7, 8, 9, d: 4) { :blk }
+p C4.new.m(1, 2, d: 4, z: 1), C4.new.m(1, d: 4)
+p C5.new.m(1, d: 3)
+p C6.new.m(1, 2, 3, d: 4)
+p C7.new.m(1)
+", @"
+[[1, 2], [[:d, 3]], nil]
+[[], [[:d, 3]], nil]
+[[1, 2], [[:d, 4]], nil]
+[[1, 5], [[:d, 4]], nil]
+[[1, 7, 8, 9], [[:d, 4], [:e, 5]], :blk]
+[[1, 2], [[:z, 1], [:d, 4]], nil]
+[[1], [[:d, 4]], nil]
+[[1, 9], [[:d, 10]], nil]
+[[1, 2, 3], [[:d, 4]], nil]
+[[1], [[:d, 7]], nil]
+");
+        }
+
+        /// <summary>
+        /// eval('super') with anonymous and destructured parameters, **nil, a lone **rest, and from a
+        /// block and a binding.
+        /// </summary>
+        public void SuperParameterlessEval2() {
+            TestOutput(@"
+class P
+  def m(*a, **k, &b) = [a, k.to_a, b&.call]
+end
+class R < P; def m(a, **r); r = {q: 1}; eval('super'); end; end
+class A < P; def m(a, *, d:); eval('super'); end; end
+class D < P; def m((a, b), d:); eval('super'); end; end
+class N < P; def m(a, **nil); eval('super'); end; end
+class K < P; def m(a, **); eval('super'); end; end
+class B < P; def m(*c, d:); [1].map { eval('super') }.first; end; end
+class Bd < P; def m(*c, d:); b = binding; eval('super', b); end; end
+class O < P; def m(a, b = 2, *r, c, d: 1, **kw, &blk); eval('super'); end; end
+p R.new.m(1, x: 2)
+p A.new.m(1, 2, 3, d: 4)
+p D.new.m([1, 2], d: 4)
+p N.new.m(1)
+p K.new.m(1, z: 3)
+p B.new.m(5, d: 6), Bd.new.m(5, d: 6)
+p O.new.m(1, 9, d: 0, z: 1) { 3 }
+", @"
+[[1], [[:q, 1]], nil]
+[[1, 2, 3], [[:d, 4]], nil]
+[[[1, 2]], [[:d, 4]], nil]
+[[1], [], nil]
+[[1], [[:z, 3]], nil]
+[[5], [[:d, 6]], nil]
+[[5], [[:d, 6]], nil]
+[[1, 2, 9], [[:z, 1], [:d, 0]], 3]
+");
+        }
+
+        /// <summary>
         /// Calls to super with block and no arguments (was bug in parser/AST).
         /// </summary>
         public void Super2() {
@@ -892,49 +966,6 @@ B::foo
 B::foo
 ");
         }
-
-#if OBSOLETE
-        /// <summary>
-        /// MRI 1.8: The self object captured by Kernel#binding is the receiver of the binding call.
-        /// Thus the self used in eval might be different from the one the scope holds on.
-        /// Super call uses the scope's self object.
-        /// </summary>
-        public void SuperCallInEvalWithBinding18() {
-            TestOutput(@"
-module Kernel
-  public :binding
-end
-
-class A
-  def m
-    puts 'A::m'
-  end
-end
-
-class D < A
-  def m
-    puts 'D::m'
-    p self.class
-    
-    cb = C.new.binding             # binding captures C.new as self
-    eval('
-        p self.class               # self is different from RubyScope.SelfObject here
-        super                      # super picks up RubyScope.SelfObject
-    ', cb)
-  end
-end
-
-class C
-end
-
-D.new.m", @"
-D::m
-D
-C
-A::m
-");
-        }
-#endif
 
         /// <summary>
         /// MRI 1.9: The self object captured by Kernel#binding is the one captured by the scope, not the receiver of the binding call.

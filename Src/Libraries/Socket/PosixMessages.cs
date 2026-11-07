@@ -13,10 +13,11 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Collections.Generic;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 
 namespace IronRuby.StandardLibrary.Sockets {
@@ -115,6 +116,57 @@ namespace IronRuby.StandardLibrary.Sockets {
             byte[] result = new byte[length];
             Array.Copy(buffer, result, length);
             return result;
+        }
+
+        #endregion
+
+        #region connect
+
+        [DllImport("libc", EntryPoint = "connect", SetLastError = true)]
+        private static extern int sys_connect(int fd, byte[] address, int length);
+
+        private static readonly bool IsUnix = !RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+        private static readonly bool IsBsd = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || RuntimeInformation.IsOSPlatform(OSPlatform.FreeBSD);
+
+        internal static readonly int EINPROGRESS = IsBsd ? 36 : 115;
+
+        /// <summary>
+        /// connect(2) on the socket's descriptor, with the sockaddr .NET would pass. Answers the errno
+        /// (0 when it connected at once), or -1 where there is no libc to ask (Windows).
+        /// </summary>
+        internal static int StartConnect(Socket/*!*/ socket, EndPoint/*!*/ endPoint) {
+            if (!IsUnix) {
+                return -1;
+            }
+            SocketAddress address = endPoint.Serialize();
+            byte[] bytes = new byte[address.Size];
+            for (int i = 0; i < bytes.Length; i++) {
+                bytes[i] = address[i];
+            }
+            try {
+                return sys_connect((int)socket.Handle, bytes, bytes.Length) == 0 ? 0 : Marshal.GetLastWin32Error();
+            } catch (EntryPointNotFoundException) {
+                return -1;
+            } catch (DllNotFoundException) {
+                return -1;
+            }
+        }
+
+        /// <summary>
+        /// SO_ERROR, which reading clears: the errno a non-blocking connect ended with, 0 for none,
+        /// or -1 where there is no libc to ask.
+        /// </summary>
+        internal static int GetPendingError(Socket/*!*/ socket) {
+            if (!IsUnix) {
+                return -1;
+            }
+            byte[] value = new byte[4];
+            int length = value.Length;
+            // SOL_SOCKET and SO_ERROR: 1 and 4 on Linux, 0xffff and 0x1007 on the BSDs.
+            if (sys_getsockopt((int)socket.Handle, IsBsd ? 0xffff : 1, IsBsd ? 0x1007 : 4, value, ref length) != 0) {
+                return Marshal.GetLastWin32Error();
+            }
+            return BitConverter.ToInt32(value, 0);
         }
 
         #endregion
@@ -357,4 +409,3 @@ namespace IronRuby.StandardLibrary.Sockets {
     }
 }
 
-#endif

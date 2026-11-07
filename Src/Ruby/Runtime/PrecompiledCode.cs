@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Diagnostics;
@@ -146,6 +142,31 @@ namespace IronRuby.Runtime.Precompiled {
             return result;
         }
 
+        /// <summary>
+        /// A block that uses locals of the scopes around it: Ractor.new needs to know which
+        /// (BlockDispatcher.OuterVariableNames).
+        /// </summary>
+        public static BlockDispatcher/*!*/ CreateBlockDispatcher(int parameterCount, int postCount, int attributesAndArity,
+            string sourcePath, int sourceLine, RubyParameterSignature signature, string[] outerVariables, string[] assignedOuterVariables) {
+            var result = CreateBlockDispatcher(parameterCount, postCount, attributesAndArity, sourcePath, sourceLine, signature);
+            result.OuterVariableNames = outerVariables;
+            result.AssignedOuterVariableNames = assignedOuterVariables;
+            return result;
+        }
+
+        /// <summary>
+        /// As above, with the outer variables the scope assigns more than once
+        /// (BlockDispatcher.ReassignedOuterVariableNames), which a shareable proc may not read.
+        /// </summary>
+        public static BlockDispatcher/*!*/ CreateBlockDispatcher(int parameterCount, int postCount, int attributesAndArity,
+            string sourcePath, int sourceLine, RubyParameterSignature signature, string[] outerVariables, string[] assignedOuterVariables,
+            string[] reassignedOuterVariables) {
+            var result = CreateBlockDispatcher(parameterCount, postCount, attributesAndArity, sourcePath, sourceLine, signature,
+                outerVariables, assignedOuterVariables);
+            result.ReassignedOuterVariableNames = reassignedOuterVariables;
+            return result;
+        }
+
         public static RubyParameterSignature/*!*/ Signature(string[]/*!*/ kinds, string[]/*!*/ names, int leadingCount, int optionalCount,
             int postCount, bool hasRest, int requiredKeywordCount, bool hasKeywords, bool hasKeywordRest, string[] implicitParameterNames) {
             var ps = new RubyParameterSignature.Parameter[kinds.Length];
@@ -236,7 +257,7 @@ namespace IronRuby.Runtime.Precompiled {
             }
             try {
                 var unit = context.CreateSnippet(source, path, SourceCodeKind.File);
-                var options = new RubyCompilerOptions(context.RubyOptions) {
+                var options = new RubyCompilerOptions() {
                     FactoryKind = TopScopeFactoryKind.File,
                     InitialLocation = new SourceLocation(0, line, 1)
                 };
@@ -663,8 +684,11 @@ namespace IronRuby.Runtime.Precompiled {
     /// chain, as .NET cannot walk another thread's stack, and precompiled code is compiled code from its first call:
     /// without these, Kernel#loop, Set#each or Monitor#synchronize were missing from every thread dump, where they are
     /// much of what a parked worker shows. Other methods are left out: they would pay for a frame at every call, and they
-    /// are rarely what a thread is parked or busy in below its own code. Without the library the same holds for the
-    /// methods the runtime compiles once they are hot.
+    /// are rarely what a thread is parked or busy in below its own code.
+    ///
+    /// The methods, blocks and files the runtime compiles once they are hot keep a frame here too, every one of them
+    /// (IronRuby.Compiler.Ast.CompiledFrameExpression): a DynamicMethod has no line information at all, so this is where
+    /// the line of such a frame comes from in the thread's own backtraces as well.
     ///
     /// The saved code of such a method or block does (AotCompiler.ThreadFrameAdder):
     ///   var frames = PrecompiledFrames.Current; int depth = frames.Enter(name, line);
@@ -687,6 +711,9 @@ namespace IronRuby.Runtime.Precompiled {
 
         private Entry[] _entries = new Entry[16];
         private int _depth;
+        // one past the frame entered last: the frames from _depth up to here have been left since, and keep the
+        // line they were left at - an exception's backtrace, built after it left them, reads them (see CaptureLines)
+        private int _top;
 
         // this thread's slot of InterpretedFrame.CurrentFrame, which holds its current interpreted frame: a slot is its
         // thread's for good, and reading it is a field load where the thread-local lookup takes two thread-static reads
@@ -697,6 +724,7 @@ namespace IronRuby.Runtime.Precompiled {
         }
 
         public static PrecompiledFrames/*!*/ Current {
+            [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
             get { return _current ?? CreateCurrent(); }
         }
 
@@ -707,6 +735,7 @@ namespace IronRuby.Runtime.Precompiled {
         }
 
         /// <summary>Enters a frame; returns what <see cref="SetLine"/> and <see cref="Leave"/> take.</summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         public int Enter(string/*!*/ name, int line) {
             int depth = _depth;
             var entries = _entries;
@@ -714,24 +743,55 @@ namespace IronRuby.Runtime.Precompiled {
                 entries = Grow();
             }
             ref Entry entry = ref entries[depth];
-            entry.Name = name;
+            // A hot loop calls the same method at the same depth over and over: the slot already has its name, and
+            // skipping a store that is a no-op skips its GC write barrier.
+            if ((object)entry.Name != name) {
+                entry.Name = name;
+            }
             entry.Line = line;
             entry.Below = _interpreted.Value;
+            _top = depth + 1;
             // written last: another thread reading the frames reads the depth first
             _depth = depth + 1;
             return depth;
         }
 
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         public void SetLine(int depth, int line) {
             _entries[depth].Line = line;
         }
 
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         public void Leave(int depth) {
             // the interpreted frame is not kept alive by a frame that is gone
             _entries[depth].Below = null;
             _depth = depth;
         }
 
+        /// <summary>
+        /// Leaves a frame that returned (<see cref="Leave"/> is for one an exception left): the frames above it are
+        /// gone for good, and an exception raised from here on is no longer one that unwound them.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        public void Return(int depth) {
+            _entries[depth].Below = null;
+            _top = depth;
+            _depth = depth;
+        }
+
+        /// <summary>
+        /// A rescue clause has taken the exception that left the frames above the current one: their lines were for its
+        /// backtrace, which has been captured, and the frames are gone for good. An exception raised from here on did
+        /// not unwind them, and must not find a stale line under the name of a live frame (a rescued recursive call).
+        /// </summary>
+        internal static void ForgetLeft() {
+            var frames = _current;
+            if (frames != null) {
+                frames._top = frames._depth;
+            }
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private Entry[]/*!*/ Grow() {
             // filled before it is published: a reader sees the old array or the complete new one
             var entries = new Entry[_entries.Length * 2];
@@ -743,6 +803,31 @@ namespace IronRuby.Runtime.Precompiled {
             public string Name;
             public int Line;
             public Microsoft.Scripting.Interpreter.InterpretedFrame Below;
+        }
+
+        /// <summary>
+        /// The current thread's frames, outermost first, for its own backtrace; null if it has none. With
+        /// <paramref name="includeLeft"/> also the frames left since the innermost one was entered, which an exception
+        /// raised there has just unwound: the frames of the exception's backtrace that it caught nowhere. A frame that
+        /// ran Ruby code on its way out (an ensure clause calling a method) may have reused the slot of one of them,
+        /// which the backtrace then does not find under its name.
+        /// </summary>
+        internal static Frame[] CaptureLines(bool includeLeft) {
+            var frames = _current;
+            if (frames == null) {
+                return null;
+            }
+            int count = includeLeft ? Math.Max(frames._top, frames._depth) : frames._depth;
+            if (count == 0) {
+                return null;
+            }
+            var entries = frames._entries;
+            var result = new Frame[count];
+            for (int i = 0; i < count; i++) {
+                result[i].Name = entries[i].Name;
+                result[i].Line = entries[i].Line;
+            }
+            return result;
         }
 
         /// <summary>

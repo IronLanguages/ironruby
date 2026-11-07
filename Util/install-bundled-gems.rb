@@ -64,7 +64,7 @@ BIN_DIR = File.join(STDLIB, "bin")
 LOAD_PATH_DIRS = [
   File.join(STDLIB, "ironruby"),
   File.join(STDLIB, "ruby", "4.0"),
-  File.join(STDLIB, "ruby", "site_ruby", "1.9.1"),
+  File.join(STDLIB, "ruby", "site_ruby", "4.0.0"),
   File.join(STDLIB, "ruby", "site_ruby"),
 ].freeze
 
@@ -76,6 +76,7 @@ SHIPPED = %w[
   net-ftp net-imap net-pop net-smtp
   matrix prime racc mutex_m getoptlong base64 observer abbrev
   resolv-replace rinda drb csv ostruct pstore benchmark logger
+  readline
 ].freeze
 
 # The bundled gems IronRuby does not ship, and why.
@@ -96,7 +97,6 @@ SKIPPED = {
   "irb" => "vendored in Src/StdLib/ruby/4.0 (1.18.0); a default gem here",
   "reline" => "vendored in Src/StdLib/ruby/4.0; a default gem here",
   "rdoc" => "vendored in Src/StdLib/ruby/4.0 as irb's dependency",
-  "readline" => "IronRuby's readline is rb-readline, in Src/StdLib/ruby/site_ruby/1.9.1",
   # Cannot run here.
   "typeprof" => "a type checker, not part of the REPL; depends on rbs 3.x",
   "debug" => "C extension, and built on RubyVM::InstructionSequence and TracePoint internals",

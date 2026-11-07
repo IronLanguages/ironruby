@@ -13,16 +13,11 @@
  *
  * ***************************************************************************/
 
-using IronRuby.Builtins;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 using System.Diagnostics;
-using System;
 using System.Collections.Generic;
-using Microsoft.Scripting.Utils;
-using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Collections.ObjectModel;
 
 namespace IronRuby.Builtins {

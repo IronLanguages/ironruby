@@ -12,20 +12,15 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_ENCODING
 
 using System;
 using System.Collections.Generic;
 using System.Text;
-using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using Microsoft.Scripting;
-using System.Globalization;
 
 namespace IronRuby.Builtins {
-    [RubyClass("Encoding", Extends = typeof(RubyEncoding), Inherits = typeof(Object), BuildConfig = "FEATURE_ENCODING")]
+    [RubyClass("Encoding", Extends = typeof(RubyEncoding), Inherits = typeof(Object))]
     public static partial class RubyEncodingOps {
         #region Exceptions
 
@@ -115,105 +110,81 @@ namespace IronRuby.Builtins {
 
 #region Constants
 
-        [RubyConstant("ANSI_X3_4_1968")]
-        [RubyConstant("US_ASCII")]
-        [RubyConstant("ASCII")]
-        public static readonly RubyEncoding US_ASCII = RubyEncoding.Ascii; 
-    
-        [RubyConstant]
-        public static readonly RubyEncoding UTF_8 = RubyEncoding.UTF8;
+        // for C# callers; Ruby sees these through DefineConstants
+        public static readonly RubyEncoding/*!*/ US_ASCII = RubyEncoding.Ascii;
+        public static readonly RubyEncoding/*!*/ UTF_8 = RubyEncoding.UTF8;
+        public static readonly RubyEncoding/*!*/ UTF_7 = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF7);
+        public static readonly RubyEncoding/*!*/ UTF_16BE = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF16BE);
+        public static readonly RubyEncoding/*!*/ UTF_16LE = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF16LE);
+        public static readonly RubyEncoding/*!*/ UTF_32BE = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF32BE);
+        public static readonly RubyEncoding/*!*/ UTF_32LE = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF32LE);
+        public static readonly RubyEncoding/*!*/ KOI8_R = RubyEncoding.GetRubyEncoding(20866);
+        public static readonly RubyEncoding/*!*/ ISO_8859_15 = RubyEncoding.GetRubyEncoding(28605);
 
-        [RubyConstant]
-        public static readonly RubyEncoding ASCII_8BIT = RubyEncoding.Binary;
+        /// <summary>
+        /// MRI makes a constant of every encoding name and alias that can be one (set_encoding_const):
+        /// the name itself if it already is a constant name, and otherwise with each character that
+        /// cannot be in one replaced by '_' and its first letter capitalized, provided the name has
+        /// an upper case letter at all ("eucJP" is Encoding::EucJP, "ebcdic-cp-us" gets no such
+        /// form); plus an all upper case form whenever the name has a lower case letter. A name that
+        /// starts with a digit ("646") makes no constant.
+        /// </summary>
+        [RubyConstant("UTF_8")]
+        public static RubyEncoding/*!*/ DefineConstants(RubyModule/*!*/ module) {
+            foreach (var name in RubyEncoding.GetAllNames()) {
+                var encoding = RubyEncoding.FindByName(name);
+                foreach (var constantName in GetConstantNames(name)) {
+                    LibraryInitializer.SetBuiltinConstant(module, constantName, encoding);
+                }
+            }
+            return RubyEncoding.UTF8;
+        }
 
-        [RubyConstant]
-        public static readonly RubyEncoding BINARY = RubyEncoding.Binary;
+        internal static IEnumerable<string>/*!*/ GetConstantNames(string/*!*/ name) {
+            if (name.Length == 0 || Char.IsAsciiDigit(name[0])) {
+                yield break;
+            }
 
-        [RubyConstant("SHIFT_JIS")]
-        [RubyConstant("Shift_JIS")]
-        public static readonly RubyEncoding SHIFT_JIS = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageShiftJIS);
-        
-        [RubyConstant]
-        public static readonly RubyEncoding EUC_JP = RubyEncoding.EUCJP;
+            bool valid = Char.IsAsciiLetterUpper(name[0]);
+            bool hasLower = false, hasUpper = false;
+            foreach (char c in name) {
+                hasLower |= Char.IsAsciiLetterLower(c);
+                hasUpper |= Char.IsAsciiLetterUpper(c);
+                valid &= Char.IsAsciiLetterOrDigit(c) || c == '_';
+            }
 
-        [RubyConstant]
-        public static readonly RubyEncoding KOI8_R = RubyEncoding.GetRubyEncoding(20866);
+            var chars = name.ToCharArray();
+            if (valid) {
+                yield return name;
+            } else {
+                chars[0] = Char.ToUpperInvariant(chars[0]);
+                for (int i = 0; i < chars.Length; i++) {
+                    if (!Char.IsAsciiLetterOrDigit(chars[i])) {
+                        chars[i] = '_';
+                    }
+                }
+                if (hasUpper) {
+                    yield return new string(chars);
+                }
+            }
 
-        // TIS-620 is not Windows-874: Windows-874 is TIS-620 plus the Windows C1 repertoire.
-        [RubyConstant]
-        public static readonly RubyEncoding TIS_620 = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageTIS620);
-
-        [RubyConstant("Windows_874")]
-        [RubyConstant("WINDOWS_874")]
-        [RubyConstant("CP874")]
-        public static readonly RubyEncoding Windows_874 = RubyEncoding.GetRubyEncoding(874);
-
-        [RubyConstant]
-        public static readonly RubyEncoding CESU_8 = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCESU8);
-
-        // Emacs-Mule: Ruby has it, .NET does not, and Ruby ships no converter for it either - only
-        // a string that is all ASCII can be transcoded to or from it.
-        [RubyConstant("Emacs_Mule")]
-        [RubyConstant("EMACS_MULE")]
-        public static readonly RubyEncoding Emacs_Mule = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEmacsMule);
-
-        [RubyConstant("ISO8859_9")]
-        [RubyConstant("ISO_8859_9")]
-        public static readonly RubyEncoding ISO_8859_9 = RubyEncoding.GetRubyEncoding(28599);
-
-        [RubyConstant("ISO8859_15")]
-        [RubyConstant("ISO_8859_15")]
-        public static readonly RubyEncoding ISO_8859_15 = RubyEncoding.GetRubyEncoding(28605);
-
-        [RubyConstant("Big5")]
-        [RubyConstant("BIG5")]
-        public static readonly RubyEncoding Big5 = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageBig5);
-
-        [RubyConstant("ISO2022_JP")]
-        [RubyConstant("ISO_2022_JP")]
-        public static readonly RubyEncoding ISO_2022_JP = RubyEncoding.GetRubyEncoding(50220);
-
-        [RubyConstant]
-        public static readonly RubyEncoding CP50221 = RubyEncoding.GetRubyEncoding(50221);
-
-        // TODO:
-        // ...
-
-        // TODO: lazy encoding load?
-
-        [RubyConstant]
-#pragma warning disable SYSLIB0001 // UTF-7 is obsolete in .NET, and still one of Ruby's encodings
-        public static readonly RubyEncoding UTF_7 = RubyEncoding.GetRubyEncoding(Encoding.UTF7);
-#pragma warning restore SYSLIB0001
-
-        // UTF-16 and UTF-32 without an endianness suffix are dummy encodings that carry a BOM.
-        // They are distinct from UTF-16LE/BE and UTF-32LE/BE, which are not dummy.
-        [RubyConstant]
-        public static readonly RubyEncoding UTF_16 = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF16);
-
-        [RubyConstant]
-        public static readonly RubyEncoding UTF_32 = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF32);
-
-        [RubyConstant]
-        public static readonly RubyEncoding UTF_16BE = RubyEncoding.GetRubyEncoding(Encoding.BigEndianUnicode);
-
-        [RubyConstant]
-        public static readonly RubyEncoding UTF_16LE = RubyEncoding.GetRubyEncoding(Encoding.Unicode);
-
-        [RubyConstant]
-        public static readonly RubyEncoding UTF_32BE = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF32BE);
-
-        [RubyConstant]
-        public static readonly RubyEncoding UTF_32LE = RubyEncoding.GetRubyEncoding(Encoding.UTF32);
+            if (hasLower) {
+                for (int i = 0; i < chars.Length; i++) {
+                    chars[i] = Char.ToUpperInvariant(chars[i]);
+                }
+                yield return new string(chars);
+            }
+        }
 
         #endregion
+
 
 #region to_s, inspect, based_encoding, dummy?, ascii_compatible?
 
         [RubyMethod("name")]
         [RubyMethod("to_s")]
         public static MutableString/*!*/ ToS(RubyEncoding/*!*/ self) {
-            return MutableString.CreateAscii(self.Name);
+            return MutableString.CreateAscii(self.Name).Freeze();
         }
 
         [RubyMethod("inspect")]
@@ -223,19 +194,12 @@ namespace IronRuby.Builtins {
             result.Append("#<");
             result.Append(context.GetClassDisplayName(self));
             result.Append(':');
-            // Ruby 3.4 renamed ASCII-8BIT to BINARY but kept #name answering the old spelling, so
-            // #inspect is the one place both appear.
-            result.Append(self == RubyEncoding.Binary ? "BINARY (ASCII-8BIT)" : self.Name);
+            result.Append(self.InspectName);
             if (self.IsDummy) {
                 result.Append(" (dummy)");
             }
             result.Append('>');
             return result;
-        }
-
-        [RubyMethod("based_encoding")]
-        public static RubyEncoding BasedEncoding(RubyEncoding/*!*/ self) {
-            return null;
         }
 
         [RubyMethod("dummy?")]
@@ -255,28 +219,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("names")]
         public static RubyArray/*!*/ GetAllNames(RubyContext/*!*/ context, RubyEncoding/*!*/ self) {
             var result = new RubyArray();
-            
-            string name = self.Name;
-            result.Add(MutableString.Create(name));
-            
-            foreach (var alias in RubyEncoding.Aliases) {
-                if (StringComparer.OrdinalIgnoreCase.Equals(alias.Value, name)) {
-                    result.Add(MutableString.CreateAscii(alias.Key));
+            result.Add(MutableString.CreateAscii(self.Name).Freeze());
+            foreach (var alias in self.GetAliasNames()) {
+                result.Add(MutableString.CreateAscii(alias).Freeze());
+            }
+            foreach (var special in GetSpecialAliases(context)) {
+                if (special.Value == self) {
+                    result.Add(MutableString.CreateAscii(special.Key).Freeze());
                 }
             }
-
-            if (self == context.RubyOptions.LocaleEncoding) {
-                result.Add(MutableString.CreateAscii("locale"));
-            }
-
-            if (self == context.DefaultExternalEncoding) {
-                result.Add(MutableString.CreateAscii("external"));
-            }
-
-            if (self == context.GetPathEncoding()) {
-                result.Add(MutableString.CreateAscii("filesystem"));
-            }
-
             return result;
         }
 
@@ -284,106 +235,50 @@ namespace IronRuby.Builtins {
 
 #region aliases, name_list, list, find
 
+        /// <summary>
+        /// The names that stand for whatever encoding the runtime currently uses for something,
+        /// in MRI's order; "internal" only while there is a default internal encoding.
+        /// </summary>
+        private static IEnumerable<KeyValuePair<string, RubyEncoding>>/*!*/ GetSpecialAliases(RubyContext/*!*/ context) {
+            yield return new KeyValuePair<string, RubyEncoding>("locale", context.RubyOptions.LocaleEncoding);
+            yield return new KeyValuePair<string, RubyEncoding>("external", context.DefaultExternalEncoding);
+            yield return new KeyValuePair<string, RubyEncoding>("filesystem", context.GetPathEncoding());
+            if (context.DefaultInternalEncoding != null) {
+                yield return new KeyValuePair<string, RubyEncoding>("internal", context.DefaultInternalEncoding);
+            }
+        }
+
         [RubyMethod("aliases", RubyMethodAttributes.PublicSingleton)]
         public static Hash/*!*/ GetAliases(RubyClass/*!*/ self) {
             var context = self.Context;
-            var result = new Hash(context.EqualityComparer, RubyEncoding.Aliases.Count + 3);
-            foreach (var alias in RubyEncoding.Aliases) {
+            var result = new Hash(context.EqualityComparer);
+            foreach (var alias in RubyEncoding.GetAliases()) {
                 result.Add(MutableString.CreateAscii(alias.Key).Freeze(), MutableString.CreateAscii(alias.Value).Freeze());
             }
-
-            result.Add(MutableString.CreateAscii("locale").Freeze(), MutableString.Create(context.RubyOptions.LocaleEncoding.Name).Freeze());
-            result.Add(MutableString.CreateAscii("external").Freeze(), MutableString.Create(context.DefaultExternalEncoding.Name).Freeze());
-            result.Add(MutableString.CreateAscii("filesystem").Freeze(), MutableString.Create(context.GetPathEncoding().Name).Freeze());
+            foreach (var special in GetSpecialAliases(context)) {
+                result.Add(MutableString.CreateAscii(special.Key).Freeze(), MutableString.CreateAscii(special.Value.Name).Freeze());
+            }
             return result;
-        }
-
-        /// <summary>
-        /// The encodings Encoding.list reports, each exactly once.
-        ///
-        /// .NET's Encoding.GetEncodings() is not enough on its own to build this. It reports the
-        /// code pages the platform's provider happens to enumerate, which on Linux leaves out
-        /// several that Encoding.GetEncoding still resolves - EUC-JP is the obvious one - and it
-        /// knows nothing about the encodings Ruby has and .NET does not. Everything an alias points
-        /// at has to be in here as well, or Encoding.list.include?(Encoding.find(alias)) is false.
-        /// </summary>
-        private static List<RubyEncoding>/*!*/ GetEncodingList(RubyContext/*!*/ context) {
-            var seen = new Dictionary<int, bool>();
-            var result = new List<RubyEncoding>();
-
-            foreach (var encoding in new[] {
-                RubyEncoding.Binary, RubyEncoding.UTF8, RubyEncoding.Ascii, RubyEncoding.SJIS, RubyEncoding.EUCJP,
-                UTF_16, UTF_32, UTF_16BE, UTF_16LE, UTF_32BE, UTF_32LE, CESU_8, TIS_620, Emacs_Mule,
-            }) {
-                AddEncoding(seen, result, encoding);
-            }
-
-            // Code pages Encoding.GetEncoding resolves but Encoding.GetEncodings() does not
-            // enumerate on this platform. Leaving them out would make Encoding.find answer with an
-            // encoding that Encoding.list says does not exist.
-            foreach (var codepage in new[] { 51936 /* GB2312 */, 51949 /* EUC-KR */, 54936 /* GB18030 */, 50220, 50221,
-                RubyEncoding.CodePageShiftJIS, RubyEncoding.CodePageUTF8Mac, RubyEncoding.CodePageCP51932, RubyEncoding.CodePageEucJpMs,
-                RubyEncoding.CodePageStatelessISO2022JP, RubyEncoding.CodePageISO2022JP2, RubyEncoding.CodePageGB12345, RubyEncoding.CodePageEUCTW,
-                RubyEncoding.CodePageGB1988, RubyEncoding.CodePageISO8859_10, RubyEncoding.CodePageISO8859_14, RubyEncoding.CodePageISO8859_16 }) {
-                try {
-                    AddEncoding(seen, result, RubyEncoding.GetRubyEncoding(codepage));
-                } catch (ArgumentException) {
-                    // not available here
-                } catch (NotSupportedException) {
-                    // not available here
-                }
-            }
-
-            foreach (var info in Encoding.GetEncodings()) {
-                AddEncoding(seen, result, RubyEncoding.GetRubyEncoding(info.CodePage));
-            }
-            // GetEncodings() leaves UTF-7 out when the host has not enabled
-            // System.Text.Encoding.EnableUnsafeUTF7Encoding; Ruby always has it.
-            AddEncoding(seen, result, UTF_7);
-
-            foreach (var alias in RubyEncoding.Aliases) {
-                try {
-                    AddEncoding(seen, result, context.GetRubyEncoding(alias.Value));
-                } catch (ArgumentException) {
-                    // an alias for an encoding this platform doesn't have
-                }
-            }
-
-            return result;
-        }
-
-        private static void AddEncoding(Dictionary<int, bool>/*!*/ seen, List<RubyEncoding>/*!*/ result, RubyEncoding encoding) {
-            if (encoding != null && !seen.ContainsKey(encoding.CodePage)) {
-                seen.Add(encoding.CodePage, true);
-                result.Add(encoding);
-            }
         }
 
         [RubyMethod("name_list", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ GetNameList(RubyClass/*!*/ self) {
-            var encodings = GetEncodingList(self.Context);
-            var result = new RubyArray(encodings.Count + RubyEncoding.Aliases.Count + 3);
-
-            foreach (var encoding in encodings) {
-                result.Add(MutableString.Create(encoding.Name));
+            var result = new RubyArray();
+            foreach (var name in RubyEncoding.GetAllNames()) {
+                result.Add(MutableString.CreateAscii(name).Freeze());
             }
-
-            foreach (var alias in RubyEncoding.Aliases.Keys) {
-                result.Add(MutableString.CreateAscii(alias));
-            }
-
-            result.Add(MutableString.CreateAscii("locale"));
-            result.Add(MutableString.CreateAscii("external"));
-            result.Add(MutableString.CreateAscii("filesystem"));
-
+            // MRI lists "internal" even while it names no encoding
+            result.Add(MutableString.CreateAscii("locale").Freeze());
+            result.Add(MutableString.CreateAscii("external").Freeze());
+            result.Add(MutableString.CreateAscii("filesystem").Freeze());
+            result.Add(MutableString.CreateAscii("internal").Freeze());
             return result;
         }
 
         [RubyMethod("list", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ GetAvailableEncodings(RubyClass/*!*/ self) {
-            var encodings = GetEncodingList(self.Context);
-            var result = new RubyArray(encodings.Count);
-            foreach (var encoding in encodings) {
+            var result = new RubyArray();
+            foreach (var encoding in RubyEncoding.GetAll()) {
                 result.Add(encoding);
             }
             return result;
@@ -560,15 +455,10 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("locale_charmap", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ GetDefaultCharmap(RubyClass/*!*/ self) {
-            var encoding = self.Context.RubyOptions.LocaleEncoding;
-            // nl_langinfo(CODESET) of the C locale, as glibc spells it
-            if (encoding == RubyEncoding.Ascii && Environment.OSVersion.Platform == PlatformID.Unix) {
-                return MutableString.CreateAscii("ANSI_X3.4-1968");
-            }
-            return MutableString.Create(encoding.Name);
+            // nl_langinfo(CODESET), as the C library spells it ("ANSI_X3.4-1968" for the C locale)
+            return MutableString.Create(RubyEncoding.LocaleCharmap ?? self.Context.RubyOptions.LocaleEncoding.Name);
         }
 
         #endregion
     }
 }
-#endif

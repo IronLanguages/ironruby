@@ -13,29 +13,18 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Interpreter;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using System.Reflection;
 using IronRuby.Builtins;
-using System.Collections.ObjectModel;
 using System.Collections;
-using System.Diagnostics;
 using System.Threading;
+using System.Runtime.CompilerServices;
 
 namespace IronRuby.Runtime.Calls {
     using Ast = Expression;
-    using AstFactory = IronRuby.Compiler.Ast.AstFactory;
 
     using BlockCallTarget0 = Func<BlockParam, object, object>;
     using BlockCallTarget1 = Func<BlockParam, object, object, object>;
@@ -175,6 +164,44 @@ namespace IronRuby.Runtime.Calls {
             set { _ruby2Keywords = value; }
         }
 
+        /// <summary>
+        /// The local variables of enclosing scopes the block body (nested blocks included) reads or
+        /// assigns, in order of first use; null if there are none. Ractor.new refuses a block that
+        /// has any, and Ractor.make_shareable checks their values.
+        /// </summary>
+        public string[] OuterVariableNames { get; internal set; }
+
+        /// <summary>
+        /// Those of <see cref="OuterVariableNames"/> the block assigns to; null if none.
+        /// </summary>
+        public string[] AssignedOuterVariableNames { get; internal set; }
+
+        // for each of OuterVariableNames, how often its scope assigns it; final once the code is compiled
+        internal LocalAssignmentCount[] OuterVariableAssignments;
+        private string[] _reassignedOuterVariableNames;
+
+        /// <summary>
+        /// Those of <see cref="OuterVariableNames"/> their scope assigns more than once (a parameter
+        /// counts as one assignment): CRuby will not make a shareable proc read such a variable, as
+        /// it "may be reassigned". Null if none.
+        /// </summary>
+        public string[] ReassignedOuterVariableNames {
+            get {
+                if (_reassignedOuterVariableNames == null && OuterVariableAssignments != null) {
+                    var names = new System.Collections.Generic.List<string>();
+                    for (int i = 0; i < OuterVariableAssignments.Length; i++) {
+                        var assignments = OuterVariableAssignments[i];
+                        if (assignments != null && assignments.Count > 1) {
+                            names.Add(OuterVariableNames[i]);
+                        }
+                    }
+                    _reassignedOuterVariableNames = names.ToArray();
+                }
+                return (_reassignedOuterVariableNames != null && _reassignedOuterVariableNames.Length > 0) ? _reassignedOuterVariableNames : null;
+            }
+            internal set { _reassignedOuterVariableNames = value ?? Array.Empty<string>(); }
+        }
+
         private bool _wrapsMethod;
 
         /// <summary>
@@ -216,7 +243,26 @@ namespace IronRuby.Runtime.Calls {
             set {
                 _parameterSignature = value;
                 _checksKeywords = value != null && (value.TakesKeywords || value.RefusesKeywords);
+                _unmarksKeywords = value != null && !value.TakesKeywords && !value.RefusesKeywords;
             }
+        }
+
+        // the block declares no keywords (nor **nil): a Hash passed as keywords is a positional argument to it
+        private bool _unmarksKeywords;
+
+        /// <summary>
+        /// The argument a positional parameter of the block is about to be given. A block that declares no keywords takes a
+        /// Hash passed as keywords (yield(a: 1)) as a positional argument, which it may keep: it stops saying it is keyword
+        /// arguments, as for a method (<see cref="RubyOps.ClearKeywordArguments"/>). The dispatchers of blocks with at most
+        /// <see cref="MaxBlockArity"/> plain parameters do it here, in C#, rather than the block's prologue, where the test
+        /// would be interpreted on every call of the block while it is (see <see cref="UnmarksKeywordArguments"/>).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        protected object Positional(object arg) {
+            if (_unmarksKeywords) {
+                RubyOps.ClearKeywordArguments(arg);
+            }
+            return arg;
         }
 
         // the signature declares keywords or **nil, so even a proc's arguments are checked on a yield
@@ -297,6 +343,16 @@ namespace IronRuby.Runtime.Calls {
 
         internal static BlockDispatcher/*!*/ Create(int parameterCount, BlockSignatureAttributes attributesAndArity, string sourcePath, int sourceLine) {
             return Create(parameterCount, 0, attributesAndArity, sourcePath, sourceLine);
+        }
+
+        /// <summary>
+        /// Whether the dispatcher <see cref="Create(int, int, BlockSignatureAttributes, string, int)"/> makes for a block of this
+        /// shape takes the keyword mark off the arguments it gives the block's positional parameters (<see cref="Positional"/>),
+        /// so that the block's prologue need not: BlockDispatcher0 to 4.
+        /// </summary>
+        internal static bool UnmarksKeywordArguments(int parameterCount, int postCount, BlockSignatureAttributes attributesAndArity) {
+            return postCount == 0 && parameterCount <= MaxBlockArity &&
+                (attributesAndArity & (BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter)) == 0;
         }
 
         internal static BlockDispatcher/*!*/ Create(int parameterCount, int postCount, BlockSignatureAttributes attributesAndArity, string sourcePath, int sourceLine) {

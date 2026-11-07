@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_FULL_CONSOLE
 
 using System;
 using System.Collections.Generic;
@@ -22,8 +21,6 @@ using Microsoft.Scripting;
 using Microsoft.Scripting.Hosting;
 using Microsoft.Scripting.Hosting.Shell;
 using Microsoft.Scripting.Runtime;
-using System.Reflection;
-using System.Threading;
 using System.IO;
 using System.Globalization;
 using System.Text;
@@ -54,13 +51,6 @@ namespace IronRuby.Hosting {
         protected override int? TryInteractiveAction() {
             try {
                 return base.TryInteractiveAction();
-            } catch (ThreadAbortException e) {
-                Exception visibleException = RubyUtils.GetVisibleException(e);
-                if (visibleException == e || visibleException == null) {
-                    throw;
-                } else {
-                    throw visibleException;
-                }
             } catch (SystemExit e) {
                 return e.Status;
             }
@@ -395,4 +385,3 @@ namespace IronRuby.Hosting {
         }
     }
 }
-#endif

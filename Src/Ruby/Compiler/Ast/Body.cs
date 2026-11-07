@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -49,6 +45,20 @@ namespace IronRuby.Compiler.Ast {
         public List<RescueClause> RescueClauses { get { return _rescueClauses; } }
         public Statements ElseStatements { get { return _elseStatements; } }
         public Statements EnsureStatements { get { return _ensureStatements; } }
+
+        /// <summary>
+        /// Whether the statements can be guarded by the rescue clauses: there are both.
+        /// </summary>
+        internal bool HasRescue {
+            get { return _statements.Count > 0 && _rescueClauses != null; }
+        }
+
+        /// <summary>
+        /// Set by the block whose whole body this is, which then has no safe point at its entry
+        /// (RubyOps.CreateBlockScopeSafePointInBody): the first thing the rescued statements do is
+        /// the safe point - on a `retry` too, which makes the retry loop interruptible as well.
+        /// </summary>
+        internal bool SafePointFirst { get; set; }
 
         private bool HasExceptionHandling {
             get {
@@ -150,6 +160,9 @@ namespace IronRuby.Compiler.Ast {
             // body should do return, but else-clause is present => we cannot do return from the guarded statements: 
             // (the value of the last expression in the body cannot be the last executed expression statement => we can ignore it):
             transformedBody = gen.TransformStatements(_statements, (_elseStatements != null) ? ResultOperation.Ignore : resultOperation);
+            if (SafePointFirst) {
+                transformedBody = Ast.Block(gen.AddDebugInfo(Ast.Call(RubyUtils.SafePointMethod), _statements.First.Location), transformedBody);
+            }
 
             MSA.Expression enterRescue = null, leaveRescue = null;
             var retryLabel = Ast.Label("retry");
@@ -235,13 +248,9 @@ namespace IronRuby.Compiler.Ast {
                     AstUtils.Empty()
                 ).FinallyWithJumps(
                     AstUtils.Unless(retryingVariable,
-#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
                         // Reclaiming a discarded fiber drops Ruby ensure bodies, just as freeing
                         // a native fiber stack does. CLR cleanup finally blocks still execute.
                         AstUtils.Unless(Ast.Property(null, typeof(RubyUtils), "IsReclaimingFiber"), transformedEnsure)
-#else
-                        transformedEnsure
-#endif
                     )
                 )
             );

@@ -17,19 +17,29 @@
 # So a prelude method answers nil unless CRuby's own is written in Ruby too, and then it is
 # located where CRuby's is: "<internal:kernel>" for Kernel#tap, "<internal:numeric>" for
 # Integer#times. (--disable-gems keeps RubyGems' Kernel#require, which is a library, out.)
+#
+# The second table holds each such method's Method#arity and #parameters, which IronRuby
+# reports for it whether its own is a library method or prelude Ruby, as
+# "arity|kind name,kind name": "-2|req arg,opt base,key exception" for Kernel#Integer. A core
+# method CRuby writes in C reports what its C function takes instead, which needs no table
+# (see MethodReflection.cs).
 
 abort "run this with CRuby 4.0, not #{RUBY_ENGINE} #{RUBY_VERSION}" unless RUBY_ENGINE == "ruby" && RUBY_VERSION.start_with?("4.0")
 
 entries = {}
+signatures = {}
 ObjectSpace.each_object(Module) do |mod|
   name = mod.name
-  next if name.nil? || mod.singleton_class?
+  # the JITs are there or not depending on how CRuby was built, and IronRuby has neither
+  next if name.nil? || mod.singleton_class? || name.start_with?("RubyVM::YJIT", "RubyVM::ZJIT")
   [[mod, "#"], [mod.singleton_class, "."]].each do |owner, sep|
     (owner.instance_methods(false) + owner.private_instance_methods(false)).each do |meth|
       location = owner.instance_method(meth).source_location
       next unless location && location[0].start_with?("<internal:")
       next unless owner.instance_method(meth).owner == owner
       entries["#{name}#{sep}#{meth}"] = location[0]
+      um = owner.instance_method(meth)
+      signatures["#{name}#{sep}#{meth}"] = "#{um.arity}|" + um.parameters.map { |param| param.join(" ") }.join(",")
     end
   end
 end
@@ -44,6 +54,10 @@ out = +<<~HEADER
           internal static readonly Dictionary<string, string>/*!*/ SourceFiles = new Dictionary<string, string> {
 HEADER
 entries.sort.each { |key, file| out << "            { #{key.dump}, #{file.dump} },\n" }
+out << "        };\n\n"
+out << "        // Method#arity and #parameters of each, as \"arity|kind name,kind name\".\n"
+out << "        internal static readonly Dictionary<string, string>/*!*/ Signatures = new Dictionary<string, string> {\n"
+signatures.sort.each { |key, signature| out << "            { #{key.dump}, #{signature.dump} },\n" }
 out << <<~FOOTER
           };
       }
@@ -51,5 +65,5 @@ out << <<~FOOTER
 FOOTER
 
 path = File.expand_path("../Src/Libraries/Builtins/InternalMethods.Generated.cs", __dir__)
-File.binwrite(path, out.gsub("\n", "\r\n"))
+File.binwrite(path, out)
 puts "#{entries.size} methods -> #{path.sub(File.expand_path("..", __dir__) + "/", "")}"

@@ -17,7 +17,6 @@ using System;
 using System.Collections.Generic;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
 

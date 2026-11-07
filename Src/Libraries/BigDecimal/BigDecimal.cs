@@ -1,11 +1,11 @@
-﻿/* ****************************************************************************
+﻿﻿/* ****************************************************************************
  *
- * Copyright (c) Microsoft Corporation. 
+ * Copyright (c) Microsoft Corporation.
  *
- * This source code is subject to terms and conditions of the Apache License, Version 2.0. A 
- * copy of the license can be found in the License.html file at the root of this distribution. If 
- * you cannot locate the  Apache License, Version 2.0, please send an email to 
- * dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+ * copy of the license can be found in the License.html file at the root of this distribution. If
+ * you cannot locate the  Apache License, Version 2.0, please send an email to
+ * dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
  * by the terms of the Apache License, Version 2.0.
  *
  * You must not remove this notice, or any other, from this software.
@@ -15,107 +15,54 @@
 
 using System;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using System.Text;
-using System.Text.RegularExpressions;
-using IronRuby.Builtins;
 using System.Numerics;
-using Microsoft.Scripting.Utils;
+using System.Text;
+using IronRuby.Builtins;
+using IronRuby.Runtime;
 
 namespace IronRuby.StandardLibrary.BigDecimal {
-    public class BigDecimal : IComparable<BigDecimal>, IEquatable<BigDecimal> {
-
-        static BigDecimal() {
-            CreateSC();
-            CreateSR();
-        }
+    /// <summary>
+    /// An arbitrary-precision decimal number, as the bigdecimal 4.0.1 gem defines it: NaN, an infinity,
+    /// a signed zero, or sign * 0.d1d2...dn * 10**Exponent, with the digits d1...dn (d1 and dn non-zero)
+    /// held as a single BigInteger. MRI keeps the digits in base 10**9 words; nothing here depends on
+    /// that, except where MRI's results do (the ROUND_UP quirk of #round and #_dump's digit count),
+    /// and those places work the word layout out from the exponent.
+    /// </summary>
+    public class BigDecimal : IRubyObjectState {
 
         /// <summary>
-        /// This class holds the configuration information for the BigDecimal calculations
-        /// This information needs to be shared amongst all the instances of BigDecimal
-        /// but cannot be held in static variable storage since we need to scope more finely
-        /// than per assembly.
+        /// BigDecimal.limit, BigDecimal.mode(ROUND_MODE) and the exception flags. MRI keeps them per
+        /// thread; they are per RubyContext here.
         /// </summary>
-        public class Config {
-            public Config() {
-                Limit = 0;
-                RoundingMode = RoundingModes.HalfUp;
-                OverflowMode = OverflowExceptionModes.None;
-            }
+        public sealed class Config {
             public int Limit { get; set; }
-            public RoundingModes RoundingMode { get; set; }
-            public OverflowExceptionModes OverflowMode { get; set; }
+            public RoundingModes RoundingMode { get; set; } = RoundingModes.HalfUp;
+            public ExceptionModes ExceptionMode { get; set; }
+
+            internal bool Raises(ExceptionModes mode) {
+                return (ExceptionMode & mode) != 0;
+            }
         }
 
-        #region Instance Fields
-        private readonly NumberTypes _type;
-        private readonly int _sign;
-        private readonly Fraction _fraction;
-        private readonly int _exponent;
-        private readonly int _maxPrecision;
-        #endregion
-
-        #region Private Constants
-
-        private const string NaNString = "NaN";
-        private const string InfinityString = "Infinity";
-        private const string NegativeInfinityString = "-Infinity";
-        private const string ZeroString = "0.0";
-        private const string NegativeZeroString = "-0.0";
-
-        #endregion
-
-        #region Enumerations
-
         public enum RoundingModes {
-            /// <summary>
-            /// No rounding
-            /// </summary>
-            None = 0,
-            /// <summary>
-            /// Round away from zero
-            /// </summary>
             Up = 1,
-            /// <summary>
-            /// Round toward zero
-            /// </summary>
             Down = 2,
-            /// <summary>
-            /// Round towards "nearest neighbour" unless both neighbours are equidistant, in which case round up
-            /// </summary>
             HalfUp = 3,
-            /// <summary>
-            /// Round towards "nearest neighbour" unless both neighbours are equidistant, in which case round down
-            /// </summary>
             HalfDown = 4,
-            /// <summary>
-            /// Round toward positive infinity
-            /// </summary>
             Ceiling = 5,
-            /// <summary>
-            /// Round toward negative infinity
-            /// </summary>
             Floor = 6,
-            /// <summary>
-            /// Round towards "nearest neighbour" unless both neighbours are equidistant, in which case round to the even neighbour
-            /// </summary>
             HalfEven = 7
         }
 
-        /// <summary>
-        /// Flags of when exceptions should be thrown on special values
-        /// </summary>
-        /// <remarks>
-        /// Currently Infinity, Overflow and ZeroDivide are the same
-        /// </remarks>
+        /// <summary>The EXCEPTION_* flags. OVERFLOW is the same bit as INFINITY, as in MRI.</summary>
         [Flags]
-        public enum OverflowExceptionModes {
+        public enum ExceptionModes {
             None = 0,
-            NaN = 2,
             Infinity = 1,
-            Underflow = 4,
             Overflow = 1,
+            NaN = 2,
+            Underflow = 4,
             ZeroDivide = 16,
             All = 255
         }
@@ -126,2675 +73,1359 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             Infinite = 2
         }
 
-        private enum BasicOperations {
-            Add = 0,
-            Subtract = 1,
-            Multiply = 2,
-            Divide = 3
-        }
+        #region Representation
 
-        #endregion
+        private readonly NumberTypes _type;
+        private readonly int _sign;
+        // Positive and without trailing zeros for a non-zero finite value; zero otherwise.
+        private readonly BigInteger _digits;
+        private readonly int _digitCount;
+        private readonly long _exponent;
 
-        #region Special BigDecimal Values
-
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
-        public static readonly BigDecimal One = new BigDecimal(1, Fraction.One, 1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
-        public static readonly BigDecimal Half = new BigDecimal(1, Fraction.Five, 0);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
-        public static readonly BigDecimal NaN = new BigDecimal(NumberTypes.NaN, 0);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
+        public static readonly BigDecimal NaN = new BigDecimal(NumberTypes.NaN, 1);
         public static readonly BigDecimal PositiveInfinity = new BigDecimal(NumberTypes.Infinite, 1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
         public static readonly BigDecimal NegativeInfinity = new BigDecimal(NumberTypes.Infinite, -1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
-        public static readonly BigDecimal PositiveZero = new BigDecimal(1, Fraction.Zero, 1);
-        [SuppressMessage("Microsoft.Security", "CA2104:DoNotDeclareReadOnlyMutableReferenceTypes")]
-        public static readonly BigDecimal NegativeZero = new BigDecimal(-1, Fraction.Zero, 1);
-        public const uint BASE = Fraction.BASE;
-        public const int BASE_FIG = Fraction.BASE_FIG;
-        public const int DOUBLE_FIG = 16;
+        public static readonly BigDecimal PositiveZero = new BigDecimal(NumberTypes.Finite, 1);
+        public static readonly BigDecimal NegativeZero = new BigDecimal(NumberTypes.Finite, -1);
 
-        #endregion
+        /// <summary>MRI's word: BigDecimal::BASE is 10**9, and #_dump and #round count in its digits.</summary>
+        public const int BASE_FIG = 9;
+        public const int BASE = 1000000000;
 
-        #region Private Constructors
+        /// <summary>BIGDECIMAL_DOUBLE_FIGURES</summary>
+        public const int DoubleFig = 16;
 
-        public BigDecimal() : this(0, NaN) {
+        // MRI's exponent is a word count in a signed 64-bit value: EXPONENT_MAX and EXPONENT_MIN in digits.
+        private const long MaxExponent = long.MaxValue / BASE_FIG * BASE_FIG;
+        private const long MinExponent = long.MinValue;
+
+        // A subclass instance (AotSubclasses.Generated.cs) needs a parameterless constructor; nothing can
+        // make one, since BigDecimal has no allocator.
+        public BigDecimal() : this(NumberTypes.NaN, 1) {
         }
 
-        private BigDecimal(int sign, Fraction/*!*/ fraction, int exponent)
-            : this(sign, fraction, exponent, fraction.Precision) {
-        }
-
-        private BigDecimal(int sign, Fraction/*!*/ fraction, int exponent, int maxPrecision) {
-            Debug.Assert(sign == 1 || sign == -1);
-            _type = NumberTypes.Finite;
-            _sign = sign;
-            _fraction = fraction;
-            _exponent = exponent;
-            // If maxPrecision is 0 then default to the precision of the fraction
-            _maxPrecision = maxPrecision == 0 ? fraction.Precision : maxPrecision;
-        }
-
-        private BigDecimal(int sign, BigDecimal/*!*/ copyFrom) {
-            _type = copyFrom._type;
-            _sign = sign;
-            _fraction = copyFrom._fraction;
-            _exponent = copyFrom._exponent;
-            _maxPrecision = copyFrom._maxPrecision;
-        }
-
-        private BigDecimal(int sign, BigDecimal/*!*/ copyFrom, int maxPrecision) {
-            _type = copyFrom._type;
-            _sign = sign;
-            _fraction = new Fraction(copyFrom._fraction, maxPrecision);
-            _exponent = copyFrom._exponent;
-            _maxPrecision = maxPrecision;
-        }
-
-        private BigDecimal(NumberTypes type, int sign)
-            : this(type, sign, 1) {
-        }
-
-        private BigDecimal(NumberTypes type, int sign, int maxPrecision) {
-            Debug.Assert(type != NumberTypes.Finite);
+        private BigDecimal(NumberTypes type, int sign) {
             _type = type;
             _sign = sign;
-            _fraction = Fraction.Zero;
-            _exponent = 0;
-            _maxPrecision = maxPrecision;
+        }
+
+        private BigDecimal(int sign, BigInteger digits, int digitCount, long exponent) {
+            Debug.Assert((sign == 1 || sign == -1) && digits.Sign > 0 && digitCount > 0);
+            _type = NumberTypes.Finite;
+            _sign = sign;
+            _digits = digits;
+            _digitCount = digitCount;
+            _exponent = exponent;
+        }
+
+        public int Sign => _sign;
+        public bool IsNaN => _type == NumberTypes.NaN;
+        public bool IsInfinite => _type == NumberTypes.Infinite;
+        public bool IsFinite => _type == NumberTypes.Finite;
+        public bool IsZero => _type == NumberTypes.Finite && _digitCount == 0;
+        public bool IsNonZeroFinite => _type == NumberTypes.Finite && _digitCount != 0;
+
+        /// <summary>The decimal exponent: 0.1234e3 has 3. Zero and the special values have 0.</summary>
+        public long Exponent => _exponent;
+
+        /// <summary>The number of significant digits, without leading or trailing zeros. Zero has none.</summary>
+        public int DigitCount => _digitCount;
+
+        /// <summary>
+        /// The power of ten the last digit stands for: the value is ±digits * 10**Scale. It is wider than
+        /// the exponent, which can be as small as long.MinValue, and so is every scale computed from it.
+        /// </summary>
+        private Int128 Scale => (Int128)_exponent - _digitCount;
+
+        /// <summary>MRI's #sign: the SIGN_* constants.</summary>
+        public int SignCode => _type switch {
+            NumberTypes.NaN => 0,
+            NumberTypes.Infinite => 3 * _sign,
+            _ => (_digitCount == 0 ? 1 : 2) * _sign,
+        };
+
+        public static BigDecimal/*!*/ Zero(int sign) => sign < 0 ? NegativeZero : PositiveZero;
+        public static BigDecimal/*!*/ Infinity(int sign) => sign < 0 ? NegativeInfinity : PositiveInfinity;
+
+        #endregion
+
+        #region IRubyObjectState
+
+        // A BigDecimal is immutable and, as in MRI, always frozen.
+        public bool IsFrozen => true;
+        public void Freeze() { }
+        public bool IsTainted { get => false; set { } }
+        public bool IsUntrusted { get => false; set { } }
+
+        #endregion
+
+        #region Digits and powers of ten
+
+        private static readonly BigInteger[] _powers = CreatePowers(64);
+        private static readonly ulong[] _ulongPowers = CreateULongPowers();
+
+        private static BigInteger[] CreatePowers(int count) {
+            var result = new BigInteger[count];
+            result[0] = BigInteger.One;
+            for (int i = 1; i < count; i++) {
+                result[i] = result[i - 1] * 10;
+            }
+            return result;
+        }
+
+        private static ulong[] CreateULongPowers() {
+            var result = new ulong[20];
+            result[0] = 1;
+            for (int i = 1; i < result.Length; i++) {
+                result[i] = result[i - 1] * 10;
+            }
+            return result;
+        }
+
+        internal static BigInteger Pow10(Int128 n) {
+            Debug.Assert(n >= 0);
+            if (n < _powers.Length) {
+                return _powers[(int)n];
+            }
+            if (n > Int32.MaxValue) {
+                throw new OutOfMemoryException("failed to allocate memory");
+            }
+            return BigInteger.Pow(10, (int)n);
+        }
+
+        /// <summary>The number of decimal digits of a positive value.</summary>
+        internal static int CountDigits(BigInteger n) {
+            Debug.Assert(n.Sign > 0);
+            if (n <= ulong.MaxValue) {
+                ulong value = (ulong)n;
+                int count = 1;
+                while (count < _ulongPowers.Length && value >= _ulongPowers[count]) {
+                    count++;
+                }
+                return count;
+            }
+            // 2**(bits-1) <= n < 2**bits, so n has this many digits or one more
+            long bits = (long)n.GetBitLength();
+            int estimate = (int)((bits - 1) * 0.30102999566398119521) + 1;
+            if (n >= Pow10(estimate)) {
+                return estimate + 1;
+            }
+            if (n < Pow10(estimate - 1)) {
+                return estimate - 1;
+            }
+            return estimate;
+        }
+
+        /// <summary>Removes the trailing zeros of a positive value, adding one to scale for each.</summary>
+        private static BigInteger StripTrailingZeros(BigInteger n, ref Int128 scale) {
+            if (!n.IsEven) {
+                return n;
+            }
+            if (n <= ulong.MaxValue) {
+                ulong value = (ulong)n;
+                if (value % 10 != 0) {
+                    return n;
+                }
+                do {
+                    value /= 10;
+                    scale++;
+                } while (value % 10 == 0);
+                return value;
+            }
+            BigInteger remainder;
+            while (true) {
+                BigInteger quotient = BigInteger.DivRem(n, _powers[16], out remainder);
+                if (!remainder.IsZero) {
+                    break;
+                }
+                n = quotient;
+                scale += 16;
+            }
+            while (true) {
+                BigInteger quotient = BigInteger.DivRem(n, 10, out remainder);
+                if (!remainder.IsZero) {
+                    return n;
+                }
+                n = quotient;
+                scale++;
+            }
         }
 
         #endregion
 
-        #region Public Properties
-        public NumberTypes NumberType { get { return _type; } }
-        public int Sign { get { return _sign; } }
-        public int Exponent { get { return _exponent; } }
-        public int Precision { get { return _fraction.Precision; } }
-        public int MaxPrecision { get { return _maxPrecision; } }
-        public int Digits { get { return _fraction.DigitCount; } }
-        public int MaxPrecisionDigits { get { return _maxPrecision * BASE_FIG; } }
-        public int PrecisionDigits { get { return _fraction.Precision * BASE_FIG; } }
-        #endregion
+        #region Creation
 
-        #region Create Methods
-
-        public static BigDecimal Create(Config/*!*/config, object value) {
-            Debug.Assert(!(value is double) && !(value is float)); // Need to use CultureInfo.InvariantCulture for double
-            return Create(config, value.ToString(), 0);
+        /// <summary>
+        /// sign * magnitude * 10**scale, exactly: zero is the signed zero, and an exponent beyond MRI's
+        /// range overflows to an infinity or underflows to zero (raising, if the mode says so).
+        /// </summary>
+        internal static BigDecimal/*!*/ Create(Config/*!*/ config, int sign, BigInteger magnitude, Int128 scale) {
+            Debug.Assert(magnitude.Sign >= 0);
+            if (magnitude.IsZero) {
+                return Zero(sign);
+            }
+            magnitude = StripTrailingZeros(magnitude, ref scale);
+            int count = CountDigits(magnitude);
+            Int128 exponent = scale + count;
+            if (exponent > MaxExponent) {
+                return ExponentOverflow(config, sign);
+            }
+            if (exponent < MinExponent) {
+                return ExponentUnderflow(config, sign);
+            }
+            return new BigDecimal(sign, magnitude, count, (long)exponent);
         }
 
-        public static BigDecimal Create(Config/*!*/config, double value) {
-            return Create(config, value.ToString(CultureInfo.InvariantCulture), 0);
+        /// <summary>An unscaled value carrying its own sign, times 10**scale; zero is +0.</summary>
+        internal static BigDecimal/*!*/ Create(Config/*!*/ config, BigInteger value, Int128 scale) {
+            return Create(config, value.Sign < 0 ? -1 : 1, BigInteger.Abs(value), scale);
         }
 
-        public static BigDecimal Create(Config/*!*/config, string value) {
+        internal static BigDecimal/*!*/ ExponentOverflow(Config/*!*/ config, int sign) {
+            Raise(config, ExceptionModes.Overflow, "Exponent overflow");
+            return Infinity(sign);
+        }
+
+        private static BigDecimal/*!*/ ExponentUnderflow(Config/*!*/ config, int sign) {
+            Raise(config, ExceptionModes.Underflow, "Exponent underflow");
+            return Zero(sign);
+        }
+
+        public static BigDecimal/*!*/ Create(Config/*!*/ config, int value) {
+            return Create(config, (BigInteger)value, 0);
+        }
+
+        public static BigDecimal/*!*/ Create(Config/*!*/ config, long value) {
+            return Create(config, (BigInteger)value, 0);
+        }
+
+        public static BigDecimal/*!*/ Create(Config/*!*/ config, BigInteger value) {
             return Create(config, value, 0);
         }
 
-        public static BigDecimal Create(Config/*!*/config, string value, int maxPrecision) {
-            value = value.Trim();
-            BigDecimal result = CheckSpecialCases(value);
-
-            if (result == null) {
-                Match m = Regex.Match(value, @"^(?<sign>[-+]?)(?<integer>[\d_]*)\.?(?<fraction>[\d_]*)([eEdD](?<exponent>[-+]?[\d_]+))?", RegexOptions.ExplicitCapture);
-
-                int sign = m.Groups["sign"].Value == "-" ? -1 : 1;
-
-                // Get the integer part of the mantissa (stripping off leading zeros and any '_' chars)
-                string integerStr = (m.Groups["integer"].Value ?? "0").TrimStart('0').Replace("_", "");
-                // Get the fraction part of the mantissa (stripping off following zeros and any '_' chars)
-                string decimalStr = (m.Groups["fraction"].Value ?? "").TrimEnd('0').Replace("_", "");
-                // Build the whole of the mantissa string
-                string fractionStr = (integerStr + decimalStr);
-                string strippedFractionStr = fractionStr.TrimStart('0');
-
-                // Finally strip off any excess zeros left over
-                string trimmedFractionStr = strippedFractionStr.Trim('0');
-
-                Fraction fraction = Fraction.Create(trimmedFractionStr);
-
-                string exponentStr = m.Groups["exponent"].Value.Replace("_", "");
-                int exponent = 0;
-                if (!fraction.IsZero) {
-                    if (!string.IsNullOrEmpty(exponentStr)) {
-                        try {
-                            exponent = int.Parse(exponentStr, CultureInfo.InvariantCulture);
-                        } catch (OverflowException) {
-                            exponent = exponentStr.StartsWith("-", StringComparison.Ordinal) ? -1 : 1;
-                            return ExponentOverflow(config, sign, exponent);
-                        }
-                    }
-                    // Normalize exponent where mantissa > 1.0
-                    exponent += integerStr.Length;
-                    // Normalize exponent where mantissa < 1.0
-                    exponent -= (fractionStr.Length - strippedFractionStr.Length);
-                }
-                result = new BigDecimal(sign, fraction, exponent, maxPrecision);
+        /// <summary>
+        /// A Float as MRI's rb_float_convert_to_BigDecimal makes it. With no digit count it takes the
+        /// shortest digits that read back as the same Float, and keeps only the first 16 of them, unrounded
+        /// (so 0.1 + 0.2 becomes 0.3). Otherwise it takes as many digits as dtoa's mode 2 gives: the Float's
+        /// exact binary value rounded half to even (BigDecimal(1.25, 2) is 0.12e1) - nearly always.
+        /// NaN and the infinities raise when the exception mode says so.
+        /// </summary>
+        public static BigDecimal/*!*/ Create(Config/*!*/ config, double value, int digits) {
+            if (Double.IsNaN(value)) {
+                return CheckResult(config, NaN);
             }
-            return CheckOverflowExceptions(config, result);
+            if (Double.IsInfinity(value)) {
+                return CheckResult(config, Infinity(value > 0 ? 1 : -1));
+            }
+            int sign = value < 0 || (value == 0 && Double.IsNegative(value)) ? -1 : 1;
+            if (value == 0) {
+                return Zero(sign);
+            }
+
+            if (digits == 0) {
+                return CreateFromShortest(config, sign, Math.Abs(value));
+            }
+
+            string text = DtoaMode2(Math.Abs(value), digits, out int pointPosition);
+            return Create(config, sign, BigInteger.Parse(text, CultureInfo.InvariantCulture), pointPosition - text.Length);
         }
 
-        // A run of digits, which may be broken up by single underscores but may not start or
-        // end with one: 1_2_3 is fine, 1__2 and _123 are not.
-        private const string DigitRun = @"\d+(_\d+)*";
-
-        private static readonly Regex/*!*/ _strictNumber = new Regex(
-            @"^[-+]?(" + DigitRun + @"(\.(" + DigitRun + @")?)?|\.(" + DigitRun + @"))([eEdD][-+]?" + DigitRun + @")?$",
-            RegexOptions.ExplicitCapture);
-
-        // MRI tolerates one trailing underscore, but only on a bare integer and only at the
-        // very end of the string: "123_" and "1_2_" parse, while "123_.45", "1.23_" and
-        // "1E1_" are all rejected. Measured, not deduced - the general rule would have
-        // accepted all four.
-        private static readonly Regex/*!*/ _strictTrailingUnderscore = new Regex(
-            @"^[-+]?" + DigitRun + "_$", RegexOptions.ExplicitCapture);
+        private static readonly double[] _tens = {
+            1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+        };
+        private static readonly double[] _bigTens = { 1e16, 1e32, 1e64, 1e128, 1e256 };
 
         /// <summary>
-        /// Whether Kernel#BigDecimal would accept this string. The parser itself is
-        /// deliberately forgiving (String#to_d wants a value out of "45.67 degrees"), so the
-        /// strictness lives here rather than in Create.
+        /// The first <paramref name="ndigits"/> significant digits of d &gt; 0 as the dtoa.c in MRI's
+        /// bigdecimal makes them (mode 2), trailing zeros dropped; d is 0.digits * 10**pointPosition.
+        /// That is the correctly rounded value, but for one patch of Ruby's: when dtoa's quick
+        /// floating-point attempt cannot tell whether the discarded part is more or less than half
+        /// (it is within the attempt's error bound of half), it rounds an odd last digit up there and
+        /// then, and makes the exact computation that follows leave an even one alone - whichever side
+        /// of half the value really is. So BigDecimal(4.383733694592053e-09, 14), whose 15th digit is a
+        /// 5 followed by 2862..., is 0.4383733694592e-8. The quick attempt is reproduced step for step.
         /// </summary>
-        public static bool IsValidNumericString(string value) {
-            if (value == null) {
-                return false;
+        private static string/*!*/ DtoaMode2(double d, int ndigits, out int pointPosition) {
+            long bits = BitConverter.DoubleToInt64Bits(d);
+            int biasedExponent = (int)((bits >> 52) & 0x7FF);
+            long fraction = bits & 0xFFFFFFFFFFFFFL;
+            BigInteger mantissa = biasedExponent == 0 ? fraction : fraction | (1L << 52);
+            int binaryExponent = (biasedExponent == 0 ? 1 : biasedExponent) - 1075;
+
+            // dtoa's estimate of floor(log10(d)), with d2 the mantissa scaled to [1, 2)
+            double d2 = BitConverter.Int64BitsToDouble((bits & 0xFFFFFFFFFFFFFL) | 0x3FF0000000000000L);
+            int i = biasedExponent - 1023;
+            if (biasedExponent == 0) {
+                // denormal: normalize the mantissa first
+                int shift = 53 - (int)mantissa.GetBitLength();
+                d2 = BitConverter.Int64BitsToDouble((((long)mantissa << shift) & 0xFFFFFFFFFFFFFL) | 0x3FF0000000000000L);
+                i = -1022 - shift;
             }
-            value = value.Trim();
-            if (value == "NaN" || value == "Infinity" || value == "+Infinity" || value == "-Infinity") {
-                return true;
+            double ds = (d2 - 1.5) * 0.289529654602168 + 0.1760912590558 + i * 0.301029995663981;
+            int k = (int)ds;
+            if (ds < 0.0 && ds != k) {
+                k--;
             }
-            return _strictNumber.IsMatch(value) || _strictTrailingUnderscore.IsMatch(value);
+            bool kCheck = true;
+            if (k >= 0 && k <= 22) {
+                if (d < _tens[k]) {
+                    k--;
+                }
+                kCheck = false;
+            }
+
+            var s = new StringBuilder();
+            bool half = false;
+            int ilim = ndigits;
+            if (ilim <= 14) {
+                // Try to get by with floating-point arithmetic.
+                double dd = d;
+                int ieps = 2;
+                int kq = k;
+                if (k > 0) {
+                    double tens = _tens[k & 0xf];
+                    int j = k >> 4;
+                    if ((j & 0x10) != 0) {
+                        j &= 0xf;
+                        dd /= _bigTens[4];
+                        ieps++;
+                    }
+                    for (int b = 0; j != 0; j >>= 1, b++) {
+                        if ((j & 1) != 0) {
+                            ieps++;
+                            tens *= _bigTens[b];
+                        }
+                    }
+                    dd /= tens;
+                } else if (k < 0) {
+                    dd *= _tens[-k & 0xf];
+                    for (int j = -k >> 4, b = 0; j != 0; j >>= 1, b++) {
+                        if ((j & 1) != 0) {
+                            ieps++;
+                            dd *= _bigTens[b];
+                        }
+                    }
+                }
+                if (kCheck && dd < 1.0) {
+                    kq--;
+                    dd *= 10.0;
+                    ieps++;
+                }
+                double eps = (ieps * dd + 7.0) * (1.0 / (1L << 52)) * _tens[ilim - 1];
+                for (int n = 1; ; n++, dd *= 10.0) {
+                    long digit = (long)dd;
+                    dd -= digit;
+                    if (dd == 0) {
+                        ilim = n;
+                    }
+                    s.Append((char)('0' + digit));
+                    if (n == ilim) {
+                        if (dd > 0.5 + eps) {
+                            return RoundUpDigits(s, kq, out pointPosition);
+                        }
+                        if (dd < 0.5 - eps) {
+                            pointPosition = kq + 1;
+                            return s.ToString().TrimEnd('0');
+                        }
+                        half = true;
+                        if ((digit & 1) != 0) {
+                            return RoundUpDigits(s, kq, out pointPosition);
+                        }
+                        break;
+                    }
+                }
+                s.Clear();
+                ilim = ndigits;
+            }
+
+            // Exactly. (dtoa's own way for a small integer rounds the same, without the patch.)
+            bool smallInteger = k <= 14 && (binaryExponent >= 0 || (mantissa & ((BigInteger.One << -binaryExponent) - 1)).IsZero);
+            BigInteger numerator;
+            int scale;
+            if (binaryExponent >= 0) {
+                numerator = mantissa << binaryExponent;
+                scale = 0;
+            } else {
+                numerator = mantissa * BigInteger.Pow(5, -binaryExponent);
+                scale = binaryExponent;
+            }
+            int count = CountDigits(numerator);
+            int drop = count - ilim;
+            BigInteger quotient = numerator, remainder = BigInteger.Zero, unit = BigInteger.One;
+            if (drop > 0) {
+                unit = Pow10(drop);
+                quotient = BigInteger.DivRem(numerator, unit, out remainder);
+            }
+            string digits = quotient.ToString(CultureInfo.InvariantCulture);
+            int position = count + scale;
+            int compared = (remainder << 1).CompareTo(unit);
+            if (drop > 0 && (compared > 0 || (compared == 0 && !quotient.IsEven))) {
+                s.Append(digits);
+                if (smallInteger || !half) {
+                    return RoundUpDigits(s, position - 1, out pointPosition);
+                }
+                // roundoff with the patch: the trailing 9s go, and an even digit stays as it is
+                int last = s.Length - 1;
+                while (last >= 0 && s[last] == '9') {
+                    last--;
+                }
+                if (last < 0) {
+                    pointPosition = position + 1;
+                    return "1";
+                }
+                s.Length = last + 1;
+                if (((s[last] - '0') & 1) != 0) {
+                    s[last]++;
+                }
+                pointPosition = position;
+                return s.ToString();
+            }
+            pointPosition = position;
+            return digits.TrimEnd('0');
         }
 
-        private static BigDecimal CheckSpecialCases(string value) {
-            BigDecimal result = null;
-            if (value == null) {
-                result = PositiveZero;
-            } else {
-                value = value.Trim();
-                if (value == "NaN") {
-                    result = NaN;
-                } else if (value.Contains("Infinity")) {
-                    if (value == "+Infinity" || value == "Infinity") {
-                        result = PositiveInfinity;
-                    } else if (value == "-Infinity") {
-                        result = NegativeInfinity;
-                    } else {
-                        result = PositiveZero;
+        /// <summary>dtoa's bump_up: adds one to the last digit, carrying through 9s.</summary>
+        private static string/*!*/ RoundUpDigits(StringBuilder/*!*/ s, int k, out int pointPosition) {
+            int last = s.Length - 1;
+            while (last >= 0 && s[last] == '9') {
+                last--;
+            }
+            if (last < 0) {
+                pointPosition = k + 2;
+                return "1";
+            }
+            s.Length = last + 1;
+            s[last]++;
+            pointPosition = k + 1;
+            return s.ToString();
+        }
+
+        private static BigDecimal/*!*/ CreateFromShortest(Config/*!*/ config, int sign, double magnitude) {
+            // "R" is the shortest form that round-trips ("1.1805916207174113E+21", "0.0001", "1E-05")
+            string text = magnitude.ToString("R", CultureInfo.InvariantCulture);
+            int e = text.IndexOfAny(new[] { 'E', 'e' });
+            long exponent = 0;
+            if (e >= 0) {
+                exponent = Int64.Parse(text.Substring(e + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+                text = text.Substring(0, e);
+            }
+            int point = text.IndexOf('.');
+            if (point >= 0) {
+                exponent -= text.Length - point - 1;
+                text = text.Remove(point, 1);
+            }
+            text = text.TrimStart('0');
+            // dtoa's digits are at most 17; MRI keeps 16 and drops the rest
+            if (text.Length > DoubleFig) {
+                exponent += text.Length - DoubleFig;
+                text = text.Substring(0, DoubleFig);
+            }
+            return Create(config, sign, BigInteger.Parse(text, CultureInfo.InvariantCulture), exponent);
+        }
+
+        #endregion
+
+        #region Parsing
+
+        private static bool IsSpace(char c) {
+            return c == ' ' || (c >= '\t' && c <= '\r');
+        }
+
+        private static bool IsDigit(char c) {
+            return c >= '0' && c <= '9';
+        }
+
+        /// <summary>
+        /// MRI's VpAlloc. Strictly (Kernel#BigDecimal) the whole string must be a number, give or take
+        /// surrounding white space, and null is returned when it is not. Loosely (String#to_d) the number
+        /// ends at the first character that cannot continue it, and a string with no number is zero.
+        /// Underscores may separate digits: after the first digit of the integer part (where one may also
+        /// end it), and between two digits elsewhere.
+        /// </summary>
+        public static BigDecimal Parse(Config/*!*/ config, string/*!*/ str, bool strict) {
+            int length = str.Length;
+            int j = 0;
+            char Peek(int k) => k < length ? str[k] : '\0';
+
+            while (j < length && IsSpace(str[j])) {
+                j++;
+            }
+
+            BigDecimal special = ParseSpecial(str, j);
+            if (special != null) {
+                return CheckResult(config, special);
+            }
+
+            if (Peek(j) == '#') {
+                j++;
+            }
+
+            var integerDigits = new StringBuilder();
+            var fractionDigits = new StringBuilder();
+            var exponentDigits = new StringBuilder();
+            int sign = 1;
+            bool exponentNegative = false;
+            bool exponentSeen = false;
+
+            char v = Peek(j);
+            if (v == '-' || v == '+') {
+                sign = v == '-' ? -1 : 1;
+                j++;
+            }
+
+            // integer part
+            while ((v = Peek(j)) != '\0') {
+                if (!strict && IsSpace(v)) {
+                    v = '\0';
+                    break;
+                }
+                if (v == '_') {
+                    if (integerDigits.Length > 0) {
+                        char next = Peek(j + 1);
+                        if (next == '\0' || IsSpace(next) || IsDigit(next)) {
+                            j++;
+                            continue;
+                        }
+                        if (!strict) {
+                            v = '\0';
+                            break;
+                        }
+                    }
+                    return Invalid(strict);
+                }
+                if (!IsDigit(v)) {
+                    break;
+                }
+                integerDigits.Append(v);
+                j++;
+            }
+
+            if (v != '\0') {
+                // fraction part
+                if (Peek(j) == '.') {
+                    j++;
+                    while ((v = Peek(j)) != '\0') {
+                        if (!strict && IsSpace(v)) {
+                            v = '\0';
+                            break;
+                        }
+                        if (v == '_') {
+                            if (fractionDigits.Length > 0 && IsDigit(Peek(j + 1))) {
+                                j++;
+                                continue;
+                            }
+                            if (!strict) {
+                                v = '\0';
+                                break;
+                            }
+                            return Invalid(strict);
+                        }
+                        if (!IsDigit(v)) {
+                            break;
+                        }
+                        fractionDigits.Append(v);
+                        j++;
+                    }
+                }
+
+                // exponent part
+                if (v != '\0') {
+                    char marker = Peek(j);
+                    if (marker == 'e' || marker == 'E' || marker == 'd' || marker == 'D') {
+                        exponentSeen = true;
+                        j++;
+                        v = Peek(j);
+                        if (v == '-' || v == '+') {
+                            exponentNegative = v == '-';
+                            j++;
+                        }
+                        while ((v = Peek(j)) != '\0') {
+                            if (!strict && IsSpace(v)) {
+                                v = '\0';
+                                break;
+                            }
+                            if (v == '_') {
+                                if (exponentDigits.Length > 0 && IsDigit(Peek(j + 1))) {
+                                    j++;
+                                    continue;
+                                }
+                                if (!strict) {
+                                    v = '\0';
+                                    if (exponentDigits.Length == 0) {
+                                        exponentSeen = false;
+                                    }
+                                    break;
+                                }
+                                return Invalid(strict);
+                            }
+                            if (!IsDigit(v)) {
+                                break;
+                            }
+                            exponentDigits.Append(v);
+                            j++;
+                        }
+                    }
+                }
+
+                if (v != '\0') {
+                    while (j < length && IsSpace(str[j])) {
+                        j++;
+                    }
+                    if (j < length && strict) {
+                        return Invalid(strict);
                     }
                 }
             }
-            return result;
-        }
 
-        #endregion
-
-        #region Special Value Tests
-
-        public static bool IsNaN(BigDecimal x) {
-            return x._type == NumberTypes.NaN;
-        }
-
-        public static bool IsInfinite(BigDecimal x) {
-            return (x._type == NumberTypes.Infinite);
-        }
-
-        public static bool IsFinite(BigDecimal x) {
-            return x._type == NumberTypes.Finite;
-        }
-
-        public static bool IsZero(BigDecimal/*!*/ x) {
-            return IsFinite(x) && x._fraction.IsZero;
-        }
-
-        public static bool IsNonZeroFinite(BigDecimal x) {
-            return IsFinite(x) && !x._fraction.IsZero;
-        }
-
-        public static bool IsPositive(BigDecimal x) {
-            return x._sign == 1;
-        }
-
-        public static bool IsNegative(BigDecimal x) {
-            return x._sign == -1;
-        }
-
-        public static bool IsPositiveInfinite(BigDecimal x) {
-            return IsInfinite(x) && IsPositive(x);
-        }
-
-        public static bool IsNegativeInfinite(BigDecimal x) {
-            return IsInfinite(x) && IsNegative(x);
-        }
-
-        public static bool IsPositiveZero(BigDecimal x) {
-            return IsZero(x) && IsPositive(x);
-        }
-
-        public static bool IsNegativeZero(BigDecimal x) {
-            return IsZero(x) && IsNegative(x);
-        }
-
-        public static bool IsOne(BigDecimal x) {
-            return x._fraction.IsOne && x._exponent == 1;
-        }
-
-        public static bool IsPositiveOne(BigDecimal x) {
-            return IsOne(x) && IsPositive(x);
-        }
-
-        public static bool IsNegativeOne(BigDecimal x) {
-            return IsOne(x) && IsPositive(x);
-        }
-
-        #endregion
-
-        #region Public Static Operations
-
-        public static double ToFloat(Config config, BigDecimal/*!*/ x) {
-            try {
-                if (BigDecimal.IsNegativeZero(x)) {
-                    return -0.0;
-                }
-                return Double.Parse(x.ToString(0, "", true), CultureInfo.InvariantCulture);
-            } catch (OverflowException) {
-                return Double.PositiveInfinity;
-            }
-        }
-
-        public static object ToInteger(Config/*!*/ config, BigDecimal/*!*/ x) {
-            if (IsFinite(x)) {
-                BigDecimal i = IntegerPart(config, x);
-                BigInteger d = new BigInteger(0);
-                string digits = i._fraction.ToString();
-                foreach (char c in digits) {
-                    d *= 10;
-                    d += (c - '0');
-                }
-                if (IsNegative(x)) {
-                    d = BigInteger.Negate(d);
-                }
-                return ClrInteger.Multiply(d, new BigInteger(10).Power(i.Exponent - digits.Length));
-            } else {
+            if (strict && ((integerDigits.Length == 0 && fractionDigits.Length == 0) || (exponentSeen && exponentDigits.Length == 0))) {
                 return null;
             }
+
+            return CreateFromDigits(config, sign, integerDigits.ToString(), fractionDigits.ToString(), exponentNegative, exponentDigits.ToString());
         }
 
-        public static BigDecimal Abs(Config config, BigDecimal x) {
-            if (IsNegative(x)) {
-                return Negate(config, x);
-            } else {
-                return x;
-            }
+        private static BigDecimal Invalid(bool strict) {
+            return strict ? null : PositiveZero;
         }
 
-        public static BigDecimal Negate(Config config, BigDecimal x) {
-            if (IsFinite(x)) {
-                return new BigDecimal(-x._sign, x._fraction, x._exponent);
-            } else {
-                return new BigDecimal(x.NumberType, -x.Sign);
-            }
-        }
-
-        public static BigDecimal/*!*/ Add(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y) {
-            return Add(config, x, y, 0);
-        }
-
-        public static BigDecimal/*!*/ Add(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, int limit) {
-            return InternalAdd(config, x, y, limit);
-        }
-
-        public static BigDecimal/*!*/ Subtract(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y) {
-            return Subtract(config, x, y, 0);
-        }
-
-        public static BigDecimal/*!*/ Subtract(Config config, BigDecimal x, BigDecimal y, int limit) {
-            return InternalAdd(config, x, BigDecimal.Negate(config, y), limit);
-        }
-
-        public static BigDecimal Multiply(Config config, BigDecimal x, BigDecimal y) {
-            return Multiply(config, x, y, 0);
-        }
-
-        public static BigDecimal Multiply(Config config, BigDecimal x, BigDecimal y, int limit) {
-            BigDecimal result = CheckSpecialResult(config, x, y, BasicOperations.Multiply);
-            if (result != null) {
-                return result;
-            }
-
-            // Default to the global limit
-            if (limit == 0) {
-                limit = config.Limit;
-            }
-
-            // Calculate the number of digits if not specified
-            if (limit == 0) {
-                limit = x.Digits + y.Digits;
-            }
-
-            int sign = y._sign * x._sign;
-            // #mult's limit counts significant digits, but LimitPrecision's counts decimal
-            // places, so the multiply-by-one short cut has to convert between the two -
-            // otherwise BigDecimal("1.234").mult(1, 2) keeps three digits instead of two.
-            if (IsOne(x)) {
-                BigDecimal scaled = new BigDecimal(sign, y._fraction, y._exponent);
-                return LimitPrecision(config, scaled, limit - scaled.Exponent, config.RoundingMode);
-            }
-            if (IsOne(y)) {
-                BigDecimal scaled = new BigDecimal(sign, x._fraction, x._exponent);
-                return LimitPrecision(config, scaled, limit - scaled.Exponent, config.RoundingMode);
-            }
-
-            int exponent;
-            Fraction fraction;
-            try {
-                checked {
-                    int diffDigits1, diffDigits2;
-                    fraction = Fraction.Multiply(x._fraction, y._fraction, out diffDigits1);
-                    fraction = Fraction.LimitPrecision(sign, fraction, limit, config.RoundingMode, out diffDigits2);
-                    exponent = x._exponent + y._exponent + diffDigits1 + diffDigits2;
+        // "Infinity", "+Infinity", "-Infinity" or "NaN", followed by nothing but white space.
+        private static BigDecimal ParseSpecial(string/*!*/ str, int start) {
+            foreach (var (text, value) in _specialStrings) {
+                if (String.CompareOrdinal(str, start, text, 0, text.Length) != 0) {
+                    continue;
                 }
-            } catch (OverflowException) {
-                return ExponentOverflow(config, sign, x._exponent);
-            }
-
-            result = new BigDecimal(sign, fraction, exponent, limit);
-            return result;
-        }
-
-        public static BigDecimal Divide(Config config, BigDecimal x, BigDecimal y, int limit, out BigDecimal remainder) {
-            BigDecimal result = CheckSpecialResult(config, x, y, BasicOperations.Divide);
-            if (result != null) {
-                remainder = BigDecimal.PositiveZero;
-                return result;
-            }
-
-            // Default to global limit if not specified
-            if (limit == 0) {
-                limit = config.Limit;
-            }
-
-            // Sign
-            int sign = x._sign * y._sign;
-
-            if (IsOne(y)) {
-                remainder = BigDecimal.PositiveZero;
-                return new BigDecimal(sign, x._fraction, x._exponent);
-            }
-
-            // Fraction
-            int xOffset, rOffset, limitOffset;
-            int minPrecision = (int)Math.Ceiling((double)limit / BASE_FIG) + 1;
-            Fraction rFraction;
-            Fraction fraction = Fraction.Divide(x._fraction, y._fraction, minPrecision, out rFraction, out xOffset, out rOffset);
-            if (limit == 0) {
-                limitOffset = 0;
-            } else {
-                fraction = Fraction.LimitPrecision(sign, fraction, limit, config.RoundingMode, out limitOffset);
-            }
-
-            // Exponent
-            int exponent, rExponent;
-            try {
-                checked {
-                    exponent = x._exponent - y._exponent + xOffset + limitOffset;
-                    rExponent = x._exponent - y._exponent + rOffset;
+                int i = start + text.Length;
+                while (i < str.Length && IsSpace(str[i])) {
+                    i++;
                 }
-            } catch (OverflowException) {
-                remainder = BigDecimal.PositiveZero;
-                return ExponentOverflow(config, sign, x._exponent);
-            }
-
-            remainder = new BigDecimal(sign, rFraction, rExponent, rFraction.MaxPrecision);
-            result = new BigDecimal(sign, fraction, exponent, fraction.MaxPrecision);
-            return result;
-        }
-
-        /// <summary>A finite x as unscaled * 10**scale, the unscaled value carrying the sign.</summary>
-        // The fraction's words hold its digits left-aligned (0.w0 w1 ... * 10**exponent, w0's first digit
-        // non-zero), so the unscaled value is the words read as one base 10**9 number, 9 digits a word.
-        private static void ToUnscaled(BigDecimal/*!*/ x, out System.Numerics.BigInteger unscaled, out long scale) {
-            int precision = x._fraction.Precision;
-            if (precision <= 2) {
-                ulong value = x._fraction.GetWord(0);
-                if (precision == 2) {
-                    value = value * Fraction.BASE + x._fraction.GetWord(1);
+                if (i == str.Length) {
+                    return value;
                 }
-                unscaled = value;
-            } else {
-                System.Numerics.BigInteger value = System.Numerics.BigInteger.Zero;
-                for (int i = 0; i < precision; i++) {
-                    value = value * Fraction.BASE + x._fraction.GetWord(i);
-                }
-                unscaled = value;
-            }
-            if (x._sign < 0) {
-                unscaled = -unscaled;
-            }
-            scale = (long)x._exponent - (long)precision * Fraction.BASE_FIG;
-        }
-
-        /// <summary>The digit count of a positive value made by ToUnscaled: 9 for each word.</summary>
-        private static int UnscaledDigits(BigDecimal/*!*/ x) {
-            return x._fraction.Precision * Fraction.BASE_FIG;
-        }
-
-        private static BigDecimal/*!*/ FromUnscaled(Config/*!*/ config, System.Numerics.BigInteger unscaled, long scale) {
-            if (unscaled.IsZero) {
-                return PositiveZero;
-            }
-            int sign = unscaled.Sign;
-            string digits = System.Numerics.BigInteger.Abs(unscaled).ToString(CultureInfo.InvariantCulture);
-            int length = digits.Length;
-            while (length > 1 && digits[length - 1] == '0') {
-                length--;
-            }
-            long exponent = scale + digits.Length;
-            if (exponent > Int32.MaxValue || exponent < Int32.MinValue) {
-                return Create(config, (sign < 0 ? "-" : "") + digits + "e" + scale.ToString(CultureInfo.InvariantCulture));
-            }
-            int wordCount = (length + Fraction.BASE_FIG - 1) / Fraction.BASE_FIG;
-            var words = new uint[wordCount];
-            for (int w = 0; w < wordCount; w++) {
-                uint word = 0;
-                for (int d = 0; d < Fraction.BASE_FIG; d++) {
-                    int i = w * Fraction.BASE_FIG + d;
-                    word = word * 10 + (i < length ? (uint)(digits[i] - '0') : 0);
-                }
-                words[w] = word;
-            }
-            return new BigDecimal(sign, new Fraction(words), (int)exponent);
-        }
-
-        /// <summary>
-        /// x / y to <paramref name="digits"/> significant digits in <paramref name="mode"/>, as bigdecimal's
-        /// BigDecimal_div2 makes it: the quotient is worked out exactly to one digit more, the remainder
-        /// stands for everything beyond it (so that a quotient that is not exact never looks like a tie
-        /// or a stop), and that is rounded. Fraction.Divide was asked for 2 words, so x / y had 18 digits
-        /// where MRI's has max(x.precision, y.precision) + 16, and at least 32.
-        /// </summary>
-        public static BigDecimal/*!*/ DivideRounded(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, int digits, RoundingModes mode) {
-            BigDecimal special = CheckSpecialResult(config, x, y, BasicOperations.Divide);
-            if (special != null) {
-                return special;
-            }
-            int sign = x._sign * y._sign;
-            if (IsZero(x)) {
-                return sign < 0 ? NegativeZero : PositiveZero;
-            }
-
-            System.Numerics.BigInteger a, b;
-            long ea, eb;
-            ToUnscaled(x, out a, out ea);
-            ToUnscaled(y, out b, out eb);
-            a = System.Numerics.BigInteger.Abs(a);
-            b = System.Numerics.BigInteger.Abs(b);
-
-            int aDigits = UnscaledDigits(x);
-            int bDigits = UnscaledDigits(y);
-            long shift = Math.Max(0, (long)digits + 2 + bDigits - aDigits);
-            System.Numerics.BigInteger remainder;
-            System.Numerics.BigInteger quotient = System.Numerics.BigInteger.DivRem(a * System.Numerics.BigInteger.Pow(10, (int)shift), b, out remainder);
-            long scale = ea - eb - shift;
-            if (!remainder.IsZero) {
-                quotient = quotient * 10 + 1;
-                scale--;
-            }
-
-            BigDecimal exact = FromUnscaled(config, quotient, scale);
-            if (!IsFinite(exact)) {
-                return sign < 0 ? NegativeInfinity : PositiveInfinity;
-            }
-            int offset;
-            Fraction fraction = Fraction.LimitPrecision(sign, exact._fraction, digits, mode, out offset);
-            return new BigDecimal(sign, fraction, exact._exponent + offset);
-        }
-
-        public static void DivMod(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, out BigDecimal/*!*/ div, out BigDecimal/*!*/ mod) {
-            div = BigDecimal.NaN;
-            mod = BigDecimal.NaN;
-
-            // Exactly, at the exponent of the finer of the two: the quotient of an 18-digit division,
-            // floored, was wrong whenever the true quotient needed more digits - BigDecimal("1e100") % 3
-            // was 0.1e83.
-            if (BigDecimal.IsFinite(x) && BigDecimal.IsFinite(y) && !IsZero(y)) {
-                if (IsZero(x)) {
-                    div = PositiveZero;
-                    mod = x;
-                    return;
-                }
-                System.Numerics.BigInteger a, b;
-                long ea, eb;
-                ToUnscaled(x, out a, out ea);
-                ToUnscaled(y, out b, out eb);
-                if (Math.Abs(ea - eb) <= 100000) {
-                    long e = Math.Min(ea, eb);
-                    a *= System.Numerics.BigInteger.Pow(10, (int)(ea - e));
-                    b *= System.Numerics.BigInteger.Pow(10, (int)(eb - e));
-                    System.Numerics.BigInteger r;
-                    System.Numerics.BigInteger q = System.Numerics.BigInteger.DivRem(a, b, out r);
-                    if (!r.IsZero && (r.Sign < 0) != (b.Sign < 0)) {
-                        q -= 1;
-                        r += b;
-                    }
-                    div = FromUnscaled(config, q, 0);
-                    mod = FromUnscaled(config, r, e);
-                    return;
-                }
-            }
-            if (BigDecimal.IsFinite(x) && BigDecimal.IsFinite(y)) {
-                BigDecimal remainder;
-                BigDecimal quotient = Divide(config, x, y, 0, out remainder);
-                if (BigDecimal.IsFinite(quotient)) {
-                    // Calculate the div: floor(quotient)
-                    div = LimitPrecision(config, quotient, 0, BigDecimal.RoundingModes.Floor);
-                    // Calculate the mod: x - (div * y)
-                    mod = Subtract(config, x, Multiply(config, div, y));
-                }
-            }
-        }
-
-        public static BigDecimal/*!*/ Power(Config/*!*/ config, BigDecimal/*!*/ x, int power) {
-            if (IsNaN(x)) {
-                return CheckOverflowExceptions(config, NaN);
-            }
-
-            if (power == 0) {
-                // Even Infinity ** 0 is 1.
-                return One;
-            }
-
-            // power is odd  => sign = x.Sign
-            // power is even => sign = 1
-            int sign = (power % 2 != 0) ? x.Sign : 1;
-
-            if (IsInfinite(x)) {
-                // Infinity to a positive power stays infinite; to a negative power it
-                // collapses onto a (signed) zero, exactly as 0 ** -n blows up to Infinity.
-                if (power < 0) {
-                    return new BigDecimal(sign, PositiveZero);
-                }
-                return CheckOverflowExceptions(config, sign < 0 ? NegativeInfinity : PositiveInfinity);
-            }
-
-            if (IsOne(x)) {
-                return new BigDecimal(sign, One);
-            }
-
-            if (IsZero(x)) {
-                if (power < 0) {
-                    return CheckOverflowExceptions(config, new BigDecimal(sign, PositiveInfinity));
-                } else {
-                    return new BigDecimal(sign, PositiveZero);
-                }
-            }
-
-            BigDecimal result = x;
-            int n = Math.Abs(power) - 1;
-            int precision = x.Precision * (n + 2);
-            while (n > 0) {
-                // Copy x into temp ensuring a good precision
-                BigDecimal temp = new BigDecimal(x.Sign, x, precision);
-                int s = 2;
-                int ss = 1;
-                while (s <= n) {
-                    temp = Multiply(config, temp, temp);
-                    ss = s;
-                    s += s;
-                }
-                n -= ss;
-                result = Multiply(config, result, temp);
-            }
-            if (power < 0) {
-                BigDecimal remainder;
-                result = Divide(config, One, result, precision * (BASE_FIG + 1), out remainder);
-            }
-            return result;
-        }
-
-        public static BigDecimal/*!*/ SquareRoot(Config/*!*/ config, BigDecimal/*!*/ x, int limit) {
-            if (limit < 0) {
-                throw new ArgumentException("argument must be positive");
-            }
-            // Special cases
-            if (IsZero(x) || IsPositiveOne(x)) {
-                return x;
-            }
-            if (x.Sign < 0) {
-                throw new FloatDomainError("SQRT(negative value)");
-                // Really it seems more consistent to check the overflow exceptions
-                // return CheckOverflowExceptions(config, NaN);
-            }
-            if (IsNaN(x)) {
-                throw new FloatDomainError("SQRT(NaN)");
-            }
-            if (!IsFinite(x)) {
-                return CheckOverflowExceptions(config, x);
-            }
-
-            // bigdecimal 4's sqrt (Ruby, Newton's method) works to the precision asked for plus some and
-            // rounds that to it: sqrt(n) has n digits, rounded in the current mode, and sqrt(0) has
-            // n_significant_digits + 16 (BigDecimal.double_fig) - no more than BigDecimal.limit. The
-            // computation this replaces kept a fixed number of words of whatever its iteration reached,
-            // so BigDecimal("0.1").sqrt(10) was 0.31622776600000000000000000093469343e0.
-            if (limit == 0) {
-                limit = x.Digits + 16;
-                if (config.Limit > 0 && config.Limit < limit) {
-                    limit = config.Limit;
-                }
-            }
-            return SquareRootRounded(config, x, limit);
-        }
-
-        private static System.Numerics.BigInteger IntegerSquareRoot(System.Numerics.BigInteger n) {
-            if (n.IsZero) {
-                return n;
-            }
-            // Newton's method from a power of two above the root
-            int bits = (int)((n.GetBitLength() + 1) / 2);
-            System.Numerics.BigInteger x = System.Numerics.BigInteger.One << bits;
-            while (true) {
-                System.Numerics.BigInteger y = (x + n / x) >> 1;
-                if (y >= x) {
-                    return x;
-                }
-                x = y;
-            }
-        }
-
-        /// <summary>The square root of a finite positive x to <paramref name="digits"/> significant digits.</summary>
-        private static BigDecimal/*!*/ SquareRootRounded(Config/*!*/ config, BigDecimal/*!*/ x, int digits) {
-            System.Numerics.BigInteger a;
-            long scale;
-            ToUnscaled(x, out a, out scale);
-            if ((scale & 1) != 0) {
-                a *= 10;
-                scale--;
-            }
-            int aDigits = a.ToString(CultureInfo.InvariantCulture).Length;
-            long k = Math.Max(0, (long)digits + 2 - aDigits / 2 + 1);
-            System.Numerics.BigInteger n = a * System.Numerics.BigInteger.Pow(10, (int)(2 * k));
-            System.Numerics.BigInteger root = IntegerSquareRoot(n);
-            long rootScale = scale / 2 - k;
-            if (root * root != n) {
-                root = root * 10 + 1;
-                rootScale--;
-            }
-            BigDecimal exact = FromUnscaled(config, root, rootScale);
-            int offset;
-            Fraction fraction = Fraction.LimitPrecision(1, exact._fraction, digits, config.RoundingMode, out offset);
-            return new BigDecimal(1, fraction, exact._exponent + offset);
-        }
-
-        public static BigDecimal/*!*/ FractionalPart(Config/*!*/ config, BigDecimal/*!*/ x) {
-            if (IsFinite(x)) {
-                if (x.Exponent > 0) {
-                    if (x.Exponent < x.Digits) {
-                        return new BigDecimal(x.Sign, Fraction.Create(x._fraction.ToString().Substring(x.Exponent)), 0);
-                    } else {
-                        return x.Sign > 0 ? BigDecimal.PositiveZero : BigDecimal.NegativeZero;
-                    }
-                } else {
-                    return x;
-                }
-            }
-            return x;
-        }
-
-        public static BigDecimal/*!*/ IntegerPart(Config/*!*/ config, BigDecimal/*!*/ x) {
-            if (IsFinite(x)) {
-                if (x.Exponent > 0) {
-                    if (x.Exponent < x._fraction.DigitCount) {
-                        return new BigDecimal(x.Sign, Fraction.Create(x._fraction.ToString().Substring(0, x.Exponent)), x.Exponent);
-                    } else {
-                        return x;
-                    }
-                } else {
-                    return x.Sign > 0 ? BigDecimal.PositiveZero : BigDecimal.NegativeZero;
-                }
-            } else {
-                return x;
-            }
-        }
-
-        public static BigDecimal/*!*/ LimitPrecision(Config/*!*/ config, BigDecimal/*!*/ x, int limit, RoundingModes mode) {
-            try {
-                checked {
-                    if (IsFinite(x)) {
-                        int diffDigits;
-                        Fraction fraction = Fraction.LimitPrecision(x._sign, x._fraction, limit + x.Exponent, mode, out diffDigits);
-                        return new BigDecimal(x._sign, fraction, x._exponent + diffDigits);
-                    } else {
-                        return x;
-                    }
-                }
-            } catch (OverflowException) {
-                return ExponentOverflow(config, x._sign, x._exponent);
-            }
-        }
-
-        #endregion
-
-        #region Private Helpers
-
-        private static BigDecimal InternalAdd(Config config, BigDecimal x, BigDecimal y, int limit) {
-            if (limit < 0) {
-                throw new ArgumentException("limit must be positive");
-            }
-            if (limit == 0) {
-                limit = config.Limit;
-            }
-
-            // This method is used for both adding and subtracting, but the special cases are the same.
-            BigDecimal result = CheckSpecialResult(config, x, y, BasicOperations.Add);
-            if (result != null) {
-                return result;
-            }
-
-            if (IsZero(x)) {
-                if (limit == 0) {
-                    return y;
-                } else {
-                    return LimitPrecision(config, y, limit, config.RoundingMode);
-                }
-            }
-            if (IsZero(y)) {
-                if (limit == 0) {
-                    return x;
-                } else {
-                    return LimitPrecision(config, x, limit, config.RoundingMode);
-                }
-            }
-
-            int exponent = Math.Max(x._exponent, y._exponent);
-            int sign = x._sign;
-            Fraction fraction;
-            int exponentDiff;
-
-            try {
-                checked {
-                    exponentDiff = checked(x._exponent - y._exponent);
-                    int diffDigits;
-                    if (x._sign == y._sign) {
-                        fraction = Fraction.Add(x._fraction, y._fraction, exponentDiff, out diffDigits);
-                        exponent = exponent + diffDigits;
-                        sign = x._sign;
-                    } else {
-                        // Signs are different then we have to do a subtraction instead
-                        fraction = Fraction.Subtract(x._fraction, y._fraction, exponentDiff, out diffDigits, out sign);
-                        exponent = exponent + diffDigits;
-                        if (sign == 0) {
-                            return PositiveZero;
-                        }
-                        sign = x._sign * sign;
-                    }
-                    if (limit == 0) {
-                        limit = fraction.DigitCount;
-                    }
-                    fraction = Fraction.LimitPrecision(sign, fraction, limit, config.RoundingMode, out diffDigits);
-                    exponent = exponent + diffDigits;
-                }
-            } catch (OverflowException) {
-                return ExponentOverflow(config, sign, x._exponent);
-            }
-
-            result = new BigDecimal(sign, fraction, exponent);
-            return result;
-        }
-
-        private static BigDecimal ExponentOverflow(Config config, int sign, int exponent) {
-            if (exponent > 0) {
-                if ((config.OverflowMode & OverflowExceptionModes.Overflow) == OverflowExceptionModes.Overflow) {
-                    throw new FloatDomainError("Exponent overflow");
-                }
-                // Our exponent is an Int32 where MRI's is a 64-bit value, so we run out of
-                // room sooner - but the answer at the end of the road is the same one MRI
-                // gives when its own exponent overflows: Infinity, not zero.
-                return sign < 0 ? NegativeInfinity : PositiveInfinity;
-            }
-            if ((config.OverflowMode & OverflowExceptionModes.Underflow) == OverflowExceptionModes.Underflow) {
-                throw new FloatDomainError("Exponent underflow");
-            }
-            // Underflow flushes to zero.
-            return PositiveZero;
-        }
-
-        #endregion
-
-        #region Special Comparisons
-
-        //TODO: There is some redundancy in this table that could be removed.
-        private static int? CheckSpecialComparison(BigDecimal x, BigDecimal y) {
-            // Non-zero comparisons are not allowed (since these are not special cases)
-            Debug.Assert(!IsNonZeroFinite(x) || !IsNonZeroFinite(y));
-
-            // Encode the array indices
-            int xSign = x._sign == -1 ? 0 : 1;
-            int ySign = y._sign == -1 ? 0 : 1;
-            int xZero = IsZero(x) ? 0 : 1;
-            int yZero = IsZero(y) ? 0 : 1;
-            int xType = (int)x._type;
-            int yType = (int)y._type;
-            return SC[xSign, xZero, xType, ySign, yZero, yType];
-        }
-
-        // # Generated by the following ruby code:
-        // require 'bigdecimal'
-        // 
-        // signs = [:-, :+]
-        // zeros = [true, false]
-        // types = [:NaN, :Finite, :Infinite]
-        // ops = [:+, :-, :*, :/]
-        // 
-        // def CreateBigDecimal(sign, zero, type, finiteValue) 
-        //   if zero
-        //     BigDecimal.new("#{sign}0.0")
-        //   else
-        //     if type == :NaN
-        //       BigDecimal.new("NaN")
-        //     elsif type == :Infinite
-        //       BigDecimal.new("#{sign}Infinity")
-        //     else
-        //       BigDecimal.new("#{sign}#{finiteValue}")
-        //     end
-        //   end
-        // end
-        // 
-        // def map(r, null)
-        //    if r.sign == BigDecimal::SIGN_NaN
-        //      result = 'NaN'
-        //    elsif r.sign == BigDecimal::SIGN_POSITIVE_INFINITE
-        //      result = 'PositiveInfinity'
-        //    elsif r.sign == BigDecimal::SIGN_NEGATIVE_INFINITE
-        //      result = 'NegativeInfinity'
-        //    elsif r.sign == BigDecimal::SIGN_POSITIVE_ZERO
-        //      result = 'PositiveZero'
-        //    elsif r.sign == BigDecimal::SIGN_NEGATIVE_ZERO
-        //      result = 'NegativeZero'
-        //    elsif null
-        //      result = 'null'
-        //    else
-        //      result = 'Finite'
-        //    end
-        // end
-        // signs.each do |xSign|
-        //     zeros.each do |xZero|
-        //         types.each do |xType|
-        //             signs.each do |ySign|
-        //                 zeros.each do |yZero|
-        //                     types.each do |yType|
-        //                         x = CreateBigDecimal(xSign, xZero, xType, 7)
-        //                         y = CreateBigDecimal(ySign, yZero, yType, 11)
-        //                         cmp = (x <=> y) || "null"
-        //                         puts "// #{map(x, false)} <=> #{map(y, false)} = #{cmp}"
-        //                         puts "SC[#{signs.index(xSign)}, #{zeros.index(xZero)}, #{types.index(xType)}, #{signs.index(ySign)}, #{zeros.index(yZero)}, #{types.index(yType)}] = #{cmp};"
-        //                     end
-        //                 end
-        //             end
-        //         end
-        //     end
-        // end
-        private static readonly int?[, , , , ,] SC = new int?[2, 2, 3, 2, 2, 3];
-
-        private static void CreateSC() {
-            // xSign, xZero, xType, ySign, yZero, yType
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 0, 0, 0, 0] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 0, 0, 0, 1] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 0, 0, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 0, 0, 1, 0] = null;
-            // NegativeZero <=> Finite = 1
-            SC[0, 0, 0, 0, 1, 1] = 1;
-            // NegativeZero <=> NegativeInfinity = 1
-            SC[0, 0, 0, 0, 1, 2] = 1;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 0, 1, 0, 0] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 0, 1, 0, 1] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 0, 1, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 0, 1, 1, 0] = null;
-            // NegativeZero <=> Finite = -1
-            SC[0, 0, 0, 1, 1, 1] = -1;
-            // NegativeZero <=> PositiveInfinity = -1
-            SC[0, 0, 0, 1, 1, 2] = -1;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 1, 0, 0, 0] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 1, 0, 0, 1] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 1, 0, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 1, 0, 1, 0] = null;
-            // NegativeZero <=> Finite = 1
-            SC[0, 0, 1, 0, 1, 1] = 1;
-            // NegativeZero <=> NegativeInfinity = 1
-            SC[0, 0, 1, 0, 1, 2] = 1;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 1, 1, 0, 0] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 1, 1, 0, 1] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 1, 1, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 1, 1, 1, 0] = null;
-            // NegativeZero <=> Finite = -1
-            SC[0, 0, 1, 1, 1, 1] = -1;
-            // NegativeZero <=> PositiveInfinity = -1
-            SC[0, 0, 1, 1, 1, 2] = -1;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 2, 0, 0, 0] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 2, 0, 0, 1] = 0;
-            // NegativeZero <=> NegativeZero = 0
-            SC[0, 0, 2, 0, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 2, 0, 1, 0] = null;
-            // NegativeZero <=> Finite = 1
-            SC[0, 0, 2, 0, 1, 1] = 1;
-            // NegativeZero <=> NegativeInfinity = 1
-            SC[0, 0, 2, 0, 1, 2] = 1;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 2, 1, 0, 0] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 2, 1, 0, 1] = 0;
-            // NegativeZero <=> PositiveZero = 0
-            SC[0, 0, 2, 1, 0, 2] = 0;
-            // NegativeZero <=> NaN = null
-            SC[0, 0, 2, 1, 1, 0] = null;
-            // NegativeZero <=> Finite = -1
-            SC[0, 0, 2, 1, 1, 1] = -1;
-            // NegativeZero <=> PositiveInfinity = -1
-            SC[0, 0, 2, 1, 1, 2] = -1;
-            // NaN <=> NegativeZero = null
-            SC[0, 1, 0, 0, 0, 0] = null;
-            // NaN <=> NegativeZero = null
-            SC[0, 1, 0, 0, 0, 1] = null;
-            // NaN <=> NegativeZero = null
-            SC[0, 1, 0, 0, 0, 2] = null;
-            // NaN <=> NaN = null
-            SC[0, 1, 0, 0, 1, 0] = null;
-            // NaN <=> Finite = null
-            SC[0, 1, 0, 0, 1, 1] = null;
-            // NaN <=> NegativeInfinity = null
-            SC[0, 1, 0, 0, 1, 2] = null;
-            // NaN <=> PositiveZero = null
-            SC[0, 1, 0, 1, 0, 0] = null;
-            // NaN <=> PositiveZero = null
-            SC[0, 1, 0, 1, 0, 1] = null;
-            // NaN <=> PositiveZero = null
-            SC[0, 1, 0, 1, 0, 2] = null;
-            // NaN <=> NaN = null
-            SC[0, 1, 0, 1, 1, 0] = null;
-            // NaN <=> Finite = null
-            SC[0, 1, 0, 1, 1, 1] = null;
-            // NaN <=> PositiveInfinity = null
-            SC[0, 1, 0, 1, 1, 2] = null;
-            // Finite <=> NegativeZero = -1
-            SC[0, 1, 1, 0, 0, 0] = -1;
-            // Finite <=> NegativeZero = -1
-            SC[0, 1, 1, 0, 0, 1] = -1;
-            // Finite <=> NegativeZero = -1
-            SC[0, 1, 1, 0, 0, 2] = -1;
-            // Finite <=> NaN = null
-            SC[0, 1, 1, 0, 1, 0] = null;
-            // Finite <=> Finite = 1
-            SC[0, 1, 1, 0, 1, 1] = 1;
-            // Finite <=> NegativeInfinity = 1
-            SC[0, 1, 1, 0, 1, 2] = 1;
-            // Finite <=> PositiveZero = -1
-            SC[0, 1, 1, 1, 0, 0] = -1;
-            // Finite <=> PositiveZero = -1
-            SC[0, 1, 1, 1, 0, 1] = -1;
-            // Finite <=> PositiveZero = -1
-            SC[0, 1, 1, 1, 0, 2] = -1;
-            // Finite <=> NaN = null
-            SC[0, 1, 1, 1, 1, 0] = null;
-            // Finite <=> Finite = -1
-            SC[0, 1, 1, 1, 1, 1] = -1;
-            // Finite <=> PositiveInfinity = -1
-            SC[0, 1, 1, 1, 1, 2] = -1;
-            // NegativeInfinity <=> NegativeZero = -1
-            SC[0, 1, 2, 0, 0, 0] = -1;
-            // NegativeInfinity <=> NegativeZero = -1
-            SC[0, 1, 2, 0, 0, 1] = -1;
-            // NegativeInfinity <=> NegativeZero = -1
-            SC[0, 1, 2, 0, 0, 2] = -1;
-            // NegativeInfinity <=> NaN = null
-            SC[0, 1, 2, 0, 1, 0] = null;
-            // NegativeInfinity <=> Finite = -1
-            SC[0, 1, 2, 0, 1, 1] = -1;
-            // NegativeInfinity <=> NegativeInfinity = 0
-            SC[0, 1, 2, 0, 1, 2] = 0;
-            // NegativeInfinity <=> PositiveZero = -1
-            SC[0, 1, 2, 1, 0, 0] = -1;
-            // NegativeInfinity <=> PositiveZero = -1
-            SC[0, 1, 2, 1, 0, 1] = -1;
-            // NegativeInfinity <=> PositiveZero = -1
-            SC[0, 1, 2, 1, 0, 2] = -1;
-            // NegativeInfinity <=> NaN = null
-            SC[0, 1, 2, 1, 1, 0] = null;
-            // NegativeInfinity <=> Finite = -1
-            SC[0, 1, 2, 1, 1, 1] = -1;
-            // NegativeInfinity <=> PositiveInfinity = -1
-            SC[0, 1, 2, 1, 1, 2] = -1;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 0, 0, 0, 0] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 0, 0, 0, 1] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 0, 0, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 0, 0, 1, 0] = null;
-            // PositiveZero <=> Finite = 1
-            SC[1, 0, 0, 0, 1, 1] = 1;
-            // PositiveZero <=> NegativeInfinity = 1
-            SC[1, 0, 0, 0, 1, 2] = 1;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 0, 1, 0, 0] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 0, 1, 0, 1] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 0, 1, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 0, 1, 1, 0] = null;
-            // PositiveZero <=> Finite = -1
-            SC[1, 0, 0, 1, 1, 1] = -1;
-            // PositiveZero <=> PositiveInfinity = -1
-            SC[1, 0, 0, 1, 1, 2] = -1;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 1, 0, 0, 0] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 1, 0, 0, 1] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 1, 0, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 1, 0, 1, 0] = null;
-            // PositiveZero <=> Finite = 1
-            SC[1, 0, 1, 0, 1, 1] = 1;
-            // PositiveZero <=> NegativeInfinity = 1
-            SC[1, 0, 1, 0, 1, 2] = 1;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 1, 1, 0, 0] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 1, 1, 0, 1] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 1, 1, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 1, 1, 1, 0] = null;
-            // PositiveZero <=> Finite = -1
-            SC[1, 0, 1, 1, 1, 1] = -1;
-            // PositiveZero <=> PositiveInfinity = -1
-            SC[1, 0, 1, 1, 1, 2] = -1;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 2, 0, 0, 0] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 2, 0, 0, 1] = 0;
-            // PositiveZero <=> NegativeZero = 0
-            SC[1, 0, 2, 0, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 2, 0, 1, 0] = null;
-            // PositiveZero <=> Finite = 1
-            SC[1, 0, 2, 0, 1, 1] = 1;
-            // PositiveZero <=> NegativeInfinity = 1
-            SC[1, 0, 2, 0, 1, 2] = 1;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 2, 1, 0, 0] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 2, 1, 0, 1] = 0;
-            // PositiveZero <=> PositiveZero = 0
-            SC[1, 0, 2, 1, 0, 2] = 0;
-            // PositiveZero <=> NaN = null
-            SC[1, 0, 2, 1, 1, 0] = null;
-            // PositiveZero <=> Finite = -1
-            SC[1, 0, 2, 1, 1, 1] = -1;
-            // PositiveZero <=> PositiveInfinity = -1
-            SC[1, 0, 2, 1, 1, 2] = -1;
-            // NaN <=> NegativeZero = null
-            SC[1, 1, 0, 0, 0, 0] = null;
-            // NaN <=> NegativeZero = null
-            SC[1, 1, 0, 0, 0, 1] = null;
-            // NaN <=> NegativeZero = null
-            SC[1, 1, 0, 0, 0, 2] = null;
-            // NaN <=> NaN = null
-            SC[1, 1, 0, 0, 1, 0] = null;
-            // NaN <=> Finite = null
-            SC[1, 1, 0, 0, 1, 1] = null;
-            // NaN <=> NegativeInfinity = null
-            SC[1, 1, 0, 0, 1, 2] = null;
-            // NaN <=> PositiveZero = null
-            SC[1, 1, 0, 1, 0, 0] = null;
-            // NaN <=> PositiveZero = null
-            SC[1, 1, 0, 1, 0, 1] = null;
-            // NaN <=> PositiveZero = null
-            SC[1, 1, 0, 1, 0, 2] = null;
-            // NaN <=> NaN = null
-            SC[1, 1, 0, 1, 1, 0] = null;
-            // NaN <=> Finite = null
-            SC[1, 1, 0, 1, 1, 1] = null;
-            // NaN <=> PositiveInfinity = null
-            SC[1, 1, 0, 1, 1, 2] = null;
-            // Finite <=> NegativeZero = 1
-            SC[1, 1, 1, 0, 0, 0] = 1;
-            // Finite <=> NegativeZero = 1
-            SC[1, 1, 1, 0, 0, 1] = 1;
-            // Finite <=> NegativeZero = 1
-            SC[1, 1, 1, 0, 0, 2] = 1;
-            // Finite <=> NaN = null
-            SC[1, 1, 1, 0, 1, 0] = null;
-            // Finite <=> Finite = 1
-            SC[1, 1, 1, 0, 1, 1] = 1;
-            // Finite <=> NegativeInfinity = 1
-            SC[1, 1, 1, 0, 1, 2] = 1;
-            // Finite <=> PositiveZero = 1
-            SC[1, 1, 1, 1, 0, 0] = 1;
-            // Finite <=> PositiveZero = 1
-            SC[1, 1, 1, 1, 0, 1] = 1;
-            // Finite <=> PositiveZero = 1
-            SC[1, 1, 1, 1, 0, 2] = 1;
-            // Finite <=> NaN = null
-            SC[1, 1, 1, 1, 1, 0] = null;
-            // Finite <=> Finite = -1
-            SC[1, 1, 1, 1, 1, 1] = -1;
-            // Finite <=> PositiveInfinity = -1
-            SC[1, 1, 1, 1, 1, 2] = -1;
-            // PositiveInfinity <=> NegativeZero = 1
-            SC[1, 1, 2, 0, 0, 0] = 1;
-            // PositiveInfinity <=> NegativeZero = 1
-            SC[1, 1, 2, 0, 0, 1] = 1;
-            // PositiveInfinity <=> NegativeZero = 1
-            SC[1, 1, 2, 0, 0, 2] = 1;
-            // PositiveInfinity <=> NaN = null
-            SC[1, 1, 2, 0, 1, 0] = null;
-            // PositiveInfinity <=> Finite = 1
-            SC[1, 1, 2, 0, 1, 1] = 1;
-            // PositiveInfinity <=> NegativeInfinity = 1
-            SC[1, 1, 2, 0, 1, 2] = 1;
-            // PositiveInfinity <=> PositiveZero = 1
-            SC[1, 1, 2, 1, 0, 0] = 1;
-            // PositiveInfinity <=> PositiveZero = 1
-            SC[1, 1, 2, 1, 0, 1] = 1;
-            // PositiveInfinity <=> PositiveZero = 1
-            SC[1, 1, 2, 1, 0, 2] = 1;
-            // PositiveInfinity <=> NaN = null
-            SC[1, 1, 2, 1, 1, 0] = null;
-            // PositiveInfinity <=> Finite = 1
-            SC[1, 1, 2, 1, 1, 1] = 1;
-            // PositiveInfinity <=> PositiveInfinity = 0
-            SC[1, 1, 2, 1, 1, 2] = 0;
-        }
-        #endregion
-
-        #region Special Results
-        //TODO: Probably don't need the subtract operation since it is symetric with addition operation in terms of special results
-        /// <summary>
-        /// Look up special results for calculations that involve unusual values such as NaN, infinity and zero.
-        /// </summary>
-        /// <param name="x">The left hand side of the operation</param>
-        /// <param name="y">The right hand side of the operation</param>
-        /// <param name="op">The operation itself</param>
-        /// <returns>The special result or null if the result is not special</returns>
-        private static BigDecimal CheckSpecialResult(Config config, BigDecimal x, BigDecimal y, BasicOperations op) {
-            // Encode the array indices
-            int xSign = x._sign == -1 ? 0 : 1;
-            int ySign = y._sign == -1 ? 0 : 1;
-            int xZero = IsZero(x) ? 0 : 1;
-            int yZero = IsZero(y) ? 0 : 1;
-            int xType = (int)x._type;
-            int yType = (int)y._type;
-            int opValue = (int)op;
-
-            // Look up the special result
-            BigDecimal result = SR[xSign, xZero, xType, opValue, ySign, yZero, yType];
-            if (result != null) {
-                return CheckOverflowExceptions(config, result);
             }
             return null;
         }
 
-        private static BigDecimal/*!*/ CheckOverflowExceptions(Config/*!*/ config, BigDecimal/*!*/ result) {
-            if (IsNaN(result) && (config.OverflowMode & OverflowExceptionModes.NaN) == OverflowExceptionModes.NaN) {
-                throw new FloatDomainError("Computation results to 'NaN'");
-            } else if (IsInfinite(result) && (config.OverflowMode & OverflowExceptionModes.Infinity) == OverflowExceptionModes.Infinity) {
-                throw new FloatDomainError("Computation results to 'Infinity'");
+        private static readonly (string, BigDecimal)[] _specialStrings = {
+            ("Infinity", PositiveInfinity), ("+Infinity", PositiveInfinity), ("-Infinity", NegativeInfinity), ("NaN", NaN)
+        };
+
+        /// <summary>MRI's VpCtoV: the value of integer.fraction * 10**exponent.</summary>
+        private static BigDecimal/*!*/ CreateFromDigits(Config/*!*/ config, int sign, string/*!*/ integer, string/*!*/ fraction,
+            bool exponentNegative, string/*!*/ exponentText) {
+
+            string digits = (integer + fraction).TrimStart('0');
+            if (digits.Length == 0) {
+                return Zero(sign);
             }
+
+            // An exponent beyond MRI's 64-bit one makes an infinity of a positive exponent and zero of a
+            // negative one, whatever the digits before it: 17e-9223372036854775809 is zero.
+            BigInteger exponent = exponentText.Length > 0 ? BigInteger.Parse(exponentText, CultureInfo.InvariantCulture) : BigInteger.Zero;
+            if (exponentNegative) {
+                exponent = -exponent;
+            }
+            BigInteger decimalExponent = exponent + digits.Length - fraction.Length;
+            if (exponent > long.MaxValue || decimalExponent > MaxExponent) {
+                Raise(config, ExceptionModes.Infinity, "exponent overflow");
+                return CheckResult(config, Infinity(sign));
+            }
+            if (exponent < long.MinValue || decimalExponent < MinExponent) {
+                return Zero(sign);
+            }
+            // within a string's length of the exponent, so an Int128 holds it
+            Int128 scale = (Int128)(exponent - fraction.Length);
+            return Create(config, sign, BigInteger.Parse(digits, CultureInfo.InvariantCulture), scale);
+        }
+
+        #endregion
+
+        #region Exceptions
+
+        internal static void Raise(Config/*!*/ config, ExceptionModes mode, string/*!*/ message) {
+            if (config.Raises(mode)) {
+                throw new FloatDomainError(message);
+            }
+        }
+
+        /// <summary>MRI's CheckGetValue: a NaN or infinite result raises when the exception mode says so.</summary>
+        internal static BigDecimal/*!*/ CheckResult(Config/*!*/ config, BigDecimal/*!*/ x) {
+            if (x.IsNaN) {
+                Raise(config, ExceptionModes.NaN, "Computation results in 'NaN' (Not a Number)");
+            } else if (x.IsInfinite) {
+                Raise(config, ExceptionModes.Infinity, x._sign > 0 ? "Computation results in 'Infinity'" : "Computation results in '-Infinity'");
+            }
+            return x;
+        }
+
+        /// <summary>
+        /// The error of asking a special value for something only a finite number has (#to_i, #to_r): it
+        /// raises whatever the exception mode.
+        /// </summary>
+        internal static Exception/*!*/ CreateSpecialValueError(BigDecimal/*!*/ x) {
+            return new FloatDomainError(x.IsNaN
+                ? "Computation results in 'NaN' (Not a Number)"
+                : (x._sign > 0 ? "Computation results in 'Infinity'" : "Computation results in '-Infinity'"));
+        }
+
+        // MRI's VpIsDefOP reports a special result of an operation in its own words ("to", not "in").
+        private static BigDecimal/*!*/ OperationNaN(Config/*!*/ config) {
+            Raise(config, ExceptionModes.NaN, "Computation results to 'NaN'");
+            return NaN;
+        }
+
+        private static BigDecimal/*!*/ OperationInfinity(Config/*!*/ config, BigDecimal/*!*/ result) {
+            Raise(config, ExceptionModes.Infinity, result.IsInfinite && result._sign > 0
+                ? "Computation results to 'Infinity'"
+                : "Computation results to '-Infinity'");
             return result;
         }
 
-        /// <remarks>
-        /// Generated by the following ruby code
-        /// <code>
-        ///   require 'bigdecimal'
-        ///   
-        ///   signs = [:-, :+]
-        ///   zeros = [true, false]
-        ///   types = [:NaN, :Finite, :Infinite]
-        ///   ops = [:+, :-, :*, :/]
-        ///   
-        ///   def CreateBigDecimal(sign, zero, type, finiteValue) 
-        ///     if zero
-        ///       BigDecimal.new("#{sign}0.0")
-        ///     else
-        ///       if type == :NaN
-        ///         BigDecimal.new("NaN")
-        ///       elsif type == :Infinite
-        ///         BigDecimal.new("#{sign}Infinity")
-        ///       else
-        ///         BigDecimal.new("#{sign}#{finiteValue}")
-        ///       end
-        ///     end
-        ///   end
-        ///   
-        ///   def map(r, null)
-        ///      if r.sign == BigDecimal::SIGN_NaN
-        ///        result = 'NaN'
-        ///      elsif r.sign == BigDecimal::SIGN_POSITIVE_INFINITE
-        ///        result = 'PositiveInfinity'
-        ///      elsif r.sign == BigDecimal::SIGN_NEGATIVE_INFINITE
-        ///        result = 'NegativeInfinity'
-        ///      elsif r.sign == BigDecimal::SIGN_POSITIVE_ZERO
-        ///        result = 'PositiveZero'
-        ///      elsif r.sign == BigDecimal::SIGN_NEGATIVE_ZERO
-        ///        result = 'NegativeZero'
-        ///      elsif null
-        ///        result = 'null'
-        ///      else
-        ///        result = 'Finite'
-        ///      end
-        ///   end
-        ///   
-        ///   signs.each do |xSign|
-        ///   zeros.each do |xZero|
-        ///    types.each do |xType|
-        ///      ops.each do |op|
-        ///        signs.each do |ySign|
-        ///          zeros.each do |yZero|
-        ///            types.each do |yType|
-        ///              x = CreateBigDecimal(xSign, xZero, xType, 7)
-        ///              y = CreateBigDecimal(ySign, yZero, yType, 11)
-        ///              r = x.send(op, y)
-        ///              result = map(r, true)
-        ///              puts "// #{map(x, false)} #{op} #{map(y, false)} = #{result}"
-        ///              puts "SR[#{signs.index(xSign)}, #{zeros.index(xZero)}, #{types.index(xType)}, #{ops.index(op)}, #{signs.index(ySign)}, #{zeros.index(yZero)}, #{types.index(yType)}] = #{result};"
-        ///            end
-        ///          end
-        ///        end
-        ///      end
-        ///    end
-        ///   end
-        ///   end 
-        ///   </code>
-        /// </remarks>
-        private static readonly BigDecimal[, , , , , ,] SR = new BigDecimal[2, 2, 3, 4, 2, 2, 3];
-        private static void CreateSR() {
-            //[xSign, xZero, xType, Op, ySign, yZero, yType]
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 0, 0, 0, 0, 0] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 0, 0, 0, 0, 1] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 0, 0, 0, 0, 2] = NegativeZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 0, 0, 0, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 0, 0, 0, 1, 1] = null;
-            // NegativeZero + NegativeInfinity = NegativeInfinity
-            SR[0, 0, 0, 0, 0, 1, 2] = NegativeInfinity;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 0, 0, 1, 0, 0] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 0, 0, 1, 0, 1] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 0, 0, 1, 0, 2] = PositiveZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 0, 0, 1, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 0, 0, 1, 1, 1] = null;
-            // NegativeZero + PositiveInfinity = PositiveInfinity
-            SR[0, 0, 0, 0, 1, 1, 2] = PositiveInfinity;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 0, 1, 0, 0, 0] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 0, 1, 0, 0, 1] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 0, 1, 0, 0, 2] = PositiveZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 0, 1, 0, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 0, 1, 0, 1, 1] = null;
-            // NegativeZero - NegativeInfinity = PositiveInfinity
-            SR[0, 0, 0, 1, 0, 1, 2] = PositiveInfinity;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 0, 1, 1, 0, 0] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 0, 1, 1, 0, 1] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 0, 1, 1, 0, 2] = NegativeZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 0, 1, 1, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 0, 1, 1, 1, 1] = null;
-            // NegativeZero - PositiveInfinity = NegativeInfinity
-            SR[0, 0, 0, 1, 1, 1, 2] = NegativeInfinity;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 0, 2, 0, 0, 0] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 0, 2, 0, 0, 1] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 0, 2, 0, 0, 2] = PositiveZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 0, 2, 0, 1, 0] = NaN;
-            // NegativeZero * Finite = PositiveZero
-            SR[0, 0, 0, 2, 0, 1, 1] = PositiveZero;
-            // NegativeZero * NegativeInfinity = NaN
-            SR[0, 0, 0, 2, 0, 1, 2] = NaN;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 0, 2, 1, 0, 0] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 0, 2, 1, 0, 1] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 0, 2, 1, 0, 2] = NegativeZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 0, 2, 1, 1, 0] = NaN;
-            // NegativeZero * Finite = NegativeZero
-            SR[0, 0, 0, 2, 1, 1, 1] = NegativeZero;
-            // NegativeZero * PositiveInfinity = NaN
-            SR[0, 0, 0, 2, 1, 1, 2] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 0, 3, 0, 0, 0] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 0, 3, 0, 0, 1] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 0, 3, 0, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 0, 3, 0, 1, 0] = NaN;
-            // NegativeZero / Finite = PositiveZero
-            SR[0, 0, 0, 3, 0, 1, 1] = PositiveZero;
-            // NegativeZero / NegativeInfinity = PositiveZero
-            SR[0, 0, 0, 3, 0, 1, 2] = PositiveZero;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 0, 3, 1, 0, 0] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 0, 3, 1, 0, 1] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 0, 3, 1, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 0, 3, 1, 1, 0] = NaN;
-            // NegativeZero / Finite = NegativeZero
-            SR[0, 0, 0, 3, 1, 1, 1] = NegativeZero;
-            // NegativeZero / PositiveInfinity = NegativeZero
-            SR[0, 0, 0, 3, 1, 1, 2] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 1, 0, 0, 0, 0] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 1, 0, 0, 0, 1] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 1, 0, 0, 0, 2] = NegativeZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 1, 0, 0, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 1, 0, 0, 1, 1] = null;
-            // NegativeZero + NegativeInfinity = NegativeInfinity
-            SR[0, 0, 1, 0, 0, 1, 2] = NegativeInfinity;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 1, 0, 1, 0, 0] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 1, 0, 1, 0, 1] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 1, 0, 1, 0, 2] = PositiveZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 1, 0, 1, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 1, 0, 1, 1, 1] = null;
-            // NegativeZero + PositiveInfinity = PositiveInfinity
-            SR[0, 0, 1, 0, 1, 1, 2] = PositiveInfinity;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 1, 1, 0, 0, 0] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 1, 1, 0, 0, 1] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 1, 1, 0, 0, 2] = PositiveZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 1, 1, 0, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 1, 1, 0, 1, 1] = null;
-            // NegativeZero - NegativeInfinity = PositiveInfinity
-            SR[0, 0, 1, 1, 0, 1, 2] = PositiveInfinity;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 1, 1, 1, 0, 0] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 1, 1, 1, 0, 1] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 1, 1, 1, 0, 2] = NegativeZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 1, 1, 1, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 1, 1, 1, 1, 1] = null;
-            // NegativeZero - PositiveInfinity = NegativeInfinity
-            SR[0, 0, 1, 1, 1, 1, 2] = NegativeInfinity;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 1, 2, 0, 0, 0] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 1, 2, 0, 0, 1] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 1, 2, 0, 0, 2] = PositiveZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 1, 2, 0, 1, 0] = NaN;
-            // NegativeZero * Finite = PositiveZero
-            SR[0, 0, 1, 2, 0, 1, 1] = PositiveZero;
-            // NegativeZero * NegativeInfinity = NaN
-            SR[0, 0, 1, 2, 0, 1, 2] = NaN;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 1, 2, 1, 0, 0] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 1, 2, 1, 0, 1] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 1, 2, 1, 0, 2] = NegativeZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 1, 2, 1, 1, 0] = NaN;
-            // NegativeZero * Finite = NegativeZero
-            SR[0, 0, 1, 2, 1, 1, 1] = NegativeZero;
-            // NegativeZero * PositiveInfinity = NaN
-            SR[0, 0, 1, 2, 1, 1, 2] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 1, 3, 0, 0, 0] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 1, 3, 0, 0, 1] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 1, 3, 0, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 1, 3, 0, 1, 0] = NaN;
-            // NegativeZero / Finite = PositiveZero
-            SR[0, 0, 1, 3, 0, 1, 1] = PositiveZero;
-            // NegativeZero / NegativeInfinity = PositiveZero
-            SR[0, 0, 1, 3, 0, 1, 2] = PositiveZero;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 1, 3, 1, 0, 0] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 1, 3, 1, 0, 1] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 1, 3, 1, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 1, 3, 1, 1, 0] = NaN;
-            // NegativeZero / Finite = NegativeZero
-            SR[0, 0, 1, 3, 1, 1, 1] = NegativeZero;
-            // NegativeZero / PositiveInfinity = NegativeZero
-            SR[0, 0, 1, 3, 1, 1, 2] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 2, 0, 0, 0, 0] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 2, 0, 0, 0, 1] = NegativeZero;
-            // NegativeZero + NegativeZero = NegativeZero
-            SR[0, 0, 2, 0, 0, 0, 2] = NegativeZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 2, 0, 0, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 2, 0, 0, 1, 1] = null;
-            // NegativeZero + NegativeInfinity = NegativeInfinity
-            SR[0, 0, 2, 0, 0, 1, 2] = NegativeInfinity;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 2, 0, 1, 0, 0] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 2, 0, 1, 0, 1] = PositiveZero;
-            // NegativeZero + PositiveZero = PositiveZero
-            SR[0, 0, 2, 0, 1, 0, 2] = PositiveZero;
-            // NegativeZero + NaN = NaN
-            SR[0, 0, 2, 0, 1, 1, 0] = NaN;
-            // NegativeZero + Finite = null
-            SR[0, 0, 2, 0, 1, 1, 1] = null;
-            // NegativeZero + PositiveInfinity = PositiveInfinity
-            SR[0, 0, 2, 0, 1, 1, 2] = PositiveInfinity;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 2, 1, 0, 0, 0] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 2, 1, 0, 0, 1] = PositiveZero;
-            // NegativeZero - NegativeZero = PositiveZero
-            SR[0, 0, 2, 1, 0, 0, 2] = PositiveZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 2, 1, 0, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 2, 1, 0, 1, 1] = null;
-            // NegativeZero - NegativeInfinity = PositiveInfinity
-            SR[0, 0, 2, 1, 0, 1, 2] = PositiveInfinity;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 2, 1, 1, 0, 0] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 2, 1, 1, 0, 1] = NegativeZero;
-            // NegativeZero - PositiveZero = NegativeZero
-            SR[0, 0, 2, 1, 1, 0, 2] = NegativeZero;
-            // NegativeZero - NaN = NaN
-            SR[0, 0, 2, 1, 1, 1, 0] = NaN;
-            // NegativeZero - Finite = null
-            SR[0, 0, 2, 1, 1, 1, 1] = null;
-            // NegativeZero - PositiveInfinity = NegativeInfinity
-            SR[0, 0, 2, 1, 1, 1, 2] = NegativeInfinity;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 2, 2, 0, 0, 0] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 2, 2, 0, 0, 1] = PositiveZero;
-            // NegativeZero * NegativeZero = PositiveZero
-            SR[0, 0, 2, 2, 0, 0, 2] = PositiveZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 2, 2, 0, 1, 0] = NaN;
-            // NegativeZero * Finite = PositiveZero
-            SR[0, 0, 2, 2, 0, 1, 1] = PositiveZero;
-            // NegativeZero * NegativeInfinity = NaN
-            SR[0, 0, 2, 2, 0, 1, 2] = NaN;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 2, 2, 1, 0, 0] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 2, 2, 1, 0, 1] = NegativeZero;
-            // NegativeZero * PositiveZero = NegativeZero
-            SR[0, 0, 2, 2, 1, 0, 2] = NegativeZero;
-            // NegativeZero * NaN = NaN
-            SR[0, 0, 2, 2, 1, 1, 0] = NaN;
-            // NegativeZero * Finite = NegativeZero
-            SR[0, 0, 2, 2, 1, 1, 1] = NegativeZero;
-            // NegativeZero * PositiveInfinity = NaN
-            SR[0, 0, 2, 2, 1, 1, 2] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 2, 3, 0, 0, 0] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 2, 3, 0, 0, 1] = NaN;
-            // NegativeZero / NegativeZero = NaN
-            SR[0, 0, 2, 3, 0, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 2, 3, 0, 1, 0] = NaN;
-            // NegativeZero / Finite = PositiveZero
-            SR[0, 0, 2, 3, 0, 1, 1] = PositiveZero;
-            // NegativeZero / NegativeInfinity = PositiveZero
-            SR[0, 0, 2, 3, 0, 1, 2] = PositiveZero;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 2, 3, 1, 0, 0] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 2, 3, 1, 0, 1] = NaN;
-            // NegativeZero / PositiveZero = NaN
-            SR[0, 0, 2, 3, 1, 0, 2] = NaN;
-            // NegativeZero / NaN = NaN
-            SR[0, 0, 2, 3, 1, 1, 0] = NaN;
-            // NegativeZero / Finite = NegativeZero
-            SR[0, 0, 2, 3, 1, 1, 1] = NegativeZero;
-            // NegativeZero / PositiveInfinity = NegativeZero
-            SR[0, 0, 2, 3, 1, 1, 2] = NegativeZero;
-            // NaN + NegativeZero = NaN
-            SR[0, 1, 0, 0, 0, 0, 0] = NaN;
-            // NaN + NegativeZero = NaN
-            SR[0, 1, 0, 0, 0, 0, 1] = NaN;
-            // NaN + NegativeZero = NaN
-            SR[0, 1, 0, 0, 0, 0, 2] = NaN;
-            // NaN + NaN = NaN
-            SR[0, 1, 0, 0, 0, 1, 0] = NaN;
-            // NaN + Finite = NaN
-            SR[0, 1, 0, 0, 0, 1, 1] = NaN;
-            // NaN + NegativeInfinity = NaN
-            SR[0, 1, 0, 0, 0, 1, 2] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[0, 1, 0, 0, 1, 0, 0] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[0, 1, 0, 0, 1, 0, 1] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[0, 1, 0, 0, 1, 0, 2] = NaN;
-            // NaN + NaN = NaN
-            SR[0, 1, 0, 0, 1, 1, 0] = NaN;
-            // NaN + Finite = NaN
-            SR[0, 1, 0, 0, 1, 1, 1] = NaN;
-            // NaN + PositiveInfinity = NaN
-            SR[0, 1, 0, 0, 1, 1, 2] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[0, 1, 0, 1, 0, 0, 0] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[0, 1, 0, 1, 0, 0, 1] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[0, 1, 0, 1, 0, 0, 2] = NaN;
-            // NaN - NaN = NaN
-            SR[0, 1, 0, 1, 0, 1, 0] = NaN;
-            // NaN - Finite = NaN
-            SR[0, 1, 0, 1, 0, 1, 1] = NaN;
-            // NaN - NegativeInfinity = NaN
-            SR[0, 1, 0, 1, 0, 1, 2] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[0, 1, 0, 1, 1, 0, 0] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[0, 1, 0, 1, 1, 0, 1] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[0, 1, 0, 1, 1, 0, 2] = NaN;
-            // NaN - NaN = NaN
-            SR[0, 1, 0, 1, 1, 1, 0] = NaN;
-            // NaN - Finite = NaN
-            SR[0, 1, 0, 1, 1, 1, 1] = NaN;
-            // NaN - PositiveInfinity = NaN
-            SR[0, 1, 0, 1, 1, 1, 2] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[0, 1, 0, 2, 0, 0, 0] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[0, 1, 0, 2, 0, 0, 1] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[0, 1, 0, 2, 0, 0, 2] = NaN;
-            // NaN * NaN = NaN
-            SR[0, 1, 0, 2, 0, 1, 0] = NaN;
-            // NaN * Finite = NaN
-            SR[0, 1, 0, 2, 0, 1, 1] = NaN;
-            // NaN * NegativeInfinity = NaN
-            SR[0, 1, 0, 2, 0, 1, 2] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[0, 1, 0, 2, 1, 0, 0] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[0, 1, 0, 2, 1, 0, 1] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[0, 1, 0, 2, 1, 0, 2] = NaN;
-            // NaN * NaN = NaN
-            SR[0, 1, 0, 2, 1, 1, 0] = NaN;
-            // NaN * Finite = NaN
-            SR[0, 1, 0, 2, 1, 1, 1] = NaN;
-            // NaN * PositiveInfinity = NaN
-            SR[0, 1, 0, 2, 1, 1, 2] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[0, 1, 0, 3, 0, 0, 0] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[0, 1, 0, 3, 0, 0, 1] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[0, 1, 0, 3, 0, 0, 2] = NaN;
-            // NaN / NaN = NaN
-            SR[0, 1, 0, 3, 0, 1, 0] = NaN;
-            // NaN / Finite = NaN
-            SR[0, 1, 0, 3, 0, 1, 1] = NaN;
-            // NaN / NegativeInfinity = NaN
-            SR[0, 1, 0, 3, 0, 1, 2] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[0, 1, 0, 3, 1, 0, 0] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[0, 1, 0, 3, 1, 0, 1] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[0, 1, 0, 3, 1, 0, 2] = NaN;
-            // NaN / NaN = NaN
-            SR[0, 1, 0, 3, 1, 1, 0] = NaN;
-            // NaN / Finite = NaN
-            SR[0, 1, 0, 3, 1, 1, 1] = NaN;
-            // NaN / PositiveInfinity = NaN
-            SR[0, 1, 0, 3, 1, 1, 2] = NaN;
-            // Finite + NegativeZero = null
-            SR[0, 1, 1, 0, 0, 0, 0] = null;
-            // Finite + NegativeZero = null
-            SR[0, 1, 1, 0, 0, 0, 1] = null;
-            // Finite + NegativeZero = null
-            SR[0, 1, 1, 0, 0, 0, 2] = null;
-            // Finite + NaN = NaN
-            SR[0, 1, 1, 0, 0, 1, 0] = NaN;
-            // Finite + Finite = null
-            SR[0, 1, 1, 0, 0, 1, 1] = null;
-            // Finite + NegativeInfinity = NegativeInfinity
-            SR[0, 1, 1, 0, 0, 1, 2] = NegativeInfinity;
-            // Finite + PositiveZero = null
-            SR[0, 1, 1, 0, 1, 0, 0] = null;
-            // Finite + PositiveZero = null
-            SR[0, 1, 1, 0, 1, 0, 1] = null;
-            // Finite + PositiveZero = null
-            SR[0, 1, 1, 0, 1, 0, 2] = null;
-            // Finite + NaN = NaN
-            SR[0, 1, 1, 0, 1, 1, 0] = NaN;
-            // Finite + Finite = null
-            SR[0, 1, 1, 0, 1, 1, 1] = null;
-            // Finite + PositiveInfinity = PositiveInfinity
-            SR[0, 1, 1, 0, 1, 1, 2] = PositiveInfinity;
-            // Finite - NegativeZero = null
-            SR[0, 1, 1, 1, 0, 0, 0] = null;
-            // Finite - NegativeZero = null
-            SR[0, 1, 1, 1, 0, 0, 1] = null;
-            // Finite - NegativeZero = null
-            SR[0, 1, 1, 1, 0, 0, 2] = null;
-            // Finite - NaN = NaN
-            SR[0, 1, 1, 1, 0, 1, 0] = NaN;
-            // Finite - Finite = null
-            SR[0, 1, 1, 1, 0, 1, 1] = null;
-            // Finite - NegativeInfinity = PositiveInfinity
-            SR[0, 1, 1, 1, 0, 1, 2] = PositiveInfinity;
-            // Finite - PositiveZero = null
-            SR[0, 1, 1, 1, 1, 0, 0] = null;
-            // Finite - PositiveZero = null
-            SR[0, 1, 1, 1, 1, 0, 1] = null;
-            // Finite - PositiveZero = null
-            SR[0, 1, 1, 1, 1, 0, 2] = null;
-            // Finite - NaN = NaN
-            SR[0, 1, 1, 1, 1, 1, 0] = NaN;
-            // Finite - Finite = null
-            SR[0, 1, 1, 1, 1, 1, 1] = null;
-            // Finite - PositiveInfinity = NegativeInfinity
-            SR[0, 1, 1, 1, 1, 1, 2] = NegativeInfinity;
-            // Finite * NegativeZero = PositiveZero
-            SR[0, 1, 1, 2, 0, 0, 0] = PositiveZero;
-            // Finite * NegativeZero = PositiveZero
-            SR[0, 1, 1, 2, 0, 0, 1] = PositiveZero;
-            // Finite * NegativeZero = PositiveZero
-            SR[0, 1, 1, 2, 0, 0, 2] = PositiveZero;
-            // Finite * NaN = NaN
-            SR[0, 1, 1, 2, 0, 1, 0] = NaN;
-            // Finite * Finite = null
-            SR[0, 1, 1, 2, 0, 1, 1] = null;
-            // Finite * NegativeInfinity = PositiveInfinity
-            SR[0, 1, 1, 2, 0, 1, 2] = PositiveInfinity;
-            // Finite * PositiveZero = NegativeZero
-            SR[0, 1, 1, 2, 1, 0, 0] = NegativeZero;
-            // Finite * PositiveZero = NegativeZero
-            SR[0, 1, 1, 2, 1, 0, 1] = NegativeZero;
-            // Finite * PositiveZero = NegativeZero
-            SR[0, 1, 1, 2, 1, 0, 2] = NegativeZero;
-            // Finite * NaN = NaN
-            SR[0, 1, 1, 2, 1, 1, 0] = NaN;
-            // Finite * Finite = null
-            SR[0, 1, 1, 2, 1, 1, 1] = null;
-            // Finite * PositiveInfinity = NegativeInfinity
-            SR[0, 1, 1, 2, 1, 1, 2] = NegativeInfinity;
-            // Finite / NegativeZero = PositiveInfinity
-            SR[0, 1, 1, 3, 0, 0, 0] = PositiveInfinity;
-            // Finite / NegativeZero = PositiveInfinity
-            SR[0, 1, 1, 3, 0, 0, 1] = PositiveInfinity;
-            // Finite / NegativeZero = PositiveInfinity
-            SR[0, 1, 1, 3, 0, 0, 2] = PositiveInfinity;
-            // Finite / NaN = NaN
-            SR[0, 1, 1, 3, 0, 1, 0] = NaN;
-            // Finite / Finite = null
-            SR[0, 1, 1, 3, 0, 1, 1] = null;
-            // Finite / NegativeInfinity = PositiveZero
-            SR[0, 1, 1, 3, 0, 1, 2] = PositiveZero;
-            // Finite / PositiveZero = NegativeInfinity
-            SR[0, 1, 1, 3, 1, 0, 0] = NegativeInfinity;
-            // Finite / PositiveZero = NegativeInfinity
-            SR[0, 1, 1, 3, 1, 0, 1] = NegativeInfinity;
-            // Finite / PositiveZero = NegativeInfinity
-            SR[0, 1, 1, 3, 1, 0, 2] = NegativeInfinity;
-            // Finite / NaN = NaN
-            SR[0, 1, 1, 3, 1, 1, 0] = NaN;
-            // Finite / Finite = null
-            SR[0, 1, 1, 3, 1, 1, 1] = null;
-            // Finite / PositiveInfinity = NegativeZero
-            SR[0, 1, 1, 3, 1, 1, 2] = NegativeZero;
-            // NegativeInfinity + NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 0, 0, 0, 0] = NegativeInfinity;
-            // NegativeInfinity + NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 0, 0, 0, 1] = NegativeInfinity;
-            // NegativeInfinity + NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 0, 0, 0, 2] = NegativeInfinity;
-            // NegativeInfinity + NaN = NaN
-            SR[0, 1, 2, 0, 0, 1, 0] = NaN;
-            // NegativeInfinity + Finite = NegativeInfinity
-            SR[0, 1, 2, 0, 0, 1, 1] = NegativeInfinity;
-            // NegativeInfinity + NegativeInfinity = NegativeInfinity
-            SR[0, 1, 2, 0, 0, 1, 2] = NegativeInfinity;
-            // NegativeInfinity + PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 0, 1, 0, 0] = NegativeInfinity;
-            // NegativeInfinity + PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 0, 1, 0, 1] = NegativeInfinity;
-            // NegativeInfinity + PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 0, 1, 0, 2] = NegativeInfinity;
-            // NegativeInfinity + NaN = NaN
-            SR[0, 1, 2, 0, 1, 1, 0] = NaN;
-            // NegativeInfinity + Finite = NegativeInfinity
-            SR[0, 1, 2, 0, 1, 1, 1] = NegativeInfinity;
-            // NegativeInfinity + PositiveInfinity = NaN
-            SR[0, 1, 2, 0, 1, 1, 2] = NaN;
-            // NegativeInfinity - NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 1, 0, 0, 0] = NegativeInfinity;
-            // NegativeInfinity - NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 1, 0, 0, 1] = NegativeInfinity;
-            // NegativeInfinity - NegativeZero = NegativeInfinity
-            SR[0, 1, 2, 1, 0, 0, 2] = NegativeInfinity;
-            // NegativeInfinity - NaN = NaN
-            SR[0, 1, 2, 1, 0, 1, 0] = NaN;
-            // NegativeInfinity - Finite = NegativeInfinity
-            SR[0, 1, 2, 1, 0, 1, 1] = NegativeInfinity;
-            // NegativeInfinity - NegativeInfinity = NaN
-            SR[0, 1, 2, 1, 0, 1, 2] = NaN;
-            // NegativeInfinity - PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 1, 1, 0, 0] = NegativeInfinity;
-            // NegativeInfinity - PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 1, 1, 0, 1] = NegativeInfinity;
-            // NegativeInfinity - PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 1, 1, 0, 2] = NegativeInfinity;
-            // NegativeInfinity - NaN = NaN
-            SR[0, 1, 2, 1, 1, 1, 0] = NaN;
-            // NegativeInfinity - Finite = NegativeInfinity
-            SR[0, 1, 2, 1, 1, 1, 1] = NegativeInfinity;
-            // NegativeInfinity - PositiveInfinity = NegativeInfinity
-            SR[0, 1, 2, 1, 1, 1, 2] = NegativeInfinity;
-            // NegativeInfinity * NegativeZero = NaN
-            SR[0, 1, 2, 2, 0, 0, 0] = NaN;
-            // NegativeInfinity * NegativeZero = NaN
-            SR[0, 1, 2, 2, 0, 0, 1] = NaN;
-            // NegativeInfinity * NegativeZero = NaN
-            SR[0, 1, 2, 2, 0, 0, 2] = NaN;
-            // NegativeInfinity * NaN = NaN
-            SR[0, 1, 2, 2, 0, 1, 0] = NaN;
-            // NegativeInfinity * Finite = PositiveInfinity
-            SR[0, 1, 2, 2, 0, 1, 1] = PositiveInfinity;
-            // NegativeInfinity * NegativeInfinity = PositiveInfinity
-            SR[0, 1, 2, 2, 0, 1, 2] = PositiveInfinity;
-            // NegativeInfinity * PositiveZero = NaN
-            SR[0, 1, 2, 2, 1, 0, 0] = NaN;
-            // NegativeInfinity * PositiveZero = NaN
-            SR[0, 1, 2, 2, 1, 0, 1] = NaN;
-            // NegativeInfinity * PositiveZero = NaN
-            SR[0, 1, 2, 2, 1, 0, 2] = NaN;
-            // NegativeInfinity * NaN = NaN
-            SR[0, 1, 2, 2, 1, 1, 0] = NaN;
-            // NegativeInfinity * Finite = NegativeInfinity
-            SR[0, 1, 2, 2, 1, 1, 1] = NegativeInfinity;
-            // NegativeInfinity * PositiveInfinity = NegativeInfinity
-            SR[0, 1, 2, 2, 1, 1, 2] = NegativeInfinity;
-            // NegativeInfinity / NegativeZero = PositiveInfinity
-            SR[0, 1, 2, 3, 0, 0, 0] = PositiveInfinity;
-            // NegativeInfinity / NegativeZero = PositiveInfinity
-            SR[0, 1, 2, 3, 0, 0, 1] = PositiveInfinity;
-            // NegativeInfinity / NegativeZero = PositiveInfinity
-            SR[0, 1, 2, 3, 0, 0, 2] = PositiveInfinity;
-            // NegativeInfinity / NaN = NaN
-            SR[0, 1, 2, 3, 0, 1, 0] = NaN;
-            // NegativeInfinity / Finite = PositiveInfinity
-            SR[0, 1, 2, 3, 0, 1, 1] = PositiveInfinity;
-            // NegativeInfinity / NegativeInfinity = NaN
-            SR[0, 1, 2, 3, 0, 1, 2] = NaN;
-            // NegativeInfinity / PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 3, 1, 0, 0] = NegativeInfinity;
-            // NegativeInfinity / PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 3, 1, 0, 1] = NegativeInfinity;
-            // NegativeInfinity / PositiveZero = NegativeInfinity
-            SR[0, 1, 2, 3, 1, 0, 2] = NegativeInfinity;
-            // NegativeInfinity / NaN = NaN
-            SR[0, 1, 2, 3, 1, 1, 0] = NaN;
-            // NegativeInfinity / Finite = NegativeInfinity
-            SR[0, 1, 2, 3, 1, 1, 1] = NegativeInfinity;
-            // NegativeInfinity / PositiveInfinity = NaN
-            SR[0, 1, 2, 3, 1, 1, 2] = NaN;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 0, 0, 0, 0, 0] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 0, 0, 0, 0, 1] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 0, 0, 0, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 0, 0, 0, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 0, 0, 0, 1, 1] = null;
-            // PositiveZero + NegativeInfinity = NegativeInfinity
-            SR[1, 0, 0, 0, 0, 1, 2] = NegativeInfinity;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 0, 0, 1, 0, 0] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 0, 0, 1, 0, 1] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 0, 0, 1, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 0, 0, 1, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 0, 0, 1, 1, 1] = null;
-            // PositiveZero + PositiveInfinity = PositiveInfinity
-            SR[1, 0, 0, 0, 1, 1, 2] = PositiveInfinity;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 0, 1, 0, 0, 0] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 0, 1, 0, 0, 1] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 0, 1, 0, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 0, 1, 0, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 0, 1, 0, 1, 1] = null;
-            // PositiveZero - NegativeInfinity = PositiveInfinity
-            SR[1, 0, 0, 1, 0, 1, 2] = PositiveInfinity;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 0, 1, 1, 0, 0] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 0, 1, 1, 0, 1] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 0, 1, 1, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 0, 1, 1, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 0, 1, 1, 1, 1] = null;
-            // PositiveZero - PositiveInfinity = NegativeInfinity
-            SR[1, 0, 0, 1, 1, 1, 2] = NegativeInfinity;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 0, 2, 0, 0, 0] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 0, 2, 0, 0, 1] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 0, 2, 0, 0, 2] = NegativeZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 0, 2, 0, 1, 0] = NaN;
-            // PositiveZero * Finite = NegativeZero
-            SR[1, 0, 0, 2, 0, 1, 1] = NegativeZero;
-            // PositiveZero * NegativeInfinity = NaN
-            SR[1, 0, 0, 2, 0, 1, 2] = NaN;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 0, 2, 1, 0, 0] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 0, 2, 1, 0, 1] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 0, 2, 1, 0, 2] = PositiveZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 0, 2, 1, 1, 0] = NaN;
-            // PositiveZero * Finite = PositiveZero
-            SR[1, 0, 0, 2, 1, 1, 1] = PositiveZero;
-            // PositiveZero * PositiveInfinity = NaN
-            SR[1, 0, 0, 2, 1, 1, 2] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 0, 3, 0, 0, 0] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 0, 3, 0, 0, 1] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 0, 3, 0, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 0, 3, 0, 1, 0] = NaN;
-            // PositiveZero / Finite = NegativeZero
-            SR[1, 0, 0, 3, 0, 1, 1] = NegativeZero;
-            // PositiveZero / NegativeInfinity = NegativeZero
-            SR[1, 0, 0, 3, 0, 1, 2] = NegativeZero;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 0, 3, 1, 0, 0] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 0, 3, 1, 0, 1] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 0, 3, 1, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 0, 3, 1, 1, 0] = NaN;
-            // PositiveZero / Finite = PositiveZero
-            SR[1, 0, 0, 3, 1, 1, 1] = PositiveZero;
-            // PositiveZero / PositiveInfinity = PositiveZero
-            SR[1, 0, 0, 3, 1, 1, 2] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 1, 0, 0, 0, 0] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 1, 0, 0, 0, 1] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 1, 0, 0, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 1, 0, 0, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 1, 0, 0, 1, 1] = null;
-            // PositiveZero + NegativeInfinity = NegativeInfinity
-            SR[1, 0, 1, 0, 0, 1, 2] = NegativeInfinity;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 1, 0, 1, 0, 0] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 1, 0, 1, 0, 1] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 1, 0, 1, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 1, 0, 1, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 1, 0, 1, 1, 1] = null;
-            // PositiveZero + PositiveInfinity = PositiveInfinity
-            SR[1, 0, 1, 0, 1, 1, 2] = PositiveInfinity;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 1, 1, 0, 0, 0] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 1, 1, 0, 0, 1] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 1, 1, 0, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 1, 1, 0, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 1, 1, 0, 1, 1] = null;
-            // PositiveZero - NegativeInfinity = PositiveInfinity
-            SR[1, 0, 1, 1, 0, 1, 2] = PositiveInfinity;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 1, 1, 1, 0, 0] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 1, 1, 1, 0, 1] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 1, 1, 1, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 1, 1, 1, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 1, 1, 1, 1, 1] = null;
-            // PositiveZero - PositiveInfinity = NegativeInfinity
-            SR[1, 0, 1, 1, 1, 1, 2] = NegativeInfinity;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 1, 2, 0, 0, 0] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 1, 2, 0, 0, 1] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 1, 2, 0, 0, 2] = NegativeZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 1, 2, 0, 1, 0] = NaN;
-            // PositiveZero * Finite = NegativeZero
-            SR[1, 0, 1, 2, 0, 1, 1] = NegativeZero;
-            // PositiveZero * NegativeInfinity = NaN
-            SR[1, 0, 1, 2, 0, 1, 2] = NaN;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 1, 2, 1, 0, 0] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 1, 2, 1, 0, 1] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 1, 2, 1, 0, 2] = PositiveZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 1, 2, 1, 1, 0] = NaN;
-            // PositiveZero * Finite = PositiveZero
-            SR[1, 0, 1, 2, 1, 1, 1] = PositiveZero;
-            // PositiveZero * PositiveInfinity = NaN
-            SR[1, 0, 1, 2, 1, 1, 2] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 1, 3, 0, 0, 0] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 1, 3, 0, 0, 1] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 1, 3, 0, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 1, 3, 0, 1, 0] = NaN;
-            // PositiveZero / Finite = NegativeZero
-            SR[1, 0, 1, 3, 0, 1, 1] = NegativeZero;
-            // PositiveZero / NegativeInfinity = NegativeZero
-            SR[1, 0, 1, 3, 0, 1, 2] = NegativeZero;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 1, 3, 1, 0, 0] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 1, 3, 1, 0, 1] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 1, 3, 1, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 1, 3, 1, 1, 0] = NaN;
-            // PositiveZero / Finite = PositiveZero
-            SR[1, 0, 1, 3, 1, 1, 1] = PositiveZero;
-            // PositiveZero / PositiveInfinity = PositiveZero
-            SR[1, 0, 1, 3, 1, 1, 2] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 2, 0, 0, 0, 0] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 2, 0, 0, 0, 1] = PositiveZero;
-            // PositiveZero + NegativeZero = PositiveZero
-            SR[1, 0, 2, 0, 0, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 2, 0, 0, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 2, 0, 0, 1, 1] = null;
-            // PositiveZero + NegativeInfinity = NegativeInfinity
-            SR[1, 0, 2, 0, 0, 1, 2] = NegativeInfinity;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 2, 0, 1, 0, 0] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 2, 0, 1, 0, 1] = PositiveZero;
-            // PositiveZero + PositiveZero = PositiveZero
-            SR[1, 0, 2, 0, 1, 0, 2] = PositiveZero;
-            // PositiveZero + NaN = NaN
-            SR[1, 0, 2, 0, 1, 1, 0] = NaN;
-            // PositiveZero + Finite = null
-            SR[1, 0, 2, 0, 1, 1, 1] = null;
-            // PositiveZero + PositiveInfinity = PositiveInfinity
-            SR[1, 0, 2, 0, 1, 1, 2] = PositiveInfinity;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 2, 1, 0, 0, 0] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 2, 1, 0, 0, 1] = PositiveZero;
-            // PositiveZero - NegativeZero = PositiveZero
-            SR[1, 0, 2, 1, 0, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 2, 1, 0, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 2, 1, 0, 1, 1] = null;
-            // PositiveZero - NegativeInfinity = PositiveInfinity
-            SR[1, 0, 2, 1, 0, 1, 2] = PositiveInfinity;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 2, 1, 1, 0, 0] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 2, 1, 1, 0, 1] = PositiveZero;
-            // PositiveZero - PositiveZero = PositiveZero
-            SR[1, 0, 2, 1, 1, 0, 2] = PositiveZero;
-            // PositiveZero - NaN = NaN
-            SR[1, 0, 2, 1, 1, 1, 0] = NaN;
-            // PositiveZero - Finite = null
-            SR[1, 0, 2, 1, 1, 1, 1] = null;
-            // PositiveZero - PositiveInfinity = NegativeInfinity
-            SR[1, 0, 2, 1, 1, 1, 2] = NegativeInfinity;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 2, 2, 0, 0, 0] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 2, 2, 0, 0, 1] = NegativeZero;
-            // PositiveZero * NegativeZero = NegativeZero
-            SR[1, 0, 2, 2, 0, 0, 2] = NegativeZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 2, 2, 0, 1, 0] = NaN;
-            // PositiveZero * Finite = NegativeZero
-            SR[1, 0, 2, 2, 0, 1, 1] = NegativeZero;
-            // PositiveZero * NegativeInfinity = NaN
-            SR[1, 0, 2, 2, 0, 1, 2] = NaN;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 2, 2, 1, 0, 0] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 2, 2, 1, 0, 1] = PositiveZero;
-            // PositiveZero * PositiveZero = PositiveZero
-            SR[1, 0, 2, 2, 1, 0, 2] = PositiveZero;
-            // PositiveZero * NaN = NaN
-            SR[1, 0, 2, 2, 1, 1, 0] = NaN;
-            // PositiveZero * Finite = PositiveZero
-            SR[1, 0, 2, 2, 1, 1, 1] = PositiveZero;
-            // PositiveZero * PositiveInfinity = NaN
-            SR[1, 0, 2, 2, 1, 1, 2] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 2, 3, 0, 0, 0] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 2, 3, 0, 0, 1] = NaN;
-            // PositiveZero / NegativeZero = NaN
-            SR[1, 0, 2, 3, 0, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 2, 3, 0, 1, 0] = NaN;
-            // PositiveZero / Finite = NegativeZero
-            SR[1, 0, 2, 3, 0, 1, 1] = NegativeZero;
-            // PositiveZero / NegativeInfinity = NegativeZero
-            SR[1, 0, 2, 3, 0, 1, 2] = NegativeZero;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 2, 3, 1, 0, 0] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 2, 3, 1, 0, 1] = NaN;
-            // PositiveZero / PositiveZero = NaN
-            SR[1, 0, 2, 3, 1, 0, 2] = NaN;
-            // PositiveZero / NaN = NaN
-            SR[1, 0, 2, 3, 1, 1, 0] = NaN;
-            // PositiveZero / Finite = PositiveZero
-            SR[1, 0, 2, 3, 1, 1, 1] = PositiveZero;
-            // PositiveZero / PositiveInfinity = PositiveZero
-            SR[1, 0, 2, 3, 1, 1, 2] = PositiveZero;
-            // NaN + NegativeZero = NaN
-            SR[1, 1, 0, 0, 0, 0, 0] = NaN;
-            // NaN + NegativeZero = NaN
-            SR[1, 1, 0, 0, 0, 0, 1] = NaN;
-            // NaN + NegativeZero = NaN
-            SR[1, 1, 0, 0, 0, 0, 2] = NaN;
-            // NaN + NaN = NaN
-            SR[1, 1, 0, 0, 0, 1, 0] = NaN;
-            // NaN + Finite = NaN
-            SR[1, 1, 0, 0, 0, 1, 1] = NaN;
-            // NaN + NegativeInfinity = NaN
-            SR[1, 1, 0, 0, 0, 1, 2] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[1, 1, 0, 0, 1, 0, 0] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[1, 1, 0, 0, 1, 0, 1] = NaN;
-            // NaN + PositiveZero = NaN
-            SR[1, 1, 0, 0, 1, 0, 2] = NaN;
-            // NaN + NaN = NaN
-            SR[1, 1, 0, 0, 1, 1, 0] = NaN;
-            // NaN + Finite = NaN
-            SR[1, 1, 0, 0, 1, 1, 1] = NaN;
-            // NaN + PositiveInfinity = NaN
-            SR[1, 1, 0, 0, 1, 1, 2] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[1, 1, 0, 1, 0, 0, 0] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[1, 1, 0, 1, 0, 0, 1] = NaN;
-            // NaN - NegativeZero = NaN
-            SR[1, 1, 0, 1, 0, 0, 2] = NaN;
-            // NaN - NaN = NaN
-            SR[1, 1, 0, 1, 0, 1, 0] = NaN;
-            // NaN - Finite = NaN
-            SR[1, 1, 0, 1, 0, 1, 1] = NaN;
-            // NaN - NegativeInfinity = NaN
-            SR[1, 1, 0, 1, 0, 1, 2] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[1, 1, 0, 1, 1, 0, 0] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[1, 1, 0, 1, 1, 0, 1] = NaN;
-            // NaN - PositiveZero = NaN
-            SR[1, 1, 0, 1, 1, 0, 2] = NaN;
-            // NaN - NaN = NaN
-            SR[1, 1, 0, 1, 1, 1, 0] = NaN;
-            // NaN - Finite = NaN
-            SR[1, 1, 0, 1, 1, 1, 1] = NaN;
-            // NaN - PositiveInfinity = NaN
-            SR[1, 1, 0, 1, 1, 1, 2] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[1, 1, 0, 2, 0, 0, 0] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[1, 1, 0, 2, 0, 0, 1] = NaN;
-            // NaN * NegativeZero = NaN
-            SR[1, 1, 0, 2, 0, 0, 2] = NaN;
-            // NaN * NaN = NaN
-            SR[1, 1, 0, 2, 0, 1, 0] = NaN;
-            // NaN * Finite = NaN
-            SR[1, 1, 0, 2, 0, 1, 1] = NaN;
-            // NaN * NegativeInfinity = NaN
-            SR[1, 1, 0, 2, 0, 1, 2] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[1, 1, 0, 2, 1, 0, 0] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[1, 1, 0, 2, 1, 0, 1] = NaN;
-            // NaN * PositiveZero = NaN
-            SR[1, 1, 0, 2, 1, 0, 2] = NaN;
-            // NaN * NaN = NaN
-            SR[1, 1, 0, 2, 1, 1, 0] = NaN;
-            // NaN * Finite = NaN
-            SR[1, 1, 0, 2, 1, 1, 1] = NaN;
-            // NaN * PositiveInfinity = NaN
-            SR[1, 1, 0, 2, 1, 1, 2] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[1, 1, 0, 3, 0, 0, 0] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[1, 1, 0, 3, 0, 0, 1] = NaN;
-            // NaN / NegativeZero = NaN
-            SR[1, 1, 0, 3, 0, 0, 2] = NaN;
-            // NaN / NaN = NaN
-            SR[1, 1, 0, 3, 0, 1, 0] = NaN;
-            // NaN / Finite = NaN
-            SR[1, 1, 0, 3, 0, 1, 1] = NaN;
-            // NaN / NegativeInfinity = NaN
-            SR[1, 1, 0, 3, 0, 1, 2] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[1, 1, 0, 3, 1, 0, 0] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[1, 1, 0, 3, 1, 0, 1] = NaN;
-            // NaN / PositiveZero = NaN
-            SR[1, 1, 0, 3, 1, 0, 2] = NaN;
-            // NaN / NaN = NaN
-            SR[1, 1, 0, 3, 1, 1, 0] = NaN;
-            // NaN / Finite = NaN
-            SR[1, 1, 0, 3, 1, 1, 1] = NaN;
-            // NaN / PositiveInfinity = NaN
-            SR[1, 1, 0, 3, 1, 1, 2] = NaN;
-            // Finite + NegativeZero = null
-            SR[1, 1, 1, 0, 0, 0, 0] = null;
-            // Finite + NegativeZero = null
-            SR[1, 1, 1, 0, 0, 0, 1] = null;
-            // Finite + NegativeZero = null
-            SR[1, 1, 1, 0, 0, 0, 2] = null;
-            // Finite + NaN = NaN
-            SR[1, 1, 1, 0, 0, 1, 0] = NaN;
-            // Finite + Finite = null
-            SR[1, 1, 1, 0, 0, 1, 1] = null;
-            // Finite + NegativeInfinity = NegativeInfinity
-            SR[1, 1, 1, 0, 0, 1, 2] = NegativeInfinity;
-            // Finite + PositiveZero = null
-            SR[1, 1, 1, 0, 1, 0, 0] = null;
-            // Finite + PositiveZero = null
-            SR[1, 1, 1, 0, 1, 0, 1] = null;
-            // Finite + PositiveZero = null
-            SR[1, 1, 1, 0, 1, 0, 2] = null;
-            // Finite + NaN = NaN
-            SR[1, 1, 1, 0, 1, 1, 0] = NaN;
-            // Finite + Finite = null
-            SR[1, 1, 1, 0, 1, 1, 1] = null;
-            // Finite + PositiveInfinity = PositiveInfinity
-            SR[1, 1, 1, 0, 1, 1, 2] = PositiveInfinity;
-            // Finite - NegativeZero = null
-            SR[1, 1, 1, 1, 0, 0, 0] = null;
-            // Finite - NegativeZero = null
-            SR[1, 1, 1, 1, 0, 0, 1] = null;
-            // Finite - NegativeZero = null
-            SR[1, 1, 1, 1, 0, 0, 2] = null;
-            // Finite - NaN = NaN
-            SR[1, 1, 1, 1, 0, 1, 0] = NaN;
-            // Finite - Finite = null
-            SR[1, 1, 1, 1, 0, 1, 1] = null;
-            // Finite - NegativeInfinity = PositiveInfinity
-            SR[1, 1, 1, 1, 0, 1, 2] = PositiveInfinity;
-            // Finite - PositiveZero = null
-            SR[1, 1, 1, 1, 1, 0, 0] = null;
-            // Finite - PositiveZero = null
-            SR[1, 1, 1, 1, 1, 0, 1] = null;
-            // Finite - PositiveZero = null
-            SR[1, 1, 1, 1, 1, 0, 2] = null;
-            // Finite - NaN = NaN
-            SR[1, 1, 1, 1, 1, 1, 0] = NaN;
-            // Finite - Finite = null
-            SR[1, 1, 1, 1, 1, 1, 1] = null;
-            // Finite - PositiveInfinity = NegativeInfinity
-            SR[1, 1, 1, 1, 1, 1, 2] = NegativeInfinity;
-            // Finite * NegativeZero = NegativeZero
-            SR[1, 1, 1, 2, 0, 0, 0] = NegativeZero;
-            // Finite * NegativeZero = NegativeZero
-            SR[1, 1, 1, 2, 0, 0, 1] = NegativeZero;
-            // Finite * NegativeZero = NegativeZero
-            SR[1, 1, 1, 2, 0, 0, 2] = NegativeZero;
-            // Finite * NaN = NaN
-            SR[1, 1, 1, 2, 0, 1, 0] = NaN;
-            // Finite * Finite = null
-            SR[1, 1, 1, 2, 0, 1, 1] = null;
-            // Finite * NegativeInfinity = NegativeInfinity
-            SR[1, 1, 1, 2, 0, 1, 2] = NegativeInfinity;
-            // Finite * PositiveZero = PositiveZero
-            SR[1, 1, 1, 2, 1, 0, 0] = PositiveZero;
-            // Finite * PositiveZero = PositiveZero
-            SR[1, 1, 1, 2, 1, 0, 1] = PositiveZero;
-            // Finite * PositiveZero = PositiveZero
-            SR[1, 1, 1, 2, 1, 0, 2] = PositiveZero;
-            // Finite * NaN = NaN
-            SR[1, 1, 1, 2, 1, 1, 0] = NaN;
-            // Finite * Finite = null
-            SR[1, 1, 1, 2, 1, 1, 1] = null;
-            // Finite * PositiveInfinity = PositiveInfinity
-            SR[1, 1, 1, 2, 1, 1, 2] = PositiveInfinity;
-            // Finite / NegativeZero = NegativeInfinity
-            SR[1, 1, 1, 3, 0, 0, 0] = NegativeInfinity;
-            // Finite / NegativeZero = NegativeInfinity
-            SR[1, 1, 1, 3, 0, 0, 1] = NegativeInfinity;
-            // Finite / NegativeZero = NegativeInfinity
-            SR[1, 1, 1, 3, 0, 0, 2] = NegativeInfinity;
-            // Finite / NaN = NaN
-            SR[1, 1, 1, 3, 0, 1, 0] = NaN;
-            // Finite / Finite = null
-            SR[1, 1, 1, 3, 0, 1, 1] = null;
-            // Finite / NegativeInfinity = NegativeZero
-            SR[1, 1, 1, 3, 0, 1, 2] = NegativeZero;
-            // Finite / PositiveZero = PositiveInfinity
-            SR[1, 1, 1, 3, 1, 0, 0] = PositiveInfinity;
-            // Finite / PositiveZero = PositiveInfinity
-            SR[1, 1, 1, 3, 1, 0, 1] = PositiveInfinity;
-            // Finite / PositiveZero = PositiveInfinity
-            SR[1, 1, 1, 3, 1, 0, 2] = PositiveInfinity;
-            // Finite / NaN = NaN
-            SR[1, 1, 1, 3, 1, 1, 0] = NaN;
-            // Finite / Finite = null
-            SR[1, 1, 1, 3, 1, 1, 1] = null;
-            // Finite / PositiveInfinity = PositiveZero
-            SR[1, 1, 1, 3, 1, 1, 2] = PositiveZero;
-            // PositiveInfinity + NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 0, 0, 0, 0] = PositiveInfinity;
-            // PositiveInfinity + NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 0, 0, 0, 1] = PositiveInfinity;
-            // PositiveInfinity + NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 0, 0, 0, 2] = PositiveInfinity;
-            // PositiveInfinity + NaN = NaN
-            SR[1, 1, 2, 0, 0, 1, 0] = NaN;
-            // PositiveInfinity + Finite = PositiveInfinity
-            SR[1, 1, 2, 0, 0, 1, 1] = PositiveInfinity;
-            // PositiveInfinity + NegativeInfinity = NaN
-            SR[1, 1, 2, 0, 0, 1, 2] = NaN;
-            // PositiveInfinity + PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 0, 1, 0, 0] = PositiveInfinity;
-            // PositiveInfinity + PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 0, 1, 0, 1] = PositiveInfinity;
-            // PositiveInfinity + PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 0, 1, 0, 2] = PositiveInfinity;
-            // PositiveInfinity + NaN = NaN
-            SR[1, 1, 2, 0, 1, 1, 0] = NaN;
-            // PositiveInfinity + Finite = PositiveInfinity
-            SR[1, 1, 2, 0, 1, 1, 1] = PositiveInfinity;
-            // PositiveInfinity + PositiveInfinity = PositiveInfinity
-            SR[1, 1, 2, 0, 1, 1, 2] = PositiveInfinity;
-            // PositiveInfinity - NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 1, 0, 0, 0] = PositiveInfinity;
-            // PositiveInfinity - NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 1, 0, 0, 1] = PositiveInfinity;
-            // PositiveInfinity - NegativeZero = PositiveInfinity
-            SR[1, 1, 2, 1, 0, 0, 2] = PositiveInfinity;
-            // PositiveInfinity - NaN = NaN
-            SR[1, 1, 2, 1, 0, 1, 0] = NaN;
-            // PositiveInfinity - Finite = PositiveInfinity
-            SR[1, 1, 2, 1, 0, 1, 1] = PositiveInfinity;
-            // PositiveInfinity - NegativeInfinity = PositiveInfinity
-            SR[1, 1, 2, 1, 0, 1, 2] = PositiveInfinity;
-            // PositiveInfinity - PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 1, 1, 0, 0] = PositiveInfinity;
-            // PositiveInfinity - PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 1, 1, 0, 1] = PositiveInfinity;
-            // PositiveInfinity - PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 1, 1, 0, 2] = PositiveInfinity;
-            // PositiveInfinity - NaN = NaN
-            SR[1, 1, 2, 1, 1, 1, 0] = NaN;
-            // PositiveInfinity - Finite = PositiveInfinity
-            SR[1, 1, 2, 1, 1, 1, 1] = PositiveInfinity;
-            // PositiveInfinity - PositiveInfinity = NaN
-            SR[1, 1, 2, 1, 1, 1, 2] = NaN;
-            // PositiveInfinity * NegativeZero = NaN
-            SR[1, 1, 2, 2, 0, 0, 0] = NaN;
-            // PositiveInfinity * NegativeZero = NaN
-            SR[1, 1, 2, 2, 0, 0, 1] = NaN;
-            // PositiveInfinity * NegativeZero = NaN
-            SR[1, 1, 2, 2, 0, 0, 2] = NaN;
-            // PositiveInfinity * NaN = NaN
-            SR[1, 1, 2, 2, 0, 1, 0] = NaN;
-            // PositiveInfinity * Finite = NegativeInfinity
-            SR[1, 1, 2, 2, 0, 1, 1] = NegativeInfinity;
-            // PositiveInfinity * NegativeInfinity = NegativeInfinity
-            SR[1, 1, 2, 2, 0, 1, 2] = NegativeInfinity;
-            // PositiveInfinity * PositiveZero = NaN
-            SR[1, 1, 2, 2, 1, 0, 0] = NaN;
-            // PositiveInfinity * PositiveZero = NaN
-            SR[1, 1, 2, 2, 1, 0, 1] = NaN;
-            // PositiveInfinity * PositiveZero = NaN
-            SR[1, 1, 2, 2, 1, 0, 2] = NaN;
-            // PositiveInfinity * NaN = NaN
-            SR[1, 1, 2, 2, 1, 1, 0] = NaN;
-            // PositiveInfinity * Finite = PositiveInfinity
-            SR[1, 1, 2, 2, 1, 1, 1] = PositiveInfinity;
-            // PositiveInfinity * PositiveInfinity = PositiveInfinity
-            SR[1, 1, 2, 2, 1, 1, 2] = PositiveInfinity;
-            // PositiveInfinity / NegativeZero = NegativeInfinity
-            SR[1, 1, 2, 3, 0, 0, 0] = NegativeInfinity;
-            // PositiveInfinity / NegativeZero = NegativeInfinity
-            SR[1, 1, 2, 3, 0, 0, 1] = NegativeInfinity;
-            // PositiveInfinity / NegativeZero = NegativeInfinity
-            SR[1, 1, 2, 3, 0, 0, 2] = NegativeInfinity;
-            // PositiveInfinity / NaN = NaN
-            SR[1, 1, 2, 3, 0, 1, 0] = NaN;
-            // PositiveInfinity / Finite = NegativeInfinity
-            SR[1, 1, 2, 3, 0, 1, 1] = NegativeInfinity;
-            // PositiveInfinity / NegativeInfinity = NaN
-            SR[1, 1, 2, 3, 0, 1, 2] = NaN;
-            // PositiveInfinity / PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 3, 1, 0, 0] = PositiveInfinity;
-            // PositiveInfinity / PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 3, 1, 0, 1] = PositiveInfinity;
-            // PositiveInfinity / PositiveZero = PositiveInfinity
-            SR[1, 1, 2, 3, 1, 0, 2] = PositiveInfinity;
-            // PositiveInfinity / NaN = NaN
-            SR[1, 1, 2, 3, 1, 1, 0] = NaN;
-            // PositiveInfinity / Finite = PositiveInfinity
-            SR[1, 1, 2, 3, 1, 1, 1] = PositiveInfinity;
-            // PositiveInfinity / PositiveInfinity = NaN
-            SR[1, 1, 2, 3, 1, 1, 2] = NaN;
-        }
         #endregion
 
-        #region ToString
-        public string GetFractionString() {
-            if (IsFinite(this)) {
-                return this._fraction.ToString();
-            } else if (IsInfinite(this)) {
-                return InfinityString;
-            } else {
-                return NaNString;
-            }
-        }
-        public override string ToString() {
-            return ToString(0);
-        }
-        public string ToString(int separateAt) {
-            return ToString(separateAt, "", false);
-        }
-        public string ToString(int separateAt, string plusSign, bool floatStyleFormat) {
-            if (separateAt < 0) {
-                throw new ArgumentException("argument must be positive");
-            }
+        #region Rounding
 
-            if (IsFinite(this) && !IsZero(this)) {
-                StringBuilder sb = new StringBuilder();
-                if (IsNegative(this)) {
-                    sb.Append("-");
-                } else {
-                    sb.Append(plusSign);
-                }
-                if (floatStyleFormat) {
-                    AppendFloatStyle(sb, separateAt);
-                } else {
-                    AppendEngineeringStyle(sb, separateAt);
-                }
-                return sb.ToString();
+        private static bool RoundsAway(RoundingModes mode, int sign, int comparedToHalf, bool inexact, bool odd) {
+            switch (mode) {
+                case RoundingModes.Up: return inexact;
+                case RoundingModes.Down: return false;
+                case RoundingModes.HalfUp: return comparedToHalf >= 0;
+                case RoundingModes.HalfDown: return comparedToHalf > 0;
+                case RoundingModes.HalfEven: return comparedToHalf > 0 || (comparedToHalf == 0 && odd);
+                case RoundingModes.Ceiling: return inexact && sign > 0;
+                case RoundingModes.Floor: return inexact && sign < 0;
+                default: throw new ArgumentOutOfRangeException(nameof(mode));
             }
-            if (IsPositiveZero(this)) {
-                return plusSign + ZeroString;
-            }
-            if (IsNegativeZero(this)) {
-                return NegativeZeroString;
-            }
-            if (IsPositiveInfinite(this)) {
-                return plusSign + InfinityString;
-            }
-            if (IsNegativeInfinite(this)) {
-                return NegativeInfinityString;
-            }
-            return NaNString;
-        }
-
-        private void AppendFloatStyle(StringBuilder/*!*/ sb, int separateAt) {
-            if (_exponent <= 0) {
-                sb.Append("0.");
-                AppendDigits(sb, new string('0', -_exponent) + _fraction.ToString(), 0, Digits - _exponent, separateAt);
-            } else {
-                int expLenDiff = _exponent - Digits;
-                if (expLenDiff >= 0) {
-                    AppendIntegerDigits(sb, _fraction.ToString() + new string('0', expLenDiff), 0, _exponent, separateAt);
-                    sb.Append(".0");
-                } else {
-                    AppendIntegerDigits(sb, _fraction.ToString(), 0, _exponent, separateAt);
-                    sb.Append(".");
-                    AppendDigits(sb, _fraction.ToString(), _exponent, Digits - _exponent, separateAt);
-                }
-            }
-        }
-
-        private void AppendEngineeringStyle(StringBuilder/*!*/ sb, int separateAt) {
-            sb.Append("0.");
-            AppendDigits(sb, _fraction.ToString(), 0, Digits, separateAt);
-            sb.Append("e");
-            sb.AppendFormat("{0}", this._exponent);
         }
 
         /// <summary>
-        /// Groups the fractional digits, which run left to right: the short group, if any,
-        /// is the last one ("0.123 456 78").
+        /// Rounds sign * magnitude * 10**scale to a multiple of 10**position in the given mode.
+        /// <paramref name="sticky"/> says that the true value is a little more than magnitude * 10**scale
+        /// in magnitude - a quotient or root that did not come out exactly - which turns a tie into
+        /// more than half and an exact value into an inexact one. A result of zero keeps the sign.
         /// </summary>
-        private void AppendDigits(StringBuilder/*!*/ sb, string digits, int start, int length, int separateAt) {
-            int current = start;
-            if (separateAt > 0) {
-                while (current + separateAt < start + length) {
-                    sb.Append(digits.Substring(current, separateAt));
-                    current += separateAt;
-                    sb.Append(" ");
+        internal static BigDecimal/*!*/ RoundAt(Config/*!*/ config, int sign, BigInteger magnitude, Int128 scale, Int128 position,
+            RoundingModes mode, bool sticky) {
+
+            if (position <= scale) {
+                if (!sticky) {
+                    return Create(config, sign, magnitude, scale);
+                }
+                magnitude *= Pow10(scale - position + 1);
+                scale = position - 1;
+            }
+
+            Int128 drop = position - scale;
+            BigInteger quotient;
+            int comparedToHalf;
+            bool inexact;
+            if (magnitude.IsZero || drop > CountDigits(magnitude)) {
+                // everything goes, and it is less than half of the last place kept
+                quotient = BigInteger.Zero;
+                inexact = !magnitude.IsZero || sticky;
+                comparedToHalf = -1;
+            } else {
+                BigInteger unit = Pow10((long)drop);
+                quotient = BigInteger.DivRem(magnitude, unit, out BigInteger remainder);
+                inexact = !remainder.IsZero || sticky;
+                comparedToHalf = (remainder << 1).CompareTo(unit);
+                if (comparedToHalf == 0 && sticky) {
+                    comparedToHalf = 1;
                 }
             }
-            sb.Append(digits.Substring(current, length - (current - start)));
+            if (RoundsAway(mode, sign, comparedToHalf, inexact, !quotient.IsEven)) {
+                quotient += 1;
+            }
+            return Create(config, sign, quotient, position);
+        }
+
+        /// <summary>Rounds to <paramref name="digits"/> significant digits (MRI's VpLeftRound).</summary>
+        internal static BigDecimal/*!*/ RoundToDigits(Config/*!*/ config, int sign, BigInteger magnitude, Int128 scale, int digits,
+            RoundingModes mode, bool sticky) {
+
+            if (magnitude.IsZero) {
+                return Zero(sign);
+            }
+            return RoundAt(config, sign, magnitude, scale, scale + CountDigits(magnitude) - digits, mode, sticky);
+        }
+
+        /// <summary>A finite x rounded to <paramref name="digits"/> significant digits; others as they are.</summary>
+        internal static BigDecimal/*!*/ RoundToDigits(Config/*!*/ config, BigDecimal/*!*/ x, int digits, RoundingModes mode) {
+            if (!x.IsNonZeroFinite || digits <= 0 || x._digitCount <= digits) {
+                return x;
+            }
+            return RoundAt(config, x._sign, x._digits, x.Scale, (Int128)x._exponent - digits, mode, false);
+        }
+
+        /// <summary>The global limit applied to the result of an operation (MRI's VpLimitRound).</summary>
+        private static BigDecimal/*!*/ ApplyLimit(Config/*!*/ config, BigDecimal/*!*/ x, int limit) {
+            return RoundToDigits(config, x, limit, config.RoundingMode);
         }
 
         /// <summary>
-        /// Groups the digits of the integer part, which are counted from the decimal point
-        /// backwards, so the short group is the *first* one: 1000010 with a width of 5 is
-        /// "10 00010", not "10000 10".
+        /// #round, #truncate, #floor and #ceil: rounds to <paramref name="places"/> digits after the decimal
+        /// point (before it, for a negative count). Zero and the special values are left alone.
+        /// MRI's VpMidRound is exact but for one thing: in ROUND_UP mode, a position before the first of
+        /// the 9-digit words the number occupies rounds to zero, so BigDecimal("0.04").round(-1, :up) is 0.
         /// </summary>
-        private void AppendIntegerDigits(StringBuilder/*!*/ sb, string digits, int start, int length, int separateAt) {
-            if (separateAt <= 0 || length <= separateAt) {
-                sb.Append(digits.Substring(start, length));
+        public static BigDecimal/*!*/ RoundDecimalPlaces(Config/*!*/ config, BigDecimal/*!*/ x, long places, RoundingModes mode) {
+            if (!x.IsNonZeroFinite) {
+                return x;
+            }
+            if (mode == RoundingModes.Up && (Int128)places + WordExponent(x._exponent) * BASE_FIG < 0) {
+                return Zero(x._sign);
+            }
+            return RoundAt(config, x._sign, x._digits, x.Scale, -(Int128)places, mode, false);
+        }
+
+        /// <summary>MRI's exponent in 9-digit words: the number is 0.[w0 w1 ...] * 10**(9 * WordExponent).</summary>
+        private static long WordExponent(long exponent) {
+            return exponent > 0 ? (exponent + BASE_FIG - 1) / BASE_FIG : -(-exponent / BASE_FIG);
+        }
+
+        #endregion
+
+        #region Arithmetic
+
+        /// <summary>
+        /// x + y, or x - y for an <paramref name="operation"/> of -1, rounded to <paramref name="limit"/>
+        /// significant digits, or to BigDecimal.limit for 0 (MRI's BigDecimal_addsub_with_coerce).
+        /// </summary>
+        public static BigDecimal/*!*/ Add(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, int operation, int limit) {
+            if (x.IsNaN) {
+                return CheckResult(config, x);
+            }
+            if (y.IsNaN) {
+                return CheckResult(config, y);
+            }
+            int ySign = operation * y._sign;
+            if (x.IsInfinite) {
+                return y.IsInfinite && x._sign != ySign ? OperationNaN(config) : OperationInfinity(config, x);
+            }
+            if (y.IsInfinite) {
+                return OperationInfinity(config, Infinity(ySign));
+            }
+            if (limit == 0) {
+                limit = config.Limit;
+            }
+            if (x.IsZero) {
+                if (y.IsZero) {
+                    return Zero(x._sign < 0 && ySign < 0 ? -1 : 1);
+                }
+                return ApplyLimit(config, operation < 0 ? Negate(y) : y, limit);
+            }
+            if (y.IsZero) {
+                return ApplyLimit(config, x, limit);
+            }
+
+            BigDecimal big = x, small = y;
+            int bigSign = x._sign, smallSign = ySign;
+            if (x._exponent < y._exponent) {
+                big = y;
+                small = x;
+                bigSign = ySign;
+                smallSign = x._sign;
+            }
+            BigInteger smallDigits = small._digits;
+            Int128 smallScale = small.Scale;
+
+            // An operand that lies wholly below both the other's last digit and the rounding position
+            // only decides which way the rounding goes, as any smaller value of the same sign would; one
+            // a long way down is replaced by a single digit, so that 1e1000000000 + 1 rounds without first
+            // writing out a billion digits.
+            if (limit > 0) {
+                Int128 floor = Int128.Min(big.Scale, (Int128)big._exponent - limit) - 2;
+                if (small._exponent < floor && floor - smallScale > 1000) {
+                    smallDigits = BigInteger.One;
+                    smallScale = floor - 1;
+                }
+            }
+
+            Int128 scale = Int128.Min(big.Scale, smallScale);
+            BigInteger sum = bigSign * big._digits * Pow10(big.Scale - scale) + smallSign * smallDigits * Pow10(smallScale - scale);
+            if (sum.IsZero) {
+                return PositiveZero;
+            }
+            BigDecimal result = Create(config, sum, scale);
+            return ApplyLimit(config, result, limit);
+        }
+
+        /// <summary>
+        /// x * y, rounded to <paramref name="digits"/> significant digits, or to BigDecimal.limit for 0
+        /// (MRI's BigDecimal_mult_with_coerce).
+        /// </summary>
+        public static BigDecimal/*!*/ Multiply(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, int digits) {
+            int sign = x._sign * y._sign;
+            if (x.IsNaN || y.IsNaN) {
+                return OperationNaN(config);
+            }
+            if (x.IsInfinite || y.IsInfinite) {
+                return x.IsZero || y.IsZero ? OperationNaN(config) : OperationInfinity(config, Infinity(sign));
+            }
+            if (x.IsZero || y.IsZero) {
+                return Zero(sign);
+            }
+            BigDecimal product = Create(config, sign, x._digits * y._digits, x.Scale + y.Scale);
+            return RoundToDigits(config, product, digits != 0 ? digits : config.Limit, config.RoundingMode);
+        }
+
+        /// <summary>
+        /// x / y to <paramref name="digits"/> significant digits in the current rounding mode, as MRI's
+        /// BigDecimal_div2 makes it: the quotient rounded as if it were known exactly.
+        /// </summary>
+        public static BigDecimal/*!*/ Divide(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, int digits) {
+            int sign = x._sign * y._sign;
+            if (x.IsNaN || y.IsNaN) {
+                return OperationNaN(config);
+            }
+            if (x.IsInfinite) {
+                return y.IsInfinite ? OperationNaN(config) : CheckResult(config, OperationInfinity(config, Infinity(sign)));
+            }
+            if (y.IsInfinite) {
+                // VpIsDefOP reports even this zero as an infinite result
+                return OperationInfinity(config, Zero(sign));
+            }
+            if (y.IsZero) {
+                if (x.IsZero) {
+                    return OperationNaN(config);
+                }
+                Raise(config, ExceptionModes.ZeroDivide, "Divide by zero");
+                return CheckResult(config, Infinity(sign));
+            }
+            if (x.IsZero) {
+                return Zero(sign);
+            }
+
+            // enough digits of the quotient for one more than asked, and a remainder to say whether it is exact
+            long shift = Math.Max(0, (long)digits + 2 - x._digitCount + y._digitCount);
+            BigInteger quotient = BigInteger.DivRem(x._digits * Pow10(shift), y._digits, out BigInteger remainder);
+            return RoundToDigits(config, sign, quotient, x.Scale - y.Scale - shift, digits, config.RoundingMode, !remainder.IsZero);
+        }
+
+        /// <summary>
+        /// The digits #/ (and #div(y, 0)) divides to: the precision of the more precise operand plus 16,
+        /// at least 32, and no more than BigDecimal.limit when one is set.
+        /// </summary>
+        public static int DivisionDigits(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y) {
+            long digits = Math.Max(x.Precision, y.Precision) + DoubleFig;
+            if (digits < 2 * DoubleFig) {
+                digits = 2 * DoubleFig;
+            }
+            if (config.Limit > 0 && config.Limit < digits) {
+                digits = config.Limit;
+            }
+            return (int)Math.Min(digits, Int32.MaxValue);
+        }
+
+        /// <summary>
+        /// MRI's BigDecimal_DoDivmod: the integral quotient and the remainder, the quotient floored
+        /// (#divmod, #%) or truncated (#remainder). The quotient is a BigDecimal still; NaN and the
+        /// infinities raise only when #divmod and #div make an Integer of it. A zero divisor raises.
+        /// </summary>
+        public static void DivMod(Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y, bool truncate,
+            out BigDecimal/*!*/ div, out BigDecimal/*!*/ mod) {
+
+            if (x.IsNaN || y.IsNaN || (x.IsInfinite && y.IsInfinite)) {
+                div = mod = NaN;
                 return;
             }
-            int firstGroup = length % separateAt;
-            int current = start;
-            if (firstGroup != 0) {
-                sb.Append(digits.Substring(current, firstGroup));
-                sb.Append(" ");
-                current += firstGroup;
+            if (y.IsZero) {
+                throw new DivideByZeroException("divided by 0");
             }
-            while (current < start + length) {
-                sb.Append(digits.Substring(current, separateAt));
-                current += separateAt;
-                if (current < start + length) {
-                    sb.Append(" ");
+            if (x.IsInfinite) {
+                div = Infinity(x._sign == y._sign ? 1 : -1);
+                mod = NaN;
+                return;
+            }
+            if (x.IsZero) {
+                div = PositiveZero;
+                mod = x;
+                return;
+            }
+            if (y.IsInfinite) {
+                if (!truncate && x._sign != y._sign) {
+                    div = Create(config, -1);
+                    mod = y;
+                } else {
+                    div = PositiveZero;
+                    mod = x;
                 }
+                return;
+            }
+
+            // exactly, at the exponent of the finer of the two
+            Int128 scale = Int128.Min(x.Scale, y.Scale);
+            BigInteger a = x._sign * x._digits * Pow10(x.Scale - scale);
+            BigInteger b = y._sign * y._digits * Pow10(y.Scale - scale);
+            BigInteger q = BigInteger.DivRem(a, b, out BigInteger r);
+            if (!truncate && !r.IsZero && (r.Sign < 0) != (b.Sign < 0)) {
+                q -= 1;
+                r += b;
+            }
+            div = Create(config, q, 0);
+            mod = Create(config, r, scale);
+        }
+
+        public static BigDecimal/*!*/ Negate(BigDecimal/*!*/ x) {
+            switch (x._type) {
+                case NumberTypes.NaN: return x;
+                case NumberTypes.Infinite: return Infinity(-x._sign);
+                default: return x.IsZero ? Zero(-x._sign) : new BigDecimal(-x._sign, x._digits, x._digitCount, x._exponent);
             }
         }
+
+        public static BigDecimal/*!*/ Abs(BigDecimal/*!*/ x) {
+            return x._sign < 0 && !x.IsNaN ? Negate(x) : x;
+        }
+
+        /// <summary>x * 10**n, exactly (MRI's _decimal_shift).</summary>
+        public static BigDecimal/*!*/ DecimalShift(Config/*!*/ config, BigDecimal/*!*/ x, long n) {
+            if (!x.IsNonZeroFinite || n == 0) {
+                return CheckResult(config, x);
+            }
+            Int128 exponent = (Int128)x._exponent + n;
+            if (exponent > MaxExponent) {
+                return ExponentOverflow(config, x._sign);
+            }
+            if (exponent < MinExponent) {
+                return ExponentUnderflow(config, x._sign);
+            }
+            return new BigDecimal(x._sign, x._digits, x._digitCount, (long)exponent);
+        }
+
+        /// <summary>
+        /// bigdecimal 4.0.1's #sqrt, which the gem writes in Ruby (lib/bigdecimal.rb), step for step: Newton's
+        /// iteration from the Float root, at a precision that doubles each time up to <paramref name="digits"/>
+        /// + 16, then rounded to <paramref name="digits"/> in the current mode. 0 digits means
+        /// n_significant_digits + 16, or BigDecimal.limit if that is less. It is not the correctly rounded
+        /// root in every mode - the iteration may stop a unit below an exact one - so it is not computed as one.
+        /// </summary>
+        public static BigDecimal/*!*/ SquareRoot(Config/*!*/ config, BigDecimal/*!*/ x, int digits) {
+            if (x.IsInfinite && x._sign > 0) {
+                Raise(config, ExceptionModes.Infinity, "Computation results in 'Infinity'");
+                return PositiveInfinity;
+            }
+            if (Compare(x, PositiveZero) < 0) {
+                throw new FloatDomainError("sqrt of negative value");
+            }
+            if (x.IsNaN) {
+                throw new FloatDomainError("sqrt of 'NaN'(Not a Number)");
+            }
+            if (x.IsZero) {
+                return x;
+            }
+            if (digits == 0) {
+                digits = x._digitCount + DoubleFig;
+                if (config.Limit != 0) {
+                    digits = Math.Min(config.Limit, digits);
+                }
+            }
+
+            long shift = x._exponent >= 0 ? x._exponent / 2 : -((1 - x._exponent) / 2);
+            BigDecimal a = DecimalShift(config, x, -2 * shift);
+            BigDecimal y = Create(config, Math.Sqrt(ToFloat(config, a)), 0);
+            BigDecimal two = Create(config, 2);
+            var precisions = new System.Collections.Generic.List<int> { digits + DoubleFig };
+            while (precisions[precisions.Count - 1] > DoubleFig) {
+                precisions.Add(2 + precisions[precisions.Count - 1] / 2);
+            }
+            for (int i = precisions.Count - 1; i >= 0; i--) {
+                int p = precisions[i];
+                y = Divide(config, Add(config, y, Divide(config, a, y, p), 1, p), two, p);
+            }
+            return Multiply(config, DecimalShift(config, y, shift), Create(config, 1), digits);
+        }
+
+        /// <summary>The integer part, truncated towards zero (#fix).</summary>
+        public static BigDecimal/*!*/ IntegerPart(Config/*!*/ config, BigDecimal/*!*/ x) {
+            if (!x.IsNonZeroFinite || x.Scale >= 0) {
+                return x;
+            }
+            return RoundAt(config, x._sign, x._digits, x.Scale, 0, RoundingModes.Down, false);
+        }
+
+        /// <summary>What #fix leaves out, with self's sign (#frac).</summary>
+        public static BigDecimal/*!*/ FractionalPart(Config/*!*/ config, BigDecimal/*!*/ x) {
+            if (!x.IsNonZeroFinite || x._exponent <= 0) {
+                return x;
+            }
+            if (x.Scale >= 0) {
+                return Zero(x._sign);
+            }
+            return Create(config, x._sign, x._digits % Pow10(-x.Scale), x.Scale);
+        }
+
         #endregion
 
         #region Comparison
-        #region IEquatable<BigDecimal> Members
 
-        public bool Equals(BigDecimal other) {
-            return CompareTo(other) == 0;
-        }
-
-        #endregion
-
-        public int? CompareBigDecimal(BigDecimal other) {
-            int? result;
-            if (other == null) {
-                result = null;
-            } else if (!IsNonZeroFinite(this) || !IsNonZeroFinite(other)) {
-                result = CheckSpecialComparison(this, other);
+        /// <summary>x &lt;=&gt; y; null when either is NaN.</summary>
+        public static int? Compare(BigDecimal/*!*/ x, BigDecimal/*!*/ y) {
+            if (x.IsNaN || y.IsNaN) {
+                return null;
+            }
+            int xRank = x.Rank, yRank = y.Rank;
+            if (xRank != yRank || xRank == 0 || !x.IsFinite) {
+                return xRank.CompareTo(yRank);
+            }
+            // two non-zero finite numbers of the same sign
+            int result;
+            if (x._exponent != y._exponent) {
+                result = x._exponent.CompareTo(y._exponent);
             } else {
-                if (this._sign != other._sign) {
-                    // Different signs
-                    result = this._sign > other._sign ? 1 : -1;
-                } else {
-                    result = this._sign * (Fraction.Compare(this._fraction, other._fraction, this._exponent - other._exponent));
-                }
+                int shift = x._digitCount - y._digitCount;
+                result = shift >= 0
+                    ? x._digits.CompareTo(y._digits * Pow10(shift))
+                    : (x._digits * Pow10(-shift)).CompareTo(y._digits);
             }
-            return result;
+            return x._sign * result;
         }
 
-        #region IComparable<BigDecimal> Members
-        public int CompareTo(BigDecimal other) {
-            int? result = CompareBigDecimal(other);
-            if (result.HasValue) {
-                return result.Value;
-            } else {
-                // Must have NaNs so we map them to Double.CompareTo results
-                if (IsNaN(this)) {
-                    if (IsNaN(other)) {
-                        // Both NaN so 
-                        return 0;
-                    } else {
-                        // this == NaN && other != NaN
-                        return -1;
-                    }
-                } else {
-                    return 1;
-                }
-            }
-        }
-        #endregion
-        #endregion
+        // -Infinity < negative < zero (of either sign) < positive < Infinity
+        private int Rank => IsZero ? 0 : (IsInfinite ? 2 : 1) * _sign;
 
-        #region Hash Code
-        public int GetSignCode() {
-            switch (this.NumberType) {
-                case BigDecimal.NumberTypes.NaN:
-                    return 0;
-                case BigDecimal.NumberTypes.Infinite:
-                    return this.Sign * 3;
-                default:
-                case BigDecimal.NumberTypes.Finite:
-                    if (BigDecimal.IsZero(this)) {
-                        return this.Sign;
-                    } else {
-                        return this.Sign * 2;
-                    }
-            }
-        }
+        /// <summary>
+        /// Equal numbers hash alike, whatever digits they were written with. As in MRI, the special values
+        /// and the zeros hash to their sign: so +0 and -0 hash apart though they are ==.
+        /// (Equals stays reference equality: IronRuby's #equal? is object.Equals for a CLR object.)
+        /// </summary>
         public override int GetHashCode() {
-            int hash = this.GetSignCode();
-            // Special values have special hash codes
-            if (hash == 2) {
-                int fHash = _fraction.GetHashCode();
-                hash = (31 * hash + fHash) ^ fHash + Exponent;
+            if (!IsNonZeroFinite) {
+                return SignCode;
             }
-            return hash;
+            return HashCode.Combine(_sign, _digits, _exponent);
         }
+
         #endregion
 
-        //#region Conversion
-        //public static implicit operator BigDecimal/*!*/(int i) {
-        //    Config dummy = new Config();
-        //    return Create(dummy, i.ToString());
-        //}
-        //public static implicit operator BigDecimal/*!*/(BigInteger/*!*/ i) {
-        //    Config dummy = new Config();
-        //    return Create(dummy, i.ToString());
-        //}
-        //public static implicit operator BigDecimal/*!*/(double d) {
-        //    Config dummy = new Config();
-        //    return Create(dummy, d.ToString());
-        //}
-        //#endregion
-    }
+        #region Precision
 
+        /// <summary>
+        /// The number of decimal digits it takes to write the number out in positional notation (MRI's
+        /// #precision): BigDecimal("1e2") has one significant digit but a precision of 3, and 0.001 has a
+        /// precision of 3 for the zeros after its decimal point. Zero and the special values have 0.
+        /// </summary>
+        public long Precision {
+            get {
+                if (!IsNonZeroFinite) {
+                    return 0;
+                }
+                return _exponent > 0 ? Math.Max(_digitCount, _exponent) : _digitCount - _exponent;
+            }
+        }
+
+        /// <summary>The digits after the decimal point.</summary>
+        public long ScaleDigits => IsNonZeroFinite ? (long)Int128.Max(0, -Scale) : 0;
+
+        /// <summary>
+        /// The digits MRI's representation holds, 9 to a word with the words aligned at the decimal point -
+        /// what #_dump writes before the colon.
+        /// </summary>
+        public long InternalDigits {
+            get {
+                if (!IsNonZeroFinite) {
+                    return BASE_FIG;
+                }
+                Int128 words = FloorDivide((Int128)_exponent - 1, BASE_FIG) - FloorDivide(Scale, BASE_FIG) + 1;
+                return (long)(words * BASE_FIG);
+            }
+        }
+
+        private static Int128 FloorDivide(Int128 n, int d) {
+            var (quotient, remainder) = Int128.DivRem(n, d);
+            return remainder < 0 ? quotient - 1 : quotient;
+        }
+
+        #endregion
+
+        #region Conversion
+
+        /// <summary>
+        /// MRI's #to_f: the nearest Float to the decimal value; one too big for a Float is an infinity and
+        /// one too small a zero, each of which raises when the mode for it (EXCEPTION_OVERFLOW,
+        /// EXCEPTION_UNDERFLOW) is set.
+        /// </summary>
+        public static double ToFloat(Config/*!*/ config, BigDecimal/*!*/ x) {
+            switch (x._type) {
+                case NumberTypes.NaN: return Double.NaN;
+                case NumberTypes.Infinite: return x._sign > 0 ? Double.PositiveInfinity : Double.NegativeInfinity;
+            }
+            if (x.IsZero) {
+                return x._sign > 0 ? 0.0 : -0.0;
+            }
+            double result;
+            if (x._exponent > 400) {
+                result = Double.PositiveInfinity;
+            } else if (x._exponent < -400) {
+                result = 0.0;
+            } else {
+                result = Double.Parse(x._digits.ToString(CultureInfo.InvariantCulture) + "E" + x.Scale.ToString(CultureInfo.InvariantCulture),
+                    NumberStyles.Float, CultureInfo.InvariantCulture);
+            }
+            if (Double.IsInfinity(result)) {
+                Raise(config, ExceptionModes.Overflow, "BigDecimal to Float conversion");
+            } else if (result == 0) {
+                Raise(config, ExceptionModes.Underflow, "BigDecimal to Float conversion");
+            }
+            return x._sign > 0 ? result : -result;
+        }
+
+        /// <summary>The integer part as an Integer (#to_i); a special value raises.</summary>
+        public static object/*!*/ ToInteger(BigDecimal/*!*/ x) {
+            if (!x.IsFinite) {
+                throw CreateSpecialValueError(x);
+            }
+            if (x.IsZero || x._exponent <= 0) {
+                return ClrInteger.Zero;
+            }
+            BigInteger value = x.Scale >= 0 ? x._digits * Pow10(x.Scale) : x._digits / Pow10(-x.Scale);
+            return Protocols.Normalize(x._sign < 0 ? -value : value);
+        }
+
+        #endregion
+
+        #region ToString
+
+        /// <summary>The digits as #split gives them: "0" for zero, "NaN" and "Infinity" for the others.</summary>
+        public string/*!*/ GetDigitString() {
+            switch (_type) {
+                case NumberTypes.NaN: return "NaN";
+                case NumberTypes.Infinite: return "Infinity";
+            }
+            return IsZero ? "0" : ToDecimalString(_digits, _digitCount);
+        }
+
+        // Below this many digits BigInteger.ToString is quick enough on its own.
+        private const int DecimalStringLeafDigits = 2000;
+
+        /// <summary>
+        /// The <paramref name="digitCount"/> decimal digits of a positive value. BigInteger.ToString is
+        /// quadratic in the number of digits - a million take half a minute - so a long value is split at
+        /// 10**(DecimalStringLeafDigits * 2**k) and its halves written out separately, which is as fast as
+        /// the runtime's division (a million digits in well under a second on .NET 10, half the time of
+        /// ToString on .NET 8, whose division is itself quadratic).
+        /// </summary>
+        internal static string/*!*/ ToDecimalString(BigInteger n, int digitCount) {
+            Debug.Assert(n.Sign > 0 && digitCount > 0);
+            if (digitCount <= DecimalStringLeafDigits) {
+                return n.ToString(CultureInfo.InvariantCulture);
+            }
+            // powers[k] = 10**(DecimalStringLeafDigits * 2**k), the last one at least half the digits
+            var powers = new System.Collections.Generic.List<BigInteger> { Pow10(DecimalStringLeafDigits) };
+            for (long d = DecimalStringLeafDigits; d * 2 < digitCount; d *= 2) {
+                powers.Add(powers[powers.Count - 1] * powers[powers.Count - 1]);
+            }
+            var result = new char[digitCount];
+            WriteDecimal(n, result, digitCount, digitCount, powers, powers.Count - 1);
+            return new string(result);
+        }
+
+        // Writes n, which is less than 10**width, into buffer[end - width, end), padded with leading zeros.
+        private static void WriteDecimal(BigInteger n, char[]/*!*/ buffer, int end, int width,
+            System.Collections.Generic.List<BigInteger>/*!*/ powers, int level) {
+
+            while (level >= 0 && (long)DecimalStringLeafDigits << level >= width) {
+                level--;
+            }
+            if (level < 0) {
+                string text = n.IsZero ? "" : n.ToString(CultureInfo.InvariantCulture);
+                int start = end - text.Length;
+                for (int i = end - width; i < start; i++) {
+                    buffer[i] = '0';
+                }
+                text.CopyTo(0, buffer, start, text.Length);
+                return;
+            }
+            int lowWidth = DecimalStringLeafDigits << level;
+            BigInteger high = BigInteger.DivRem(n, powers[level], out BigInteger low);
+            WriteDecimal(low, buffer, end, lowWidth, powers, level - 1);
+            WriteDecimal(high, buffer, end - lowWidth, width - lowWidth, powers, level - 1);
+        }
+
+        public override string/*!*/ ToString() {
+            return ToString(0, "", false);
+        }
+
+        // MRI's VpToSpecialString
+        private string ToSpecialString(string/*!*/ plusSign) {
+            switch (_type) {
+                case NumberTypes.NaN: return "NaN";
+                case NumberTypes.Infinite: return _sign > 0 ? plusSign + "Infinity" : "-Infinity";
+            }
+            if (IsZero) {
+                return _sign > 0 ? plusSign + "0.0" : "-0.0";
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// #to_s: "0.12345e3", or "123.45" in the F format; <paramref name="plusSign"/> (" " or "+") goes
+        /// before a positive number, and a non-zero <paramref name="group"/> puts a space between every that
+        /// many digits - counted from the decimal point, so the integer part is grouped from its right.
+        /// </summary>
+        public string/*!*/ ToString(int group, string/*!*/ plusSign, bool floatFormat) {
+            string special = ToSpecialString(plusSign);
+            if (special != null) {
+                return special;
+            }
+
+            var sb = new StringBuilder();
+            sb.Append(_sign < 0 ? "-" : plusSign);
+            string digits = ToDecimalString(_digits, _digitCount);
+            if (!floatFormat) {
+                sb.Append("0.");
+                AppendGroupedFromLeft(sb, digits, group);
+                sb.Append('e').Append(_exponent.ToString(CultureInfo.InvariantCulture));
+                return sb.ToString();
+            }
+
+            if (_exponent > 0) {
+                string integer = _exponent >= _digitCount
+                    ? digits + new string('0', checked((int)(_exponent - _digitCount)))
+                    : digits.Substring(0, (int)_exponent);
+                AppendGroupedFromRight(sb, integer, group);
+            } else {
+                sb.Append('0');
+            }
+            sb.Append('.');
+            if (_exponent >= _digitCount) {
+                sb.Append('0');
+            } else {
+                string fraction = _exponent > 0
+                    ? digits.Substring((int)_exponent)
+                    : new string('0', checked((int)-_exponent)) + digits;
+                AppendGroupedFromLeft(sb, fraction, group);
+            }
+            return sb.ToString();
+        }
+
+        private static void AppendGroupedFromLeft(StringBuilder/*!*/ sb, string/*!*/ digits, int group) {
+            if (group <= 0) {
+                sb.Append(digits);
+                return;
+            }
+            for (int i = 0; i < digits.Length; i += group) {
+                if (i > 0) {
+                    sb.Append(' ');
+                }
+                sb.Append(digits, i, Math.Min(group, digits.Length - i));
+            }
+        }
+
+        private static void AppendGroupedFromRight(StringBuilder/*!*/ sb, string/*!*/ digits, int group) {
+            if (group <= 0) {
+                sb.Append(digits);
+                return;
+            }
+            int first = digits.Length % group;
+            if (first == 0) {
+                first = group;
+            }
+            sb.Append(digits, 0, Math.Min(first, digits.Length));
+            for (int i = first; i < digits.Length; i += group) {
+                sb.Append(' ').Append(digits, i, group);
+            }
+        }
+
+        #endregion
+    }
 }

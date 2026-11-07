@@ -14,12 +14,8 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using IronRuby.Compiler.Generation;
-using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
-using System.Diagnostics;
-using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Runtime {
     [ReflectionCached, CLSCompliant(false)]
@@ -41,6 +37,16 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public volatile object Value; // not null after initialized for the first time
+
+        // in the core library written in Ruby, which Ractor isolation does not apply to (RactorIsolation)
+        internal readonly bool IsCoreLibrary;
+
+        public ConstantSiteCache() {
+        }
+
+        public ConstantSiteCache(bool isCoreLibrary) {
+            IsCoreLibrary = isCoreLibrary;
+        }
 
         internal void Update(object newValue, int newVersion) {
             // Thread safety:
@@ -83,6 +89,16 @@ namespace IronRuby.Runtime {
     public sealed class ExpressionQualifiedConstantSiteCache {
         internal volatile VersionAndModule/*!*/ Condition = VersionAndModule.Default;
         internal volatile object/*!*/ Value;
+
+        // in the core library written in Ruby, which Ractor isolation does not apply to (RactorIsolation)
+        internal readonly bool IsCoreLibrary;
+
+        public ExpressionQualifiedConstantSiteCache() {
+        }
+
+        public ExpressionQualifiedConstantSiteCache(bool isCoreLibrary) {
+            IsCoreLibrary = isCoreLibrary;
+        }
 
         internal void Update(object newValue, int newVersion, RubyModule newModule) {
             // Thread safety:

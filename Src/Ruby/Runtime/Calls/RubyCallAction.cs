@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -25,11 +21,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
-using System.Runtime.CompilerServices;
+using System.Numerics;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -729,6 +724,30 @@ namespace IronRuby.Runtime.Calls {
                 new VisibilityContext(scope.SelfImmediateClass);
         }
 
+        /// <summary>
+        /// Integer's CLR members are those of Int32, its CLR type. An Int64 or BigInteger receiver is an Integer too, and a
+        /// member only its own type has - (2**70).IsEven, .Sign, (2**40).is_even - is looked up there before the call goes to
+        /// method_missing. The rule already tests the receiver's CLR type, so an Int32 never gets here; the test of the class
+        /// version covers extension methods activated for the type later.
+        /// </summary>
+        private static MethodResolutionResult ResolveOwnClrMember(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args,
+            RubyClass/*!*/ targetClass, string/*!*/ methodName, MethodResolutionResult notFound) {
+
+            object target = args.Target;
+            var context = targetClass.Context;
+            if (!(target is long || target is BigInteger) || targetClass != context.IntegerClass ||
+                !(context.GetClrTypeModule(target.GetType()) is RubyClass ownClass) || ownClass == targetClass) {
+                return notFound;
+            }
+
+            metaBuilder.AddVersionTest(ownClass);
+            RubyMemberInfo member;
+            if (ownClass.TryGetClrMember(methodName, null, out member) && member.Visibility == RubyMethodVisibility.Public) {
+                return new MethodResolutionResult(member, ownClass, true);
+            }
+            return notFound;
+        }
+
         internal static MethodResolutionResult Resolve(MetaObjectBuilder/*!*/ metaBuilder, string/*!*/ methodName, CallArguments/*!*/ args,
             out RubyMemberInfo methodMissing) {
 
@@ -759,6 +778,10 @@ namespace IronRuby.Runtime.Calls {
                 } else {
                     var options = args.Signature.IsVirtualCall ? MethodLookup.Virtual : MethodLookup.Default;
                     method = targetClass.ResolveMethodNoLock(methodName, visibilityContext, options, refinements).InvalidateSitesOnOverride();
+                }
+
+                if (!method.Found && method.Info == null && !args.Signature.IsVirtualCall) {
+                    method = ResolveOwnClrMember(metaBuilder, args, targetClass, methodName, method);
                 }
 
                 if (!method.Found) {
@@ -866,7 +889,9 @@ namespace IronRuby.Runtime.Calls {
                 case MethodMissingBinding.Custom:
                     Debug.Assert(!metaBuilder.Error);
                     // a user-defined method_missing may call super: record how the call was made
-                    metaBuilder.AddInitialization(Methods.SetMethodMissingReason.OpCall(AstUtils.Constant(args.Signature.HasImplicitSelf)));
+                    metaBuilder.AddInitialization(Methods.SetMethodMissingReason.OpCall(
+                        AstUtils.Constant(args.Signature.HasImplicitSelf), AstUtils.Constant(defaultFallback && args.Signature.IsVariableCall)
+                    ));
                     methodMissing.BuildMethodMissingCall(metaBuilder, args, methodName);
                     return true;
 
@@ -879,6 +904,7 @@ namespace IronRuby.Runtime.Calls {
                     if (defaultFallback && args.Signature.IsVariableCall) {
                         metaBuilder.SetError(Methods.MakeUndefinedLocalOrMethodError.OpCall(
                             args.MetaContext.Expression,
+                            AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope)),
                             AstUtils.Convert(args.TargetExpression, typeof(object)),
                             Ast.Constant(methodName)
                         ));

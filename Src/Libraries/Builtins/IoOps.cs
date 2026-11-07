@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -39,7 +35,6 @@ using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
     using Ast = Expression;
-    using Utils = IronRuby.Runtime.Utils;
     using TranscodeStorage = CallSiteStorage<Func<CallSite, object, object, object>>;
 
     /// <summary>
@@ -127,7 +122,7 @@ namespace IronRuby.Builtins {
             RubyClass/*!*/ self,
             object descriptor,
             [Optional]object optionsOrMode,
-            [Optional]object options) {
+            [Keywords, Optional]object options) {
 
             return Reinitialize(toInt, toHash, toStr, new RubyIO(self.Context), descriptor, optionsOrMode, options);
         }
@@ -140,7 +135,7 @@ namespace IronRuby.Builtins {
             RubyIO/*!*/ self,
             object descriptor,
             [Optional]object optionsOrMode,
-            [Optional]object optionsArgument) {
+            [Keywords, Optional]object optionsArgument) {
 
             var context = self.Context;
 
@@ -190,7 +185,7 @@ namespace IronRuby.Builtins {
             // and #inspect answer it, and nothing else in the stream knows it.
             object path;
             if (options != null && options.TryGetValue(context.CreateAsciiSymbol("path"), out path) && path != null) {
-                context.SetInstanceVariable(self, "@__io_path__", Protocols.CastToPath(toStr, path));
+                context.SetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__io_path__"), Protocols.CastToPath(toStr, path));
             }
 
             return self;
@@ -266,12 +261,15 @@ namespace IronRuby.Builtins {
             self.Mode = source.Mode;
             self.CopyEncodingsFrom(source);
             self.ConversionOptions = source.ConversionOptions;
+            if (source.Timeout != null) {
+                ApplyTimeout(self.Context, self, source.Timeout, source.TimeoutMilliseconds);
+            }
 
             // The copy owns the descriptor dup(2) just made it, so it closes it and does not pass
             // it to a child, whatever the original had been set to. Kernel#dup copied those two
             // settings across with the rest of the instance variables.
             self.Context.SetInstanceVariable(self, "@__autoclose", true);
-            self.Context.SetInstanceVariable(self, "@__close_on_exec__", true);
+            self.Context.SetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__close_on_exec__"), true);
             return self;
         }
 
@@ -347,7 +345,7 @@ namespace IronRuby.Builtins {
                 int native = self.KernelDescriptor;
                 if (native > 2) {
                     RubyProcess.SetCloseOnExec(native);
-                    self.Context.SetInstanceVariable(self, "@__close_on_exec__", true);
+                    self.Context.SetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__close_on_exec__"), true);
                 }
                 CopyPath(self, source);
                 return self;
@@ -499,7 +497,7 @@ namespace IronRuby.Builtins {
                 int errno;
                 int fd = Posix.Open(directory, Posix.O_RDONLY | Posix.O_CLOEXEC, out errno);
                 if (fd < 0) {
-                    throw Posix.Error(errno, directory);
+                    throw Posix.Error(errno, directory, self.Context);
                 }
                 return self.Context.AllocateFileDescriptor(new DescriptorStream(fd, true, false, true));
             }
@@ -579,8 +577,7 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region pipe, popen
-#if FEATURE_PROCESS
-        [RubyMethod("pipe", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
+        [RubyMethod("pipe", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ OpenPipe(RubyClass/*!*/ self) {
             Stream reader, writer;
             RubyPipe.CreatePipe(out reader, out writer);
@@ -597,7 +594,7 @@ namespace IronRuby.Builtins {
 
         // TODO: params, conversions, options?
 
-        [RubyMethod("popen", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
+        [RubyMethod("popen", RubyMethodAttributes.PublicSingleton)]
         public static object OpenPipe(RubyContext/*!*/ context, BlockParam block, RubyClass/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ command, [DefaultProtocol, Optional, NotNull]MutableString modeString) {
 
@@ -620,7 +617,7 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("popen", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
+        [RubyMethod("popen", RubyMethodAttributes.PublicSingleton)]
         public static RubyIO/*!*/ OpenPipe(RubyContext/*!*/ context, RubyClass/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ command, [DefaultProtocol, Optional, NotNull]MutableString modeString) {
             return OpenPipe(context, command, IOModeEnum.Parse(modeString));
@@ -659,7 +656,6 @@ namespace IronRuby.Builtins {
             return new RubyIO(context, reader, writer, mode);
         }
 
-#endif
         #endregion
 
         #region select
@@ -677,12 +673,67 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("select", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray Select(RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, UnaryOpStorage/*!*/ toFloatStorage,
             RubyContext/*!*/ context, object self,
             object read, [Optional]object write, [Optional]object error, [Optional]object timeout) {
 
-            return SelectInternal(respondToStorage, toIoStorage, context, read, write, error, ToTimeInterval(context, timeout));
+            return SelectInternal(respondToStorage, toIoStorage, context, read, write, error,
+                ToTimeInterval(context, ToTimeIntervalValue(respondToStorage, toFloatStorage, timeout)));
         }
+
+        /// <summary>
+        /// MRI's rb_time_interval takes any number that answers #divmod as well as Integer and
+        /// Float - a Rational, typically. The fractional ones go through #to_f here.
+        /// </summary>
+        private static object ToTimeIntervalValue(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ toFloatStorage, object timeout) {
+            if (timeout == null || timeout is Missing || timeout is int || timeout is double || timeout is long || timeout is BigInteger) {
+                return timeout;
+            }
+            if (Protocols.RespondTo(respondToStorage, timeout, "divmod") && Protocols.RespondTo(respondToStorage, timeout, "to_f")) {
+                var site = toFloatStorage.GetCallSite("to_f");
+                object converted = site.Target(site, timeout);
+                if (converted is double) {
+                    return converted;
+                }
+            }
+            return timeout;
+        }
+
+        #region timeout, timeout= (3.2)
+
+        [RubyMethod("timeout")]
+        public static object GetTimeout(RubyIO/*!*/ self) {
+            return self.Timeout;
+        }
+
+        /// <summary>
+        /// IO#timeout=: a read or a write that has to wait for the stream waits at most this long
+        /// and then raises IO::TimeoutError. A regular file is always ready, so it never times
+        /// out, as in MRI. Unlike MRI, #readpartial and #sysread honour the timeout too (MRI 4.0's
+        /// wait forever on a pipe).
+        /// </summary>
+        [RubyMethod("timeout=")]
+        public static object SetTimeout(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ toFloatStorage,
+            RubyContext/*!*/ context, RubyIO/*!*/ self, object timeout) {
+
+            if (timeout == null) {
+                self.SetTimeout(null, Timeout.Infinite, null);
+            } else {
+                ApplyTimeout(context, self, timeout, ToTimeInterval(context, ToTimeIntervalValue(respondToStorage, toFloatStorage, timeout)));
+            }
+            return timeout;
+        }
+
+        private static void ApplyTimeout(RubyContext/*!*/ context, RubyIO/*!*/ self, object timeout, int milliseconds) {
+            object seconds = (milliseconds == Timeout.Infinite) ? null : (object)(milliseconds / 1000.0);
+            // The wait comes before a read of the stream underneath the IO's buffer, so what that
+            // buffer holds must not count as ready: the read would then block with no bound.
+            self.SetTimeout(timeout, milliseconds, isRead =>
+                WaitForEvents(context, self, isRead ? Readable : Writable, seconds, true) != null
+            );
+        }
+
+        #endregion
 
         /// <summary>
         /// The timeout in milliseconds, or Timeout.Infinite for "wait as long as it takes". MRI
@@ -759,16 +810,8 @@ namespace IronRuby.Builtins {
         private static RubyIO/*!*/ ToSelectableIo(RespondToStorage/*!*/ respondToStorage,
             CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, RubyContext/*!*/ context, object obj) {
 
-            var io = obj as RubyIO;
-            if (io == null && Protocols.RespondTo(respondToStorage, obj, "to_io")) {
-                var site = toIoStorage.GetCallSite("to_io", 0);
-                io = site.Target(site, obj) as RubyIO;
-            }
-
-            if (io == null) {
-                throw RubyExceptions.CreateTypeError("can't convert {0} into IO", context.GetClassDisplayName(obj));
-            }
-            return io;
+            return TryToIO(respondToStorage, toIoStorage, context, obj, true) ??
+                throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(obj), "IO");
         }
 
         private static RubyArray SelectInternal(RespondToStorage/*!*/ respondToStorage,
@@ -892,12 +935,21 @@ namespace IronRuby.Builtins {
         }
 
         private static bool IsReady(RubyIO/*!*/ io, Readiness kind) {
+            return IsReady(io, kind, false);
+        }
+
+        /// <summary>
+        /// Whether the IO is ready for <paramref name="kind"/>. With <paramref name="ignoreBuffer"/>
+        /// the IO's own read buffer does not count: the question is then whether a read of the
+        /// stream underneath would block, which is what IO#timeout has to wait for.
+        /// </summary>
+        private static bool IsReady(RubyIO/*!*/ io, Readiness kind, bool ignoreBuffer) {
             if (io.Closed) {
                 throw RubyExceptions.CreateIOError("closed stream");
             }
 
             var stream = io.GetStream();
-            if (kind == Readiness.Read && stream.DataBuffered) {
+            if (kind == Readiness.Read && !ignoreBuffer && stream.DataBuffered) {
                 return true;
             }
 
@@ -947,7 +999,7 @@ namespace IronRuby.Builtins {
                 if (windowsPipe != null) {
                     switch (kind) {
                         case Readiness.Read: return io.Mode.CanRead() && IoReadiness.IsWindowsPipeReadable(windowsPipe);
-                        case Readiness.Write: return io.Mode.CanWrite();
+                        case Readiness.Write: return io.Mode.CanWrite() && IoReadiness.IsWindowsPipeWritable(windowsPipe);
                         default: return false;
                     }
                 }
@@ -1089,6 +1141,10 @@ namespace IronRuby.Builtins {
         /// interruptible by Thread#kill and reports the thread as sleeping while it runs.
         /// </summary>
         private static object WaitForEvents(RubyContext/*!*/ context, RubyIO/*!*/ io, int events, object timeout) {
+            return WaitForEvents(context, io, events, timeout, false);
+        }
+
+        private static object WaitForEvents(RubyContext/*!*/ context, RubyIO/*!*/ io, int events, object timeout, bool ignoreBuffer) {
             int milliseconds = ToTimeInterval(context, timeout);
             long deadline = (milliseconds == Timeout.Infinite)
                 ? Int64.MaxValue
@@ -1101,14 +1157,14 @@ namespace IronRuby.Builtins {
             if ((events & Priority) != 0) { watched.Add(io); kinds.Add(IoReadiness.Error); }
 
             return WaitUntilReady<object>(watched, kinds, deadline, () => {
-                int ready = ReadyEvents(io, events);
+                int ready = ReadyEvents(io, events, ignoreBuffer);
                 return (ready != 0) ? ScriptingRuntimeHelpers.Int32ToObject(ready) : null;
             });
         }
 
-        private static int ReadyEvents(RubyIO/*!*/ io, int events) {
+        private static int ReadyEvents(RubyIO/*!*/ io, int events, bool ignoreBuffer) {
             int ready = 0;
-            if ((events & Readable) != 0 && IsReady(io, Readiness.Read)) {
+            if ((events & Readable) != 0 && IsReady(io, Readiness.Read, ignoreBuffer)) {
                 ready |= Readable;
             }
             if ((events & Writable) != 0 && IsReady(io, Readiness.Write)) {
@@ -1187,7 +1243,6 @@ namespace IronRuby.Builtins {
             }
         }
 
-        // TODO:
         [RubyMethod("close_read")]
         public static void CloseReader(RubyIO/*!*/ self) {
             if (self.Closed) {
@@ -1196,7 +1251,6 @@ namespace IronRuby.Builtins {
             self.CloseReader();
         }
 
-        // TODO:
         [RubyMethod("close_write")]
         public static void CloseWriter(RubyIO/*!*/ self) {
             if (self.Closed) {
@@ -1209,10 +1263,6 @@ namespace IronRuby.Builtins {
         public static bool Closed(RubyIO/*!*/ self) {
             return self.Closed;
         }
-
-        // TODO: 1.9 only
-        // close_on_exec=
-        // close_on_exec?
 
         #endregion
 
@@ -1287,7 +1337,7 @@ namespace IronRuby.Builtins {
                         throw error;
                     }
                 }
-                throw Posix.Error(errno, null);
+                throw Posix.Error(errno, null, self.Context);
             }
             if (str != null) {
                 str.Clear();
@@ -1351,7 +1401,7 @@ namespace IronRuby.Builtins {
             return self.IsBinmode;
         }
 
-        [RubyMethod("stat", BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("stat")]
         public static System.IO.FileSystemInfo/*!*/ Stat(RubyIO/*!*/ self) {
             self.RequireOpen();
             return RubyFileOps.RubyStatOps.Create(self);
@@ -1390,7 +1440,7 @@ namespace IronRuby.Builtins {
                         // A stream that knows its path shows it; one that does not shows its
                         // descriptor, which a closed stream no longer has.
                         object path;
-                        self.Context.TryGetInstanceVariable(self, "@__io_path__", out path);
+                        self.Context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__io_path__"), out path);
                         var pathString = path as MutableString;
                         if (pathString != null) {
                             result.Append(pathString);
@@ -1506,7 +1556,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("set_encoding")]
         public static RubyIO/*!*/ SetEncodings(ConversionStorage<IDictionary<object, object>>/*!*/ toHash, ConversionStorage<MutableString>/*!*/ toStr,
-            RubyIO/*!*/ self, object external, [Optional]object @internal, [Optional]IDictionary<object, object> options) {
+            RubyIO/*!*/ self, object external, [Optional]object @internal, [Keywords, Optional]IDictionary<object, object> options) {
 
             self.RequireOpen();
             Protocols.TryConvertToOptions(toHash, ref options, ref external, ref @internal);
@@ -1725,6 +1775,10 @@ namespace IronRuby.Builtins {
             bool nonBlocking = windowsPipe != null;
             int count = val.GetByteCount();
             if ((pipe != null || nonBlocking) && count > 0) {
+                if (!nonBlocking) {
+                    // the write(2) blocks on a full pipe, so IO#timeout is waited out before it
+                    self.WaitForStream(false);
+                }
                 int written;
                 try {
                     written = nonBlocking
@@ -1753,7 +1807,7 @@ namespace IronRuby.Builtins {
         public static int WriteNoBlock(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
             self.RequireWritable();
             int result = -1;
-            self.NonBlockingOperation(() => result = WriteOnceWithoutWaiting(self, val), false);
+            self.RunNonBlocking(() => result = WriteOnceWithoutWaiting(self, val), false);
             return result;
         }
 
@@ -1827,8 +1881,8 @@ namespace IronRuby.Builtins {
                 }
                 if (fd == 1 || fd == 2) {
                     var signal = new SignalException("SIGPIPE");
-                    io.Context.SetInstanceVariable(signal, "@signo", 13);
-                    io.Context.SetInstanceVariable(signal, "@signm", MutableString.CreateAscii("SIGPIPE"));
+                    io.Context.SetInstanceVariable(signal, RubyUtils.GetCoreStateInstanceVariableName("@__signo__"), 13);
+                    io.Context.SetInstanceVariable(signal, RubyUtils.GetCoreStateInstanceVariableName("@__signm__"), MutableString.CreateAscii("SIGPIPE"));
                     return signal;
                 }
             }
@@ -1841,7 +1895,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("write_nonblock")]
         public static int WriteNoBlock(ConversionStorage<MutableString>/*!*/ tosConversion, RubyIO/*!*/ self, object obj) {
-            return Write(self, Protocols.ConvertToString(tosConversion, obj), true);
+            // rb_obj_as_string, then the same single write(2) a String gets - never a blocking write
+            return WriteNoBlock(self, Protocols.ConvertToString(tosConversion, obj));
         }
         
         #endregion
@@ -1854,18 +1909,6 @@ namespace IronRuby.Builtins {
             } else {
                 buffer.Clear();
             } 
-#if TODO
-            var internalEncoding = io.InternalEncoding ?? io.ExternalEncoding;
-
-            if (buffer != null) {
-                buffer.Clear();
-                buffer.ForceEncoding(internalEncoding);
-            } else if (io.ExternalEncoding == RubyEncoding.Binary && internalEncoding == RubyEncoding.Binary) {
-                buffer = MutableString.CreateBinary();
-            } else {
-                buffer = MutableString.CreateMutable(internalEncoding);
-            }
-#endif            
             return buffer;
         }
 
@@ -1883,6 +1926,15 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("read")]
         public static MutableString Read(RubyIO/*!*/ self, [DefaultProtocol]int bytes, [DefaultProtocol, Optional]MutableString buffer) {
+            return Read(self, bytes, buffer, true);
+        }
+
+        /// <summary>
+        /// IO#read(n) reads n bytes, or what is left before the end of the stream: a pipe or a
+        /// socket hands back what it has so far, and the rest is waited for (each wait bounded by
+        /// IO#timeout). #sysread is a single read, and answers what that one read brought.
+        /// </summary>
+        private static MutableString Read(RubyIO/*!*/ self, int bytes, MutableString buffer, bool fully) {
             self.RequireReadable();
             if (bytes < 0) {
                 throw RubyExceptions.CreateArgumentError("negative length {0} given", bytes);
@@ -1890,6 +1942,12 @@ namespace IronRuby.Builtins {
 
             buffer = PrepareReadBuffer(self, buffer);
             int bytesRead = self.AppendBytes(buffer, bytes);
+            if (fully && bytesRead > 0) {
+                int more;
+                while (bytesRead < bytes && (more = self.AppendBytes(buffer, bytes - bytesRead)) > 0) {
+                    bytesRead += more;
+                }
+            }
             return (bytesRead == 0 && bytes != 0) ? null : buffer;
         }
 
@@ -1915,7 +1973,7 @@ namespace IronRuby.Builtins {
             // TODO: sysopen does that?
             stream.Flush();
 
-            var result = Read(self, bytes, buffer);
+            var result = Read(self, bytes, buffer, false);
             if (result == null) {
                 throw new EOFError("end of file reached");
             }
@@ -1950,7 +2008,7 @@ namespace IronRuby.Builtins {
         public static MutableString ReadNoBlock(RubyIO/*!*/ self, [DefaultProtocol]int bytes, [DefaultProtocol, Optional]MutableString buffer) {
             self.RequireReadable();
             MutableString result = null;
-            self.NonBlockingOperation(() => result = ReadOnceWithoutWaiting(self, bytes, buffer), true);
+            self.RunNonBlocking(() => result = ReadOnceWithoutWaiting(self, bytes, buffer), true);
             if (result == null) {
                 throw new EOFError("end of file reached");
             }
@@ -2012,6 +2070,16 @@ namespace IronRuby.Builtins {
 
             var pipe = (INonBlockingReadStream)DescriptorStream.Of(stream.BaseStream) ?? stream.BaseStream as INonBlockingReadStream;
             if (pipe == null) {
+                // A Windows pipe has no descriptor, and a ReadFile on an empty one waits for the
+                // writer however long that is, but PeekNamedPipe says whether anything is there.
+                var windowsPipe = IoReadiness.GetWindowsPipe(io);
+                if (windowsPipe != null && !IoReadiness.IsWindowsPipeReadable(windowsPipe)) {
+                    if (buffered > 0) {
+                        return buffer;
+                    }
+                    throw NonBlockingError(io.Context, true, "read would block");
+                }
+
                 // No non-blocking read primitive for this stream - a socket, or something with no
                 // descriptor at all.  With bytes already in hand, poll(2) decides whether to ask
                 // for more: an ordinary read that would block raises EAGAIN out of here, and the
@@ -2050,7 +2118,7 @@ namespace IronRuby.Builtins {
             object path, 
             [Optional]object optionsOrLength, 
             [Optional]object optionsOrOffset,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             Protocols.TryConvertToOptions(toHash, ref options, ref optionsOrLength, ref optionsOrOffset);
             var site = fixnumCast.GetSite(ConvertToFixnumAction.Make(fixnumCast.Context));
@@ -2116,6 +2184,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("readline")]
+        [ReceivesKeywords]
         public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, ConversionStorage<MutableString>/*!*/ toStr,
             ConversionStorage<int>/*!*/ toInt, RubyScope/*!*/ scope, RubyIO/*!*/ self, params object[]/*!*/ args) {
 
@@ -2345,13 +2414,12 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// What every line reader does to a line it has read: it is tainted, converted when the
+        /// What every line reader does to a line it has read: it is converted when the
         /// stream has an internal encoding or conversion options (the conversion is Ruby code,
         /// IO#__transcode__ in ruby4.rb), and chomped when chomp: was given.
         /// </summary>
         private static MutableString/*!*/ FinishLine(TranscodeStorage/*!*/ transcode, RubyIO/*!*/ self, MutableString/*!*/ line,
             MutableString separator, bool chomp) {
-            line.IsTainted = true;
             if (self.Enc2 != null || self.ConversionOptions != null) {
                 var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
                 line = site.Target(site, self, line) as MutableString ?? line;
@@ -2554,6 +2622,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("gets")]
+        [ReceivesKeywords]
         public static MutableString Gets(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, ConversionStorage<MutableString>/*!*/ toStr,
             ConversionStorage<int>/*!*/ toInt, RubyScope/*!*/ scope, RubyIO/*!*/ self, params object[]/*!*/ args) {
 
@@ -2760,9 +2829,6 @@ namespace IronRuby.Builtins {
             return site.Target(site, self, value);
         }
 
-        // TODO: 1.9 only
-        // getbyte
-
         #endregion
 
         #region foreach, each, each_byte, each_line
@@ -2771,6 +2837,7 @@ namespace IronRuby.Builtins {
         // mode: option and reads through #each_line). What is left here is $_: MRI's foreach
         // reads into its caller's, so once the block has had every line it is nil.
         [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static object ForEach(CallSiteStorage<Func<CallSite, object, Proc, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, RubyClass/*!*/ self, params object[]/*!*/ args) {
 
@@ -2798,32 +2865,34 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        [RubyMethod("each")]
+        // #each_line first: a backtrace names the frame by it, which makes it one frame with the Ruby
+        // #each_line that wraps it (ruby4.rb)
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self) {
             return Each(transcode, universal, context, block, self, context.InputSeparator, -1, false);
         }
 
-        [RubyMethod("each")]
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, DynamicNull separator) {
             return Each(transcode, universal, context, block, self, null, -1, false);
         }
 
-        [RubyMethod("each")]
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
             return Each(transcode, universal, context, block, self, separatorOrLimit, false);
         }
 
-        [RubyMethod("each")]
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
             return Each(transcode, universal, context, block, self, separator, -1, false);
         }
 
-        [RubyMethod("each")]
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
             return Each(transcode, universal, context, block, self, separator, limit, false);
         }
@@ -3067,16 +3136,12 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        // TODO: 1.9 only
-        // bytes -> Enumerable::Enumerator
-        // lines -> Enumerable::Enumerator
-
         public static IOWrapper/*!*/ CreateIOWrapper(RespondToStorage/*!*/ respondToStorage, object io, FileAccess access) {
             return CreateIOWrapper(respondToStorage, io, access, 0x1000);
         }
 
         public static IOWrapper/*!*/ CreateIOWrapper(RespondToStorage/*!*/ respondToStorage, object io, FileAccess access, int bufferSize) {
-            bool canRead, canWrite, canSeek, canFlush, canBeClosed;
+            bool canRead, canWrite, canSeek, canFlush;
 
             if (access == FileAccess.Read || access == FileAccess.ReadWrite) {
                 canRead = Protocols.RespondTo(respondToStorage, io, "read");
@@ -3092,9 +3157,8 @@ namespace IronRuby.Builtins {
 
             canSeek = Protocols.RespondTo(respondToStorage, io, "seek") && Protocols.RespondTo(respondToStorage, io, "tell");
             canFlush = Protocols.RespondTo(respondToStorage, io, "flush");
-            canBeClosed = Protocols.RespondTo(respondToStorage, io, "close");
 
-            return new IOWrapper(respondToStorage.Context, io, canRead, canWrite, canSeek, canFlush, canBeClosed, bufferSize);
+            return new IOWrapper(respondToStorage.Context, io, canRead, canWrite, canSeek, canFlush, bufferSize);
         }
     }
 }

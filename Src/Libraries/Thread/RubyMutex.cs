@@ -18,12 +18,10 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Threading;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 
 namespace IronRuby.StandardLibrary.Threading {
     /// <summary>
@@ -409,18 +407,6 @@ namespace IronRuby.StandardLibrary.Threading {
                     }
                 }
                 return (int)Math.Round(watch.Elapsed.TotalSeconds);
-            } finally {
-                DoLock(self);
-            }
-        }
-
-        [RubyMethod("exclusive_unlock")]
-        public static object ExclusiveUnlock(BlockParam criticalSection, RubyMutex/*!*/ self) {
-            Unlock(self);
-            try {
-                object result;
-                criticalSection.Yield(out result);
-                return result;
             } finally {
                 DoLock(self);
             }

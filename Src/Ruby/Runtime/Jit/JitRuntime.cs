@@ -391,7 +391,18 @@ namespace IronRuby.Runtime.Jit {
         // Each `@x` in a compiled body has an inline cache of its own: the same shape-checked fast
         // path as the interpreter's and the DLR compiler's (see RubyInstanceData).
         public static object GetIVar(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            RequireIsolationCheckFree(context, self, site);
             return RubyOps.ReadInstanceVariable(context, self, site);
+        }
+
+        /// <summary>
+        /// An instance variable of anything but a plain Ruby object, in a non-main Ractor: the
+        /// generic code does what RactorIsolation says about it, raising from a frame of its own.
+        /// </summary>
+        private static void RequireIsolationCheckFree(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            if (context.RactorsStarted && !(self is RubyObject) && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
+                throw Deopt();
+            }
         }
 
         /// <summary>
@@ -533,6 +544,7 @@ namespace IronRuby.Runtime.Jit {
                 }
                 return data.GetInstanceVariable(site.Variable);
             }
+            RequireIsolationCheckFree(context, self, site.Variable);
             return RubyOps.ReadInstanceVariable(context, self, site.Variable);
         }
 
@@ -586,12 +598,16 @@ namespace IronRuby.Runtime.Jit {
                 if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
                     return value;
                 }
+            } else if (RubyOps.TrySetRubyObjectInstanceVariable(self, value, site)) {
+                // an instance of a Ruby subclass of Array, Hash, Exception, Enumerator...
+                return value;
             }
             // A frozen receiver raises FrozenError, and a typed body has no frame to raise it from:
             // let the generic body run instead (see JitCompiler._ivarWrite).
             if (context.IsObjectFrozen(self)) {
                 throw Deopt();
             }
+            RequireIsolationCheckFree(context, self, site);
             context.SetInstanceVariable(self, value, site);
             return value;
         }

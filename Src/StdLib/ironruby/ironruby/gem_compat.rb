@@ -261,7 +261,7 @@ IronRuby::GemCompat.on_require("bundler") do
           specs[spec.name] = { spec.full_name => spec }
           duplicates.delete(spec.name)
           instance_variable_get(:@cache).clear
-          (@ironruby_pinned_specs ||= {})[spec.name] = spec
+          (@__ironruby_pinned_specs__ ||= {})[spec.name] = spec
           self
         end
       end
@@ -271,7 +271,7 @@ IronRuby::GemCompat.on_require("bundler") do
         # index was narrowed to: IronRuby's spec when the exact one is absent.
         def local_search(query)
           results = super
-          return results unless results.empty? && @ironruby_pinned_specs
+          return results unless results.empty? && @__ironruby_pinned_specs__
 
           name =
             case query
@@ -279,7 +279,7 @@ IronRuby::GemCompat.on_require("bundler") do
             when String then nil
             else query.respond_to?(:name) ? query.name : nil
             end
-          spec = name && @ironruby_pinned_specs[name]
+          spec = name && @__ironruby_pinned_specs__[name]
           return results unless spec
 
           unless ::Gem.ironruby_lock_substitutable?(spec)
@@ -316,9 +316,9 @@ IronRuby::GemCompat.on_require("bundler") do
       def specs
         index = super
         return index unless @allow_local
-        return index if @ironruby_pinned_gems_applied
+        return index if @__ironruby_pinned_gems_applied__
 
-        @ironruby_pinned_gems_applied = true
+        @__ironruby_pinned_gems_applied__ = true
         ::Gem.ironruby_pinned_gems.each do |name, version|
           spec = default_specs.search(name).find {|s| s.version == version }
           index.ironruby_replace_specs!(spec) if spec

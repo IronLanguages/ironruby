@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -29,7 +25,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using IronRuby.Builtins;
-using IronRuby.Compiler;
 using IronRuby.Runtime.Conversions;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Generation;
@@ -81,12 +76,20 @@ namespace IronRuby.Runtime.Calls {
         private readonly int _positionalCount;
         private readonly Parameter _params;
 
+        // how many positional arguments a call without keywords (the only one made without a rule) passes: those before a
+        // [Keywords] parameter, which takes nothing else
+        private readonly int _positionalLimit;
+
         // the BlockParam parameter and its index, or null (the block is not passed to the overload):
         private readonly Parameter _block;
         private readonly int _blockIndex;
 
+        // whether a keyword Hash the call passes stops saying it is keyword arguments, as the rule has it
+        // (RubyMethodGroupBase.BuildCallNoFlow): the overload does not receive keywords
+        private readonly bool _clearsKeywords;
+
         private LibraryCallPlan(LibraryFunctionCall function, CallInstruction call, Parameter/*!*/[]/*!*/ parameters, Type/*!*/ returnType,
-            int mandatoryCount, int positionalCount, Parameter paramsParameter, Parameter block) {
+            int mandatoryCount, int positionalCount, int positionalLimit, Parameter paramsParameter, Parameter block, bool clearsKeywords) {
             Debug.Assert((function != null) != (call != null));
             _function = function;
             _call = call;
@@ -94,9 +97,11 @@ namespace IronRuby.Runtime.Calls {
             _returnType = returnType;
             _mandatoryCount = mandatoryCount;
             _positionalCount = positionalCount;
+            _positionalLimit = positionalLimit;
             _params = paramsParameter;
             _block = block;
             _blockIndex = Array.IndexOf(parameters, block);
+            _clearsKeywords = clearsKeywords;
         }
 
         /// <summary>
@@ -194,6 +199,10 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal object/*!*/ Invoke(RubyContext/*!*/ context, RubyScope/*!*/ scope, object self, Proc block, object[]/*!*/ args) {
+            if (_clearsKeywords && args.Length > 0) {
+                RubyOps.ClearKeywordArguments(args[args.Length - 1]);
+            }
+
             var clrArgs = new object[_parameters.Length];
             BlockParam bfc = null;
 
@@ -313,6 +322,11 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
+            // The name the method was called by is the rule's to pass (a plan is per method, not per name):
+            if (i < infos.Count && CalledNameAttribute.IsDefinedOn(infos[i])) {
+                return null;
+            }
+
             Parameter block = null;
             if (i < infos.Count && infos[i].ParameterType == typeof(BlockParam)) {
                 parameters[i] = block = new Parameter { Kind = Kind.Block, Type = typeof(BlockParam), NotNull = overload.ProhibitsNull(i) };
@@ -332,6 +346,7 @@ namespace IronRuby.Runtime.Calls {
 
             int mandatoryCount = 0;
             int positionalCount = 0;
+            int positionalLimit = -1;
             Parameter paramsParameter = null;
             for (; i < infos.Count; i++) {
                 var info = infos[i];
@@ -370,6 +385,14 @@ namespace IronRuby.Runtime.Calls {
                 }
 
                 var p = new Parameter { Kind = Kind.Positional, Type = type, NotNull = overload.ProhibitsNull(i), Conversion = conversion };
+
+                if (info.IsDefined(typeof(KeywordsAttribute), false)) {
+                    // a call that passes no keywords leaves it out; one that must pass them is not made without a rule
+                    if (info.IsMandatory() || positionalLimit >= 0) {
+                        return null;
+                    }
+                    positionalLimit = positionalCount;
+                }
 
                 if (info.IsMandatory()) {
                     // a mandatory parameter after an optional one: let the resolver map it
@@ -425,7 +448,9 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
-            return new LibraryCallPlan(function, call, parameters, returnType, mandatoryCount, positionalCount, paramsParameter, block);
+            return new LibraryCallPlan(function, call, parameters, returnType, mandatoryCount, positionalCount,
+                (positionalLimit >= 0) ? positionalLimit : positionalCount, paramsParameter, block,
+                !RubyOverloadResolver.ReceivesKeywordArguments(method));
         }
 
         private static bool IsPlainParameterType(Type/*!*/ type) {
@@ -439,7 +464,7 @@ namespace IronRuby.Runtime.Calls {
         /// Whether the overload takes <paramref name="count"/> positional arguments and the block given, if it insists on one.
         /// </summary>
         internal bool AcceptsShape(int count, Proc block) {
-            return count >= _mandatoryCount && (_params != null || count <= _positionalCount) && (_block == null || !_block.NotNull || block != null);
+            return count >= _mandatoryCount && (_params != null || count <= _positionalLimit) && (_block == null || !_block.NotNull || block != null);
         }
 
         /// <summary>
@@ -1699,12 +1724,15 @@ namespace IronRuby.Runtime.Calls {
 
     /// <summary>
     /// What the rule RubyClass.BuildObjectConstructionNoFlow builds for Class#new of a plain Ruby class does: under the class's
-    /// version (its initializer), allocate a RubyObject and call a Ruby initializer that takes the arguments given - or, the
+    /// version (its initializer), allocate a RubyObject (or an instance of the type generated for the class) and call a Ruby initializer that takes the arguments given - or, the
     /// initializer being Object's (or BasicObject's) and there being no arguments, only allocate.
     /// </summary>
     internal sealed class ObjectConstruction {
         private readonly RubyClass/*!*/ _class;
         private readonly int _version;
+
+        // the allocator of the instances of a type generated for the class (see RubyTypeDispenser.TryGetObjectAllocator); null for RubyObject
+        private readonly Func<RubyClass, object> _allocator;
 
         // the initializer's body (Func<object, Proc, object x N, object>) of mandatory parameters only, or the call of one with optional
         // or rest parameters; both null if it is not called:
@@ -1712,15 +1740,17 @@ namespace IronRuby.Runtime.Calls {
         private readonly RubyMethodCallPlan _initializerCall;
         private readonly int _arity;
 
-        internal ObjectConstruction(RubyClass/*!*/ cls, int version, Delegate initializer, int arity) {
+        internal ObjectConstruction(RubyClass/*!*/ cls, Func<RubyClass, object> allocator, int version, Delegate initializer, int arity) {
             _class = cls;
+            _allocator = allocator;
             _version = version;
             _initializer = initializer;
             _arity = arity;
         }
 
-        internal ObjectConstruction(RubyClass/*!*/ cls, int version, RubyMethodCallPlan/*!*/ initializerCall, int arity) {
+        internal ObjectConstruction(RubyClass/*!*/ cls, Func<RubyClass, object> allocator, int version, RubyMethodCallPlan/*!*/ initializerCall, int arity) {
             _class = cls;
+            _allocator = allocator;
             _version = version;
             _initializerCall = initializerCall;
             _arity = arity;
@@ -1753,7 +1783,7 @@ namespace IronRuby.Runtime.Calls {
 
         private object/*!*/ Construct(object[]/*!*/ args, Proc block) {
             // PropagateRetrySingleton(instance = new RubyObject(class), instance.initialize(args)):
-            var instance = new RubyObject(_class);
+            object instance = (_allocator != null) ? _allocator(_class) : new RubyObject(_class);
             if (!CallsInitializer) {
                 return instance;
             }

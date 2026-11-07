@@ -19,28 +19,32 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Security;
 using System.Text;
 using System.Threading;
 using IronRuby.Builtins;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Interpreter;
 
 namespace IronRuby.Runtime {
     public sealed class RubyStackTraceBuilder {
-#if FEATURE_STACK_TRACE
         private readonly RubyArray/*!*/ _trace;
-        private readonly bool _hasFileAccessPermission;
         private readonly bool _needsClrFileInfo;
         private readonly bool _exceptionDetail;
         private readonly RubyEncoding/*!*/ _encoding;
         private IList<InterpretedFrameInfo> _interpretedFrames;
         private int _interpretedFrameIndex;
+        // The lines of the compiled frames (see CompiledFrameExpression), outermost first; a compiled frame of the trace is
+        // matched with the innermost one of its name not matched yet.
+        private Precompiled.PrecompiledFrames.Frame[] _compiledFrames;
+        private int _compiledFrameIndex;
         // Frames reported with the source info of the next frame out that has its own: a library
         // method's, and a core method written in Ruby (see IsInternalFile). Innermost first.
         private readonly List<string>/*!*/ _deferredMethodNames = new List<string>();
-        private bool _lastDeferredIsLibrary;
+        // How many of the last deferred frames are library methods' (the methods a core method written in Ruby has called).
+        private int _libraryRun;
+        // Whether a call site has been seen since the library frame last deferred: it called the method that is still on top
+        // as a Ruby method.
+        private bool _callSiteSinceLastLibrary;
         private readonly RubyContext/*!*/ _context;
         // TracePoint's c_call location needs the frame that really made the call, which inside a
         // core method written in Ruby is that method's own, not its caller's.
@@ -53,7 +57,6 @@ namespace IronRuby.Runtime {
         private RubyStackTraceBuilder(RubyContext/*!*/ context, RubyEncoding/*!*/ encoding) {
             _context = context;
             _needsClrFileInfo = NeedsClrFileInfo(context);
-            _hasFileAccessPermission = _needsClrFileInfo && DetectFileAccessPermissions();
             _exceptionDetail = context.Options.ExceptionDetail;
             _encoding = encoding;
             _trace = new RubyArray();
@@ -64,12 +67,14 @@ namespace IronRuby.Runtime {
             // Compiled trace: contains frames starting with the throw site up to the first filter/catch that the exception was caught by:
             StackTrace throwSiteTrace = GetClrStackTrace(exception, _needsClrFileInfo);
             _interpretedFrames = GetInterpretedFrames(exception);
+            SetCompiledFrames(Precompiled.PrecompiledFrames.CaptureLines(true));
             AddExceptionBacktrace(throwSiteTrace, catchSiteTrace, isCatchSiteInterpreted);
         }
 
         private RubyStackTraceBuilder(CapturedTrace/*!*/ captured)
             : this(captured.Context, captured.Encoding) {
             _interpretedFrames = captured.InterpretedFrames;
+            SetCompiledFrames(captured.CompiledFrames);
             if (captured.IsCatchSiteClr) {
                 AddClrCaughtBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace);
             } else {
@@ -120,6 +125,7 @@ namespace IronRuby.Runtime {
             internal readonly StackTrace/*!*/ ThrowSiteTrace;
             internal readonly StackTrace CatchSiteTrace;
             internal readonly IList<InterpretedFrameInfo> InterpretedFrames;
+            internal readonly Precompiled.PrecompiledFrames.Frame[] CompiledFrames;
             internal readonly bool IsCatchSiteInterpreted;
             internal readonly bool IsCatchSiteClr;
 
@@ -130,6 +136,8 @@ namespace IronRuby.Runtime {
                 ThrowSiteTrace = GetClrStackTrace(exception, NeedsClrFileInfo(context));
                 // the interpreter's frames are saved on the exception once, and raise clears them:
                 InterpretedFrames = GetInterpretedFrames(exception);
+                // the compiled frames' lines change as they run on, and the frames it has left are reused by the next call:
+                CompiledFrames = Precompiled.PrecompiledFrames.CaptureLines(true);
                 CatchSiteTrace = catchSiteTrace;
                 IsCatchSiteInterpreted = isCatchSiteInterpreted;
             }
@@ -180,6 +188,7 @@ namespace IronRuby.Runtime {
             _interpretedFrames = InterpretedFrame.CurrentFrame.Value != null ?
                 new List<InterpretedFrameInfo>(InterpretedFrame.CurrentFrame.Value.GetStackTraceDebugInfo()) :
                 null;
+            SetCompiledFrames(Precompiled.PrecompiledFrames.CaptureLines(false));
 
             AddBacktrace(trace.GetFrames(), skipFrames, false);
         }
@@ -245,23 +254,48 @@ namespace IronRuby.Runtime {
                     }
                 }
 
-                if (IsInternalFile(file)) {
-                    if (IsInternalMethodFrame(methodName)) {
-                        _deferredMethodNames.Add(methodName);
-                    }
+                if (IsInternalFrameFile(file)) {
+                    AddInternalFrame(methodName);
                     continue;
                 }
 
                 foreach (var deferred in _deferredMethodNames) {
-                    _trace.Add(MutableString.Create(FormatFrame(file, line, deferred), _encoding));
+                    _trace.Add(CreateFrame(FormatFrame(file, line, deferred)));
                 }
                 _deferredMethodNames.Clear();
 
-                _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
+                _trace.Add(CreateFrame(FormatFrame(file, line, methodName)));
             }
         }
 
         private const int MaxThreadBacktraceDepth = 10000;
+
+        // A frame in the path encoding. Under the C locale (US-ASCII) a frame with a non-ASCII file or method name is its
+        // UTF-8 bytes in a BINARY string, as MRI's is and as the path layer hands out such a path (RubyContext.EncodePath):
+        // a US-ASCII string of those characters was invalid, and require_relative, caller_locations(0)[0].path and the
+        // error report raised "invalid byte sequence in US-ASCII".
+        private MutableString/*!*/ CreateFrame(string/*!*/ frame) {
+            return RubyContext.TryEncodeRawAsciiPath(frame, _encoding) ?? MutableString.Create(frame, _encoding);
+        }
+
+        private void SetCompiledFrames(Precompiled.PrecompiledFrames.Frame[] frames) {
+            _compiledFrames = frames;
+            _compiledFrameIndex = (frames != null) ? frames.Length - 1 : -1;
+        }
+
+        /// <summary>
+        /// The line of a frame of a compiled lambda: of the innermost compiled frame of that name not matched yet, which
+        /// is the next one out, or 0 if there is none.
+        /// </summary>
+        private int TakeCompiledFrameLine(string/*!*/ encodedName) {
+            for (int i = _compiledFrameIndex; i >= 0; i--) {
+                if (String.Equals(_compiledFrames[i].Name, encodedName, StringComparison.Ordinal)) {
+                    _compiledFrameIndex = i - 1;
+                    return _compiledFrames[i].Line;
+                }
+            }
+            return 0;
+        }
 
         /// <summary>
         /// The file and line of the innermost Ruby frame, taken from the interpreter's own frame
@@ -276,7 +310,6 @@ namespace IronRuby.Runtime {
         internal static bool TryGetInterpretedFrameLocation(out string file, out int line) {
             file = null;
             line = 0;
-#if FEATURE_STACK_TRACE
             var frame = InterpretedFrame.CurrentFrame.Value;
             for (int depth = 0; frame != null && depth < MaxThreadBacktraceDepth; depth++, frame = frame.Parent) {
                 string methodName = frame.Name;
@@ -301,7 +334,7 @@ namespace IronRuby.Runtime {
 
                 // A frame of the Ruby half of the core library is reported at its caller's location,
                 // so it is not the answer either - keep walking out.
-                if (IsInternalFile(frameFile)) {
+                if (IsInternalFrameFile(frameFile)) {
                     continue;
                 }
 
@@ -313,7 +346,6 @@ namespace IronRuby.Runtime {
                 line = frameLine;
                 return true;
             }
-#endif
             return false;
         }
 
@@ -393,6 +425,7 @@ namespace IronRuby.Runtime {
         // `require' of gem_compat.rb catching a LoadError dropped the frame of the code calling require, once that block was
         // compiled - from the start with the precompiled startup library).
         private void AddBacktrace(IEnumerable<StackFrame> stackTrace, int skipFrames, bool skipInterpreterRunMethod, bool skipCompiledCatchSite) {
+            bool skippedAny = false;
             if (stackTrace != null) {
                 foreach (var frame in InterpretedFrame.GroupStackFrames(stackTrace)) {
                     string methodName, file;
@@ -421,7 +454,11 @@ namespace IronRuby.Runtime {
                         TryParseRubyMethodName(ref methodName, ref file, ref line);
 
                         if (methodName == InterpretedCallSiteName) {
-                            // ignore ruby interpreted call sites
+                            // ignore ruby interpreted call sites - the rule of a site a library method calls through
+                            // when the DLR interprets it
+                            if (_libraryRun > 0) {
+                                _callSiteSinceLastLibrary = true;
+                            }
                             continue;
                         }
                     } else if (skipCompiledCatchSite && IsRubyMethodFrame(frame)) {
@@ -430,41 +467,56 @@ namespace IronRuby.Runtime {
                     } else if (TryGetStackFrameInfo(frame, out methodName, out file, out line)) {
                         // special case: the frame will be added with the next frame's source info:
                         if (line == NextFrameLine) {
-                            // of library methods calling one another only the outermost is reported
-                            if (_lastDeferredIsLibrary) {
+                            // MRI gives a C function a frame when it is called as a method - by method dispatch,
+                            // rb_funcall, rb_block_call - and none when another C function calls it directly.
+                            // Here the first is a library method calling a Ruby method through a call site, the
+                            // second one library method calling another as a CLR method, which is reported as
+                            // the outermost of them: Array#keep_if, not the Array#select! it is written with.
+                            // A method of the same class called through a site is one MRI calls directly unless it has been
+                            // redefined: Hash#[] calling Hash#default.
+                            if (_libraryRun > 0 && (!_callSiteSinceLastLibrary || HaveSameOwner(_deferredMethodNames[_deferredMethodNames.Count - 1], methodName))) {
                                 _deferredMethodNames[_deferredMethodNames.Count - 1] = methodName;
                             } else {
                                 _deferredMethodNames.Add(methodName);
+                                _libraryRun++;
                             }
-                            _lastDeferredIsLibrary = true;
+                            _callSiteSinceLastLibrary = false;
                             continue;
                         }
                     } else {
+                        if (_libraryRun > 0 && IsCallSiteFrame(frame.GetMethod())) {
+                            _callSiteSinceLastLibrary = true;
+                        }
                         continue;
                     }
 
-                    if (!_keepInternalFrames && IsInternalFile(file)) {
-                        if (IsInternalMethodFrame(methodName)) {
-                            _deferredMethodNames.Add(methodName);
-                            _lastDeferredIsLibrary = false;
+                    if (!_keepInternalFrames && IsInternalFrameFile(file)) {
+                        // Above the first frame reported, the frames it drops still count for caller(n): a method of the prelude
+                        // skips its own frame that way (Kernel#caller_locations calls caller(n + 1)), and Thread#backtrace, which
+                        // calls caller_locations, dropped that frame - so its caller's went instead.
+                        int dropped = AddInternalFrame(methodName);
+                        if (_trace.Count == 0 && !skippedAny) {
+                            skipFrames = Math.Max(0, skipFrames - dropped);
                         }
                         continue;
                     }
 
                     foreach (var deferred in _deferredMethodNames) {
                         if (skipFrames == 0) {
-                            _trace.Add(MutableString.Create(FormatFrame(file, line, deferred), _encoding));
+                            _trace.Add(CreateFrame(FormatFrame(file, line, deferred)));
                         } else {
                             skipFrames--;
+                            skippedAny = true;
                         }
                     }
                     _deferredMethodNames.Clear();
-                    _lastDeferredIsLibrary = false;
+                    _libraryRun = 0;
 
                     if (skipFrames == 0) {
-                        _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
+                        _trace.Add(CreateFrame(FormatFrame(file, line, methodName)));
                     } else {
                         skipFrames--;
+                        skippedAny = true;
                     }
                 }
             }
@@ -477,6 +529,114 @@ namespace IronRuby.Runtime {
 
         private static bool IsInternalMethodFrame(string methodName) {
             return !String.IsNullOrEmpty(methodName) && !methodName.StartsWith("block ", StringComparison.Ordinal) && methodName[0] != '<';
+        }
+
+        /// <summary>
+        /// A frame of the Ruby half of the core library (see <see cref="IsInternalFrameFile"/>), innermost first. A core method's
+        /// frame is reported with its caller's location; a block of one is not reported, nor is a helper method (Math.__dom__,
+        /// Enumerable#__extreme_by__, Math.__ir_sqrt__ - the Ruby half of a library method), which MRI writes as a C function
+        /// the method calls directly.
+        /// </summary>
+        // Returns how many of the deferred frames it dropped.
+        private int AddInternalFrame(string methodName) {
+            if (!IsInternalMethodFrame(methodName)) {
+                return 0;
+            }
+            int deferred = _deferredMethodNames.Count;
+            string owner, name;
+            SplitLabel(methodName, out owner, out name);
+
+            // Every frame deferred since the last one reported was called by this method, directly or not. MRI's own method
+            // would be C calling them directly, which gives them no frame (Kernel#sleep and Kernel#require wrapping the library
+            // method of the same name, Array#uniq calling Array#each, Array#sum calling Enumerable#sum) - except for the generic
+            // methods of Enumerable and the like, which call #each and #<=> as methods, so MRI reports those (Array#each below
+            // Enumerable#min_by).
+            if (!IsGenericModule(owner)) {
+                _deferredMethodNames.Clear();
+            } else if (_deferredMethodNames.Count > 0 && HaveSameOwner(_deferredMethodNames[_deferredMethodNames.Count - 1], methodName)) {
+                // a method of its own module it is written with (Enumerator#next with #next_values), or the library method it
+                // wraps (Enumerable#each_with_index): one method to MRI
+                _deferredMethodNames.RemoveAt(_deferredMethodNames.Count - 1);
+            }
+            _libraryRun = 0;
+
+            int dropped = deferred - _deferredMethodNames.Count;
+            if (!IsHelperMethodName(name)) {
+                _deferredMethodNames.Add(methodName);
+            }
+            return dropped;
+        }
+
+        // "Enumerable#map" -> ("Enumerable", "map"); "Math.sqrt" -> ("Math", "sqrt"); "foo" -> (null, "foo")
+        private static void SplitLabel(string/*!*/ label, out string owner, out string/*!*/ name) {
+            int i = label.LastIndexOfAny(_LabelSeparators);
+            if (i <= 0) {
+                owner = null;
+                name = label;
+            } else {
+                owner = label.Substring(0, i);
+                name = label.Substring(i + 1);
+            }
+        }
+
+        private static readonly char[]/*!*/ _LabelSeparators = { '#', '.' };
+
+        private static bool HaveSameOwner(string/*!*/ label1, string/*!*/ label2) {
+            string owner1, owner2, name;
+            SplitLabel(label1, out owner1, out name);
+            SplitLabel(label2, out owner2, out name);
+            return owner1 != null && owner1 == owner2;
+        }
+
+        // The modules whose methods work on any object that has #each (or #<=>) by calling it as a method.
+        private static bool IsGenericModule(string owner) {
+            return owner == "Enumerable" || owner == "Comparable" || owner == "Enumerator";
+        }
+
+        // __foo__ - but not the ones that are Ruby methods: BasicObject#__send__ and friends.
+        private static bool IsHelperMethodName(string/*!*/ name) {
+            return name.Length > 4 && name.StartsWith("__", StringComparison.Ordinal) && name.EndsWith("__", StringComparison.Ordinal) &&
+                name != "__send__" && name != "__id__" && name != "__method__" && name != "__dir__" && name != "__callee__";
+        }
+
+        // The modules whose methods MRI defines with module_function and that code calls on the module: Math.sqrt. Kernel's are
+        // usually called as instance methods (Integer("1")), so they keep "Kernel#Integer".
+        private static bool IsModuleFunctionModule(string owner) {
+            return owner == "Math" || owner == "Process" || owner == "FileTest" || owner == "GC" || owner == "ObjectSpace" ||
+                owner == "Signal" || owner == "Marshal";
+        }
+
+        // A frame of method dispatch: what a library method calls a Ruby method through - the call site's rule, or the
+        // dispatcher a call site's target is (IronRuby.Runtime.Calls.LibraryDispatcher and the like).
+        private static bool IsCallSiteFrame(MethodBase method) {
+            return method != null && (System.Runtime.CompilerServices.CallSiteHelpers.IsInternalFrame(method) ||
+                method.DeclaringType != null && method.DeclaringType.Namespace == "IronRuby.Runtime.Calls");
+        }
+
+        /// <summary>
+        /// A file whose frames are reported the way MRI reports a C method's (see <see cref="IsInternalFile"/>): also any file
+        /// named "&lt;internal:...&gt;", as MRI does - RubyGems' Kernel#require is evaluated so.
+        /// </summary>
+        private static bool IsInternalFrameFile(string file) {
+            return file != null && (file.StartsWith("<internal:", StringComparison.Ordinal) || IsInternalFile(file));
+        }
+
+        /// <summary>
+        /// A frame put on top of <paramref name="backtrace"/> for the method an arity error was raised for:
+        /// at the method's definition, or with no <paramref name="file"/> (a library method) where the
+        /// backtrace's top frame is, as MRI reports a C method.
+        /// </summary>
+        internal static MutableString/*!*/ FormatCalleeFrame(RubyArray/*!*/ backtrace, string file, int line, string/*!*/ label) {
+            if (file != null) {
+                return MutableString.Create(FormatFrame(file, line, label), RubyEncoding.UTF8);
+            }
+            var top = (backtrace.Count > 0) ? backtrace[0] as MutableString : null;
+            if (top == null) {
+                return MutableString.Create("in '" + label + "'", RubyEncoding.UTF8);
+            }
+            string text = top.ToString();
+            int at = text.IndexOf(":in '", StringComparison.Ordinal);
+            return MutableString.Create((at < 0 ? text : text.Substring(0, at)) + ":in '" + label + "'", top.Encoding);
         }
 
         private static string/*!*/ FormatFrame(string file, int line, string methodName) {
@@ -495,21 +655,24 @@ namespace IronRuby.Runtime {
             MethodBase method = frame.GetMethod();
             methodName = method.Name;
 
-            fileName = (_hasFileAccessPermission) ? GetFileName(frame) : null;
+            fileName = (_needsClrFileInfo) ? GetFileName(frame) : null;
             var sourceLine = line = frame.GetFileLineNumber();
 
             if (TryParseRubyMethodName(ref methodName, ref fileName, ref line)) {
                 Precompiled.PrecompiledCode.RebaseFrameFile(method, ref fileName);
                 if (sourceLine == 0) {
                     RubyMethodDebugInfo debugInfo;
+                    int mappedLine = 0;
                     if (RubyMethodDebugInfo.TryGet(method, out debugInfo)) {
                         var ilOffset = frame.GetILOffset();
                         if (ilOffset >= 0) {
-                            var mappedLine = debugInfo.Map(ilOffset);
-                            if (mappedLine != 0) {
-                                line = mappedLine;
-                            }
+                            mappedLine = debugInfo.Map(ilOffset);
                         }
+                    } else if (_compiledFrames != null) {
+                        mappedLine = TakeCompiledFrameLine(method.Name);
+                    }
+                    if (mappedLine > 0) {
+                        line = mappedLine;
                     }
                 }
 
@@ -532,7 +695,7 @@ namespace IronRuby.Runtime {
                     // Visible CLR method:
                     if (String.IsNullOrEmpty(fileName)) {
                         if (method.DeclaringType != null) {
-                            fileName = (_hasFileAccessPermission) ? GetAssemblyName(method.DeclaringType.Assembly) : null;
+                            fileName = (_needsClrFileInfo) ? GetAssemblyName(method.DeclaringType.Assembly) : null;
                             line = 0;
                         }
                     }
@@ -558,8 +721,6 @@ namespace IronRuby.Runtime {
                 return label;
             }
 
-            // a module function is registered twice, as an instance method and a singleton one, and
-            // MRI reports the instance method
             RubyMethodAttribute chosen = null;
             foreach (RubyMethodAttribute attr in attrs) {
                 if ((attr.MethodAttributes & RubyMethodAttributes.Instance) != 0) {
@@ -571,6 +732,16 @@ namespace IronRuby.Runtime {
             chosen = chosen ?? (RubyMethodAttribute)attrs[0];
 
             string owner = GetLibraryModuleName(method.DeclaringType);
+
+            // a module function is both an instance method and a singleton one, and MRI names the one called, which a frame
+            // here cannot tell: Math.sqrt, but Kernel#Integer
+            if (!singleton && IsModuleFunctionModule(owner)) {
+                foreach (RubyMethodAttribute attr in attrs) {
+                    if ((attr.MethodAttributes & RubyMethodAttributes.Singleton) != 0 && attr.Name == chosen.Name) {
+                        singleton = true;
+                    }
+                }
+            }
             label = (owner != null) ? owner + (singleton ? "." : "#") + chosen.Name : chosen.Name;
             _libraryMethodLabels.TryAdd(method, label);
             return label;
@@ -652,7 +823,7 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        private static bool IsVisibleClrFrame(MethodBase/*!*/ method) {
+        internal static bool IsVisibleClrFrame(MethodBase/*!*/ method) {
             if (Microsoft.Scripting.Actions.DynamicSiteHelpers.IsInvisibleDlrStackFrame(method)) {
                 return false;
             }
@@ -671,10 +842,22 @@ namespace IronRuby.Runtime {
                 method.Name.StartsWith("Thunk", StringComparison.Ordinal)) {
                 return false;
             }
+            // the stub MethodInfo.Invoke makes for a method it calls often (see MethodBaseInvoker below)
+            if (type == null && method.Name.StartsWith("InvokeStub_", StringComparison.Ordinal)) {
+                return false;
+            }
+            // a lambda System.Linq.Expressions compiled without a name: a wrapper the runtime made (a fiber's body run
+            // from compiled code put "0:in 'lambda_method66'" under the fiber's block), never a frame of Ruby code
+            if (type == null && method.Name.StartsWith("lambda_method", StringComparison.Ordinal)) {
+                return false;
+            }
             if (type != null) {
                 if (type.Assembly == typeof(RubyOps).Assembly || type.Namespace != null && 
                     (type.Namespace.StartsWith("IronRuby.StandardLibrary", StringComparison.Ordinal) ||
-                    type.Namespace.StartsWith("IronRuby.Builtins", StringComparison.Ordinal))) {
+                    type.Namespace.StartsWith("IronRuby.Builtins", StringComparison.Ordinal) ||
+                    // the parser (PrismAstBridge.Parse): an error found reading a file, such as an
+                    // unknown magic-comment encoding, was reported as raised in ":0:in 'Parse'"
+                    type.Namespace.StartsWith("IronRuby.Prism", StringComparison.Ordinal))) {
                     return false;
                 }                
 
@@ -695,6 +878,20 @@ namespace IronRuby.Runtime {
                 // IronLanguages/dlr #371), which put ":0:in 'Throw'" on top of every backtrace of an exception
                 // leaving an interpreted frame. Ruby code calling ExceptionDispatchInfo.Throw gets the same.
                 if (type == typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo)) {
+                    return false;
+                }
+
+                // The runtime's helper for a tail call it cannot make directly (a compiled method's `tail.' call into a
+                // library method with more arguments than its caller), which put "in 'DispatchTailCalls'" under the frame
+                // of Kernel#Integer called from compiled code.
+                if (type == typeof(RuntimeHelpers)) {
+                    return false;
+                }
+
+                // MethodInfo.Invoke's own frames (RuntimeMethodHandle.InvokeMethod, MethodBaseInvoker): the interpreter
+                // calls a delegate with more parameters than it has call instructions for (a Ruby method with more than
+                // a dozen) through reflection, and rethrows what it raised from where it was raised.
+                if (type == typeof(RuntimeMethodHandle) || type.Namespace == "System.Reflection" && type.Assembly == typeof(object).Assembly) {
                     return false;
                 }
 
@@ -721,18 +918,10 @@ namespace IronRuby.Runtime {
             return ns != null && (ns.StartsWith("System.Linq.Expressions", StringComparison.Ordinal) ||
                 ns == "System.Dynamic.Utils" || ns == "System.Reflection");
         }
-
-        // TODO: partial trust
-        private static bool DetectFileAccessPermissions() {
-#if FEATURE_FILESYSTEM
-            return true;
-#else
-            return false;
-#endif
-        }
-#endif
+        // stringio.rb: MRI's StringIO is a C extension, so a method written here has no frame of its own either; nor
+        // has a method of set.rb, which is the core class Set in MRI 4.0.
         private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb", "/ironruby/gem_compat.rb",
-            "/ironruby/ironruby/rational.rb", "/ironruby/ironruby/complex.rb" };
+            "/ironruby/ironruby/rational.rb", "/ironruby/ironruby/complex.rb", "/ironruby/stringio.rb", "/ironruby/set.rb" };
 
         /// <summary>
         /// The Ruby half of the core library. MRI 3.4+ reports a frame of a core method written in

@@ -15,18 +15,10 @@
 
 using System;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Ast;
 using IronRuby.Builtins;
-using System.Numerics;
-using System.Reflection;
-using System.Reflection.Emit;
-using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Generation;
-using System.Collections.Generic;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Tests {
 
@@ -36,6 +28,80 @@ namespace IronRuby.Tests {
             CompilerTest(@"$z = $x");
             object z = Context.GetGlobalVariable("z");
             AssertEquals(z, 123);
+        }
+
+        /// <summary>
+        /// $KCODE, $-K and $SAFE lost their special meaning (1.9 and 3.0): they are plain globals.
+        /// </summary>
+        public void Scenario_Globals2() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+$KCODE = 'u'
+$-K = 1
+$SAFE = 'x'
+p $KCODE, $-K, $SAFE
+");
+            }, @"
+""u""
+1
+""x""
+");
+        }
+
+        /// <summary>
+        /// $defout went in 1.9 and $-O never was an MRI global; $$ is the process id.
+        /// </summary>
+        public void Scenario_Globals3() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+p global_variables.include?(:$defout), global_variables.include?(:$-O)
+p $$ == Process.pid
+");
+            }, @"
+false
+false
+true
+");
+        }
+
+        /// <summary>
+        /// Kernel#inspect of an object met again inside its own inspect: MRI's "#&lt;Foo:0x... ...&gt;".
+        /// </summary>
+        public void Scenario_InspectRecursive1() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+class Foo; end
+o = Foo.new
+o.instance_variable_set(:@a, o)
+puts o.inspect.gsub(/0x\h+/, 'X')
+");
+            }, @"
+#<Foo:X @a=#<Foo:X ...>>
+");
+        }
+
+        /// <summary>
+        /// MRI prints an object's address as 16 hex digits on a 64-bit build, whatever the address.
+        /// Kernel#instance_variables_to_inspect is Ruby 4.0's private hook, nil by default.
+        /// </summary>
+        public void Scenario_InspectObjectId1() {
+            TestOutput(@"
+class Foo; end
+o = Foo.new
+p o.inspect =~ /\A#<Foo:0x\h{16}>\z/, o.to_s =~ /\A#<Foo:0x\h{16}>\z/
+p Class.new.inspect =~ /\A#<Class:0x\h{16}>\z/, Object.new.singleton_class.inspect =~ /\A#<Class:#<Object:0x\h{16}>>\z/
+p Kernel.private_method_defined?(:instance_variables_to_inspect), o.send(:instance_variables_to_inspect)
+o.instance_variable_set(:@a, 1)
+p o.inspect.sub(/0x\h+/, 'X')
+", @"
+0
+0
+0
+0
+true
+nil
+""#<Foo:X @a=1>""
+");
         }
 
         public void Scenario_RubyLocals1() {
@@ -131,10 +197,11 @@ foo
         }
         
         public void Scenario_RubyMethodMissing2() {
-            AssertExceptionThrown<MissingMethodException>(delegate {
+            // a bare name is a NameError, as in MRI, also where the top level's method_missing looks up the host's scope first
+            AssertExceptionThrown<MemberAccessException>(delegate {
                 CompilerTest(@"unknown_method");
-            }, delegate(MissingMethodException e) {
-                return e.Message.StartsWith("undefined method");
+            }, delegate(MemberAccessException e) {
+                return e.Message.StartsWith("undefined local variable or method 'unknown_method'");
             });
         }
 
@@ -627,9 +694,9 @@ end
 p f1, f2, f3, f4
 ", @"
 [1, 2, 3, 4, 5, 6, 7]
-[1, 2, 3, {:a=>2, :b=>3}]
-{:a=>2, :b=>3}
-[1, 2, 3, {:a=>2, :b=>3}]
+[1, 2, 3, {a: 2, b: 3}]
+{a: 2, b: 3}
+[1, 2, 3, {a: 2, b: 3}]
 ");
         }
         
@@ -653,7 +720,7 @@ x = while true do
 end
 puts x
 ", @"
-{1=>2, 3=>4}
+{1 => 2, 3 => 4}
 ");
         }
 
@@ -666,7 +733,7 @@ puts x
 ", @"
 a
 b
-{1=>2, 3=>4}
+{1 => 2, 3 => 4}
 ");
         }
 
@@ -681,7 +748,7 @@ a
 b
 A
 B
-{1=>2, 3=>4}
+{1 => 2, 3 => 4}
 ");
         }
 
@@ -697,7 +764,7 @@ puts foo
 3
 6
 7
-{4=>5}
+{4 => 5}
 ");
         }
 
@@ -1209,6 +1276,56 @@ true
         }
 
         /// <summary>
+        /// File::Constants and Fcntl hold the platform's own open(2)/fcntl(2) numbers, and the flags
+        /// a platform lacks are undefined (File::DIRECT and friends were missing on Linux; macOS got
+        /// Linux's numbers). File::NULL lives in File::Constants, where IO and File both see it.
+        /// File.lchmod works where libc has it: on Linux it changes a file and raises ENOTSUP for a
+        /// link (it raised NotImplementedError although File.respond_to?(:lchmod) said true).
+        /// </summary>
+        public void File_PlatformConstants1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+require 'fcntl'
+linux = RUBY_PLATFORM =~ /\A(x86_64|i[3-6]86|s390x|riscv64|loongarch64)-linux/
+expected = {
+  APPEND: 1024, CREAT: 64, DIRECT: 16384, DSYNC: 4096, EXCL: 128, NOATIME: 262144, NOCTTY: 256,
+  NOFOLLOW: 131072, NONBLOCK: 2048, RSYNC: 1052672, SYNC: 1052672, TMPFILE: 4259840, TRUNC: 512,
+}
+p !linux || expected.all? { |k, v| File::Constants.const_get(k) == v }
+p !linux || [Fcntl::F_GETPIPE_SZ, Fcntl::F_SETPIPE_SZ, Fcntl::F_GETLK, Fcntl::F_RDLCK, Fcntl::F_WRLCK] == [1032, 1031, 5, 0, 1]
+p File::Constants::NULL == (File::ALT_SEPARATOR ? 'NUL' : '/dev/null'), IO::NULL.equal?(File::NULL), IO.const_defined?(:NULL, false), File::NULL.frozen?
+if linux
+  Dir.mktmpdir do |d|
+    f = File.join(d, 'f')
+    File.write(f, '')
+    File.chmod(0644, f)
+    File.symlink(f, l = File.join(d, 'l'))
+    p File.respond_to?(:lchmod), File.lchmod(0600, f), File.stat(f).mode & 0777 == 0600
+    begin
+      File.lchmod(0600, l)
+    rescue NotImplementedError, SystemCallError => e
+      p e.class
+    end
+  end
+else
+  puts 'true', '1', 'true', 'Errno::ENOTSUP'
+end
+", @"
+true
+true
+true
+true
+false
+true
+true
+1
+true
+Errno::ENOTSUP
+");
+        }
+
+        /// <summary>
         /// A raw control character (U+0000-U+001F) inside a JSON string is a ParserError, as in the json gem;
         /// JSON.parse took a document with a literal line break in a value as it was. The gem's
         /// allow_control_characters option (2.18.0) lets them through.
@@ -1248,7 +1365,8 @@ true
         /// </summary>
         public void Zlib_Streams1() {
             TestOutput(@"
-load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Zlib'
+require 'ruby4'
+require 'zlib'
 
 hex = lambda { |s| [s].pack('H*') }
 text = 'hello hello hello hello'
@@ -1544,11 +1662,75 @@ No such file or directory @ rb_sysopen - x
 ");
         }
 
+        /// <summary>
+        /// Process::CLOCK_* are MRI's Integers (Linux's numbers); clock_gettime takes those and
+        /// MRI's emulated-clock Symbols and is Errno::EINVAL for any other clock. The CPU-time
+        /// clocks are processor time, not the monotonic clock.
+        /// </summary>
+        public void Process_ClockGetTime1() {
+            TestOutput(@"
+p Process::CLOCK_REALTIME, Process::CLOCK_MONOTONIC, Process::CLOCK_PROCESS_CPUTIME_ID, Process::CLOCK_THREAD_CPUTIME_ID
+def t; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+p t { Process.clock_gettime(:bogus) }, t { Process.clock_gettime(99) }, t { Process.clock_gettime(nil) }, t { Process.clock_gettime(0, :bogus) }
+p (Process.clock_gettime(Process::CLOCK_REALTIME) - Time.now.to_f).abs < 5, Process.clock_gettime(:GETTIMEOFDAY_BASED_CLOCK_REALTIME).class
+p Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID) <= Process.clock_gettime(Process::CLOCK_MONOTONIC), Process.clock_gettime(1, :nanosecond).class
+", @"
+0
+1
+2
+3
+""Errno::EINVAL: Invalid argument - clock_gettime(:bogus)""
+""Errno::EINVAL: Invalid argument - clock_gettime(99)""
+""TypeError: no implicit conversion from nil to integer""
+""ArgumentError: unexpected unit: bogus""
+true
+Float
+true
+Integer
+");
+        }
+
+        /// <summary>
+        /// Process.maxgroups= is read back by Process.maxgroups (it set an ivar the getter did not read), takes a positive
+        /// Integer by implicit conversion and caps it at 65536, as MRI's does. Not on Windows, which has
+        /// no supplementary groups: there both are NotImplementedError, as in CRuby.
+        /// </summary>
+        public void Process_MaxGroups1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+def t; p yield; rescue => e; p e; end
+n = Process.maxgroups
+t { Process.maxgroups = n - 1; Process.maxgroups }
+t { Process.maxgroups = 70000; Process.maxgroups }
+t { Process.maxgroups = 0 }
+t { Process.maxgroups = nil }
+t { Process.maxgroups = 'a' }
+t { Process.maxgroups = 3.7; Process.maxgroups }
+Process.maxgroups = n
+p Process.instance_variables, Process.maxgroups == n
+", @"
+65535
+65536
+#<ArgumentError: maxgroups 0 should be positive>
+#<TypeError: no implicit conversion from nil to integer>
+#<TypeError: no implicit conversion of String into Integer>
+3
+[]
+true
+");
+        }
+
+        // Nine "Integer out of Float range" warnings, as MRI gives under -w: one for each Bignum
+        // that meets a Float in an operator - on either side of it - except fdiv and <=>/>/==.
         public void Numeric_BignumFloatOverflow1() {
             TestOutput(@"
 x = 10**400
 p x * 1.0, x + 1.0, x - 1.0, x / 10.0, x.fdiv(10**399), x.fdiv(10**401) <= 1e309, (-x) * 1.0
 p x <=> 1e308, x > 1e308, x == 1.0 / 0
+p 1.0 / x, -1.0 / x, 1.0 * x, -1.0 * x
 ", @"
 Infinity
 Infinity
@@ -1560,7 +1742,11 @@ true
 1
 true
 false
-", 1);
+0.0
+-0.0
+Infinity
+-Infinity
+", 1, 9);
         }
 
         public void Numeric_BignumExponent1() {
@@ -1800,8 +1986,8 @@ m
 n
 inner
 ruby
-backtrace must be Array of String
-backtrace must be Array of String
+backtrace must be an Array of String or an Array of Thread::Backtrace::Location
+backtrace must be an Array of String or an Array of Thread::Backtrace::Location
 :t
 uncaught throw :zz
 :zz
@@ -2000,6 +2186,428 @@ format should have ASCII compatible encoding
 ");
         }
 
+        public void Encoding_List1() {
+            TestOutput(@"
+p Encoding.list.size, Encoding.list.first(4).map(&:name), Encoding.list.last.name
+p Encoding.name_list.size, Encoding.name_list.last(5)
+p Encoding.aliases.size, Encoding.aliases.first(3), Encoding.aliases[""CP951""], Encoding.aliases[""Big5-HKSCS:2008""]
+p Encoding::US_ASCII.names
+p [Encoding::EUCJP, Encoding::EucJP, Encoding::EBCDIC_CP_US, Encoding::BIG5_HKSCS_2008, Encoding::Stateless_ISO_2022_JP_KDDI].map(&:name)
+p Encoding.const_defined?(:Ebcdic_cp_us), Encoding.const_defined?(:Locale), Encoding.const_defined?(:IBM880)
+%w[ibm880 johab x-mac-arabic CP1026 CP20932].each { |n| begin; Encoding.find(n); rescue ArgumentError => e; puts e.message; end }
+p Encoding::CP950 == Encoding::Big5, Encoding::CP852 == Encoding::IBM852, Encoding::CP50220.dummy?
+p Encoding::MacThai.ascii_compatible?, Encoding::ISO_2022_JP_KDDI.ascii_compatible?, Encoding::UTF8_DoCoMo.dummy?
+p Encoding::Converter.asciicompat_encoding(""CP50220""), Encoding::Converter.asciicompat_encoding(""ISO-2022-JP-KDDI"")
+%w[Windows-1258 macThai macCentEuro GB1988].each do |n|
+  begin; ""é"".encode(n); rescue Encoding::ConverterNotFoundError => e; puts e.message; end
+  p ""abc"".encode(n).bytes, ""\xe0a"".force_encoding(n).upcase.bytes, ""\xe0"".force_encoding(n).ord
+end
+p ""\xC0\xE0\x81\x40\xA1\x40"".force_encoding(""Big5-HKSCS"").chars.map(&:bytesize)
+p ""\x80\x81\x40\xA1\x40\xFF"".force_encoding(""Windows-31J"").chars.map(&:valid_encoding?)
+p ""\x80\xFF\x81\x40"".force_encoding(""GBK"").chars.map(&:valid_encoding?)
+p ""\xA1\xA1\xA2\xE8\xFF"".force_encoding(""GB2312"").chars.map(&:bytesize)
+s = ""\x85\x40a"".force_encoding(""Windows-31J"")
+p s.valid_encoding?, s.length, s.codepoints, s.reverse.bytes, s.upcase.bytes
+begin; s.encode(""UTF-8""); rescue Encoding::UndefinedConversionError => e; puts e.message; end
+begin; ""\xDB"".force_encoding(""TIS-620"").encode(""UTF-16LE""); rescue Encoding::UndefinedConversionError => e; puts e.message; end
+p ""a\xDBb"".force_encoding(""TIS-620"").encode(""UTF-8"", undef: :replace)
+p ""\x80\xA0\xA1\xDF"".force_encoding(""ISO-8859-11"").encode(""UTF-8"").codepoints
+", @"
+103
+[""ASCII-8BIT"", ""UTF-8"", ""US-ASCII"", ""UTF-16BE""]
+""SJIS-SoftBank""
+175
+[""SJIS-SoftBank"", ""locale"", ""external"", ""filesystem"", ""internal""]
+71
+[[""BINARY"", ""ASCII-8BIT""], [""CP437"", ""IBM437""], [""CP720"", ""IBM720""]]
+nil
+""Big5-HKSCS""
+[""US-ASCII"", ""ASCII"", ""ANSI_X3.4-1968"", ""646""]
+[""EUC-JP"", ""EUC-JP"", ""IBM037"", ""Big5-HKSCS"", ""stateless-ISO-2022-JP-KDDI""]
+false
+false
+false
+unknown encoding name - ibm880
+unknown encoding name - johab
+unknown encoding name - x-mac-arabic
+unknown encoding name - CP1026
+unknown encoding name - CP20932
+false
+false
+true
+true
+false
+false
+#<Encoding:CP51932>
+#<Encoding:stateless-ISO-2022-JP-KDDI>
+code converter not found (UTF-8 to Windows-1258)
+[97, 98, 99]
+[224, 65]
+224
+code converter not found (UTF-8 to macThai)
+[97, 98, 99]
+[224, 65]
+224
+code converter not found (UTF-8 to macCentEuro)
+[97, 98, 99]
+[224, 65]
+224
+code converter not found (UTF-8 to GB1988)
+[97, 98, 99]
+[224, 65]
+224
+[2, 1, 1, 2]
+[false, true, true, true, false]
+[true, false, true]
+[2, 2, 1]
+true
+2
+[34112, 97]
+[97, 133, 64]
+[133, 64, 65]
+""\x85@"" from Windows-31J to UTF-8
+""\xDB"" to UTF-8 in conversion from TIS-620 to UTF-8 to UTF-16LE
+""a�b""
+[128, 160, 3585, 3647]
+");
+        }
+
+        public void Encoding_InvalidBytes1() {
+            TestOutput(@"
+def t
+  r = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+  puts r.inspect
+end
+s = ""\xffabc""
+t { s.count(""a"") }
+t { s.count("""") }
+t { """".count(""\xff"") }
+t { ""\x80a"".force_encoding(""Windows-31J"").count(""a"") }
+t { ""\xffa"".force_encoding(""BINARY"").count(""a"") }
+t { s.delete(""a"") }
+t { s.dup.delete!(""z"") }
+t { """".delete(""\xff"") }
+t { s.squeeze }
+t { s.squeeze(""a"") }
+t { """".squeeze(""\xff"") }
+t { ""abc"".tr(""\xff"", ""b"") }
+t { ""abc"".tr(""a"", ""\xff"") }
+t { """".tr(""\xff"", ""a"") }
+t { s.dup.upcase! }
+t { s.dup.capitalize! }
+t { s.upcase(:ascii) }
+t { ""abc"".force_encoding(""UTF-16"").upcase }
+t { ""abc"".force_encoding(""ISO-2022-JP"").downcase! }
+t { ""abc"".force_encoding(""UTF-7"").casecmp?(""abc"".force_encoding(""UTF-7"")) }
+t { s.gsub(""a"", ""b"") }
+t { s.sub(""a"") { ""X"" } }
+t { s.dup.gsub!(""b"", ""z"") }
+t { s.scan(""a"") }
+t { s.gsub(/a/, ""b"") }
+t { Regexp.union(""a"", s) }
+t { s.encode(xml: :text) }
+t { ""\xffa\n"".encode(crlf_newline: true) }
+t { ""\xff"".succ.bytes }
+t { ""\xe3\x81"".succ.bytes }
+t { ""\xffz"".succ }
+t { ""\xe0"".force_encoding(""macThai"").ord }
+", @"
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in Windows-31J""
+1
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""""
+""ArgumentError: input string invalid""
+""ArgumentError: input string invalid""
+""\xFFABC""
+""Encoding::CompatibilityError: incompatible encoding with this operation: UTF-16""
+""Encoding::CompatibilityError: incompatible encoding with this operation: ISO-2022-JP""
+""Encoding::CompatibilityError: incompatible encoding with this operation: UTF-7""
+""\xFFbbc""
+""\xFFXbc""
+""\xFFazc""
+""ArgumentError: invalid byte sequence in UTF-8""
+""ArgumentError: invalid byte sequence in UTF-8""
+""RegexpError: invalid multibyte character: /a|\\xFFabc/""
+""\xFFabc""
+""\xFFa\r\n""
+[1, 255]
+[1, 227, 129]
+""\xFFaa""
+224
+");
+        }
+
+        public void Encoding_Converter1() {
+            TestOutput(@"
+def t
+  r = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+  p r
+end
+ec = Encoding::Converter.new("""", """", crlf_newline: true)
+t { [ec.convert(""a\nb"").encoding, ec.convpath, ec.source_encoding, ec.destination_encoding, ec.inspect] }
+t { Encoding::Converter.new("""", """", universal_newline: true).convert(""a\r\nb\rc"") }
+t { Encoding::Converter.new("""", """", xml: :text).convert(""<a&'\"">"") }
+t { Encoding::Converter.new("""", """").inspect }
+t { Encoding::Converter.new("""", """").convert(""a\xff"") }
+t { Encoding::Converter.new(""UTF-8"", """", crlf_newline: true) }
+t { Encoding::Converter.new("""", ""UTF-8"") }
+t { Encoding::Converter.search_convpath("""", """", crlf_newline: true) }
+t { Encoding::Converter.search_convpath("""", """") }
+t { Encoding::Converter.new(""UTF-8"", ""EUC-JP"", crlf_newline: true, xml: :text).inspect }
+ec = Encoding::Converter.new(""UTF-8"", ""EUC-JP"")
+d = """".dup
+t { ec.primitive_convert(""a"".dup, d) }
+t { ec.convert(""b"") }
+t { [ec.primitive_convert(""c"".dup, d), d] }
+t { ec.finish }
+ec = Encoding::Converter.new(""UTF-8"", ""Shift_JIS"")
+t { [ec.convert(""あ""), ec.finish, ec.finish] }
+t { ec.convert(""b"") }
+", @"
+[#<Encoding:BINARY (ASCII-8BIT)>, [""crlf_newline""], nil, nil, ""#<Encoding::Converter: crlf_newline>""]
+""a\nb\nc""
+""&lt;a&amp;'\""&gt;""
+""#<Encoding::Converter: no-conversion>""
+""a\xFF""
+""Encoding::ConverterNotFoundError: code converter not found (UTF-8 with crlf_newline)""
+""Encoding::ConverterNotFoundError: code converter not found (UTF-8)""
+""Encoding::ConverterNotFoundError: code converter not found (crlf_newline)""
+""Encoding::ConverterNotFoundError: code converter not found (no-conversion)""
+""#<Encoding::Converter: UTF-8 to EUC-JP with crlf_newline,xml_text>""
+:finished
+""ArgumentError: converter already finished""
+[:finished, ""a""]
+""""
+[""\x{82A0}"", """", """"]
+""ArgumentError: converter already finished""
+");
+        }
+        /// <summary>
+        /// Undefined conversions on the first leg: ASCII-8BIT's high bytes, and the bytes a
+        /// Windows/ISO code page leaves undefined; the messages that name the encodings.
+        /// </summary>
+        public void Encoding_Converter2() {
+            TestOutput(@"
+require 'ruby4'
+def t
+  r = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+  p r
+end
+t { Encoding::Converter.new(""BINARY"", ""UTF-8"").convert(""\xff"".b) }
+t { Encoding::Converter.new(""BINARY"", ""UTF-8"", undef: :replace).convert(""a\xffb"".b) }
+t { ec = Encoding::Converter.new(""BINARY"", ""UTF-8""); s = ""a\xffb"".b; [ec.primitive_convert(s, d = +""""), d, s, ec.primitive_errinfo] }
+t { ec = Encoding::Converter.new(""Windows-1252"", ""UTF-8""); s = ""a\x81b"".force_encoding(""Windows-1252""); [ec.primitive_convert(s, d = +""""), d, s, ec.primitive_errinfo] }
+t { ""a\x81b"".force_encoding(""Windows-1252"").encode(""UTF-8"") }
+t { ""\xaa"".force_encoding(""Windows-1253"").encode(""UTF-8"") }
+t { ""\x80\xe9"".force_encoding(""Windows-1252"").encode(""UTF-8"") }
+t { ""\u0081"".encode(""Windows-1252"") }
+t { ""あ"".encode(""Windows-1252"") }
+t { ""\x81"".force_encoding(""Windows-1252"").valid_encoding? }
+t { ""\xff"".b.encode(""Shift_JIS"") }
+t { ""a"".encode("""", crlf_newline: true) }
+t { ""a"".encode(""UTF-8"", """", xml: :attr) }
+t { ""a"".encode("""") }
+t { Integer(""1\xFF"") }
+t { Integer(""1\xFF"".b, 16) }
+t { Integer(""1é\0"") }
+", @"
+""Encoding::UndefinedConversionError: \""\\xFF\"" from ASCII-8BIT to UTF-8""
+""a�b""
+[:undefined_conversion, ""a"", ""b"", [:undefined_conversion, ""ASCII-8BIT"", ""UTF-8"", ""\xFF"", """"]]
+[:undefined_conversion, ""a"", ""b"", [:undefined_conversion, ""WINDOWS-1252"", ""UTF-8"", ""\x81"", """"]]
+""Encoding::UndefinedConversionError: \""\\x81\"" from WINDOWS-1252 to UTF-8""
+""Encoding::UndefinedConversionError: \""\\xAA\"" from WINDOWS-1253 to UTF-8""
+""€é""
+""Encoding::UndefinedConversionError: U+0081 from UTF-8 to WINDOWS-1252""
+""Encoding::UndefinedConversionError: U+3042 from UTF-8 to WINDOWS-1252""
+true
+""Encoding::UndefinedConversionError: \""\\xFF\"" to UTF-8 in conversion from ASCII-8BIT to UTF-8 to Shift_JIS""
+""Encoding::ConverterNotFoundError: code converter not found (UTF-8 with crlf_newline)""
+""Encoding::ConverterNotFoundError: code converter not found (UTF-8 with xml_attr_content,xml_attr_quote)""
+""Encoding::ConverterNotFoundError: code converter not found (UTF-8)""
+""ArgumentError: invalid value for Integer(): \""1\\xFF\""""
+""ArgumentError: invalid value for Integer(): \""1\\xFF\""""
+""ArgumentError: invalid value for Integer(): \""1é\\u0000\""""
+");
+        }
+
+        /// <summary>
+        /// stateless-ISO-2022-JP transcodes its JIS X 0208 characters (0x92 and the EUC-JP bytes) by way of EUC-JP.
+        /// </summary>
+        public void Encoding_StatelessIso2022Jp1() {
+            TestOutput(@"
+def t
+  r = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+  p r
+end
+t { ""\x92\xa4\xa2a"".force_encoding(""stateless-ISO-2022-JP"").encode(""UTF-8"") }
+t { ""あa"".encode(""stateless-ISO-2022-JP"").bytes }
+t { ""\xa4\xa2"".force_encoding(""EUC-JP"").encode(""stateless-ISO-2022-JP"").bytes }
+t { ""é"".encode(""stateless-ISO-2022-JP"") }
+t { ""\x92\xa4"".force_encoding(""stateless-ISO-2022-JP"").encode(""UTF-8"") }
+t { Encoding::Converter.search_convpath(""stateless-ISO-2022-JP"", ""UTF-8"") }
+t { Encoding::Converter.new(""UTF-8"", ""stateless-ISO-2022-JP"").convert(""あ"").bytes }
+t { ""あ"".encode(""stateless-ISO-2022-JP-KDDI"").bytes }
+", @"
+""あa""
+[146, 164, 162, 97]
+[146, 164, 162]
+""Encoding::UndefinedConversionError: \""\\x8F\\xAB\\xB1\"" to stateless-ISO-2022-JP in conversion from UTF-8 to EUC-JP to stateless-ISO-2022-JP""
+""Encoding::InvalidByteSequenceError: incomplete \""\\x92\\xA4\"" on stateless-ISO-2022-JP""
+[[#<Encoding:stateless-ISO-2022-JP>, #<Encoding:EUC-JP>], [#<Encoding:EUC-JP>, #<Encoding:UTF-8>]]
+[146, 164, 162]
+[146, 164, 162]
+");
+        }
+
+
+
+        /// <summary>
+        /// UTF-16/32 strings against ASCII arguments (MRI pads with 0x20 bytes, compares bytes, refuses
+        /// the rest), case mapping by encoding, broken strings in casecmp?, EUC sequences that name
+        /// no character.
+        /// </summary>
+        public void Encoding_AsciiIncompatible1() {
+            TestOutput(@"
+def t
+  r = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+  p r
+end
+s = ""abc"".encode(""UTF-16LE"")
+t { [s.center(8).bytes, s.ljust(5).bytes, s.rjust(4, ""x"".encode(""UTF-16LE"")).bytes, s.size, s.bytes] }
+t { s.center(10, ""*"") }
+t { s.rjust(5, ""xy"") }
+t { s.ljust(1, """") }
+t { ""ab"".ljust(1).equal?(""ab"") }
+t { [s == ""abc"", s.eql?(""abc""), s <=> ""abc"", """".encode(""UTF-16LE"") == """"] }
+t { s.chomp(""c"") }
+t { (""ab\n"".encode(""UTF-16LE"")).chomp.bytes }
+t { s.tr(""a"".encode(""UTF-16LE""), ""x"".encode(""UTF-16LE"")).bytes }
+t { s % [] }
+t { format(""%s"".encode(""UTF-32BE""), 1) }
+t { [s, s].join(""-"") }
+t { [""a"".force_encoding(""BINARY""), ""b"".force_encoding(""BINARY"")].join(""-"").encoding }
+t { ""abc"".encode(""UTF-16LE"").succ.bytes }
+t { [(0x80..0xff).map(&:chr).join.force_encoding(""KOI8-U"").upcase.bytes.uniq.size, ""\xa0"".force_encoding(""IBM852"").casecmp?(""\xb5"".force_encoding(""IBM852""))] }
+t { [""\xdf\xff\xe9"".force_encoding(""ISO-8859-1"").upcase.bytes, ""\xdf\xff"".force_encoding(""Windows-1252"").upcase.bytes, ""\xdf"".force_encoding(""ISO-8859-1"").capitalize.bytes] }
+t { [""\xdd"".force_encoding(""ISO-8859-9"").downcase.bytes, ""\xc0"".force_encoding(""ISO-8859-7"").upcase.bytes, ""\xd3\xd3 "".force_encoding(""ISO-8859-7"").downcase.bytes] }
+t { ""aａα"".encode(""EUC-JP"").upcase.encode(""UTF-8"") }
+t { ""\xff"".casecmp?(""\xff"") }
+t { ""\xff"".casecmp(""\xff"") }
+t { [""a\x8f\xa1\xa1\x8f\xb0\xa1b"".force_encoding(""EUC-JP"").chars.map(&:bytesize), ""\x8f\xa1\xa1"".force_encoding(""EUC-JP"").reverse.bytes] }
+t { ""a\xa4\xa1\x8e\xa2\xa1\xa1b"".force_encoding(""EUC-TW"").chars.map(&:bytesize) }
+", @"
+[[32, 32, 97, 0, 98, 0, 99, 0, 32, 32, 32], [97, 0, 98, 0, 99, 0, 32, 32], [120, 0, 97, 0, 98, 0, 99, 0], 3, [97, 0, 98, 0, 99, 0]]
+""Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8""
+""Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8""
+""ArgumentError: zero width padding""
+false
+[false, false, -1, true]
+""Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8""
+[97, 0, 98, 0]
+[120, 0, 98, 0, 99, 0]
+""Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE""
+""Encoding::CompatibilityError: ASCII incompatible encoding: UTF-32BE""
+""Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8""
+#<Encoding:BINARY (ASCII-8BIT)>
+[97, 0, 98, 0, 100, 0]
+[128, false]
+[[83, 83, 255, 201], [83, 83, 159], [83, 115]]
+[[105], [192], [243, 243, 32]]
+""Aａα""
+""ArgumentError: input string invalid""
+0
+[[1, 3, 3, 1], [143, 161, 161]]
+[1, 2, 4, 1]
+");
+        }
+
+
+        /// <summary>
+        /// String#each_line on UTF-16: $/ and paragraph mode are transcoded, other separators checked.
+        /// </summary>
+        public void Encoding_AsciiIncompatibleLines1() {
+            TestOutput(@"
+require 'ruby4'
+s = ""a\n\n\nb\r\nc"".encode(""UTF-16LE"")
+p s.lines.map { |l| l.encode(""UTF-8"") }, s.lines("""").map { |l| l.encode(""UTF-8"") }
+p s.lines(chomp: true).map { |l| l.encode(""UTF-8"") }, s.lines("""", chomp: true).map { |l| l.encode(""UTF-8"") }
+p s.lines(""b"".encode(""UTF-16LE""), chomp: true).map { |l| l.encode(""UTF-8"") }
+p((s.lines(""\n"") rescue $!), (s.each_line(""b"") { } rescue $!))
+u = ""abc"".encode(""UTF-16LE"")
+p u.upto(u).to_a.size
+", @"
+[""a\n"", ""\n"", ""\n"", ""b\r\n"", ""c""]
+[""a\n\n"", ""b\r\nc""]
+[""a"", """", """", ""b\r"", ""c""]
+[""a"", ""b\r\nc""]
+[""a\n\n\n"", ""\r\nc""]
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+1
+");
+        }
+
+        /// <summary>
+        /// sub/gsub on UTF-16/32 with a String replacement read the replacement as characters (its
+        /// byte length overran them), and a String pattern is escaped by character, not by byte.
+        /// </summary>
+        public void Encoding_AsciiIncompatibleGsub1() {
+            TestOutput(@"
+u = ->(s) { s.encode(""UTF-16LE"") }
+p u[""abcb""].gsub(u[""b""], u[""x""]).bytes, u[""abc""].sub(u[""b""], u[""\\0\\0""]).bytes
+p u[""a\r\nb""].gsub(u[""\r\n""], u[""\n""]).encode(""UTF-8""), u[""x.y""].gsub(u["".""], u[""Z""]).encode(""UTF-8""), u[""x y""].sub(u["" ""], u[""_""]).encode(""UTF-8"")
+p ""a.b"".encode(""UTF-32BE"").gsub(""."".encode(""UTF-32BE""), ""-"".encode(""UTF-32BE"")).encode(""UTF-8"")
+p Regexp.escape(u[""a.b""]).encode(""UTF-8"")
+", @"
+[97, 0, 120, 0, 99, 0, 120, 0]
+[97, 0, 98, 0, 98, 0, 99, 0]
+""a\nb""
+""xZy""
+""x_y""
+""a-b""
+""a\\.b""
+");
+        }
+
+        /// <summary>
+        /// MRI's chompped_length judges a separator in its own encoding: one "\n" that is a whole
+        /// character of it chomps a newline (and a CR) of the receiver's encoding, compatible or
+        /// not. Any other separator has to be compatible with the receiver.
+        /// </summary>
+        public void Encoding_AsciiIncompatibleChomp1() {
+            TestOutput(@"
+require 'ruby4'
+u = ->(s) { s.encode(""UTF-16LE"") }
+p u[""abc\n""].chomp(""\n"").bytes, u[""abc\r\n""].chomp(""\n"").bytes, u[""abc\r""].chomp(""\n"").bytes, u[""abc""].chomp(""\n"").bytes
+s = u[""a\n""]; p s.chomp!(""\n"").bytes, s.chomp!(""\n"")
+p ""a\n"".encode(""UTF-32LE"").chomp(u[""\n""]).bytes, ""a\n"".force_encoding(""UTF-16LE"").chomp(""\n"").bytes
+p((u[""a\n""].chomp(""\r\n"") rescue $!), (u[""a\n""].each_line(""\n"") { } rescue $!))
+", @"
+[97, 0, 98, 0, 99, 0]
+[97, 0, 98, 0, 99, 0]
+[97, 0, 98, 0, 99, 0]
+[97, 0, 98, 0, 99, 0]
+[97, 0]
+nil
+[97, 0, 0, 0]
+[97, 10]
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+");
+        }
+
+
         public void Io_Messages1() {
             TestOutput(@"
 r, w = IO.pipe
@@ -2035,7 +2643,7 @@ no implicit conversion of nil into Integer
             TestOutput(@"
 e = [1, 2].each
 p e.dup.to_a, e.clone.to_a, [1, 2, 3].each_slice(2).dup.to_a
-p Float.ancestors.include?(Precision), Float.ancestors[0, 3].map(&:to_s)
+p defined?(Precision), Float.ancestors[0, 3].map(&:to_s)
 $VERBOSE = nil; p $-W
 $VERBOSE = false; p $-W
 $VERBOSE = true; p $-W
@@ -2044,7 +2652,7 @@ begin; $-W = 1; rescue NameError => x; puts x.message; end
 [1, 2]
 [1, 2]
 [[1, 2], [3]]
-false
+nil
 [""Float"", ""Numeric"", ""Comparable""]
 0
 1
@@ -2058,6 +2666,7 @@ $-W is a read-only variable
 p 1e-20.round(25), 1e-20.round(30), 1e-20.round(19), 1.5.round(16), 0.1.round(20), 5e-324.round(324)
 p((-1e-10).ceil(1), 1e-10.floor(1), (-1e-10).floor(1), 2.1.floor(1), 1.1.ceil(1), (-2.5).truncate(1))
 p Float::MAX_10_EXP, Float::MIN_10_EXP
+p '%#.0f' % 3, '%#.0f' % 10**20, '%#5.0f' % -3, '%#.0f' % 3.0
 begin; '%5 5d' % 3; rescue ArgumentError => e; puts e.message; end
 begin; '%.5+d' % 3; rescue ArgumentError => e; puts e.message; end
 begin; '%1$1$d' % 3; rescue ArgumentError => e; puts e.message; end
@@ -2086,6 +2695,10 @@ begin; Float(""½.5""); rescue ArgumentError => e; puts e.message; end
 -2.5
 308
 -307
+""3""
+""100000000000000000000""
+""   -3""
+""3.""
 flag after width
 flag after precision
 value given twice - 1$
@@ -2097,7 +2710,7 @@ unnumbered(1) mixed with numbered
 too few arguments
 ASCII incompatible encoding: UTF-16LE
 12354 out of char range
-incompatible character encodings: UTF-8 and ASCII-8BIT
+incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
 invalid value for Float(): ""\xC2\xBD.5""
 ");
         }
@@ -2353,6 +2966,350 @@ true
 [""1_000"", 1.0]
 ["".5e-2"", 0.005]
 ");
+        }
+
+        /// <summary>
+        /// A Set's instance variables of its own go in an "I" wrapper around the 'o' record that holds its table, as
+        /// MRI 4.0 writes them, and an 'o' record of a Set holding anything besides "@hash" loses it, as in MRI.
+        /// </summary>
+        public void Marshal_SetIVars1() {
+            TestOutput(@"
+require 'ruby4'
+s = Set[1]; s.instance_variable_set(:@x, 5)
+d = Marshal.dump(s); p d
+o = Marshal.load(d); p o, o.instance_variables, o.instance_variable_get(:@x)
+o = Marshal.load(""\x04\bo:\bSet\a:\n@hash}\x06i\x06TF:\a@xi\n"".b); p o, o.instance_variables
+class MySet < Set; end
+m = MySet[2]; m.instance_variable_set(:@y, [m]); d = Marshal.dump(m); p d
+o = Marshal.load(d); p o.class, o.instance_variable_get(:@y)[0].equal?(o), Marshal.dump(Set[1])
+", @"
+""\x04\bIo:\bSet\x06:\n@hash}\x06i\x06TF\x06:\a@xi\n""
+Set[1]
+[:@x]
+5
+Set[1]
+[]
+""\x04\bIo:\nMySet\x06:\n@hash}\x06i\aTF\x06:\a@y[\x06@\x00""
+MySet
+true
+""\x04\bo:\bSet\x06:\n@hash}\x06i\x06TF""
+");
+        }
+
+        /// <summary>
+        /// An exception MRI dumped loads as MRI loads it: "bt_locations" is not an instance variable of the result, which
+        /// has no Locations; a NoMethodError's message dumped as a NameError::message is its string, and NameError's name,
+        /// NoMethodError's args and private_call? are the error's own again - and IronRuby writes them as MRI does. The
+        /// prelude's record of an exception's Locations is not an instance variable either.
+        /// </summary>
+        public void Marshal_NameError1() {
+            TestOutput(@"
+require 'ruby4'
+x = Marshal.load(""\x04\bo:\x12NoMethodError\v:\tmesgIu:\x17NameError::message#undefined method 'foo' for nil\x06:\x06EF:\abt[\x06I\""\x15-e:1:in '<main>'\x06;\bF:\tname:\bfoo:\targs[\x00:\x12private_call?T:\x11bt_locations@\a"".b)
+p x.message, x.name, x.args, x.private_call?, x.backtrace, x.backtrace_locations, x.instance_variables
+p Marshal.dump(NameError.new('x', :foo, receiver: 1)) == ""\x04\bo:\x0ENameError\b:\tmesgI\""\x06x\x06:\x06ET:\abt0:\tname:\bfoo"".b
+p Marshal.dump(NoMethodError.new) == ""\x04\bo:\x12NoMethodError\n:\tmesg0:\abt0:\tname0:\targs0:\x12private_call?F"".b
+y = Marshal.load(Marshal.dump(NoMethodError.new('x', :bar, [1, 2], true))); p y.name, y.args, y.private_call?, y.instance_variables
+e = (raise 'q' rescue $!); e.backtrace_locations; p e.instance_variables, Marshal.load(Marshal.dump(e)).backtrace_locations
+", @"
+""undefined method 'foo' for nil""
+:foo
+[]
+true
+[""-e:1:in '<main>'""]
+nil
+[]
+true
+true
+:bar
+[1, 2]
+true
+[]
+[]
+nil
+");
+        }
+
+        /// <summary>
+        /// Data.new reports a missing member before an unknown keyword, as MRI's rb_data_initialize_m does, and Data.define
+        /// and Struct.new refuse only setter names (rb_is_attrset_id) as members, so `[]=` is allowed. All in the prelude.
+        /// </summary>
+        public void Prelude_DataStructErrors1() {
+            TestOutput(@"
+require 'ruby4'
+D = Data.define(:a)
+E = Data.define(:a, :b)
+[
+  -> { D.new(b: 1) }, -> { D.new(a: 1, b: 2) }, -> { D.new(b: 1, c: 2) }, -> { E.new(a: 1, c: 2) },
+  -> { E.new(c: 1, d: 2) }, -> { E.new(a: 1, b: 2, c: 3) }, -> { E.new(1) }, -> { D.new(1, 2) },
+  -> { E.new(1, b: 2) }, -> { D.new(1).with(b: 2, c: 3) }, -> { Data.define(1) }, -> { Data.define(:a=) },
+  -> { Data.define(:[]=).members }, -> { Data.define(:x, :x) }, -> { E.new(b: 1, a: 2) },
+  -> { Struct.new(:a=) }, -> { Struct.new(:b=, :a, :a) }, -> { Struct.new(:a, :a, :b=) }, -> { Struct.new(:[]=, :a?).members },
+].each { |l| p((l.call rescue $!)) }
+", @"
+#<ArgumentError: missing keyword: :a>
+#<ArgumentError: unknown keyword: :b>
+#<ArgumentError: missing keyword: :a>
+#<ArgumentError: missing keyword: :b>
+#<ArgumentError: missing keywords: :a, :b>
+#<ArgumentError: unknown keyword: :c>
+#<ArgumentError: missing keyword: :b>
+#<ArgumentError: wrong number of arguments (given 2, expected 0..1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 0)>
+#<ArgumentError: unknown keywords: :b, :c>
+#<TypeError: 1 is not a symbol nor a string>
+#<ArgumentError: invalid data member: a=>
+[:[]=]
+#<ArgumentError: duplicate member: x>
+#<data E a=2, b=1>
+#<ArgumentError: invalid struct member: a=>
+#<ArgumentError: invalid struct member: b=>
+#<ArgumentError: duplicate member: a>
+[:[]=, :a?]
+");
+        }
+
+        /// <summary>
+        /// #yield_self is an alias of #then, as in MRI, so the Enumerator and Method#original_name say :then; the prelude's
+        /// aliases (collect_concat, Lazy#filter/collect, select!/filter!, ENV#filter/each_pair) name the Enumerator after the
+        /// name they were called by, Array#rfind shows its argument only when given one, and String#each_line and
+        /// #each_grapheme_cluster answer to_enum Enumerators.
+        /// </summary>
+        public void Prelude_AliasNames1() {
+            TestOutput(@"
+require 'ruby4'
+p 1.then, 1.yield_self, 1.method(:yield_self).name, 1.method(:yield_self).original_name
+p Kernel.instance_method(:then) == Kernel.instance_method(:yield_self), Kernel.instance_method(:then).parameters
+p [1, 2, 3].rfind, [1, 2, 3].rfind(nil), [1, 2, 3].rfind(1, 2), [1, 2, 3].rfind(-> { 9 }) { false }
+p (1..2).collect_concat, (1..2).flat_map
+p [3].lazy.filter { 1 }, [3].lazy.find_all { 1 }, [3].lazy.select { 1 }
+p [3].lazy.collect { 1 }, [3].lazy.map { 1 }, [3].lazy.collect_concat { [1] }
+p [1].filter!, [1].select!, ENV.filter.inspect.end_with?(':filter>'), ENV.each_pair.inspect.end_with?(':each_pair>')
+p ""ab\ncd"".each_line, ""ab\ncd"".each_line('b'), ""ab\ncd"".each_line(chomp: true).to_a, 'ab'.each_grapheme_cluster, 'ab'.each_grapheme_cluster.size
+", @"
+#<Enumerator: 1:then>
+#<Enumerator: 1:then>
+:yield_self
+:then
+true
+[]
+#<Enumerator: [1, 2, 3]:rfind>
+#<Enumerator: [1, 2, 3]:rfind(nil)>
+#<Enumerator: [1, 2, 3]:rfind(1, 2)>
+9
+#<Enumerator: 1..2:collect_concat>
+#<Enumerator: 1..2:flat_map>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:filter>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:find_all>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:select>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:collect>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:map>
+#<Enumerator::Lazy: #<Enumerator::Lazy: [3]>:collect_concat>
+#<Enumerator: [1]:filter!>
+#<Enumerator: [1]:select!>
+true
+true
+#<Enumerator: ""ab\ncd"":each_line>
+#<Enumerator: ""ab\ncd"":each_line(""b"")>
+[""ab"", ""cd""]
+#<Enumerator: ""ab"":each_grapheme_cluster>
+2
+");
+        }
+
+        /// <summary>
+        /// The prelude's helpers stay out of the core's public surface (no Integer::MAX, SPAWN_*, ERRNO_TABLE, *_without_*
+        /// wrappers), the definitions removed as dead are still answered by the C# core, and sleep and the Kernel conversion
+        /// functions fail with MRI's messages.
+        /// </summary>
+        public void Prelude_HiddenHelpers1() {
+            TestOutput(@"
+require 'ruby4'
+p Integer.const_defined?(:MAX), Process.constants.grep(/SPAWN|NOT_IMPL|LOCKS/), Errno.constants.reject { |c| Errno.const_get(c).is_a?(Class) }
+p Enumerable.constants, Fiber.constants.grep(/KILL|SCHEDULER/), GC.singleton_methods.include?(:major_count), Warning.constants
+p Enumerable.public_instance_methods.grep(/without/), Kernel.public_instance_methods.grep(/without/), Range.public_instance_methods.grep(/without/), String.public_instance_methods.grep(/lines_enum/)
+p(begin; Process.getrlimit(:LOCKS); rescue ArgumentError, NotImplementedError; $!; end)
+p KeyError.ancestors.include?(IndexError), KeyError.new('x', receiver: 1, key: 2).key
+p(({a: 1}.fetch_values(:a, :b) rescue $!))
+p SystemCallError.new('x', 2).class, SystemCallError.new('x', 99999).message
+p (1..3).first(2), [1, 2].all?(Integer), [1, 2].inject(:+), [1, 2].min(1), [1, 2].zip(3..4), [1, 2, 3].shift(2), Object.new.clone(freeze: false).frozen?
+[-1, -0.5, -1r, '1', :a, true].each { |d| p((sleep(d) rescue $!)) }
+p sleep(0), sleep(0.001r).class
+o = Object.new; def o.to_hash = 1; def o.to_s = 1; def o.to_c = 1; def o.to_r = 1
+[-> { Hash(o) }, -> { String(o) }, -> { Complex(o) }, -> { Rational(o) }].each { |l| p((l.call rescue $!)) }
+", @"
+false
+[]
+[]
+[]
+[]
+false
+[]
+[]
+[]
+[]
+[]
+" + (Environment.OSVersion.Platform == PlatformID.Win32NT
+    // CRuby on Windows has no resource limits: Process.getrlimit is rb_f_notimplement there. Its
+    // NotImplementedError is a ScriptError, which a rescue modifier does not catch.
+    ? "#<NotImplementedError: getrlimit() function is unimplemented on this machine>"
+    : "#<ArgumentError: invalid resource name: LOCKS>") + @"
+true
+2
+#<KeyError: key not found: :b>
+Errno::ENOENT
+""Unknown error 99999 - x""
+[1, 2]
+true
+3
+[1]
+[[1, 3], [2, 4]]
+[1, 2]
+false
+#<ArgumentError: time interval must not be negative>
+#<ArgumentError: time interval must not be negative>
+#<ArgumentError: time interval must not be negative>
+#<TypeError: can't convert String into time interval>
+#<TypeError: can't convert Symbol into time interval>
+#<TypeError: can't convert TrueClass into time interval>
+0
+Integer
+#<TypeError: can't convert Object to Hash (Object#to_hash gives Integer)>
+#<TypeError: can't convert Object to String (Object#to_s gives Integer)>
+#<TypeError: can't convert Object to Complex (Object#to_c gives Integer)>
+#<TypeError: can't convert Object to Rational (Object#to_r gives Integer)>
+");
+        }
+
+        /// <summary>
+        /// The state the Ruby-written core keeps in @__name__ ivars is not the object's state to Ruby, as
+        /// MRI keeps it in C: a Rational's numerator, a Complex's parts, the errno tables and Process.argv0
+        /// are not instance variables or constants (MRI has no Errno::ERRNO_TABLE, Process::ORIGINAL_ARGV0),
+        /// and Marshal still round-trips. GC::INTERNAL_CONSTANTS and GC::OPTS exist. Enumerator#inspect
+        /// shows a trailing all-Symbol Hash as keywords, as inspect_enumerator does.
+        /// </summary>
+        public void Prelude_HiddenState1() {
+            TestOutput(@"
+require 'ruby4'
+r, c = Rational(3, 4), Complex(1, 2.5)
+p r.instance_variables, c.instance_variables, Marshal.load(Marshal.dump(r)), Marshal.load(Marshal.dump(c)), r.inspect, r.numerator
+p Errno.instance_variables, Errno.const_defined?(:ERRNO_TABLE), Errno.const_defined?(:ERRNO_CLASSES), SystemCallError.new('x', 2).class
+p Process.const_defined?(:ORIGINAL_ARGV0), Process.instance_variables, Process.argv0 == Process.argv0
+p GC::INTERNAL_CONSTANTS[:BASE_SLOT_SIZE], GC::INTERNAL_CONSTANTS.frozen?, GC::OPTS.include?('USE_RGENGC'), GC::OPTS.frozen?
+def m(*a, **k); end
+p [1].to_enum(:m, 1, x: 2, y: [3]), [1].to_enum(:m, {x: 2}), [1].to_enum(:m, 'a' => 1), [1].to_enum(:m, :'a b' => 1)
+o = Object.new; o.instance_variable_set(:@a, 1)
+p o.instance_variables
+", @"
+[]
+[]
+(3/4)
+(1+2.5i)
+""(3/4)""
+3
+[]
+false
+false
+Errno::ENOENT
+false
+[]
+true
+40
+true
+true
+true
+#<Enumerator: [1]:m(1, x: 2, y: [3])>
+#<Enumerator: [1]:m(x: 2)>
+#<Enumerator: [1]:m({""a"" => 1})>
+#<Enumerator: [1]:m(a b: 1)>
+[:@a]
+");
+        }
+
+        /// <summary>
+        /// Only the core's own @__name__ state is hidden: the same spelling in a program (gems use @__memoized__,
+        /// @__Lock__) is an ordinary instance variable, as in MRI - listed, inspected, copied, marshaled, and frozen
+        /// by Ractor.make_shareable - while a Set's or a KeyError's state still is not, and a deep freeze reaches it.
+        /// </summary>
+        public void Prelude_HiddenState2() {
+            TestOutput(@"
+require 'ruby4'
+class Foo; attr_reader :__c__; def initialize; @__c__ = +'s'; @a = 2; end; end
+f = Foo.new
+p f.instance_variables, f.instance_variable_get(:@__c__), f.instance_variable_defined?(:@__c__), f.inspect.include?('@__c__')
+p f.dup.__c__, Marshal.load(Marshal.dump(f)).__c__, Marshal.dump(f).include?('@__c__')
+p Ractor.make_shareable(Foo.new).__c__.frozen?
+o = Object.new; o.instance_variable_set(:@__x__, 1); p o.instance_variables, o.remove_instance_variable(:@__x__), o.instance_variables
+s = Set[+'a']; s.each { s.dup.each {} }
+p s.instance_variables, s.dup.instance_variables, s, Marshal.dump(s) == Marshal.dump(Set['a'])
+Ractor.make_shareable(s); p s.frozen?, s.first.frozen?
+k = KeyError.new('x', receiver: 1, key: 2); p k.instance_variables, k.receiver, k.key
+p Errno.instance_variables, Process.instance_variables, Random.instance_variables, Random.new(3) == Random.new(3)
+", @"
+[:@__c__, :@a]
+""s""
+true
+true
+""s""
+""s""
+true
+true
+[:@__x__]
+1
+[]
+[]
+[]
+Set[""a""]
+true
+true
+true
+[]
+1
+2
+[]
+[]
+[]
+true
+");
+        }
+
+        /// <summary>
+        /// A SyntaxError's message starts with the file and line, as MRI's does, whichever of load, require or
+        /// eval parsed the code; the report of one that a method raised names that method's caller, as for any
+        /// other error, and says the location once. An error found reading a file (an unknown magic-comment
+        /// encoding) has no parser frame in its backtrace.
+        /// </summary>
+        public void SyntaxError_MessageLocation1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+Dir.mktmpdir do |d|
+  bad = File.join(d, 'bad.rb')
+  File.write(bad, ""x = 1\n"" * 49 + ""x = )\n"")
+  begin; load bad; rescue SyntaxError => e; p e.message.start_with?(""#{bad}:50: ""), e.path == bad; end
+  File.write(bad, ""# encoding: bogus\np 1\n"")
+  begin; load bad; rescue ArgumentError => e; p e.message == ""#{bad}:1: unknown or invalid encoding in the magic comment"", e.backtrace.grep(/Parse/); end
+end
+begin; eval(""1\n1 +"", nil, 'q.rb', 3); rescue SyntaxError => e; p e.message, e.path; end
+begin; eval(""1 +"", nil, 'z.rb', -5); rescue SyntaxError => e; p e.message; end
+", @"
+true
+true
+true
+[]
+""q.rb:4: syntax errors found\n  3 | 1\n> 4 | 1 +\n    |    ^ unexpected end-of-input, assuming it is closing the parent top level context\n    |    ^ unexpected end-of-input; expected an expression after the operator\n""
+""q.rb""
+""z.rb:-5: syntax errors found\n> -5 | 1 +\n     |    ^ unexpected end-of-input, assuming it is closing the parent top level context\n     |    ^ unexpected end-of-input; expected an expression after the operator\n""
+");
+            try {
+                Engine.Execute("def syntax_error_location1; eval('x = )', nil, 'q.rb', 3); end; syntax_error_location1");
+                Assert(false);
+            } catch (SyntaxError e) {
+                string report = Context.FormatException(e);
+                // MRI's report: prism's picture of the errors follows the first line
+                Assert(report.Replace("\r\n", "\n").Contains("in 'Kernel#eval': q.rb:3: syntax errors found (SyntaxError)\n> 3 | x = )\n    |   ^ expected an expression after `=`\n"));
+                Assert(!report.Contains("q.rb:3: q.rb:3:"));
+            }
         }
 
         /// <summary>
@@ -2677,6 +3634,55 @@ link still there: :ok
         }
 
         /// <summary>
+        /// Under the C locale the filesystem encoding is US-ASCII. A non-ASCII file name still opens,
+        /// and comes back from Dir as its UTF-8 bytes in a BINARY string, from File.readlink in a
+        /// US-ASCII one, as in MRI (it was Errno::EINVAL, and Dir.children left the name out).
+        /// </summary>
+        public void Dir_AsciiFilesystemNames1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+old = Encoding.default_external
+Encoding.default_external = Encoding::US_ASCII
+begin
+  name = File.join(dir, ""あ.txt"")
+  File.write(name, ""x"")
+  File.symlink(name, File.join(dir, ""lnk""))
+  p Encoding.find(""filesystem"")
+  p Dir.children(dir).sort.map { [it, it.encoding] }
+  p Dir.entries(dir).sort.map(&:encoding).uniq
+  p Dir.glob(File.join(dir, ""*.txt"")).map(&:encoding)
+  Dir.children(dir).each { p File.exist?(File.join(dir, it)) }
+  p File.read(name)
+  link = File.readlink(File.join(dir, ""lnk""))
+  p link.encoding, link.b == name.b
+  sub = File.join(dir, ""あ""); Dir.mkdir(sub)
+  p File.realdirpath(""."".encode(""ISO-8859-1""), sub).encoding
+  Dir.rmdir(sub)
+ensure
+  Encoding.default_external = old
+  Dir.children(dir).each { File.unlink(File.join(dir, it)) }
+  Dir.rmdir(dir)
+end
+", @"
+#<Encoding:US-ASCII>
+[[""lnk"", #<Encoding:US-ASCII>], [""\xE3\x81\x82.txt"", #<Encoding:BINARY (ASCII-8BIT)>]]
+[#<Encoding:US-ASCII>, #<Encoding:BINARY (ASCII-8BIT)>]
+[#<Encoding:UTF-8>]
+true
+true
+""x""
+#<Encoding:US-ASCII>
+true
+#<Encoding:UTF-8>
+");
+        }
+
+        /// <summary>
         /// The File and FileTest predicates MRI answers with rb_stat (exist?, file?, size, zero?, the times,
         /// identical?, ...) take an IO, or anything whose #to_io gives one, and fstat it; they raised TypeError
         /// for a #to_io object. The access(2) ones (readable?, writable?, executable?) and symlink? still take
@@ -2989,6 +3995,29 @@ broken mid: nil
         }
 
         /// <summary>
+        /// A thread Ruby has just started is "run" (or already done), as in MRI: the CLR reports it as WaitSleepJoin while
+        /// the OS brings it up, which made Thread#status say "sleep" right after Thread.new most of the time - and
+        /// ruby/spec's block_caller matcher decide that Mutex#lock on a free mutex blocked.
+        /// </summary>
+        public void Thread_StatusAtStart1() {
+            TestOutput(@"
+statuses = Array.new(200) { t = Thread.new { 1 }; s = t.status; t.join; s }
+p statuses.include?(""sleep""), (statuses - [""run"", false])
+t = Thread.new { sleep }
+deadline = Time.now + 10
+Thread.pass until t.status == ""sleep"" || Time.now > deadline
+p t.status
+t.kill; t.join
+p t.status
+", @"
+false
+[]
+""sleep""
+false
+");
+        }
+
+        /// <summary>
         /// Thread.stop with no other thread alive is MRI's ThreadError "stopping only thread" (rb_thread_stop),
         /// where it slept forever. A fiber runs on a CLR thread of its own here but is part of the thread that
         /// owns it, so neither it nor its thread counts as another thread - for Thread.stop, nor for Thread.list
@@ -3247,6 +4276,616 @@ symlink existing: Errno::EEXIST
             } catch (Exception) {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Keyword calls that leave optional positionals out go straight into the JIT's specialized body
+        /// (JitKeywordCall): the call site fills in the literal defaults of the positionals it does not
+        /// pass. The loop runs long enough for the methods to be specialized. The expected output is CRuby's.
+        /// </summary>
+        public void Method_OptionalAndKeywordParameters2() {
+            TestOutput(@"
+require 'ruby4'
+def d1(a, b = 2, k: 3) = [a, b, k]
+def d4(b = 1, k: 2) = [b, k]
+def d5(b = 1, c = 2.5, k: 2, j: nil) = [b, c, k, j]
+def di(a, b = 2, k: 3) = a + b + k
+class DC; def m(a, b = :d, k: 1) = [a, b, k]; end
+o = DC.new
+r = nil
+3000.times do |i|
+  r = [d1(1, k: 9), d1(1, 5, k: 9), d4(k: 6), d4(5, k: 6), d5(k: 1), d5(3, k: 1, j: 2), d5(3, 4, j: 1), di(i, k: 1), di(i, 1, k: 1), o.m(1, k: 2), o.m(1, 2, k: 3)]
+end
+p r
+", @"
+[[1, 2, 9], [1, 5, 9], [1, 6], [5, 6], [1, 2.5, 1, nil], [3, 2.5, 1, 2], [3, 4, 2, 1], 3002, 3001, [1, :d, 2], [1, 2, 3]]
+");
+        }
+
+        /// <summary>
+        /// Complex as a C# type (RubyComplex) with +, -, *, /, ==, #hash and #abs in C# for Integer and Float
+        /// parts, Kernel#Complex and #to_c; Rational parts, coercion and the rest left to complex.rb; Math.hypot
+        /// rounded as libm's is. The expected output is CRuby's.
+        /// </summary>
+        public void Complex_CSharp1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+a = Complex(1, 2); b = Complex(3.5, -1); r = Complex(Rational(1, 2), 3); z = Complex(0, 0)
+t('basic') { [a, a.real, a.imaginary, a.imag, a.frozen?, a.instance_variables, a.class.superclass, Complex(1), Complex(1.5), Complex(""1+2i"")] }
+t('add') { [a + b, a + 1, a + 2.5, a + r, a - b, a - 1, a + Rational(1, 3), -a, a + Complex(0, 0)] }
+t('mul') { [a * b, a * 2, a * 0.5, a * r, a * Complex(0, 1), Complex(Float::INFINITY, 0) * 0, a * z] }
+t('div') { [a / b, a / 2, a / 0.5, a.quo(a), a / r, a.fdiv(2), Complex(1, 1) / Complex(1, -1)] }
+t('div0') { a / 0 }
+t('div0f') { a / 0.0 }
+t('pow') { [a ** 2, a ** -1, a ** 0.5, a ** a, a ** Rational(1, 2), Complex(0, 1) ** 2] }
+t('eq') { [a == Complex(1, 2), a == b, Complex(3) == 3, Complex(3, 0.0) == 3, a == ""x"", a.eql?(Complex(1, 2)), a.eql?(Complex(1.0, 2)), Complex(1, 0) <=> 2, a <=> 1] }
+t('hash') { [a.hash == Complex(1, 2).hash, {a => 1}[Complex(1, 2)], a.hash == Complex(1.0, 2).hash] }
+t('abs') { [a.abs, a.abs2, a.arg, a.polar, a.rectangular, a.conjugate, b.abs, Complex(3, 4).abs, Complex(-0.0, 0).arg] }
+t('fmt') { [a.to_s, a.inspect, b.to_s, r.inspect, Complex(1, Float::NAN).to_s, Complex(1, -0.0).inspect] }
+t('marshal') { [Marshal.load(Marshal.dump(a)), Marshal.load(Marshal.dump(r))] }
+o = Object.new; def o.coerce(x) = [x, Complex(1, 1)]
+t('coerce') { [a + o, a * o] }
+t('bad') { a + ""x"" }
+t('int ops') { [1 + a, 2 * a, 3 - a, 4 / a, 1.5 * a, Rational(1, 2) + a, 2 ** a] }
+t('misc') { [a.real?, 1.real?, a.to_c, 5.to_c, 2.5.to_c, Rational(1, 2).to_c, a.finite?, Complex(Float::INFINITY, 0).infinite?, Complex.polar(1, Math::PI / 2).real.round(10), Complex.rectangular(1, 2)] }
+t('Complex()') { [Complex(1, 2), Complex(""3""), Complex(nil, exception: false), Complex(""x"", exception: false), Complex(1, 2.0)] }
+t('cerr') { Complex(nil) }
+t('hypot') { [Math.hypot(3.5, 1), Math.hypot(3, 4), Math.hypot(1e300, 1e300), Math.hypot(1e-300, 1e-300), Math.hypot(-0.0, 0), Math.hypot(Float::INFINITY, Float::NAN), Math.hypot(5e-324, 5e-324)] }
+t('undef') { [Complex.instance_method(:==).owner, (Complex(1) < 2 rescue $!.class)] }
+t('int32 edge') { m = -2147483648; x = 2147483647; [Complex(m, m) * Complex(m, m), Complex(x, x) * Complex(x, -x), Complex(m, x) * Complex(x, m), Complex(m, 0) * m + Complex(m, 0) * m, Complex(x, x) + Complex(x, x), Complex(m, m) - Complex(x, x)] }
+", @"
+basic: [(1+2i), 1, 2, 2, true, [], Numeric, (1+0i), (1.5+0i), (1+2i)]
+add: [(4.5+1i), (2+2i), (3.5+2i), ((3/2)+5i), (-2.5+3i), (0+2i), ((4/3)+2i), (-1-2i), (1+2i)]
+mul: [(5.5+6.0i), (2+4i), (0.5+1.0i), ((-11/2)+(4/1)*i), (-2+1i), (NaN+0i), (0+0i)]
+div: [(0.11320754716981132+0.6037735849056602i), ((1/2)+1i), (2.0+4.0i), (1+0i), ((26/37)-(8/37)*i), (0.5+1.0i), (0+1i)]
+div0: [ZeroDivisionError, ""divided by 0""]
+div0f: (Infinity+Infinity*i)
+pow: [(-3+4i), ((1/5)-(2/5)*i), (1.272019649514069+0.7861513777574233i), (-0.22251715680177267+0.10070913113607541i), (1.272019649514069+0.7861513777574233i), (-1+0i)]
+eq: [true, false, true, true, false, true, false, -1, nil]
+hash: [true, 1, false]
+abs: [2.23606797749979, 5, 1.1071487177940904, [2.23606797749979, 1.1071487177940904], [1, 2], (1-2i), 3.640054944640259, 5.0, 3.141592653589793]
+fmt: [""1+2i"", ""(1+2i)"", ""3.5-1i"", ""((1/2)+3i)"", ""1+NaN*i"", ""(1-0.0i)""]
+marshal: [(1+2i), ((1/2)+3i)]
+coerce: [(2+3i), (-1+3i)]
+bad: [TypeError, ""String can't be coerced into Complex""]
+int ops: [(2+2i), (2+4i), (2-2i), ((4/5)-(8/5)*i), (1.5+3.0i), ((3/2)+2i), (0.36691394948660344+1.9660554808224875i)]
+misc: [false, true, (1+2i), (5+0i), (2.5+0i), ((1/2)+0i), true, 1, 0.0, (1+2i)]
+Complex(): [(1+2i), (3+0i), nil, nil, (1+2.0i)]
+cerr: [TypeError, ""can't convert nil into Complex""]
+hypot: [3.640054944640259, 5.0, 1.4142135623730952e+300, 1.414213562373095e-300, 0.0, Infinity, 5.0e-324]
+undef: [Complex, NoMethodError]
+int32 edge: [(0+9223372036854775808i), (9223372028264841218+0i), (0+9223372032559808513i), (9223372036854775808+0i), (4294967294+4294967294i), (-4294967295-4294967295i)]
+");
+        }
+
+        /// <summary>
+        /// Kernel#Rational and #Complex in C# follow the library conventions: exception: is a keyword
+        /// ([Keywords]), so a bad or unknown one and the arity are worded as MRI words them, and Kernel.Rational
+        /// is a frame of its own. A Rational/Complex keeps its parts out of #instance_variables, #dup and #clone
+        /// are Numeric's, and the conversion errors say "into"/"to" as CRuby 4.0 does. Also Range#first/#max with
+        /// two counts, Float-range #first(0), Integer#step's keywords and Integer()'s nil base. The expected
+        /// output is CRuby's.
+        /// </summary>
+        public void Rational_ComplexConventions1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+r = Rational(3, 4); c = Complex(1, 2)
+t('R kw') { [Rational(1, 2, exception: false), Rational(nil, exception: false), Rational('1/3', exception: false), Rational(1, **{})] }
+t('R bad kw') { Rational(1, exception: 1) }
+t('R unknown kw') { Rational(1, foo: 1) }
+t('R arity') { [(Rational() rescue $!.message), (Rational(1, 2, 3) rescue $!.message), method(:Rational).arity] }
+t('R nil den') { Rational(1, nil) }
+t('R hash den') { Rational(1, {}) }
+t('R to_r') { o = Object.new; def o.to_r; 1; end; Rational(o) }
+t('C kw') { [Complex(1, 2, exception: false), Complex(nil, exception: false), Complex('1+2i', exception: false)] }
+t('C unknown kw') { Complex(1, foo: 1) }
+t('C arity') { [(Complex() rescue $!.message), (Complex(1, 2, 3) rescue $!.message), method(:Complex).arity] }
+t('C to_c') { o = Object.new; def o.to_c; 1; end; Complex(o) }
+t('C self') { Complex(c).equal?(c) }
+t('state') { [r.instance_variables, c.instance_variables, r.frozen?, c.frozen?] }
+t('copies') { [r.dup.equal?(r), c.clone.equal?(c), r.method(:dup).owner, c.method(:clone).owner] }
+t('clone freeze') { r.clone(freeze: 1) }
+t('clone unfreeze') { c.clone(freeze: false) }
+t('marshal') { [Marshal.load(Marshal.dump(r)), Marshal.load(Marshal.dump(c))] }
+t('backtrace') { [(Kernel.Rational(nil) rescue $!.backtrace[0][/'.*'/]), (Complex(nil) rescue $!.backtrace[0][/'.*'/])] }
+t('Integer nil base') { Integer('10', nil) }
+t('range arity') { [((1..5).first(1, 2) rescue $!.message), ((1..5).max(1, 2) rescue $!.message)] }
+t('float first 0') { (1.0..2.0).first(0) }
+t('step kw') { [1.step(by: 2, to: 5).to_a, 1.step(5, by: 2).to_a] }
+", @"
+R kw: [(1/2), nil, (1/3), (1/1)]
+R bad kw: [ArgumentError, ""expected true or false as exception: 1""]
+R unknown kw: [ArgumentError, ""unknown keyword: :foo""]
+R arity: [""wrong number of arguments (given 0, expected 1..2)"", ""wrong number of arguments (given 3, expected 1..2)"", -1]
+R nil den: [TypeError, ""can't convert nil into Rational""]
+R hash den: [TypeError, ""not an integer""]
+R to_r: [TypeError, ""can't convert Object to Rational (Object#to_r gives Integer)""]
+C kw: [(1+2i), nil, (1+2i)]
+C unknown kw: [ArgumentError, ""unknown keyword: :foo""]
+C arity: [""wrong number of arguments (given 0, expected 1..2)"", ""wrong number of arguments (given 3, expected 1..2)"", -1]
+C to_c: [TypeError, ""can't convert Object to Complex (Object#to_c gives Integer)""]
+C self: true
+state: [[], [], true, true]
+copies: [true, true, Numeric, Numeric]
+clone freeze: [ArgumentError, ""unexpected value for freeze: Integer""]
+clone unfreeze: [ArgumentError, ""can't unfreeze Complex""]
+marshal: [(3/4), (1+2i)]
+backtrace: [""'Kernel.Rational'"", ""'Kernel#Complex'""]
+Integer nil base: [TypeError, ""no implicit conversion from nil to integer""]
+range arity: [""wrong number of arguments (given 2, expected 1)"", ""wrong number of arguments (given 2, expected 1)""]
+float first 0: [TypeError, ""can't iterate from Float""]
+step kw: [[1, 3, 5], [1, 3, 5]]
+");
+        }
+
+        /// <summary>
+        /// Rational as a C# type (RubyRational) with its arithmetic, comparison, #to_f and #hash in C#, and
+        /// Kernel#Rational: Integer, Float, Rational and big operands, coercion, division by zero, NaN,
+        /// Marshal, hash keys, the conversions and errors left to rational.rb. The expected output is CRuby's.
+        /// </summary>
+        public void Rational_CSharp1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+a = Rational(1, 3); b = Rational(-2, 5); big = Rational(2**70, 3); c = Rational(5)
+t('add') { [a + b, a + 1, a + 2**70, a + 0.5, a + big, big + big, a - b, a - 3, b - a, c - c] }
+t('mul') { [a * b, a * 3, a * 0, a * 0.5, big * big, b * -1, a * Rational(3, 1)] }
+t('div') { [a / b, a / 3, a / 0.5, a.quo(b), Rational(1) / a, big / a, a / -2, a / Rational(-1, 2)] }
+t('div0') { a / 0 }
+t('div0r') { a / Rational(0) }
+t('div0f') { a / 0.0 }
+t('cmp') { [a <=> b, a <=> 1, a <=> a, a <=> 0.25, a <=> Float::NAN, a <=> ""x"", big <=> a, c <=> 5] }
+t('eq') { [a == Rational(2, 6), a == b, c == 5, Rational(0) == 0, a == 1.0/3, a == ""x"", Rational(0) == 0.0, big == big] }
+t('to_f') { [a.to_f, b.to_f, big.to_f, Rational(10**400, 3*10**399).to_f, Rational(1, 10**400).to_f] }
+t('hash') { [a.hash == Rational(2, 6).hash, {a => 1}[Rational(1, 3)], {big => 2}[Rational(2**70, 3)], a.eql?(Rational(1, 3)), a.hash == b.hash] }
+o = Object.new; def o.coerce(x) = [x, Rational(1, 2)]
+t('coerce') { [a + o, a * o, a <=> o] }
+t('bad') { a + ""x"" }
+t('int ops') { [1 + a, 2 * a, 3 - a, 4 / a, 1.5 + a, 2**70 + a, 1 <=> a, 1 == Rational(1)] }
+t('misc') { [a.numerator, a.denominator, -a, a.abs, a ** 2, a.round, a.floor, a.ceil, a.truncate, a.to_s, a.inspect, a.to_i, a.zero?, a.positive?] }
+t('marshal') { [Marshal.load(Marshal.dump(a)), Marshal.load(Marshal.dump(big)), a.instance_variables, a.frozen?] }
+t('sum') { (1..10).sum { |i| Rational(1, i) } }
+t('ints') { [Rational(1, 3), Rational(2, 4), Rational(-2, -4), Rational(2, -4), Rational(0, 5), Rational(5), Rational(-5), Rational(2**70, 2**68), Rational(6, 2**70)] }
+t('zero') { Rational(1, 0) }
+t('rat') { [Rational(Rational(1, 2)), Rational(Rational(1, 2), 3), Rational(Rational(1, 2), 1), Rational(1, Rational(1, 2))] }
+t('str') { [Rational(""1/3""), Rational(""0.75""), Rational(""x"", exception: false), Rational(1.5), Rational(nil, exception: false)] }
+t('nil') { Rational(nil) }
+t('nil2') { Rational(1, nil) }
+t('arity0') { Rational() }
+t('arity3') { Rational(1, 2, 3) }
+t('arity4') { Rational(1, 2, 3, 4) }
+t('kw') { [Rational(1, 2, exception: false), Rational(""1/2"", exception: true)] }
+t('badkw') { Rational(1, exception: 1) }
+t('Kernel.') { Kernel.Rational(3, 9) }
+t('arity') { method(:Rational).arity }
+t('int32 edge') { [Rational(2**31 - 1, 2**31 - 2) + Rational(-2**31, 2**31 - 1), Rational(-2**31, 1) * Rational(-2**31, 1), Rational(2**31, 3) / Rational(-2**31, 7), Rational(-2**31, 2**31 - 1) <=> Rational(2**31 - 1, 2**31 - 2), Rational(2**31 - 1) + (2**31 - 1), Rational(2**31, 1) + 1, Rational(-2**31, 3) - Rational(2**31 - 1, 5), Rational(2**31 - 1, -(2**31)), (-2**31) ** -1, (-2**31) ** -2] }
+t('class') { [Rational(1, 3).class, Rational(4, 2).denominator.class] }
+", @"
+add: [(-1/15), (4/3), (3541774862152233910273/3), 0.8333333333333333, (1180591620717411303425/3), (2361183241434822606848/3), (11/15), (-8/3), (-11/15), (0/1)]
+mul: [(-2/15), (1/1), (0/1), 0.16666666666666666, (1393796574908163946345982392040522594123776/9), (2/5), (1/1)]
+div: [(-5/6), (1/9), 0.6666666666666666, (-5/6), (3/1), (1180591620717411303424/1), (-1/6), (-2/3)]
+div0: [ZeroDivisionError, ""divided by 0""]
+div0r: [ZeroDivisionError, ""divided by 0""]
+div0f: Infinity
+cmp: [1, -1, 0, 1, nil, nil, 1, 0]
+eq: [true, false, true, true, true, false, true, true]
+to_f: [0.3333333333333333, -0.4, 3.935305402391371e+20, 3.3333333333333335, 0.0]
+hash: [true, 1, 2, true, false]
+coerce: [(5/6), (1/6), -1]
+bad: [TypeError, ""String can't be coerced into Rational""]
+int ops: [(4/3), (2/3), (8/3), (12/1), 1.8333333333333333, (3541774862152233910273/3), 1, true]
+misc: [1, 3, (-1/3), (1/3), (1/9), 0, 0, 1, 0, ""1/3"", ""(1/3)"", 0, false, true]
+marshal: [(1/3), (1180591620717411303424/3), [], true]
+sum: (7381/2520)
+ints: [(1/3), (1/2), (1/2), (-1/2), (0/1), (5/1), (-5/1), (4/1), (3/590295810358705651712)]
+zero: [ZeroDivisionError, ""divided by 0""]
+rat: [(1/2), (1/6), (1/2), (2/1)]
+str: [(1/3), (3/4), nil, (3/2), nil]
+nil: [TypeError, ""can't convert nil into Rational""]
+nil2: [TypeError, ""can't convert nil into Rational""]
+arity0: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+arity3: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+arity4: [ArgumentError, ""wrong number of arguments (given 4, expected 1..2)""]
+kw: [(1/2), (1/2)]
+badkw: [ArgumentError, ""expected true or false as exception: 1""]
+Kernel.: (1/3)
+arity: -1
+int32 edge: [(1/4611686011984936962), (4611686018427387904/1), (-7/3), -1, (4294967294/1), (2147483649/1), (-17179869181/15), (-2147483647/2147483648), (-1/2147483648), (1/4611686018427387904)]
+class: [Rational, Integer]
+");
+        }
+
+        /// <summary>
+        /// Integer#** in C# with what it hands rational.rb (__ir_pow_slow__): a negative exponent (a Rational),
+        /// a negative base to a fractional power (a Complex), coercion, and MRI's answers for 0 ** NaN and
+        /// Bignum exponents. The expected output is CRuby's.
+        /// </summary>
+        public void Integer_Power1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+t('int') { [3 ** 5, 2 ** 62, 2 ** 64, 3 ** 0, 0 ** 0, (-2) ** 3, 10 ** 20] }
+t('neg') { [3 ** -2, 1 ** -5, (-1) ** -3, (-1) ** -4, 2 ** -1, (2**70) ** -1, (-3) ** -3] }
+t('zero neg') { 0 ** -1 }
+t('float') { [3 ** 0.5, 4 ** 0.5, 0 ** -1.5, 0 ** Float::NAN, 1 ** Float::NAN, 2 ** Float::INFINITY, (-2) ** 2.0, (-8) ** (1.0/3), (-2) ** Float::NAN, (2**70) ** 0.5, (-(2**70)) ** 0.5] }
+t('rational') { [2 ** Rational(1, 2), 4 ** Rational(1, 2), 2 ** Rational(3)] }
+t('complex') { [2 ** Complex(1, 1), 2 ** Complex(2, 0)] }
+t('coerce') { o = Object.new; def o.coerce(x) = [x, 3]; 2 ** o }
+t('bad') { 2 ** ""x"" }
+t('big exp') { [1 ** (2**70), (-1) ** (2**70), 0 ** (2**70)] }
+t('big neg exp') { [2 ** -(2**70)] }
+t('pow') { [3.pow(5), 3.pow(-2), 3.pow(5, 7), (2**70).pow(2)] }
+t('method') { [3.method(:**).arity, 2.method(:**).owner] }
+", @"
+int: [243, 4611686018427387904, 18446744073709551616, 1, 1, -8, 100000000000000000000]
+neg: [(1/9), 1, -1, 1, (1/2), (1/1180591620717411303424), (-1/27)]
+zero neg: [ZeroDivisionError, ""divided by 0""]
+float: [1.7320508075688772, 2.0, Infinity, 0.0, 1.0, Infinity, 4.0, (1.0000000000000002+1.7320508075688772i), (NaN+NaN*i), 34359738368.0, (0.0+34359738368.0i)]
+rational: [1.4142135623730951, 2.0, (8/1)]
+complex: [(1.5384778027279442+1.2779225526272695i), (4+0i)]
+coerce: 8
+bad: [TypeError, ""String can't be coerced into Integer""]
+big exp: [1, 1, 0]
+big neg exp: [ArgumentError, ""exponent is too large""]
+pow: [243, (1/9), 5, 1393796574908163946345982392040522594123776]
+method: [1, Integer]
+");
+        }
+
+        /// <summary>
+        /// Random::Formatter#random_number (SecureRandom's) with a range: an endless or beginless one is
+        /// Errno::EDOM, as random.c has it (it answered a Float in [0, 1)); a backwards one still falls back
+        /// to a Float, a non-numeric one is ArgumentError.
+        /// </summary>
+        public void Random_FormatterRanges1() {
+            TestOutput(@"
+require 'ruby4'
+require 'securerandom'
+[1.., ..1, 1.0.., (nil..nil), ('a'..), (1..0), (2..2), ('a'..'b')].each do |r|
+  begin
+    v = SecureRandom.random_number(r)
+    p [r, v.class]
+  rescue => e
+    p [r, e.class]
+  end
+end
+", @"
+[1.., Errno::EDOM]
+[..1, Errno::EDOM]
+[1.0.., Errno::EDOM]
+[nil..nil, Errno::EDOM]
+[""a"".., Errno::EDOM]
+[1..0, Float]
+[2..2, Integer]
+[""a""..""b"", ArgumentError]
+");
+        }
+
+        /// <summary>
+        /// The URI parser IronRuby patches (its \g calls written out) has MRI's constants and no others: the
+        /// pieces the patch builds its host pattern from were public constants of URI::RFC3986_Parser.
+        /// </summary>
+        public void URI_PatchedParserConstants1() {
+            TestOutput(@"
+require 'ruby4'
+require 'uri'
+p URI::RFC3986_Parser.constants.sort
+p URI('http://[::1.2.3.4]:80/x').host, URI('http://10.0.0.255/').host, URI('//[v1.x]/').host
+", @"
+[:FRAGMENT, :HOST, :RFC3986_URI, :RFC3986_relative_ref, :SCHEME, :SEG, :SEG_NC, :USERINFO]
+""[::1.2.3.4]""
+""10.0.0.255""
+""[v1.x]""
+");
+        }
+
+        /// <summary>
+        /// Two corners of ruby4.rb's Ruby versions of what MRI writes in C: ObjectSpace::WeakKeyMap is not
+        /// Marshal-able (it dumped its table), and String#each_line's enumerator shows the chomp: it was given
+        /// even when it is false (it left `(chomp: false)` out).
+        /// </summary>
+        public void Ruby4_WeakKeyMapMarshalEachLine1() {
+            TestOutput(@"
+require 'ruby4'
+m = ObjectSpace::WeakKeyMap.new
+m['k'] = 1
+begin; Marshal.dump(m); rescue TypeError => e; p e.message; end
+p m.respond_to?(:marshal_dump)
+p ""a\nb"".each_line(chomp: false), ""a\nb"".each_line(chomp: true), ""a"".each_line, ""a"".each_line('x', chomp: true)
+p ""a\nb"".each_line(chomp: false).to_a, ""a\nb"".each_line(chomp: true).to_a
+", @"
+""no _dump_data is defined for class ObjectSpace::WeakKeyMap""
+false
+#<Enumerator: ""a\nb"":each_line(chomp: false)>
+#<Enumerator: ""a\nb"":each_line(chomp: true)>
+#<Enumerator: ""a"":each_line>
+#<Enumerator: ""a"":each_line(""x"", chomp: true)>
+[""a\n"", ""b""]
+[""a"", ""b""]
+");
+        }
+
+        /// <summary>
+        /// Range#min, #max, #include? and #member? in C#, with what they hand the prelude: an Integer or Float
+        /// range answered from its endpoints, Strings, blocks, counts, endless and beginless ranges, a break
+        /// from the block and a subclass's own #max. The expected output is CRuby's.
+        /// </summary>
+        // Integer#step over Fixnums loops in C# (Integer.cs); everything else is the prelude's.
+        // MatchData#string keeps a String subclass and answers a frozen subject itself.
+        public void Integer_StepMatchString1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+def c(*args, **kw); a = []; r = 1.step(*args, **kw) { |v| a << v }; [r, a]; end
+t('fixnum') { [c(10), c(10, 3), c(0), [10.step(1, -4) { }, 7.step(1, -4).to_a]] }
+t('break') { [1.step(100) { |v| break v * 2 if v == 7 }, 1.step(100, 2) { |v| break :x if v > 7 }] }
+def m; 1.step(100) { |v| return v if v == 3 }; :no; end
+t('return') { m }
+t('edges') { a = []; (2**31-3).step(2**31-1, 5) { |v| a << v }; (-2**31+2).step(-2**31, -7) { |v| a << v }; (2**31-2).step(2**31-1) { |v| a << v }; a }
+t('kw') { [c(by: 2, to: 9), c(9, by: 4), c(2.0, 0.5), c(2, 0.5)] }
+t('bignum') { a = []; (2**70).step(2**70+2) { |v| a << v }; a }
+t('enum') { [1.step(10).class, 1.step(10, 3).to_a, 1.step(by: 2).first(2), 1.step(10).size, 1.step(3).map { |x| x * 2 }] }
+t('zero') { 1.step(10, 0) { } }
+t('zero enum') { 1.step(10, 0) }
+t('string step') { 1.step(10, ""x"") { } }
+t('arity') { 1.step(1, 2, 3) { } }
+t('unknown kw') { 1.step(foo: 1) { } }
+t('twice') { 1.step(3, to: 4) { } }
+class S < String; end
+t('md subclass') { m = /b/.match(S.new(""abc"")); [m.string.class, m.string.frozen?] }
+t('md frozen') { f = ""xyz"".freeze; [/y/.match(f).string.equal?(f), (f =~ /z/; $~.string.equal?(f))] }
+t('md mutated') { s = +""abc""; m = s.match(/b/); s << ""d""; [m.string, m.pre_match, m.post_match, m.string.frozen?] }
+", @"
+fixnum: [[1, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], [1, [1, 4, 7, 10]], [1, []], [10, [7, 3]]]
+break: [14, :x]
+return: 3
+edges: [2147483645, -2147483646, 2147483646, 2147483647]
+kw: [[1, [1, 3, 5, 7, 9]], [1, [1, 5, 9]], [1, [1.0, 1.5, 2.0]], [1, [1.0, 1.5, 2.0]]]
+bignum: [1180591620717411303424, 1180591620717411303425, 1180591620717411303426]
+enum: [Enumerator::ArithmeticSequence, [1, 4, 7, 10], [1, 3], 10, [2, 4, 6]]
+zero: [ArgumentError, ""step can't be 0""]
+zero enum: [ArgumentError, ""step can't be 0""]
+string step: [ArgumentError, ""comparison of String with 0 failed""]
+arity: [ArgumentError, ""wrong number of arguments (given 3, expected 0..2)""]
+unknown kw: [ArgumentError, ""unknown keyword: :foo""]
+twice: [ArgumentError, ""to is given twice""]
+md subclass: [S, true]
+md frozen: [true, true]
+md mutated: [""abc"", ""a"", ""c"", true]
+");
+        }
+
+        public void Range_MinMaxInclude1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+t('max') { [(1..10).max, (1...10).max, (5..1).max, (1...1).max, (1..1).max, ('a'..'e').max, ('a'...'e').max, (1.0..2.5).max, (1..2.5).max, (..5).max, (...5).max] }
+t('min') { [(1..10).min, (1...10).min, (5..1).min, (1...1).min, ('a'..'e').min, (1.5..3).min, (1..).min] }
+t('max n') { [(1..10).max(3), (1...10).max(2), (1..10).min(3), ('a'..'e').max(2), (..5).max(2)] }
+t('max block') { [(1..10).max { |a, b| b <=> a }, (1..10).min { |a, b| b <=> a }, (1..10).max(2) { |a, b| b <=> a }] }
+t('break') { (1..10).max { |a, b| break :brk } }
+t('endless max') { (1..).max }
+t('beginless min') { (..5).min }
+t('float excl max') { (1.0...2.0).max }
+t('minmax') { [(1..10).minmax, (1..10).minmax { |a, b| b <=> a }] }
+t('include') { r = (1..10); [r.include?(5), r.include?(10), (1...10).include?(10), r.include?(0), r.include?(5.5), r.member?(3), r.include?(""a""), (1.0..2.0).include?(1.5), (1.0...2.0).include?(2), (1..2.0).include?(2), (1.0..2.0).include?(Float::NAN), (1..Float::INFINITY).include?(10**30)] }
+t('include str') { [('a'..'z').include?('m'), ('a'..'z').include?('cc'), ('a'..'z').member?('z')] }
+r = ('a'..'z'); x = ('a'...'z'); d = ('0'..'9'); w = ('A'..'z')
+p [r.include?('m'), r.include?('a'), r.include?('z'), x.include?('z'), r.include?('cc'), r.include?(''), r.include?('A'), r.member?('q'), d.include?('5'), w.include?('_'), w.include?('['), ('z'..'a').include?('m'), r.include?(""é""), ('a'..'e').include?(:c), r.include?('m'.b), Class.new(String).new('k').then { |s| r.include?(s) }, ('a'..'zz').include?('cc'), ('aa'..'b').include?('az')]
+t('include endless') { [(1..).include?(10**20), (..5).include?(3), (1..nil).include?(0)] }
+t('include obj') { (Time.at(0)..Time.at(10)).include?(Time.at(5)) }
+t('include beginless str') { (..'z').include?('a') }
+t('case') { case 5 when 1..3 then :a when 4..6 then :b end }
+t('sub') { Class.new(Range) { def max; :mine; end }.new(1, 3).max }
+t('respond') { [(1..2).respond_to?(:__max__), (1..2).respond_to?(:include?), Range.instance_method(:max).arity, Range.instance_method(:include?).arity] }
+", @"
+max: [10, 9, nil, nil, 1, ""e"", ""d"", 2.5, 2.5, 5, 4]
+min: [1, 1, nil, nil, ""a"", 1.5, 1]
+max n: [[10, 9, 8], [9, 8], [1, 2, 3], [""e"", ""d""], [5, 4]]
+max block: [1, 10, [1, 2]]
+break: :brk
+endless max: [RangeError, ""cannot get the maximum of endless range""]
+beginless min: [RangeError, ""cannot get the minimum of beginless range""]
+float excl max: [TypeError, ""cannot exclude non Integer end value""]
+minmax: [[1, 10], [10, 1]]
+include: [true, true, false, false, true, true, false, true, false, true, false, true]
+include str: [true, false, true]
+[true, true, true, false, false, false, false, true, true, true, true, false, false, false, true, true, true, false]
+include endless: [true, true, false]
+include obj: true
+include beginless str: [TypeError, ""cannot determine inclusion in beginless/endless ranges""]
+case: :b
+sub: :mine
+respond: [false, true, -1, 1]
+");
+        }
+
+        /// <summary>
+        /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
+        /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
+        /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the
+        /// end runs the methods specialized). Arity errors name the positionals and required keywords as
+        /// MRI does, and #parameters lists required keywords first. The expected output is CRuby's.
+        /// </summary>
+        public void Method_OptionalAndKeywordParameters1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+def m1(a, b = 2, k: 3) = [a, b, k]
+def m2(a, b = 2, c = a + b, k: 3, j:) = [a, b, c, k, j]
+def m3(a, b = {x: 1}, **kw) = [a, b, kw]
+def m4(b = 1, k: 2) = [b, k]
+def m5(a, b = nil, exception: true) = [a, b, exception]
+t(1) { [m1(1), m1(1, 5), m1(1, k: 9), m1(1, 5, k: 9)] }
+t(2) { m1(1, {k: 9}) }
+t(3) { m1(1, 5, {k: 9}) }
+t(4) { m1(1, 5, 6) }
+t(5) { m1(k: 1) }
+t(6) { m1() }
+t(7) { m1(1, z: 2) }
+t(8) { [m2(1, j: 0), m2(1, 4, j: 0), m2(1, 4, 5, j: 0, k: 7)] }
+t(9) { m2(1, 4) }
+t(10) { m2(1, 4, 5, 6, j: 0) }
+t(11) { [m3(1), m3(1, z: 2), m3(1, {y: 2}), m3(1, {y: 2}, z: 3), m3(1, **{})] }
+t(12) { h = {k: 7}; [m1(1, **h), m1(1, 2, **h), m4, m4(5), m4(k: 6), m4(5, k: 6), m4({k: 6})] }
+t(13) { [m5(1), m5(""1"", 16), m5(1, exception: false), m5(1, 2, exception: false)] }
+t(14) { [method(:m1).arity, method(:m2).arity, method(:m3).arity, method(:m4).arity, method(:m1).parameters, method(:m2).parameters] }
+class P; def s(a, b = 2, k: 3) = [:p, a, b, k]; end
+class C < P; def s(a, b = 5, k: 4); super; end; end
+class D < P; def s(a, b = 5, k: 4); b = 9; k = 8; super; end; end
+t(15) { [C.new.s(1), C.new.s(1, 2), C.new.s(1, k: 0), D.new.s(1)] }
+def nil_kw(a, b = 1, k: 2) = [a, b, k]
+t(16) { [nil_kw(1, nil), nil_kw(nil), nil_kw(1, nil, k: nil)] }
+t(18) { send(:m1, 1, k: 4) }
+t(19) { method(:m1).call(1, k: 4) }
+t(20) { pr = method(:m1).to_proc; [pr.(1), pr.(1, k: 2)] }
+o = Object.new
+def o.each_pair(x = 1, sep: "",""); ""#{x}#{sep}""; end
+t(21) { [o.each_pair, o.each_pair(2), o.each_pair(sep: "";""), o.each_pair(3, sep: ""|"")] }
+def opt_hash_default(a, b = {}, k: 1) = [a, b, k]
+t(22) { [opt_hash_default(1), opt_hash_default(1, {z: 1}), opt_hash_default(1, k: 2)] }
+1000.times { m1(1, k: 2); m1(1); m1(1, 2) }
+t(23) { [m1(1), m1(1, 5), m1(1, k: 9), m1(1, 5, k: 9)] }
+# every case again after the JIT has specialized the methods
+def n1(a, b = 2, k: 3) = [a, b, k]
+def n2(a, b = 2, c = 7, k: 3, j:) = [a, b, c, k, j]
+def n4(b = 1, k: 2) = [b, k]
+def m6(a, b = 1.5, k: :x) = [a, b, k]
+def mi(a, b = 2, k: 3) = a + b + k
+r = nil
+3000.times do |i|
+  r = [n1(1), n1(1, 5), n1(1, k: 9), n1(1, 5, k: 9), n2(1, j: 0), n2(1, 4, j: 0), n2(1, 4, 5, j: 0, k: 7),
+       m4, n4(5), n4(k: 6), n4(5, k: 6), n4({k: 6}), m6(1), m6(1, 2.5), m6(1, k: :y), mi(1), mi(1, 2, k: 4), mi(i, k: i)]
+end
+p r
+t(1) { n1(k: 1) }
+t(2) { n1(1, {k: 9}) }
+t(3) { n1(1, 5, 6) }
+t(4) { n1(1, z: 2) }
+t(5) { n2(1, 4) }
+t(6) { mi(1, ""x"") }
+t(7) { mi(""a"", k: 1) }
+t(8) { n1({k: 1}) }
+t(9) { n4({k: 6}, k: 1) }
+def kwreq_order(a, k: 1, j:) = 1
+t(24) { method(:kwreq_order).parameters }
+def mand_only(a, k: 1) = 1
+t(25) { [(mand_only rescue $!.message), (mand_only(1, 2) rescue $!.message)] }
+", @"
+1: [[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9]]
+2: [1, {k: 9}, 3]
+3: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+4: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+5: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+6: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+7: [ArgumentError, ""unknown keyword: :z""]
+8: [[1, 2, 3, 3, 0], [1, 4, 5, 3, 0], [1, 4, 5, 7, 0]]
+9: [ArgumentError, ""missing keyword: :j""]
+10: [ArgumentError, ""wrong number of arguments (given 4, expected 1..3; required keyword: j)""]
+11: [[1, {x: 1}, {}], [1, {x: 1}, {z: 2}], [1, {y: 2}, {}], [1, {y: 2}, {z: 3}], [1, {x: 1}, {}]]
+12: [[1, 2, 7], [1, 2, 7], [1, 2], [5, 2], [1, 6], [5, 6], [{k: 6}, 2]]
+13: [[1, nil, true], [""1"", 16, true], [1, nil, false], [1, 2, false]]
+14: [-2, -3, -2, -1, [[:req, :a], [:opt, :b], [:key, :k]], [[:req, :a], [:opt, :b], [:opt, :c], [:keyreq, :j], [:key, :k]]]
+15: [[:p, 1, 5, 4], [:p, 1, 2, 4], [:p, 1, 5, 0], [:p, 1, 9, 8]]
+16: [[1, nil, 2], [nil, 1, 2], [1, nil, nil]]
+18: [1, 2, 4]
+19: [1, 2, 4]
+20: [[1, 2, 3], [1, 2, 2]]
+21: [""1,"", ""2,"", ""1;"", ""3|""]
+22: [[1, {}, 1], [1, {z: 1}, 1], [1, {}, 2]]
+23: [[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9]]
+[[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9], [1, 2, 7, 3, 0], [1, 4, 7, 3, 0], [1, 4, 5, 7, 0], [1, 2], [5, 2], [1, 6], [5, 6], [{k: 6}, 2], [1, 1.5, :x], [1, 2.5, :x], [1, 1.5, :y], 6, 7, 6000]
+1: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+2: [1, {k: 9}, 3]
+3: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+4: [ArgumentError, ""unknown keyword: :z""]
+5: [ArgumentError, ""missing keyword: :j""]
+6: [TypeError, ""String can't be coerced into Integer""]
+7: [TypeError, ""no implicit conversion of Integer into String""]
+8: [{k: 1}, 2, 3]
+9: [{k: 6}, 1]
+24: [[:req, :a], [:keyreq, :j], [:key, :k]]
+25: [""wrong number of arguments (given 0, expected 1)"", ""wrong number of arguments (given 2, expected 1)""]
+");
+        }
+
+        /// <summary>
+        /// Kernel#Integer and #Float in C# (the cases they answer themselves and the ones they hand to
+        /// the prelude), Integer#round/floor/ceil/truncate of a Fixnum in long arithmetic, Range#first
+        /// and #last without a count, the lazily inspected ArithmeticSequence, and the Float loop of
+        /// #step in C#, break and return included. The expected output is CRuby's.
+        /// </summary>
+        public void Kernel_ConversionsRoundingStep1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+t('Integer nil radix') { Integer(""10"", nil) }
+t('Integer float radix') { [Integer(""10"", 8.9), Integer(""z"", 8.9, exception: false)] }
+o = Object.new; def o.to_int; 16; end
+t('Integer to_int radix') { Integer(""ff"", o) }
+t('Integer radix non-string') { [Integer(12, 16, exception: false), (Integer(12, 16) rescue $!.message)] }
+t('Integer nil') { [Integer(nil, exception: false), (Integer(nil) rescue $!.message)] }
+t('Integer 3 args') { Integer(""1"", 2, 3) }
+t('Integer 4 args') { Integer(""1"", 2, 3, 4) }
+t('Float 2 args') { Float(1, 2) }
+t('Integer unknown keyword') { Integer(""1"", foo: 1) }
+t('Float unknown keyword') { Float(""1"", foo: 1) }
+t('Integer braced hash') { Integer(""1"", {exception: false}) }
+t('arity') { [method(:Integer).arity, method(:Float).arity] }
+t('Integer values') { [Integer(4.7), Integer(-4.7), Integer(1e30), Integer(2**70), Integer(""0x1f""), Integer(""1_000""), Integer("" 42 "")] }
+t('Integer failures') { [Integer(Float::NAN, exception: false), (Integer(Float::NAN) rescue $!.class), Integer(""zz"", exception: false), Integer(""zz"", 36)] }
+t('Float values') { [Float(1), Float(2**70), Float(""1.5""), Float(""x"", exception: false), Float(nil, exception: false), (Float(nil) rescue $!.class), Float(""1e3""), (Float("""") rescue $!.class)] }
+f = 1.5
+t('Float identity') { Float(f).equal?(f) }
+t('Kernel.') { [Kernel.Integer(""7""), Kernel.Float(""1"")] }
+t('bad exception') { Integer(""1"", exception: 1) }
+t('true radix') { Integer(""1"", true) }
+t('utf16') { Integer(""12"".encode(""UTF-16LE""), exception: false) }
+t('to_i') { r = Object.new; def r.to_i; 3; end; [Integer(r), Integer(Rational(7, 2)), Float(Rational(7, 2))] }
+t('round') { [12345.round(-2), 12350.round(-2), -12350.round(-2), 12350.round(-2, half: :even), 12350.round(-2, half: :down), 25.round(-1, half: :even), 2147483647.round(-9), -2147483648.floor(-9), 5.ceil(-18), 5.ceil(-19), -5.floor(-19), 5.round(-25), 12345.truncate(-3), -12345.truncate(-3), 7.round(2)] }
+t('round as a hash key') { {-3000000000 => :hit}[-2147483648.floor(-9)] }
+t('first/last') { [(1..10).first, (1...10).last, (1..10).first(3), (1..10).last(3), (..5).last(2), (...5).last(3), ('a'..'e').last(2)] }
+t('beginless first') { (..5).first }
+t('endless last') { (1..).last }
+t('step inspect') { r = (1..10); [(r % 3).inspect, r.step(3).inspect, r.step.inspect, 1.step(10, 3).inspect, 1.step(by: 2, to: 5).inspect, 1.0.step(2.0, 0.5).inspect, (r % 3).to_a] }
+t('float step') { a = []; 1.0.step(2.0, 0.3) { |x| a << x }; 2.0.step(1.0, -0.5) { |x| a << x }; (1.0...2.0).step(0.5) { |x| a << x }; a }
+t('float step break') { [1.0.step(2.0, 0.5) { |x| break x * 10 if x > 1.2 }, 1.0.step(2.0, 0.5) { }, (1.0..2.0).step(0.5).map { |x| x * 2 }] }
+def float_step_return; 1.0.step(5.0, 1.0) { |x| return x if x == 3.0 }; :no; end
+t('float step return') { float_step_return }
+", @"
+Integer nil radix: [TypeError, ""no implicit conversion from nil to integer""]
+Integer float radix: [8, nil]
+Integer to_int radix: 255
+Integer radix non-string: [nil, ""base specified for non string value""]
+Integer nil: [nil, ""can't convert nil into Integer""]
+Integer 3 args: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+Integer 4 args: [ArgumentError, ""wrong number of arguments (given 4, expected 1..2)""]
+Float 2 args: [ArgumentError, ""wrong number of arguments (given 2, expected 1)""]
+Integer unknown keyword: [ArgumentError, ""unknown keyword: :foo""]
+Float unknown keyword: [ArgumentError, ""unknown keyword: :foo""]
+Integer braced hash: [TypeError, ""no implicit conversion of Hash into Integer""]
+arity: [-2, -2]
+Integer values: [4, -4, 1000000000000000019884624838656, 1180591620717411303424, 31, 1000, 42]
+Integer failures: [nil, FloatDomainError, nil, 1295]
+Float values: [1.0, 1.1805916207174113e+21, 1.5, nil, nil, TypeError, 1000.0, ArgumentError]
+Float identity: true
+Kernel.: [7, 1.0]
+bad exception: [ArgumentError, ""expected true or false as exception: 1""]
+true radix: [TypeError, ""no implicit conversion of true into Integer""]
+utf16: [Encoding::CompatibilityError, ""ASCII incompatible encoding: UTF-16LE""]
+to_i: [3, 3, 3.5]
+round: [12300, 12400, -12400, 12400, 12300, 20, 2000000000, -3000000000, 1000000000000000000, 10000000000000000000, -10000000000000000000, 0, 12000, -12000, 7]
+round as a hash key: :hit
+first/last: [1, 10, [1, 2, 3], [8, 9, 10], [4, 5], [2, 3, 4], [""d"", ""e""]]
+beginless first: [RangeError, ""cannot get the first element of beginless range""]
+endless last: [RangeError, ""cannot get the last element of endless range""]
+step inspect: [""((1..10).%(3))"", ""((1..10).step(3))"", ""((1..10).step)"", ""(1.step(10, 3))"", ""(1.step(by: 2, to: 5))"", ""(1.0.step(2.0, 0.5))"", [1, 4, 7, 10]]
+float step: [1.0, 1.3, 1.6, 1.9, 2.0, 1.5, 1.0, 1.0, 1.5]
+float step break: [15.0, 1.0, [2.0, 3.0, 4.0]]
+float step return: 3.0
+");
         }
 
         /// <summary>
@@ -3686,7 +5325,7 @@ last ""a""..""e"" 2: [""d"", ""e""]
 first 1..3.5 2: [1, 2]
 last 1..3.5 2: [2, 3]
 first ..5 2: ""RangeError: cannot get the first element of beginless range""
-last ..5 2: ""TypeError: can't iterate from NilClass""
+last ..5 2: [4, 5]
 sub first: [:x]
 sub last: [9, 10]
 big last: [999999998, 999999999, 1000000000]
@@ -3916,6 +5555,239 @@ ivars on frozen string: nil
 ivar on integer receiver via instance_exec: nil
 autoload const: ""LoadError: cannot load such file -- /nonexistent/thing""
 tracepoint ctor: [[:call, :initialize], [:return, :initialize], [:call, :x], [:return, :x]]
+");
+        }
+
+        /// <summary>
+        /// BigDecimal against CRuby 4.0's bigdecimal 4.0.1: a Rational operand of a comparison is expanded as
+        /// for arithmetic (== used to recurse through Rational#== until the stack overflowed), #power and #**
+        /// take any real exponent and a precision, round takes half:, and a BigDecimal is frozen and has no
+        /// public constructor.
+        /// </summary>
+        public void BigDecimal_Ruby4_1() {
+            TestOutput(@"
+require 'ruby4'
+require 'bigdecimal'
+def t(label)
+  r = begin; v = yield; v.is_a?(BigDecimal) ? v.to_s : v.inspect; rescue => e; ""#{e.class}: #{e.message}""; end
+  puts ""#{label}: #{r}""
+end
+t('==') { BigDecimal('0.5') == Rational(1, 2) }
+t('<=>') { BigDecimal('0.5') <=> Rational(1, 3) }
+t('r+') { Rational(1, 3) + BigDecimal('0.5') }
+t('div') { BigDecimal('1').div(Rational(1, 3), 5) }
+t('power') { BigDecimal('2').power(BigDecimal('0.5'), 20) }
+t('**') { BigDecimal('4') ** Rational(1, 2) }
+t('round') { BigDecimal('1.25').round(1, half: :even) }
+t('quo') { BigDecimal('1').quo(3, 5) }
+t('sqrt') { BigDecimal('-2').sqrt(10) }
+t('frozen') { BigDecimal('1').frozen? }
+t('new') { BigDecimal.new('1') }
+t('allocate') { BigDecimal.allocate }
+t('_dump') { BigDecimal('1.5')._dump }
+t('BASE') { BigDecimal::BASE.class }
+z = %w[-0 0 NaN Infinity -Infinity 1.5].map { |s| BigDecimal(s) }
+t('specials') { z.product(z).map { |x, y| [x + y, x * y, x / y, x <=> y].map { |v| v.is_a?(BigDecimal) && v.zero? ? v.sign : v.to_s } }.flatten.join(',') }
+t('x/inf raises') { BigDecimal.save_exception_mode { BigDecimal.mode(BigDecimal::EXCEPTION_INFINITY, true); BigDecimal('1') / BigDecimal('Infinity') } }
+", @"
+==: true
+<=>: 1
+r+: 0.83333333333333333333333333333333e0
+div: 0.3e1
+power: 0.14142135623730950488e1
+**: 0.2e1
+round: 0.12e1
+quo: 0.33333e0
+sqrt: FloatDomainError: sqrt of negative value
+frozen: true
+new: NoMethodError: undefined method 'new' for class BigDecimal
+allocate: TypeError: allocator undefined for BigDecimal
+_dump: ""18:0.15e1""
+BASE: Integer
+specials: ""-1,1,NaN,0,1,-1,NaN,0,NaN,NaN,NaN,,Infinity,NaN,-1,-1,-Infinity,NaN,1,1,0.15e1,-1,-1,-1,1,-1,NaN,0,1,1,NaN,0,NaN,NaN,NaN,,Infinity,NaN,1,-1,-Infinity,NaN,-1,1,0.15e1,1,1,-1,NaN,NaN,NaN,,NaN,NaN,NaN,,NaN,NaN,NaN,,NaN,NaN,NaN,,NaN,NaN,NaN,,NaN,NaN,NaN,,Infinity,NaN,-Infinity,1,Infinity,NaN,Infinity,1,NaN,NaN,NaN,,Infinity,Infinity,NaN,0,NaN,-Infinity,NaN,1,Infinity,Infinity,Infinity,1,-Infinity,NaN,Infinity,-1,-Infinity,NaN,-Infinity,-1,NaN,NaN,NaN,,NaN,-Infinity,NaN,-1,-Infinity,Infinity,NaN,0,-Infinity,-Infinity,-Infinity,-1,0.15e1,-1,-Infinity,1,0.15e1,1,Infinity,1,NaN,NaN,NaN,,Infinity,Infinity,1,-1,-Infinity,-Infinity,-1,1,0.3e1,0.225e1,0.1e1,0""
+x/inf raises: FloatDomainError: Computation results in 'Infinity'
+");
+        }
+
+        /// <summary>
+        /// The BigDecimal engine (sign, BigInteger digits and exponent) against CRuby 4.0's bigdecimal 4.0.1:
+        /// Float conversion as MRI's dtoa does it (shortest digits cut to 16; mode 2's rounding quirk),
+        /// parsing, to_s formats, round's ROUND_UP quirk, BigDecimal.limit, division precision, divmod and
+        /// remainder, the exception modes, precision/scale, sqrt's Newton iteration, and an exponent beyond Int32.
+        /// </summary>
+        public void BigDecimal_Engine1() {
+            TestOutput(@"
+require 'ruby4'
+require 'bigdecimal'
+def t(label)
+  r = begin; v = yield; v.is_a?(BigDecimal) ? v.to_s : v.inspect; rescue => e; ""#{e.class}: #{e.message}""; end
+  puts ""#{label}: #{r}""
+end
+t('float') { [BigDecimal(0.1 + 0.2), BigDecimal(2.0**70), BigDecimal(1.25, 2), BigDecimal(4.383733694592053e-09, 14)].join(' ') }
+t('float+') { BigDecimal('1') + (0.1 + 0.2) }
+t('parse') { %w[1_000 1_ 5. .5 1e5 1E-5 1d2 +1.5 -0].map { |s| BigDecimal(s).to_s }.join(' ') }
+t('parse spaces') { BigDecimal(""  1.5  \n"") }
+t('invalid') { %w[_1 1__2 1.5x 1e . 1e_5].map { |s| BigDecimal(s, exception: false).inspect }.join(' ') }
+t('loose') { ['1.5x', '_1', '1 2', '12e', '0x1f'].map { |s| BigDecimal.interpret_loosely(s).to_s }.join(' ') }
+t('huge exponent') { [BigDecimal('1e3000000000').exponent, (BigDecimal('1e3000000000') * BigDecimal('1e3000000000')).exponent].inspect }
+t('exponent overflow') { BigDecimal('1e99999999999999999999') }
+t('to_s') { [BigDecimal('-1234567.891').to_s('3F'), BigDecimal('0.000123').to_s('+2F'), BigDecimal('1234.5').to_s(' 2E'), BigDecimal('1e10').to_s('F')].inspect }
+t('to_s 0') { BigDecimal('1').to_s(0) }
+t('round up') { [BigDecimal('0.04').round(-1, :up), BigDecimal('0.0004').round(1, :up), BigDecimal('-0.04').round(1)].join(' ') }
+t('round modes') { %w[up down half_up half_down half_even ceiling floor].map { |m| BigDecimal('-2.5').round(0, m.to_sym).to_s }.join(' ') }
+t('round nil') { BigDecimal('1.5').round(nil) }
+t('round string mode') { BigDecimal('1.5').round(0, 'up') }
+t('limit') { BigDecimal.save_limit { BigDecimal.limit(5); [BigDecimal('1.23456789') + 1, BigDecimal('1') / 3, BigDecimal('1.23456789') * 1, BigDecimal('1.23456789').add(0, 3)].join(' ') } }
+t('div') { [BigDecimal('1') / 3, BigDecimal('1').div(3, 5), BigDecimal('2').div(3, 0), BigDecimal('7').div(2), BigDecimal('-7').divmod(2)].map(&:to_s).join(' ') }
+t('remainder') { [BigDecimal('-7').remainder(2), BigDecimal('7') % -2, BigDecimal('1e100') % 3].join(' ') }
+t('mode') { BigDecimal.save_exception_mode { BigDecimal.mode(BigDecimal::EXCEPTION_INFINITY, true); BigDecimal.mode(BigDecimal::EXCEPTION_NaN) } }
+t('divmod nan mode') { BigDecimal.save_exception_mode { i = BigDecimal('-Infinity'); BigDecimal.mode(BigDecimal::EXCEPTION_NaN, true); i.divmod(1) } }
+t('precision') { %w[0 1e20 1e-20 123.456 -0.001].map { |s| x = BigDecimal(s); [x.precision, x.scale, x.n_significant_digits, x.exponent] }.inspect }
+t('shift') { [BigDecimal('1.5')._decimal_shift(3), BigDecimal('1.5')._decimal_shift(-12)].join(' ') }
+t('sqrt') { [BigDecimal('2').sqrt(20), BigDecimal('4').sqrt(0), BigDecimal('0.01').sqrt(5)].join(' ') }
+t('sqrt down') { BigDecimal.save_rounding_mode { BigDecimal.mode(BigDecimal::ROUND_MODE, :down); [BigDecimal('2').sqrt(10), BigDecimal('16').sqrt(3)].join(' ') } }
+t('frac fix') { [BigDecimal('-1.5').frac, BigDecimal('-0.5').fix, BigDecimal('12').frac, BigDecimal('123.456').fix].join(' ') }
+t('to_f') { [BigDecimal('1e400').to_f, BigDecimal('-1e-400').to_f, BigDecimal('0.1').to_f].inspect }
+t('to_i') { [BigDecimal('-12.9').to_i, BigDecimal('1e20').to_i, BigDecimal('0.5').to_i].inspect }
+t('hash') { [BigDecimal('0.1').hash == BigDecimal('0.10').hash, BigDecimal('1').eql?(BigDecimal('1.0'))].inspect }
+t('coerce') { BigDecimal('1').add('x', 3) }
+t('kernel') { [BigDecimal(Rational(1, 3), 0), BigDecimal(Complex(2, 0)), BigDecimal(nil, exception: false).inspect].join(' ') }
+t('precision too large') { BigDecimal(1.5, 17) }
+t('exception kwarg') { BigDecimal('1', exception: 1) }
+t('identity') { a = BigDecimal('1.5'); [a.equal?(BigDecimal('1.50')), a.equal?(a), { a => 1 }[BigDecimal('1.50')]] }
+", @"
+float: ""0.3e0 0.1180591620717411e22 0.12e1 0.4383733694592e-8""
+float+: 0.13e1
+parse: ""0.1e4 0.1e1 0.5e1 0.5e0 0.1e6 0.1e-4 0.1e3 0.15e1 -0.0""
+parse spaces: 0.15e1
+invalid: ""nil nil nil nil nil nil""
+loose: ""0.15e1 0.0 0.1e1 0.12e2 0.0""
+huge exponent: ""[3000000001, 6000000001]""
+exponent overflow: Infinity
+to_s: ""[\""-1 234 567.891\"", \""+0.00 01 23\"", \"" 0.12 34 5e4\"", \""10000000000.0\""]""
+to_s 0: ArgumentError: argument must be positive
+round up: ""0.0 0.1e0 -0.0""
+round modes: ""-0.3e1 -0.2e1 -0.3e1 -0.2e1 -0.2e1 -0.2e1 -0.3e1""
+round nil: TypeError: no implicit conversion from nil to integer
+round string mode: TypeError: no implicit conversion of String into Integer
+limit: ""0.22346e1 0.33333e0 0.12346e1 0.123e1""
+div: ""0.33333333333333333333333333333333e0 0.33333e0 0.66666666666666666666666666666667e0 3 [-4, 0.1e1]""
+remainder: ""-0.1e1 -0.1e1 0.1e1""
+mode: 1
+divmod nan mode: FloatDomainError: Computation results in 'NaN' (Not a Number)
+precision: ""[[0, 0, 0, 0], [21, 0, 1, 21], [20, 20, 1, -19], [6, 3, 6, 3], [3, 3, 1, -2]]""
+shift: ""0.15e4 0.15e-11""
+sqrt: ""0.14142135623730950488e1 0.2e1 0.1e0""
+sqrt down: ""0.1414213562e1 0.4e1""
+frac fix: ""-0.5e0 -0.0 0.0 0.123e3""
+to_f: ""[Infinity, -0.0, 0.1]""
+to_i: ""[-12, 100000000000000000000, 0]""
+hash: ""[true, true]""
+coerce: TypeError: String can't be coerced into BigDecimal
+kernel: ""0.33333333333333333333333333333333e0 0.2e1 nil""
+precision too large: ArgumentError: precision too large.
+exception kwarg: ArgumentError: expected true or false as exception: 1
+identity: [false, true, 1]
+");
+        }
+
+        /// <summary>
+        /// Exponents at the ends of MRI's 64-bit range: a scale (the exponent less the digit count) below
+        /// long.MinValue, and a product or quotient beyond either end, underflow or overflow as bigdecimal
+        /// 4.0.1 does instead of wrapping around to a huge exponent of the other sign.
+        /// </summary>
+        public void BigDecimal_ExponentLimits1() {
+            TestOutput(@"
+require 'ruby4'
+require 'bigdecimal'
+def t(label)
+  r = begin; v = yield; v.is_a?(BigDecimal) ? v.to_s : v.inspect; rescue => e; ""#{e.class}: #{e.message}""; end
+  puts ""#{label}: #{r}""
+end
+tiny = BigDecimal('1e-9223372036854775800')
+t('pow') { BigDecimal('1e-5000000000000000000') ** 2 }
+t('mul') { tiny * BigDecimal('1e-100') }
+t('div') { tiny / BigDecimal('1e100') }
+t('mul over') { BigDecimal('1e9223372036854775700') * BigDecimal('1e1000') }
+t('underflow mode') { BigDecimal.save_exception_mode { BigDecimal.mode(BigDecimal::EXCEPTION_UNDERFLOW, true); tiny * BigDecimal('1e-100') } }
+t('underflow mode div') { BigDecimal.save_exception_mode { BigDecimal.mode(BigDecimal::EXCEPTION_UNDERFLOW, true); tiny / BigDecimal('1e100') } }
+t('parse') { [BigDecimal('0.123456e-9223372036854775805'), BigDecimal('0.1e-9223372036854775808'), BigDecimal('17e-9223372036854775809')].join(' ') }
+t('small ops') { x = BigDecimal('0.123456e-9223372036854775805'); [x / 3, x * 3, x + x, x.frac, BigDecimal('0.1e-9223372036854775807') / 10].join(' ') }
+t('small dump') { BigDecimal('0.123456e-9223372036854775805')._dump }
+", @"
+pow: 0.0
+mul: 0.0
+div: 0.0
+mul over: Infinity
+underflow mode: FloatDomainError: Exponent underflow
+underflow mode div: FloatDomainError: Exponent underflow
+parse: ""0.123456e-9223372036854775805 0.1e-9223372036854775808 0.0""
+small ops: ""0.41152e-9223372036854775806 0.370368e-9223372036854775805 0.246912e-9223372036854775805 0.123456e-9223372036854775805 0.1e-9223372036854775808""
+small dump: ""18:0.123456e-9223372036854775805""
+");
+        }
+
+        /// <summary>
+        /// BigDecimal#to_s and #split write a long digit string in pieces split at powers of ten (BigInteger.ToString
+        /// is quadratic); the pieces keep their leading zeros, at and around the split sizes.
+        /// </summary>
+        public void BigDecimal_LongDigits1() {
+            TestOutput(@"
+require 'ruby4'
+require 'bigdecimal'
+srand(3)
+ok = [1999, 2000, 2001, 4001, 9000, 20000].map do |d|
+  s = '1' + (1...d - 1).map { rand(10).to_s }.join + '7'
+  s[d / 3, d / 4] = '0' * (d / 4)
+  x = BigDecimal(""0.#{s}e3"")
+  [x.split[1] == s, x.to_s == ""0.#{s}e3"", x.to_s('F') == ""#{s[0, 3]}.#{s[3..]}"", (-x).to_s('5F').delete(' ') == ""-#{s[0, 3]}.#{s[3..]}""]
+end
+p ok.flatten.uniq
+p (BigDecimal('1e10000') + 1).to_s('F') == '1' + '0' * 9999 + '1.0'
+", @"
+[true]
+true
+");
+        }
+
+        /// <summary>
+        /// BasicObject#equal? is identity, separate from #== - a class whose == calls equal?
+        /// (Set#==) must not recurse through BaseEquals into its own ==.
+        /// </summary>
+        public void BasicObject_EqualIdentity1() {
+            TestOutput(@"
+# Set#== in set.rb (not loadable here: no prelude) has this shape
+class MySet
+  attr_reader :h
+  def initialize(*a); @h = {}; a.each { |x| @h[x] = true }; end
+  def ==(other); if self.equal?(other) then true elsif other.instance_of?(self.class) then @h == other.h else false end; end
+end
+class Eq; def ==(o); equal?(o); end; end
+class Str < String; def ==(o); equal?(o); end; end
+p MySet.new(1).equal?(MySet.new(1)), (s = MySet.new(1)).equal?(s), s == MySet.new(1)
+e = Eq.new; p e.equal?(e), e.equal?(Eq.new), e == e, e == Eq.new
+t = Str.new('a'); p t.equal?(t), t.equal?(Str.new('a')), 'a'.equal?('a')
+p 1.equal?(1), 1.5.equal?(1.5), :a.equal?(:a), nil.equal?(nil), true.equal?(true)
+p BasicObject.new.equal?(BasicObject.new)
+p BasicObject.instance_method(:equal?) == BasicObject.instance_method(:==)
+", @"
+false
+true
+true
+true
+false
+true
+false
+true
+false
+false
+true
+true
+true
+true
+true
+false
+true
 ");
         }
     }

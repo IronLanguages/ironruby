@@ -14,16 +14,12 @@
  * ***************************************************************************/
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Generation;
 using System.Globalization;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 
 namespace IronRuby.Builtins {
 
@@ -116,6 +112,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("binding")]
         public static Binding/*!*/ GetLocalScope(Proc/*!*/ self) {
+            if (self.IsIsolated) {
+                throw RubyExceptions.CreateArgumentError("Can't create Binding from isolated Proc");
+            }
             // a curried or composed proc has no Ruby scope of its own to hand out
             if (self.LocalScope.IsEmpty) {
                 throw RubyExceptions.CreateArgumentError("Can't create Binding from C level Proc");
@@ -206,9 +205,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region call, [],  ===, yield (TODO)
-        
-        // TODO: 1.9 yield: yield and call might have different semantics with respect to control-flow!
+        #region call, [],  ===, yield
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
@@ -219,6 +216,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1) {
             RubyOps.RequireLambdaArity(self, 1, arg1);
             return self.Call(block != null ? block.Proc : null, arg1);
@@ -226,6 +224,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1, object arg2) {
             RubyOps.RequireLambdaArity(self, 2, arg2);
             return self.Call(block != null ? block.Proc : null, arg1, arg2);
@@ -233,6 +232,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1, object arg2, object arg3) {
             RubyOps.RequireLambdaArity(self, 3, arg3);
             return self.Call(block != null ? block.Proc : null, arg1, arg2, arg3);
@@ -240,6 +240,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1, object arg2, object arg3, object arg4) {
             RubyOps.RequireLambdaArity(self, 4, arg4);
             return self.Call(block != null ? block.Proc : null, arg1, arg2, arg3, arg4);
@@ -247,6 +248,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object Call(BlockParam block, Proc/*!*/ self, params object[]/*!*/ args) {
             RubyOps.RequireLambdaArity(self, args.Length, args.Length > 0 ? args[args.Length - 1] : null);
             return self.CallN(block != null ? block.Proc : null, args);
@@ -374,6 +376,7 @@ namespace IronRuby.Builtins {
         /// arguments Proc.new was given.
         /// </summary>
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static object CreateNew(CallSiteStorage<Func<CallSite, object, Proc, RubyArray, object>>/*!*/ storage, 
             BlockParam block, RubyClass/*!*/ self, params object[]/*!*/ args) {
 

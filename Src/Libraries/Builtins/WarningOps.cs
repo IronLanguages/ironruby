@@ -63,7 +63,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("warn", RubyMethodAttributes.PublicInstance)]
         public static object Warn(RubyContext/*!*/ context, object self, object message,
-            [DefaultParameterValue(null)]Hash options) {
+            [Keywords, DefaultParameterValue(null)]Hash options) {
 
             MutableString str = message as MutableString;
             if (str == null) {

@@ -147,7 +147,7 @@ namespace IronRuby.Aot {
             for (int i = 0; i < paths.Length; i++) {
                 var unit = units[i] = _context.CreateFileUnit(paths[i]);
                 bool isMain = mainFile != null && paths[i] == Path.GetFullPath(mainFile);
-                var options = unitOptions[i] = new RubyCompilerOptions(_context.RubyOptions) { FactoryKind = isMain ? TopScopeFactoryKind.Main : TopScopeFactoryKind.File };
+                var options = unitOptions[i] = new RubyCompilerOptions() { FactoryKind = isMain ? TopScopeFactoryKind.Main : TopScopeFactoryKind.File };
                 asts[i] = IronRuby.Prism.PrismAstBridge.Parse(unit, options, ErrorSink.Default);
                 if (asts[i] == null) throw new InvalidOperationException("syntax error in " + paths[i]);
                 new ExtendWalker(extended).Walk(asts[i]);
@@ -361,6 +361,14 @@ namespace IronRuby.Aot {
             }
 
             protected override Expression VisitExtension(Expression node) {
+                // The frame a runtime-compiled lambda keeps its line in: saved code has its line table (and the frames
+                // ThreadFrameAdder adds, where another thread's backtrace needs them).
+                if (node is IronRuby.Compiler.Ast.CompiledFrameExpression frame) {
+                    return Visit(frame.Body);
+                }
+                if (node is IronRuby.Compiler.Ast.SourceLineMarker) {
+                    return Expression.Empty();
+                }
                 if (!node.CanReduce) {
                     throw new NotSupportedException("irreducible extension node " + node.GetType());
                 }
@@ -621,10 +629,19 @@ namespace IronRuby.Aot {
                     var postField = dispatcher.GetType().GetField("_postCount", BindingFlags.NonPublic | BindingFlags.Instance);
                     if (postField != null) postCount = (int)postField.GetValue(dispatcher);
                     int attributes = (int)(BlockSignatureAttributes)_dispatcherAttributes.GetValue(dispatcher);
-                    return Expression.Call(typeof(PrecompiledCode).GetMethod("CreateBlockDispatcher"),
+                    var args = new List<Expression> {
                         Expression.Constant(dispatcher.ParameterCount), Expression.Constant(postCount), Expression.Constant(attributes),
                         StringExpression(dispatcher.SourcePath), Expression.Constant(dispatcher.SourceLine),
-                        SerializeSignature(dispatcher.ParameterSignature));
+                        SerializeSignature(dispatcher.ParameterSignature)
+                    };
+                    // the locals of enclosing scopes the block uses, which Ractor.new checks
+                    if (dispatcher.OuterVariableNames != null) {
+                        args.Add(Strings(dispatcher.OuterVariableNames));
+                        args.Add(Strings(dispatcher.AssignedOuterVariableNames));
+                        args.Add(Strings(dispatcher.ReassignedOuterVariableNames));
+                    }
+                    return Expression.Call(typeof(PrecompiledCode).GetMethods()
+                        .Single(m => m.Name == "CreateBlockDispatcher" && m.GetParameters().Length == args.Count), args);
                 }
 
                 case RubySymbol symbol:
@@ -669,11 +686,21 @@ namespace IronRuby.Aot {
 
                 case InstanceVariableSite ivar:
                     hint = "ivar";
-                    return Expression.New(typeof(InstanceVariableSite).GetConstructor(new[] { typeof(string) }), Expression.Constant(ivar.Name));
+                    return Expression.New(typeof(InstanceVariableSite).GetConstructor(new[] { typeof(string), typeof(bool) }),
+                        Expression.Constant(ivar.Name), Expression.Constant(ivar.IsCoreLibrary));
 
                 case GlobalVariableSite gvar:
                     hint = "gvar";
-                    return Expression.New(typeof(GlobalVariableSite).GetConstructor(new[] { typeof(string) }), Expression.Constant(gvar.Name));
+                    return Expression.New(typeof(GlobalVariableSite).GetConstructor(new[] { typeof(string), typeof(bool) }),
+                        Expression.Constant(gvar.Name), Expression.Constant(gvar.IsCoreLibrary));
+
+                case ConstantSiteCache cache when cache.IsCoreLibrary:
+                    hint = "constcache";
+                    return Expression.New(typeof(ConstantSiteCache).GetConstructor(new[] { typeof(bool) }), Expression.Constant(true));
+
+                case ExpressionQualifiedConstantSiteCache cache when cache.IsCoreLibrary:
+                    hint = "constcache";
+                    return Expression.New(typeof(ExpressionQualifiedConstantSiteCache).GetConstructor(new[] { typeof(bool) }), Expression.Constant(true));
 
                 case ExpressionQualifiedConstantSiteCache:
                 case ExpressionQualifiedIsDefinedConstantSiteCache:
@@ -681,6 +708,10 @@ namespace IronRuby.Aot {
                 case IsDefinedConstantSiteCache:
                     hint = "constcache";
                     return Expression.New(value.GetType());
+
+                case ArrayExtremeSite extreme:
+                    hint = "extreme";
+                    return Expression.New(typeof(ArrayExtremeSite).GetConstructor(new[] { typeof(bool) }), Expression.Constant(extreme.IsMax));
 
                 case BinaryOpStorage:
                     hint = "opstorage";

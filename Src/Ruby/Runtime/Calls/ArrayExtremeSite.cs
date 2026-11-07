@@ -45,9 +45,12 @@ namespace IronRuby.Runtime.Calls {
         private readonly bool _isMax;
         private volatile Binding _binding;
 
-        internal ArrayExtremeSite(bool isMax) {
+        // public, as is IsMax: the startup library (Util/aot) re-creates the site at load time
+        public ArrayExtremeSite(bool isMax) {
             _isMax = isMax;
         }
+
+        public bool IsMax => _isMax;
 
         internal object/*!*/ Invoke(RubyScope/*!*/ scope, object first, object second) {
             var context = scope.RubyContext;

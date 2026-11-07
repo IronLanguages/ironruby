@@ -13,17 +13,13 @@
  *
  * ***************************************************************************/
 
-using System.Collections.Generic;
-using System.Diagnostics;
+using System;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Compiler.Ast {
 
     //	when <expressions>, *<array>: <body>
     public partial class WhenClause : Node {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly WhenClause[] EmptyArray = new WhenClause[0];
 
         private readonly Expression/*!*/[]/*!*/ _comparisons;
         private readonly Statements _statements;              // optional
@@ -38,7 +34,7 @@ namespace IronRuby.Compiler.Ast {
 
         public WhenClause(Expression/*!*/[] comparisons, Statements statements, SourceSpan location)
             : base(location) {
-            _comparisons = comparisons ?? Expression.EmptyArray;
+            _comparisons = comparisons ?? Array.Empty<Expression>();
             _statements = statements;
         }
     }

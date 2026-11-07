@@ -1,4 +1,3 @@
-using System;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -220,6 +219,36 @@ p events
 [:c_return, :const_added, Module, ""Object""]
 [:c_call, :method_added, Module, ""WM""]
 [:c_return, :method_added, Module, ""WM""]
+[]
+");
+        }
+
+        /// <summary>
+        /// `[a, b].max' and `[a, b].min' are answered without the call (CRuby's opt_newarray_send), which a :c_call
+        /// TracePoint does not see; an array of literals such as `[5, 6]' is made and sent #max as written, as CRuby does,
+        /// so the TracePoint sees that call (ruby/spec core/tracepoint/inspect_spec.rb). The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Hooks2b() {
+            TestOutput(@"
+def f(a, b) = [[a, b].max, [a, b].min]
+p f(1, 2)
+events = []
+tp = TracePoint.new(:c_call, :c_return) { |t| events << [t.event, t.method_id] if %i[max min].include?(t.method_id) }
+tp.enable do
+  p f(3, 4)
+  p [5, 6].max
+end
+events.each { |e| p e }
+events.clear
+p f(7, 8)
+p events
+", @"
+[2, 1]
+[4, 3]
+6
+[:c_call, :max]
+[:c_return, :max]
+[8, 7]
 []
 ");
         }

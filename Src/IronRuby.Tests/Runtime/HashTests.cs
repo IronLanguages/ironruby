@@ -63,9 +63,9 @@ end
 
 foo Hash.[](1 => :a), { 2 => :b }, 3 => :c
 ", @"
-{1=>:a}
-{2=>:b}
-{3=>:c}
+{1 => :a}
+{2 => :b}
+{3 => :c}
 ");
         }
 
@@ -296,6 +296,106 @@ nil
 [nil, 1]
 [[1, 1], [3, 3], [5, 5]]
 [1, 3]
+");
+        }
+
+        /// <summary>
+        /// Hash#inspect and #to_s in Ruby 3.4's format: a Symbol key as a label, quoted when it would not
+        /// read back as one (MRI's symbol_key_needs_quote), any other key with a spaced rocket; a recursive
+        /// Hash as {...}; US-ASCII until an element brings another encoding.
+        /// </summary>
+        public void Hash_Inspect1() {
+            TestOutput(@"
+p({1 => :a, foo: 1, ""a b"": 2, :""a="" => 3, :+ => 4, :@iv => 5, :$g => 6, :! => 7, :a? => 8, :b! => 9, :[] => 10, :A => 11, :""9x"" => 12, :"""" => 13, nil => nil, [1] => {x: 1}})
+r = {}; r[:self] = r; r[r] = 1
+puts r.to_s
+k = Object.new; def k.inspect = ""K!""
+p({k => k}, {}, Class.new(Hash).new.update(x: 1))
+p [{a: 1}.inspect.encoding, {""a"" => 1}.to_s.encoding]
+p Hash.instance_method(:to_s) == Hash.instance_method(:inspect)
+", @"
+{1 => :a, foo: 1, ""a b"": 2, ""a="": 3, ""+"": 4, ""@iv"": 5, ""$g"": 6, ""!"": 7, a?: 8, b!: 9, ""[]"": 10, A: 11, ""9x"": 12, """": 13, nil => nil, [1] => {x: 1}}
+{self: {...}, {...} => 1}
+{K! => K!}
+{}
+{x: 1}
+[#<Encoding:US-ASCII>, #<Encoding:UTF-8>]
+true
+");
+        }
+
+        /// <summary>
+        /// Ruby 4.0's Hash#merge/#merge!/#update (any number of hashes, #to_hash, frozen check first), #delete_if,
+        /// #keep_if, #reject!, #select!/#filter! and #reject (an Enumerator without a block, a plain Hash without the
+        /// default from #reject), #filter, and #shift answering nil for an empty hash without asking the default.
+        /// </summary>
+        public void Hash_MergeRejectShift1() {
+            TestOutput(@"
+def t
+  r = yield
+  r.inspect
+rescue => e
+  e.is_a?(FrozenError) ? ""FrozenError"" : ""#{e.class}: #{e.message}""
+end
+h = {a: 1, b: 2}
+puts t { h.merge }, t { h.merge({c: 3}, {a: 9}) }, t { h.merge({a: 5}, {a: 7}) { |k, o, n| o + n } }
+puts t { h.dup.merge! }, t { h.dup.update({c: 3}, {d: 4}) }, t { h.dup.update({a: 5}) { |k, o, n| [k, o, n] } }
+puts t { {a: 1}.freeze.merge!({}) }, t { {a: 1}.freeze.update(b: 1) }, t { {a: 1}.merge(1) }
+o = Object.new; def o.to_hash = {z: 26}
+puts t { {a: 1}.merge(o) }
+d = Hash.new(5); d[:a] = 1; m = d.merge(b: 2); p [m.default, m.class]
+class SubH < Hash; end
+s = SubH[a: 1]; p s.merge(b: 1).class, s.reject { false }.class
+dp = Hash.new { |hh, k| k * 2 }; dp[:x] = 1
+r = dp.reject { false }; p [r.default_proc.nil?, r.default]
+puts t { h.delete_if.class }, t { h.reject.class }, t { h.dup.reject!.class }, t { h.dup.keep_if.class }
+puts t { {a: 1}.freeze.delete_if { true } }, t { {a: 1}.freeze.delete_if.class }, t { {a: 1}.freeze.reject! { true } }, t { {a: 1}.freeze.reject!.class }
+puts t { {a: 1}.freeze.keep_if { true } }
+p({a: 1, b: 2}.reject { |k, v| v > 1 }, {a: 1, b: 2}.reject! { false }, {a: 1, b: 2}.delete_if { |k, v| v == 1 })
+x = Hash.new(9); p x.shift, Hash.new { 1 }.shift, {a: 1, b: 2}.shift
+puts t { {}.freeze.shift }, t { {a: 1}.freeze.shift }
+p({a: 1}.filter { true }, {a: 1}.select { false })
+p Hash.instance_method(:update) == Hash.instance_method(:merge!)
+p Hash.instance_method(:merge).arity, Hash.instance_method(:merge!).arity
+e = {a: 1, b: 2}.delete_if; p e.each { |k, v| v == 1 }
+", @"
+{a: 1, b: 2}
+{a: 9, b: 2, c: 3}
+{a: 13, b: 2}
+{a: 1, b: 2}
+{a: 1, b: 2, c: 3, d: 4}
+{a: [:a, 1, 5], b: 2}
+FrozenError
+FrozenError
+TypeError: no implicit conversion of Integer into Hash
+{a: 1, z: 26}
+[5, Hash]
+SubH
+Hash
+[true, nil]
+Enumerator
+Enumerator
+Enumerator
+Enumerator
+FrozenError
+Enumerator
+FrozenError
+Enumerator
+FrozenError
+{a: 1}
+nil
+{b: 2}
+nil
+nil
+[:a, 1]
+FrozenError
+FrozenError
+{a: 1}
+{}
+true
+-1
+-1
+{b: 2}
 ");
         }
 

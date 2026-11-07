@@ -74,7 +74,11 @@ namespace IronRuby.Aot {
                 return 2;
             }
             int major = tfm == "net8.0" ? 8 : tfm == "net10.0" ? 10 : throw new ArgumentException("--tfm net8.0 or net10.0");
-            rid ??= RuntimeInformation.RuntimeIdentifier;
+            // the portable RID the host is published for (Ruby.Console.csproj: -r linux-x64), not RuntimeIdentifier,
+            // which a distribution's own .NET build reports as its distro RID (ubuntu.24.04-x64) - whose crossgen2
+            // package nothing restores
+            rid ??= (OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "osx" : "linux") + "-" +
+                RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant();
 
             // the files of the host's tree: the same relative paths under --root as under the tree they were listed in
             string sourceRoot = FindRepoRoot(listed[0]);

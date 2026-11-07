@@ -24,7 +24,6 @@ using Microsoft.Scripting.Runtime;
 using System.Numerics;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Generation;
 
 namespace IronRuby.Builtins {
     /// <summary>
@@ -32,48 +31,6 @@ namespace IronRuby.Builtins {
     /// </summary>
     [RubyModule("Float", DefineIn = typeof(IronRubyOps.Clr))]
     public static class ClrFloat {
-
-        #region induced_from
-
-        /// <summary>
-        /// Convert value to Float, where value is Float.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static double InducedFrom(RubyModule/*!*/ self, double value) {
-            return value;
-        }
-
-        /// <summary>
-        /// Convert value to Float, where value is Fixnum.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(UnaryOpStorage/*!*/ tofStorage, RubyModule/*!*/ self, int value) {
-            var site = tofStorage.GetCallSite("to_f");
-            return site.Target(site, ScriptingRuntimeHelpers.Int32ToObject(value));
-        }
-
-        /// <summary>
-        /// Convert value to Float, where value is Bignum.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(UnaryOpStorage/*!*/ tofStorage, RubyModule/*!*/ self, [NotNull]BigInteger/*!*/ value) {
-            var site = tofStorage.GetCallSite("to_f");
-            return site.Target(site, value);
-        }
-
-        /// <summary>
-        /// Convert value to Float, where value is not Float, Fixnum or Bignum.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static double InducedFrom(RubyModule/*!*/ self, object value) {
-            throw RubyExceptions.CreateTypeError("failed to convert {0} into Float", self.Context.GetClassDisplayName(value));
-        }
-
-        #endregion
 
         #region Arithmetic Operators
 
@@ -374,10 +331,11 @@ namespace IronRuby.Builtins {
         [RubyMethod("divmod")]
         public static RubyArray DivMod(double self, double other) {
             RubyArray result = InternalDivMod(self, other);
-            // Unlike modulo, divmod blows up if the quotient or modulus are not finite, so we can't put this inside InternalDivMod
-            // We only need to test if the quotient is double since it should have been converted to Integer (Fixnum or Bignum) if it was OK.
-            if (result[0] is double || Double.IsNaN((double)result[1])) {
-                throw CreateFloatDomainError("NaN");
+            // Unlike modulo, divmod needs the quotient as an Integer (flo_divmod's dbl2ival), so a
+            // quotient that is not finite - left as a double by InternalDivMod - is an error named
+            // after that quotient: Float::INFINITY.divmod(1.0) is "Infinity", not "NaN".
+            if (result[0] is double quotient) {
+                throw new FloatDomainError(Double.IsNaN(quotient) ? "NaN" : quotient > 0 ? "Infinity" : "-Infinity");
             }
             return result;
         }
@@ -561,9 +519,13 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("round")]
         public static object Round(ConversionStorage<IntegerValue>/*!*/ integerCast, double self,
-            object ndigits, [Optional]object options) {
+            object ndigits, [Keywords, Optional]object options) {
 
             var opts = options as IDictionary<object, object>;
+            // round(ndigits, half: mode): the options only ever come as keywords
+            if (options != Missing.Value && opts == null) {
+                throw RubyOps.MakeWrongNumberOfArgumentsErrorN(2, "0..1");
+            }
             if (opts == null && options == Missing.Value) {
                 // round(half: :up) - the only argument is the options hash
                 opts = ndigits as IDictionary<object, object>;
@@ -1299,13 +1261,6 @@ namespace IronRuby.Builtins {
             return new BigInteger(value);
         }
 
-        public static Exception CreateFloatDomainError(string message) {
-            return new FloatDomainError("NaN");
-        }
-
-        public static Exception CreateFloatDomainError(string message, Exception inner) {
-            return new FloatDomainError("NaN", inner);
-        }
 
         #endregion
     }

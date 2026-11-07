@@ -14,19 +14,13 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Security;
 using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Interpreter;
 using Microsoft.Scripting.Utils;
-using System.Globalization;
 
 namespace IronRuby.Runtime {
     /// <summary>
@@ -44,19 +38,8 @@ namespace IronRuby.Runtime {
         // True if the exception has already been handled by Ruby EH clause or if it was constructed "dynamically" via Class#new.
         internal bool Handled { get; set; }
 
-        // Real exception begin propagated by the CLR. Needed for lazy initialization of message, backtrace
-        private Exception/*!*/ _exception;
-        // For asynchronous exceptions (Thread#raise), the user-visible exception (accessible via _visibleException)
-        // is wrapped in a TheadAbortException (accessible via _exception)
-        private Exception/*!*/ _visibleException;
-
-#if DEBUG && FEATURE_THREAD
-#pragma warning disable 414 // msc: unused field
-        // For asynchronous exceptions, this is useful to figure out which thread raised the exception
-        [NonSerialized]
-        private Thread/*!*/ _throwingThread;
-#pragma warning restore 414
-#endif
+        // The exception this data belongs to. Needed for lazy initialization of message, backtrace
+        private readonly Exception/*!*/ _exception;
 
         // if this is set to null we need to initialize it
         private object _message; 
@@ -69,7 +52,6 @@ namespace IronRuby.Runtime {
         // of #backtrace (see CallRedefinedSetBacktrace); null otherwise.
         private RubyArray _raiseBacktrace;
 
-#if FEATURE_STACK_TRACE
         // The backtrace the runtime captured when the exception was raised, until someone asks for
         // it (see CaptureExceptionTrace). Only ever set while _backtrace is null.
         [NonSerialized]
@@ -80,7 +62,6 @@ namespace IronRuby.Runtime {
         private static WeakReference<InterpretedFrame> _lastCatchFrame;
         [ThreadStatic]
         private static StackTrace _lastCatchSiteTrace;
-#endif
 
         // Exception#cause; _hasCause tells "decided" from "not raised yet", see TrySetCause.
         private Exception _cause;
@@ -96,23 +77,24 @@ namespace IronRuby.Runtime {
         // NoMethodError#args: the arguments of the call that found no method (nil if unknown).
         private object _arguments;
 
+        // NameError#local_variables: those of the scope the error was made in (null: none).
+        private RubyArray _localVariables;
+
+        // The frame of the method an arity error was raised for (see RubyOps.SetCalleeFrame): file null
+        // for a library method, which is reported at the location of its caller.
+        private string _calleeFile;
+        private int _calleeLine;
+        private string _calleeLabel;
+
         [NonSerialized]
         private CallSite<Func<CallSite, RubyContext, Exception, RubyArray, object>> _setBacktraceCallSite;
 
         private RubyExceptionData(Exception/*!*/ exception) {
             _exception = exception;
-            _visibleException = exception;
-#if DEBUG && FEATURE_THREAD
-            _throwingThread = Thread.CurrentThread;
-#endif
         }
 
         public static RubyArray/*!*/ CreateBacktrace(RubyContext/*!*/ context, int skipFrames) {
-#if FEATURE_STACK_TRACE
             return new RubyStackTraceBuilder(context, skipFrames).RubyTrace;
-#else
-            return new RubyArray();
-#endif
         }
 
         /// <summary>
@@ -120,11 +102,7 @@ namespace IronRuby.Runtime {
         /// instead of being reported at their caller's (TracePoint needs to see where a call really is).
         /// </summary>
         internal static RubyArray/*!*/ CreateRawBacktrace(RubyContext/*!*/ context) {
-#if FEATURE_STACK_TRACE
             return new RubyStackTraceBuilder(context, 0, true).RubyTrace;
-#else
-            return new RubyArray();
-#endif
         }
 
         /// <summary>
@@ -132,7 +110,6 @@ namespace IronRuby.Runtime {
         /// stack to speak of - it has not started, it has finished, or it has never run Ruby code.
         /// </summary>
         public static RubyArray CreateBacktrace(RubyContext/*!*/ context, Thread/*!*/ thread) {
-#if FEATURE_STACK_TRACE && FEATURE_THREAD
             if (thread == Thread.CurrentThread) {
                 return CreateBacktrace(context, 0);
             }
@@ -148,9 +125,6 @@ namespace IronRuby.Runtime {
             }
 
             return new RubyStackTraceBuilder(context, frame, precompiled).RubyTrace;
-#else
-            return null;
-#endif
         }
 
         /// <summary>
@@ -159,9 +133,18 @@ namespace IronRuby.Runtime {
         /// Called from compiled code.
         /// </summary>
         internal void CaptureExceptionTrace(RubyScope/*!*/ scope) {
+            if (CaptureTrace(scope)) {
+                // MRI (setup_exception) only calls #set_backtrace when it has been redefined:
+                if (!HasBuiltinSetBacktrace(scope.RubyContext)) {
+                    CallRedefinedSetBacktrace(scope.RubyContext);
+                }
+            }
+        }
+
+        // Takes the trace of the exception as a Ruby frame first sees it go by; false if it has one already.
+        private bool CaptureTrace(RubyScope/*!*/ scope) {
             if (!HasBacktrace && _raiseBacktrace == null) {
                 var context = scope.RubyContext;
-#if FEATURE_STACK_TRACE
                 bool debugMode = context.DomainManager.Configuration.DebugMode;
 
                 // The catch-site walk is the expensive part of a raise: the whole CLR stack, every frame's
@@ -196,14 +179,9 @@ namespace IronRuby.Runtime {
 
                 // formatted on first use, see Backtrace:
                 _capturedTrace = new RubyStackTraceBuilder.CapturedTrace(context, _exception, catchSiteTrace, scope.InterpretedFrame != null);
-#else
-                _backtrace = new RubyArray();
-#endif
-                // MRI (setup_exception) only calls #set_backtrace when it has been redefined:
-                if (!HasBuiltinSetBacktrace(context)) {
-                    CallRedefinedSetBacktrace(context);
-                }
+                return true;
             }
+            return false;
         }
 
         /// <summary>
@@ -220,7 +198,6 @@ namespace IronRuby.Runtime {
             if (HasBacktrace || _raiseBacktrace != null) {
                 return;
             }
-#if FEATURE_STACK_TRACE
             // the catch site's callers: this walk has the catching method too, below which they are (see Build)
             var captured = new RubyStackTraceBuilder.CapturedTrace(context, _exception,
                 RubyStackTraceBuilder.GetClrStackTrace(null, context.DomainManager.Configuration.DebugMode));
@@ -231,7 +208,6 @@ namespace IronRuby.Runtime {
             if (!HasBuiltinSetBacktrace(context)) {
                 CallRedefinedSetBacktrace(context);
             }
-#endif
         }
 
         /// <summary>
@@ -251,7 +227,7 @@ namespace IronRuby.Runtime {
             Backtrace = null;
             try {
                 DynamicSetBacktrace(context, raised);
-            } catch (Exception e) when (!(e is StackUnwinder || e is ThreadAbortException || e is ThreadInterruptedException)) {
+            } catch (Exception e) when (!(e is StackUnwinder || e is ThreadInterruptedException)) {
                 // MRI drops it too; #backtrace stays as the method left it
             }
         }
@@ -313,29 +289,7 @@ namespace IronRuby.Runtime {
         }
 
         internal static RubyExceptionData/*!*/ AssociateInstance(Exception/*!*/ e) {
-            RubyExceptionData result;
-
-#if FEATURE_THREAD
-            Exception visibleException = RubyUtils.GetVisibleException(e);
-            if (e == visibleException || visibleException == null) {
-                result = new RubyExceptionData(e);
-            } else {
-                // Async exception
-
-                Debug.Assert(e is ThreadAbortException);
-                result = GetInstance(visibleException);
-
-                if (result._exception == visibleException) {
-                    // A different instance of ThreadAbortException is thrown at the end of every catch block (as long as
-                    // Thread.ResetAbort is not called). However, we only want to remember the first one 
-                    // as it will have the most complete stack trace.
-                    result._exception = e;
-                }
-            }
-#else
-            result = new RubyExceptionData(e);
-#endif
-
+            var result = new RubyExceptionData(e);
             e.SetData(_DataKey, result);
             return result;
         }
@@ -349,15 +303,15 @@ namespace IronRuby.Runtime {
                 if (_message == null) {
                     // A Ruby-defined exception class whose #initialize never set a message: MRI's
                     // default is the class name, not the CLR's "Exception of type X was thrown."
-                    var rubyObject = _visibleException as IRubyObject;
+                    var rubyObject = _exception as IRubyObject;
                     if (rubyObject != null) {
                         var immediateClass = rubyObject.ImmediateClass;
                         if (immediateClass != null) {
                             return _message = GetDefaultMessage(immediateClass.NominalClass);
                         }
                     }
-                    string clrMessage = _visibleException.Message;
-                    if (_visibleException is DivideByZeroException && clrMessage == _DefaultDivideByZeroMessage) {
+                    string clrMessage = _exception.Message;
+                    if (_exception is DivideByZeroException && clrMessage == _DefaultDivideByZeroMessage) {
                         // Integer division by zero raises the CLR's own exception, whose message is
                         // "Attempted to divide by zero."; MRI says "divided by 0".
                         clrMessage = "divided by 0";
@@ -374,17 +328,13 @@ namespace IronRuby.Runtime {
 
         public RubyArray Backtrace {
             get {
-#if FEATURE_STACK_TRACE
                 if (_capturedTrace != null) {
                     FormatCapturedTrace();
                 }
-#endif
                 return _backtrace;
             }
             set {
-#if FEATURE_STACK_TRACE
                 _capturedTrace = null;
-#endif
                 _backtrace = value;
             }
         }
@@ -394,15 +344,10 @@ namespace IronRuby.Runtime {
         /// </summary>
         public bool HasBacktrace {
             get {
-#if FEATURE_STACK_TRACE
                 return _backtrace != null || _capturedTrace != null;
-#else
-                return _backtrace != null;
-#endif
             }
         }
 
-#if FEATURE_STACK_TRACE
         private void FormatCapturedTrace() {
             var captured = _capturedTrace;
             if (captured == null) {
@@ -414,10 +359,12 @@ namespace IronRuby.Runtime {
                 if (_capturedTrace == captured) {
                     _backtrace = captured.Build();
                     _capturedTrace = null;
+                    if (_calleeLabel != null && _backtrace != null) {
+                        _backtrace.Insert(0, RubyStackTraceBuilder.FormatCalleeFrame(_backtrace, _calleeFile, _calleeLine, _calleeLabel));
+                    }
                 }
             }
         }
-#endif
 
         /// <summary>
         /// Exception#cause. MRI fixes the cause the first time an exception is raised and never
@@ -478,6 +425,23 @@ namespace IronRuby.Runtime {
             set { _arguments = value; }
         }
 
+        internal void SetCalleeFrame(string file, int line, string/*!*/ label) {
+            _calleeFile = file;
+            _calleeLine = line;
+            _calleeLabel = label;
+        }
+
+        /// <summary>
+        /// NameError#local_variables: the local variables of the scope the error was made in, which
+        /// MRI takes from the instruction sequence it keeps on the error. Null when there is none.
+        /// The names rather than the scope are kept, so that the error does not keep the variables'
+        /// values alive.
+        /// </summary>
+        public RubyArray LocalVariables {
+            get { return _localVariables; }
+            set { _localVariables = value; }
+        }
+
         public bool TrySetCause(Exception cause) {
             if (_hasCause) {
                 return false;
@@ -494,7 +458,7 @@ namespace IronRuby.Runtime {
         public void SetCause(Exception cause) {
             _hasCause = true;
             // an exception is never its own cause (MRI: `raise e, cause: e` leaves cause nil)
-            _cause = (cause == _exception || cause == _visibleException) ? null : cause;
+            _cause = (cause == _exception) ? null : cause;
         }
 
         public static string/*!*/ GetClrMessage(RubyContext/*!*/ context, object message) {
@@ -528,7 +492,8 @@ namespace IronRuby.Runtime {
             return exception;
         }
 
-        internal static Exception/*!*/ HandleException(RubyContext/*!*/ context, Exception/*!*/ exception) {
+        internal static Exception/*!*/ HandleException(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            var context = scope.RubyContext;
             // already handled:
             var instanceData = GetInstance(exception);
             if (instanceData.Handled) {
@@ -557,13 +522,18 @@ namespace IronRuby.Runtime {
                 message = StripSystemCallErrorPrefix(exceptionClass, message);
             }
 
+            // The new exception is never thrown and has no trace of its own: it gets the one the thrown exception has come by
+            // so far (an Errno raised by a library method had none at all when rescued). Taken before "new" runs Ruby code,
+            // which would reuse the PrecompiledFrames slots of the compiled frames the exception left (and their lines).
+            bool captured = instanceData.CaptureTrace(scope);
+
             var site = exceptionClass.NewSite;
             Exception newException;
             try {
                 newException = site.Target(site, exceptionClass, message) as Exception;
             } catch (Exception e) {
                 // MRI: this can lead to stack overflow:
-                return HandleException(context, e);
+                return HandleException(scope, e);
             }
 
             // MRI doesn't handle this correctly, see http://redmine.ruby-lang.org/issues/show/1886:
@@ -575,9 +545,10 @@ namespace IronRuby.Runtime {
             
             newInstanceData.Handled = true;
             newInstanceData._backtrace = instanceData._backtrace;
-#if FEATURE_STACK_TRACE
             newInstanceData._capturedTrace = instanceData._capturedTrace;
-#endif
+            if (captured && !newInstanceData.HasBuiltinSetBacktrace(context)) {
+                newInstanceData.CallRedefinedSetBacktrace(context);
+            }
             return newException;
         }
 
@@ -586,7 +557,7 @@ namespace IronRuby.Runtime {
         /// (RubyExceptions.MakeMessage). The Ruby-level initialize it is about to be handed to -
         /// the prelude's SystemCallError#initialize - builds that same form from the detail, so it
         /// gets the detail alone, or the error would name itself twice: "No such file or directory
-        /// - No such file or directory - path". The class's strerror text is its Message constant.
+        /// - No such file or directory - path". The class's strerror text is its hidden @__message__ (see the prelude's Errno).
         /// </summary>
         private static object StripSystemCallErrorPrefix(RubyClass/*!*/ exceptionClass, object message) {
             var text = message as MutableString;
@@ -595,7 +566,7 @@ namespace IronRuby.Runtime {
             }
             for (RubyClass c = exceptionClass; c != null; c = c.SuperClass) {
                 object constant;
-                if (c.TryGetConstant(null, "Message", out constant)) {
+                if (c.Context.TryGetInstanceVariable(c, RubyUtils.GetCoreStateInstanceVariableName("@__message__"), out constant)) {
                     var prefix = constant as MutableString;
                     if (prefix == null) {
                         return message;
@@ -613,11 +584,5 @@ namespace IronRuby.Runtime {
             }
             return message;
         }
-
-        // A handled exception used to leave a pending Thread.Abort behind when Thread#raise had delivered it
-        // that way, and Thread.ResetAbort cancelled it here. Thread#raise no longer aborts the target thread
-        // (see RubyUtils.RaiseAsyncException) and Thread.ResetAbort only throws on .NET Core, so there is
-        // nothing left to do.
-        public static void ActiveExceptionHandled(Exception visibleException) {}
     }
 }

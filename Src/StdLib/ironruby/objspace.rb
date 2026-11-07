@@ -239,7 +239,7 @@ module ObjectSpace
       "\"" => "\\\"", "\\" => "\\\\", "\b" => "\\b", "\f" => "\\f",
       "\n" => "\\n", "\r" => "\\r", "\t" => "\\t"
     }.freeze
-    private_constant :JSON_ESCAPES
+    __hide_constant__ :JSON_ESCAPES
 
     def __quote__(str)
       escaped = str.to_s.gsub(/["\\\x00-\x1f]/) { |c| JSON_ESCAPES[c] || ('\\u%04x' % c.ord) }

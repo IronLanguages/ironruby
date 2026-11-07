@@ -13,13 +13,8 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using IronRuby.Builtins;

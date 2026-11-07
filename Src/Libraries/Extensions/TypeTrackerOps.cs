@@ -14,8 +14,6 @@
  * ***************************************************************************/
 
 using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
@@ -23,15 +21,15 @@ namespace IronRuby.Builtins {
     public static class TypeTrackerOps {
         [RubyMethod("to_module")]
         public static RubyModule/*!*/ ToModule(RubyContext/*!*/ context, TypeTracker/*!*/ self) {
-            return context.GetModule(self.Type);
+            return context.GetClrTypeModule(self.Type);
         }
 
         [RubyMethod("to_class")]
         public static RubyClass/*!*/ ToClass(RubyContext/*!*/ context, TypeTracker/*!*/ self) {
             if (self.Type.IsInterface) {
-                RubyExceptions.CreateTypeError("Cannot convert a CLR interface to a Ruby class");
+                throw RubyExceptions.CreateTypeError("Cannot convert a CLR interface to a Ruby class");
             }
-            return context.GetClass(self.Type);
+            return context.GetClrTypeModule(self.Type) as RubyClass ?? context.GetClass(self.Type);
         }
     }
 }

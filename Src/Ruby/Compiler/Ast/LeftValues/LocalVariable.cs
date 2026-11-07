@@ -13,24 +13,16 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Diagnostics;
-using System.Dynamic;
 using Microsoft.Scripting;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
-using IronRuby.Builtins;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
 
     public partial class LocalVariable : Variable {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static new LocalVariable[] EmptyArray = new LocalVariable[0];
 
         // -1: the variable is defined in the outer runtime scope
         private readonly int _definitionLexicalDepth;
@@ -62,6 +54,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformReadVariable(AstGenerator/*!*/ gen, bool tryRead) {
+            gen.NoteLocalVariableUse(Name, _definitionLexicalDepth, false, gen.GetLocalAssignments(_definitionLexicalDepth, _closureIndex));
             if (_definitionLexicalDepth >= 0) {
                 // static lookup:
                 return gen.CurrentScope.GetVariableAccessor(_definitionLexicalDepth, _closureIndex);
@@ -72,6 +65,9 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformWriteVariable(AstGenerator/*!*/ gen, MSA.Expression/*!*/ rightValue) {
+            var assignments = gen.GetLocalAssignments(_definitionLexicalDepth, _closureIndex);
+            gen.NoteLocalAssignment(assignments);
+            gen.NoteLocalVariableUse(Name, _definitionLexicalDepth, true, assignments);
             if (_definitionLexicalDepth >= 0) {
                 // static lookup:
                 return Ast.Assign(gen.CurrentScope.GetVariableAccessor(_definitionLexicalDepth, _closureIndex), AstUtils.Box(rightValue));
@@ -82,7 +78,6 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override string/*!*/ GetNodeName(AstGenerator/*!*/ gen) {
-            // TODO: 1.8/1.9 variables in a block
             return "local-variable";
         }
     }
