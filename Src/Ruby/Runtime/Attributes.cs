@@ -361,6 +361,8 @@ namespace IronRuby.Runtime {
     /// <see cref="ClrName"/> - under another Ruby name. MRI defines `collect' and `map' as one C function under two names,
     /// and its backtrace names the frame by the name called; a backtrace here names a library frame by its CLR method, so
     /// each name that can show in one has a method of its own. To Ruby the two are still one method (UnboundMethod#==).
+    /// BasicObject#equal? also uses it: MRI defines it and BasicObject#== with one C function, but here #== of a CLR-backed
+    /// object reaches the CLR Equals (a String subclass compares contents), which #equal? must not.
     /// </summary>
     [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
     public sealed class SameRubyMethodAttribute : Attribute {

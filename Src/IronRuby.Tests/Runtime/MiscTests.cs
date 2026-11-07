@@ -5369,6 +5369,7 @@ e = Eq.new; p e.equal?(e), e.equal?(Eq.new), e == e, e == Eq.new
 t = Str.new('a'); p t.equal?(t), t.equal?(Str.new('a')), 'a'.equal?('a')
 p 1.equal?(1), 1.5.equal?(1.5), :a.equal?(:a), nil.equal?(nil), true.equal?(true)
 p BasicObject.new.equal?(BasicObject.new)
+p BasicObject.instance_method(:equal?) == BasicObject.instance_method(:==)
 ", @"
 false
 true
@@ -5386,6 +5387,7 @@ true
 true
 true
 false
+true
 ");
         }
     }

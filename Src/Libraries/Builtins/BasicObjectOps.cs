@@ -187,7 +187,16 @@ namespace IronRuby.Builtins {
             return self.BaseEquals(other);
         }
 
+        // An overload for each of =='s, so that to Ruby the two are still the one method MRI defines
+        // them with (BasicObject.instance_method(:equal?) == BasicObject.instance_method(:==)).
         [RubyMethod("equal?")]
+        [SameRubyMethod("ValueEquals")]
+        public static bool IsEqual([NotNull]IRubyObject/*!*/ self, object other) {
+            return ReferenceEquals(self, other);
+        }
+
+        [RubyMethod("equal?")]
+        [SameRubyMethod("ValueEquals")]
         public static bool IsEqual(object self, object other) {
             // Integer, Float, true/false etc. are CLR value types boxed per use: their identity is
             // their value (CRuby's immediates). Everything else is identical only to itself.
