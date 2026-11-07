@@ -39,13 +39,26 @@
   </PropertyGroup>
 
   <!-- Without SourceLink nothing sets SourceRevisionId; ask git, and leave it empty (so
-       RUBY_REVISION is "") when building outside a checkout. -->
+       RUBY_REVISION is "") when building outside a checkout - and when this tree is not the
+       top of one, as a source tarball unpacked inside some other repository is not: git's
+       HEAD there is that repository's. ConsoleOutput takes stderr as well as stdout, so
+       git's stderr goes to the null device, or a warning would join the revision. -->
   <Target Name="IronRubySourceRevision" BeforeTargets="GetAssemblyVersion;AddSourceRevisionToInformationalVersion" Condition="'$(SourceRevisionId)' == ''">
-    <Exec Command="git rev-parse HEAD" WorkingDirectory="$(MSBuildThisFileDirectory)" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardErrorImportance="low" StandardOutputImportance="low">
+    <PropertyGroup>
+      <_IronRubyNullDevice Condition="'$(OS)' == 'Windows_NT'">nul</_IronRubyNullDevice>
+      <_IronRubyNullDevice Condition="'$(OS)' != 'Windows_NT'">/dev/null</_IronRubyNullDevice>
+    </PropertyGroup>
+    <!-- the path of this directory below the work tree's top: empty only at the top -->
+    <Exec Command="git rev-parse --show-prefix 2&gt;$(_IronRubyNullDevice)" WorkingDirectory="$(MSBuildThisFileDirectory)" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardErrorImportance="low" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_IronRubyGitPrefix" />
+      <Output TaskParameter="ExitCode" PropertyName="_IronRubyGitPrefixExit" />
+    </Exec>
+    <Exec Command="git rev-parse --verify -q HEAD 2&gt;$(_IronRubyNullDevice)" WorkingDirectory="$(MSBuildThisFileDirectory)" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardErrorImportance="low" StandardOutputImportance="low"
+          Condition="'$(_IronRubyGitPrefixExit)' == '0' and '$(_IronRubyGitPrefix.Trim())' == ''">
       <Output TaskParameter="ConsoleOutput" PropertyName="_IronRubyGitHead" />
       <Output TaskParameter="ExitCode" PropertyName="_IronRubyGitExit" />
     </Exec>
-    <PropertyGroup Condition="'$(_IronRubyGitExit)' == '0'">
+    <PropertyGroup Condition="'$(_IronRubyGitExit)' == '0' and $([System.Text.RegularExpressions.Regex]::IsMatch($(_IronRubyGitHead.Trim()), '^[0-9a-f]{40}([0-9a-f]{24})?$'))">
       <SourceRevisionId>$(_IronRubyGitHead.Trim())</SourceRevisionId>
     </PropertyGroup>
   </Target>
