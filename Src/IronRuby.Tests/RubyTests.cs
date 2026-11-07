@@ -945,6 +945,7 @@ namespace IronRuby.Tests {
                 NameError_LocalVariables1,
                 ErrorHighlight_Spots1,
                 ErrorHighlight_Report1,
+                ErrorHighlight_Threads1,
                 StringIO_LineReaders1,
                 Kernel_ConversionsInjectZip1,
                 Kernel_ConversionsRoundingStep1,

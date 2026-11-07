@@ -72,7 +72,9 @@ module ErrorHighlight
 
   module IronRubyLocator # :nodoc:
     CACHE_SIZE = 4
+    # every thread whose error message is asked for comes through here
     @trees = {}
+    @trees_lock = Thread::Mutex.new
 
     ARITY_ERROR = /\A(?:wrong number of arguments|missing keyword[s]?|unknown keyword[s]?|no keywords accepted)\b/
 
@@ -179,14 +181,17 @@ module ErrorHighlight
       def tree(path)
         stat = File.stat(path)
         key = [stat.mtime, stat.size]
-        cached = @trees[path]
+        cached = @trees_lock.synchronize { @trees[path] }
         return cached[1] if cached && cached[0] == key
 
+        # parsed outside the lock: another thread's message need not wait for this file
         require "prism"
         root = Prism.parse_file(path).value
-        @trees.delete(path)
-        @trees.shift if @trees.size >= CACHE_SIZE
-        @trees[path] = [key, root]
+        @trees_lock.synchronize do
+          @trees.delete(path)
+          @trees.shift if @trees.size >= CACHE_SIZE
+          @trees[path] = [key, root]
+        end
         root
       end
     end
