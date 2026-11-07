@@ -1093,6 +1093,7 @@ namespace IronRuby.Tests {
                 Backtrace9,
                 Backtrace_CompiledLines1,
                 Backtrace_CompiledLines2,
+                Backtrace_UnnamedLambdaFrame1,
                 Backtrace_LibraryErrors1,
                 Backtrace_PreludeCallerSkip1,
 

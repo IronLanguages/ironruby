@@ -327,6 +327,19 @@ end
         }
 
         /// <summary>
+        /// A lambda System.Linq.Expressions compiled without a name is no frame of Ruby code: a fiber's backtrace from
+        /// code ir.sh had compiled (once hot) had a bogus "0:in 'lambda_methodNN'" under the fiber's block.
+        /// </summary>
+        public void Backtrace_UnnamedLambdaFrame1() {
+            var trace = System.Linq.Expressions.Expression.Lambda<Func<System.Diagnostics.StackTrace>>(
+                System.Linq.Expressions.Expression.New(typeof(System.Diagnostics.StackTrace))
+            ).Compile()();
+            var method = trace.GetFrame(0).GetMethod();
+            Assert(method != null && method.Name.StartsWith("lambda_method", StringComparison.Ordinal));
+            Assert(!RubyStackTraceBuilder.IsVisibleClrFrame(method));
+        }
+
+        /// <summary>
         /// An exception a library method throws whose class has an initialize written in Ruby - SystemCallError's, in the
         /// prelude - is replaced by a new one when it is rescued; the backtrace went with the thrown one, and Dir.mkdir's
         /// Errno::ENOENT had none - a re-raise of it (FileUtils.mkdir_p) got one from the `raise' instead. A LoadError of

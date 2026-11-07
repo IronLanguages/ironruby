@@ -815,7 +815,7 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        private static bool IsVisibleClrFrame(MethodBase/*!*/ method) {
+        internal static bool IsVisibleClrFrame(MethodBase/*!*/ method) {
             if (Microsoft.Scripting.Actions.DynamicSiteHelpers.IsInvisibleDlrStackFrame(method)) {
                 return false;
             }
@@ -836,6 +836,11 @@ namespace IronRuby.Runtime {
             }
             // the stub MethodInfo.Invoke makes for a method it calls often (see MethodBaseInvoker below)
             if (type == null && method.Name.StartsWith("InvokeStub_", StringComparison.Ordinal)) {
+                return false;
+            }
+            // a lambda System.Linq.Expressions compiled without a name: a wrapper the runtime made (a fiber's body run
+            // from compiled code put "0:in 'lambda_method66'" under the fiber's block), never a frame of Ruby code
+            if (type == null && method.Name.StartsWith("lambda_method", StringComparison.Ordinal)) {
                 return false;
             }
             if (type != null) {
