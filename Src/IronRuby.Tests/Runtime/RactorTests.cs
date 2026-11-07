@@ -437,6 +437,32 @@ true
 ");
         }
 
+        /// <summary>
+        /// Ractor.shareable?, Ractor.make_shareable and a message copy over a deeply nested graph: a
+        /// copy deeper than the stack goes is a SystemStackError, not the end of the process.
+        /// </summary>
+        public void Ractor_DeepGraph1() {
+            TestOutput(RactorPrologue + @"
+def deep(n) = (a = []; n.times { a = [a] }; a)
+a = deep(2000)
+r = Ractor.new { Ractor.receive.flatten.size }
+r.send(a)
+p Ractor.shareable?(a), r.value, Ractor.shareable?(Ractor.make_shareable(a))
+a = deep(1_000_000)
+r = Ractor.new { Ractor.receive; :got }
+p Ractor.shareable?(a), (begin; r.send(a); rescue SystemStackError => e; e.class; end)
+r.send(1)
+p r.value
+", @"
+false
+0
+true
+false
+SystemStackError
+:got
+");
+        }
+
         // Each runs its Ractor's block and prints its value, or the error that ended the Ractor.
         private const string RactorIsolationPrologue = RactorPrologue + @"
 Thread.report_on_exception = false
