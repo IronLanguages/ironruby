@@ -131,8 +131,11 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         /// <summary>The number of significant digits, without leading or trailing zeros. Zero has none.</summary>
         public int DigitCount => _digitCount;
 
-        /// <summary>The power of ten the last digit stands for: the value is ±digits * 10**Scale.</summary>
-        private long Scale => _exponent - _digitCount;
+        /// <summary>
+        /// The power of ten the last digit stands for: the value is ±digits * 10**Scale. It is wider than
+        /// the exponent, which can be as small as long.MinValue, and so is every scale computed from it.
+        /// </summary>
+        private Int128 Scale => (Int128)_exponent - _digitCount;
 
         /// <summary>MRI's #sign: the SIGN_* constants.</summary>
         public int SignCode => _type switch {
@@ -179,10 +182,10 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return result;
         }
 
-        internal static BigInteger Pow10(long n) {
+        internal static BigInteger Pow10(Int128 n) {
             Debug.Assert(n >= 0);
             if (n < _powers.Length) {
-                return _powers[n];
+                return _powers[(int)n];
             }
             if (n > Int32.MaxValue) {
                 throw new OutOfMemoryException("failed to allocate memory");
@@ -214,7 +217,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         /// <summary>Removes the trailing zeros of a positive value, adding one to scale for each.</summary>
-        private static BigInteger StripTrailingZeros(BigInteger n, ref long scale) {
+        private static BigInteger StripTrailingZeros(BigInteger n, ref Int128 scale) {
             if (!n.IsEven) {
                 return n;
             }
@@ -256,14 +259,14 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         /// sign * magnitude * 10**scale, exactly: zero is the signed zero, and an exponent beyond MRI's
         /// range overflows to an infinity or underflows to zero (raising, if the mode says so).
         /// </summary>
-        internal static BigDecimal/*!*/ Create(Config/*!*/ config, int sign, BigInteger magnitude, long scale) {
+        internal static BigDecimal/*!*/ Create(Config/*!*/ config, int sign, BigInteger magnitude, Int128 scale) {
             Debug.Assert(magnitude.Sign >= 0);
             if (magnitude.IsZero) {
                 return Zero(sign);
             }
             magnitude = StripTrailingZeros(magnitude, ref scale);
             int count = CountDigits(magnitude);
-            Int128 exponent = (Int128)scale + count;
+            Int128 exponent = scale + count;
             if (exponent > MaxExponent) {
                 return ExponentOverflow(config, sign);
             }
@@ -274,7 +277,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         /// <summary>An unscaled value carrying its own sign, times 10**scale; zero is +0.</summary>
-        internal static BigDecimal/*!*/ Create(Config/*!*/ config, BigInteger value, long scale) {
+        internal static BigDecimal/*!*/ Create(Config/*!*/ config, BigInteger value, Int128 scale) {
             return Create(config, value.Sign < 0 ? -1 : 1, BigInteger.Abs(value), scale);
         }
 
@@ -716,21 +719,22 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             }
 
             // An exponent beyond MRI's 64-bit one makes an infinity of a positive exponent and zero of a
-            // negative one.
+            // negative one, whatever the digits before it: 17e-9223372036854775809 is zero.
             BigInteger exponent = exponentText.Length > 0 ? BigInteger.Parse(exponentText, CultureInfo.InvariantCulture) : BigInteger.Zero;
             if (exponentNegative) {
                 exponent = -exponent;
             }
             BigInteger decimalExponent = exponent + digits.Length - fraction.Length;
-            if (decimalExponent > MaxExponent) {
+            if (exponent > long.MaxValue || decimalExponent > MaxExponent) {
                 Raise(config, ExceptionModes.Infinity, "exponent overflow");
                 return CheckResult(config, Infinity(sign));
             }
-            BigInteger scale = exponent - fraction.Length;
-            if (decimalExponent < MinExponent || scale < long.MinValue) {
+            if (exponent < long.MinValue || decimalExponent < MinExponent) {
                 return Zero(sign);
             }
-            return Create(config, sign, BigInteger.Parse(digits, CultureInfo.InvariantCulture), (long)scale);
+            // within a string's length of the exponent, so an Int128 holds it
+            Int128 scale = (Int128)(exponent - fraction.Length);
+            return Create(config, sign, BigInteger.Parse(digits, CultureInfo.InvariantCulture), scale);
         }
 
         #endregion
@@ -799,7 +803,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         /// in magnitude - a quotient or root that did not come out exactly - which turns a tie into
         /// more than half and an exact value into an inexact one. A result of zero keeps the sign.
         /// </summary>
-        internal static BigDecimal/*!*/ RoundAt(Config/*!*/ config, int sign, BigInteger magnitude, long scale, long position,
+        internal static BigDecimal/*!*/ RoundAt(Config/*!*/ config, int sign, BigInteger magnitude, Int128 scale, Int128 position,
             RoundingModes mode, bool sticky) {
 
             if (position <= scale) {
@@ -810,7 +814,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 scale = position - 1;
             }
 
-            Int128 drop = (Int128)position - scale;
+            Int128 drop = position - scale;
             BigInteger quotient;
             int comparedToHalf;
             bool inexact;
@@ -835,7 +839,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         /// <summary>Rounds to <paramref name="digits"/> significant digits (MRI's VpLeftRound).</summary>
-        internal static BigDecimal/*!*/ RoundToDigits(Config/*!*/ config, int sign, BigInteger magnitude, long scale, int digits,
+        internal static BigDecimal/*!*/ RoundToDigits(Config/*!*/ config, int sign, BigInteger magnitude, Int128 scale, int digits,
             RoundingModes mode, bool sticky) {
 
             if (magnitude.IsZero) {
@@ -849,7 +853,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             if (!x.IsNonZeroFinite || digits <= 0 || x._digitCount <= digits) {
                 return x;
             }
-            return RoundAt(config, x._sign, x._digits, x.Scale, x._exponent - digits, mode, false);
+            return RoundAt(config, x._sign, x._digits, x.Scale, (Int128)x._exponent - digits, mode, false);
         }
 
         /// <summary>The global limit applied to the result of an operation (MRI's VpLimitRound).</summary>
@@ -867,10 +871,10 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             if (!x.IsNonZeroFinite) {
                 return x;
             }
-            if (mode == RoundingModes.Up && places + WordExponent(x._exponent) * BASE_FIG < 0) {
+            if (mode == RoundingModes.Up && (Int128)places + WordExponent(x._exponent) * BASE_FIG < 0) {
                 return Zero(x._sign);
             }
-            return RoundAt(config, x._sign, x._digits, x.Scale, -places, mode, false);
+            return RoundAt(config, x._sign, x._digits, x.Scale, -(Int128)places, mode, false);
         }
 
         /// <summary>MRI's exponent in 9-digit words: the number is 0.[w0 w1 ...] * 10**(9 * WordExponent).</summary>
@@ -922,21 +926,21 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 smallSign = x._sign;
             }
             BigInteger smallDigits = small._digits;
-            long smallScale = small.Scale;
+            Int128 smallScale = small.Scale;
 
             // An operand that lies wholly below both the other's last digit and the rounding position
             // only decides which way the rounding goes, as any smaller value of the same sign would; one
             // a long way down is replaced by a single digit, so that 1e1000000000 + 1 rounds without first
             // writing out a billion digits.
             if (limit > 0) {
-                long floor = Math.Min(big.Scale, big._exponent - limit) - 2;
+                Int128 floor = Int128.Min(big.Scale, (Int128)big._exponent - limit) - 2;
                 if (small._exponent < floor && floor - smallScale > 1000) {
                     smallDigits = BigInteger.One;
                     smallScale = floor - 1;
                 }
             }
 
-            long scale = Math.Min(big.Scale, smallScale);
+            Int128 scale = Int128.Min(big.Scale, smallScale);
             BigInteger sum = bigSign * big._digits * Pow10(big.Scale - scale) + smallSign * smallDigits * Pow10(smallScale - scale);
             if (sum.IsZero) {
                 return PositiveZero;
@@ -1049,7 +1053,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             }
 
             // exactly, at the exponent of the finer of the two
-            long scale = Math.Min(x.Scale, y.Scale);
+            Int128 scale = Int128.Min(x.Scale, y.Scale);
             BigInteger a = x._sign * x._digits * Pow10(x.Scale - scale);
             BigInteger b = y._sign * y._digits * Pow10(y.Scale - scale);
             BigInteger q = BigInteger.DivRem(a, b, out BigInteger r);
@@ -1210,7 +1214,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         /// <summary>The digits after the decimal point.</summary>
-        public long ScaleDigits => IsNonZeroFinite ? Math.Max(0, -Scale) : 0;
+        public long ScaleDigits => IsNonZeroFinite ? (long)Int128.Max(0, -Scale) : 0;
 
         /// <summary>
         /// The digits MRI's representation holds, 9 to a word with the words aligned at the decimal point -
@@ -1221,10 +1225,14 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 if (!IsNonZeroFinite) {
                     return BASE_FIG;
                 }
-                long words = Math.DivRem(_exponent - 1, BASE_FIG, out long r1) - (r1 < 0 ? 1 : 0)
-                    - (Math.DivRem(Scale, BASE_FIG, out long r2) - (r2 < 0 ? 1 : 0)) + 1;
-                return words * BASE_FIG;
+                Int128 words = FloorDivide((Int128)_exponent - 1, BASE_FIG) - FloorDivide(Scale, BASE_FIG) + 1;
+                return (long)(words * BASE_FIG);
             }
+        }
+
+        private static Int128 FloorDivide(Int128 n, int d) {
+            var (quotient, remainder) = Int128.DivRem(n, d);
+            return remainder < 0 ? quotient - 1 : quotient;
         }
 
         #endregion

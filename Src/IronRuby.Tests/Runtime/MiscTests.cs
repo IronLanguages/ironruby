@@ -5351,6 +5351,42 @@ identity: [false, true, 1]
         }
 
         /// <summary>
+        /// Exponents at the ends of MRI's 64-bit range: a scale (the exponent less the digit count) below
+        /// long.MinValue, and a product or quotient beyond either end, underflow or overflow as bigdecimal
+        /// 4.0.1 does instead of wrapping around to a huge exponent of the other sign.
+        /// </summary>
+        public void BigDecimal_ExponentLimits1() {
+            TestOutput(@"
+require 'ruby4'
+require 'bigdecimal'
+def t(label)
+  r = begin; v = yield; v.is_a?(BigDecimal) ? v.to_s : v.inspect; rescue => e; ""#{e.class}: #{e.message}""; end
+  puts ""#{label}: #{r}""
+end
+tiny = BigDecimal('1e-9223372036854775800')
+t('pow') { BigDecimal('1e-5000000000000000000') ** 2 }
+t('mul') { tiny * BigDecimal('1e-100') }
+t('div') { tiny / BigDecimal('1e100') }
+t('mul over') { BigDecimal('1e9223372036854775700') * BigDecimal('1e1000') }
+t('underflow mode') { BigDecimal.save_exception_mode { BigDecimal.mode(BigDecimal::EXCEPTION_UNDERFLOW, true); tiny * BigDecimal('1e-100') } }
+t('underflow mode div') { BigDecimal.save_exception_mode { BigDecimal.mode(BigDecimal::EXCEPTION_UNDERFLOW, true); tiny / BigDecimal('1e100') } }
+t('parse') { [BigDecimal('0.123456e-9223372036854775805'), BigDecimal('0.1e-9223372036854775808'), BigDecimal('17e-9223372036854775809')].join(' ') }
+t('small ops') { x = BigDecimal('0.123456e-9223372036854775805'); [x / 3, x * 3, x + x, x.frac, BigDecimal('0.1e-9223372036854775807') / 10].join(' ') }
+t('small dump') { BigDecimal('0.123456e-9223372036854775805')._dump }
+", @"
+pow: 0.0
+mul: 0.0
+div: 0.0
+mul over: Infinity
+underflow mode: FloatDomainError: Exponent underflow
+underflow mode div: FloatDomainError: Exponent underflow
+parse: ""0.123456e-9223372036854775805 0.1e-9223372036854775808 0.0""
+small ops: ""0.41152e-9223372036854775806 0.370368e-9223372036854775805 0.246912e-9223372036854775805 0.123456e-9223372036854775805 0.1e-9223372036854775808""
+small dump: ""18:0.123456e-9223372036854775805""
+");
+        }
+
+        /// <summary>
         /// BasicObject#equal? is identity, separate from #== - a class whose == calls equal?
         /// (Set#==) must not recurse through BaseEquals into its own ==.
         /// </summary>
