@@ -690,6 +690,48 @@ namespace IronRuby.Runtime {
             return "<ir>" + name;
         }
 
+        // Library files outside the core (RubyStackTraceBuilder.IsInternalFile) that stand in for a C
+        // extension and keep their objects' state the same way.
+        private static readonly string[]/*!*/ _HiddenStateLibraryFiles = {
+            "/ironruby/coverage.rb", "/ironruby/json.rb", "/ironruby/io/console.rb",
+        };
+
+        /// <summary>
+        /// True for the Ruby-written parts of IronRuby whose @__name__ instance variables are their own
+        /// state - what MRI keeps in a C struct - rather than the object's (see <see cref="GetCoreStateInstanceVariableName"/>).
+        /// </summary>
+        public static bool KeepsHiddenState(string path) {
+            if (path == null) {
+                return false;
+            }
+            if (RubyStackTraceBuilder.IsInternalFile(path)) {
+                return true;
+            }
+            path = path.Replace('\\', '/');
+            foreach (var suffix in _HiddenStateLibraryFiles) {
+                if (path.EndsWith(suffix, StringComparison.Ordinal)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The name an @__name__ instance variable written in the Ruby-written core (<see cref="KeepsHiddenState"/>)
+        /// is kept under: a hidden one (<see cref="GetHiddenInstanceVariableName"/>), so that #instance_variables,
+        /// #inspect and Marshal do not see it - MRI keeps that state in C - while the same spelling in any other
+        /// code is an ordinary instance variable, as it is in MRI (gems use @__memoized__, @__Lock__ and the like).
+        /// C# code and the core's reflective calls (__ir_hidden_ivar__) reach it by this name too.
+        /// </summary>
+        public static string/*!*/ GetCoreStateInstanceVariableName(string/*!*/ name) {
+            Debug.Assert(IsCoreStateInstanceVariableName(name));
+            return GetHiddenInstanceVariableName(name);
+        }
+
+        public static bool IsCoreStateInstanceVariableName(string/*!*/ name) {
+            return name.Length > 5 && name.StartsWith("@__", StringComparison.Ordinal) && name.EndsWith("__", StringComparison.Ordinal);
+        }
+
         public static void CheckInstanceVariableName(string name) {
             if (!Tokenizer.IsInstanceVariableName(name)) {
                 throw RubyExceptions.CreateNameError(String.Format("'{0}' is not allowed as an instance variable name", name));

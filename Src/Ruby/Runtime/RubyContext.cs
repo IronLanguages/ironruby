@@ -2764,26 +2764,22 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// False for the runtime's angle-bracketed slots and for @__name__: the Ruby-written parts
-        /// of the core (the prelude, rational.rb, complex.rb) keep their state in ivars spelled the
-        /// way their helper methods are (see RubyModule.IsHelperName). MRI keeps the state of a
-        /// Rational, an Enumerator or a Random in a C struct, so neither #instance_variables nor
-        /// #inspect nor Marshal sees it.
+        /// False for the runtime's angle-bracketed slots: the finalizer, a Data's members and the
+        /// state of the Ruby-written core (the prelude's @__name__ variables, which the compiler
+        /// keeps under hidden names, see RubyUtils.GetCoreStateInstanceVariableName). MRI keeps the
+        /// state of a Set, an Enumerator or a Random in a C struct, so neither #instance_variables
+        /// nor #inspect nor Marshal sees it. An @__name__ written by any other code is an ordinary
+        /// instance variable, as it is in MRI.
         /// </summary>
         internal static bool IsVisibleInstanceVariableName(string/*!*/ name) {
-            if (name.Length == 0) {
-                return true;
-            }
-            if (name[0] == '<') {
-                return false;
-            }
-            return !(name.Length > 5 && name.StartsWith("@__", StringComparison.Ordinal) && name.EndsWith("__", StringComparison.Ordinal));
+            return name.Length == 0 || name[0] != '<';
         }
 
         /// <summary>
         /// The object's state kept in instance variables: the visible ones and those the runtime keeps
-        /// under names Ruby cannot spell (<see cref="RubyUtils.GetHiddenInstanceVariableName"/>, a Data's
-        /// members), which a deep copy or deep freeze has to reach too.
+        /// under names Ruby cannot spell (<see cref="RubyUtils.GetHiddenInstanceVariableName"/>: a Data's
+        /// members, the core's own state such as a Set's table), which a deep copy or deep freeze has to
+        /// reach too, as MRI's traversal reaches the hidden ivars and C references of an object.
         /// </summary>
         public string[]/*!*/ GetStateInstanceVariableNames(object obj) {
             RubyInstanceData data = TryGetInstanceData(obj);
@@ -4335,8 +4331,8 @@ namespace IronRuby.Runtime {
             // ivar of Process); it was nil then.
             object process;
             if (ObjectClass.TryGetConstant(null, "Process", out process) && process is RubyModule processModule &&
-                TryGetInstanceVariable(processModule, "@__argv0__", out _)) {
-                SetInstanceVariable(processModule, "@__argv0__",
+                TryGetInstanceVariable(processModule, RubyUtils.GetCoreStateInstanceVariableName("@__argv0__"), out _)) {
+                SetInstanceVariable(processModule, RubyUtils.GetCoreStateInstanceVariableName("@__argv0__"),
                     (CommandLineProgramPath != null) ? (object)CommandLineProgramPath.Clone().Freeze() : null);
             }
         }

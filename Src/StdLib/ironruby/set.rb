@@ -291,16 +291,16 @@ class Set
   # Dup internal hash.
   def initialize_copy(orig)
     super
-    @__hash__ = orig.instance_variable_get(:@__hash__).dup
+    @__hash__ = orig.__send__(:__ir_hidden_ivar__, :@__hash__).dup
     # a copy taken inside #each is not itself being iterated
-    remove_instance_variable(:@__iter_lev__) if defined?(@__iter_lev__)
+    @__iter_lev__ = nil if @__iter_lev__
   end
 
   # Clone internal hash.
   def initialize_clone(orig, **options)
     super
-    @__hash__ = orig.instance_variable_get(:@__hash__).clone(**options)
-    remove_instance_variable(:@__iter_lev__) if defined?(@__iter_lev__) && !frozen?
+    @__hash__ = orig.__send__(:__ir_hidden_ivar__, :@__hash__).clone(**options)
+    @__iter_lev__ = nil if @__iter_lev__ && !frozen?
   end
 
   def freeze    # :nodoc:
@@ -340,7 +340,7 @@ class Set
     __check_frozen__
     raise RuntimeError, "cannot replace set during iteration" if @__iter_lev__
     if enum.instance_of?(self.class)
-      @__hash__.replace(enum.instance_variable_get(:@__hash__))
+      @__hash__.replace(enum.__send__(:__ir_hidden_ivar__, :@__hash__))
       self
     else
       __do_with_enum__(enum)  # make sure enum is enumerable before calling clear
@@ -413,7 +413,7 @@ class Set
   def superset?(set)
     case
     when set.instance_of?(self.class) && @__hash__.respond_to?(:>=)
-      @__hash__ >= set.instance_variable_get(:@__hash__)
+      @__hash__ >= set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
       size >= set.size && set.all?(self)
     else
@@ -426,7 +426,7 @@ class Set
   def proper_superset?(set)
     case
     when set.instance_of?(self.class) && @__hash__.respond_to?(:>)
-      @__hash__ > set.instance_variable_get(:@__hash__)
+      @__hash__ > set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
       size > set.size && set.all?(self)
     else
@@ -439,7 +439,7 @@ class Set
   def subset?(set)
     case
     when set.instance_of?(self.class) && @__hash__.respond_to?(:<=)
-      @__hash__ <= set.instance_variable_get(:@__hash__)
+      @__hash__ <= set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
       size <= set.size && all?(set)
     else
@@ -452,7 +452,7 @@ class Set
   def proper_subset?(set)
     case
     when set.instance_of?(self.class) && @__hash__.respond_to?(:<)
-      @__hash__ < set.instance_variable_get(:@__hash__)
+      @__hash__ < set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
       size < set.size && all?(set)
     else
@@ -526,7 +526,7 @@ class Set
         if @__iter_lev__ > 1
           @__iter_lev__ -= 1
         else
-          remove_instance_variable(:@__iter_lev__)
+          @__iter_lev__ = nil
         end
       end
     end
@@ -636,7 +636,7 @@ class Set
     raise RuntimeError, "cannot add to set during iteration" if @__iter_lev__
     enums.each do |enum|
       if enum.instance_of?(self.class)
-        @__hash__.update(enum.instance_variable_get(:@__hash__))
+        @__hash__.update(enum.__send__(:__ir_hidden_ivar__, :@__hash__))
       else
         __do_with_enum__(enum) { |o| add(o) }
       end
@@ -721,7 +721,7 @@ class Set
     if self.equal?(other)
       true
     elsif other.instance_of?(self.class)
-      @__hash__ == other.instance_variable_get(:@__hash__)
+      @__hash__ == other.__send__(:__ir_hidden_ivar__, :@__hash__)
     elsif other.is_a?(Set) && self.size == other.size
       other.all? { |o| @__hash__.include?(o) }
     else

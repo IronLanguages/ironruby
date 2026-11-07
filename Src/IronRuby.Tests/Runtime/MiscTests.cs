@@ -2965,6 +2965,68 @@ true
         }
 
         /// <summary>
+        /// A Set's instance variables of its own go in an "I" wrapper around the 'o' record that holds its table, as
+        /// MRI 4.0 writes them, and an 'o' record of a Set holding anything besides "@hash" loses it, as in MRI.
+        /// </summary>
+        public void Marshal_SetIVars1() {
+            TestOutput(@"
+require 'ruby4'
+s = Set[1]; s.instance_variable_set(:@x, 5)
+d = Marshal.dump(s); p d
+o = Marshal.load(d); p o, o.instance_variables, o.instance_variable_get(:@x)
+o = Marshal.load(""\x04\bo:\bSet\a:\n@hash}\x06i\x06TF:\a@xi\n"".b); p o, o.instance_variables
+class MySet < Set; end
+m = MySet[2]; m.instance_variable_set(:@y, [m]); d = Marshal.dump(m); p d
+o = Marshal.load(d); p o.class, o.instance_variable_get(:@y)[0].equal?(o), Marshal.dump(Set[1])
+", @"
+""\x04\bIo:\bSet\x06:\n@hash}\x06i\x06TF\x06:\a@xi\n""
+Set[1]
+[:@x]
+5
+Set[1]
+[]
+""\x04\bIo:\nMySet\x06:\n@hash}\x06i\aTF\x06:\a@y[\x06@\x00""
+MySet
+true
+""\x04\bo:\bSet\x06:\n@hash}\x06i\x06TF""
+");
+        }
+
+        /// <summary>
+        /// An exception MRI dumped loads as MRI loads it: "bt_locations" is not an instance variable of the result, which
+        /// has no Locations; a NoMethodError's message dumped as a NameError::message is its string, and NameError's name,
+        /// NoMethodError's args and private_call? are the error's own again - and IronRuby writes them as MRI does. The
+        /// prelude's record of an exception's Locations is not an instance variable either.
+        /// </summary>
+        public void Marshal_NameError1() {
+            TestOutput(@"
+require 'ruby4'
+x = Marshal.load(""\x04\bo:\x12NoMethodError\v:\tmesgIu:\x17NameError::message#undefined method 'foo' for nil\x06:\x06EF:\abt[\x06I\""\x15-e:1:in '<main>'\x06;\bF:\tname:\bfoo:\targs[\x00:\x12private_call?T:\x11bt_locations@\a"".b)
+p x.message, x.name, x.args, x.private_call?, x.backtrace, x.backtrace_locations, x.instance_variables
+p Marshal.dump(NameError.new('x', :foo, receiver: 1)) == ""\x04\bo:\x0ENameError\b:\tmesgI\""\x06x\x06:\x06ET:\abt0:\tname:\bfoo"".b
+p Marshal.dump(NoMethodError.new) == ""\x04\bo:\x12NoMethodError\n:\tmesg0:\abt0:\tname0:\targs0:\x12private_call?F"".b
+y = Marshal.load(Marshal.dump(NoMethodError.new('x', :bar, [1, 2], true))); p y.name, y.args, y.private_call?, y.instance_variables
+e = (raise 'q' rescue $!); e.backtrace_locations; p e.instance_variables, Marshal.load(Marshal.dump(e)).backtrace_locations
+", @"
+""undefined method 'foo' for nil""
+:foo
+[]
+true
+[""-e:1:in '<main>'""]
+nil
+[]
+true
+true
+:bar
+[1, 2]
+true
+[]
+[]
+nil
+");
+        }
+
+        /// <summary>
         /// Data.new reports a missing member before an unknown keyword, as MRI's rb_data_initialize_m does, and Data.define
         /// and Struct.new refuse only setter names (rb_is_attrset_id) as members, so `[]=` is allowed. All in the prelude.
         /// </summary>
@@ -3153,6 +3215,53 @@ true
 #<Enumerator: [1]:m({""a"" => 1})>
 #<Enumerator: [1]:m(a b: 1)>
 [:@a]
+");
+        }
+
+        /// <summary>
+        /// Only the core's own @__name__ state is hidden: the same spelling in a program (gems use @__memoized__,
+        /// @__Lock__) is an ordinary instance variable, as in MRI - listed, inspected, copied, marshaled, and frozen
+        /// by Ractor.make_shareable - while a Set's or a KeyError's state still is not, and a deep freeze reaches it.
+        /// </summary>
+        public void Prelude_HiddenState2() {
+            TestOutput(@"
+require 'ruby4'
+class Foo; attr_reader :__c__; def initialize; @__c__ = +'s'; @a = 2; end; end
+f = Foo.new
+p f.instance_variables, f.instance_variable_get(:@__c__), f.instance_variable_defined?(:@__c__), f.inspect.include?('@__c__')
+p f.dup.__c__, Marshal.load(Marshal.dump(f)).__c__, Marshal.dump(f).include?('@__c__')
+p Ractor.make_shareable(Foo.new).__c__.frozen?
+o = Object.new; o.instance_variable_set(:@__x__, 1); p o.instance_variables, o.remove_instance_variable(:@__x__), o.instance_variables
+s = Set[+'a']; s.each { s.dup.each {} }
+p s.instance_variables, s.dup.instance_variables, s, Marshal.dump(s) == Marshal.dump(Set['a'])
+Ractor.make_shareable(s); p s.frozen?, s.first.frozen?
+k = KeyError.new('x', receiver: 1, key: 2); p k.instance_variables, k.receiver, k.key
+p Errno.instance_variables, Process.instance_variables, Random.instance_variables, Random.new(3) == Random.new(3)
+", @"
+[:@__c__, :@a]
+""s""
+true
+true
+""s""
+""s""
+true
+true
+[:@__x__]
+1
+[]
+[]
+[]
+Set[""a""]
+true
+true
+true
+[]
+1
+2
+[]
+[]
+[]
+true
 ");
         }
 

@@ -25,7 +25,7 @@ namespace IronRuby.Compiler.Ast {
     public partial class InstanceVariable : Variable {
         public InstanceVariable(string/*!*/ name, SourceSpan location)
             : base(name, location) {
-            Debug.Assert(name.StartsWith("@"));
+            Debug.Assert(name.StartsWith("@") || name.StartsWith(RubyUtils.GetHiddenInstanceVariableName("@"), System.StringComparison.Ordinal));
         }
 
         internal override MSA.Expression/*!*/ TransformReadVariable(AstGenerator/*!*/ gen, bool tryRead) {

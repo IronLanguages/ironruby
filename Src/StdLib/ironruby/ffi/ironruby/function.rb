@@ -276,11 +276,11 @@ module FFI
     # the call would leave a library like libcurl calling freed memory the next
     # time it used the callback it was handed.
     def closure_for(type, callable)
-      cache = callable.instance_variable_get(:@__ffi_closures__)
+      cache = callable.__send__(:__ir_hidden_ivar__, :@__ffi_closures__)
       unless cache
         cache = {}
         begin
-          callable.instance_variable_set(:@__ffi_closures__, cache)
+          callable.__send__(:__ir_set_hidden_ivar__, :@__ffi_closures__, cache)
         rescue FrozenError, RuntimeError
           # a frozen callable cannot hold the cache; the closure then lives
           # only as long as the call, which is all that can be promised

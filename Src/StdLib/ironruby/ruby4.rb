@@ -2074,7 +2074,7 @@ class << IO
       end
     end
 
-    io.instance_variable_set(:@__popen_pid__, pid)
+    io.__send__(:__ir_set_hidden_ivar__, :@__popen_pid__, pid)
     io.extend(::IO.__send__(:__popen_child__))
     # As for IO.pipe, MRI's popen IO is sync: what is written goes to the child rather
     # than sitting in a buffer until the IO is closed.
@@ -4027,7 +4027,8 @@ module Errno
   @__errno_table__ = {}
   @__errno_classes__ = {}
   class << self
-    attr_reader :__errno_table__, :__errno_classes__
+    def __errno_table__ = @__errno_table__
+    def __errno_classes__ = @__errno_classes__
   end
 
   # Every class below is a new receiver, so a call like klass.const_set(...) would bind
@@ -4036,7 +4037,7 @@ module Errno
   # them on these classes yet: this runs before any program code.
   const_set_on = ::Module.instance_method(:const_set)
   const_defined_on = ::Module.instance_method(:const_defined?)
-  ivar_set_on = ::Kernel.instance_method(:instance_variable_set)
+  ivar_set_on = ::Kernel.instance_method(:__ir_set_hidden_ivar__)
 
   missing = []
   __ir_errno_table__.each do |name, errno, message|
@@ -4109,7 +4110,7 @@ class SystemCallError
   # one that sets Errno itself - says what strerror says for it.
   def self.__default_message__(klass, errno)
     while klass && klass < ::SystemCallError
-      message = klass.instance_variable_get(:@__message__)
+      message = klass.__send__(:__ir_hidden_ivar__, :@__message__)
       return message if message
       klass = klass.superclass
     end
@@ -5448,7 +5449,7 @@ class Enumerator
         # MRI answers `to_enum(:chunk)`: a Lazy whose #each block becomes the chunk block.
         source = self
         deferred = Lazy.__raw__ { |y| }
-        deferred.instance_variable_set(:@__deferred__, lambda { |blk| source.chunk(&blk) })
+        deferred.__send__(:__ir_set_hidden_ivar__, :@__deferred__, lambda { |blk| source.chunk(&blk) })
         return deferred
       end
       source = self
@@ -7623,9 +7624,9 @@ module Process
     # after $0 is assigned to. setproctitle is what assignment goes through. MRI has no
     # constant for it: a hidden ivar of the module, which RubyContext sets again once the
     # main script is known.
-    @__argv0__ = ($0 && $0.dup.freeze) unless instance_variable_defined?(:@__argv0__)
+    @__argv0__ = ($0 && $0.dup.freeze) unless defined?(@__argv0__)
     class << self
-      attr_reader :__argv0__
+      def __argv0__ = @__argv0__
     end
 
     def argv0
@@ -8638,7 +8639,7 @@ unless defined?(Random)
 
     def initialize_copy(other)
       super
-      @__mt__ = other.instance_variable_get(:@__mt__).copy
+      @__mt__ = other.__send__(:__ir_hidden_ivar__, :@__mt__).copy
       self
     end
 
@@ -8658,7 +8659,7 @@ unless defined?(Random)
 
     def ==(other)
       other.is_a?(::Random) && self.class == other.class &&
-        @__mt__.state_equals(other.instance_variable_get(:@__mt__)) && seed == other.seed
+        @__mt__.state_equals(other.__send__(:__ir_hidden_ivar__, :@__mt__)) && seed == other.seed
     end
 
     def rand(limit = nil)
@@ -8752,7 +8753,7 @@ unless defined?(Random)
     # rand_srand: reseeds the default generator and answers the seed it had.
     def self.srand(number = new_seed)
       previous = ::Random.__send__(:__default__).seed
-      ::Random.instance_variable_set(:@__default__, ::Random.new(number))
+      ::Random.__send__(:__ir_set_hidden_ivar__, :@__default__, ::Random.new(number))
       previous
     end
   end
@@ -10985,7 +10986,7 @@ class << Struct
     end
 
     klass = args.empty? ? __struct_new__(nil) : __struct_new__(*args)
-    klass.instance_variable_set(:@__keyword_init__, keyword_init)
+    klass.__send__(:__ir_set_hidden_ivar__, :@__keyword_init__, keyword_init)
     # only classes created by Struct.new answer #keyword_init?, not every Struct subclass
     klass.define_singleton_method(:keyword_init?) { @__keyword_init__ }
     if keyword_init
@@ -11073,28 +11074,28 @@ class Exception
   def set_backtrace(value)
     if ::Array === value && !value.empty? &&
        value.all? { |v| ::Thread::Backtrace::Location === v }
-      @__backtrace_locations = value
+      @__backtrace_locations__ = value
       __core_set_backtrace__(value.map(&:to_s))
     else
       # The locations belong to the raise and not to these strings: an exception that
       # was raised keeps the ones it was raised with, and one that never was gets none,
       # however many strings it is given.
-      @__backtrace_locations = backtrace_locations
-      @__backtrace_from_strings = true
+      @__backtrace_locations__ = backtrace_locations
+      @__backtrace_from_strings__ = true
       __core_set_backtrace__(value)
     end
   end
 
   def backtrace_locations
-    return @__backtrace_locations if @__backtrace_locations
-    return nil if defined?(@__backtrace_from_strings)
+    return @__backtrace_locations__ if @__backtrace_locations__
+    return nil if defined?(@__backtrace_from_strings__)
     # a #set_backtrace of the exception's own that did not store the raise's backtrace leaves
     # #backtrace nil, and MRI still has the locations of the raise
     entries = backtrace || __raise_backtrace__
     return nil unless entries
     # The array is answered again as it is, rather than parsed afresh: MRI hands back
     # the one array, and a spec pushes onto it and looks again.
-    @__backtrace_locations = entries.map { |entry| ::Thread::Backtrace::Location.__parse__(entry) }
+    @__backtrace_locations__ = entries.map { |entry| ::Thread::Backtrace::Location.__parse__(entry) }
   end unless method_defined?(:backtrace_locations)
 
   # Whether an uncaught exception would be printed to a terminal. Decides the
@@ -11561,7 +11562,7 @@ class Range
 
   def %(n)
     seq = step(n)
-    seq.instance_variable_set(:@__inspect_str__, [:%, n]) if seq.is_a?(::Enumerator::ArithmeticSequence)
+    seq.__send__(:__ir_set_hidden_ivar__, :@__inspect_str__, [:%, n]) if seq.is_a?(::Enumerator::ArithmeticSequence)
     seq
   end
 

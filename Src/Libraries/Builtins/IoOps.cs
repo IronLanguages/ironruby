@@ -185,7 +185,7 @@ namespace IronRuby.Builtins {
             // and #inspect answer it, and nothing else in the stream knows it.
             object path;
             if (options != null && options.TryGetValue(context.CreateAsciiSymbol("path"), out path) && path != null) {
-                context.SetInstanceVariable(self, "@__io_path__", Protocols.CastToPath(toStr, path));
+                context.SetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__io_path__"), Protocols.CastToPath(toStr, path));
             }
 
             return self;
@@ -269,7 +269,7 @@ namespace IronRuby.Builtins {
             // it to a child, whatever the original had been set to. Kernel#dup copied those two
             // settings across with the rest of the instance variables.
             self.Context.SetInstanceVariable(self, "@__autoclose", true);
-            self.Context.SetInstanceVariable(self, "@__close_on_exec__", true);
+            self.Context.SetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__close_on_exec__"), true);
             return self;
         }
 
@@ -345,7 +345,7 @@ namespace IronRuby.Builtins {
                 int native = self.KernelDescriptor;
                 if (native > 2) {
                     RubyProcess.SetCloseOnExec(native);
-                    self.Context.SetInstanceVariable(self, "@__close_on_exec__", true);
+                    self.Context.SetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__close_on_exec__"), true);
                 }
                 CopyPath(self, source);
                 return self;
@@ -1425,7 +1425,7 @@ namespace IronRuby.Builtins {
                         // A stream that knows its path shows it; one that does not shows its
                         // descriptor, which a closed stream no longer has.
                         object path;
-                        self.Context.TryGetInstanceVariable(self, "@__io_path__", out path);
+                        self.Context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__io_path__"), out path);
                         var pathString = path as MutableString;
                         if (pathString != null) {
                             result.Append(pathString);
@@ -1852,8 +1852,8 @@ namespace IronRuby.Builtins {
                 }
                 if (fd == 1 || fd == 2) {
                     var signal = new SignalException("SIGPIPE");
-                    io.Context.SetInstanceVariable(signal, "@__signo__", 13);
-                    io.Context.SetInstanceVariable(signal, "@__signm__", MutableString.CreateAscii("SIGPIPE"));
+                    io.Context.SetInstanceVariable(signal, RubyUtils.GetCoreStateInstanceVariableName("@__signo__"), 13);
+                    io.Context.SetInstanceVariable(signal, RubyUtils.GetCoreStateInstanceVariableName("@__signm__"), MutableString.CreateAscii("SIGPIPE"));
                     return signal;
                 }
             }
