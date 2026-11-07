@@ -4296,6 +4296,24 @@ end
         }
 
         /// <summary>
+        /// The URI parser IronRuby patches (its \g calls written out) has MRI's constants and no others: the
+        /// pieces the patch builds its host pattern from were public constants of URI::RFC3986_Parser.
+        /// </summary>
+        public void URI_PatchedParserConstants1() {
+            TestOutput(@"
+require 'ruby4'
+require 'uri'
+p URI::RFC3986_Parser.constants.sort
+p URI('http://[::1.2.3.4]:80/x').host, URI('http://10.0.0.255/').host, URI('//[v1.x]/').host
+", @"
+[:FRAGMENT, :HOST, :RFC3986_URI, :RFC3986_relative_ref, :SCHEME, :SEG, :SEG_NC, :USERINFO]
+""[::1.2.3.4]""
+""10.0.0.255""
+""[v1.x]""
+");
+        }
+
+        /// <summary>
         /// Range#min, #max, #include? and #member? in C#, with what they hand the prelude: an Integer or Float
         /// range answered from its endpoints, Strings, blocks, counts, endless and beginless ranges, a break
         /// from the block and a subclass's own #max. The expected output is CRuby's.
