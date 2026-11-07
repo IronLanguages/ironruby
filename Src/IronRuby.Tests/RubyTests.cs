@@ -940,6 +940,7 @@ namespace IronRuby.Tests {
                 Io_LineReaders3,
                 Io_Timeout1,
                 Io_Timeout2,
+                Io_Timeout3,
                 Core_Ruby4Surface1,
                 DidYouMean_Lazy1,
                 NameError_LocalVariables1,
