@@ -1291,7 +1291,54 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 case NumberTypes.NaN: return "NaN";
                 case NumberTypes.Infinite: return "Infinity";
             }
-            return IsZero ? "0" : _digits.ToString(CultureInfo.InvariantCulture);
+            return IsZero ? "0" : ToDecimalString(_digits, _digitCount);
+        }
+
+        // Below this many digits BigInteger.ToString is quick enough on its own.
+        private const int DecimalStringLeafDigits = 2000;
+
+        /// <summary>
+        /// The <paramref name="digitCount"/> decimal digits of a positive value. BigInteger.ToString is
+        /// quadratic in the number of digits - a million take half a minute - so a long value is split at
+        /// 10**(DecimalStringLeafDigits * 2**k) and its halves written out separately, which is as fast as
+        /// the runtime's division (a million digits in well under a second on .NET 10, half the time of
+        /// ToString on .NET 8, whose division is itself quadratic).
+        /// </summary>
+        internal static string/*!*/ ToDecimalString(BigInteger n, int digitCount) {
+            Debug.Assert(n.Sign > 0 && digitCount > 0);
+            if (digitCount <= DecimalStringLeafDigits) {
+                return n.ToString(CultureInfo.InvariantCulture);
+            }
+            // powers[k] = 10**(DecimalStringLeafDigits * 2**k), the last one at least half the digits
+            var powers = new System.Collections.Generic.List<BigInteger> { Pow10(DecimalStringLeafDigits) };
+            for (long d = DecimalStringLeafDigits; d * 2 < digitCount; d *= 2) {
+                powers.Add(powers[powers.Count - 1] * powers[powers.Count - 1]);
+            }
+            var result = new char[digitCount];
+            WriteDecimal(n, result, digitCount, digitCount, powers, powers.Count - 1);
+            return new string(result);
+        }
+
+        // Writes n, which is less than 10**width, into buffer[end - width, end), padded with leading zeros.
+        private static void WriteDecimal(BigInteger n, char[]/*!*/ buffer, int end, int width,
+            System.Collections.Generic.List<BigInteger>/*!*/ powers, int level) {
+
+            while (level >= 0 && (long)DecimalStringLeafDigits << level >= width) {
+                level--;
+            }
+            if (level < 0) {
+                string text = n.IsZero ? "" : n.ToString(CultureInfo.InvariantCulture);
+                int start = end - text.Length;
+                for (int i = end - width; i < start; i++) {
+                    buffer[i] = '0';
+                }
+                text.CopyTo(0, buffer, start, text.Length);
+                return;
+            }
+            int lowWidth = DecimalStringLeafDigits << level;
+            BigInteger high = BigInteger.DivRem(n, powers[level], out BigInteger low);
+            WriteDecimal(low, buffer, end, lowWidth, powers, level - 1);
+            WriteDecimal(high, buffer, end - lowWidth, width - lowWidth, powers, level - 1);
         }
 
         public override string/*!*/ ToString() {
@@ -1323,7 +1370,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
             var sb = new StringBuilder();
             sb.Append(_sign < 0 ? "-" : plusSign);
-            string digits = _digits.ToString(CultureInfo.InvariantCulture);
+            string digits = ToDecimalString(_digits, _digitCount);
             if (!floatFormat) {
                 sb.Append("0.");
                 AppendGroupedFromLeft(sb, digits, group);

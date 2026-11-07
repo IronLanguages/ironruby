@@ -5387,6 +5387,29 @@ small dump: ""18:0.123456e-9223372036854775805""
         }
 
         /// <summary>
+        /// BigDecimal#to_s and #split write a long digit string in pieces split at powers of ten (BigInteger.ToString
+        /// is quadratic); the pieces keep their leading zeros, at and around the split sizes.
+        /// </summary>
+        public void BigDecimal_LongDigits1() {
+            TestOutput(@"
+require 'ruby4'
+require 'bigdecimal'
+srand(3)
+ok = [1999, 2000, 2001, 4001, 9000, 20000].map do |d|
+  s = '1' + (1...d - 1).map { rand(10).to_s }.join + '7'
+  s[d / 3, d / 4] = '0' * (d / 4)
+  x = BigDecimal(""0.#{s}e3"")
+  [x.split[1] == s, x.to_s == ""0.#{s}e3"", x.to_s('F') == ""#{s[0, 3]}.#{s[3..]}"", (-x).to_s('5F').delete(' ') == ""-#{s[0, 3]}.#{s[3..]}""]
+end
+p ok.flatten.uniq
+p (BigDecimal('1e10000') + 1).to_s('F') == '1' + '0' * 9999 + '1.0'
+", @"
+[true]
+true
+");
+        }
+
+        /// <summary>
         /// BasicObject#equal? is identity, separate from #== - a class whose == calls equal?
         /// (Set#==) must not recurse through BaseEquals into its own ==.
         /// </summary>
