@@ -868,6 +868,7 @@ Caught LoadError
         /// <summary>
         /// A subclass of SystemCallError reads its errno from its Errno constant, which for a class outside
         /// Errno is the Errno module (a TypeError, as in MRI). The location is shown only with a message.
+        /// The text of errno 7 is the C library's: Windows' CRT calls E2BIG "Arg list too long".
         /// </summary>
         public void SystemCallErrorSubclass1() {
             TestOutput(@"
@@ -883,7 +884,7 @@ class E2 < Errno::ENOENT; end
 #<TypeError: no implicit conversion of Module into Integer>
 #<TypeError: no implicit conversion of Module into Integer>
 #<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
-#<MyErr2: Argument list too long @ f - q>
+#<MyErr2: " + (Environment.OSVersion.Platform == PlatformID.Win32NT ? "Arg" : "Argument") + @" list too long @ f - q>
 #<E2: No such file or directory @ 3 - x>
 #<Errno::ENOENT: No such file or directory>
 ");
@@ -1040,8 +1041,12 @@ Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
         /// Socket::ResolutionError (a plain SocketError). connect(2) with a timeout - IO#timeout,
         /// Addrinfo#connect(timeout:), Socket.tcp - reads SO_ERROR for the verdict as CRuby does since
         /// [Bug #22223]; Addrinfo#connect and Socket.tcp ignored the timeout altogether.
+        /// Windows reports the ICMP error as WSAECONNRESET (CRuby's ECONNRESET there too), and retries
+        /// a refused connect for about two seconds, so a connect with no time at all has timed out.
         /// </summary>
         public void Errno_SocketCalls3() {
+            bool windows = Environment.OSVersion.Platform == PlatformID.Win32NT;
+            string icmp = windows ? "Errno::ECONNRESET" : "Errno::ECONNREFUSED";
             TestOutput(@"
 require 'ruby4'
 require 'socket'
@@ -1075,10 +1080,9 @@ t { Socket.tcp('127.0.0.1', port, connect_timeout: 5) }
 t { Addrinfo.tcp('127.0.0.1', port).connect(timeout: 0) }
 t { s = Socket.new(:INET, :STREAM); s.timeout = 5; s.connect(Socket.sockaddr_in(port, '127.0.0.1')) }
 t { TCPSocket.new('127.0.0.1', port, connect_timeout: 5) }
-", @"
-Errno::ECONNREFUSED - recvfrom(2)
-Errno::ECONNREFUSED
-Errno::ECONNREFUSED - recvfrom(2)
+", icmp + @" - recvfrom(2)
+" + icmp + @"
+" + icmp + @" - recvfrom(2)
 Socket::ResolutionError
 true
 true
@@ -1087,7 +1091,7 @@ true
 true
 ArgumentError
 Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
-Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
+" + (windows ? "Errno::ETIMEDOUT - user specified timeout" : "Errno::ECONNREFUSED - connect(2)") + @" for 127.0.0.1:PORT
 Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
 Errno::ECONNREFUSED - connect(2) for ""127.0.0.1"" port PORT
 ");

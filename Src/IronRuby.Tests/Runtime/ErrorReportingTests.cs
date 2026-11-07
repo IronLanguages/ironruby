@@ -37,7 +37,7 @@ require 'ironruby/did_you_mean'
 require 'tmpdir'
 Dir.mktmpdir do |d|
   file = File.join(d, 'eh.rb')
-  File.write(file, <<~'RUBY')
+  File.binwrite(file, <<~'RUBY')
     def t
       yield
     rescue Exception => e

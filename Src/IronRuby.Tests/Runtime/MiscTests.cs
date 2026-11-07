@@ -1692,9 +1692,13 @@ Integer
 
         /// <summary>
         /// Process.maxgroups= is read back by Process.maxgroups (it set an ivar the getter did not read), takes a positive
-        /// Integer by implicit conversion and caps it at 65536, as MRI's does.
+        /// Integer by implicit conversion and caps it at 65536, as MRI's does. Not on Windows, which has
+        /// no supplementary groups: there both are NotImplementedError, as in CRuby.
         /// </summary>
         public void Process_MaxGroups1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
             TestOutput(@"
 require 'ruby4'
 def t; p yield; rescue => e; p e; end

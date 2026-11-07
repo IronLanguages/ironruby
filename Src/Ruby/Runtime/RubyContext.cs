@@ -4802,6 +4802,7 @@ namespace IronRuby.Runtime {
             }
         }
 
+        // Warning.warn gets the line as MRI gives it, ending in "\n" - not AppendLine's "\r\n" on Windows.
         internal static string/*!*/ FormatWarning(string/*!*/ message, string file, int line) {
             var sb = new StringBuilder();
             sb.Append(file ?? "unknown");
@@ -4809,7 +4810,7 @@ namespace IronRuby.Runtime {
             sb.Append(file != null ? line : 0);
             sb.Append(": warning: ");
             sb.Append(message);
-            sb.AppendLine();
+            sb.Append('\n');
             return sb.ToString();
         }
 

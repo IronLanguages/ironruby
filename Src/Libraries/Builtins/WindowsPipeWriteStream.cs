@@ -29,8 +29,11 @@ namespace IronRuby.Builtins {
     ///
     /// A FileStream still, so what looks up the handle behind an IO (spawn redirections,
     /// IO.select via IoReadiness.GetWindowsPipe) finds it.
+    ///
+    /// The same room makes #write_nonblock possible: it writes what fits and reports a full pipe
+    /// as EAGAIN, where a plain write would wait.
     /// </summary>
-    internal sealed class WindowsPipeWriteStream : FileStream {
+    internal sealed class WindowsPipeWriteStream : FileStream, INonBlockingWriteStream {
         private int _writeTimeout = Timeout.Infinite;
         private int _readTimeout = Timeout.Infinite;
 
@@ -77,6 +80,20 @@ namespace IronRuby.Builtins {
                 offset += chunk;
                 count -= chunk;
             }
+        }
+
+        /// <summary>The bytes written, or -1 when the pipe is full (EAGAIN).</summary>
+        public int WriteNonBlocking(byte[]/*!*/ buffer, int offset, int count) {
+            if (count == 0) {
+                return 0;
+            }
+            int room = IoReadiness.GetWindowsPipeRoom(SafeFileHandle);
+            if (room == 0) {
+                return -1;
+            }
+            int chunk = Math.Min(room, count);
+            base.Write(buffer, offset, chunk);
+            return chunk;
         }
     }
 }

@@ -1549,7 +1549,8 @@ nil
         /// A core method the prelude writes in Ruby reports what MRI's C function takes, no Ruby parameters of its own: the
         /// private copies of Process's module functions have the singleton's arity and no source location; Range#first is
         /// (*). Arguments counted as MRI counts them: Kernel#warn knows only uplevel: and category:, IO.read takes 1..4,
-        /// Kernel#open converts the path first, ARGF#readlines counts at the end of input too.
+        /// Kernel#open converts the path first, ARGF#readlines counts at the end of input too. Windows has no
+        /// initgroups: there it is NotImplementedError, (*) as CRuby's rb_f_notimplement is.
         /// </summary>
         public void MethodArity_PreludeMethods1() {
             TestOutput(@"
@@ -1567,7 +1568,7 @@ p Encoding::UTF_8._dump
 ].each { |l| p((l.call rescue $!)) }
 ", @"
 0
-[[:req], [:req]]
+" + (Environment.OSVersion.Platform == PlatformID.Win32NT ? "[[:rest]]" : "[[:req], [:req]]") + @"
 nil
 -1
 [[:rest]]

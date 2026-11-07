@@ -439,12 +439,13 @@ true
 
         /// <summary>
         /// Ractor.shareable?, Ractor.make_shareable and a message copy over a deeply nested graph: a
-        /// copy deeper than the stack goes is a SystemStackError, not the end of the process.
+        /// copy deeper than the stack goes is a SystemStackError, not the end of the process. The walk
+        /// recurses, so 1000 levels: a Windows thread has a 1 MB stack, where Linux's main thread has 8.
         /// </summary>
         public void Ractor_DeepGraph1() {
             TestOutput(RactorPrologue + @"
 def deep(n) = (a = []; n.times { a = [a] }; a)
-a = deep(2000)
+a = deep(1000)
 r = Ractor.new { Ractor.receive.flatten.size }
 r.send(a)
 p Ractor.shareable?(a), r.value, Ractor.shareable?(Ractor.make_shareable(a))
@@ -741,7 +742,8 @@ lambda default: ""Ractor::IsolationError: cannot make a shareable Proc because t
         /// </summary>
         public void Ractor_RequireInMain1() {
             TestOutput(RactorIsolationPrologue + @"
-path = File.join(ENV['TMPDIR'] || '/tmp', ""ir_ractor_req_#{Process.pid}.rb"")
+require 'tmpdir'
+path = File.join(Dir.tmpdir, ""ir_ractor_req_#{Process.pid}.rb"")
 File.open(path, ""w"") { |io| io.write(""RACTOR_REQ = 'loaded'.dup\n$ractor_req = Ractor.main?\n"") }
 rt(path) { |f| require f }
 p RACTOR_REQ, $ractor_req
