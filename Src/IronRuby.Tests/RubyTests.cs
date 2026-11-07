@@ -733,6 +733,7 @@ namespace IronRuby.Tests {
                 SystemCallErrorSubclass1,
                 Errno_PlatformTable1,
                 Errno_SocketCalls1,
+                Errno_SocketResolution1,
                 Errno_SocketCalls2,
                 Errno_SocketCalls3,
                 Errno_FileCalls1,

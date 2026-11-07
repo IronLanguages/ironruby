@@ -238,11 +238,11 @@ class Addrinfo
   end
 
   def self.tcp(host, port)
-    __ir_new_ip(__resolve(host), port, Socket::SOCK_STREAM, Socket::IPPROTO_TCP, nil, host && host.to_s)
+    __ir_new_ip(__resolve(host), Socket.__ir_service_arg(port) || 0, Socket::SOCK_STREAM, Socket::IPPROTO_TCP, nil, host && host.to_s)
   end
 
   def self.udp(host, port)
-    __ir_new_ip(__resolve(host), port, Socket::SOCK_DGRAM, Socket::IPPROTO_UDP, nil, host && host.to_s)
+    __ir_new_ip(__resolve(host), Socket.__ir_service_arg(port) || 0, Socket::SOCK_DGRAM, Socket::IPPROTO_UDP, nil, host && host.to_s)
   end
 
   def self.ip(host)
@@ -276,16 +276,8 @@ class Addrinfo
     socktype = socktype.nil? ? nil : Socket.__ir_socktype_arg(socktype)
     protocol = protocol.nil? ? nil : Socket.__ir_protocol_arg(protocol)
 
-    port = case service
-           when nil then 0
-           when Integer then service
-           else
-             begin
-               Socket.getservbyname(service.to_s)
-             rescue StandardError
-               service.to_s.to_i
-             end
-           end
+    # a service name that is not one is Socket::ResolutionError, as in Socket.getaddrinfo
+    port = Socket.__ir_service_arg(service) || 0
 
     if socktype.nil?
       socktype = protocol == Socket::IPPROTO_UDP ? Socket::SOCK_DGRAM : Socket::SOCK_STREAM
@@ -2104,7 +2096,7 @@ class Socket
             # .NET's Dns failure is a plain SocketError; CRuby's is a ResolutionError.
             code = { "HostNotFound" => EAI_NONAME, "NoData" => EAI_NONAME, "TryAgain" => EAI_AGAIN }[Socket.__ir_socket_error_code(e)]
             raise unless code
-            raise __ir_resolution_error("getaddrinfo: #{e.message}", code)
+            raise __ir_resolution_error(e.message, code) # already "getaddrinfo: ..."
           end
           wanted = found.select { |a| a.include?(":") == (fam == AF_INET6) }
           fam == AF_UNSPEC || wanted.empty? ? found : wanted
@@ -2161,7 +2153,7 @@ class Socket
       begin
         getservbyname(name)
       rescue StandardError
-        raise SocketError, "getaddrinfo: Servname not supported for ai_socktype"
+        raise __ir_resolution_error("getaddrinfo: Servname not supported for ai_socktype", EAI_SERVICE)
       end
     end
 
