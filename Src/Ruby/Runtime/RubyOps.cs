@@ -331,6 +331,20 @@ namespace IronRuby.Runtime {
 
             // Block entry too: `n.times { }` and `each { }` loop in C#, where no back edge is emitted.
             RubyUtils.SafePoint();
+            return CreateBlockScopeSafePointInBody(locals, variableNames, blockParam, selfObject, interpretedFrame);
+        }
+
+        /// <summary>
+        /// <see cref="CreateBlockScope"/> for a block whose whole body is `begin ... rescue ... end`
+        /// (`n.times do ... rescue ... end`): its entry safe point is the first thing inside the
+        /// rescued statements (Body.SafePointFirst). At the entry, a Thread#raise that came in while
+        /// the previous call was returning would be raised outside the rescue written for it - MRI
+        /// has no check there, only at the block's `leave` and the loop's back edge, which leaves it
+        /// a window of a few instructions where IronRuby's was a block return and a C# loop step.
+        /// </summary>
+        [Emitted]
+        public static RubyBlockScope/*!*/ CreateBlockScopeSafePointInBody(MutableTuple locals, string[] variableNames,
+            BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
 
             var scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
             if ((TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0) {
@@ -371,7 +385,17 @@ namespace IronRuby.Runtime {
         public static RubyBlockScope TakeReusableBlockScope(BlockParam/*!*/ blockParam) {
             // Block entry too: `n.times { }` and `each { }` loop in C#, where no back edge is emitted.
             RubyUtils.SafePoint();
+            return TakeReusableBlockScopeSafePointInBody(blockParam);
+        }
 
+        /// <summary>
+        /// <see cref="TakeReusableBlockScope"/> for a block whose safe point is inside its body (see
+        /// <see cref="CreateBlockScopeSafePointInBody"/>). Whatever that safe point runs - a trap
+        /// handler, a finalizer - runs after the scope is taken, so a call of the block it makes finds
+        /// nothing kept and makes a scope of its own.
+        /// </summary>
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static RubyBlockScope TakeReusableBlockScopeSafePointInBody(BlockParam/*!*/ blockParam) {
             if (blockParam.MayHaveReusableScope) {
                 var scope = blockParam.ReusableScope;
                 if (scope != null && !scope.IsCaptured) {

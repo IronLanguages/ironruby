@@ -75,7 +75,7 @@ namespace IronRuby.Builtins {
             private RubyThreadInfo _ownerInfo;
 
             public void Post(object message) {
-                lock (_lock) {
+                using (new RubyUtils.UninterruptedLock(_lock)) {
                     int count = _count;
                     if (count == 0) {
                         _message = message;
@@ -106,7 +106,7 @@ namespace IronRuby.Builtins {
 
                 while (true) {
                     bool interrupted = false;
-                    lock (_lock) {
+                    using (new RubyUtils.UninterruptedLock(_lock)) {
                         if (_count == 0) {
                             _blocked = true;
                             try {
@@ -155,7 +155,7 @@ namespace IronRuby.Builtins {
                 long deadline = Environment.TickCount64 + milliseconds;
                 while (true) {
                     bool interrupted = false;
-                    lock (_lock) {
+                    using (new RubyUtils.UninterruptedLock(_lock)) {
                         if (_count == 0) {
                             int left = (int)(deadline - Environment.TickCount64);
                             if (left <= 0) {
@@ -313,7 +313,7 @@ namespace IronRuby.Builtins {
                 _thread = Thread.CurrentThread;
                 if (running && !ReferenceEquals(_ownerInfo.ActiveFiberThread, Thread.CurrentThread)) {
                     // normally already done by the fiber that handed us control (MakeRunning)
-                    lock (_ownerInfo.FiberSwitchLock) {
+                    using (new RubyUtils.UninterruptedLock(_ownerInfo.FiberSwitchLock)) {
                         _ownerInfo.ActiveFiberThread = Thread.CurrentThread;
                     }
                 }
@@ -334,7 +334,7 @@ namespace IronRuby.Builtins {
                 }
                 Thread current = Thread.CurrentThread;
                 // Atomic with respect to Thread#raise (RubyThreadInfo.FiberSwitchLock).
-                lock (_ownerInfo.FiberSwitchLock) {
+                using (new RubyUtils.UninterruptedLock(_ownerInfo.FiberSwitchLock)) {
                     _ownerInfo.ActiveFiberThread = thread;
                     if (RubyUtils.IsSafePointRequested && !ReferenceEquals(current, thread)) {
                         // no nudge: the message we are about to post wakes the thread, which raises
@@ -514,7 +514,7 @@ namespace IronRuby.Builtins {
         public static Thread ReuseFiberThread(object self, object fiber) {
             FiberWorker worker;
             while (true) {
-                lock (_idleFiberWorkers) {
+                using (new RubyUtils.UninterruptedLock(_idleFiberWorkers)) {
                     int last = _idleFiberWorkers.Count - 1;
                     if (last < 0) {
                         return null;
@@ -556,7 +556,7 @@ namespace IronRuby.Builtins {
             info.FiberExecution = null;
 
             FiberWorker worker = _fiberWorker ?? (_fiberWorker = new FiberWorker(current));
-            lock (_idleFiberWorkers) {
+            using (new RubyUtils.UninterruptedLock(_idleFiberWorkers)) {
                 if (_terminating || _idleFiberWorkers.Count >= MaxIdleFiberWorkers) {
                     return null;
                 }
@@ -573,7 +573,7 @@ namespace IronRuby.Builtins {
                     HandOffParkedInterrupt();
                     return fiber;
                 }
-                lock (_idleFiberWorkers) {
+                using (new RubyUtils.UninterruptedLock(_idleFiberWorkers)) {
                     if (_idleFiberWorkers.Remove(worker)) {
                         // retired; stays hidden until the thread is gone
                         parked = false;
@@ -588,7 +588,7 @@ namespace IronRuby.Builtins {
             } finally {
                 if (parked) {
                     // left by an exception (Thread#kill): nobody may hand this thread a fiber now
-                    lock (_idleFiberWorkers) {
+                    using (new RubyUtils.UninterruptedLock(_idleFiberWorkers)) {
                         _idleFiberWorkers.Remove(worker);
                     }
                 }

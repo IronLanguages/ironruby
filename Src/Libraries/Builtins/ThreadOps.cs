@@ -889,7 +889,7 @@ namespace IronRuby.Builtins {
             RubyThreadInfo ownerInfo = RubyThreadInfo.FromThread(thread);
             RubyThreadInfo info;
             RubyThreadStatus status;
-            lock (ownerInfo.FiberSwitchLock) {
+            using (new RubyUtils.UninterruptedLock(ownerInfo.FiberSwitchLock)) {
                 Thread activeFiber = ownerInfo.ActiveFiberThread;
                 if (activeFiber != null && activeFiber.IsAlive) {
                     thread = activeFiber;

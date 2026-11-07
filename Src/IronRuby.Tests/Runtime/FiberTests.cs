@@ -222,5 +222,40 @@ p errors.uniq
 []
 ");
         }
+
+        /// <summary>
+        /// A Thread#raise that comes in between two calls of a `do ... rescue ... end` block meets the
+        /// block's rescue. Integer#times loops in C#, so the safe point that reaches such a loop is the
+        /// block's entry - which used to come before the rescued statements, and the exception left
+        /// the loop. MRI checks only at the block's `leave` and the loop's back edge, a few instructions;
+        /// here it was every raise that found the body without a safe point of its own, as this one has
+        /// none. The pattern is ruby/spec core/mutex/lock_spec's "does not raise deadlock if a fiber's
+        /// attempt to lock was interrupted".
+        /// </summary>
+        public void Thread_RaiseBetweenBlockCallsMeetsRescue1() {
+            TestOutput(@"
+rescued = 0
+ready = stop = false
+t = Thread.new do
+  Thread.current.report_on_exception = false
+  1_000_000_000.times do
+    ready = true
+    break if stop
+  rescue RuntimeError
+    rescued += 1
+  end
+  :finished
+end
+Thread.pass until ready
+5.times do |i|
+  t.raise 'between two calls of the block'
+  Thread.pass until rescued > i || !t.alive?
+end
+stop = true
+p [(t.value rescue $!.message), rescued]
+", @"
+[:finished, 5]
+");
+        }
     }
 }

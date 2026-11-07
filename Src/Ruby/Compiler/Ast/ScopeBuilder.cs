@@ -282,8 +282,10 @@ namespace IronRuby.Compiler.Ast {
         /// none) and then makes the locals storage: the taken scope's tuple, if the block reuses it, or a new one.
         /// A tuple is only ever reused together with the scope it came from.
         /// </summary>
-        public MSA.Expression/*!*/ MakeReusableLocalsStorage(MSA.Expression/*!*/ blockParameter, MSA.ParameterExpression/*!*/ reusableScope) {
-            var take = Ast.Assign(reusableScope, Methods.TakeReusableBlockScope.OpCall(blockParameter));
+        public MSA.Expression/*!*/ MakeReusableLocalsStorage(MSA.Expression/*!*/ blockParameter, MSA.ParameterExpression/*!*/ reusableScope,
+            bool safePointInBody) {
+            var take = Ast.Assign(reusableScope,
+                (safePointInBody ? Methods.TakeReusableBlockScopeSafePointInBody : Methods.TakeReusableBlockScope).OpCall(blockParameter));
             if (!HasReusableLocals) {
                 return Ast.Block(take, MakeLocalsStorage());
             }
