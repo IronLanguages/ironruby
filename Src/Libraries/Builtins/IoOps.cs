@@ -999,7 +999,7 @@ namespace IronRuby.Builtins {
                 if (windowsPipe != null) {
                     switch (kind) {
                         case Readiness.Read: return io.Mode.CanRead() && IoReadiness.IsWindowsPipeReadable(windowsPipe);
-                        case Readiness.Write: return io.Mode.CanWrite();
+                        case Readiness.Write: return io.Mode.CanWrite() && IoReadiness.IsWindowsPipeWritable(windowsPipe);
                         default: return false;
                     }
                 }

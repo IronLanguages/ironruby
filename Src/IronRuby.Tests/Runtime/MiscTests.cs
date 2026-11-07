@@ -3145,7 +3145,10 @@ false
 []
 []
 []
-#<ArgumentError: invalid resource name: LOCKS>
+" + (Environment.OSVersion.Platform == PlatformID.Win32NT
+    // CRuby on Windows has no resource limits: Process.getrlimit is rb_f_notimplement there.
+    ? "#<NotImplementedError: getrlimit() function is unimplemented on this machine>"
+    : "#<ArgumentError: invalid resource name: LOCKS>") + @"
 true
 2
 #<KeyError: key not found: :b>
