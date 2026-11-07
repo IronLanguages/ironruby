@@ -383,6 +383,15 @@ namespace IronRuby.Builtins {
             }
 
             /// <summary>
+            /// The Ruby threads of the Ractor the current thread belongs to: what Thread.list and
+            /// ThreadGroup#list answer, which in MRI list only the asking Ractor's living threads.
+            /// </summary>
+            internal static RubyThreadInfo[]/*!*/ GetRactorThreads(RubyContext/*!*/ context) {
+                var ractor = Current.Ractor;
+                return Array.FindAll(GetRubyThreads(context), info => info.Ractor == ractor);
+            }
+
+            /// <summary>
             /// We do not use Thread.Sleep here as another thread can call Thread#wakeup/Thread#run. Instead, we use our own
             /// lock which can be signalled from another thread.
             /// </summary>
@@ -1014,7 +1023,7 @@ namespace IronRuby.Builtins {
         public static RubyArray/*!*/ List(RubyContext/*!*/ context, object self) {
             RubyThreadInfo.RegisterCurrentThread();
 
-            RubyThreadInfo[] threads = RubyThreadInfo.GetRubyThreads(context);
+            RubyThreadInfo[] threads = RubyThreadInfo.GetRactorThreads(context);
             RubyArray result = new RubyArray(threads.Length);
             foreach (RubyThreadInfo threadInfo in threads) {
                 Thread thread = threadInfo.Thread;
@@ -1028,7 +1037,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("main", RubyMethodAttributes.PublicSingleton)]
         public static Thread/*!*/ GetMainThread(RubyContext/*!*/ context, RubyClass self) {
-            return context.MainThread;
+            // in a Ractor, the Ractor's own main thread, as in MRI
+            var ractor = RubyThreadInfo.Current.Ractor;
+            return (ractor != null && ractor.MainThread != null) ? ractor.MainThread : context.MainThread;
         }
 
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
@@ -1358,7 +1369,7 @@ namespace IronRuby.Builtins {
             // MRI's rb_thread_stop: with no other thread alive nothing could ever wake this one.
             // (Kernel#sleep has no such check: a signal can end it.)
             RubyThreadInfo.RegisterCurrentThread();
-            if (RubyThreadInfo.GetRubyThreads(context).Length <= 1) {
+            if (RubyThreadInfo.GetRactorThreads(context).Length <= 1) {
                 throw new ThreadError("stopping only thread\n\tnote: use sleep to stop forever");
             }
             DoSleep();

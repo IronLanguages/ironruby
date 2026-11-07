@@ -413,6 +413,30 @@ p Ractor.new { Ractor.store_if_absent(:a) { Thread.new { Ractor[:b] = 3 }.value 
 ");
         }
 
+        /// <summary>
+        /// Inside a Ractor, Thread.main is the Ractor's main thread and Thread.list (and the "only
+        /// thread" check of Thread.stop) sees only the Ractor's own threads, as in MRI.
+        /// </summary>
+        public void Ractor_Threads1() {
+            TestOutput(RactorPrologue + @"
+th0 = Thread.new { sleep }
+p Thread.list.include?(th0), Thread.main == Thread.current
+p Ractor.new {
+  th = Thread.new { sleep 0.05; Thread.main }
+  [Thread.main == Thread.current, th.value == Thread.current, Thread.list.size, Thread.list.include?(Thread.current),
+   (Thread.stop rescue $!.class)]
+}.value
+p Thread.list.include?(th0), Thread.main == Thread.current
+th0.kill.join
+", @"
+true
+true
+[true, true, 1, true, ThreadError]
+true
+true
+");
+        }
+
         // Each runs its Ractor's block and prints its value, or the error that ended the Ractor.
         private const string RactorIsolationPrologue = RactorPrologue + @"
 Thread.report_on_exception = false
