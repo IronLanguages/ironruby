@@ -46,6 +46,20 @@ namespace IronRuby.Compiler.Ast {
         public Statements ElseStatements { get { return _elseStatements; } }
         public Statements EnsureStatements { get { return _ensureStatements; } }
 
+        /// <summary>
+        /// Whether the statements can be guarded by the rescue clauses: there are both.
+        /// </summary>
+        internal bool HasRescue {
+            get { return _statements.Count > 0 && _rescueClauses != null; }
+        }
+
+        /// <summary>
+        /// Set by the block whose whole body this is, which then has no safe point at its entry
+        /// (RubyOps.CreateBlockScopeSafePointInBody): the first thing the rescued statements do is
+        /// the safe point - on a `retry` too, which makes the retry loop interruptible as well.
+        /// </summary>
+        internal bool SafePointFirst { get; set; }
+
         private bool HasExceptionHandling {
             get {
                 return (_statements.Count > 0 && _rescueClauses != null) || _elseStatements != null || _ensureStatements != null;
@@ -146,6 +160,9 @@ namespace IronRuby.Compiler.Ast {
             // body should do return, but else-clause is present => we cannot do return from the guarded statements: 
             // (the value of the last expression in the body cannot be the last executed expression statement => we can ignore it):
             transformedBody = gen.TransformStatements(_statements, (_elseStatements != null) ? ResultOperation.Ignore : resultOperation);
+            if (SafePointFirst) {
+                transformedBody = Ast.Block(gen.AddDebugInfo(Ast.Call(RubyUtils.SafePointMethod), _statements.First.Location), transformedBody);
+            }
 
             MSA.Expression enterRescue = null, leaveRescue = null;
             var retryLabel = Ast.Label("retry");

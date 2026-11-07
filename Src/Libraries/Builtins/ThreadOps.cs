@@ -77,6 +77,42 @@ namespace IronRuby.Builtins {
                     info._blocked = blocked;
                     return was;
                 };
+                RubyUtils.AsyncExceptionRedirectHook = ForwardToActiveFiber;
+            }
+
+            /// <summary>
+            /// An exception parked for this CLR thread while it is not the running fiber of its Ruby
+            /// thread - it resumed another fiber and waits for it, its fiber is finishing, or it sits
+            /// in the fiber pool - goes on to the fiber that is running.
+            /// </summary>
+            private static bool ForwardToActiveFiber() {
+                if (TryForwardToActiveFiber()) {
+                    return true;
+                }
+                // A fiber thread outside its fiber keeps it parked: FiberCore.Run picks it up once
+                // the fiber can take it, and a thread that goes away drops it.
+                RubyThreadInfo info = FromThread(Thread.CurrentThread);
+                return info.IsFiberWorker && !info.InFiberRun;
+            }
+
+            /// <summary>
+            /// Moves what is parked for this CLR thread to the running fiber of the Ruby thread it
+            /// runs on behalf of (<see cref="RubyUtils.CurrentRubyThread"/>), if that is another one.
+            /// </summary>
+            internal static bool TryForwardToActiveFiber() {
+                Thread current = Thread.CurrentThread;
+                Thread active = FromThread(RubyUtils.CurrentRubyThread).ActiveFiberThread;
+                return active != null && !ReferenceEquals(active, current) && active.IsAlive && ForwardAsyncException(current, active);
+            }
+
+            /// <summary>Moves what is parked for <paramref name="from"/> to <paramref name="to"/>.</summary>
+            internal static bool ForwardAsyncException(Thread/*!*/ from, Thread/*!*/ to) {
+                if (!RubyUtils.ForwardAsyncException(from, to)) {
+                    return false;
+                }
+                // as RaiseAsyncException does: Kernel#sleep waits on the run signal
+                FromThread(to).Run();
+                return true;
             }
             private readonly Dictionary<RubySymbol, object> _threadLocalStorage;
             private ThreadGroup _group;
@@ -237,6 +273,13 @@ namespace IronRuby.Builtins {
             /// fiber is the thread that owns it - so the Ruby thread lists leave it out for good.
             /// </summary>
             internal volatile bool IsFiberWorker;
+
+            /// <summary>
+            /// The fiber thread is inside FiberCore.Run - its fiber's code, with interrupts masked
+            /// until the fiber's block runs. Outside it (starting up, between two fibers) a
+            /// Thread#raise parked for the thread must not be raised there: nothing would catch it.
+            /// </summary>
+            internal volatile bool InFiberRun;
             internal bool ExitRequested { get; set; }
             internal MutableString Name { get; set; }
             internal bool ReportOnException { get; set; }
@@ -250,7 +293,22 @@ namespace IronRuby.Builtins {
             /// it describes, read by any thread.
             /// </summary>
             internal volatile string BlockedLabel;
+            /// <summary>
+            /// The CLR thread of the fiber this thread is running, for Thread#raise; null before the
+            /// thread has run a fiber. Changed by the fiber handing control on (FiberCore.MakeRunning),
+            /// under <see cref="FiberSwitchLock"/>.
+            /// </summary>
             internal volatile Thread ActiveFiberThread;
+
+            /// <summary>
+            /// Makes "find the running fiber and park a Thread#raise for it" (RaiseAsyncException)
+            /// and "make another fiber the running one and move what is parked" (FiberCore.MakeRunning)
+            /// happen one after the other: the raise is then either parked before the switch, and
+            /// travels with control, or after it, for the new fiber - never for the fiber that has
+            /// just handed control on, which would pass it along only later, when MRI's thread has
+            /// long raised it.
+            /// </summary>
+            internal readonly object/*!*/ FiberSwitchLock = new object();
             internal FiberCore FiberExecution;
 
             /// <summary>
@@ -845,18 +903,33 @@ namespace IronRuby.Builtins {
         private static CallSite<Func<CallSite, object, object>> _exceptionSite;
 
         private static void RaiseAsyncException(RubyContext/*!*/ context, Thread thread, Exception exception) {
-            Thread activeFiber = RubyThreadInfo.FromThread(thread).ActiveFiberThread;
-            if (activeFiber != null && activeFiber.IsAlive) {
-                thread = activeFiber;
-            }
-            RubyThreadInfo info = RubyThreadInfo.FromThread(thread);
+            // MRI delivers the interrupt to the thread's running fiber, and each fiber here is a
+            // CLR thread of its own.
+            RubyThreadInfo ownerInfo = RubyThreadInfo.FromThread(thread);
+            RubyThreadInfo info;
+            RubyThreadStatus status;
+            using (new RubyUtils.UninterruptedLock(ownerInfo.FiberSwitchLock)) {
+                Thread activeFiber = ownerInfo.ActiveFiberThread;
+                if (activeFiber != null && activeFiber.IsAlive) {
+                    thread = activeFiber;
+                }
+                info = RubyThreadInfo.FromThread(thread);
+                status = GetStatus(thread);
+                if (thread == Thread.CurrentThread) {
+                    throw exception;
+                }
 
-            // rethrow semantics, preserves the backtrace associated with the exception:
-            RubyUtils.RaiseAsyncException(thread, exception, e => {
-                // MRI raises exception.exception in the target thread
-                var site = RubyUtils.GetCallSite(ref _exceptionSite, context, "exception", 0);
-                return site.Target(site, e) as Exception;
-            });
+                // rethrow semantics, preserves the backtrace associated with the exception:
+                RubyUtils.ParkAsyncException(thread, exception, e => {
+                    // MRI raises exception.exception in the target thread
+                    var site = RubyUtils.GetCallSite(ref _exceptionSite, context, "exception", 0);
+                    return site.Target(site, e) as Exception;
+                });
+            }
+            // Not under the lock: the thread may be waiting for it, and an interrupt would break that
+            // wait off (RubyUtils.ParkAsyncException).
+            RubyUtils.NudgeThread(thread);
+
             // Kernel#sleep and Thread.stop use the Ruby run signal. This is race-safe even when
             // the target has announced sleep but has not entered WaitOne yet.
             info.Run();
