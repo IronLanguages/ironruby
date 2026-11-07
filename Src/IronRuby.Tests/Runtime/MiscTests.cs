@@ -4314,6 +4314,32 @@ p URI('http://[::1.2.3.4]:80/x').host, URI('http://10.0.0.255/').host, URI('//[v
         }
 
         /// <summary>
+        /// Two corners of ruby4.rb's Ruby versions of what MRI writes in C: ObjectSpace::WeakKeyMap is not
+        /// Marshal-able (it dumped its table), and String#each_line's enumerator shows the chomp: it was given
+        /// even when it is false (it left `(chomp: false)` out).
+        /// </summary>
+        public void Ruby4_WeakKeyMapMarshalEachLine1() {
+            TestOutput(@"
+require 'ruby4'
+m = ObjectSpace::WeakKeyMap.new
+m['k'] = 1
+begin; Marshal.dump(m); rescue TypeError => e; p e.message; end
+p m.respond_to?(:marshal_dump)
+p ""a\nb"".each_line(chomp: false), ""a\nb"".each_line(chomp: true), ""a"".each_line, ""a"".each_line('x', chomp: true)
+p ""a\nb"".each_line(chomp: false).to_a, ""a\nb"".each_line(chomp: true).to_a
+", @"
+""no _dump_data is defined for class ObjectSpace::WeakKeyMap""
+false
+#<Enumerator: ""a\nb"":each_line(chomp: false)>
+#<Enumerator: ""a\nb"":each_line(chomp: true)>
+#<Enumerator: ""a"":each_line>
+#<Enumerator: ""a"":each_line(""x"", chomp: true)>
+[""a\n"", ""b""]
+[""a"", ""b""]
+");
+        }
+
+        /// <summary>
         /// Range#min, #max, #include? and #member? in C#, with what they hand the prelude: an Integer or Float
         /// range answered from its endpoints, Strings, blocks, counts, endless and beginless ranges, a break
         /// from the block and a subclass's own #max. The expected output is CRuby's.

@@ -959,6 +959,7 @@ namespace IronRuby.Tests {
                 Integer_Power1,
                 Random_FormatterRanges1,
                 URI_PatchedParserConstants1,
+                Ruby4_WeakKeyMapMarshalEachLine1,
                 Rational_CSharp1,
                 Complex_CSharp1,
                 Rational_ComplexConventions1,
