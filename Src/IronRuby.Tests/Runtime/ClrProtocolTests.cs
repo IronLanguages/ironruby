@@ -1050,6 +1050,41 @@ p [s.io, s.w], Caller.compare(Sub.new(2), Sub.new(1)), Caller.default_compare(Su
 ");
         }
 
+        /// <summary>
+        /// Class#new of a class that mixes in Comparable or Enumerable (whose CLR type implements IComparable or IEnumerable) is
+        /// made without a rule as a plain Ruby class's is (RubyClass.TryGetObjectConstruction), and such classes share one generated
+        /// type: a type emitted, and a rule built, for the first new of each made it ~60 times slower than a plain class's.
+        /// </summary>
+        public void ClrRubyImpliedInterfaces3() {
+            Context.ObjectClass.SetConstant("Caller", Context.GetClass(typeof(ProtocolClrCaller1)));
+            Engine.Execute(@"
+class Co; include Comparable; attr_reader :v; def initialize(v) = @v = v; def <=>(o) = v <=> o.v; end
+class En; include Enumerable; def initialize(*a, &b) = (@a = a; b&.call); def each(&) = @a.each(&); end
+class Pl; include Comparable; def <=>(o) = 0; end
+");
+            var co = Engine.Execute<IronRuby.Builtins.RubyClass>("Co");
+            var en = Engine.Execute<IronRuby.Builtins.RubyClass>("En");
+            var pl = Engine.Execute<IronRuby.Builtins.RubyClass>("Pl");
+            Assert(co.TryGetObjectConstruction(1) != null && en.TryGetObjectConstruction(2) != null && pl.TryGetObjectConstruction(0) != null);
+            Assert(co.GetUnderlyingSystemType() == pl.GetUnderlyingSystemType() && typeof(IComparable).IsAssignableFrom(pl.GetUnderlyingSystemType()));
+
+            TestOutput(@"
+a = (1..3).map { Co.new(4 - it) }
+x = Pl.new
+p Caller.compare(a[0], a[1]), Caller.default_compare(a[2], a[0]), Caller.compare(x, x)
+p Caller.each(En.new(1, 2)), En.new(3) { p :b }.to_a, En.new { break :br }, Caller.each(En.new(5))
+", @"
+1
+-1
+0
+:b
+'1 2'
+[3]
+:br
+'5'
+");
+        }
+
         #endregion
 
         #region Tasks and async streams

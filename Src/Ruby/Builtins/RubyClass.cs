@@ -1696,8 +1696,11 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
+            // A RubyObject - or an instance of the type generated for a class implementing CLR interfaces (one that mixes in
+            // Comparable or Enumerable is an IComparable or an IEnumerable, see GetImpliedClrInterface), allocated the same way.
             Type type = GetUnderlyingSystemType();
-            if (type != typeof(object) && type != typeof(RubyObject)) {
+            Func<RubyClass, object> allocator = null;
+            if (type != typeof(object) && type != typeof(RubyObject) && (allocator = RubyTypeDispenser.TryGetObjectAllocator(type)) == null) {
                 return null;
             }
 
@@ -1715,7 +1718,7 @@ namespace IronRuby.Builtins {
             // Object#initialize and BasicObject#initialize: no arguments - construct (a RubyObject constructor, the same allocation)
             if (initializer is RubyLibraryMethodInfo) {
                 return (count == 0 && (initializer.DeclaringModule.IsObjectClass || initializer.DeclaringModule.IsBasicObjectClass)) ?
-                    new ObjectConstruction(this, version, (Delegate)null, 0) : null;
+                    new ObjectConstruction(this, allocator, version, (Delegate)null, 0) : null;
             }
 
             // a Ruby initializer: allocate and call it (BuildOverriddenInitializerCall), unless it is empty
@@ -1733,7 +1736,7 @@ namespace IronRuby.Builtins {
             var parameters = method.Parameters;
             if (parameters.Unsplat != null || parameters.Optional.Length > 0) {
                 var call = RubyMethodCallPlan.TryCreate(method, count, Symbols.Initialize);
-                return (call != null) ? new ObjectConstruction(this, version, call, count) : null;
+                return (call != null) ? new ObjectConstruction(this, allocator, version, call, count) : null;
             }
 
             if (parameters.Mandatory.Length != count) {
@@ -1741,7 +1744,7 @@ namespace IronRuby.Builtins {
             }
 
             var body = method.GetDelegate();
-            return (body.GetType() == MemberDispatcher.GetRubyMethodDelegateType(count)) ? new ObjectConstruction(this, version, body, count) : null;
+            return (body.GetType() == MemberDispatcher.GetRubyMethodDelegateType(count)) ? new ObjectConstruction(this, allocator, version, body, count) : null;
         }
 
         public void BuildObjectConstructionNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ methodName) {
