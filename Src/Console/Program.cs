@@ -21,10 +21,8 @@ using IronRuby.Runtime;
 using Microsoft.Scripting.Hosting;
 using Microsoft.Scripting.Hosting.Providers;
 using Microsoft.Scripting.Hosting.Shell;
-using System.IO;
 
 internal sealed class Host : RubyConsoleHost {
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1031:DoNotCatchGeneralExceptionTypes")]
     private static void OnCancelKey(ConsoleCancelEventArgs ev, RubyContext context, Thread mainThread) {
         if (ev.SpecialKey == ConsoleSpecialKey.ControlC) {
             ev.Cancel = true;
@@ -76,7 +74,7 @@ internal sealed class Host : RubyConsoleHost {
         }
 
         if (rubyOptions.DisplayVersion && (rubyOptions.Command != null || rubyOptions.FileName != null)) {
-            Console.WriteLine(RubyContext.MakeDescriptionString(), Style.Out);
+            Console.WriteLine(RubyContext.MakeDescriptionString());
         }
 
         return rubyOptions;

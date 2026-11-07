@@ -16,16 +16,13 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.Dynamic;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Hosting.Providers;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Tests {
@@ -70,8 +67,6 @@ namespace IronRuby.Tests {
         }
 
         public void Require1() {
-            if (_driver.PartialTrust) return;
-
             try {
                 string temp = _driver.MakeTempDir();
                 Context.Loader.SetLoadPaths(new[] { temp });
@@ -101,9 +96,15 @@ false
             }
         }
 
-        public void Load1() {
-            if (_driver.PartialTrust) return;
+        /// <summary>
+        /// A new runtime's $LOAD_PATH has no "." (MRI dropped it in 1.9.2): `require "foo"` does not find ./foo.rb.
+        /// </summary>
+        public void LoadPath_NoCurrentDirectory1() {
+            var engine = Ruby.CreateEngine();
+            Assert(!engine.GetSearchPaths().Contains("."));
+        }
 
+        public void Load1() {
             try {
                 string temp = _driver.MakeTempDir();
                 Context.Loader.SetLoadPaths(new[] { temp });
@@ -121,58 +122,6 @@ error
 ");
             } finally {
                 File.Delete("a.rb");
-            }
-        }
-
-        public void RequireInterop1() {
-            if (_driver.PartialTrust || !_driver.RunPython) return;
-
-            try {
-                string temp = _driver.MakeTempDir();
-                Context.Loader.SetLoadPaths(new[] { temp });
-
-                File.WriteAllText(Path.Combine(temp, "a.py"), @"
-print 'Hello from Python'
-");
-                AssertExceptionThrown<LoadError>(() => CompilerTest(@"require('a')"));
-            } finally {
-                File.Delete("b.py");
-            }
-        }
-
-        public void RequireInterop2() {
-            if (_driver.PartialTrust || !_driver.RunPython) return;
-
-            try {
-                string temp = _driver.MakeTempDir();
-                Context.Loader.SetLoadPaths(new[] { temp });
-
-                File.WriteAllText(Path.Combine(temp, "a.py"), @"
-def WhoIsThis():
-  print 'Python'
-
-Foo = 1
-
-class Bar(object):
-  def baz(self):
-    print Foo
-");
-
-                TestOutput(@"
-a = IronRuby.require('a')
-scopes = IronRuby.loaded_scripts.collect { |z| z.value }
-a.who_is_this
-a.foo += 1
-a.bar.baz             # a Python class is callable so we get Bar's instance from a.bar
-puts scopes[0].Foo
-", @"
-Python
-2
-2
-");
-
-            } finally {
-                File.Delete("b.py");
             }
         }
 
@@ -259,8 +208,6 @@ bar
         /// LoadError, as the handler looked for PathLoadedWidgets on $LOAD_PATH only.
         /// </summary>
         public void Require_PathLoadedDependency1() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(dir, "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(dir, "PathLoadedExtensions", "1.0.0.0", "1.0.0.0");
@@ -285,8 +232,6 @@ shout
         /// as .NET Framework's LoadFrom context did; the DLL found there is loaded as require would load it.
         /// </summary>
         public void Require_PathLoadedDependency2() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(dir, "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(dir, "PathLoadedExtensions", "1.0.0.0", "1.0.0.0");
@@ -309,8 +254,6 @@ PathLoadedWidgets
         /// would not take the Widgets Ruby made from the first.
         /// </summary>
         public void Require_PathLoadedDependency3() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(Path.Combine(dir, "a"), "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(Path.Combine(dir, "b"), "PathLoadedWidgets", "1.0.0.0", null);
@@ -338,8 +281,6 @@ shout
         /// application's assemblies do, and not a reference to a later version.
         /// </summary>
         public void Require_PathLoadedDependency4() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(Path.Combine(dir, "a"), "PathLoadedWidgets", "2.0.0.0", null);
             WriteFixtureAssembly(Path.Combine(dir, "b"), "PathLoadedOlderExtensions", "1.0.0.0", "1.0.0.0");
@@ -365,8 +306,6 @@ LoadError
         /// $LOAD_PATH is searched as it was, and before the directory of the DLL making the reference.
         /// </summary>
         public void Require_PathLoadedDependency5() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(Path.Combine(dir, "a"), "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(Path.Combine(dir, "b"), "PathLoadedWidgets", "1.0.0.0", null);
@@ -391,8 +330,6 @@ true
         /// runtime's Widgets and not the other's.
         /// </summary>
         public void Require_PathLoadedDependency6() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             foreach (string subdir in new[] { "a", "b", "c" }) {
                 WriteFixtureAssembly(Path.Combine(dir, subdir), "PathLoadedWidgets", "1.0.0.0", null);
@@ -430,8 +367,6 @@ PathLoadedFixture::Widget.new.shout
         /// return true without reading them, as the runtime had seen the assembly already.
         /// </summary>
         public void Require_UnreadableExtensions1() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(Path.Combine(dir, "a"), "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(Path.Combine(dir, "b"), "PathLoadedExtensions", "1.0.0.0", "1.0.0.0");
@@ -462,8 +397,6 @@ shout
         /// namespace tries it again.
         /// </summary>
         public void Require_UnreadableExtensions2() {
-            if (_driver.PartialTrust) return;
-
             string dir = MakeFixtureDir();
             WriteFixtureAssembly(dir, "PathLoadedWidgets", "1.0.0.0", null);
             WriteFixtureAssembly(dir, "PathLoadedNewerExtensions", "1.0.0.0", "3.0.0.0");

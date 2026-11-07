@@ -13,11 +13,8 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
+using System.Dynamic;
 
 using System;
 using System.Collections;
@@ -28,9 +25,7 @@ using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
 using Microsoft.Scripting.Actions.Calls;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Utils;
-using AstFactory = IronRuby.Compiler.Ast.AstFactory;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Calls {
@@ -92,8 +87,9 @@ namespace IronRuby.Runtime.Calls {
             if (mine.Length != theirs.Length) {
                 return false;
             }
+            // (a name's own method that only calls another counts as that one, see SameRubyMethodAttribute)
             for (int i = 0; i < mine.Length; i++) {
-                if (!Equals(mine[i].ReflectionInfo, theirs[i].ReflectionInfo)) {
+                if (!Equals(SameRubyMethodAttribute.GetTarget(mine[i].ReflectionInfo), SameRubyMethodAttribute.GetTarget(theirs[i].ReflectionInfo))) {
                     return false;
                 }
             }
@@ -103,7 +99,7 @@ namespace IronRuby.Runtime.Calls {
         public override int GetEquivalenceHashCode() {
             int result = 0;
             foreach (var method in MethodBases) {
-                result ^= method.ReflectionInfo.GetHashCode();
+                result ^= SameRubyMethodAttribute.GetTarget(method.ReflectionInfo).GetHashCode();
             }
             return result;
         }
@@ -124,7 +120,7 @@ namespace IronRuby.Runtime.Calls {
             return arity;
         }
 
-        private int ComputeArity() {
+        protected virtual int ComputeArity() {
             int minParameters = Int32.MaxValue;
             int maxParameters = 0;
             bool hasOptional = false;
@@ -260,11 +256,7 @@ namespace IronRuby.Runtime.Calls {
                                 ArrayUtils.ToArray(overload.Parameters, (pi) => pi.ParameterType),
                                 genericArguments,
                                 underlyingType,
-#if FEATURE_REFEMIT // TODO: should we always prefix with #base# ???
                                 ClsTypeEmitter.BaseMethodPrefix + overload.Name,
-#else
-                                overload.Name,
-#endif
                                 BindingFlags.Public | bindingFlags
                             );
 
@@ -330,7 +322,8 @@ namespace IronRuby.Runtime.Calls {
                     continue;
                 }
 
-                resolver = new RubyOverloadResolver(metaBuilder, args, callConvention, implicitProtocolConversions);
+                resolver = new RubyOverloadResolver(metaBuilder, args, callConvention, implicitProtocolConversions, name);
+                resolver.Overloads = overloads;
                 if (byName) {
                     resolver.BindKeywordsByName(keywords, overloads);
                 }
@@ -453,6 +446,10 @@ namespace IronRuby.Runtime.Calls {
         internal static void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name,
             IList<OverloadInfo>/*!*/ overloads, SelfCallConvention callConvention, bool implicitProtocolConversions) {
 
+            if (!implicitProtocolConversions && !TakesPositionalCount(metaBuilder, args, overloads, callConvention)) {
+                return;
+            }
+
             RubyOverloadResolver resolver;
             var bindingTarget = ResolveOverload(metaBuilder, args, name, overloads, callConvention, implicitProtocolConversions, out resolver);
             if (bindingTarget.Success) {
@@ -475,10 +472,111 @@ namespace IronRuby.Runtime.Calls {
                     metaBuilder.Result = Ast.Field(null, Fields.ForwardToBase);
                 } else {
                     metaBuilder.Result = bindingTarget.MakeExpression();
+
+                    // A keyword Hash is a positional argument to a method that does not receive keywords, which may keep it:
+                    // it stops saying it is keyword arguments, as it does for a Ruby method (RubyMethodInfo.BuildCallNoFlow).
+                    // The rule's tests have read it already.
+                    if (!RubyOverloadResolver.ReceivesKeywordArguments(bindingTarget.Overload.ReflectionInfo)) {
+                        var last = resolver.GetLastArgumentExpression();
+                        if (last != null && last.Type.IsAssignableFrom(typeof(Hash)) && !RestrictsToNonHash(bindingTarget, last)) {
+                            last = AstUtils.Box(last);
+                            metaBuilder.Result = Ast.Block(
+                                Ast.IfThen(Ast.TypeEqual(last, typeof(Hash)), Methods.ClearKeywordArguments.OpCall(last)),
+                                metaBuilder.Result
+                            );
+                        }
+                    }
                 }
+            } else if (bindingTarget.Result == BindingResult.IncorrectArgumentCount) {
+                metaBuilder.SetArityError(resolver.MakeInvalidParametersError(bindingTarget).Expression);
             } else {
                 metaBuilder.SetError(resolver.MakeInvalidParametersError(bindingTarget).Expression);
             }
+        }
+
+        /// <summary>
+        /// Whether the rule only applies when the argument <paramref name="expression"/> is of a class other than Hash: the
+        /// overloads told its class apart, so the rule tests it exactly. Then the keyword mark need not be looked for - the
+        /// test would be one more step on every call of a rule while it is interpreted.
+        /// </summary>
+        private static bool RestrictsToNonHash(BindingTarget/*!*/ bindingTarget, Expression/*!*/ expression) {
+            foreach (var arg in bindingTarget.RestrictedArguments.GetObjects()) {
+                if (arg.Expression == expression) {
+                    return arg.Restrictions != BindingRestrictions.Empty && ExcludesHash(arg.Restrictions.ToExpression(), expression);
+                }
+            }
+            return false;
+        }
+
+        private static bool ExcludesHash(Expression/*!*/ test, Expression/*!*/ expression) {
+            if (test.NodeType == ExpressionType.AndAlso) {
+                var and = (BinaryExpression)test;
+                return ExcludesHash(and.Left, expression) || ExcludesHash(and.Right, expression);
+            }
+            return test.NodeType == ExpressionType.TypeEqual && ((TypeBinaryExpression)test).Expression == expression &&
+                !typeof(Hash).IsAssignableFrom(((TypeBinaryExpression)test).TypeOperand);
+        }
+
+        /// <summary>
+        /// A library method that takes keywords in a [Keywords] parameter is called with as many positional arguments - not
+        /// counting a trailing keyword Hash - as one of its overloads takes, or else it raises MRI's "wrong number of arguments"
+        /// that counts them (Integer(exception: false) is "given 0, expected 1..2"), not whatever binding the Hash to a
+        /// positional parameter would do. False if the error is set.
+        /// </summary>
+        private static bool TakesPositionalCount(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, IList<OverloadInfo>/*!*/ overloads,
+            SelfCallConvention callConvention) {
+
+            if (args.Signature.HasRhsArgument) {
+                return true;
+            }
+
+            int restFrom;
+            var arities = RubyOverloadResolver.GetPositionalArities(overloads, callConvention, out restFrom);
+            if (arities == null) {
+                return true;
+            }
+
+            // The arguments, the items of a splatted list among them - the way the resolver counts them (a ruby2_keywords
+            // hash at the end of the list is keywords again, see MetaObjectBuilder.AddSplattedArgumentTest):
+            int count = args.SimpleArgumentCount;
+            IList list = null;
+            if (args.Signature.HasSplattedArgument) {
+                list = RubyOps.SplatRuby2Keywords((IList)args.GetSplattedArgument());
+                count += list.Count;
+            }
+
+            object last = (list != null) ? (list.Count > 0 ? list[list.Count - 1] : null) : (count > 0 ? args.GetSimpleArgument(count - 1) : null);
+            bool isKeywords = RubyOps.IsKeywordArgumentsHash(last);
+            bool takes = RubyOverloadResolver.AcceptsPositionalCount(arities, restFrom, isKeywords ? count - 1 : count);
+
+            // Whether the last argument is a keyword Hash decides it, so the rule holds for calls that pass one, or for those
+            // that do not; a splatted call's for lists of this length.
+            bool keywordsDecide = count > 0 && takes != RubyOverloadResolver.AcceptsPositionalCount(arities, restFrom, isKeywords ? count : count - 1);
+            if (list != null && (keywordsDecide || !takes)) {
+                int listLength;
+                ParameterExpression listVariable;
+                metaBuilder.AddSplattedArgumentTest((IList)args.GetSplattedArgument(), args.GetSplattedMetaArgument().Expression, out listLength, out listVariable);
+                if (keywordsDecide && listLength > 0) {
+                    Expression test = Methods.IsKeywordArgumentsHash.OpCall(
+                        Ast.Call(listVariable, typeof(IList).GetMethod("get_Item"), AstUtils.Constant(listLength - 1))
+                    );
+                    metaBuilder.AddCondition(isKeywords ? test : Ast.Not(test));
+                    keywordsDecide = false;
+                }
+            }
+
+            if (keywordsDecide) {
+                Expression test = Methods.IsKeywordArgumentsHash.OpCall(AstUtils.Box(args.GetSimpleArgumentExpression(args.SimpleArgumentCount - 1)));
+                metaBuilder.AddRestriction(isKeywords ? test : Ast.Not(test));
+            }
+
+            if (!takes) {
+                metaBuilder.SetArityError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                    AstUtils.Constant(isKeywords ? count - 1 : count),
+                    AstUtils.Constant(RubyOverloadResolver.DescribePositionalArities(arities, restFrom))
+                ));
+            }
+            return takes;
         }
 
         /// <summary>

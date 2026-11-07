@@ -13,13 +13,8 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -31,22 +26,6 @@ namespace IronRuby.Compiler.Ast {
         private readonly ConstructedSymbol _newName;
         private readonly ConstructedSymbol _oldName;
         private readonly bool _isMethodAlias;
-
-        public ConstructedSymbol NewName {
-            get { return _newName; }
-        }
-
-        public ConstructedSymbol OldName {
-            get { return _oldName; }
-        }
-
-        public bool IsMethodAlias {
-            get { return _isMethodAlias; }
-        }
-
-        public bool IsGlobalVariableAlias {
-            get { return !_isMethodAlias; }
-        }
 
         public AliasStatement(bool isMethodAlias, ConstructedSymbol newName, ConstructedSymbol oldName, SourceSpan location)
             : base(location) {

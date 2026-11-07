@@ -16,13 +16,11 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.StringScanner {
@@ -82,7 +80,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
             _scanString = MutableString.FrozenEmpty;
         }
 
-#if FEATURE_SERIALIZATION
         public StringScanner(SerializationInfo/*!*/ info, StreamingContext context)
             : base(info, context) {
             // TODO: deserialize
@@ -92,7 +89,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
             base.GetObjectData(info, context);
             // TODO: serialize
         }
-#endif
 
         protected override RubyObject/*!*/ CreateInstance() {
             return new StringScanner(ImmediateClass.NominalClass);
@@ -552,7 +548,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
             return SearchFull(stringCast, self, pattern, false, true) as MutableString;
         }
 
-        [RubyMethod("empty?")]
         [RubyMethod("eos?")]
         public static bool EndOfLine(StringScanner/*!*/ self) {
             return self._position >= self.ByteLength;
@@ -567,7 +562,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
         }
 
         [RubyMethod("get_byte")]
-        [RubyMethod("getbyte")]
         public static MutableString GetByte(StringScanner/*!*/ self) {
             if (self._position >= self.ByteLength) {
                 self.ClearMatch();
@@ -641,7 +635,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
         }
 
         [RubyMethod("matched_size")]
-        [RubyMethod("matchedsize")]
         public static int? MatchedSize(StringScanner/*!*/ self) {
             if (!self._matched) {
                 return null;
@@ -650,7 +643,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
         }
 
         [RubyMethod("peek")]
-        [RubyMethod("peep")]
         public static MutableString/*!*/ Peek(StringScanner/*!*/ self, [DefaultProtocol]int len) {
             if (len < 0) {
                 throw RubyExceptions.CreateArgumentError("negative string size (or size too big)");
@@ -717,7 +709,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
         }
 
         [RubyMethod("rest_size")]
-        [RubyMethod("restsize")]
         public static int RestSize(StringScanner/*!*/ self) {
             return Math.Max(0, self.ByteLength - self._position);
         }
@@ -780,7 +771,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
         /// </summary>
         [RubyMethod("scan_integer")]
         public static object ScanInteger(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, StringScanner/*!*/ self,
-            [Optional]object options) {
+            [Keywords, Optional]object options) {
 
             int numericBase = 10;
             var hash = options as IDictionary<object, object>;
@@ -868,7 +859,6 @@ namespace IronRuby.StandardLibrary.StringScanner {
             return str;
         }
 
-        [RubyMethod("clear")]
         [RubyMethod("terminate")]
         public static StringScanner Clear(StringScanner/*!*/ self) {
             self.ClearMatch();

@@ -17,8 +17,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection.Emit;
 using System.Text;
-using System.Threading;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
@@ -41,6 +39,9 @@ namespace IronRuby.Compiler.Generation {
 
         private static readonly Publisher<TypeDescription/*!*/, Type/*!*/>/*!*/ _newTypes;
         private static readonly Dictionary<Type/*!*/, IList<ITypeFeature/*!*/>/*!*/>/*!*/ _typeFeatures;
+
+        // guarded by _typeFeatures (see TryGetObjectAllocator)
+        private static readonly Dictionary<Type/*!*/, Func<RubyClass, object>/*!*/>/*!*/ _objectAllocators = new Dictionary<Type, Func<RubyClass, object>>();
 
         private static readonly ITypeFeature/*!*/[]/*!*/ _defaultFeatures = new ITypeFeature[] {
             RubyTypeFeature.Instance,
@@ -86,6 +87,12 @@ namespace IronRuby.Compiler.Generation {
             if (interfaces.Count == 0) {
                 features = _defaultFeatures;
             } else {
+                // RubyObject is what a plain Ruby class's instances are, not a base for generated types: one derived from it
+                // would implement IRubyObject a second time, over fields of its own, and override its CreateInstance.
+                // The type of a subclass that adds interfaces derives from Object, as RubyObject itself does.
+                if (baseType == typeof(RubyObject)) {
+                    baseType = typeof(object);
+                }
                 features = new ITypeFeature[] {
                     RubyTypeFeature.Instance,
                     InterfaceImplFeature.Create(interfaces)
@@ -104,6 +111,45 @@ namespace IronRuby.Compiler.Generation {
 
             Debug.Assert(typeof(IRubyObject).IsAssignableFrom(type));
             return type;
+        }
+
+        /// <summary>
+        /// The allocator of the instances of <paramref name="type"/> if it is a type generated for Ruby classes that derives
+        /// from Object (the type of a Ruby class implementing CLR interfaces - those Comparable and Enumerable imply, say), so that
+        /// Class#new can make them without a rule as it makes RubyObjects (see RubyClass.TryGetObjectConstruction); null otherwise.
+        /// It calls the constructor taking the class the rule calls (RubyClass.GetAllocatorNewExpression).
+        /// </summary>
+        internal static Func<RubyClass, object> TryGetObjectAllocator(Type/*!*/ type) {
+            if (type.BaseType != typeof(object) || !typeof(IRubyObject).IsAssignableFrom(type)) {
+                return null;
+            }
+
+            Func<RubyClass, object> allocator;
+            lock (_typeFeatures) {
+                if (_objectAllocators.TryGetValue(type, out allocator)) {
+                    return allocator;
+                }
+                if (!_typeFeatures.ContainsKey(type)) {
+                    return null;
+                }
+            }
+
+            var ctor = type.GetConstructor(new[] { typeof(RubyClass) });
+            if (ctor == null || !System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported) {
+                return null;
+            }
+
+            var method = new DynamicMethod("Allocate" + type.Name, typeof(object), new[] { typeof(RubyClass) }, true);
+            var il = method.GetILGenerator();
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Newobj, ctor);
+            il.Emit(OpCodes.Ret);
+            allocator = (Func<RubyClass, object>)method.CreateDelegate(typeof(Func<RubyClass, object>));
+
+            lock (_typeFeatures) {
+                _objectAllocators[type] = allocator;
+            }
+            return allocator;
         }
 
         internal static bool TryGetFeatures(Type/*!*/ type, out IList<ITypeFeature/*!*/> features) {
@@ -135,7 +181,6 @@ namespace IronRuby.Compiler.Generation {
                 );
             }
 
-#if FEATURE_REFEMIT
             string typeName = GetName(baseType);
             TypeBuilder tb = Snippets.Shared.DefinePublicType(typeName, baseType);
             Utils.Log(typeName, "TYPE_BUILDER");
@@ -160,9 +205,6 @@ namespace IronRuby.Compiler.Generation {
                 _typeFeatures.Add(result, typeInfo.Features);
             }
             return result;
-#else
-            throw new NotSupportedException("Creating new CLR types is not supported on this platform.");
-#endif
         }
 
         private static string GetName(Type/*!*/ baseType) {

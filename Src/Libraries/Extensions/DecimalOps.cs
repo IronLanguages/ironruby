@@ -14,52 +14,20 @@
  * ***************************************************************************/
 
 using System;
-using Microsoft.Scripting.Runtime;
-using System.Numerics;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
 
 namespace IronRuby.Builtins {
     [RubyClass(Extends = typeof(decimal), Inherits = typeof(Numeric), Restrictions = ModuleRestrictions.None)]
     public static class DecimalOps {
-        #region induced_from
+        #region new
 
-        /// <summary>
-        /// Convert value to Float, where value is Float.
-        /// </summary>
-        /// <returns>Float</returns>
         [RubyConstructor]
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static decimal InducedFrom(RubyModule/*!*/ self, double value) {
+        public static decimal Create(RubyModule/*!*/ self, double value) {
             try {
                 return (decimal)value;
             } catch (OverflowException) {
                 throw RubyExceptions.CreateRangeError("number too big or to small to convert into System::Decimal");
             }
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static decimal InducedFrom(RubyModule/*!*/ self, decimal value) {
-            return value;
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static decimal InducedFrom(RubyModule/*!*/ self, int value) {
-            return (decimal)value;
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static decimal InducedFrom(RubyModule/*!*/ self, [NotNull]BigInteger value) {
-            try {
-                return (decimal)value;
-            } catch (OverflowException) {
-                throw RubyExceptions.CreateRangeError("number too big to convert into System::Decimal");
-            }
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static double InducedFrom(RubyModule/*!*/ self, object value) {
-            throw RubyExceptions.CreateTypeError("failed to convert {0} into Decimal", self.Context.GetClassDisplayName(value));
         }
 
         #endregion

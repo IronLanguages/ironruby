@@ -13,5 +13,4 @@
 #
 # ****************************************************************************
 
-version = System::Environment.Version.Major == 4 ? "4.0.0.0" : "2.0.0.0"
-require "System.Drawing, Version=#{version}, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a"
+require "System.Drawing, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a"

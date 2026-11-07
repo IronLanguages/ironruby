@@ -39,13 +39,13 @@ not kept.
 
 - **Ruby 4.0, parsed by prism**: pattern matching, endless methods, `it`, keyword
   arguments, `...` forwarding — the syntax CRuby 4.0 accepts, read by CRuby's own parser.
-- **[ruby/spec](#status) at CRuby 4.0.6**: `spec/language` (2,934 examples) and
-  `spec/library` (6,398) pass with **0 failures**; `spec/core` has 21 of 23,136, 20 of them
-  `ObjectSpace.each_object`.
+- **[ruby/spec](#status)**: `spec/library` (6,011 examples), `spec/command_line` and
+  `spec/security` pass with **0 failures**, `spec/language` has 1 of 2,935 and `spec/core`
+  44 of 23,130 - 20 of them `ObjectSpace.each_object`, 24 a newer error wording than CRuby 4.0's.
 - **[A method JIT and OSR](#performance)**, on by default: integer and float loops, `fib`
   and `mandelbrot` run in **0.27–0.74×** CRuby's time. Over all 50 benchmarks the geomean
   is 3.25×; calls, strings and arrays are where the work is.
-- **irb 1.18 + reline**, **RubyGems 4.0.16 and Bundler** over real TLS, and Ruby 4.0's
+- **irb 1.18 + reline**, **RubyGems 4.0.20 and Bundler** over real TLS, and Ruby 4.0's
   standard library and bundled gems.
 - **[Rails 8.1 boots](#rails)** and serves requests through Rack (with nokogiri stubbed).
 - **.NET is right there**: `require "System.Windows.Forms"`, and Windows Forms and WPF load
@@ -175,10 +175,17 @@ group gets them as more overloads (`list.count(pred)`, the instance member winni
 and a Ruby object such as an Array, whose ancestors don't include `IEnumerable[T]`, gets none.
 Moving from one to the other means changing that one line.
 
-Also: a `Method` converts to a delegate, `IComparable<T>` types are `Comparable`,
+Also: a `Method` converts to a delegate, `IComparable<T>` types are `Comparable`, a Ruby class
+that includes `Comparable` or `Enumerable` is an `IComparable` or `IEnumerable` to .NET code,
 `IAsyncEnumerable<T>` is `Enumerable`, C# 8 default interface methods are callable and run for
 Ruby implementations, `include System::IComparable` works although the name is also a generic,
-and `Method#parameters` names a CLR method's parameters. See
+and `Method#parameters` names a CLR method's parameters. An Int32, Int64 or BigInteger value is an
+`Integer`, yet `System::Int64` and `System::Numerics::BigInteger` still name their CLR types
+(`List[System::Int64]` is a `List<long>`, `System::Int64.MaxValue` is 2**63-1), and such an
+Integer has its own type's CLR members (`(2**70).is_even`, `5.to_string("X")`). An Array passed
+where overloads take different collections goes to the one its items fit, as a C# collection's
+static type would: `String.Join(",", [1, 2])` takes the `object[]`, `Enumerable.Sum([1.5, 2])`
+the `IEnumerable<double>`; a bignum takes a `double` parameter over narrower ones. See
 [`Src/IronRuby.Tests/Runtime/ClrBinderTests.cs`](Src/IronRuby.Tests/Runtime/ClrBinderTests.cs),
 [`ClrProtocolTests.cs`](Src/IronRuby.Tests/Runtime/ClrProtocolTests.cs) and
 [`ClrRuntimeInteropTests.cs`](Src/IronRuby.Tests/Runtime/ClrRuntimeInteropTests.cs) for the
@@ -208,7 +215,7 @@ version (`4.0.0`).
 | Integer | Int32, then BigInteger | Int32 → **Int64** → BigInteger |
 | Execution | DLR interpreter, then IL | + a **method JIT and OSR** that specialize on observed types |
 | REPL | irb from 2011 | **irb 1.18.0 + reline**, on a termios `io/console` |
-| Gems | RubyGems 1.3.7 (2010) | **RubyGems 4.0.16 + Bundler**, installing over real TLS; `gem install rails` resolves without compiling C |
+| Gems | RubyGems 1.3.7 (2010) | **RubyGems 4.0.20 + Bundler**, installing over real TLS; `gem install rails` resolves without compiling C |
 
 ## The prism front end
 
@@ -240,16 +247,32 @@ See [`Src/Prism/README.md`](Src/Prism/README.md) for the details and the known g
 
 ## Status
 
-Measured with [ruby/spec](https://github.com/ruby/spec) at CRuby 4.0.6, `Util/parallel-sweep.sh`:
+Measured on 2026-11-06 with [ruby/spec](https://github.com/ruby/spec) `dda28d04` (2026-10-24,
+"Update to latest CRuby releases") and [mspec](https://github.com/ruby/mspec) `b79c65ed` - the
+`SPEC_REF`/`MSPEC_REF` CI pins - on Linux x64, .NET 10, Debug build, `LANG=C.UTF-8`, with
+`Util/parallel-sweep.sh`:
 
 | suite | examples | failing |
 |---|---|---|
-| `spec/language` | 2934 | **0** |
+| `spec/language` | 2935 | **1** — error wording (below) |
 | `spec/command_line` | 175 | **0** |
 | `spec/security` | 34 | **0** |
-| `spec/library` | 6398 | **0** |
-| `spec/core` | 23136 | **21** — 20 of them `ObjectSpace.each_object`, which needs `-X:ObjectSpace` |
-| IronRuby's own C# test suite | ~1470 | 19 known |
+| `spec/library` | 6011 | **0** |
+| `spec/core` | 23130 | **44** — 20 `ObjectSpace.each_object`, 24 error wording (below) |
+| IronRuby's own C# test suite | ~1000 | **0** |
+
+What the failing examples are:
+
+- **`ObjectSpace.each_object` (20)**: walking the heap needs `-X:ObjectSpace`, which the
+  sweep does not pass (see below).
+- **Error wording (25: 24 in core, 1 in language)**: these specs expect the wording of
+  CRuby's development branch for a conversion method returning the wrong type, "can't
+  convert X **into** Y (X#to_y gives Z)". CRuby 4.0 says "can't convert X **to** Y" and so
+  does IronRuby; mspec's `raise_consistent_error` checks the message only on
+  implementations other than CRuby.
+- `Mutex#lock` "does not raise deadlock if a fiber's attempt to lock was interrupted" fails in
+  some runs: a `Thread#raise` that arrives just as a thread resumes a fiber can land in the
+  resuming thread instead of the fiber.
 
 CRuby 4.0.9 is the oracle: where a spec and IronRuby disagree, the behaviour is checked
 against `ruby` and IronRuby is changed, not the spec. The aim is Ruby 4.0 compatibility
@@ -263,8 +286,8 @@ The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0`; `Src/Std
 holds what CRuby implements as C extensions, written in C# (`Src/Libraries`) or Ruby, and is
 the only other library directory on the load path. A compatibility prelude
 ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb)) supplies what MRI provides
-natively — `Process.clock_gettime`, `Random`, `ObjectSpace::WeakMap`, `ruby2_keywords`,
-pattern-matching support classes and core methods from Ruby 2.x-4.x; `Rational` and `Complex`
+natively and is simplest written in Ruby — `Fiber` (over C# mailboxes), `Random` (over a C#
+MT19937), `ruby2_keywords` and core methods from Ruby 2.x-4.x; `Rational` and `Complex`
 are Ruby ports of CRuby 4.0's `rational.c` and `complex.c`, and `Pathname` is CRuby 4.0's own
 `pathname_builtin.rb`. `Ripper` is implemented
 on prism, the way CRuby 4.0 implements it, and `io/console` over termios, so the current
@@ -312,6 +335,63 @@ of the rbs C parser itself - the gem's `src/`, built unmodified into `librbs` by
 [`Util/build-librbs.sh`](Util/build-librbs.sh) - with the glue that builds the Ruby objects in
 C# (`Src/Libraries/Rbs`).  The parser is tied to one rbs release, currently 4.0.0.dev.5, and
 `require "rbs"` under any other version raises a `LoadError` saying so.
+
+### Ractor
+
+`Ractor` has Ruby 4.0's API ([`RactorOps.cs`](Src/Libraries/Builtins/RactorOps.cs)): `Ractor.new`
+(with `name:`), `#join` and `#value`, `Ractor::Port` (`#send`/`<<` with `move:`, `#receive`,
+`#close`, `#closed?`), `Ractor.receive`, `#send`, `Ractor.select` over ports and Ractors,
+`#monitor`/`#unmonitor`, `Ractor.current`/`.main`/`.main?`/`.count`, Ractor-local storage
+(`Ractor[]`, `Ractor[]=`, `Ractor.store_if_absent`), `Ractor.shareable?`,
+`Ractor.make_shareable` (with `copy:`), `Ractor.shareable_proc`/`shareable_lambda`, and the
+error classes (`Ractor::RemoteError` with its `cause` and `ractor`, `IsolationError`,
+`MovedError`, `ClosedError`, `Ractor::MovedObject`).  A Ractor is a CLR thread - a Ruby
+thread in its own `ThreadGroup`, whose threads all answer the same `Ractor.current` - so
+Ractors really run in parallel.
+
+What crosses between Ractors behaves as in CRuby: a message is shared when it is shareable
+(frozen all the way down, or made so by `make_shareable`), deep-copied otherwise (cycles and
+shared references kept, `TypeError`/`Ractor::Error` for what CRuby cannot copy), and with
+`move: true` every object copied becomes a `Ractor::MovedObject`, whose every method raises
+`Ractor::MovedError`.  The block of `Ractor.new` is checked when it is created: one that reads
+or assigns a local variable of an enclosing scope raises `ArgumentError` ("can not isolate a
+Proc because it accesses outer variables (a)."), from the variables the compiler records
+for every block; `make_shareable` and `shareable_proc` check those variables' values.
+
+The Ractors are isolated from each other as in CRuby ([`RactorIsolation.cs`](Src/Ruby/Runtime/RactorIsolation.cs)).
+A non-main Ractor gets `Ractor::IsolationError` for a global variable other than the
+Ractor-local ones (`$stdin`, `$stdout`, `$stderr` - IO objects of its own over the standard
+streams - `$VERBOSE`, `$DEBUG` and their aliases, which it inherits from its creator, and the
+per-thread or per-scope ones such as `$~`, `$_` and `$!`), for `global_variables` and
+`alias $a $b`, for any class variable, for an unshareable value of an instance variable of a
+class or module or any write to one, for the instance variables of a shareable object such as a
+Ractor, and for a constant that holds an unshareable value, read or set.  The block of
+`Ractor.new` and a shareable Proc are isolated: `eval` in them cannot use the locals around
+them (`SyntaxError`), `Proc#binding` refuses, and `Ractor.shareable_proc`/`make_shareable`
+refuse an outer variable the code assigns more than once ("may be reassigned").  A method
+`define_method` made of an unshareable block runs only in the Ractor that defined it, `trap` in
+a non-main Ractor isolates its block, and `require` there has the main Ractor load the file
+(`Ractor._require`; the prelude prepends Kernel with the delegating `#require` when the first
+Ractor starts, as CRuby does).  The core library written in Ruby (`ruby4.rb` and the other
+files `RubyStackTraceBuilder.IsInternalFile` names) stands in for CRuby's C code and is exempt.
+
+None of this costs the main Ractor anything until a Ractor is started: each check is a test of
+one field of the runtime (`RubyContext.RactorsStarted`), and a constant site's cached read of an
+object is unchanged.  Once a Ractor has run, a global variable or class-level instance variable
+access first asks which Ractor the thread is in, and a cached read of a constant holding an
+unshareable object does too (about 20 ns more per access in the main Ractor, measured on a loop
+of them).
+
+Not enforced: a shareable Proc still reads its outer variables live rather than from a copy
+taken when it was made (the "may be reassigned" check makes the difference unobservable for
+the variables it lets through); a moved String, Array or Hash raises `Ractor::MovedError` when
+it is sent a method, but a built-in method handed it as an argument (`[].concat(moved)`) still
+reads it; `ObjectSpace.each_object` without a module still needs `-X:ObjectSpace` (CRuby's
+non-main Ractor sees only the shareable objects) and `ObjectSpace._id2ref` cannot tell an
+unshareable object's id.  CRuby's own `bootstraptest/test_ractor.rb` passes 146 of its 153
+output checks: the misses are those, the 1000-Ractor `define_method` check that is correct but
+slower than the harness's 40 seconds (each of its million calls raises), and a `make_shareable`
+of a `Rational` with a `Numeric` subclass numerator.
 
 ### Rails
 
@@ -364,7 +444,7 @@ Build with `-c Release` and run with `IR_CONFIG=Release ./ir.sh`: the optimized 
 `IRONRUBY_STARTUP_TRACE=1` prints, when the process exits, where its startup went: milestones
 since the process started, and for the Ruby files it loaded the time spent parsing them
 (prism), transforming them to the DLR tree, compiling them for the interpreter and running
-their own code, slowest files first.
+their own code, the 15 slowest files first (`IRONRUBY_STARTUP_TRACE=all`: every file).
 
 ## Packaging an application (`irubyc`)
 
@@ -515,9 +595,9 @@ Linux is the primary target and the one the numbers above are measured on. **Win
 `ir.cmd` and `iirb.cmd` run, and `spec/language` (2920 examples) and `spec/security` pass with
 **0 failures**. `spec/core` and `spec/library` are rougher there — symlinks/chmod/umask in
 `core/file`, fork and signals in `core/process`, and `IO.select`/`IO#wait` on pipes (which is
-`poll(2)`, so `core/io` and the socket suites hang rather than fail). Win32OLE and
-readline are not implemented on Windows; `IO.console` is nil, so irb falls back to its ANSI
-input path. Windows Forms and WPF (`require "System.Windows.Forms"`, `"PresentationFramework"`)
+`poll(2)`, so `core/io` and the socket suites hang rather than fail). Win32OLE is not
+implemented on Windows. `readline` is the readline gem over Reline, as on CRuby 4.0;
+`IO.console` is nil, so irb and Reline fall back to their ANSI input path. Windows Forms and WPF (`require "System.Windows.Forms"`, `"PresentationFramework"`)
 come from the Windows Desktop runtime, which `ir` references whenever it is built for Windows
 (`-p:IronRubyWindowsDesktop=false` leaves it out); on Linux and macOS they do not exist.
 [`Samples/Notepad`](Samples/Notepad/notepad.rb) is Windows Notepad written that way, in Ruby
@@ -600,6 +680,10 @@ $ (cd Src/Prism && ruby generate.rb)                             # C# nodes + lo
 $ dotnet build Src/Console/Ruby.Console.csproj
 ```
 
+Once the DLR and prism are in place, `make`, `make test` (IronRuby's own C# tests) and
+`make spec` (ruby/spec's language suite) run the same `dotnet build` and test commands CI
+does; the [`Makefile`](Makefile) lists them.
+
 The prism revision is pinned: `Generated/` is produced from a particular `config.yml`, and
 a `libprism` built from a different one deserializes into the wrong fields. See
 [`Src/Prism/README.md`](Src/Prism/README.md) for the revision and how to check a checkout.
@@ -610,7 +694,7 @@ Running the conformance suite:
 $ git clone https://github.com/ruby/spec && git clone https://github.com/ruby/mspec
 $ RUBY_EXE=./ir.sh ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language
 $ Util/parallel-sweep.sh out            # all five suites, 8 at a time, ~8 minutes
-$ Util/run-tests.sh                     # IronRuby's own C# tests
+$ make test                            # IronRuby's own C# tests
 $ Util/bench/run.sh                     # benchmarks against CRuby
 $ Util/gems/run.sh                      # default/bundled gems, each with its own suite
 ```
@@ -654,8 +738,9 @@ C:\ir> ir.cmd -Imspec/lib mspec/bin/mspec-run spec/language
 separator, so its argument is `;`-separated on Windows (a `:`-separated list would be cut
 apart at every drive letter).
 
-Conformance on Windows 11 x64 (.NET 8.0.31), same ruby/spec revision as the Linux table
-above. Some suites are run a directory at a time there because three of them hang (see
+Conformance on Windows 11 x64 (.NET 8.0.31), measured in September 2026 against an earlier
+ruby/spec revision than the [Status](#status) table, with the Linux numbers of that time
+beside it. Some suites are run a directory at a time there because three of them hang (see
 below), which the whole-suite numbers on Linux do not need:
 
 | suite | examples | Windows | Linux |
@@ -668,8 +753,10 @@ below), which the whole-suite numbers on Linux do not need:
 
 Where the Windows errors are: `core/file` (113) and `core/filetest` (8) are symlinks,
 `chmod`/`umask` and the other Unix file metadata; `core/process` (36 failures, 15 errors) is
-`fork`, process groups, uid/gid and signals; `library/win32ole` (114) and `library/readline`
-(25) are libraries IronRuby does not implement and whose specs only run on Windows;
+`fork`, process groups, uid/gid and signals; `library/win32ole` (114) is a library IronRuby
+does not implement and whose specs only run on Windows; `library/readline` (25) was the
+old rb-readline, since replaced by the Reline-based readline gem CRuby ships, whose specs
+are skipped there as they are on CRuby;
 `library/zlib` (3 errors, and 2 failures on .NET 10) is the zlib below. `core/objectspace` needs
 `-X:ObjectSpace`, as on Linux.
 
@@ -692,4 +779,3 @@ table, so such a redirection is refused with `EINVAL`), and the Unix-only half o
 ## License
 
 Apache License 2.0, as the original. See [`Src/Public`](Src/Public/LICENSE.APACHE.html).
-The original content description is preserved in [`README.txt`](README.txt).

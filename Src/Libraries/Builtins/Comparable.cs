@@ -14,10 +14,9 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
@@ -157,15 +156,43 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            // Ruby 2.3 stopped rescuing StandardError here: whatever <=> raises goes through,
-            // a nil result is false and a non-numeric result raises (via the comparison below).
-            var compare = comparisonStorage.CompareSite;
-            object compareResult = compare.Target(compare, self, other);
-            if (compareResult == null) {
+            // MRI's rb_exec_recursive_paired: a <=> that compares the same two objects again inside
+            // itself (members that refer back to their container) gets false there, not a stack overflow.
+            var pair = new KeyValuePair<object, object>(self, other);
+            var comparing = _comparing ??= new HashSet<KeyValuePair<object, object>>(ReferencePairComparer.Instance);
+            if (!comparing.Add(pair)) {
                 return false;
             }
 
-            return Protocols.ConvertCompareResult(comparisonStorage, compareResult) == 0;
+            try {
+                // Ruby 2.3 stopped rescuing StandardError here: whatever <=> raises goes through,
+                // a nil result is false and any other is compared with 0 (rb_cmpint).
+                var compare = comparisonStorage.CompareSite;
+                object compareResult = compare.Target(compare, self, other);
+                if (compareResult == null) {
+                    return false;
+                }
+
+                return Protocols.ConvertCompareResult(comparisonStorage, compareResult) == 0;
+            } finally {
+                comparing.Remove(pair);
+            }
+        }
+
+        // the pairs Comparable#== is comparing on this thread
+        [ThreadStatic]
+        private static HashSet<KeyValuePair<object, object>> _comparing;
+
+        private sealed class ReferencePairComparer : IEqualityComparer<KeyValuePair<object, object>> {
+            internal static readonly ReferencePairComparer Instance = new ReferencePairComparer();
+
+            public bool Equals(KeyValuePair<object, object> x, KeyValuePair<object, object> y) {
+                return ReferenceEquals(x.Key, y.Key) && ReferenceEquals(x.Value, y.Value);
+            }
+
+            public int GetHashCode(KeyValuePair<object, object> pair) {
+                return RuntimeHelpers.GetHashCode(pair.Key) * 31 + RuntimeHelpers.GetHashCode(pair.Value);
+            }
         }
     }
 }

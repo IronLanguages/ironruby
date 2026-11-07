@@ -15,9 +15,6 @@
 
 using System;
 using System.Collections;
-using System.Collections.Generic;
-using System.Text;
-using Microsoft.Scripting.Utils;
 using System.Diagnostics;
 using IronRuby.Builtins;
 

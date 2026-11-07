@@ -13,5 +13,4 @@
 #
 # ****************************************************************************
 
-version = System::Environment.Version.Major == 4 ? "4.0.0.0" : "2.0.0.0"
-require "System, Version=#{version}, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+require "System, Culture=neutral, PublicKeyToken=b77a5c561934e089"

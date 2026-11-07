@@ -82,13 +82,13 @@ namespace IronRuby.Builtins {
 
         [RubyConstructor]
         public static RubyDir/*!*/ Create(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options));
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static RubyDir/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ toPath, RubyDir/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             self._encoding = GetEncodingOption(self.ImmediateClass.Context, options);
             return Reinitialize(self, Protocols.CastToPath(toPath, dirname));
         }
@@ -177,7 +177,7 @@ namespace IronRuby.Builtins {
 
             int errno;
             if (Posix.ChRoot(strPath, out errno) != 0) {
-                throw Posix.Error(errno, strPath);
+                throw Posix.Error(errno, strPath, self.Context);
             }
             return 0;
         }
@@ -240,13 +240,11 @@ namespace IronRuby.Builtins {
             }
         }
 
-#if FEATURE_FILESYSTEM
-        [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton)]
         // #exists? was deprecated in 2.1 and removed in 3.9.
         public static bool Exists(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return RubyFileOps.DirectoryExists(self.Context, Protocols.CastToPath(toPath, path));
         }
-#endif
 
         [RubyMethod("delete", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("rmdir", RubyMethodAttributes.PublicSingleton)]
@@ -267,14 +265,14 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("entries", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ GetEntries(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname, [Optional]IDictionary<object, object> options) {
+        public static RubyArray/*!*/ GetEntries(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname, [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options))
                 .GetEntries(self.Context);
         }
 
         [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
         public static object ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options))
                 .EnumerateEntries(self.Context, block, null);
         }
@@ -469,7 +467,7 @@ namespace IronRuby.Builtins {
                 int mode = Protocols.CastToFixnum(fixnumCast, permissions);
                 int errno;
                 if (Posix.MkDir(strDir, mode, out errno) != 0) {
-                    throw Posix.Error(errno, strDir);
+                    throw Posix.Error(errno, strDir, self.Context);
                 }
                 return 0;
             }
@@ -484,7 +482,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
         public static object Open(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             RubyDir rd = new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options));
 
             try {
@@ -498,7 +496,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
         public static RubyDir/*!*/ Open(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname));
         }
 
@@ -679,7 +677,7 @@ namespace IronRuby.Builtins {
             // Close-on-exec is the default for every descriptor Ruby opens.
             int fd = Posix.Open(path, Posix.O_RDONLY | Posix.O_DIRECTORY | Posix.O_CLOEXEC, out errno);
             if (fd < 0) {
-                throw Posix.Error(errno, path);
+                throw Posix.Error(errno, path, ImmediateClass.Context);
             }
             _fd = fd;
             return fd;
@@ -877,6 +875,13 @@ namespace IronRuby.Builtins {
                 case DirectoryOperation.Create:
                     if (ex is ArgumentException) {
                         return RubyExceptions.CreateEINVAL(path);
+                    }
+                    // A name too long for the file system is not one that exists: mkdir(2) says
+                    // ENAMETOOLONG, win32.c maps ERROR_FILENAME_EXCED_RANGE to ENOENT.
+                    if (ex is PathTooLongException) {
+                        return Path.DirectorySeparatorChar == '/'
+                            ? new Errno.NameTooLongError(path)
+                            : RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
                     }
                     if (ex is IOException) {
                         return RubyExceptions.CreateEEXIST(path);

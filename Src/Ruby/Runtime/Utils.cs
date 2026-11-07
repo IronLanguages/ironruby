@@ -13,51 +13,22 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Globalization;
 using System.Diagnostics;
 using System.Text;
-using System.Reflection;
 using System.Collections;
 using System.Collections.Generic;
 using System.Dynamic;
+using System.Numerics;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
-using Microsoft.Scripting;
 
 namespace IronRuby.Runtime {
     public static class Utils {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly byte[] EmptyBytes = new byte[0];
-
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly char[] EmptyChars = new char[0];
-        
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly MemberInfo[] EmptyMemberInfos = new MemberInfo[0];
-
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly Delegate[] EmptyDelegates = new Delegate[0];
-
-        public static int IndexOf(this string[]/*!*/ array, string/*!*/ value, StringComparer/*!*/ comparer) {
-            ContractUtils.RequiresNotNull(array, "array");
-            ContractUtils.RequiresNotNull(value, "value");
-            ContractUtils.RequiresNotNull(comparer, "comparer");
-
-            for (int i = 0; i < array.Length; i++) {
-                if (comparer.Equals(array[i], value)) {
-                    return i;
-                }
-            }
-
-            return -1;
-        }
+        public static readonly byte[] EmptyBytes = Array.Empty<byte>();
+        public static readonly char[] EmptyChars = Array.Empty<char>();
 
         public static bool IsAscii(this string/*!*/ str) {
             return System.Text.Ascii.IsValid(str);
@@ -76,12 +47,7 @@ namespace IronRuby.Runtime {
         }
 
         internal static bool IsBinary(this string/*!*/ str) {
-            for (int i = 0; i < str.Length; i++) {
-                if (str[i] > 0xff) {
-                    return false;
-                }
-            }
-            return true;
+            return str.AsSpan().IndexOfAnyExceptInRange('\0', '\u00ff') < 0;
         }
 
         internal static int GetCharacterCount(this string/*!*/ str) {
@@ -198,13 +164,6 @@ namespace IronRuby.Runtime {
             }
         }
 
-        private static int GetByteCount(string/*!*/ str, int start, int count, Encoding/*!*/ encoding, out char[]/*!*/ chars) {
-            // TODO: we can special case this for some encodings and calculate the byte count w/o copying the content: 
-            chars = new char[count];
-            str.CopyTo(start, chars, 0, count);
-            return encoding.GetByteCount(chars, 0, chars.Length);
-        }
-
         internal static T[]/*!*/ Concatenate<T>(T[]/*!*/ array1, T[]/*!*/ array2) {
             return Concatenate(array1, array1.Length, array2, array2.Length);
         }
@@ -252,10 +211,10 @@ namespace IronRuby.Runtime {
         }
 
         internal static int Append(ref byte[]/*!*/ array, int itemCount, string/*!*/ other, int start, int count, Encoding/*!*/ encoding) {
-            char[] appendChars;
-            int newCount = itemCount + GetByteCount(other, start, count, encoding, out appendChars);
+            var chars = other.AsSpan(start, count);
+            int newCount = itemCount + encoding.GetByteCount(chars);
             Resize(ref array, newCount);
-            encoding.GetBytes(appendChars, 0, appendChars.Length, array, itemCount);
+            encoding.GetBytes(chars, array.AsSpan(itemCount));
             return newCount;
         }
 
@@ -298,38 +257,6 @@ namespace IronRuby.Runtime {
             ResizeForInsertion(ref array, itemCount, index, count);
             Array.Copy(other, start, array, index, count);
             return itemCount + count;
-        }
-
-        internal static int InsertAt(ref byte[]/*!*/ array, int itemCount, int index, string/*!*/ other, int start, int count, Encoding/*!*/ encoding) {
-            char[] insertChars;
-            int insertedCount = GetByteCount(other, start, count, encoding, out insertChars);
-            ResizeForInsertion(ref array, itemCount, index, insertedCount);
-            encoding.GetBytes(insertChars, 0, insertChars.Length, array, itemCount);
-            return itemCount + insertedCount;
-        }
-
-        internal static int InsertAt(ref byte[]/*!*/ array, int itemCount, int index, char[]/*!*/ other, int start, int count, Encoding/*!*/ encoding) {
-            int insertedCount = encoding.GetByteCount(other, start, count);
-            ResizeForInsertion(ref array, itemCount, index, insertedCount);
-            encoding.GetBytes(other, start, count, array, itemCount);
-            return itemCount + insertedCount;
-        }
-
-        internal static int InsertAt(ref byte[]/*!*/ array, int itemCount, int index, char other, int repeatCount, Encoding/*!*/ encoding) {
-            if (repeatCount == 0) {
-                return itemCount;
-            }
-
-            char[] chars = new char[] { other };
-            int charSize = encoding.GetByteCount(chars, 0, 1);
-            int insertedCount = charSize * repeatCount;
-
-            ResizeForInsertion(ref array, itemCount, index, insertedCount);
-
-            // first character:
-            encoding.GetBytes(chars, 0, 1, array, itemCount);
-            Fill(array, itemCount, array, itemCount + charSize, charSize, repeatCount - 1);
-            return itemCount + insertedCount;
         }
 
         internal static int Remove<T>(ref T[]/*!*/ array, int itemCount, int start, int count) {
@@ -548,107 +475,42 @@ namespace IronRuby.Runtime {
             return LastIndexOf(str.AsSpan(), Widen(value), start, count);
         }
 
+        // Ordinal comparison: the difference of the first elements that differ, or else -1, 0 or +1
+        // as the first sequence is shorter than, as long as or longer than the second.
+        private static int ValueCompareTo<T>(ReadOnlySpan<T> data, ReadOnlySpan<T> other) where T : IBinaryInteger<T> {
+            int min = Math.Min(data.Length, other.Length);
+            int i = data.Slice(0, min).CommonPrefixLength(other.Slice(0, min));
+            return (i < min) ? Int32.CreateTruncating(data[i]) - Int32.CreateTruncating(other[i]) : data.Length.CompareTo(other.Length);
+        }
+
         internal static int ValueCompareTo(this byte[]/*!*/ array, int itemCount, byte[]/*!*/ other) {
             return ValueCompareTo(array, itemCount, other, other.Length);
         }
 
         internal static int ValueCompareTo(this byte[]/*!*/ array, int itemCount, byte[]/*!*/ other, int otherCount) {
-            int min = itemCount;
-            int defaultResult;
-            if (min < otherCount) {
-                defaultResult = -1;
-            } else if (min > otherCount) {
-                min = otherCount;
-                defaultResult = +1;
-            } else {
-                defaultResult = 0;
-            }
-
-            int i = new ReadOnlySpan<byte>(array, 0, min).CommonPrefixLength(new ReadOnlySpan<byte>(other, 0, min));
-            if (i < min) {
-                return (int)array[i] - other[i];
-            }
-
-            return defaultResult;
+            return ValueCompareTo(new ReadOnlySpan<byte>(array, 0, itemCount), new ReadOnlySpan<byte>(other, 0, otherCount));
         }
 
         internal static int ValueCompareTo(this char[]/*!*/ array, int itemCount, char[]/*!*/ other, int otherCount) {
-            int min = itemCount;
-            int defaultResult;
-            if (min < otherCount) {
-                defaultResult = -1;
-            } else if (min > otherCount) {
-                min = otherCount;
-                defaultResult = +1;
-            } else {
-                defaultResult = 0;
-            }
-
-            int i = new ReadOnlySpan<char>(array, 0, min).CommonPrefixLength(new ReadOnlySpan<char>(other, 0, min));
-            if (i < min) {
-                return (int)array[i] - other[i];
-            }
-
-            return defaultResult;
+            return ValueCompareTo(new ReadOnlySpan<char>(array, 0, itemCount), new ReadOnlySpan<char>(other, 0, otherCount));
         }
 
         internal static int ValueCompareTo(this char[]/*!*/ array, int itemCount, string/*!*/ other) {
-            int min = itemCount, defaultResult;
-            if (min < other.Length) {
-                defaultResult = -1;
-            } else if (min > other.Length) {
-                min = other.Length;
-                defaultResult = +1;
-            } else {
-                defaultResult = 0;
-            }
+            return ValueCompareTo(new ReadOnlySpan<char>(array, 0, itemCount), other.AsSpan());
+        }
 
-            int i = new ReadOnlySpan<char>(array, 0, min).CommonPrefixLength(other.AsSpan(0, min));
-            if (i < min) {
-                return (int)array[i] - other[i];
-            }
-
-            return defaultResult;
+        internal static int ValueCompareTo(this string/*!*/ str, string/*!*/ other) {
+            return ValueCompareTo(str.AsSpan(), other.AsSpan());
         }
 
         internal static int ValueCompareTo(this byte[]/*!*/ array, int itemCount, string/*!*/ other) {
-            int min = itemCount;
-            int defaultResult;
-            if (min < other.Length) {
-                defaultResult = -1;
-            } else if (min > other.Length) {
-                min = other.Length;
-                defaultResult = +1;
-            } else {
-                defaultResult = 0;
-            }
-
+            int min = Math.Min(itemCount, other.Length);
             for (int i = 0; i < min; i++) {
                 if (array[i] != other[i]) {
                     return (int)array[i] - other[i];
                 }
             }
-
-            return defaultResult;
-        }
-
-        internal static int ValueCompareTo(this string/*!*/ str, string/*!*/ other) {
-            int min = str.Length, defaultResult;
-            if (min < other.Length) {
-                defaultResult = -1;
-            } else if (min > other.Length) {
-                min = other.Length;
-                defaultResult = +1;
-            } else {
-                defaultResult = 0;
-            }
-
-            int i = str.AsSpan(0, min).CommonPrefixLength(other.AsSpan(0, min));
-            if (i < min) {
-                return (int)str[i] - other[i];
-            }
-
-            return defaultResult;
+            return itemCount.CompareTo(other.Length);
         }
 
         internal static bool ValueEquals<T>(T[] array, int arrayCount, T[] other, int otherCount) {
@@ -666,14 +528,6 @@ namespace IronRuby.Runtime {
             }
 
             return true;
-        }
-
-        public static TOutput[]/*!*/ ConvertAll<TInput, TOutput>(this TInput[]/*!*/ array, Func<TInput, TOutput>/*!*/ converter) {
-            var result = new TOutput[array.Length];
-            for (int i = 0; i < array.Length; i++) {
-                result[i] = converter(array[i]);
-            }
-            return result;
         }
 
         internal static void AddRange(IList/*!*/ list, IList/*!*/ range) {
@@ -740,7 +594,6 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-#if FEATURE_ENCODING
         private sealed class CheckDecoderFallback : DecoderFallback {
             public bool HasInvalidCharacters { get; private set; }
 
@@ -857,6 +710,18 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            // Validity is a matter of shape there, and a sequence of the right shape that names no
+            // character is held as escaped bytes, which no encoder takes: ask the bytes instead.
+            if (encoding is IStructuredEncoding) {
+                byte[] bytes;
+                try {
+                    bytes = RubyEncoding.GetRubyEncoding(encoding.CodePage).EscapingEncoding.GetBytes(chars.ToArray());
+                } catch (EncoderFallbackException) {
+                    return true;
+                }
+                return ContainsInvalidCharacters(bytes, 0, bytes.Length, encoding);
+            }
+
             var encoder = encoding.GetEncoder();
             var fallback = new CheckEncoderFallback();
             encoder.Fallback = fallback;
@@ -867,34 +732,6 @@ namespace IronRuby.Runtime {
             }
             return fallback.HasInvalidCharacters;
         }
-#else
-        internal static bool ContainsInvalidCharacters(byte[]/*!*/ bytes, int start, int count, Encoding/*!*/ encoding) {
-            try {
-                encoding.GetCharCount(bytes, start, count);
-                return true;
-            } catch (DecoderFallbackException){
-                return false;
-            }
-        }
-
-        internal static bool ContainsInvalidCharacters(char[]/*!*/ chars, int start, int count, Encoding/*!*/ encoding) {
-            try {
-                encoding.GetByteCount(chars, start, count);
-                return true;
-            } catch (EncoderFallbackException) {
-                return false;
-            }
-        }
-
-        internal static bool ContainsInvalidCharacters(ReadOnlySpan<char> chars, Encoding/*!*/ encoding) {
-            try {
-                encoding.GetByteCount(chars);
-                return true;
-            } catch (EncoderFallbackException) {
-                return false;
-            }
-        }
-#endif
     }
 }
 

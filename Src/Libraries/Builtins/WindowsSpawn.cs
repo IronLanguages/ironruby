@@ -19,7 +19,6 @@
  * rather than silently dropped.
  *
  * ***************************************************************************/
-#if FEATURE_PROCESS
 
 using System;
 using System.Collections.Generic;
@@ -62,7 +61,6 @@ namespace IronRuby.Builtins {
         private const int ERROR_LOCK_VIOLATION = 33;
         private const int ERROR_INVALID_NAME = 123;
         private const int ERROR_BAD_EXE_FORMAT = 193;
-        private const int ERROR_BROKEN_PIPE = 109;
 
         // Linux errno values, which is what the prelude's Errno:: table is built from.
         private const int ENOENT = 2;
@@ -796,7 +794,7 @@ namespace IronRuby.Builtins {
             SetHandleInformation(write, HANDLE_FLAG_INHERIT, 0);
 
             var reader = new FileStream(new SafeFileHandle(read, true), FileAccess.Read, 1, false);
-            var writer = new FileStream(new SafeFileHandle(write, true), FileAccess.Write, 1, false);
+            var writer = new WindowsPipeWriteStream(new SafeFileHandle(write, true));
 
             var reading = new RubyIO(context, reader, context.AllocateFileDescriptor(reader), IOMode.ReadOnly);
             var writing = new RubyIO(context, writer, context.AllocateFileDescriptor(writer), IOMode.WriteOnly);
@@ -934,4 +932,3 @@ namespace IronRuby.Builtins {
         #endregion
     }
 }
-#endif

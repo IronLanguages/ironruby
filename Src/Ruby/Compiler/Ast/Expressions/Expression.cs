@@ -13,14 +13,8 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using Microsoft.Scripting;
 using IronRuby.Builtins;
@@ -38,17 +32,7 @@ namespace IronRuby.Compiler.Ast {
     /// although some syntactic statements evaluate to a non-null value (e.g. if/unless-statements).
     /// </summary>
     public abstract class Expression : Node {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly Expression[]/*!*/ EmptyArray = new Expression[0];
-        internal static readonly List<Expression>/*!*/ _EmptyList = new List<Expression>();
         internal static readonly Statements/*!*/ _EmptyStatements = new Statements();   
-
-        internal static List<Expression>/*!*/ EmptyList {
-            get {
-                Debug.Assert(_EmptyList.Count == 0);
-                return _EmptyList; 
-            }
-        }
 
         internal static Statements/*!*/ EmptyStatements {
             get {

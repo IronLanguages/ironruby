@@ -83,7 +83,7 @@ namespace IronRuby.Builtins {
         #region arithmetic (rational.c's rb_rational_plus, _minus, _mul, _div, f_addsub, f_muldiv)
 
         // An Integer as the CLR holds one: an Int32, an Int64 past it, a BigInteger past that.
-        private static bool IsInteger(object value) {
+        internal static bool IsIntegerValue(object value) {
             return value is int || value is long || value is BigInteger;
         }
 
@@ -214,7 +214,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("+")]
         public static object Add(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ coerce, RubyRational/*!*/ self, object other) {
-            if (IsInteger(other)) {
+            if (IsIntegerValue(other)) {
                 return self.AddSub(self._numerator, self._denominator, other, 1, true);
             }
             if (other is double) {
@@ -229,7 +229,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("-")]
         public static object Subtract(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ coerce, RubyRational/*!*/ self, object other) {
-            if (IsInteger(other)) {
+            if (IsIntegerValue(other)) {
                 return self.AddSub(self._numerator, self._denominator, other, 1, false);
             }
             if (other is double) {
@@ -244,7 +244,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("*")]
         public static object Multiply(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ coerce, RubyRational/*!*/ self, object other) {
-            if (IsInteger(other)) {
+            if (IsIntegerValue(other)) {
                 return self.MulDiv(self._numerator, self._denominator, other, 1, false);
             }
             if (other is double) {
@@ -259,7 +259,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("/"), RubyMethod("quo")]
         public static object Divide(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ coerce, RubyRational/*!*/ self, object other) {
-            if (IsInteger(other)) {
+            if (IsIntegerValue(other)) {
                 if (Big(other).IsZero) {
                     throw new DivideByZeroException("divided by 0");
                 }
@@ -328,10 +328,6 @@ namespace IronRuby.Builtins {
             return new RubyRational(cls, Protocols.Normalize(N), Protocols.Normalize(D));
         }
 
-        internal static bool IsIntegerValue(object value) {
-            return IsInteger(value);
-        }
-
         #endregion
 
         #region <=>, ==, to_f, hash
@@ -346,7 +342,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("<=>")]
         public static object Compare(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ coerce, RubyRational/*!*/ self, object other) {
             object bnum, bden;
-            if (IsInteger(other)) {
+            if (IsIntegerValue(other)) {
                 bnum = other;
                 bden = 1;
             } else if (other is RubyRational) {
@@ -371,7 +367,7 @@ namespace IronRuby.Builtins {
         // nurat_eqeq_p
         [RubyMethod("==")]
         public static bool Equal(BinaryOpStorage/*!*/ equals, RubyRational/*!*/ self, object other) {
-            if (IsInteger(other)) {
+            if (IsIntegerValue(other)) {
                 if (Big(self._numerator).IsZero && Big(other).IsZero) { return true; }
                 return IsOne(self._denominator) && Big(self._numerator) == Big(other);
             }

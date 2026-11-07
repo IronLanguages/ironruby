@@ -69,7 +69,6 @@ using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using IronRuby.StandardLibrary.Nio4r;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.StandardLibrary.CoolIo {
 

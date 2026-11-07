@@ -13,26 +13,17 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
-using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Dynamic;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Actions;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using IronRuby.Compiler.Generation;
 using System.Runtime.CompilerServices;
-using System.Collections.Generic;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
-    using Ast = Expression;
-    using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     [RubyClass(Extends = typeof(TypeGroup), Restrictions = ModuleRestrictions.None)]
     [Includes(typeof(Enumerable))]
@@ -154,6 +145,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("new")]
+        [ReceivesKeywords]
         public static object/*!*/ New(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, 
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("new", storage, self, args);
@@ -161,6 +153,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("new")]
+        [ReceivesKeywords]
         public static object New(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage, BlockParam block, 
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("new", storage, block, self, args);
@@ -174,6 +167,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("clr_new")]
+        [ReceivesKeywords]
         public static object/*!*/ ClrNew(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage,
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("clr_new", storage, self, args);
@@ -181,6 +175,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("clr_new")]
+        [ReceivesKeywords]
         public static object ClrNew(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage, BlockParam block,
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("clr_new", storage, block, self, args);
@@ -213,13 +208,15 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
         [RubyStackTraceHidden]
-        public static object MethodMissing(RubyContext/*!*/ context, BlockParam block, TypeGroup/*!*/ self,
+        [ReceivesKeywords]
+        public static object MethodMissing(RubyScope/*!*/ scope, BlockParam block, TypeGroup/*!*/ self,
             [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
+            var context = scope.RubyContext;
 
             string methodName = name.ToString();
             RubyModule target = TryGetForwardTarget(context, self, methodName);
             if (target == null) {
-                return BasicObjectOps.MethodMissing(context, self, name, args);
+                return BasicObjectOps.MethodMissing(scope, self, name, args);
             }
 
             var site = context.GetOrCreateSendSite<Func<CallSite, object, Proc, RubyArray, object>>(methodName, ForwardSignature);

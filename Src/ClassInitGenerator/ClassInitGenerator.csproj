@@ -5,7 +5,6 @@
     <AssemblyName>ClassInitGenerator</AssemblyName>
     <RootNamespace>ClassInitGenerator</RootNamespace>
     <Nullable>disable</Nullable>
-    <NoWarn>$(NoWarn);CS0618;SYSLIB0012</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />

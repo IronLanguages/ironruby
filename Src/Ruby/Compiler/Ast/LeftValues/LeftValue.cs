@@ -13,20 +13,13 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
-using System.Collections.Generic;
 using Microsoft.Scripting;
 
 namespace IronRuby.Compiler.Ast {
 
     public abstract class LeftValue : Expression {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        internal static new readonly LeftValue[] EmptyArray = new LeftValue[0];
 
         public LeftValue(SourceSpan location)
             : base(location) {

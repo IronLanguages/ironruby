@@ -13,17 +13,13 @@
  *
  * ***************************************************************************/
 
-using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Threading;
 using IronRuby.Builtins;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime {
 
-    [Serializable]
     public sealed class RubyOptions : LanguageOptions {
         private readonly ReadOnlyCollection<string>/*!*/ _arguments;
         private readonly RubyEncoding/*!*/ _localeEncoding;
@@ -53,7 +49,6 @@ namespace IronRuby.Runtime {
         private readonly int _verbosity;
         private readonly bool _debugVariable;
         private readonly string _savePath;
-        private readonly bool _loadFromDisk;
         private readonly bool _profile;
         private readonly bool _hasSearchPaths;
         private readonly bool _noAssemblyResolveHook;
@@ -62,7 +57,6 @@ namespace IronRuby.Runtime {
         private readonly bool _osr;
 
 #if DEBUG
-        public static bool UseThreadAbortForSyncRaise;
         public static bool CompileRegexps;
         public static bool ShowRules;
 #endif
@@ -206,10 +200,6 @@ namespace IronRuby.Runtime {
             get { return _savePath; }
         }
 
-        public bool LoadFromDisk {
-            get { return _loadFromDisk; }
-        }
-
         public bool Profile {
             get { return _profile; }
         }
@@ -262,10 +252,6 @@ namespace IronRuby.Runtime {
             get { return _hasSearchPaths; }
         }
 
-        public RubyCompatibility Compatibility {
-            get { return RubyCompatibility.Default; }
-        }
-
         /// <summary>
         /// The initial value of $DEBUG variable.
         /// </summary>
@@ -302,7 +288,6 @@ namespace IronRuby.Runtime {
             _debugVariable = GetOption(options, "DebugVariable", false);
             _enableTracing = GetOption(options, "EnableTracing", false);
             _savePath = GetOption(options, "SavePath", (string)null);
-            _loadFromDisk = GetOption(options, "LoadFromDisk", false);
             _profile = GetOption(options, "Profile", false);
             _noAssemblyResolveHook = GetOption(options, "NoAssemblyResolveHook", false);
             _objectSpace = GetOption(options, "ObjectSpace", false);

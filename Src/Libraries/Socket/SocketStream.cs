@@ -12,13 +12,10 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_SYNC_SOCKETS
 
 using System;
-using System.Collections.Generic;
 using System.Net.Sockets;
 using System.IO;
-using System.Diagnostics;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 
@@ -102,4 +99,3 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
     }
 }
-#endif

@@ -1870,8 +1870,6 @@ namespace IronRuby.Runtime.Jit {
         // best carried boxed: unboxing it on entry would only mean boxing it again for each store.
         private readonly HashSet<string>/*!*/ _otherUses = new HashSet<string>();
 
-        private readonly JitKeywords _keywords;
-
         // walking a keyword default, which may not assign a local (JitCompiler.EmitKeywordDefaults)
         private bool _inKeywordDefault;
 
@@ -1880,7 +1878,6 @@ namespace IronRuby.Runtime.Jit {
             _methodName = ast.Name;
             // a method with keywords is never called directly from its typed body (EmitCall)
             _arity = (keywords != null) ? -1 : ast.Parameters.Mandatory.Length + ast.Parameters.Optional.Length;
-            _keywords = keywords;
         }
 
         /// <summary>

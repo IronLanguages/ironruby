@@ -17,9 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using System.Runtime.CompilerServices;
@@ -294,7 +292,7 @@ namespace IronRuby.Builtins {
         // without -X:ObjectSpace - is asked for with an error rather than an empty walk, as in JRuby.
         [RubyMethod("each_object", RubyMethodAttributes.PublicSingleton)]
         public static Enumerator/*!*/ GetEachObjectEnumerator(RubyModule/*!*/ self, [Optional]RubyModule theModule) {
-            return new Enumerator((_, block) => EachObject(block, self, theModule));
+            return theModule != null ? new Enumerator(self, "each_object", theModule) : new Enumerator(self, "each_object");
         }
 
         [RubyMethod("each_object", RubyMethodAttributes.PublicSingleton)]
@@ -411,8 +409,7 @@ namespace IronRuby.Builtins {
 
         // GC.start's keywords (full_mark:, immediate_sweep:) have no CLR counterpart and are ignored
         [RubyMethod("garbage_collect", RubyMethodAttributes.PublicSingleton)]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
-        public static void GarbageCollect(RubyModule/*!*/ self, [Optional]IDictionary<object, object> options) {
+        public static void GarbageCollect(RubyModule/*!*/ self, [Keywords, Optional]IDictionary<object, object> options) {
             GC.Collect();
         }
 

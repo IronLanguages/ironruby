@@ -21,7 +21,6 @@ using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
@@ -357,18 +356,6 @@ namespace IronRuby.Runtime {
             }
 
             return CastToInteger(integerConversion, obj).ToUInt32Unchecked();
-        }
-
-        /// <summary>
-        /// Like CastToInteger, but converts the result to an unsigned int.
-        /// </summary>
-        [CLSCompliant(false)]
-        public static long CastToInt64Unchecked(ConversionStorage<IntegerValue>/*!*/ integerConversion, object obj) {
-            if (obj == null) {
-                throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
-            }
-
-            return CastToInteger(integerConversion, obj).ToInt64();
         }
 
         #endregion
@@ -732,21 +719,6 @@ namespace IronRuby.Runtime {
             }
 
             throw RubyExceptions.InvalidValueForType(context, value, "Class");
-        }
-
-        #endregion
-
-        #region Security
-
-        public static void CheckSafeLevel(RubyContext/*!*/ context, int level) {
-            if (level <= context.CurrentSafeLevel) {
-                throw RubyExceptions.CreateSecurityError("Insecure operation at level " + context.CurrentSafeLevel);
-            }
-        }
-        public static void CheckSafeLevel(RubyContext/*!*/ context, int level, string/*!*/ method) {
-            if (level <= context.CurrentSafeLevel) {
-                throw RubyExceptions.CreateSecurityError(String.Format("Insecure operation {0} at level {1}", method, context.CurrentSafeLevel));
-            }
         }
 
         #endregion

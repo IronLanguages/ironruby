@@ -24,5 +24,5 @@ Gem::Specification.new do |s|
   s.rubygems_version = "3.5.0.dev".freeze
   s.summary = "Racc is an LALR(1) parser generator".freeze
 
-  s.installed_by_version = "4.0.16".freeze
+  s.installed_by_version = "4.0.20".freeze
 end

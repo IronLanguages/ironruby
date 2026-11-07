@@ -13,40 +13,67 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
-using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Threading;
-using System.Diagnostics;
 using System.Reflection;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
+using Ast = System.Linq.Expressions.Expression;
 
 namespace IronRuby.Runtime.Calls {
-    using Ast = Expression;
 
     public class RubyLambdaMethodInfo : RubyMemberInfo {
         private static int _Id = 1;
 
+        // _id names this entry for super call sites (RubyOps.GetSuperCallTarget), so every copy
+        // gets its own; _bodyId is shared by the copies `alias' and visibility changes make, which
+        // are the same method to Method#==.
         private readonly int _id;
+        private readonly int _bodyId;
         private readonly Proc/*!*/ _lambda;
         private readonly string/*!*/ _definitionName;
 
-        internal RubyLambdaMethodInfo(Proc/*!*/ block, string/*!*/ definitionName, RubyMemberFlags flags, RubyModule/*!*/ declaringModule) 
+        // The block the method was defined with, and the Ractor that defined it (null: the main
+        // Ractor): only a shareable block may run in another Ractor - unless the block is the core
+        // library's (RubyStackTraceBuilder.IsInternalFile), which stands in for CRuby's C methods.
+        private readonly Proc/*!*/ _block;
+        private readonly RactorLocals _definedRactor;
+        private readonly bool _isCoreLibrary;
+
+        internal RubyLambdaMethodInfo(Proc/*!*/ block, string/*!*/ definitionName, RubyMemberFlags flags, RubyModule/*!*/ declaringModule)
+            : this(block, definitionName, flags, declaringModule, 0, CurrentRactor(declaringModule.Context)) {
+        }
+
+        private RubyLambdaMethodInfo(Proc/*!*/ block, string/*!*/ definitionName, RubyMemberFlags flags, RubyModule/*!*/ declaringModule, int bodyId,
+            RactorLocals definedRactor)
             : base(flags, declaringModule) {
             Assert.NotNull(block, definitionName, declaringModule);
             _lambda = block.ToLambda(this);
+            _block = block;
+            _definedRactor = definedRactor;
+            _isCoreLibrary = RubyStackTraceBuilder.IsInternalFile(block.Dispatcher.SourcePath);
             _definitionName = definitionName;
             _id = Interlocked.Increment(ref _Id);
+            _bodyId = bodyId != 0 ? bodyId : _id;
+        }
+
+        private static RactorLocals CurrentRactor(RubyContext/*!*/ context) {
+            return context.RactorsStarted ? RactorIsolation.GetNonMain(context) : null;
+        }
+
+        /// <summary>
+        /// A call of the method in a runtime that has started Ractors: one defined with a block
+        /// that is not shareable runs only in the Ractor that defined it (CRuby's bmethod check).
+        /// </summary>
+        public static void CheckRactor(RubyLambdaMethodInfo/*!*/ method) {
+            var context = method.DeclaringModule.Context;
+            if (!method._isCoreLibrary && RactorIsolation.GetNonMain(context) != method._definedRactor &&
+                !RactorIsolation.IsShareable(context, method._block)) {
+                throw new RuntimeError("defined with an un-shareable Proc in a different Ractor");
+            }
         }
 
         public override RubyParameterSignature GetParameterSignature() {
@@ -92,11 +119,11 @@ namespace IronRuby.Runtime.Calls {
                 return true;
             }
             var info = other as RubyLambdaMethodInfo;
-            return info != null && info._id == _id;
+            return info != null && info._bodyId == _bodyId;
         }
 
         public override int GetEquivalenceHashCode() {
-            return _id;
+            return _bodyId;
         }
 
         public string/*!*/ DefinitionName {
@@ -108,7 +135,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
-            return new RubyLambdaMethodInfo(_lambda, _definitionName, flags, module);
+            return new RubyLambdaMethodInfo(_block, _definitionName, flags, module, _bodyId, _definedRactor);
         }
 
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
@@ -152,12 +179,24 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
+            if (args.Signature.HasBlock) {
+                // The call is the flow-control frame of a literal block given to it, as a def method's is (its
+                // RubyMethodScope): a break from the block, wherever the body passes it on to, ends this call.
+                metaBuilder.ControlFlowBuilder = RubyMethodInfo.RuleControlFlowBuilder;
+            }
+
             Proc.BuildCall(
                 metaBuilder,
                 AstUtils.Constant(_lambda),            // proc object
                 args.TargetExpression,                 // self
                 args
             );
+
+            // once there are Ractors, a block that is not shareable runs only in the Ractor that defined the method
+            metaBuilder.AddInitialization(Ast.IfThen(
+                Ast.Property(AstUtils.Constant(args.RubyContext), typeof(RubyContext).GetProperty("RactorsStarted")),
+                Ast.Call(typeof(RubyLambdaMethodInfo).GetMethod("CheckRactor"), AstUtils.Constant(this))
+            ));
         }
     }
 }

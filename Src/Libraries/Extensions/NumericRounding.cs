@@ -19,7 +19,6 @@ using System.Globalization;
 using System.Numerics;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
     /// <summary>
@@ -213,7 +212,6 @@ namespace IronRuby.Builtins {
         #region MRI's float_round_overflow / float_round_underflow
 
         private const int FloatDig = 17; // DBL_DIG + 2
-        private const int DblMantDig = 53;
 
         // frexp's exponent: number = mantissa * 2**binexp with 0.5 <= |mantissa| < 1
         private static int BinaryExponent(double x) {

@@ -217,5 +217,5 @@ The `File`, `Dir` and `Encoding` specs that failed on Windows before (6 failures
   `HOMEDRIVE`+`HOMEPATH`, then the profile folder. `Dir.home` no longer modifies the `HOME`
   string it was given. `ironruby/ruby4.rb`.
 
-Noted: `RbConfig::CONFIG["ruby_version"]` is still `1.9.1` (and `sitelibdir` ends in
-`site_ruby/1.9.1`), where CRuby 4 says `4.0.0`.
+`RbConfig::CONFIG["ruby_version"]` is `4.0.0` as in CRuby 4 (it was `1.9.1`), so
+`sitelibdir` is `site_ruby/4.0.0` and Bundler's `vendor/bundle/ruby/4.0.0` matches CRuby's.

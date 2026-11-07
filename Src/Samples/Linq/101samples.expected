@@ -80,6 +80,14 @@ product 4 is in the category foo and costs 2.5 per unit
 #<struct customer_id=0, order_id=0, total=56.4>
 #<struct customer_id=0, order_id=1, total=100.3>
 #<struct customer_id=2, order_id=4, total=150.3>
+-- SelectMany: Compound from 3
+#<struct customer_id=0, order_id=1, order_date=2001>
+#<struct customer_id=1, order_id=3, order_date=2005>
+#<struct customer_id=2, order_id=4, order_date=2004>
+-- SelectMany: from Assignment
+#<struct customer_id=0, order_id=5, total=1040.0>
+#<struct customer_id=1, order_id=2, total=1000.0>
+#<struct customer_id=1, order_id=3, total=1100.4>
 -- SelectMany: Multiple from
 #<struct customer_id=0, order_id=1>
 -- SelectMany: Indexed
@@ -91,6 +99,10 @@ Customer 2 has an order with id 3
 Customer 3 has an order with id 4
 -- Take: Simple
 [5, 4, 1]
+-- Take: Nested
+#<struct customer_id=0, order_id=0, order_date=1995>
+#<struct customer_id=0, order_id=1, order_date=2001>
+#<struct customer_id=0, order_id=5, order_date=1996>
 -- Skip: Simple
 [3, 9, 8, 6, 7, 2, 0]
 -- Skip: Nested
@@ -103,6 +115,30 @@ Customer 3 has an order with id 4
 [3, 9, 8, 6, 7, 2, 0]
 -- SkipWhile: Indexed
 [1, 3, 9, 8, 6, 7, 2, 0]
+-- OrderBy: Simple 1
+["apple", "blueberry", "cherry"]
+-- OrderBy: Simple 2
+["apple", "cherry", "blueberry"]
+-- OrderBy: Simple 3
+#<struct Product product_name="product 1", category="foo", units_in_stock=4, unit_price=1.3>
+#<struct Product product_name="product 2", category="bar", units_in_stock=3, unit_price=10.0>
+#<struct Product product_name="product 3", category="baz", units_in_stock=0, unit_price=4.0>
+#<struct Product product_name="product 4", category="foo", units_in_stock=1, unit_price=2.5>
+-- OrderBy: Comparer
+["AbAcUs", "aPPLE", "BlUeBeRrY", "bRaNcH", "cHeRry", "ClOvEr"]
+-- OrderByDescending: Simple 1
+[4.1, 2.9, 2.3, 1.9, 1.7]
+-- OrderByDescending: Simple 2
+#<struct Product product_name="product 1", category="foo", units_in_stock=4, unit_price=1.3>
+#<struct Product product_name="product 2", category="bar", units_in_stock=3, unit_price=10.0>
+#<struct Product product_name="product 4", category="foo", units_in_stock=1, unit_price=2.5>
+#<struct Product product_name="product 3", category="baz", units_in_stock=0, unit_price=4.0>
+-- OrderByDescending: Comparer
+["ClOvEr", "cHeRry", "bRaNcH", "BlUeBeRrY", "aPPLE", "AbAcUs"]
+-- ThenBy: Simple
+["one", "six", "two", "five", "four", "nine", "zero", "eight", "seven", "three"]
+-- ThenBy: Comparer
+["aPPLE", "AbAcUs", "bRaNcH", "cHeRry", "ClOvEr", "BlUeBeRrY"]
 -- ThenByDescending: Simple
 #<struct Product product_name="product 2", category="bar", units_in_stock=3, unit_price=10.0>
 #<struct Product product_name="product 3", category="baz", units_in_stock=0, unit_price=4.0>
@@ -125,6 +161,15 @@ Numbers with a remainder of 2 when divided by 5: [7, 2]
 Words that start with the letter 'b': blueberry, banana
 Words that start with the letter 'c': chimpanzee, cheese
 Words that start with the letter 'a': abacus, apple
+-- Grouping: Simple 3
+foo: product 1, product 4
+bar: product 2
+baz: product 3
+-- GroupBy: Nested
+company 1: 1990s [0, 5], 2000s [1]
+company 2: 1990s [2], 2000s [3]
+company 3: 2000s [4]
+company 4: 
 -- GroupBy: Comparer
 from: 'from   ', ' form  '
 salt: ' salt', '  last   '
@@ -135,12 +180,20 @@ salt: ' SALT', '  LAST   '
 earn: ' EARN ', ' NEAR '
 -- Distinct 1
 [2, 3, 5]
+-- Distinct 2
+["foo", "bar", "baz"]
 -- Union 1
 [0, 2, 4, 5, 6, 8, 9, 1, 3, 7]
+-- Union 2
+["p", "c"]
 -- Intersect 1
 [5, 8]
+-- Intersect 2
+[]
 -- Except 1
 [0, 2, 4, 6, 9]
+-- Except 2
+["p"]
 -- ToArray
 [1.7, 1.9, 2.3, 2.9, 4.1]
 -- ToList
@@ -208,6 +261,10 @@ bar: product 2
 Cheapest products in category foo: ["product 1"]
 Cheapest products in category bar: ["product 2"]
 Cheapest products in category baz: ["product 3"]
+-- Max: Simple
+9
+-- Average: Simple
+4.5
 -- Aggregate: Simple
 88.33080999999999
 -- Aggregate: Seed
@@ -220,6 +277,10 @@ Cheapest products in category baz: ["product 3"]
 true
 -- EqualAll: 2
 false
+-- Deferred Execution
+v = 1, i = 1; v = 2, i = 2; v = 3, i = 3; v = 4, i = 4; v = 5, i = 5; v = 6, i = 6; v = 7, i = 7; v = 8, i = 8; v = 9, i = 9; v = 10, i = 10; 
+-- Immediate Execution
+v = 1, i = 10; v = 2, i = 10; v = 3, i = 10; v = 4, i = 10; v = 5, i = 10; v = 6, i = 10; v = 7, i = 10; v = 8, i = 10; v = 9, i = 10; v = 10, i = 10; 
 -- Cross Join
 product 2: bar
 product 1: foo

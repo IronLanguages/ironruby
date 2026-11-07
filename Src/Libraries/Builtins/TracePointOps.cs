@@ -132,7 +132,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("enable")]
         public static object Enable(ConversionStorage<int>/*!*/ fixnumCast, BlockParam block, TracePoint/*!*/ self,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
 
             object target = null, targetLine = null, targetThread = null;
             bool defaultThread = true;
@@ -402,7 +402,7 @@ namespace IronRuby.Builtins {
             }
 
             TracePoint.ResolveMethod(info);
-            return info.Method != null ? info.Method.GetRubyParameterArray() : new RubyArray();
+            return info.Method != null ? MethodReflection.GetParameters(self.Context, info.Method, info.MethodName ?? "") : new RubyArray();
         }
 
         [RubyMethod("inspect")]

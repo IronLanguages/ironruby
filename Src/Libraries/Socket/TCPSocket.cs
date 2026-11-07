@@ -13,18 +13,16 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Net.Sockets;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using System.Runtime.InteropServices;
 using System.Net;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("TCPSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("TCPSocket")]
     public class TCPSocket : IPSocket {
         /// <summary>
         /// Creates an uninitialized socket.
@@ -110,19 +108,28 @@ namespace IronRuby.StandardLibrary.Sockets {
 
             Exception failure = null;
             foreach (IPAddress address in addresses) {
-                Socket socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+                Socket socket = null;
+                // CRuby says which call failed, for the host and port as they were given.
+                string call = "socket(2)";
                 try {
+                    // A host without IPv6 refuses even to create the socket (EAFNOSUPPORT); that is one
+                    // more address that did not work, and the next one is tried.
+                    socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
                     if (localHost != null || localPort != 0) {
                         IPAddress localAddress = localHost != null
                             ? GetHostAddress(localHost.ConvertToString(), address.AddressFamily)
                             : (address.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any);
+                        call = "bind(2)";
                         socket.Bind(new IPEndPoint(localAddress, localPort));
                     }
+                    call = "connect(2)";
                     socket.Connect(address, port);
                     return socket;
                 } catch (SocketException e) {
-                    socket.Close();
-                    failure = SocketErrorOps.ToRubyException(e);
+                    socket?.Close();
+                    failure = call == "bind(2)"
+                        ? SocketErrorOps.ToRubyException(e, DescribeEndPoint(call, localHost, localPort))
+                        : SocketErrorOps.ToRubyException(e, DescribeEndPoint(call, remoteHost, port));
                 }
             }
             throw failure;
@@ -134,4 +141,3 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
     }
 }
-#endif

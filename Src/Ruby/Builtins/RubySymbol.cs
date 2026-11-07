@@ -156,16 +156,6 @@ namespace IronRuby.Builtins {
             get { return false; }
         }
 
-        public bool IsTainted {
-            get { return false; }
-            set { /* nop */ }
-        }
-
-        public bool IsUntrusted {
-            get { return false; }
-            set { /* nop */ }
-        }
-
         public void Freeze() {
             // nop
         }

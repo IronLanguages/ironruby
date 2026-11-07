@@ -13,12 +13,12 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
 using System.Reflection;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
@@ -114,7 +114,7 @@ namespace IronRuby.Runtime.Calls {
         #region Dynamic Call
 
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
-            var visibleOverloads = GetVisibleOverloads(args, MethodBases, false);
+            var visibleOverloads = GetVisibleOverloads(args, GetReceiverOverloads(args, MethodBases), false);
             if (visibleOverloads.Count == 0) {
                 metaBuilder.SetError(Methods.MakeClrProtectedMethodCalledError.OpCall(
                     args.MetaContext.Expression, args.MetaTarget.Expression, Ast.Constant(name)
@@ -122,6 +122,43 @@ namespace IronRuby.Runtime.Calls {
             } else {
                 BuildCallNoFlow(metaBuilder, args, name, visibleOverloads, CallConvention, ImplicitProtocolConversions);
             }
+        }
+
+        /// <summary>
+        /// The Integer class has Int32 as its CLR type, so its CLR instance methods are Int32's. An Int64 or BigInteger is an
+        /// Integer too and calls its own type's method of the same name instead: (2**40).ToString would otherwise narrow the
+        /// receiver to an Int32 and raise RangeError. The rule tests the receiver's CLR type, so it is only used for that type.
+        /// </summary>
+        private static IList<OverloadInfo>/*!*/ GetReceiverOverloads(CallArguments/*!*/ args, OverloadInfo/*!*/[]/*!*/ overloads) {
+            object target = args.Target;
+            if (!(target is long || target is BigInteger)) {
+                return overloads;
+            }
+
+            Type targetType = target.GetType();
+            List<OverloadInfo> result = null;
+            HashSet<string> retargeted = null;
+            for (int i = 0; i < overloads.Length; i++) {
+                var overload = overloads[i];
+                if (overload.IsStatic || overload.DeclaringType.IsAssignableFrom(targetType)) {
+                    if (result != null) {
+                        result.Add(overload);
+                    }
+                    continue;
+                }
+
+                if (result == null) {
+                    result = new List<OverloadInfo>(overloads.Take(i));
+                    retargeted = new HashSet<string>();
+                }
+
+                if (retargeted.Add(overload.Name)) {
+                    foreach (MethodInfo method in targetType.GetMember(overload.Name, MemberTypes.Method, BindingFlags.Public | BindingFlags.Instance)) {
+                        result.Add(new ReflectionOverloadInfo(method));
+                    }
+                }
+            }
+            return (IList<OverloadInfo>)result ?? overloads;
         }
 
         #endregion

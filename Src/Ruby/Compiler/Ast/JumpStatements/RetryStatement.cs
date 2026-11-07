@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -30,7 +26,7 @@ namespace IronRuby.Compiler.Ast {
             : base(null, location) {
         }
 
-        // see Ruby Language.doc/Runtime/Control Flow Implementation/Retry
+        // see Docs/Ruby Language.docx, Runtime/Control Flow Implementation/Retry
         internal override MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen) {
             return TransformRetry(gen);
         }

@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using System.Dynamic;
 using Microsoft.Scripting;
 
 namespace IronRuby.Compiler.Ast {
@@ -21,7 +20,6 @@ namespace IronRuby.Compiler.Ast {
     public abstract class Node {
         private readonly SourceSpan _location;
         
-        public abstract NodeTypes NodeType { get; }
         internal protected abstract void Walk(Walker/*!*/ walker);
         
         public SourceSpan Location {

@@ -16,10 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using System.Threading;
-using System.Numerics;
-using IronRuby.Builtins;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
 

@@ -14,18 +14,14 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
-    using EachSite = Func<CallSite, object, Proc, object>;
 
     internal interface IEnumerator {
         object Each(RubyScope/*!*/ scope, BlockParam/*!*/ block);
@@ -135,6 +131,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyConstructor]
+        [ReceivesKeywords]
         public static Enumerator/*!*/ Create(RubyClass/*!*/ self, object targetObject, [DefaultProtocol, Optional]string targetName,
             params object[]/*!*/ targetArguments) {
 
@@ -157,6 +154,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static Enumerator/*!*/ Reinitialize(Enumerator/*!*/ self, object targetObject, [DefaultProtocol, Optional]string targetName,
             params object[] targetArguments) {
 
@@ -178,7 +176,7 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        [RubyMethod("each_without_generator")]
+        [RubyMethod("__each_without_generator__")]
         public static object Each(RubyScope/*!*/ scope, BlockParam/*!*/ block, Enumerator/*!*/ self) {
             return self._impl.Each(scope, block);
         }
@@ -190,12 +188,13 @@ namespace IronRuby.Builtins {
         /// arguments, a generator, no block - is the prelude's __ir_each_impl__.
         /// </summary>
         [RubyMethod("each")]
+        [ReceivesKeywords]
         public static object EachFromCaller(CallSiteStorage<Func<CallSite, object, Proc, System.Collections.IList, object>>/*!*/ implStorage,
             RubyScope/*!*/ scope, BlockParam block, Enumerator/*!*/ self, params object[]/*!*/ args) {
 
             object generator;
             if (args.Length == 0 && block != null && self._impl != null &&
-                !(scope.RubyContext.TryGetInstanceVariable(self, "@generator", out generator) && generator != null)) {
+                !(scope.RubyContext.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator) && generator != null)) {
                 return self._impl.Each(scope, block);
             }
 
@@ -271,7 +270,7 @@ namespace IronRuby.Builtins {
             }
 
             object generator;
-            if (context.TryGetInstanceVariable(self, "@generator", out generator) && generator != null) {
+            if (context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator) && generator != null) {
                 return null;
             }
 
@@ -296,8 +295,8 @@ namespace IronRuby.Builtins {
             }
             var source = new Enumerator(self._impl);
             object generator;
-            if (context.TryGetInstanceVariable(self, "@generator", out generator)) {
-                context.SetInstanceVariable(source, "@generator", generator);
+            if (context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator)) {
+                context.SetInstanceVariable(source, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), generator);
             }
             return source;
         }
@@ -346,8 +345,5 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
-
-        // TODO: 1.9:
-        // :each_with_index, :each_with_object, :with_index, :with_object, :next, :rewind
     }
 }

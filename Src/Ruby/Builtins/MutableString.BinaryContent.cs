@@ -17,7 +17,6 @@ using System;
 using System.Collections.Generic;
 using Microsoft.Scripting.Utils;
 using System.Text;
-using IronRuby.Compiler;
 using IronRuby.Runtime;
 using System.Diagnostics;
 using System.IO;
@@ -47,25 +46,6 @@ namespace IronRuby.Builtins {
 
             protected virtual BinaryContent/*!*/ Create(byte[]/*!*/ data, MutableString owner) {
                 return new BinaryContent(data, owner);
-            }
-
-            private void Decode(out char[] chars, out List<byte[]> invalidCharacters) {
-#if FEATURE_ENCODING
-                Decoder decoder = _owner.Encoding.Encoding.GetDecoder();
-                var fallback = new LosslessDecoderFallback();
-                decoder.Fallback = fallback;
-
-                // TODO: split into chunks for large strings?
-                fallback.Track = true;
-                chars = new char[decoder.GetCharCount(_data, 0, _count, true)];
-                fallback.Track = false;
-                decoder.GetChars(_data, 0, _count, chars, 0, true);
-
-                invalidCharacters = fallback.InvalidCharacters;
-#else
-                chars = _owner.Encoding.Encoding.GetChars(_data, 0, _count);
-                invalidCharacters = null;
-#endif
             }
 
             // TODO: we can remember both representations until a mutable operation is performed
@@ -288,6 +268,13 @@ namespace IronRuby.Builtins {
             }
 
             public override Content/*!*/ EscapeRegularExpression() {
+                if (!_owner._encoding.IsAsciiIdentity && !ContainsInvalidCharacters()) {
+                    // UTF-16 and UTF-32: a byte is not a character there, and escaping the bytes
+                    // one by one put a lone '\' byte in the middle of the code units ("." became
+                    // the three bytes "\\.\0", which no longer matched a ".").
+                    StringBuilder sb = RubyRegex.EscapeToStringBuilder(_owner._encoding.StrictEncoding.GetString(_data, 0, _count));
+                    return (sb != null) ? new StringContent(sb.ToString(), _owner) : Clone();
+                }
                 // TODO:
                 var a = ToByteArray();
                 return Create(

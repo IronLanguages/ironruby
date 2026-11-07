@@ -14,11 +14,7 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Threading;
 using Microsoft.Scripting.Utils;
-using IronRuby.Builtins;
 
 namespace IronRuby.Runtime {
     /// <summary>

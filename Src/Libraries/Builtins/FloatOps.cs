@@ -13,11 +13,8 @@
  *
  * ***************************************************************************/
 
-using System;
-using Microsoft.Scripting.Runtime;
-using System.Numerics;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
+using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
     [RubyClass("Float", Extends = typeof(double), Inherits = typeof(Numeric)), Includes(typeof(ClrFloat), Copy = true)]
@@ -94,12 +91,6 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyConstant]
         public const int RADIX = 2;
-
-        /// <summary>
-        /// Rounding mode used by Float
-        /// </summary>
-        [RubyConstant]
-        public const int ROUNDS = 1;
 
         #endregion
 

@@ -25,6 +25,7 @@ Gem::Specification.new do |s|
     "lib/nokogiri/xml/document_fragment.rb".freeze,
     "lib/nokogiri/xml/node.rb".freeze,
     "lib/nokogiri/xml/node_set.rb".freeze,
+    "lib/nokogiri/xml/sax.rb".freeze,
     "lib/nokogiri/xpath.rb".freeze,
   ]
 end

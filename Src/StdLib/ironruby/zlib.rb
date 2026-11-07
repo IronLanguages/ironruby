@@ -27,11 +27,22 @@ module Zlib
     end
 
     # Raised when a member ends without its 8-byte footer, when the footer's CRC does not
-    # match the data, and when its length does not. Nothing here raises them yet, but they
-    # are part of the class's published surface and code rescues them by name.
+    # match the data, and when its length does not (Zlib.gunzip checks all three).
     class NoFooter < Error; end
     class CRCError < Error; end
     class LengthError < Error; end
+
+    # The header FLG bits MRI refuses: 0x02, which it reads as gzip 0.5's "multi-part" flag
+    # (RFC 1952 later made it FHCRC), 0x20 "encrypted", and the two bits nothing defines.
+    def self.__ir_check_flags(flags) # :nodoc:
+      if (flags & 0x02) != 0
+        raise Error, "multi-part gzip file is not supported"
+      elsif (flags & 0x20) != 0
+        raise Error, "encrypted gzip file is not supported"
+      elsif (flags & 0xc0) != 0
+        raise Error, format("unknown flags 0x%02x", flags)
+      end
+    end
 
     def self.wrap(*args, **opts)
       gz = opts.empty? ? new(*args) : new(*args, **opts)
@@ -366,10 +377,11 @@ module Zlib
         raise GzipFile::Error, 'not in gzip format'
       end
       unless bytes[2] == 8 # deflate, the only method gzip ever defined
-        raise GzipFile::Error, 'unsupported compression method'
+        raise GzipFile::Error, "unsupported compression method #{bytes[2]}"
       end
 
       flags = bytes[3]
+      GzipFile.__ir_check_flags(flags)
       @mtime = Time.at(bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24))
       # XFL only distinguishes "slowest" from "fastest"; everything else reads as default.
       @level = case bytes[8]
@@ -386,7 +398,6 @@ module Zlib
       end
       @orig_name = read_stringz if (flags & 0x08) != 0 # FNAME
       @comment = read_stringz if (flags & 0x10) != 0 # FCOMMENT
-      read_io(2) if (flags & 0x02) != 0 # FHCRC
     end
 
     def read_stringz
@@ -636,5 +647,52 @@ module Zlib
       header << (@comment + "\0") if @comment
       @io.write(header)
     end
+  end
+
+  # MRI's zlib_gunzip: a gzip header, one deflate member and its footer, each checked with
+  # GzipFile's errors - a string that runs out is "unexpected end of string", a member that
+  # does not end is "unexpected end of file". Bytes after the footer are ignored.
+  def self.gunzip(src)
+    data = (src.is_a?(::String) ? src : ::String.try_convert(src) ||
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{src.nil? ? 'nil' : src.class} into String")).b
+    short = -> { ::Kernel.raise(GzipFile::Error, "unexpected end of string") }
+
+    short.() if data.bytesize < 10
+    unless data.getbyte(0) == 0x1f && data.getbyte(1) == 0x8b
+      ::Kernel.raise(GzipFile::Error, "not in gzip format")
+    end
+    method = data.getbyte(2)
+    ::Kernel.raise(GzipFile::Error, "unsupported compression method #{method}") unless method == 8
+    flags = data.getbyte(3)
+    GzipFile.__ir_check_flags(flags)
+
+    pos = 10
+    if (flags & 0x04) != 0 # FEXTRA
+      short.() if data.bytesize < pos + 2
+      pos += 2 + data.byteslice(pos, 2).unpack1("v")
+      short.() if data.bytesize < pos
+    end
+    [0x08, 0x10].each do |flag| # FNAME, FCOMMENT
+      next if (flags & flag) == 0
+      terminator = data.byteindex("\0", pos) or short.()
+      pos = terminator + 1
+    end
+
+    stream = Inflate.new(-MAX_WBITS)
+    begin
+      result = stream.inflate(data.byteslice(pos..-1))
+      ::Kernel.raise(GzipFile::Error, "unexpected end of file") unless stream.finished?
+      pos += stream.total_in
+    ensure
+      stream.close
+    end
+
+    footer = data.byteslice(pos, 8)
+    ::Kernel.raise(GzipFile::NoFooter, "footer is not found") if footer.empty?
+    short.() if footer.bytesize < 8
+    crc, length = footer.unpack("VV")
+    ::Kernel.raise(GzipFile::CRCError, "invalid compressed data -- crc error") unless crc == Zlib.crc32(result)
+    ::Kernel.raise(GzipFile::LengthError, "invalid compressed data -- length error") unless length == (result.bytesize & 0xffffffff)
+    result
   end
 end

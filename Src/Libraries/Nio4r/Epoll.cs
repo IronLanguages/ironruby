@@ -34,7 +34,7 @@ namespace IronRuby.StandardLibrary.Nio4r {
 
         private const int EPOLL_CTL_ADD = 1, EPOLL_CTL_DEL = 2, EPOLL_CTL_MOD = 3;
         private const int EPOLL_CLOEXEC = 0x80000;
-        private const int EINTR = 4, ENOENT = 2, EEXIST = 17;
+        private const int ENOENT = 2, EEXIST = 17;
 
         [DllImport("libc", SetLastError = true)]
         private static extern int epoll_create1(int flags);

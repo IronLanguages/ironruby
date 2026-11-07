@@ -26,7 +26,6 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.BCrypt {
 

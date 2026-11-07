@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_THREAD
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -22,23 +21,17 @@ using System.Text;
 using System.Threading;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
-    using Debug = System.Diagnostics.Debug;
 
     /// <summary>
     /// Ruby threads are represented by CLR thread objects (System.Threading.Thread).
-    /// Ruby 1.8.N has green threads where the language does the thread scheduling. We map the green threads 
-    /// directly to CLR threads.
-    /// 
-    /// Ruby supports asynchronously manipulating of an arbitrary thread with methods like Thread#raise, Thread#exit, etc.
-    /// For such methods, we use Thread.Abort which is unsafe. Howevever, Ruby 1.9 may not support green threads,
-    /// and this will not be an issue then.
+    ///
+    /// Thread#raise, Thread#kill and friends act on another thread cooperatively: the exception is parked
+    /// and the target picks it up at its next safe point (see RubyUtils.RaiseAsyncException).
     /// </summary>
-    [RubyClass("Thread", Extends = typeof(Thread), Inherits = typeof(object), BuildConfig = "FEATURE_THREAD")]
+    [RubyClass("Thread", Extends = typeof(Thread), Inherits = typeof(object))]
     public static partial class ThreadOps {
         static bool _globalAbortOnException;
         static bool _globalReportOnException = true;
@@ -242,7 +235,20 @@ namespace IronRuby.Builtins {
 
             internal Exception Exception { get; set; }
             internal object Result { get; set; }
+
+            /// <summary>
+            /// The Ractor the thread belongs to: the one that started it, or the one it is the main
+            /// thread of. Null for the main Ractor's threads.
+            /// </summary>
+            internal RubyRactor Ractor { get; set; }
             internal bool CreatedFromRuby { get; set; }
+
+            /// <summary>
+            /// Set by a thread Ruby created while it runs Ruby code: from just before its block until it has
+            /// cleaned up after it. Outside that the CLR reports the thread as WaitSleepJoin while it starts
+            /// up and while it is torn down, where MRI's thread is "run".
+            /// </summary>
+            internal volatile bool RunsRuby;
 
             /// <summary>
             /// The runtime whose Thread.new made this thread; null for a thread Ruby did not create
@@ -432,6 +438,15 @@ namespace IronRuby.Builtins {
                     }
                 }
                 return result.ToArray();
+            }
+
+            /// <summary>
+            /// The Ruby threads of the Ractor the current thread belongs to: what Thread.list and
+            /// ThreadGroup#list answer, which in MRI list only the asking Ractor's living threads.
+            /// </summary>
+            internal static RubyThreadInfo[]/*!*/ GetRactorThreads(RubyContext/*!*/ context) {
+                var ractor = Current.Ractor;
+                return Array.FindAll(GetRubyThreads(context), info => info.Ractor == ractor);
             }
 
             /// <summary>
@@ -630,7 +645,12 @@ namespace IronRuby.Builtins {
                 if (label >= 0) {
                     caller = caller.Substring(0, label);
                 }
-                trace.Insert(0, MutableString.CreateMutable(caller + ":in '" + blockedIn + "'", RubyEncoding.UTF8));
+                // the frame of the core method written in Ruby that the thread is blocked in (the prelude's Kernel#sleep)
+                // has its label already
+                string blockedFrame = caller + ":in '" + blockedIn + "'";
+                if (trace[0].ToString() != blockedFrame) {
+                    trace.Insert(0, MutableString.CreateMutable(blockedFrame, RubyEncoding.UTF8));
+                }
             }
             return trace;
         }
@@ -880,7 +900,6 @@ namespace IronRuby.Builtins {
         #endregion
         #region raise, fail
 
-#if FEATURE_EXCEPTION_STATE
         private static CallSite<Func<CallSite, object, object>> _exceptionSite;
 
         private static void RaiseAsyncException(RubyContext/*!*/ context, Thread thread, Exception exception) {
@@ -914,18 +933,7 @@ namespace IronRuby.Builtins {
             // Kernel#sleep and Thread.stop use the Ruby run signal. This is race-safe even when
             // the target has announced sleep but has not entered WaitOne yet.
             info.Run();
-
-            if (status == RubyThreadStatus.Sleeping) {
-                // Thread.Abort can interrupt a thread with ThreadState.WaitSleepJoin. However, Thread.Abort 
-                // is deferred while the thread is in a catch block. If there is a Kernel.sleep in a catch block,
-                // then that sleep will not be interrupted. 
-                // TODO: We should call Run to nudge the thread if its CurrentException is not-null, and 
-                // ThreadOps.Stop should have a checkpoint to see whether an async exception needs to be thrown
-
-                // Run(thread);
-            }
         }
-#endif
 
         /// <summary>
         /// Thread#raise takes exactly the arguments Kernel#raise does, including `cause:`, and is
@@ -936,11 +944,11 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("raise")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static void RaiseException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
             RubyContext/*!*/ context, Thread/*!*/ self, params object[]/*!*/ args) {
 
-#if FEATURE_EXCEPTION_STATE
             // A bare Thread#raise is a plain RuntimeError even on the current thread: unlike
             // Kernel#raise it does not re-raise $!, and on another thread MRI cannot see that
             // thread's $! anyway.
@@ -953,9 +961,6 @@ namespace IronRuby.Builtins {
             }
 
             RaiseAsyncException(context, self, e);
-#else
-            throw new NotImplementedError("Thread#raise not supported on this platform");
-#endif
         }
 
         #endregion
@@ -1003,7 +1008,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if ((state & ThreadState.WaitSleepJoin) == ThreadState.WaitSleepJoin) {
+            if ((state & ThreadState.WaitSleepJoin) == ThreadState.WaitSleepJoin && (info.RunsRuby || !info.CreatedFromRuby)) {
                 // We will report a thread to be sleeping more often than in CRuby. This is because any "lock" statement
                 // can potentially cause ThreadState.WaitSleepJoin. Also, "Thread.pass" does System.Threading.Thread.Sleep(0)
                 // which also briefly changes the state to ThreadState.WaitSleepJoin
@@ -1029,9 +1034,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-#pragma warning disable 162 // msc: unreachable code
             throw new ArgumentException("unknown thread status: " + state);
-#pragma warning restore 162
         }
 
         [RubyMethod("status")]
@@ -1076,34 +1079,6 @@ namespace IronRuby.Builtins {
             return value;
         }
 
-        private static void SetCritical(RubyContext/*!*/ context, bool value) {
-            // Debug.Assert(context.RubyOptions.Compatibility < RubyCompatibility.Ruby19);
-            if (value) {
-                bool lockTaken = false;
-                try {
-                    MonitorUtils.Enter(context.CriticalMonitor, ref lockTaken);
-                } finally {
-                    // thread could have been aborted just before/after Monitor.Enter acquired the lock:
-                    if (lockTaken) {
-                        context.CriticalThread = Thread.CurrentThread;
-                    }
-                }
-            } else {
-                Monitor.Exit(context.CriticalMonitor);
-                context.CriticalThread = null;
-            }
-        }
-
-        public static bool Critical(RubyContext/*!*/ context, object self) {
-            RubyThreadInfo.RegisterCurrentThread();
-            return context.CriticalThread != null;
-        }
-
-        public static void Critical(RubyContext/*!*/ context, object self, bool value) {
-            RubyThreadInfo.RegisterCurrentThread();
-            SetCritical(context, value);
-        }
-
         /// <summary>
         /// Every fiber runs on its own CLR thread here, but Ruby says a fiber belongs to the
         /// thread that created it - so inside a fiber this answers that thread, not the one the
@@ -1121,7 +1096,7 @@ namespace IronRuby.Builtins {
         public static RubyArray/*!*/ List(RubyContext/*!*/ context, object self) {
             RubyThreadInfo.RegisterCurrentThread();
 
-            RubyThreadInfo[] threads = RubyThreadInfo.GetRubyThreads(context);
+            RubyThreadInfo[] threads = RubyThreadInfo.GetRactorThreads(context);
             RubyArray result = new RubyArray(threads.Length);
             foreach (RubyThreadInfo threadInfo in threads) {
                 Thread thread = threadInfo.Thread;
@@ -1135,10 +1110,13 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("main", RubyMethodAttributes.PublicSingleton)]
         public static Thread/*!*/ GetMainThread(RubyContext/*!*/ context, RubyClass self) {
-            return context.MainThread;
+            // in a Ractor, the Ractor's own main thread, as in MRI
+            var ractor = RubyThreadInfo.Current.Ractor;
+            return (ractor != null && ractor.MainThread != null) ? ractor.MainThread : context.MainThread;
         }
 
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static Thread/*!*/ CreateThread(CallSiteStorage<Func<CallSite, object, Proc, RubyArray, object>>/*!*/ storage,
             BlockParam startRoutine, object self, params object[]/*!*/ args) {
 
@@ -1174,6 +1152,7 @@ namespace IronRuby.Builtins {
         // building a Proc without one does, not the way Thread.new does.
         [RubyMethod("start", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("fork", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static Thread/*!*/ StartThread(RubyContext/*!*/ context, BlockParam startRoutine, object self, params object[]/*!*/ args) {
             if (startRoutine == null) {
                 throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
@@ -1186,6 +1165,26 @@ namespace IronRuby.Builtins {
             internal BlockParam StartRoutine;
             internal object[] Args;
             internal Thread Creator;
+            // a Ractor's main thread runs this instead of yielding StartRoutine, in a group of its own
+            internal Func<object> Body;
+            internal ThreadGroup Group;
+        }
+
+        /// <summary>
+        /// Starts the main thread of <paramref name="ractor"/>, which runs <paramref name="body"/>
+        /// and is a Ruby thread in every other respect (Thread.current, report_on_exception).
+        /// </summary>
+        internal static Thread/*!*/ StartRactorThread(RubyContext/*!*/ context, RubyRactor/*!*/ ractor, Func<object>/*!*/ body) {
+            ThreadStarter starter;
+            Thread result = AllocateThread(context, null, out starter);
+            RubyThreadInfo info = RubyThreadInfo.FromThread(result);
+            info.Ractor = ractor;
+            info.Location = null;
+            info.Group = starter.Group = new ThreadGroup();
+            ractor.MainThread = result;
+            starter.Body = body;
+            result.Start();
+            return result;
         }
 
         private static Thread/*!*/ StartThread(RubyContext/*!*/ context, RubyClass subclass, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
@@ -1220,7 +1219,7 @@ namespace IronRuby.Builtins {
                 context.ThreadTerminator = CreateThreadTerminator(context);
             }
             s.Creator = Thread.CurrentThread;
-            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, group, s.Creator)));
+            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, s.Group ?? group, s.Creator, s.Body)));
             if (subclass != null) {
                 context.AdoptClrObject(result, subclass);
             }
@@ -1233,6 +1232,7 @@ namespace IronRuby.Builtins {
             info.Group = group;
             info.Priority = creator.Priority;
             info.Location = GetCallerLocation(context);
+            info.Ractor = creator.Ractor;
 
             // MRI: a new thread's root fiber inherits the storage of the fiber that created it.
             // Fiber is implemented in Ruby, so all that is needed here is to carry the creating
@@ -1252,7 +1252,7 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// "file:line" of the Ruby frame that called Thread.new, for Thread#inspect.
         /// </summary>
-        private static string GetCallerLocation(RubyContext/*!*/ context) {
+        internal static string GetCallerLocation(RubyContext/*!*/ context) {
             try {
                 RubyArray trace = RubyExceptionData.CreateBacktrace(context, 1);
                 if (trace != null && trace.Count > 0) {
@@ -1271,7 +1271,7 @@ namespace IronRuby.Builtins {
         /// unhandled exception is printed at top level. It goes to $stderr rather than to the CLR
         /// console, because $stderr is what Ruby code (and the specs) can redirect.
         /// </summary>
-        private static void ReportThreadException(RubyContext/*!*/ context, RubyThreadInfo/*!*/ info, Exception/*!*/ e) {
+        internal static void ReportThreadException(RubyContext/*!*/ context, RubyThreadInfo/*!*/ info, Exception/*!*/ e) {
             try {
                 StringBuilder report = new StringBuilder();
                 report.Append(Inspect(context, info.Thread).ToString());
@@ -1297,8 +1297,8 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private static void RubyThreadStart(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args, ThreadGroup group,
-            Thread creator) {
+        private static void RubyThreadStart(RubyContext/*!*/ context, BlockParam startRoutine, object[] args, ThreadGroup group,
+            Thread creator, Func<object> body) {
             RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
             info.CreatedFromRuby = true;
 
@@ -1314,13 +1314,16 @@ namespace IronRuby.Builtins {
                     // typically stored it in a variable the hook compares Thread.current with. Wait for that.
                     WaitForCreatorToBlock(creator);
                 }
+                info.RunsRuby = true;
                 if ((TracePoint.ActiveEvents & (int)TraceEvents.ThreadBegin) != 0) {
                     TracePoint.OnThread(TraceEvents.ThreadBegin, context, Thread.CurrentThread);
                 }
 
                 object threadResult;
                 // TODO: break/returns might throw LocalJumpError if the RFC that was created for startRoutine is not active anymore:
-                if (startRoutine.Yield(args, out threadResult) && startRoutine.Returning(threadResult, out threadResult)) {
+                if (body != null) {
+                    threadResult = body();
+                } else if (startRoutine.Yield(args, out threadResult) && startRoutine.Returning(threadResult, out threadResult)) {
                     info.Exception = new ThreadError("return can't jump across threads");
                 }
                 info.Result = threadResult;
@@ -1358,7 +1361,6 @@ namespace IronRuby.Builtins {
                     }
                 } else {
                     e = RubyUtils.GetVisibleException(e);
-                    RubyExceptionData.ActiveExceptionHandled(e);
                     // a start routine that is a method (Thread.new(&method(:m))) has no Ruby frame that captured the backtrace:
                     RubyExceptionData.GetInstance(e).CaptureExceptionTrace(context);
                     info.Exception = e;
@@ -1394,7 +1396,8 @@ namespace IronRuby.Builtins {
                         // whole process down. Park it for the main thread instead - it is delivered
                         // at the main thread's next blocking point, and #join still re-raises it
                         // because info.Exception is set.
-                        Thread mainThread = context.MainThread;
+                        // in a Ractor, to the Ractor's main thread
+                        Thread mainThread = info.Ractor != null ? info.Ractor.MainThread : context.MainThread;
                         if (mainThread != null && mainThread != Thread.CurrentThread) {
                             RubyUtils.RaiseAsyncException(mainThread, e);
                         }
@@ -1415,15 +1418,7 @@ namespace IronRuby.Builtins {
                 // A Thread#raise that arrived too late to be delivered dies with the thread. Left
                 // parked it would keep every other thread's safe points on the slow path.
                 RubyUtils.GetPendingAsyncException(Thread.CurrentThread);
-
-                // Its not a good idea to terminate a thread which has set Thread.critical=true, but its hard to predict
-                // which thread will be scheduled next, even with green threads. However, ConditionVariable.create_timer 
-                // in monitor.rb explicitly does "Thread.critical=true; other_thread.raise" before exiting, and expects
-                // other_thread to be scheduled immediately.
-                // To deal with such code, we release the critical monitor here if the current thread is holding it
-                if (context.RubyOptions.Compatibility < RubyCompatibility.Ruby19 && context.CriticalThread == Thread.CurrentThread) {
-                    SetCritical(context, false);
-                }
+                info.RunsRuby = false;
             }
         }
 
@@ -1447,11 +1442,8 @@ namespace IronRuby.Builtins {
             // MRI's rb_thread_stop: with no other thread alive nothing could ever wake this one.
             // (Kernel#sleep has no such check: a signal can end it.)
             RubyThreadInfo.RegisterCurrentThread();
-            if (RubyThreadInfo.GetRubyThreads(context).Length <= 1) {
+            if (RubyThreadInfo.GetRactorThreads(context).Length <= 1) {
                 throw new ThreadError("stopping only thread\n\tnote: use sleep to stop forever");
-            }
-            if (context.CriticalThread == Thread.CurrentThread) {
-                SetCritical(context, false);
             }
             DoSleep();
         }
@@ -1565,6 +1557,28 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        #region set_trace_func, add_trace_func
+
+        /// <summary>Kernel#set_trace_func for this thread only.</summary>
+        [RubyMethod("set_trace_func")]
+        public static Proc SetTraceFunc(RubyContext/*!*/ context, Thread/*!*/ self, object traceFunc) {
+            Proc proc = KernelOps.CastTraceFunc(traceFunc);
+            TracePoint.SetTraceFunc(context, proc, self);
+            return proc;
+        }
+
+        [RubyMethod("add_trace_func")]
+        public static Proc AddTraceFunc(RubyContext/*!*/ context, Thread/*!*/ self, object traceFunc) {
+            Proc proc = KernelOps.CastTraceFunc(traceFunc);
+            if (proc == null) {
+                throw RubyExceptions.CreateTypeError("trace_func needs to be Proc");
+            }
+            TracePoint.AddTraceFunc(context, proc, self);
+            return proc;
+        }
+
+        #endregion
+
         // Thread#fetch lives in Src/StdLib/ironruby/ruby4.rb: the miss has to raise KeyError, and
         // KeyError is one of the exception classes defined in Ruby above the runtime.
 
@@ -1594,7 +1608,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        [RubyMethod("exit", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("kill", RubyMethodAttributes.PublicSingleton)]
         public static Thread/*!*/ KillThread(object self, [NotNull]Thread/*!*/ thread) {
             return Kill(thread);
@@ -1611,6 +1624,7 @@ namespace IronRuby.Builtins {
         /// initialization of a thread that is already running - which MRI refuses.
         /// </summary>
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static Thread/*!*/ Reinitialize(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, params object[]/*!*/ args) {
             // A thread of a Thread subclass, allocated by Thread.new and waiting for its block:
             RubyThreadInfo info = RubyThreadInfo.FromThread(self);
@@ -1810,4 +1824,3 @@ namespace IronRuby.Builtins {
         }
     }
 }
-#endif

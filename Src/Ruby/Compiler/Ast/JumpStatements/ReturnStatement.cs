@@ -13,13 +13,8 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
-using System.Reflection;
 using Microsoft.Scripting;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -33,7 +28,7 @@ namespace IronRuby.Compiler.Ast {
             : base(arguments, location) {
         }
 
-        // see Ruby Language.doc/Runtime/Control Flow Implementation/Return
+        // see Docs/Ruby Language.docx, Runtime/Control Flow Implementation/Return
         internal override MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen) {
             MSA.Expression transformedReturnValue = TransformReturnValue(gen);
 

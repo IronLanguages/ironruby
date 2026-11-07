@@ -50,11 +50,53 @@ module Etc
   # confstr(3) variable names.
   CS_PATH = 0
 
+  # Etc::Passwd.each and Etc::Group.each walk the whole database, as Etc.passwd and
+  # Etc.group do with a block, and the two classes are Enumerable over it.
+  class << Passwd
+    include Enumerable
+
+    def each(&block)
+      return enum_for(:each) unless block
+      Etc.passwd(&block)
+      self
+    end
+  end
+
+  class << Group
+    include Enumerable
+
+    def each(&block)
+      return enum_for(:each) unless block
+      Etc.group(&block)
+      self
+    end
+  end
+
   class << self
-    if defined?(System::Environment) &&
-       [System::PlatformID.Win32S, System::PlatformID.WinCE,
-        System::PlatformID.Win32Windows, System::PlatformID.Win32NT
-       ].include?(System::Environment.OSVersion.Platform)
+    # sysconf/confstr take a C int, the way MRI's NUM2INT converts one.
+    def __int_argument__(value)
+      raise TypeError, "no implicit conversion from nil to integer" if value.nil?
+      __id_argument__(value)
+    end
+    private :__int_argument__
+
+    # A uid or gid argument the way MRI's NUM2UIDT takes it: a Float is truncated and
+    # anything else must convert implicitly.
+    def __id_argument__(value)
+      case value
+      when Integer then value
+      when Float then value.to_i
+      else
+        unless !value.nil? && value.respond_to?(:to_int)
+          name = (value.nil? || value == true || value == false) ? value.inspect : value.class
+          raise TypeError, "no implicit conversion of #{name} into Integer"
+        end
+        value.to_int
+      end
+    end
+    private :__id_argument__
+
+    if RUBY_PLATFORM =~ /mswin|mingw/
 
       def getlogin
         ENV['USERNAME']
@@ -100,7 +142,7 @@ module Etc
       # MRI's Windows build answers only the handful of sysconf/confstr names it can;
       # everything else is nil rather than a guess.
       def sysconf(name)
-        case name
+        case __int_argument__(name)
         when SC_NPROCESSORS_CONF, SC_NPROCESSORS_ONLN then nprocessors
         when SC_PAGESIZE then 4096
         when SC_CLK_TCK then 100
@@ -109,7 +151,7 @@ module Etc
       end
 
       def confstr(name)
-        raise Errno::EINVAL, "confstr(#{name})"
+        raise Errno::EINVAL, "confstr(#{__int_argument__(name)})"
       end
     else
       PASSWD_FILE = '/etc/passwd'
@@ -146,7 +188,7 @@ module Etc
       # Only the variables whose value we can answer honestly are reported;
       # sysconf is documented to return nil for anything it does not know.
       def sysconf(name)
-        case name
+        case __int_argument__(name)
         when SC_NPROCESSORS_CONF, SC_NPROCESSORS_ONLN then nprocessors
         when SC_PAGESIZE then 4096
         when SC_OPEN_MAX then (read_proc('/proc/sys/fs/nr_open') || '1048576').to_i
@@ -161,7 +203,7 @@ module Etc
       end
 
       def confstr(name)
-        case name
+        case __int_argument__(name)
         when CS_PATH then '/bin:/usr/bin'
         else raise Errno::EINVAL, "confstr(#{name})"
         end
@@ -181,22 +223,6 @@ module Etc
         raise ArgumentError, "can't find user for #{uid}" unless entry
         entry
       end
-
-      # A uid or gid argument the way MRI's NUM2UIDT takes it: a Float is truncated and
-      # anything else must convert implicitly.
-      def __id_argument__(value)
-        case value
-        when Integer then value
-        when Float then value.to_i
-        else
-          unless !value.nil? && value.respond_to?(:to_int)
-            name = (value.nil? || value == true || value == false) ? value.inspect : value.class
-            raise TypeError, "no implicit conversion of #{name} into Integer"
-          end
-          value.to_int
-        end
-      end
-      private :__id_argument__
 
       def getgrnam(name)
         raise TypeError, "no implicit conversion of #{name.class} into String" unless name.is_a?(String)

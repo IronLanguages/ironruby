@@ -17,10 +17,8 @@ using System;
 using System.Collections.Generic;
 using Microsoft.Scripting.Utils;
 using System.Text;
-using IronRuby.Runtime;
 using System.Diagnostics;
 using System.IO;
-using IronRuby.Compiler;
 
 namespace IronRuby.Builtins {
     public partial class MutableString {

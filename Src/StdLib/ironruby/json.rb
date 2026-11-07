@@ -133,19 +133,24 @@ module JSON
       buffer_initial_length: 1024,
     }.freeze
 
+    __hide_constant__ :ATTRIBUTES
+
+    # The options are kept in one hidden Hash rather than an instance variable each: upstream's
+    # State is a C struct, with no instance variables to show.
     ATTRIBUTES.each_key do |name|
-      attr_accessor name
+      define_method(name) { @__options__[name] }
+      define_method(:"#{name}=") { |value| @__options__[name] = value }
     end
 
     # Upstream spells the predicates without the "is" and answers a boolean.
-    def allow_nan? = !!@allow_nan
-    def ascii_only? = !!@ascii_only
-    def script_safe? = !!@script_safe
-    def strict? = !!@strict
-    def allow_duplicate_key? = !!@allow_duplicate_key
+    def allow_nan? = !!@__options__[:allow_nan]
+    def ascii_only? = !!@__options__[:ascii_only]
+    def script_safe? = !!@__options__[:script_safe]
+    def strict? = !!@__options__[:strict]
+    def allow_duplicate_key? = !!@__options__[:allow_duplicate_key]
 
     # Circular references are refused whenever there is a nesting limit.
-    def check_circular? = !@max_nesting.zero?
+    def check_circular? = !@__options__[:max_nesting].zero?
 
     def self.from_state(opts)
       case opts
@@ -158,32 +163,37 @@ module JSON
     end
 
     def initialize(opts = nil)
-      ATTRIBUTES.each { |name, default| instance_variable_set(:"@#{name}", default) }
+      @__options__ = ATTRIBUTES.dup
       configure(opts) if opts
+    end
+
+    def initialize_copy(other)
+      super
+      @__options__ = @__options__.dup
     end
 
     def configure(opts)
       opts = opts.to_h if !opts.is_a?(Hash) && opts.respond_to?(:to_h)
       opts.each do |key, value|
         key = key.to_sym
-        instance_variable_set(:"@#{key}", value) if ATTRIBUTES.key?(key)
+        @__options__[key] = value if ATTRIBUTES.key?(key)
       end
       self
     end
     alias merge configure
 
     def to_h
-      ATTRIBUTES.each_key.to_h {|name| [name, instance_variable_get(:"@#{name}")] }
+      ATTRIBUTES.each_key.to_h { |name| [name, @__options__[name]] }
     end
     alias to_hash to_h
 
     def [](name)
       name = name.to_sym
-      ATTRIBUTES.key?(name) ? instance_variable_get(:"@#{name}") : nil
+      ATTRIBUTES.key?(name) ? @__options__[name] : nil
     end
 
     def []=(name, value)
-      instance_variable_set(:"@#{name.to_sym}", value)
+      @__options__[name.to_sym] = value
     end
 
     def generate(obj)
@@ -229,7 +239,7 @@ module JSON
 
   GENERIC_TO_JSON = [::Object, ::Hash, ::Array, ::String, ::Integer, ::Float, ::NilClass, ::TrueClass, ::FalseClass].
     map { |klass| klass.instance_method(:to_json) }.freeze
-  private_constant :GENERIC_TO_JSON
+  __hide_constant__ :GENERIC_TO_JSON
 
   # json/common.rb's parsing API on top of the C# parser. The parser reads the grammar's options
   # itself (symbolize_names, allow_control_characters, allow_nan, allow_trailing_comma,

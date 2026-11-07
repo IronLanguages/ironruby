@@ -16,7 +16,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Numerics;
@@ -178,7 +177,7 @@ namespace IronRuby.Builtins {
             MutableString str = value as MutableString;
             if (str != null) {
                 // obj2subsecx: a String is converted like Integer(), so "1.5" and "x" are errors
-                return ExactNum.FromInteger(ToBigInteger(KernelOps.ToInteger((object)null, str, 10)));
+                return ExactNum.FromInteger(ToBigInteger(KernelOps.ParseInteger(str, 10)));
             }
             return ToExact(context, value);
         }
@@ -190,7 +189,7 @@ namespace IronRuby.Builtins {
             if (value is MutableString) {
                 // obj2int: a String component is converted like Integer(), so "1.5" and "x" are
                 // ArgumentErrors rather than 1 and 0.
-                return ToInt32(KernelOps.ToInteger((object)null, (MutableString)value, 10));
+                return ToInt32(KernelOps.ParseInteger((MutableString)value, 10));
             }
             ExactNum exact = ToExact(context, value);
             return ToInt32(exact.Floor());
@@ -315,18 +314,14 @@ namespace IronRuby.Builtins {
             }
         }
 
-        /// <summary>
-        /// Interprets a zone specification (nil, a numeric offset, an offset string, or a
-        /// timezone object) and returns the resulting zone kind.
-        /// </summary>
-        private static RubyTimeZoneKind ResolveZone(RubyContext/*!*/ context, object zone, out ExactNum offset, out object zoneObject) {
-            return ResolveZone(context, null, zone, out offset, out zoneObject);
-        }
-
         private static bool IsTimezoneObject(RubyContext/*!*/ context, object zone) {
             return zone != null && (RespondTo(context, zone, "local_to_utc") || RespondTo(context, zone, "utc_to_local"));
         }
 
+        /// <summary>
+        /// Interprets a zone specification (nil, a numeric offset, an offset string, or a
+        /// timezone object) and returns the resulting zone kind.
+        /// </summary>
         private static RubyTimeZoneKind ResolveZone(RubyContext/*!*/ context, RubyClass owner, object zone,
             out ExactNum offset, out object zoneObject) {
 
@@ -506,6 +501,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyConstructor]
+        [ReceivesKeywords]
         public static RubyTime/*!*/ Create(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]params object[]/*!*/ args) {
             return CreateFromComponents(context, self, args);
         }
@@ -518,6 +514,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static RubyTime/*!*/ Reinitialize(RubyContext/*!*/ context, RubyTime/*!*/ self, [NotNull]params object[]/*!*/ args) {
             self.CopyFrom(CreateFromComponents(context, context.GetClassOf(self), args));
             return self;
@@ -758,7 +755,7 @@ namespace IronRuby.Builtins {
                         }
                     }
                 }
-                return ToInt32(KernelOps.ToInteger((object)null, str, 10));
+                return ToInt32(KernelOps.ParseInteger(str, 10));
             }
 
             return ToIntComponent(context, value);
@@ -868,6 +865,7 @@ namespace IronRuby.Builtins {
         #region at
 
         [RubyMethod("at", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static RubyTime/*!*/ At(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]params object[]/*!*/ args) {
             var options = ExtractOptions(ref args);
             object inZone = GetInOption(options);
@@ -939,6 +937,7 @@ namespace IronRuby.Builtins {
         #region now
 
         [RubyMethod("now", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static RubyTime/*!*/ Now(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]params object[]/*!*/ args) {
             var options = ExtractOptions(ref args);
             if (args.Length != 0) {
@@ -1243,12 +1242,6 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region succ, +, -, <=>, ==, eql?, hash
-
-        // Time#succ was removed in Ruby 1.9.2. Keeping it made a Time range look iterable, so
-        // (t...t).max answered t instead of raising TypeError "can't iterate from Time".
-        public static RubyTime/*!*/ SuccessiveSecond(RubyTime/*!*/ self) {
-            return Shift(self, ExactNum.One);
-        }
 
         private static RubyTime/*!*/ Shift(RubyTime/*!*/ self, ExactNum delta) {
             ExactNum result = self.ToExactSeconds() + delta;

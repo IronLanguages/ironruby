@@ -1,4 +1,28 @@
 
+This is CRuby 4.0.9's library directory (lib/ and ext/*/lib/ of the ruby-4.0.9
+source tarball; RubyGems and Bundler 4.0.20), with the changes below.  To move
+it to a later release, run Util/sync-stdlib.rb with this release's tarball and
+the new one: it copies what IronRuby has not changed and merges the new
+release's changes into what it has.
+
+IronRuby's changes to the vendored files, each marked by an IronRuby comment
+where it is made:
+  rubygems.rb                  - IronRuby evaluates kernel_require.rb as an
+                                 <internal:> file, like CRuby
+  bundler/self_manager.rb      - never restarts into another Bundler release
+  bundler/stub_specification.rb - an unbuilt C extension is not "missing"
+  bundled_gems.rb              - no "leaving the default gems" warning for
+                                 the libraries IronRuby implements itself
+  delegate.rb                  - tolerates an already-undefined forwarder
+  cgi/escape.rb                - StringValue() conversion the C version does
+  random/formatter.rb          - #random_number/#rand and Random's mixin,
+                                 which are C (random.c) in CRuby
+  rubygems/defaults/ironruby.rb, gem_prelude.rb, fiber.rb, io/nonblock.rb
+                               - IronRuby's own files
+  prism.rb, prism/             - the Ruby half of the prism IronRuby parses
+                                 with (Prism 2.0.0), not CRuby 4.0's 1.8;
+                                 it has to match the parser's serialization
+
 Removed from the vendored copy because MRI implements them as C extensions
 (or on top of one), so the 1.9 pure-Ruby versions behind them on the load
 path are the working ones here:
@@ -9,7 +33,8 @@ Patched in place (uri/common.rb reaches these through require_relative, so a
 shim elsewhere on the load path cannot shadow them):
   uri/rfc3986_parser.rb - the \g subexpression calls (none recursive) in the
                           HOST and RFC3986_URI/relative_ref regexps written out
-                          inline, which is exactly equivalent
+                          inline, which is exactly equivalent (the helper
+                          constants that build them are removed again)
   uri/mailto.rb         - one non-recursive \g<hfield> reference expanded
                           inline, which is exactly equivalent
   irb/startup_message.rb - the banner names the interpreter running,

@@ -17,9 +17,6 @@ using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Security;
-using IronRuby.Hosting;
-using IronRuby.Runtime;
 
 [assembly: AssemblyTitle("Ruby")]
 [assembly: AssemblyDescription("")]
@@ -34,15 +31,8 @@ using IronRuby.Runtime;
 [assembly: CLSCompliant(true)]
 [assembly: Guid("ca75230d-3011-485d-b1db-dfe924b6c434")]
 
-
-[assembly: AllowPartiallyTrustedCallers]
-
 [assembly: InternalsVisibleTo("IronRuby.Tests")]
 [assembly: InternalsVisibleTo("ClassInitGenerator")]
 [assembly: InternalsVisibleTo("IronRuby.Prism")]
 // the ahead-of-time compiler prototype, Util/aot
 [assembly: InternalsVisibleTo("IronRuby.Aot")]
-
-
-[assembly: SecurityTransparent]
-[assembly: SecurityRules(SecurityRuleSet.Level1)]

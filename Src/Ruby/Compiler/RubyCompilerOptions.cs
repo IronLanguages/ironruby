@@ -13,11 +13,8 @@
  *
  * ***************************************************************************/
 
-using System;
 using System.Collections.Generic;
 using Microsoft.Scripting;
-using System.Dynamic;
-using IronRuby.Runtime;
 
 namespace IronRuby.Compiler {
     internal enum TopScopeFactoryKind {
@@ -57,7 +54,6 @@ namespace IronRuby.Compiler {
         WrappedFile,
     }
 
-    [Serializable]
     public sealed class RubyCompilerOptions : CompilerOptions {
         /// <summary>
         /// Embedded code. The code being compiled is embedded into an already compiled code.
@@ -93,6 +89,11 @@ namespace IronRuby.Compiler {
         internal bool TopLevelHasUnsplatParameter { get; set; }
 
         /// <summary>
+        /// The declared signature of the method, if it has keyword parameters (see SuperCall.RecordKeywordSignature).
+        /// </summary>
+        internal IronRuby.Runtime.Calls.RubyParameterSignature TopLevelParameterSignature { get; set; }
+
+        /// <summary>
         /// Eval only: the encoding of the string being evaluated, which is the source encoding
         /// unless a magic comment says otherwise.
         /// </summary>
@@ -103,14 +104,11 @@ namespace IronRuby.Compiler {
         /// </summary>
         internal List<string> LocalNames { get; set; }
 
-        internal RubyCompatibility Compatibility { get; set; }
-
-        public RubyCompilerOptions() {
-        }
-        
-        // copies relevant options from runtime options:
-        public RubyCompilerOptions(RubyOptions/*!*/ runtimeOptions) {
-            Compatibility = runtimeOptions.Compatibility;
-        }
+        /// <summary>
+        /// Eval in an isolated proc (Ractor.new's block, a shareable proc): those of
+        /// <see cref="LocalNames"/> that belong to the scopes around the proc, which the code may
+        /// not use (RubyScope.GetIsolatedLocalNames). Null otherwise.
+        /// </summary>
+        internal ICollection<string> IsolatedLocalNames { get; set; }
     }
 }

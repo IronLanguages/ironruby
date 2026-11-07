@@ -13,20 +13,14 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Diagnostics;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
-    using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     /// <summary>
     /// Represents a symbol literal encoded by the containing source file encoding.

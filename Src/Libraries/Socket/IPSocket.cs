@@ -13,18 +13,15 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System.Net;
 using System.Net.Sockets;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using System.Runtime.InteropServices;
-using System.Numerics;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("IPSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("IPSocket")]
     public abstract class IPSocket : RubyBasicSocket {
 
         /// <summary>
@@ -71,11 +68,8 @@ namespace IronRuby.StandardLibrary.Sockets {
             int received = Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.ReceiveFrom(buffer, sFlags, ref fromEP));
             MutableString str = MutableString.CreateBinary();
             str.Append(buffer, 0, received);
-
-            str.IsTainted = true;
             return RubyOps.MakeArray2(str, self.GetAddressArray(fromEP));
         }
 #endregion
     }
 }
-#endif

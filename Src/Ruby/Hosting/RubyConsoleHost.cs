@@ -12,19 +12,12 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_FULL_CONSOLE
 using System;
 using System.IO;
-using System.Threading;
-using IronRuby;
-using IronRuby.Builtins;
-using IronRuby.Hosting;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Hosting.Providers;
 using Microsoft.Scripting.Hosting.Shell;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Hosting {
     public abstract partial class RubyConsoleHost : ConsoleHost {
@@ -155,14 +148,9 @@ namespace IronRuby.Hosting {
         private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint mode);
 
         private static void SetHomeEnvironmentVariable() {
-            try {
-                PlatformAdaptationLayer platform = PlatformAdaptationLayer.Default;
-                string homeDir = RubyUtils.GetHomeDirectory(platform);
-                platform.SetEnvironmentVariable("HOME", homeDir);
-            } catch (System.Security.SecurityException) {
-                // Ignore EnvironmentPermission exception
-            }
+            PlatformAdaptationLayer platform = PlatformAdaptationLayer.Default;
+            string homeDir = RubyUtils.GetHomeDirectory(platform);
+            platform.SetEnvironmentVariable("HOME", homeDir);
         }
     }
 }
-#endif

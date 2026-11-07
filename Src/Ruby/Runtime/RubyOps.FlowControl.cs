@@ -14,9 +14,7 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Reflection;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Compiler.Generation;
@@ -114,7 +112,6 @@ namespace IronRuby.Runtime {
                 if (blockScope.BlockFlowControl.CallerKind == BlockCallerKind.Yield) {
                     throw new EvalUnwinder(BlockReturnReason.Retry, null, blockScope.BlockFlowControl.Proc.Kind, BlockReturnResult.Retry);
                 }
-                //if (blockScope.BlockFlowControl.IsMethod) {
                 throw new LocalJumpError("retry from proc-closure", "retry", null);// TODO: RFC
             }
 
@@ -465,15 +462,7 @@ namespace IronRuby.Runtime {
             Debug.Assert(targetFrame != null);
 
             if (targetFrame.IsActiveMethod) {
-                // TODO: this optimization doesn't work (see test RubyBlocks14B)
-                //if (targetFrame == scope.FlowControlScope) {
-                //    // The current primary super-frame is the proc-converter, however we are still in the block frame that needs to be unwound.
-                //    // Sets the owner's BFC to exit the current block (recursively up to the primary frame).
-                //    ownerBlockFlowControl.SetFlowControl(BlockReturnReason.Break, targetFrame, yieldedBlockFlowControl.SourceProcKind);
-                //    return;
-                //} else {
-                    throw new MethodUnwinder(targetFrame, returnValue);
-                //}
+                throw new MethodUnwinder(targetFrame, returnValue);
             } else {
                 throw new LocalJumpError("break from proc-closure", "break", returnValue);
             }

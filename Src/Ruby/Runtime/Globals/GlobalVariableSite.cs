@@ -42,8 +42,16 @@ namespace IronRuby.Runtime {
         // a version with the variable of another one.
         private volatile Binding _binding;
 
-        public GlobalVariableSite(string/*!*/ name) {
+        // in the core library written in Ruby, which Ractor isolation does not apply to (RactorIsolation)
+        internal readonly bool IsCoreLibrary;
+
+        public GlobalVariableSite(string/*!*/ name)
+            : this(name, false) {
+        }
+
+        public GlobalVariableSite(string/*!*/ name, bool isCoreLibrary) {
             Name = name;
+            IsCoreLibrary = isCoreLibrary;
         }
 
         /// <summary>The variable the name denotes in the context, or null if it denotes none.</summary>

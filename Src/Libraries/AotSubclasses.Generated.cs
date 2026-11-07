@@ -40,6 +40,12 @@ namespace IronRuby.Builtins {
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.Errno.WouldBlockError), typeof(IronRuby_Builtins_Errno_WouldBlockError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.FloatDomainError), typeof(IronRuby_Builtins_FloatDomainError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.Interrupt), typeof(IronRuby_Builtins_Interrupt_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.RactorClosedError), typeof(IronRuby_Builtins_RactorClosedError_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.RactorError), typeof(IronRuby_Builtins_RactorError_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.RactorIsolationError), typeof(IronRuby_Builtins_RactorIsolationError_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.RactorMovedError), typeof(IronRuby_Builtins_RactorMovedError_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.RactorRemoteError), typeof(IronRuby_Builtins_RactorRemoteError_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.RactorUnsafeError), typeof(IronRuby_Builtins_RactorUnsafeError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.RubyTime), typeof(IronRuby_Builtins_RubyTime_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.SignalException), typeof(IronRuby_Builtins_SignalException_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.Builtins.StopIteration), typeof(IronRuby_Builtins_StopIteration_Subclass));
@@ -65,6 +71,7 @@ namespace IronRuby.Builtins {
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Iconv.Iconv.OutOfRange), typeof(IronRuby_StandardLibrary_Iconv_Iconv_OutOfRange_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Json.JsonError), typeof(IronRuby_StandardLibrary_Json_JsonError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Json.JsonGeneratorError), typeof(IronRuby_StandardLibrary_Json_JsonGeneratorError_Subclass));
+            global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Json.JsonNestingError), typeof(IronRuby_StandardLibrary_Json_JsonNestingError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Json.JsonParserError), typeof(IronRuby_StandardLibrary_Json_JsonParserError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.Markly.MarklyOps.MarklyError), typeof(IronRuby_StandardLibrary_Markly_MarklyOps_MarklyError_Subclass));
             global::IronRuby.Compiler.Generation.PrebuiltSubclasses.Register(typeof(global::IronRuby.StandardLibrary.MessagePack.MessagePackOps.MalformedFormatError), typeof(IronRuby_StandardLibrary_MessagePack_MessagePackOps_MalformedFormatError_Subclass));
@@ -164,8 +171,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -196,8 +201,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -223,8 +226,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -260,8 +261,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -297,8 +296,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -334,8 +331,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -371,8 +366,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -408,8 +401,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -445,8 +436,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -482,8 +471,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -519,8 +506,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -556,8 +541,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -593,8 +576,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -630,8 +611,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -667,8 +646,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -704,8 +681,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -741,8 +716,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -778,8 +751,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -815,8 +786,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -852,8 +821,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -889,8 +856,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -921,8 +886,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -953,8 +916,186 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_Builtins_RactorClosedError_Subclass : global::IronRuby.Builtins.RactorClosedError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_Builtins_RactorClosedError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorClosedError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorClosedError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_Builtins_RactorError_Subclass : global::IronRuby.Builtins.RactorError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_Builtins_RactorError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_Builtins_RactorIsolationError_Subclass : global::IronRuby.Builtins.RactorIsolationError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_Builtins_RactorIsolationError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorIsolationError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorIsolationError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_Builtins_RactorMovedError_Subclass : global::IronRuby.Builtins.RactorMovedError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_Builtins_RactorMovedError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorMovedError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorMovedError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_Builtins_RactorRemoteError_Subclass : global::IronRuby.Builtins.RactorRemoteError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_Builtins_RactorRemoteError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorRemoteError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorRemoteError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_Builtins_RactorUnsafeError_Subclass : global::IronRuby.Builtins.RactorUnsafeError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_Builtins_RactorUnsafeError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorUnsafeError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_Builtins_RactorUnsafeError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0, global::System.Exception p1)
+            : base(p0, p1) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -985,8 +1126,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1017,8 +1156,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1049,8 +1186,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1081,8 +1216,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1103,8 +1236,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -1123,10 +1254,8 @@ namespace IronRuby.Builtins {
         public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
         public RubyInstanceData TryGetInstanceData() { return _instanceData; }
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
-        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
-        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        bool IRubyObjectState.IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        void IRubyObjectState.Freeze() { RubyOps.FreezeObject(ref _instanceData); }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1152,8 +1281,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1174,8 +1301,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -1196,8 +1321,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -1218,8 +1341,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -1240,8 +1361,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -1262,8 +1381,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -1284,8 +1401,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -1306,8 +1421,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -1338,8 +1451,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1370,8 +1481,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1402,8 +1511,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1424,8 +1531,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -1456,8 +1561,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1488,8 +1591,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1520,8 +1621,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1552,8 +1651,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1584,8 +1681,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1611,8 +1706,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1638,8 +1731,31 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        public int BaseGetHashCode() { return base.GetHashCode(); }
+        public bool BaseEquals(object other) { return base.Equals(other); }
+        public string/*!*/ BaseToString() { return base.ToString(); }
+        DynamicMetaObject/*!*/ IDynamicMetaObjectProvider.GetMetaObject(Expression/*!*/ parameter) { return RubyOps.GetMetaObject(this, parameter); }
+    }
+
+    public sealed class IronRuby_StandardLibrary_Json_JsonNestingError_Subclass : global::IronRuby.StandardLibrary.Json.JsonNestingError, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {
+        private RubyInstanceData _instanceData;
+        private RubyClass/*!*/ _immediateClass;
+
+        public IronRuby_StandardLibrary_Json_JsonNestingError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass, global::System.String p0)
+            : base(p0) {
+            _immediateClass = rubyClass;
+        }
+
+        public IronRuby_StandardLibrary_Json_JsonNestingError_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(global::IronRuby.Runtime.RubyOps.GetDefaultExceptionMessage(rubyClass)) {
+            _immediateClass = rubyClass;
+        }
+
+        public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
+        public RubyInstanceData TryGetInstanceData() { return _instanceData; }
+        public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
+        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
+        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1665,8 +1781,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1697,8 +1811,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1729,8 +1841,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1761,8 +1871,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1793,8 +1901,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1825,8 +1931,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1857,8 +1961,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1879,8 +1981,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -1911,8 +2011,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1943,8 +2041,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1975,8 +2071,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -1997,8 +2091,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -2019,8 +2111,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -2056,8 +2146,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2078,8 +2166,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -2115,8 +2201,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2152,8 +2236,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2189,8 +2271,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2211,8 +2291,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -2233,8 +2311,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -2265,8 +2341,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2297,8 +2371,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2324,8 +2396,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2351,8 +2421,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2378,8 +2446,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2405,8 +2471,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2432,8 +2496,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2459,8 +2521,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2491,8 +2551,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2523,8 +2581,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2555,8 +2611,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2587,8 +2641,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2619,8 +2671,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2651,8 +2701,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2683,8 +2731,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2715,8 +2761,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2747,8 +2791,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2779,8 +2821,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2811,8 +2851,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2843,8 +2881,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2875,8 +2911,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2907,8 +2941,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2939,8 +2971,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -2971,8 +3001,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3003,8 +3031,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3035,8 +3061,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3067,8 +3091,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3099,8 +3121,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3131,8 +3151,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3163,8 +3181,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3195,8 +3211,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3227,8 +3241,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3259,8 +3271,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3291,8 +3301,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3323,8 +3331,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3350,8 +3356,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -3382,8 +3386,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3404,8 +3406,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -3426,8 +3426,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -3453,8 +3451,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -3475,8 +3471,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return global::IronRuby.Runtime.RubyOps.ObjectToString(this); }
@@ -3507,8 +3501,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3539,8 +3531,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3571,8 +3561,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3603,8 +3591,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3635,8 +3621,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3667,8 +3651,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3699,8 +3681,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3731,8 +3711,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3763,8 +3741,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3795,8 +3771,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }
@@ -3827,8 +3801,6 @@ namespace IronRuby.Builtins {
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
         public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
         public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return base.ToString(); }

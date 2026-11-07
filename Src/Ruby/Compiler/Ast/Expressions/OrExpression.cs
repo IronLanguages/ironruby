@@ -13,18 +13,12 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = MSA.Expression;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
     
     public partial class OrExpression : Expression {

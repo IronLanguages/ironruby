@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Reflection;
@@ -85,11 +81,21 @@ namespace IronRuby.Runtime.Calls {
             }
             // `alias` and visibility changes copy the info but share the body.
             var info = other as RubyMethodInfo;
-            return info != null && ReferenceEquals(_body, info._body);
+            return info != null && ReferenceEquals(_body.EquivalenceKey, info._body.EquivalenceKey);
         }
         
         public override int GetEquivalenceHashCode() {
-            return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_body);
+            return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_body.EquivalenceKey);
+        }
+
+        /// <summary>
+        /// Makes this method the same method as <paramref name="other"/> to Method#==, for the core methods written in Ruby
+        /// that MRI defines as one C function under two names (Array#select! and #filter!): MRI's backtrace names each frame
+        /// by the name called, so each name here is a method of its own rather than an alias, which would be labelled by
+        /// the name the body was defined with.
+        /// </summary>
+        public void MakeEquivalentTo(RubyMethodInfo/*!*/ other) {
+            _body.EquivalenceKey = other._body.EquivalenceKey;
         }
 
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
@@ -269,24 +275,9 @@ namespace IronRuby.Runtime.Calls {
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             Assert.NotNull(metaBuilder, args, name);
 
-            // A method with keyword parameters takes them in one more, hidden, optional parameter
-            // (PrismAstBridge.LowerKeywords), which ArgsBuilder would count as one more positional.
-            var signature = _body.Ast.Parameters.Signature;
-            if (signature != null && TakesOrRefusesKeywords && !args.Signature.HasSplattedArgument && !args.Signature.HasRhsArgument &&
-                Parameters.Unsplat == null) {
-                int count = args.SimpleArgumentCount;
-                if (count < Parameters.Mandatory.Length || count > Parameters.Mandatory.Length + Parameters.Optional.Length) {
-                    metaBuilder.SetError(Methods.MakeKeywordMethodArityError.OpCall(
-                        AstUtils.Constant(signature, typeof(object)),
-                        AstUtils.Constant(count),
-                        (count > 0) ? AstUtils.Box(args.GetSimpleArgumentExpression(count - 1)) : AstUtils.Constant(null)
-                    ));
-                    return;
-                }
-            }
-
             // 2 implicit args: self, block
-            var argsBuilder = new ArgsBuilder(2, Parameters.Mandatory.Length, Parameters.LeadingMandatoryCount, Parameters.Optional.Length, Parameters.Unsplat != null);
+            var argsBuilder = new ArgsBuilder(2, Parameters.Mandatory.Length, Parameters.LeadingMandatoryCount, Parameters.Optional.Length, Parameters.Unsplat != null,
+                TakesOrRefusesKeywords ? GetParameterSignature() : null);
             argsBuilder.SetImplicit(0, AstUtils.Box(args.TargetExpression));
             argsBuilder.SetImplicit(1, args.Signature.HasBlock ? AstUtils.Convert(args.GetBlockExpression(), typeof(Proc)) : AstFactory.NullOfProc);
             argsBuilder.AddCallArguments(metaBuilder, args);

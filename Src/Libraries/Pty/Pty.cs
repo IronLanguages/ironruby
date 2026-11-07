@@ -9,7 +9,6 @@
  * You must not remove this notice, or any other, from this software.
  *
  * ***************************************************************************/
-#if FEATURE_PROCESS
 
 using System;
 using System.Runtime.InteropServices;
@@ -38,7 +37,7 @@ namespace IronRuby.StandardLibrary.Pty {
     ///
     /// Unix only: Windows has no pty, and MRI does not build the library there either.
     /// </summary>
-    [RubyModule("PTY", BuildConfig = "FEATURE_PROCESS")]
+    [RubyModule("PTY")]
     public static class PtyOps {
 
         [DllImport("libc", SetLastError = true, EntryPoint = "posix_openpt")]
@@ -67,10 +66,10 @@ namespace IronRuby.StandardLibrary.Pty {
 
         private static readonly bool IsMac = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 
-        // Linux's values; macOS spells three of them differently.
         private const int O_RDWR = 2;
-        private static readonly int O_NOCTTY = IsMac ? 0x20000 : 0x100;
-        private static readonly int O_CLOEXEC = IsMac ? 0x1000000 : 0x80000;
+        private static readonly int O_NOCTTY = IOModeNative.NoControllingTerminal;
+        private static readonly int O_CLOEXEC = IOModeNative.CloseOnExec;
+        // Linux's value; macOS spells it differently.
         private static readonly int F_DUPFD_CLOEXEC = IsMac ? 67 : 1030;
 
         // The file-action opcodes the Process.spawn prelude shares with RubyProcess.
@@ -148,7 +147,7 @@ namespace IronRuby.StandardLibrary.Pty {
                 io = f;
             } else {
                 io = new RubyIO(context, stream, fd, mode);
-                context.SetInstanceVariable(io, "@__io_path__", MutableString.Create(path, RubyEncoding.UTF8).Freeze());
+                context.SetInstanceVariable(io, RubyUtils.GetCoreStateInstanceVariableName("@__io_path__"), MutableString.Create(path, RubyEncoding.UTF8).Freeze());
             }
             io.SetEncodings(null, null);
             io.AutoFlush = sync;
@@ -243,4 +242,3 @@ namespace IronRuby.StandardLibrary.Pty {
         }
     }
 }
-#endif

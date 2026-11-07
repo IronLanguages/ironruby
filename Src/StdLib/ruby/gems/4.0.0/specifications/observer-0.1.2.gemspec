@@ -18,5 +18,5 @@ Gem::Specification.new do |s|
   s.rubygems_version = "3.5.0.dev".freeze
   s.summary = "Implementation of the Observer object-oriented design pattern.".freeze
 
-  s.installed_by_version = "4.0.16".freeze
+  s.installed_by_version = "4.0.20".freeze
 end

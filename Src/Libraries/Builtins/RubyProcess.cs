@@ -12,14 +12,11 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_PROCESS 
 
 using System;
 using System.Diagnostics;
-using System.Security;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using System.Collections.Generic;
 using System.IO;
@@ -32,7 +29,7 @@ namespace IronRuby.Builtins {
     /// <summary>
     /// Process builtin module
     /// </summary>
-    [RubyModule("Process", BuildConfig = "FEATURE_PROCESS")]
+    [RubyModule("Process")]
     public static partial class RubyProcess {
         #region Utils
 
@@ -329,7 +326,7 @@ namespace IronRuby.Builtins {
         /// lets us distinguish "exited with 137" from "killed by signal 9" - a distinction
         /// System.Diagnostics.Process throws away when it folds a signal into ExitCode.
         /// </summary>
-        [RubyClass("Status", BuildConfig = "FEATURE_PROCESS")]
+        [RubyClass("Status")]
         [HideMethod("new", IsStatic = true)]
         public sealed class Status {
             private readonly int _pid;
@@ -415,11 +412,12 @@ namespace IronRuby.Builtins {
                 return self._status;
             }
 
+            // MRI's pst_equal compares #to_i only: two processes that exited alike are equal
             [RubyMethod("==")]
             public static bool Equals(Status/*!*/ self, object other) {
                 var status = other as Status;
                 if (status != null) {
-                    return self._pid == status._pid && self._status == status._status;
+                    return self._status == status._status;
                 }
                 return (other is int) && (int)other == self._status;
             }
@@ -580,25 +578,31 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("times", RubyMethodAttributes.PublicSingleton)]
         public static RubyStruct/*!*/ GetTimes(RubyModule/*!*/ self) {
-            var result = RubyStruct.Create(RubyStructOps.GetTmsClass(self.Context));
-            try {
-                FillTimes(result);
-            } catch (SecurityException) {
-                RubyStructOps.TmsSetUserTime(result, 0.0);
-                RubyStructOps.TmsSetSystemTime(result, 0.0);
-                RubyStructOps.TmsSetChildUserTime(result, 0.0);
-                RubyStructOps.TmsSetChildSystemTime(result, 0.0);
+            var result = RubyStruct.Create(GetTmsClass(self.Context));
+            using (var process = Process.GetCurrentProcess()) {
+                result[0] = process.UserProcessorTime.TotalSeconds;
+                result[1] = process.PrivilegedProcessorTime.TotalSeconds;
             }
-
+            result[2] = 0.0;
+            result[3] = 0.0;
             return result;
         }
 
-        private static void FillTimes(RubyStruct/*!*/ result) {
-            var process = Process.GetCurrentProcess();
-            RubyStructOps.TmsSetUserTime(result, process.UserProcessorTime.TotalSeconds);
-            RubyStructOps.TmsSetSystemTime(result, process.PrivilegedProcessorTime.TotalSeconds);
-            RubyStructOps.TmsSetChildUserTime(result, 0.0);
-            RubyStructOps.TmsSetChildSystemTime(result, 0.0);
+        private static readonly object TmsClassKey = new object();
+
+        // Process::Tms, the struct Process.times returns. (It was Struct::Tms until Ruby 1.9.)
+        [RubyConstant("Tms")]
+        internal static RubyClass/*!*/ CreateTmsClass(RubyModule/*!*/ module) {
+            return GetTmsClass(module.Context);
+        }
+
+        // Process.times can run before Process's constants are initialized, so the class is kept on the context.
+        private static RubyClass/*!*/ GetTmsClass(RubyContext/*!*/ context) {
+            return (RubyClass)context.GetOrCreateLibraryData(TmsClassKey, () => {
+                var tms = RubyStruct.DefineStruct(context.GetClass(typeof(RubyStruct)), null, new[] { "utime", "stime", "cutime", "cstime" });
+                tms.SetName("Process::Tms", true);
+                return tms;
+            });
         }
 
         [RubyMethod("uid", RubyMethodAttributes.PublicSingleton)]
@@ -631,129 +635,95 @@ namespace IronRuby.Builtins {
 
         #region clock_gettime
 
-        // The symbols clock_gettime compares its arguments with, made once per context. The clock
-        // constants (Process::CLOCK_REALTIME and the rest) are Symbols named after themselves - ruby4.rb
-        // defines them - so a clock id is told apart by identity, as `case clock_id when CLOCK_REALTIME`
-        // did in the Ruby definition this replaces.
-        private sealed class ClockSymbols {
-            public readonly RubyContext/*!*/ Context;
-            public readonly RubySymbol/*!*/ Realtime, FloatSecond, FloatMillisecond, FloatMicrosecond, Second, Millisecond, Microsecond, Nanosecond;
+        // The clock ids, as Integers with Linux's numbers, which is what MRI has.
+        [RubyConstant] public const int CLOCK_REALTIME = 0;
+        [RubyConstant] public const int CLOCK_MONOTONIC = 1;
+        [RubyConstant] public const int CLOCK_PROCESS_CPUTIME_ID = 2;
+        [RubyConstant] public const int CLOCK_THREAD_CPUTIME_ID = 3;
+        [RubyConstant] public const int CLOCK_MONOTONIC_RAW = 4;
+        [RubyConstant] public const int CLOCK_REALTIME_COARSE = 5;
+        [RubyConstant] public const int CLOCK_MONOTONIC_COARSE = 6;
+        [RubyConstant] public const int CLOCK_BOOTTIME = 7;
+        [RubyConstant] public const int CLOCK_REALTIME_ALARM = 8;
+        [RubyConstant] public const int CLOCK_BOOTTIME_ALARM = 9;
+        [RubyConstant] public const int CLOCK_TAI = 11;
 
-            public ClockSymbols(RubyContext/*!*/ context) {
-                Context = context;
-                Realtime = context.CreateAsciiSymbol("CLOCK_REALTIME");
-                FloatSecond = context.CreateAsciiSymbol("float_second");
-                FloatMillisecond = context.CreateAsciiSymbol("float_millisecond");
-                FloatMicrosecond = context.CreateAsciiSymbol("float_microsecond");
-                Second = context.CreateAsciiSymbol("second");
-                Millisecond = context.CreateAsciiSymbol("millisecond");
-                Microsecond = context.CreateAsciiSymbol("microsecond");
-                Nanosecond = context.CreateAsciiSymbol("nanosecond");
-            }
-        }
+        private enum ClockKind { Realtime, Monotonic, ProcessTime }
 
-        private static ClockSymbols _clockSymbols;
+        private static readonly Dictionary<string, ClockKind> _emulatedClocks = new Dictionary<string, ClockKind> {
+            // MRI's emulated clocks, named by Symbols
+            { "GETTIMEOFDAY_BASED_CLOCK_REALTIME", ClockKind.Realtime },
+            { "TIME_BASED_CLOCK_REALTIME", ClockKind.Realtime },
+            { "GETRUSAGE_BASED_CLOCK_PROCESS_CPUTIME_ID", ClockKind.ProcessTime },
+            { "TIMES_BASED_CLOCK_PROCESS_CPUTIME_ID", ClockKind.ProcessTime },
+            { "CLOCK_BASED_CLOCK_PROCESS_CPUTIME_ID", ClockKind.ProcessTime },
+            { "TIMES_BASED_CLOCK_MONOTONIC", ClockKind.Monotonic },
+        };
 
-        private static ClockSymbols/*!*/ GetClockSymbols(RubyContext/*!*/ context) {
-            ClockSymbols symbols = _clockSymbols;
-            if (symbols == null || symbols.Context != context) {
-                _clockSymbols = symbols = new ClockSymbols(context);
-            }
-            return symbols;
-        }
-
-        // ActiveSupport::Notifications reads the monotonic clock twice for every event it
-        // instruments (each SQL query, each render), so this is C# rather than Ruby. .NET's Stopwatch
-        // is the monotonic source and serves every clock but CLOCK_REALTIME, which is the system clock.
+        /// <summary>
+        /// Process.clock_gettime(clock_id, unit = :float_second). ActiveSupport::Notifications reads
+        /// the monotonic clock twice for every event it instruments, so this is C#. .NET's Stopwatch
+        /// is the monotonic (and boot-time) source; the CPU-time clocks are the process's processor
+        /// time - .NET has no per-thread figure, so CLOCK_THREAD_CPUTIME_ID is that too. A clock
+        /// that is not one of these is Errno::EINVAL, as clock_gettime(2) has it.
+        /// </summary>
         [RubyMethod("clock_gettime", RubyMethodAttributes.PublicSingleton)]
-        public static object ClockGetTime(ConversionStorage<MutableString>/*!*/ tosConversion, RubyModule/*!*/ self,
-            [Optional]object clockId, [Optional]object unit) {
+        public static object ClockGetTime(ConversionStorage<int>/*!*/ fixnumCast, ConversionStorage<MutableString>/*!*/ tosConversion,
+            RubyModule/*!*/ self, object clockId, [Optional]object unit) {
 
-            ClockSymbols symbols = GetClockSymbols(self.Context);
-            double seconds;
-            if (clockId == symbols.Realtime) {
-                seconds = (double)(DateTime.UtcNow.Ticks - RubyTime.Epoch.Ticks) / TimeSpan.TicksPerSecond;
+            var context = self.Context;
+            ClockKind kind;
+            var symbol = clockId as RubySymbol;
+            if (symbol != null) {
+                if (!_emulatedClocks.TryGetValue(symbol.ToString(), out kind)) {
+                    throw RubyExceptions.CreateEINVAL("clock_gettime({0})", context.Inspect(clockId));
+                }
+            } else if (clockId == null) {
+                // NUM2CLOCKID's wording, not to_int's
+                throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
             } else {
-                seconds = (double)Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+                switch (Protocols.CastToFixnum(fixnumCast, clockId)) {
+                    case CLOCK_REALTIME: case CLOCK_REALTIME_COARSE: case CLOCK_REALTIME_ALARM: case CLOCK_TAI:
+                        kind = ClockKind.Realtime;
+                        break;
+                    case CLOCK_MONOTONIC: case CLOCK_MONOTONIC_RAW: case CLOCK_MONOTONIC_COARSE: case CLOCK_BOOTTIME: case CLOCK_BOOTTIME_ALARM:
+                        kind = ClockKind.Monotonic;
+                        break;
+                    case CLOCK_PROCESS_CPUTIME_ID: case CLOCK_THREAD_CPUTIME_ID:
+                        kind = ClockKind.ProcessTime;
+                        break;
+                    default:
+                        throw RubyExceptions.CreateEINVAL("clock_gettime({0})", context.Inspect(clockId));
+                }
             }
 
-            if (unit == Missing.Value || unit == null || unit == symbols.FloatSecond) {
-                return seconds;
-            } else if (unit == symbols.FloatMillisecond) {
-                return seconds * 1000.0;
-            } else if (unit == symbols.FloatMicrosecond) {
-                return seconds * 1000000.0;
-            } else if (unit == symbols.Second) {
-                return ClrFloat.ToInt(seconds);
-            } else if (unit == symbols.Millisecond) {
-                return ClrFloat.ToInt(seconds * 1000);
-            } else if (unit == symbols.Microsecond) {
-                return ClrFloat.ToInt(seconds * 1000000);
-            } else if (unit == symbols.Nanosecond) {
-                return ClrFloat.ToInt(seconds * 1000000000);
-            } else {
-                throw RubyExceptions.CreateArgumentError("unexpected unit: " + Protocols.ConvertToString(tosConversion, unit).ToString());
+            double seconds;
+            switch (kind) {
+                case ClockKind.Realtime:
+                    seconds = (double)(DateTime.UtcNow.Ticks - RubyTime.Epoch.Ticks) / TimeSpan.TicksPerSecond;
+                    break;
+                case ClockKind.ProcessTime:
+                    seconds = Process.GetCurrentProcess().TotalProcessorTime.TotalSeconds;
+                    break;
+                default:
+                    seconds = (double)Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+                    break;
+            }
+
+            string unitName = (unit == Missing.Value || unit == null) ? "float_second" : (unit as RubySymbol)?.ToString();
+            switch (unitName) {
+                case "float_second": return seconds;
+                case "float_millisecond": return seconds * 1000.0;
+                case "float_microsecond": return seconds * 1000000.0;
+                case "second": return ClrFloat.ToInt(seconds);
+                case "millisecond": return ClrFloat.ToInt(seconds * 1000);
+                case "microsecond": return ClrFloat.ToInt(seconds * 1000000);
+                case "nanosecond": return ClrFloat.ToInt(seconds * 1000000000);
+                default:
+                    throw RubyExceptions.CreateArgumentError("unexpected unit: " + Protocols.ConvertToString(tosConversion, unit).ToString());
             }
         }
 
         #endregion
     }
-
-    #region Struct::Tms
-
-    public static partial class RubyStructOps {
-        #region Tms
-
-        internal static readonly object TmsStructClassKey = new object();
-        
-        [RubyConstant("Tms", BuildConfig = "FEATURE_PROCESS")]
-        internal static RubyClass/*!*/ CreateTmsClass(RubyModule/*!*/ module) {
-            // class is available for the library even if the constant is removed => store it on the context:
-            return (RubyClass)module.Context.GetOrCreateLibraryData(TmsStructClassKey, () => RubyStruct.DefineStruct(
-                (RubyClass)module, 
-                "Tms",
-                new[] { "utime", "stime", "cutime", "cstime" }
-            ));
-        }
-
-        public static RubyClass/*!*/ GetTmsClass(RubyContext/*!*/ context) {
-            ContractUtils.RequiresNotNull(context, "context");
-
-            object value;
-            if (context.TryGetLibraryData(TmsStructClassKey, out value)) {
-                return (RubyClass)value;
-            }
-
-            // trigger constant initialization of Struct class:
-            context.GetClass(typeof(RubyStruct)).TryGetConstant(null, "Tms", out value);
-
-            // try again:
-            if (context.TryGetLibraryData(TmsStructClassKey, out value)) {
-                return (RubyClass)value;
-            }
-
-            throw Assert.Unreachable;
-        }
-
-        public static void TmsSetUserTime(RubyStruct/*!*/ tms, double value) {
-            tms[0] = value;
-        }
-
-        public static void TmsSetSystemTime(RubyStruct/*!*/ tms, double value) {
-            tms[1] = value;
-        }
-
-        public static void TmsSetChildUserTime(RubyStruct/*!*/ tms, double value) {
-            tms[2] = value;
-        }
-
-        public static void TmsSetChildSystemTime(RubyStruct/*!*/ tms, double value) {
-            tms[3] = value;
-        }
-
-#endregion
-    }
-
-#endregion
 }
-#endif

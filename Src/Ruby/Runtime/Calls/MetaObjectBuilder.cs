@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -45,6 +41,7 @@ namespace IronRuby.Runtime.Calls {
         private AstExpressions _initializations;
         private List<ParameterExpression> _temps;
         private bool _error;
+        private bool _arityError;
         private bool _treatRestrictionsAsConditions;
 
         internal MetaObjectBuilder(RubyMetaBinder/*!*/ binder, DynamicMetaObject/*!*/[]/*!*/ arguments)
@@ -75,6 +72,7 @@ namespace IronRuby.Runtime.Calls {
             _result = null;
             _initializations = null;
             _error = false;
+            _arityError = false;
             _treatRestrictionsAsConditions = false;
         }
 
@@ -176,8 +174,49 @@ namespace IronRuby.Runtime.Calls {
             _error = true;
         }
 
+        /// <summary>
+        /// An ArgumentError for the wrong number of arguments, which MRI raises in the frame of the
+        /// method that was called (see <see cref="AddCalleeFrame"/>).
+        /// </summary>
+        public void SetArityError(Expression/*!*/ expression) {
+            SetError(expression);
+            _arityError = true;
+        }
+
         public void SetWrongNumberOfArgumentsError(int actual, int expected) {
-            SetError(Methods.MakeWrongNumberOfArgumentsError.OpCall(AstUtils.Constant(actual), AstUtils.Constant(expected)));
+            SetArityError(Methods.MakeWrongNumberOfArgumentsError.OpCall(AstUtils.Constant(actual), AstUtils.Constant(expected)));
+        }
+
+        /// <summary>
+        /// MRI raises an ArgumentError for the wrong number of arguments from the method that was
+        /// called: its backtrace starts with that method's frame, at its `def' for a Ruby method,
+        /// at the call for a library one (as for any C method); error_highlight then shows both the
+        /// caller and the callee. Here the arity is checked by the call site, so the frame is put
+        /// on the error.
+        /// </summary>
+        internal void AddCalleeFrame(RubyMemberInfo/*!*/ method, string/*!*/ name) {
+            if (!_error || !_arityError) {
+                return;
+            }
+            _arityError = false;
+
+            string file = null;
+            int line = 0;
+            string label;
+            if (method is RubyMethodInfo rubyMethod) {
+                label = IronRuby.Compiler.Ast.MethodDefinition.QualifyFrameLabel(rubyMethod.DefinitionName, rubyMethod.DeclaringModule);
+                if (rubyMethod.Document != null && !RubyStackTraceBuilder.IsInternalFile(rubyMethod.Document.FileName)) {
+                    file = rubyMethod.Document.FileName;
+                    line = rubyMethod.SourceSpan.Start.Line;
+                }
+            } else if (method is RubyMethodGroupBase || method is RubyLibraryMethodInfo) {
+                label = IronRuby.Compiler.Ast.MethodDefinition.QualifyFrameLabel(name, method.DeclaringModule);
+            } else {
+                return;
+            }
+            _result = Methods.SetCalleeFrame.OpCall(
+                AstUtils.Convert(_result, typeof(Exception)), AstUtils.Constant(file, typeof(string)), AstUtils.Constant(line), AstUtils.Constant(label)
+            );
         }
 
         public void SetMetaResult(DynamicMetaObject/*!*/ metaResult, CallArguments/*!*/ args) {

@@ -13,14 +13,12 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_ENCODING
 
 using System;
 using System.Buffers;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Unicode;
-using IronRuby.Builtins;
 
 namespace IronRuby.Runtime {
 
@@ -366,4 +364,3 @@ namespace IronRuby.Runtime {
         }
     }
 }
-#endif

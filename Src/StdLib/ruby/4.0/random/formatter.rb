@@ -371,7 +371,7 @@ module Random::Formatter
   end
 end
 
-# MRI defines Random::Formatter#random_number and #rand in C, in random.c, so they are absent
+# IronRuby: MRI defines Random::Formatter#random_number and #rand in C, in random.c, so they are absent
 # from this file upstream and have to be supplied here. Both are built on #random_bytes, which
 # is the module's own primitive, so they stay correct for whatever mixes Formatter in - a Random
 # instance drawing from its PRNG or SecureRandom drawing from the system's CSPRNG.
@@ -425,7 +425,8 @@ module Random::Formatter
   def __random_in_range__(range)
     low = range.begin
     high = range.end
-    return __random_float__ if low.nil? || high.nil?
+    # MRI: an endless or beginless range has no width to draw from
+    raise ::Errno::EDOM if low.nil? || high.nil?
 
     unless low.is_a?(::Numeric) && high.is_a?(::Numeric)
       raise ::ArgumentError, "invalid argument - #{range}"
@@ -444,7 +445,7 @@ module Random::Formatter
   end
 end
 
-# MRI wires Formatter into Random from random.c: `require "random/formatter"`
+# IronRuby: MRI wires Formatter into Random from random.c: `require "random/formatter"`
 # both mixes it into Random - so a Random instance answers #hex, #alphanumeric,
 # #uuid - and extends the Random class object with it, so `Random.alphanumeric`
 # works and draws from Random::DEFAULT.  Neither happens anywhere in this file

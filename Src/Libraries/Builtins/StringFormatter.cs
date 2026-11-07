@@ -17,7 +17,6 @@ using System;
 using System.Collections;
 using System.Diagnostics;
 using System.Globalization;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Text;
 using System.Numerics;
@@ -25,7 +24,6 @@ using IronRuby.Runtime;
 using SM = System.Math;
 using IronRuby.Runtime.Calls;
 using System.Runtime.CompilerServices;
-using Microsoft.Scripting.Generation;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime.Conversions;
 
@@ -128,14 +126,11 @@ namespace IronRuby.Builtins {
         private bool? _useAbsolute;
         private bool _useNamed;
         private int _relativeIndex;
-        private bool _tainted;
 
         private int _index;
 
         // The options for formatting the current formatting specifier in the format string
         private FormatSettings _opts;
-        // Should ddd.0 be displayed as "ddd" or "ddd.0". "'%g' % ddd.0" needs "ddd", but str(ddd.0) needs "ddd.0"
-        private bool _TrailingZeroAfterWholeFloat;
 
         private StringBuilder _buf;
 
@@ -151,6 +146,12 @@ namespace IronRuby.Builtins {
         // TODO: remove
         internal StringFormatter(RubyContext/*!*/ context, string/*!*/ format, RubyEncoding/*!*/ encoding, IList/*!*/ data) {
             Assert.NotNull(context, format, data, encoding);
+
+            // MRI's rb_str_format reads the format as ASCII directives, so it has to be ASCII
+            // compatible itself, even an empty one
+            if (!encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateAsciiIncompatibleEncodingError(encoding);
+            }
 
             _context = context;
             _format = format;
@@ -170,15 +171,9 @@ namespace IronRuby.Builtins {
 
         #region Public API Surface
 
-        public bool TrailingZeroAfterWholeFloat {
-            get { return _TrailingZeroAfterWholeFloat; }
-            set { _TrailingZeroAfterWholeFloat = value; }
-        }
-
         public MutableString/*!*/ Format() {
             _index = 0;
             _buf = new StringBuilder();
-            _tainted = false;
             int modIndex;
 
             while ((modIndex = _format.IndexOf('%', _index)) != -1) {
@@ -204,13 +199,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            MutableString result = MutableString.Create(_buf.ToString(), _resultEncoding ?? _encoding);
-
-            if (_tainted) {
-                result.IsTainted = true;
-            }
-
-            return result;
+            return MutableString.Create(_buf.ToString(), _resultEncoding ?? _encoding);
         }
 
         #endregion
@@ -544,8 +533,8 @@ namespace IronRuby.Builtins {
                     if (exception != null) {
                         // KeyError#receiver and #key read these; see the KeyError
                         // reopening in Src/StdLib/ironruby/ruby4.rb.
-                        _context.SetInstanceVariable(instance, "@__receiver", hash);
-                        _context.SetInstanceVariable(instance, "@__key", key);
+                        _context.SetInstanceVariable(instance, RubyUtils.GetCoreStateInstanceVariableName("@__receiver__"), hash);
+                        _context.SetInstanceVariable(instance, RubyUtils.GetCoreStateInstanceVariableName("@__key__"), key);
                         return exception;
                     }
                 } catch (Exception) {
@@ -623,7 +612,7 @@ namespace IronRuby.Builtins {
                 if (!str.Encoding.IsAsciiIdentity) {
                     throw RubyExceptions.CreateAsciiIncompatibleEncodingError(str.Encoding);
                 }
-                object parsed = KernelOps.ToInteger(null, str);
+                object parsed = KernelOps.ParseInteger(str, 0);
                 return (parsed is BigInteger) ? (BigInteger)parsed : (parsed is long ? (BigInteger)(long)parsed : (BigInteger)(int)parsed);
             }
 
@@ -1266,9 +1255,6 @@ namespace IronRuby.Builtins {
                     if (precision == 0 && _opts.AltForm) {
                         body += ".";
                     }
-                    if (_TrailingZeroAfterWholeFloat && precision == 0 && body.IndexOf('.') < 0) {
-                        body += ".0";
-                    }
                     break;
 
                 case 'e':
@@ -1279,12 +1265,6 @@ namespace IronRuby.Builtins {
                 case 'g':
                 case 'G':
                     body = FormatGeneral(magnitude, precision, upperCase, _opts.AltForm);
-                    // Float#to_s is built on "%.15g" and wants the decorative ".0" that marks
-                    // the result as a float: 123.0.to_s is "123.0", not "123". "%g" itself
-                    // never adds it, so only the internal Float#to_s caller sets the flag.
-                    if (_TrailingZeroAfterWholeFloat && body.IndexOfAny(_FloatMarkers) < 0) {
-                        body += ".0";
-                    }
                     break;
 
                 default: // 'a', 'A'
@@ -1295,9 +1275,6 @@ namespace IronRuby.Builtins {
 
             AppendPadded(SignFor(isNegative), prefix, body, true);
         }
-
-        /// <summary>Characters whose presence already marks a rendered number as a float.</summary>
-        private static readonly char[] _FloatMarkers = new char[] { '.', 'e', 'E', 'n', 'N' };
 
         private bool IsRational(object value) {
             return value != null && !(value is int) && !(value is long) && !(value is BigInteger) && !(value is double) &&
@@ -1340,14 +1317,12 @@ namespace IronRuby.Builtins {
                 body = numerator.ToString(CultureInfo.InvariantCulture);
                 if (precision > 0) {
                     body += "." + new string('0', precision);
-                } else if (_opts.AltForm) {
-                    body += ".";
                 }
             } else {
                 BigInteger scaled = (numerator * BigInteger.Pow(10, precision) + denominator / 2) / denominator;
                 string digits = scaled.ToString(CultureInfo.InvariantCulture);
                 if (precision <= 0) {
-                    body = digits + (_opts.AltForm ? "." : "");
+                    body = digits;
                 } else {
                     if (digits.Length <= precision) {
                         digits = digits.PadLeft(precision + 1, '0');
@@ -1377,8 +1352,6 @@ namespace IronRuby.Builtins {
             string body = BigInteger.Abs(value).ToString(CultureInfo.InvariantCulture);
             if (precision > 0) {
                 body += "." + new string('0', precision);
-            } else if (_opts.AltForm || _TrailingZeroAfterWholeFloat) {
-                body += _TrailingZeroAfterWholeFloat ? ".0" : ".";
             }
 
             AppendPadded(SignFor(value.Sign < 0), "", body, true);
@@ -1520,22 +1493,13 @@ namespace IronRuby.Builtins {
         }
 
         private void AppendInspect() {
-            MutableString result = _context.Inspect(_opts.Value);
-            if (_context.IsObjectTainted(result)) {
-                _tainted = true;
-            }
-
-            AppendString(result);
+            AppendString(_context.Inspect(_opts.Value));
         }
 
         private void AppendString() {
             MutableString/*!*/ str = (_opts.Value == null)
                 ? MutableString.CreateEmpty()
                 : _siteStorage.ConvertToString(_opts.Value);
-
-            if (_context.IsObjectTainted(str)) {
-                _tainted = true;
-            }
 
             AppendString(str);
         }

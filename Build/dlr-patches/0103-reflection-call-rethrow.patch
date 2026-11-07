@@ -1,0 +1,53 @@
+--- a/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs
+@@ -5,6 +5,7 @@
+ using System;
+ using System.Collections.Generic;
+ using System.Reflection;
++using System.Runtime.ExceptionServices;
+ using System.Security;
+ 
+ using Microsoft.Scripting.Runtime;
+@@ -239,30 +240,38 @@
+                 try {
+                     return _target.Invoke(null, args);
+                 } catch (TargetInvocationException e) {
+-                    throw ExceptionHelpers.UpdateForRethrow(e.InnerException);
++                    throw Rethrow(e);
+                 }
+             }
+ 
+             try {
+                 return _target.Invoke(instance, args);
+             } catch (TargetInvocationException e) {
+-                throw ExceptionHelpers.UpdateForRethrow(e.InnerException);
++                throw Rethrow(e);
+             }
+         }
+ 
++        // The exception the method threw, thrown on from where it was thrown: `throw inner` would start its stack trace
++        // over here, without the frames of the method called and whatever it called - and a language that builds its
++        // backtraces from that trace (IronRuby) would lose them.
++        private static Exception Rethrow(TargetInvocationException e) {
++            ExceptionDispatchInfo.Capture(ExceptionHelpers.UpdateForRethrow(e.InnerException)).Throw();
++            return e;
++        }
++
+         private object InvokeWorker(params object[] args) {
+             if (_target.IsStatic) {
+                 try {
+                     return _target.Invoke(null, args);
+                 } catch (TargetInvocationException e) {
+-                    throw ExceptionHelpers.UpdateForRethrow(e.InnerException);
++                    throw Rethrow(e);
+                 }
+             }
+ 
+             try {
+                 return _target.Invoke(args[0], GetNonStaticArgs(args));
+             } catch (TargetInvocationException e) {
+-                throw ExceptionHelpers.UpdateForRethrow(e.InnerException);
++                throw Rethrow(e);
+             }
+         }
+ 

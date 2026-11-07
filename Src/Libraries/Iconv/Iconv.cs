@@ -20,7 +20,6 @@ using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using System.Runtime.InteropServices;
 
 namespace IronRuby.StandardLibrary.Iconv {
@@ -106,7 +105,6 @@ namespace IronRuby.StandardLibrary.Iconv {
             if (startIndex < 0) {
                 startIndex = source.Length + startIndex;
                 if (startIndex < 0) {
-                    //throw new IllegalSequence("start index is too large of a negative number");
                     startIndex = 0;
                     length = 0;
                 }
@@ -145,13 +143,8 @@ namespace IronRuby.StandardLibrary.Iconv {
             int bytesEncoded = _toEncoding.GetBytes(buffer, 0, 0, result, 0, true);
             Debug.Assert(bytesEncoded == result.Length);
             if (resetEncoder) {
-#if FEATURE_ENCODING
                 _toEncoding.Reset();
                 ResetByteOrderMark();
-#else
-                // TODO - Create a new encoder
-                throw new NotImplementedException();
-#endif
             } else {
                 _isClosed = true;
             }
@@ -253,7 +246,6 @@ namespace IronRuby.StandardLibrary.Iconv {
             [RubyConstructor]
             public static BrokenLibrary/*!*/ Factory(RubyClass/*!*/ self, object arg1, object arg2, object arg3) {
                 BrokenLibrary result = new BrokenLibrary(GetMessage(arg2, arg3));
-                // RubyExceptionData.InitializeException(result, message);
                 return result;
             }
         }
@@ -267,7 +259,6 @@ namespace IronRuby.StandardLibrary.Iconv {
             [RubyConstructor]
             public static InvalidEncoding/*!*/ Factory(RubyClass/*!*/ self, object arg1, object arg2, object arg3) {
                 InvalidEncoding result = new InvalidEncoding(GetMessage(arg2, arg3));
-                // RubyExceptionData.InitializeException(result, message);
                 return result;
             }
         }
@@ -281,7 +272,6 @@ namespace IronRuby.StandardLibrary.Iconv {
             [RubyConstructor]
             public static InvalidCharacter/*!*/ Factory(RubyClass/*!*/ self, object arg1, object arg2, object arg3) {
                 InvalidCharacter result = new InvalidCharacter(GetMessage(arg2, arg3));
-                // RubyExceptionData.InitializeException(result, message);
                 return result;
             }
         }
@@ -295,7 +285,6 @@ namespace IronRuby.StandardLibrary.Iconv {
             [RubyConstructor]
             public static IllegalSequence/*!*/ Factory(RubyClass/*!*/ self, object arg1, object arg2, object arg3) {
                 IllegalSequence result = new IllegalSequence(GetMessage(arg2, arg3));
-                // RubyExceptionData.InitializeException(result, message);
                 return result;
             }
         }
@@ -309,7 +298,6 @@ namespace IronRuby.StandardLibrary.Iconv {
             [RubyConstructor]
             public static OutOfRange/*!*/ Factory(RubyClass/*!*/ self, object arg1, object arg2, object arg3) {
                 OutOfRange result = new OutOfRange(GetMessage(arg2, arg3));
-                // RubyExceptionData.InitializeException(result, message);
                 return result;
             }
         }

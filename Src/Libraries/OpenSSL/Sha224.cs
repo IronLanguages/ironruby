@@ -3,7 +3,6 @@
  * SHA-224 and the incremental-digest shim OpenSSL::Digest runs on.
  *
  * ***************************************************************************/
-#if FEATURE_CRYPTOGRAPHY
 
 using System;
 using Crypto = System.Security.Cryptography;
@@ -156,4 +155,3 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         }
     }
 }
-#endif

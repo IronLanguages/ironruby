@@ -65,47 +65,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region induced_from
-
-        /// <summary>
-        /// Convert obj to an Integer, where obj is Fixnum
-        /// </summary>
-        /// <remarks>Just returns the Fixnum</remarks>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(RubyClass/*!*/ self, int obj) {
-            return obj;
-        }
-
-        /// <summary>
-        /// Convert obj to an Integer, where obj is Bignum
-        /// </summary>
-        /// <remarks>Just returns the Bignum</remarks>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ obj) {
-            return obj;
-        }
-
-        /// <summary>
-        /// Convert obj to an Integer, where obj is Float
-        /// </summary>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(UnaryOpStorage/*!*/ toiStorage, RubyClass/*!*/ self, double obj) {
-            var site = toiStorage.GetCallSite("to_i");
-            return site.Target(site, obj);
-        }
-
-        /// <summary>
-        /// Convert obj to an Integer, where obj is not Fixnum, Bignum or Float
-        /// </summary>
-        /// <remarks>Just throws an error</remarks>
-        /// <exception cref="InvalidOperationException">Assumption is object cannot be induced to Integer</exception>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static int InducedFrom(RubyClass/*!*/ self, object obj) {
-            throw RubyExceptions.CreateTypeError("failed to convert {0} into Integer", self.Context.GetClassDisplayName(obj));
-        }
-
-        #endregion
-
         #region to_i, to_int, floor, ceil, round, truncate
 
         /// <summary>
@@ -157,9 +116,13 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("round")]
         public static object Round(ConversionStorage<IntegerValue>/*!*/ integerCast, object/*!*/ self,
-            object ndigits, [Optional]object options) {
+            object ndigits, [Keywords, Optional]object options) {
 
             var opts = options as IDictionary<object, object>;
+            // round(ndigits, half: mode): the options only ever come as keywords
+            if (options != Missing.Value && opts == null) {
+                throw RubyOps.MakeWrongNumberOfArgumentsErrorN(2, "0..1");
+            }
             if (opts == null && options == Missing.Value) {
                 // round(half: :up) - the only argument is the options hash
                 opts = ndigits as IDictionary<object, object>;
@@ -583,6 +546,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("step")]
         [MethodImpl(MethodImplOptions.NoInlining)]
+        [ReceivesKeywords]
         public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
             BlockParam block, object/*!*/ self, params object[]/*!*/ args) {
             return StepSlow(slow, block, self, args);

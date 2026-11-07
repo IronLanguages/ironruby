@@ -12,11 +12,7 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Diagnostics;
 using Microsoft.Scripting;
@@ -62,10 +58,6 @@ namespace IronRuby.Compiler.Ast {
             _value = value;
             _encoding = encoding;
             _mutability = mutability;
-        }
-
-        public StringLiteralMutability Mutability {
-            get { return _mutability; }
         }
 
         public object/*!*/ Value {

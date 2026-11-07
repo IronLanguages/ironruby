@@ -21,7 +21,6 @@ using IronRuby.Builtins;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
 using Microsoft.Scripting.Actions.Calls;
 
 namespace IronRuby.Tests {

@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Linq;
@@ -41,7 +37,6 @@ using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Builtins {
     using Ast = Expression;
-    using Utils = IronRuby.Runtime.Utils;
 	using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     public sealed partial class RubyClass : RubyModule, IDuplicable {
@@ -370,10 +365,11 @@ namespace IronRuby.Builtins {
             }
 
             if (_underlyingSystemType == null) {
-                Interlocked.Exchange(ref _underlyingSystemType, 
+                Type baseType = _superClass != null ? _superClass.GetUnderlyingSystemType() : typeof(BasicObject);
+                Interlocked.Exchange(ref _underlyingSystemType,
                     RubyTypeDispenser.GetOrCreateType(
-                        _superClass != null ? _superClass.GetUnderlyingSystemType() : typeof(BasicObject), 
-                        GetImplementedInterfaces(),
+                        baseType,
+                        GetImplementedInterfaces(baseType),
                         _superClass != null && (_superClass.Restrictions & ModuleRestrictions.NoOverrides) != 0
                     )
                 );
@@ -411,7 +407,7 @@ namespace IronRuby.Builtins {
             _isSingletonClass = isSingletonClass;
             _isRubyClass = isRubyClass;
             _singletonClassOf = singletonClassOf;
-            _factories = factories ?? Utils.EmptyDelegates;
+            _factories = factories ?? Array.Empty<Delegate>();
 
             if (superClass != null) {
                 _level = superClass.Level + 1;
@@ -800,12 +796,30 @@ namespace IronRuby.Builtins {
                 // singleton members are copied here, not in InitializeCopy:
                 result.ImmediateClass.InitializeMembersFrom(ImmediateClass);
 
-                // copy instance variables and taint flag:
+                // copy instance variables:
                 Context.CopyInstanceData(this, result, false);
             }
             
             // members initialized in InitializeClassFrom (invoked by "initialize_copy")
             return result;
+        }
+
+        /// <summary>
+        /// MRI's rb_check_inheritable: what `class X &lt; S` and Class.new(S) accept as S.
+        /// </summary>
+        internal static RubyClass/*!*/ CheckInheritable(RubyContext/*!*/ context, object superClassObject) {
+            RubyClass superClass = superClassObject as RubyClass;
+            if (superClass == null) {
+                throw RubyExceptions.CreateTypeError("superclass must be an instance of Class (given an instance of {0})",
+                    context.GetClassDisplayName(superClassObject));
+            }
+            if (superClass.IsSingletonClass) {
+                throw RubyExceptions.CreateTypeError("can't make subclass of singleton class");
+            }
+            if (superClass == context.ClassClass) {
+                throw RubyExceptions.CreateTypeError("can't make subclass of Class");
+            }
+            return superClass;
         }
 
         // implements Class#new
@@ -817,17 +831,7 @@ namespace IronRuby.Builtins {
             // The argument is checked here rather than by the binder so that what it is wrong
             // about can be said the way MRI says it - and so that nil, which is a perfectly good
             // conversion to "no class", is refused rather than taken as Object.
-            RubyClass superClass = null;
-            if (superClassObject != Missing.Value) {
-                superClass = superClassObject as RubyClass;
-                if (superClass == null) {
-                    throw RubyExceptions.CreateTypeError("superclass must be an instance of Class (given an instance of {0})",
-                        context.GetClassDisplayName(superClassObject));
-                }
-                if (superClass.IsSingletonClass) {
-                    throw RubyExceptions.CreateTypeError("can't make subclass of singleton class");
-                }
-            }
+            RubyClass superClass = (superClassObject != Missing.Value) ? CheckInheritable(context, superClassObject) : null;
 
             RubyModule owner = scope.GetInnerMostModuleForConstantLookup();
             
@@ -920,7 +924,7 @@ namespace IronRuby.Builtins {
         /// Reflection is not efficient at caching look-ups and we do multiple of them (due to mangling) each time a method is being resolved.
         /// { (declaring-type, method-name, isStatic) -> (type-extension-version) }
         /// </summary>
-        private static Dictionary<Key<Type, string, bool>, int> _clrFailedMemberLookupCache = new Dictionary<Key<Type, string, bool>, int>();
+        private static Dictionary<(Type, string, bool), int> _clrFailedMemberLookupCache = new Dictionary<(Type, string, bool), int>();
 
         /// <summary>
         /// GetRuntimeMethods includes
@@ -938,7 +942,7 @@ namespace IronRuby.Builtins {
         private static bool IsFailureCached(Type/*!*/ type, string/*!*/ methodName, bool isStatic, int extensionVersion) {
             // check for cached lookup failure (if the cache is available):
             bool result = false;
-            var key = Key.Create(type, methodName, isStatic);
+            var key = (type, methodName, isStatic);
 
             var cache = Interlocked.Exchange(ref _clrFailedMemberLookupCache, null);
             if (cache != null) {
@@ -968,7 +972,7 @@ namespace IronRuby.Builtins {
             // store failure to the cache if the cache is not owned by another thread:
             var cache = Interlocked.Exchange(ref _clrFailedMemberLookupCache, null);
             if (cache != null) {
-                cache[Key.Create(type, methodName, isStatic)] = extensionVersion;
+                cache[(type, methodName, isStatic)] = extensionVersion;
                 Interlocked.Exchange(ref _clrFailedMemberLookupCache, cache);
             }
         }
@@ -1282,7 +1286,9 @@ namespace IronRuby.Builtins {
                     // Skip classes that have no tracker, e.g. Fixnum(tracker) <: Integer(null) <: Numeric(null) <: Object(tracker).
                     // Skip CLR modules, their methods are not callable => do not include them into a method group.
                     // Skip all classes once hidden sentinel is encountered (no CLR overloads are visible since then).
-                    if (!skipHidden && module.TypeTracker != null && module.IsClass) {
+                    // Skip classes whose CLR type is not a CLR base of the type: System::Int16 <: Integer(Int32) must not merge
+                    // Int32.Parse/TryParse into Int16's overloads (that made Int16.TryParse("1") ambiguous).
+                    if (!skipHidden && module.TypeTracker != null && module.IsClass && module.TypeTracker.Type.IsAssignableFrom(type)) {
                         ancestors.Add((RubyClass)module);
                     }
                 }
@@ -1292,14 +1298,27 @@ namespace IronRuby.Builtins {
             });
 
             // (method clr name, parameter types) => (overload, owner)
-            Dictionary<Key<string, ValueArray<Type>>, ClrOverloadInfo> allMethods = null;
+            Dictionary<(string, ValueArray<Type>), ClrOverloadInfo> allMethods = null;
 
             if (inheritedRubyMember != null) {
                 // case [2.2.2]: add CLR methods from the Ruby member:
                 var inheritedGroup = inheritedRubyMember as RubyOverloadGroupInfo;
 
                 if (inheritedGroup != null) {
-                    AddMethodsOverwriteExisting(ref allMethods, inheritedGroup.MethodBases, inheritedGroup.OverloadOwners, specialNameOnly);
+                    // the same rule as for the ancestors above: only overloads that a CLR base of the type declares
+                    var owners = inheritedGroup.OverloadOwners;
+                    var methodBases = inheritedGroup.MethodBases;
+                    var inheritedOverloads = new List<OverloadInfo>(methodBases.Length);
+                    var inheritedOwners = new List<RubyOverloadGroupInfo>(methodBases.Length);
+                    for (int i = 0; i < methodBases.Length; i++) {
+                        var owner = (owners != null ? owners[i] : null) ?? inheritedGroup;
+                        var ownerTracker = owner.DeclaringModule.TypeTracker;
+                        if (ownerTracker == null || ownerTracker.Type.IsAssignableFrom(type)) {
+                            inheritedOverloads.Add(methodBases[i]);
+                            inheritedOwners.Add(owners != null ? owners[i] : null);
+                        }
+                    }
+                    AddMethodsOverwriteExisting(ref allMethods, inheritedOverloads, inheritedOwners.ToArray(), specialNameOnly);
                 } else if (inheritedRubyMember.IsRemovable) {
                     // The groups created below won't contain overloads defined above (if there are any).
                     // If this method is removed we need to invalidate them.
@@ -1418,16 +1437,16 @@ namespace IronRuby.Builtins {
         }
 
         // Returns the number of methods newly added to the dictionary.
-        private bool AddMethodsOverwriteExisting(ref Dictionary<Key<string, ValueArray<Type>>, ClrOverloadInfo> methods,
+        private bool AddMethodsOverwriteExisting(ref Dictionary<(string, ValueArray<Type>), ClrOverloadInfo> methods,
             IEnumerable<OverloadInfo/*!*/>/*!*/ newOverloads, RubyOverloadGroupInfo/*!*/[] overloadOwners, bool specialNameOnly) {
 
             bool anyChange = false;
             int i = 0;
             foreach (var method in newOverloads) {
                 if (IsVisible(method.Attributes, method.DeclaringType, specialNameOnly)) {
-                    var paramTypes = Key.Create(method.Name, new ValueArray<Type>(ReflectionUtils.GetParameterTypes(method.Parameters)));
+                    var paramTypes = (method.Name, new ValueArray<Type>(ReflectionUtils.GetParameterTypes(method.Parameters)));
                     if (methods == null) {
-                        methods = new Dictionary<Key<string, ValueArray<Type>>, ClrOverloadInfo>();
+                        methods = new Dictionary<(string, ValueArray<Type>), ClrOverloadInfo>();
                     }
 
                     methods[paramTypes] = new ClrOverloadInfo {
@@ -1527,24 +1546,6 @@ namespace IronRuby.Builtins {
                 new RubyOverloadGroupInfo(allMethods, this, null, _isSingletonClass);
         }
 
-        // TODO: Indexers can be overloaded:
-        //private bool TryGetClrProperty(Type/*!*/ type, BindingFlags bindingFlags, string/*!*/ name, bool isWrite, out RubyMemberInfo method) {
-        //    Assert.NotNull(type, name);
-
-        //    PropertyInfo propertyInfo = type.GetProperty(name, bindingFlags);
-        //    if (propertyInfo != null) {
-        //        MethodInfo accessor = isWrite ? propertyInfo.GetSetMethod(false) : propertyInfo.GetGetMethod(false);
-        //        if (accessor != null) {
-        //            // TODO: define RubyPropertyInfo class
-        //            method = new RubyMethodGroupInfo(new MethodBase[] { accessor }, this, _isSingletonClass);
-        //            return true;
-        //        }
-        //    }
-
-        //    method = null;
-        //    return false;
-        //}
-
         private bool TryGetClrProperty(Type/*!*/ type, BindingFlags bindingFlags, bool inherited, bool isWrite, 
             string/*!*/ name, string/*!*/ clrName, string altClrName, out RubyMemberInfo method) {
 
@@ -1633,6 +1634,19 @@ namespace IronRuby.Builtins {
         #region Dynamic operations
 
         /// <summary>
+        /// A Ruby subclass of a class whose CLR type is sealed (Integer, Symbol, Float) has no CLR type of its own
+        /// to allocate - nor, in MRI, an allocator. (Its type is made on first use, so this is where that fails.)
+        /// </summary>
+        private bool HasSealedClrBase() {
+            try {
+                GetUnderlyingSystemType();
+                return false;
+            } catch (NotSupportedException) {
+                return true;
+            }
+        }
+
+        /// <summary>
         /// Implements Class#allocate feature.
         /// </summary>  
         public void BuildObjectAllocation(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ methodName) {
@@ -1643,7 +1657,7 @@ namespace IronRuby.Builtins {
             if (!metaBuilder.Error) {
                 if (_isUninitializedAllocation) {
                     metaBuilder.SetError(Methods.MakeUninitializedClassInstantiatedError.OpCall());
-                } else if (!BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name))) {
+                } else if (HasSealedClrBase() || !BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name))) {
                     metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));
                 }
             }
@@ -1682,8 +1696,11 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
+            // A RubyObject - or an instance of the type generated for a class implementing CLR interfaces (one that mixes in
+            // Comparable or Enumerable is an IComparable or an IEnumerable, see GetImpliedClrInterface), allocated the same way.
             Type type = GetUnderlyingSystemType();
-            if (type != typeof(object) && type != typeof(RubyObject)) {
+            Func<RubyClass, object> allocator = null;
+            if (type != typeof(object) && type != typeof(RubyObject) && (allocator = RubyTypeDispenser.TryGetObjectAllocator(type)) == null) {
                 return null;
             }
 
@@ -1701,7 +1718,7 @@ namespace IronRuby.Builtins {
             // Object#initialize and BasicObject#initialize: no arguments - construct (a RubyObject constructor, the same allocation)
             if (initializer is RubyLibraryMethodInfo) {
                 return (count == 0 && (initializer.DeclaringModule.IsObjectClass || initializer.DeclaringModule.IsBasicObjectClass)) ?
-                    new ObjectConstruction(this, version, (Delegate)null, 0) : null;
+                    new ObjectConstruction(this, allocator, version, (Delegate)null, 0) : null;
             }
 
             // a Ruby initializer: allocate and call it (BuildOverriddenInitializerCall), unless it is empty
@@ -1719,7 +1736,7 @@ namespace IronRuby.Builtins {
             var parameters = method.Parameters;
             if (parameters.Unsplat != null || parameters.Optional.Length > 0) {
                 var call = RubyMethodCallPlan.TryCreate(method, count, Symbols.Initialize);
-                return (call != null) ? new ObjectConstruction(this, version, call, count) : null;
+                return (call != null) ? new ObjectConstruction(this, allocator, version, call, count) : null;
             }
 
             if (parameters.Mandatory.Length != count) {
@@ -1727,7 +1744,7 @@ namespace IronRuby.Builtins {
             }
 
             var body = method.GetDelegate();
-            return (body.GetType() == MemberDispatcher.GetRubyMethodDelegateType(count)) ? new ObjectConstruction(this, version, body, count) : null;
+            return (body.GetType() == MemberDispatcher.GetRubyMethodDelegateType(count)) ? new ObjectConstruction(this, allocator, version, body, count) : null;
         }
 
         public void BuildObjectConstructionNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ methodName) {

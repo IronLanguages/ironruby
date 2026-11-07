@@ -15,10 +15,10 @@
 
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Conversions;
 using System.Collections.Generic;
-using System.Reflection;
 
 namespace IronRuby.Builtins {
     [Flags]
@@ -342,20 +342,71 @@ namespace IronRuby.Builtins {
     /// no O_BINARY and Windows no O_NONBLOCK - and these two methods translate.
     /// </summary>
     public static class IOModeNative {
-        private static readonly bool Unix = System.IO.Path.DirectorySeparatorChar == '/';
+        private enum Os { Linux, LinuxArm, LinuxPowerPC, Darwin, FreeBsd, Windows }
 
-        // Linux bits/fcntl-linux.h on the left, the MSVCRT _O_* macros on the right.
+        private static readonly Os Platform = GetPlatform();
+
+        private static Os GetPlatform() {
+            if (OperatingSystem.IsWindows()) return Os.Windows;
+            if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsTvOS() || OperatingSystem.IsMacCatalyst()) return Os.Darwin;
+            if (OperatingSystem.IsFreeBSD()) return Os.FreeBsd;
+            switch (RuntimeInformation.OSArchitecture) {
+                case Architecture.Arm:
+                case Architecture.Arm64:
+                case Architecture.Armv6:
+                    return Os.LinuxArm;
+                case Architecture.Ppc64le:
+                    return Os.LinuxPowerPC;
+                default:
+                    return Os.Linux;
+            }
+        }
+
+        // linux: <bits/fcntl-linux.h> and asm-generic/fcntl.h (x86, s390x, riscv, loongarch);
+        // arm and powerpc move O_DIRECTORY, O_NOFOLLOW and O_DIRECT (see Linux below).
+        // darwin: <sys/fcntl.h>; freeBsd: <sys/fcntl.h>; windows: the MSVCRT _O_* macros.
+        // Fcntl picks its F_* commands by the same rule.
         // Zero means the platform has no such flag: Linux has no O_BINARY and no
-        // O_SHARE_DELETE, and MRI's File::BINARY and File::SHARE_DELETE are 0 there too.
-        public static readonly int Append = Unix ? 1024 : 0x0008;
-        public static readonly int NonBlocking = Unix ? 2048 : 0x0004;
-        public static readonly int NoControllingTerminal = Unix ? 256 : 0x0010;
-        public static readonly int Synchronized = Unix ? 1052672 : 0x0020;
-        public static readonly int ShareDelete = Unix ? 0 : 0x0040;
-        public static readonly int CreateIfNotExists = Unix ? 64 : 0x0100;
-        public static readonly int Truncate = Unix ? 512 : 0x0200;
-        public static readonly int ErrorIfExists = Unix ? 128 : 0x0400;
-        public static readonly int Binary = Unix ? 0 : 0x8000;
+        // O_SHARE_DELETE, and MRI's File::BINARY and File::SHARE_DELETE are 0 there too; the
+        // flags MRI only defines where the platform does (File::DIRECT, ...) go undefined.
+        public static int Pick(int linux, int darwin, int freeBsd, int windows) {
+            switch (Platform) {
+                case Os.Darwin: return darwin;
+                case Os.FreeBsd: return freeBsd;
+                case Os.Windows: return windows;
+                default: return linux;
+            }
+        }
+
+        private static int Linux(int generic, int arm, int powerPC) {
+            switch (Platform) {
+                case Os.LinuxArm: return arm;
+                case Os.LinuxPowerPC: return powerPC;
+                case Os.Linux: return generic;
+                default: return 0;
+            }
+        }
+
+        public static readonly int Append = Pick(0x400, 0x8, 0x8, 0x0008);
+        public static readonly int NonBlocking = Pick(0x800, 0x4, 0x4, 0x0004);
+        public static readonly int NoControllingTerminal = Pick(0x100, 0x20000, 0x8000, 0x0010);
+        public static readonly int Synchronized = Pick(0x101000, 0x80, 0x80, 0x0020);
+        public static readonly int ShareDelete = Pick(0, 0, 0, 0x0040);
+        public static readonly int CreateIfNotExists = Pick(0x40, 0x200, 0x200, 0x0100);
+        public static readonly int Truncate = Pick(0x200, 0x400, 0x400, 0x0200);
+        public static readonly int ErrorIfExists = Pick(0x80, 0x800, 0x800, 0x0400);
+        public static readonly int Binary = Pick(0, 0, 0, 0x8000);
+
+        // Flags IOMode has no representation for: File::Constants and the open(2)/fcntl(2) calls
+        // IronRuby makes itself. Zero where the platform has no such flag.
+        public static readonly int Directory = Pick(Linux(0x10000, 0x4000, 0x4000), 0x100000, 0x20000, 0);
+        public static readonly int NoFollow = Pick(Linux(0x20000, 0x8000, 0x8000), 0x100, 0x100, 0);
+        public static readonly int Direct = Pick(Linux(0x4000, 0x10000, 0x20000), 0, 0x10000, 0);
+        public static readonly int CloseOnExec = Pick(0x80000, 0x1000000, 0x100000, 0);
+        public static readonly int DataSync = Pick(0x1000, 0x400000, 0x1000000, 0);
+        public static readonly int ReadSync = Pick(0x101000, 0, 0, 0);
+        public static readonly int NoAccessTime = Pick(0x40000, 0, 0, 0);
+        public static readonly int TemporaryFile = Pick(0x400000 | Directory, 0, 0, 0);
 
         // O_ACCMODE, and the same three values on both platforms.
         public static readonly int AccessMask = (int)IOMode.ReadWriteMask;
@@ -380,21 +431,6 @@ namespace IronRuby.Builtins {
             if (Has(flags, Truncate)) result |= IOMode.Truncate;
             if (Has(flags, ErrorIfExists)) result |= IOMode.ErrorIfExists;
             if (Has(flags, Binary)) result |= IOMode.PreserveEndOfLines;
-            return result;
-        }
-
-        /// <summary>The inverse: the platform flags an IOMode stands for.</summary>
-        public static int ToNativeFlags(IOMode mode) {
-            int result = (int)mode & AccessMask;
-            if ((mode & IOMode.WriteAppends) != 0) result |= Append;
-            if ((mode & IOMode.NonBlocking) != 0) result |= NonBlocking;
-            if ((mode & IOMode.NoControllingTerminal) != 0) result |= NoControllingTerminal;
-            if ((mode & IOMode.Synchronized) != 0) result |= Synchronized;
-            if ((mode & IOMode.ShareDelete) != 0) result |= ShareDelete;
-            if ((mode & IOMode.CreateIfNotExists) != 0) result |= CreateIfNotExists;
-            if ((mode & IOMode.Truncate) != 0) result |= Truncate;
-            if ((mode & IOMode.ErrorIfExists) != 0) result |= ErrorIfExists;
-            if ((mode & IOMode.PreserveEndOfLines) != 0) result |= Binary;
             return result;
         }
     }

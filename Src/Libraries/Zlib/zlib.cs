@@ -20,7 +20,6 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.Zlib {
@@ -259,11 +258,11 @@ namespace IronRuby.StandardLibrary.Zlib {
         public const int FINISH = 4;
 
         [RubyConstant("ZLIB_VERSION")]
-        public static string ZLIB_VERSION = LibZ.Version;
+        public static readonly MutableString ZLIB_VERSION = MutableString.CreateAscii(LibZ.Version).Freeze();
 
         // The version of the `zlib` gem whose API this implements, not libz's own version.
         [RubyConstant("VERSION")]
-        public static string VERSION = "3.2.3";
+        public static readonly MutableString VERSION = MutableString.CreateAscii("3.2.3").Freeze();
 
         [RubyConstant("MAXBITS")]
         public const int MAXBITS = 15;
@@ -472,7 +471,7 @@ namespace IronRuby.StandardLibrary.Zlib {
 
         [RubyMethod("gzip", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ Gzip(ConversionStorage<int>/*!*/ fixnumCast, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ str, [Optional]object options) {
+            [DefaultProtocol, NotNull]MutableString/*!*/ str, [Keywords, Optional]object options) {
 
             RubyContext context = fixnumCast.Context;
 
@@ -496,13 +495,7 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
         }
 
-        [RubyMethod("gunzip", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ Gunzip(RubyModule/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
-            using (var z = new Inflate(MAX_WBITS + 16)) {
-                z.Run(str.ToByteArray(), LibZ.Z_FINISH, null);
-                return z.TakeBuffer();
-            }
-        }
+        // Zlib.gunzip is in Src/StdLib/ironruby/zlib.rb, next to the GzipFile errors it raises.
 
         #endregion
 
@@ -640,10 +633,6 @@ namespace IronRuby.StandardLibrary.Zlib {
             internal bool IsFinished {
                 get { return _finished; }
                 set { _finished = value; }
-            }
-
-            internal bool IsEnded {
-                get { return _ended; }
             }
 
             internal List<byte>/*!*/ Output {
@@ -1208,6 +1197,12 @@ namespace IronRuby.StandardLibrary.Zlib {
                 using (var z = new Inflate(MAX_WBITS)) {
                     bool broke;
                     object result = z.Run(str.ToByteArray(), LibZ.Z_SYNC_FLUSH, block, out broke);
+                    if (broke) {
+                        return result;
+                    }
+                    // MRI finishes the stream "for checking errors": input that stops short of
+                    // the end of the stream is a BufError, not the part that did inflate.
+                    result = z.Run(new byte[0], LibZ.Z_FINISH, block, out broke);
                     if (broke) {
                         return result;
                     }

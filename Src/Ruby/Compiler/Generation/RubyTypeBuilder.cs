@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_REFEMIT
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -21,7 +20,6 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.Serialization;
 using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -309,53 +307,25 @@ namespace IronRuby.Compiler.Generation {
             il.EmitCall(Methods.FreezeObject);
             il.Emit(OpCodes.Ret);
 
-            // bool IRubyObject.IsTainted { 
-            //   get { return RubyOps.IsObjectTainted(_instanceData); }
-            //   set { return RubyOps.SetObjectTaint(ref _instanceData, value); }
-            // }
-            il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObjectState_get_IsTainted);
-            il.EmitLoadArg(0);
-            il.EmitFieldGet(InstanceDataField);
-            il.EmitCall(Methods.IsObjectTainted);
-            il.Emit(OpCodes.Ret);
-
-            il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObjectState_set_IsTainted);
-            il.EmitLoadArg(0);
-            il.EmitFieldAddress(InstanceDataField);
-            il.EmitLoadArg(1);
-            il.EmitCall(Methods.SetObjectTaint);
-            il.Emit(OpCodes.Ret);
-
-            // bool IRubyObject.IsUntrusted { 
-            //   get { return RubyOps.IsObjectUntrusted(_instanceData); }
-            //   set { return RubyOps.SetObjectTaint(ref _instanceData, value); }
-            // }
-            il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObjectState_get_IsUntrusted);
-            il.EmitLoadArg(0);
-            il.EmitFieldGet(InstanceDataField);
-            il.EmitCall(Methods.IsObjectUntrusted);
-            il.Emit(OpCodes.Ret);
-
-            il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObjectState_set_IsUntrusted);
-            il.EmitLoadArg(0);
-            il.EmitFieldAddress(InstanceDataField);
-            il.EmitLoadArg(1);
-            il.EmitCall(Methods.SetObjectTrustiness);
-            il.Emit(OpCodes.Ret);
-
             // TODO: can we merge this with #base#GetHashCode/Equals/ToString?
+
+            // The base calls below have to be non-virtual (OpCodes.Call, as C#'s base.M() is):
+            // ILGen.EmitCall picks callvirt for a virtual method, which dispatched to this type's
+            // own override - the Ruby #hash/#==/#to_s - so Kernel#equal? on an instance of such a
+            // class ran its #==, and a #== that calls equal? (Set's does) recursed until the stack
+            // overflowed.
 
             // int IRubyObject.BaseGetHashCode() { return base.GetHashCode(); }
             il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObject_BaseGetHashCode);
             il.EmitLoadArg(0);
-            il.EmitCall(_tb.BaseType.GetMethod("GetHashCode", Type.EmptyTypes));
+            il.Emit(OpCodes.Call, _tb.BaseType.GetMethod("GetHashCode", Type.EmptyTypes));
             il.Emit(OpCodes.Ret);
 
             // int IRubyObject.BaseEquals(object other) { return base.Equals(other); }
             il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObject_BaseEquals);
             il.EmitLoadArg(0);
             il.EmitLoadArg(1);
-            il.EmitCall(_tb.BaseType.GetMethod("Equals", new[] { typeof(object) }));
+            il.Emit(OpCodes.Call, _tb.BaseType.GetMethod("Equals", new[] { typeof(object) }));
             il.Emit(OpCodes.Ret);
 
             // string IRubyObject.BaseToString() { return base.ToString(); }
@@ -365,7 +335,7 @@ namespace IronRuby.Compiler.Generation {
             if (toString.DeclaringType == typeof(object)) {
                 il.EmitCall(Methods.ObjectToString);
             } else {
-                il.EmitCall(toString);
+                il.Emit(OpCodes.Call, toString);
             }
             il.Emit(OpCodes.Ret);
         }
@@ -484,8 +454,6 @@ namespace IronRuby.Compiler.Generation {
 
         private static ILGen/*!*/ DefinePrivateInterfaceMethodOverride(TypeBuilder/*!*/ tb, MethodInfo/*!*/ decl, out MethodBuilder/*!*/ impl) {
             string name = decl.DeclaringType.Name + "." + decl.Name;
-            //MethodAttributes attributes = decl.Attributes & ~(MethodAttributes.Abstract | MethodAttributes.ReservedMask | MethodAttributes.MemberAccessMask)
-            //    | MethodAttributes.Final | MethodAttributes.HideBySig | MethodAttributes.NewSlot | MethodAttributes.Private;
             MethodAttributes attributes = decl.Attributes & ~(MethodAttributes.Abstract | MethodAttributes.Public);
             attributes |= MethodAttributes.NewSlot | MethodAttributes.Final;
             impl = tb.DefineMethod(
@@ -502,4 +470,3 @@ namespace IronRuby.Compiler.Generation {
         #endregion
     }
 }
-#endif

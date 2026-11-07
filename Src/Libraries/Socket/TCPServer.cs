@@ -13,25 +13,18 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 using System.Runtime.InteropServices;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("TCPServer", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("TCPServer")]
     public class TCPServer : TCPSocket {
-        private object _mutex = new object();
-        private IAsyncResult _acceptResult;
-
         /// <summary>
         /// Creates an uninitialized socket.
         /// </summary>
@@ -43,31 +36,8 @@ namespace IronRuby.StandardLibrary.Sockets {
             : base(context, socket) {
         }
 
-        public override WaitHandle/*!*/ CreateReadWaitHandle() {
-            return GetAcceptResult().AsyncWaitHandle;
-        }
-
-        private IAsyncResult/*!*/ GetAcceptResult() {
-            if (_acceptResult == null) {
-                lock (_mutex) {
-                    if (_acceptResult == null) {
-                        _acceptResult = Socket.BeginAccept(null, null);
-                    }
-                }
-            }
-            return _acceptResult;
-        }
-
         private Socket/*!*/ Accept() {
-            // acquire the result and replace it by null, so that no other thread can acquire it:
-            IAsyncResult result = Interlocked.Exchange(ref _acceptResult, null);
-
-            if (result == null) {
-                return RubyBasicSocket.BlockingAccept(Socket, "TCPServer#accept", () => Socket.Accept());
-            }
-
-            // wait until accept finishes:
-            return Socket.EndAccept(result);
+            return RubyBasicSocket.BlockingAccept(Socket, "TCPServer#accept", () => Socket.Accept());
         }
 
         [RubyConstructor]
@@ -108,7 +78,9 @@ namespace IronRuby.StandardLibrary.Sockets {
                 Assert.NotNull(listeningInterface);
             }
 
+            int portNumber = ConvertToPortNum(stringCast, fixnumCast, port);
             Socket socket = NewSocket(listeningInterface.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            string call = "bind(2)";
             try {
                 // CRuby's TCPServer sets SO_REUSEADDR before bind(2), but that cannot be done
                 // through .NET: SocketOptionName.ReuseAddress is translated to SO_REUSEPORT on
@@ -120,11 +92,12 @@ namespace IronRuby.StandardLibrary.Sockets {
                 if (PosixMessages.HasSocketOptions) {
                     PosixMessages.SetSocketOption((int)socket.Handle, 1, 2, BitConverter.GetBytes(1));
                 }
-                socket.Bind(new IPEndPoint(listeningInterface, ConvertToPortNum(stringCast, fixnumCast, port)));
+                socket.Bind(new IPEndPoint(listeningInterface, portNumber));
+                call = "listen(2)";
                 socket.Listen(128);
             } catch (SocketException e) {
                 socket.Close();
-                throw SocketErrorOps.ToRubyException(e);
+                throw SocketErrorOps.ToRubyException(e, DescribeEndPoint(call, hostname, portNumber));
             }
             return socket;
         }
@@ -157,4 +130,3 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
     }
 }
-#endif
