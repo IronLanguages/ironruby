@@ -396,6 +396,23 @@ TypeError: 1 is not a symbol nor a string
 ");
         }
 
+        /// <summary>
+        /// Ractor.store_if_absent's block runs under a lock of its own, not the one Ractor[] and
+        /// Ractor[]= take, so a block that waits on another thread using them does not deadlock.
+        /// </summary>
+        public void Ractor_Locals2() {
+            TestOutput(RactorPrologue + @"
+p Ractor.store_if_absent(:rl2_x) { Thread.new { Ractor[:rl2_y] = 1; Ractor[:rl2_y] + 1 }.value }
+p Ractor[:rl2_x], Ractor[:rl2_y]
+p Ractor.new { Ractor.store_if_absent(:a) { Thread.new { Ractor[:b] = 3 }.value } + Ractor[:b] }.value
+", @"
+2
+2
+1
+6
+");
+        }
+
         // Each runs its Ractor's block and prints its value, or the error that ended the Ractor.
         private const string RactorIsolationPrologue = RactorPrologue + @"
 Thread.report_on_exception = false

@@ -970,6 +970,7 @@ namespace IronRuby.Tests {
                 Ractor_Errors1,
                 Ractor_Shareable1,
                 Ractor_Locals1,
+                Ractor_Locals2,
                 Ractor_GlobalVariables1,
                 Ractor_ClassState1,
                 Ractor_IsolatedProcs1,

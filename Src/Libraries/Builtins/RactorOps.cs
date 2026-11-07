@@ -93,6 +93,10 @@ namespace IronRuby.Builtins {
         private readonly List<RactorPort>/*!*/ _openPorts = new List<RactorPort>();
         private readonly List<RactorPort>/*!*/ _monitors = new List<RactorPort>();
         private readonly Dictionary<RubySymbol, object>/*!*/ _locals = new Dictionary<RubySymbol, object>();
+
+        // Ractor.store_if_absent holds this while its block runs, CRuby's local_storage_store_lock.
+        // Not _locals: the block may run code - another thread's Ractor[]= - that needs that one.
+        private readonly object/*!*/ _storeLock = new object();
         private int _lastPortId;
 
         // the globals the Ractor has its own of; null for the main Ractor
@@ -699,10 +703,12 @@ namespace IronRuby.Builtins {
         public static object StoreIfAbsent(BlockParam block, RubyClass/*!*/ self, object key) {
             var ractor = GetCurrent(self.Context);
             var symbol = ToLocalKey(self.Context, key);
-            lock (ractor._locals) {
+            lock (ractor._storeLock) {
                 object value;
-                if (ractor._locals.TryGetValue(symbol, out value)) {
-                    return value;
+                lock (ractor._locals) {
+                    if (ractor._locals.TryGetValue(symbol, out value)) {
+                        return value;
+                    }
                 }
                 if (block == null) {
                     throw RubyExceptions.NoBlockGiven();
@@ -710,8 +716,7 @@ namespace IronRuby.Builtins {
                 if (block.Yield(symbol, out value)) {
                     return value;
                 }
-                ractor._locals[symbol] = value;
-                return value;
+                return ractor.SetLocal(symbol, value);
             }
         }
 
