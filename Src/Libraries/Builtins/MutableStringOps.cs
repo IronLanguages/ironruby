@@ -1740,9 +1740,11 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// <paramref name="defaultSeparator"/> is set when the separator is $/ rather than an
-        /// argument: MRI's chompped_length takes "\n" for a newline in the receiver's own encoding
-        /// then, and otherwise only when it is a whole character of that encoding - "\n" is not
-        /// one in UTF-16 - and anything else has to be compatible with the receiver.
+        /// argument. MRI's chompped_length chomps a trailing newline (and a CR before it, or a
+        /// lone CR) in the receiver's own encoding when the separator is $/, or when it is one
+        /// "\n" judged in the separator's OWN encoding: a single unit of that encoding, so a UTF-8
+        /// "\n" chomps a UTF-16 receiver and a UTF-16 "\n" a UTF-32 one, without the two being
+        /// compatible. Any other separator has to be compatible with the receiver.
         /// </summary>
         private static MutableString InternalChomp(MutableString/*!*/ self, MutableString separator, bool defaultSeparator) {
             if (separator == null) {
@@ -1757,8 +1759,9 @@ namespace IronRuby.Builtins {
             // Remove single trailing CR/LFs
             MutableString result = self.CloneDerived();
             int length = result.GetCharCount();
-            bool newline = separator.StartsWith('\n') && separator.GetLength() == 1 &&
-                (defaultSeparator || self.Encoding.IsAsciiIdentity || separator.Encoding == self.Encoding);
+            bool newline = defaultSeparator && separator.StartsWith('\n') && separator.GetLength() == 1 ||
+                separator.GetByteCount() == separator.Encoding.MinBytesPerChar &&
+                separator.GetCharCount() == 1 && separator.GetChar(0) == '\n';
             if (!newline) {
                 self.RequireCompatibleEncoding(separator);
             }

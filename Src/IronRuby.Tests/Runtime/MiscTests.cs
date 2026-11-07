@@ -2554,6 +2554,33 @@ p u.upto(u).to_a.size
 ");
         }
 
+        /// <summary>
+        /// MRI's chompped_length judges a separator in its own encoding: one "\n" that is a whole
+        /// character of it chomps a newline (and a CR) of the receiver's encoding, compatible or
+        /// not. Any other separator has to be compatible with the receiver.
+        /// </summary>
+        public void Encoding_AsciiIncompatibleChomp1() {
+            TestOutput(@"
+require 'ruby4'
+u = ->(s) { s.encode(""UTF-16LE"") }
+p u[""abc\n""].chomp(""\n"").bytes, u[""abc\r\n""].chomp(""\n"").bytes, u[""abc\r""].chomp(""\n"").bytes, u[""abc""].chomp(""\n"").bytes
+s = u[""a\n""]; p s.chomp!(""\n"").bytes, s.chomp!(""\n"")
+p ""a\n"".encode(""UTF-32LE"").chomp(u[""\n""]).bytes, ""a\n"".force_encoding(""UTF-16LE"").chomp(""\n"").bytes
+p((u[""a\n""].chomp(""\r\n"") rescue $!), (u[""a\n""].each_line(""\n"") { } rescue $!))
+", @"
+[97, 0, 98, 0, 99, 0]
+[97, 0, 98, 0, 99, 0]
+[97, 0, 98, 0, 99, 0]
+[97, 0, 98, 0, 99, 0]
+[97, 0]
+nil
+[97, 0, 0, 0]
+[97, 10]
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+");
+        }
+
 
         public void Io_Messages1() {
             TestOutput(@"
