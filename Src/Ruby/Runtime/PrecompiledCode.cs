@@ -779,6 +779,18 @@ namespace IronRuby.Runtime.Precompiled {
             _depth = depth;
         }
 
+        /// <summary>
+        /// A rescue clause has taken the exception that left the frames above the current one: their lines were for its
+        /// backtrace, which has been captured, and the frames are gone for good. An exception raised from here on did
+        /// not unwind them, and must not find a stale line under the name of a live frame (a rescued recursive call).
+        /// </summary>
+        internal static void ForgetLeft() {
+            var frames = _current;
+            if (frames != null) {
+                frames._top = frames._depth;
+            }
+        }
+
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private Entry[]/*!*/ Grow() {
             // filled before it is published: a reader sees the old array or the complete new one

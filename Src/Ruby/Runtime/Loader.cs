@@ -310,7 +310,7 @@ namespace IronRuby.Runtime {
 
             string assemblyName, typeName;
 
-            string strPath = path.ConvertToString();
+            string strPath = _context.DecodePath(path);
             if (TryParseAssemblyName(strPath, out typeName, out assemblyName)) {
 
                 if (AlreadyLoaded(strPath, flags, ArrayUtils.EmptyStrings)) {
@@ -777,7 +777,12 @@ namespace IronRuby.Runtime {
                     }
                 }
 
-                FileLoaded(MutableString.Create(file.Path, pathEncoding), flags);
+                // a non-ASCII path given in BINARY (or US-ASCII) - what the C locale's path layer hands out - was the file
+                // system's UTF-8 bytes (see RubyContext.DecodePath), and is recorded in the filesystem encoding, as MRI
+                // does, not one byte per character
+                FileLoaded((pathEncoding == RubyEncoding.Binary || pathEncoding == RubyEncoding.Ascii) && !file.Path.IsAscii() ?
+                    _context.EncodePath(file.Path) :
+                    MutableString.Create(file.Path, pathEncoding), flags);
                 succeeded = true;
             } finally {
                 EndAutoloads(autoloads, file.Path, succeeded);
@@ -1002,7 +1007,7 @@ namespace IronRuby.Runtime {
                     throw RubyExceptions.CreateImplicitConversionError("nil", "String");
                 }
 
-                result[i] = Protocols.CastToPath(toPath, loadPaths[i]).ConvertToString();
+                result[i] = _context.DecodePath(Protocols.CastToPath(toPath, loadPaths[i]));
             }
 
             return result;
@@ -1213,7 +1218,7 @@ namespace IronRuby.Runtime {
 
             List<RubyModule.AutoloadedConstant> result = null;
             foreach (var autoload in candidates) {
-                if (ResolveFeature(autoload.Path.ConvertToString()) == fullPath) {
+                if (ResolveFeature(_context.DecodePath(autoload.Path)) == fullPath) {
                     if (result == null) {
                         result = new List<RubyModule.AutoloadedConstant>();
                         _context.EnterAutoload();

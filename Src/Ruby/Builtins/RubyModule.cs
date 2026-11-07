@@ -300,7 +300,7 @@ namespace IronRuby.Builtins {
 
         // private constants of IronRuby's own Ruby code that MRI has no counterpart of, hidden with
         // Module#__hide_constant__ from const_defined?, const_get and the rest of constant reflection;
-        // null until one is (guarded by the class hierarchy lock, like _constants)
+        // null until one is. Replaced (under the class hierarchy lock) rather than changed: read without a lock.
         private HashSet<string> _hiddenConstants;
 
         // what Module#name hands out; see GetNameString. Cleared whenever the name changes.
@@ -1541,14 +1541,18 @@ namespace IronRuby.Builtins {
         public void HideConstant(string/*!*/ name) {
             SetConstantVisibility(name, true);
             using (Context.ClassHierarchyLocker()) {
-                (_hiddenConstants ??= new HashSet<string>()).Add(name);
+                var names = _hiddenConstants;
+                if (names == null || !names.Contains(name)) {
+                    Volatile.Write(ref _hiddenConstants, names != null ? new HashSet<string>(names) { name } : new HashSet<string> { name });
+                }
                 Context.NoteHiddenConstant(name);
             }
         }
 
         /// <summary>True if this module itself hid the constant (<see cref="HideConstant"/>).</summary>
         public bool IsHiddenConstant(string/*!*/ name) {
-            return _hiddenConstants != null && _hiddenConstants.Contains(name);
+            var names = Volatile.Read(ref _hiddenConstants);
+            return names != null && names.Contains(name);
         }
 
         /// <summary>

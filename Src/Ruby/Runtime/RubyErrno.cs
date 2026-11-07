@@ -21,80 +21,83 @@ namespace IronRuby.Runtime {
     /// <summary>
     /// The errno numbers and strerror(3) texts of MRI's Errno classes, for the platform IronRuby
     /// runs on. MRI takes both from the C library it was built against: Errno::ECONNREFUSED::Errno
-    /// is 111 on Linux, 61 on macOS and 10061 (WSAECONNREFUSED) on Windows, and its message is
-    /// "Connection refused" on the first two and the FormatMessage text on Windows. This is the one
+    /// is 111 on Linux, 61 on macOS and FreeBSD and 10061 (WSAECONNREFUSED) on Windows, and its message is
+    /// "Connection refused" on the Unixes and the FormatMessage text on Windows. This is the one
     /// place both come from: the CLR-backed Errno classes read it, and so does
     /// Src/StdLib/ironruby/ruby4.rb, through Errno.__ir_errno_table__, for all the others.
     /// </summary>
     public static class RubyErrno {
-        private enum Platform { Linux, Darwin, Windows }
+        private enum Platform { Linux, Darwin, Windows, FreeBSD }
 
         private static readonly Platform s_platform =
             RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? Platform.Windows :
-            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || RuntimeInformation.IsOSPlatform(OSPlatform.FreeBSD) ? Platform.Darwin :
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? Platform.Darwin :
+            RuntimeInformation.IsOSPlatform(OSPlatform.FreeBSD) ? Platform.FreeBSD :
             Platform.Linux;
 
         /// <summary>
         /// Every name MRI's Errno module has (defs/known_errors.def), sorted, with its number on Linux,
-        /// macOS and Windows - where MRI's win32.h redefines the socket errors as their WSA codes.
+        /// macOS, Windows - where MRI's win32.h redefines the socket errors as their WSA codes - and
+        /// FreeBSD (sys/errno.h; it shares macOS's BSD numbers up to 81 and has its own above them:
+        /// ECANCELED 85, EILSEQ 86, EDOOFUS 88, ECAPMODE 94).
         /// 0: the platform has no such error, and MRI binds the name to Errno::NOERROR. Where two
         /// names share a number, MRI makes the later one the earlier one's class (EWOULDBLOCK is
         /// EAGAIN on Linux and macOS, but a class of its own on Windows).
         /// </summary>
-        private static readonly (string Name, int Linux, int Darwin, int Windows)[] s_table = {
-            ("E2BIG", 7, 7, 7), ("EACCES", 13, 13, 13), ("EADDRINUSE", 98, 48, 10048),
-            ("EADDRNOTAVAIL", 99, 49, 10049), ("EADV", 68, 0, 0), ("EAFNOSUPPORT", 97, 47, 10047),
-            ("EAGAIN", 11, 35, 11), ("EALREADY", 114, 37, 10037), ("EAUTH", 0, 80, 0),
-            ("EBADARCH", 0, 86, 0), ("EBADE", 52, 0, 0), ("EBADEXEC", 0, 85, 0),
-            ("EBADF", 9, 9, 9), ("EBADFD", 77, 0, 0), ("EBADMACHO", 0, 88, 0),
-            ("EBADMSG", 74, 94, 104), ("EBADR", 53, 0, 0), ("EBADRPC", 0, 72, 0),
-            ("EBADRQC", 56, 0, 0), ("EBADSLT", 57, 0, 0), ("EBFONT", 59, 0, 0),
-            ("EBUSY", 16, 16, 16), ("ECANCELED", 125, 89, 105), ("ECAPMODE", 0, 0, 0),
-            ("ECHILD", 10, 10, 10), ("ECHRNG", 44, 0, 0), ("ECOMM", 70, 0, 0),
-            ("ECONNABORTED", 103, 53, 10053), ("ECONNREFUSED", 111, 61, 10061), ("ECONNRESET", 104, 54, 10054),
-            ("EDEADLK", 35, 11, 36), ("EDEADLOCK", 35, 0, 36), ("EDESTADDRREQ", 89, 39, 10039),
-            ("EDEVERR", 0, 83, 0), ("EDOM", 33, 33, 33), ("EDOOFUS", 0, 0, 0),
-            ("EDOTDOT", 73, 0, 0), ("EDQUOT", 122, 69, 10069), ("EEXIST", 17, 17, 17),
-            ("EFAULT", 14, 14, 14), ("EFBIG", 27, 27, 27), ("EFTYPE", 0, 79, 0),
-            ("EHOSTDOWN", 112, 64, 10064), ("EHOSTUNREACH", 113, 65, 10065), ("EHWPOISON", 133, 0, 0),
-            ("EIDRM", 43, 90, 111), ("EILSEQ", 84, 92, 42), ("EINPROGRESS", 115, 36, 10036),
-            ("EINTR", 4, 4, 4), ("EINVAL", 22, 22, 22), ("EIO", 5, 5, 5),
-            ("EIPSEC", 0, 0, 0), ("EISCONN", 106, 56, 10056), ("EISDIR", 21, 21, 21),
-            ("EISNAM", 120, 0, 0), ("EKEYEXPIRED", 127, 0, 0), ("EKEYREJECTED", 129, 0, 0),
-            ("EKEYREVOKED", 128, 0, 0), ("EL2HLT", 51, 0, 0), ("EL2NSYNC", 45, 0, 0),
-            ("EL3HLT", 46, 0, 0), ("EL3RST", 47, 0, 0), ("ELAST", 0, 106, 0),
-            ("ELIBACC", 79, 0, 0), ("ELIBBAD", 80, 0, 0), ("ELIBEXEC", 83, 0, 0),
-            ("ELIBMAX", 82, 0, 0), ("ELIBSCN", 81, 0, 0), ("ELNRNG", 48, 0, 0),
-            ("ELOOP", 40, 62, 10062), ("EMEDIUMTYPE", 124, 0, 0), ("EMFILE", 24, 24, 24),
-            ("EMLINK", 31, 31, 31), ("EMSGSIZE", 90, 40, 10040), ("EMULTIHOP", 72, 95, 0),
-            ("ENAMETOOLONG", 36, 63, 38), ("ENAVAIL", 119, 0, 0), ("ENEEDAUTH", 0, 81, 0),
-            ("ENETDOWN", 100, 50, 10050), ("ENETRESET", 102, 52, 10052), ("ENETUNREACH", 101, 51, 10051),
-            ("ENFILE", 23, 23, 23), ("ENOANO", 55, 0, 0), ("ENOATTR", 0, 93, 0),
-            ("ENOBUFS", 105, 55, 10055), ("ENOCSI", 50, 0, 0), ("ENODATA", 61, 96, 120),
-            ("ENODEV", 19, 19, 19), ("ENOENT", 2, 2, 2), ("ENOEXEC", 8, 8, 8),
-            ("ENOKEY", 126, 0, 0), ("ENOLCK", 37, 77, 39), ("ENOLINK", 67, 97, 121),
-            ("ENOMEDIUM", 123, 0, 0), ("ENOMEM", 12, 12, 12), ("ENOMSG", 42, 91, 122),
-            ("ENONET", 64, 0, 0), ("ENOPKG", 65, 0, 0), ("ENOPOLICY", 0, 103, 0),
-            ("ENOPROTOOPT", 92, 42, 10042), ("ENOSPC", 28, 28, 28), ("ENOSR", 63, 98, 124),
-            ("ENOSTR", 60, 99, 125), ("ENOSYS", 38, 78, 40), ("ENOTBLK", 15, 15, 0),
-            ("ENOTCAPABLE", 0, 0, 0), ("ENOTCONN", 107, 57, 10057), ("ENOTDIR", 20, 20, 20),
-            ("ENOTEMPTY", 39, 66, 41), ("ENOTNAM", 118, 0, 0), ("ENOTRECOVERABLE", 131, 104, 127),
-            ("ENOTSOCK", 88, 38, 10038), ("ENOTSUP", 95, 45, 129), ("ENOTTY", 25, 25, 25),
-            ("ENOTUNIQ", 76, 0, 0), ("ENXIO", 6, 6, 6), ("EOPNOTSUPP", 95, 102, 10045),
-            ("EOVERFLOW", 75, 84, 132), ("EOWNERDEAD", 130, 105, 133), ("EPERM", 1, 1, 1),
-            ("EPFNOSUPPORT", 96, 46, 10046), ("EPIPE", 32, 32, 32), ("EPROCLIM", 0, 67, 10067),
-            ("EPROCUNAVAIL", 0, 76, 0), ("EPROGMISMATCH", 0, 75, 0), ("EPROGUNAVAIL", 0, 74, 0),
-            ("EPROTO", 71, 100, 134), ("EPROTONOSUPPORT", 93, 43, 10043), ("EPROTOTYPE", 91, 41, 10041),
-            ("EPWROFF", 0, 82, 0), ("EQFULL", 0, 106, 0), ("ERANGE", 34, 34, 34),
-            ("EREMCHG", 78, 0, 0), ("EREMOTE", 66, 71, 10071), ("EREMOTEIO", 121, 0, 0),
-            ("ERESTART", 85, 0, 0), ("ERFKILL", 132, 0, 0), ("EROFS", 30, 30, 30),
-            ("ERPCMISMATCH", 0, 73, 0), ("ESHLIBVERS", 0, 87, 0), ("ESHUTDOWN", 108, 58, 10058),
-            ("ESOCKTNOSUPPORT", 94, 44, 10044), ("ESPIPE", 29, 29, 29), ("ESRCH", 3, 3, 3),
-            ("ESRMNT", 69, 0, 0), ("ESTALE", 116, 70, 10070), ("ESTRPIPE", 86, 0, 0),
-            ("ETIME", 62, 101, 137), ("ETIMEDOUT", 110, 60, 10060), ("ETOOMANYREFS", 109, 59, 10059),
-            ("ETXTBSY", 26, 26, 139), ("EUCLEAN", 117, 0, 0), ("EUNATCH", 49, 0, 0),
-            ("EUSERS", 87, 68, 10068), ("EWOULDBLOCK", 11, 35, 10035), ("EXDEV", 18, 18, 18),
-            ("EXFULL", 54, 0, 0),
+        private static readonly (string Name, int Linux, int Darwin, int Windows, int FreeBSD)[] s_table = {
+            ("E2BIG", 7, 7, 7, 7), ("EACCES", 13, 13, 13, 13), ("EADDRINUSE", 98, 48, 10048, 48),
+            ("EADDRNOTAVAIL", 99, 49, 10049, 49), ("EADV", 68, 0, 0, 0), ("EAFNOSUPPORT", 97, 47, 10047, 47),
+            ("EAGAIN", 11, 35, 11, 35), ("EALREADY", 114, 37, 10037, 37), ("EAUTH", 0, 80, 0, 80),
+            ("EBADARCH", 0, 86, 0, 0), ("EBADE", 52, 0, 0, 0), ("EBADEXEC", 0, 85, 0, 0),
+            ("EBADF", 9, 9, 9, 9), ("EBADFD", 77, 0, 0, 0), ("EBADMACHO", 0, 88, 0, 0),
+            ("EBADMSG", 74, 94, 104, 89), ("EBADR", 53, 0, 0, 0), ("EBADRPC", 0, 72, 0, 72),
+            ("EBADRQC", 56, 0, 0, 0), ("EBADSLT", 57, 0, 0, 0), ("EBFONT", 59, 0, 0, 0),
+            ("EBUSY", 16, 16, 16, 16), ("ECANCELED", 125, 89, 105, 85), ("ECAPMODE", 0, 0, 0, 94),
+            ("ECHILD", 10, 10, 10, 10), ("ECHRNG", 44, 0, 0, 0), ("ECOMM", 70, 0, 0, 0),
+            ("ECONNABORTED", 103, 53, 10053, 53), ("ECONNREFUSED", 111, 61, 10061, 61), ("ECONNRESET", 104, 54, 10054, 54),
+            ("EDEADLK", 35, 11, 36, 11), ("EDEADLOCK", 35, 0, 36, 0), ("EDESTADDRREQ", 89, 39, 10039, 39),
+            ("EDEVERR", 0, 83, 0, 0), ("EDOM", 33, 33, 33, 33), ("EDOOFUS", 0, 0, 0, 88),
+            ("EDOTDOT", 73, 0, 0, 0), ("EDQUOT", 122, 69, 10069, 69), ("EEXIST", 17, 17, 17, 17),
+            ("EFAULT", 14, 14, 14, 14), ("EFBIG", 27, 27, 27, 27), ("EFTYPE", 0, 79, 0, 79),
+            ("EHOSTDOWN", 112, 64, 10064, 64), ("EHOSTUNREACH", 113, 65, 10065, 65), ("EHWPOISON", 133, 0, 0, 0),
+            ("EIDRM", 43, 90, 111, 82), ("EILSEQ", 84, 92, 42, 86), ("EINPROGRESS", 115, 36, 10036, 36),
+            ("EINTR", 4, 4, 4, 4), ("EINVAL", 22, 22, 22, 22), ("EIO", 5, 5, 5, 5),
+            ("EIPSEC", 0, 0, 0, 0), ("EISCONN", 106, 56, 10056, 56), ("EISDIR", 21, 21, 21, 21),
+            ("EISNAM", 120, 0, 0, 0), ("EKEYEXPIRED", 127, 0, 0, 0), ("EKEYREJECTED", 129, 0, 0, 0),
+            ("EKEYREVOKED", 128, 0, 0, 0), ("EL2HLT", 51, 0, 0, 0), ("EL2NSYNC", 45, 0, 0, 0),
+            ("EL3HLT", 46, 0, 0, 0), ("EL3RST", 47, 0, 0, 0), ("ELAST", 0, 106, 0, 97),
+            ("ELIBACC", 79, 0, 0, 0), ("ELIBBAD", 80, 0, 0, 0), ("ELIBEXEC", 83, 0, 0, 0),
+            ("ELIBMAX", 82, 0, 0, 0), ("ELIBSCN", 81, 0, 0, 0), ("ELNRNG", 48, 0, 0, 0),
+            ("ELOOP", 40, 62, 10062, 62), ("EMEDIUMTYPE", 124, 0, 0, 0), ("EMFILE", 24, 24, 24, 24),
+            ("EMLINK", 31, 31, 31, 31), ("EMSGSIZE", 90, 40, 10040, 40), ("EMULTIHOP", 72, 95, 0, 90),
+            ("ENAMETOOLONG", 36, 63, 38, 63), ("ENAVAIL", 119, 0, 0, 0), ("ENEEDAUTH", 0, 81, 0, 81),
+            ("ENETDOWN", 100, 50, 10050, 50), ("ENETRESET", 102, 52, 10052, 52), ("ENETUNREACH", 101, 51, 10051, 51),
+            ("ENFILE", 23, 23, 23, 23), ("ENOANO", 55, 0, 0, 0), ("ENOATTR", 0, 93, 0, 87),
+            ("ENOBUFS", 105, 55, 10055, 55), ("ENOCSI", 50, 0, 0, 0), ("ENODATA", 61, 96, 120, 0),
+            ("ENODEV", 19, 19, 19, 19), ("ENOENT", 2, 2, 2, 2), ("ENOEXEC", 8, 8, 8, 8),
+            ("ENOKEY", 126, 0, 0, 0), ("ENOLCK", 37, 77, 39, 77), ("ENOLINK", 67, 97, 121, 91),
+            ("ENOMEDIUM", 123, 0, 0, 0), ("ENOMEM", 12, 12, 12, 12), ("ENOMSG", 42, 91, 122, 83),
+            ("ENONET", 64, 0, 0, 0), ("ENOPKG", 65, 0, 0, 0), ("ENOPOLICY", 0, 103, 0, 0),
+            ("ENOPROTOOPT", 92, 42, 10042, 42), ("ENOSPC", 28, 28, 28, 28), ("ENOSR", 63, 98, 124, 0),
+            ("ENOSTR", 60, 99, 125, 0), ("ENOSYS", 38, 78, 40, 78), ("ENOTBLK", 15, 15, 0, 15),
+            ("ENOTCAPABLE", 0, 0, 0, 93), ("ENOTCONN", 107, 57, 10057, 57), ("ENOTDIR", 20, 20, 20, 20),
+            ("ENOTEMPTY", 39, 66, 41, 66), ("ENOTNAM", 118, 0, 0, 0), ("ENOTRECOVERABLE", 131, 104, 127, 95),
+            ("ENOTSOCK", 88, 38, 10038, 38), ("ENOTSUP", 95, 45, 129, 45), ("ENOTTY", 25, 25, 25, 25),
+            ("ENOTUNIQ", 76, 0, 0, 0), ("ENXIO", 6, 6, 6, 6), ("EOPNOTSUPP", 95, 102, 10045, 45),
+            ("EOVERFLOW", 75, 84, 132, 84), ("EOWNERDEAD", 130, 105, 133, 96), ("EPERM", 1, 1, 1, 1),
+            ("EPFNOSUPPORT", 96, 46, 10046, 46), ("EPIPE", 32, 32, 32, 32), ("EPROCLIM", 0, 67, 10067, 67),
+            ("EPROCUNAVAIL", 0, 76, 0, 76), ("EPROGMISMATCH", 0, 75, 0, 75), ("EPROGUNAVAIL", 0, 74, 0, 74),
+            ("EPROTO", 71, 100, 134, 92), ("EPROTONOSUPPORT", 93, 43, 10043, 43), ("EPROTOTYPE", 91, 41, 10041, 41),
+            ("EPWROFF", 0, 82, 0, 0), ("EQFULL", 0, 106, 0, 0), ("ERANGE", 34, 34, 34, 34),
+            ("EREMCHG", 78, 0, 0, 0), ("EREMOTE", 66, 71, 10071, 71), ("EREMOTEIO", 121, 0, 0, 0),
+            ("ERESTART", 85, 0, 0, 0), ("ERFKILL", 132, 0, 0, 0), ("EROFS", 30, 30, 30, 30),
+            ("ERPCMISMATCH", 0, 73, 0, 73), ("ESHLIBVERS", 0, 87, 0, 0), ("ESHUTDOWN", 108, 58, 10058, 58),
+            ("ESOCKTNOSUPPORT", 94, 44, 10044, 44), ("ESPIPE", 29, 29, 29, 29), ("ESRCH", 3, 3, 3, 3),
+            ("ESRMNT", 69, 0, 0, 0), ("ESTALE", 116, 70, 10070, 70), ("ESTRPIPE", 86, 0, 0, 0),
+            ("ETIME", 62, 101, 137, 0), ("ETIMEDOUT", 110, 60, 10060, 60), ("ETOOMANYREFS", 109, 59, 10059, 59),
+            ("ETXTBSY", 26, 26, 139, 26), ("EUCLEAN", 117, 0, 0, 0), ("EUNATCH", 49, 0, 0, 0),
+            ("EUSERS", 87, 68, 10068, 68), ("EWOULDBLOCK", 11, 35, 10035, 35), ("EXDEV", 18, 18, 18, 18),
+            ("EXFULL", 54, 0, 0, 0),
         };
 
         /// <summary>
@@ -123,9 +126,10 @@ namespace IronRuby.Runtime {
             }
         }
 
-        private static int NumberOf((string Name, int Linux, int Darwin, int Windows) entry) {
+        private static int NumberOf((string Name, int Linux, int Darwin, int Windows, int FreeBSD) entry) {
             return s_platform switch {
                 Platform.Darwin => entry.Darwin,
+                Platform.FreeBSD => entry.FreeBSD,
                 Platform.Windows => entry.Windows,
                 _ => entry.Linux,
             };

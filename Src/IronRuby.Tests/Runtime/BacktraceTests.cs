@@ -299,6 +299,90 @@ p here
         }
 
         /// <summary>
+        /// The frames a rescued exception unwound keep their lines for its backtrace only: a recursive call that raised
+        /// and was rescued left a frame of the same method above the live one, and an exception the live one raised
+        /// after that was reported at the line of the call that had raised (10 here, not 8).
+        /// </summary>
+        public void Backtrace_CompiledLines2() {
+            TestOutput(@"
+def foo(n)
+  if n > 0
+    begin
+      foo(n-1)
+    rescue
+    end
+    raise 'outer'
+  else
+    raise 'inner'
+  end
+end
+begin
+  foo(1)
+rescue => e
+  p e.backtrace.first(2).map { |f| f[/:(\d+)/, 1].to_i }
+end
+", @"
+[8, 14]
+");
+        }
+
+        /// <summary>
+        /// A lambda System.Linq.Expressions compiled without a name is no frame of Ruby code: a fiber's backtrace from
+        /// code ir.sh had compiled (once hot) had a bogus "0:in 'lambda_methodNN'" under the fiber's block.
+        /// </summary>
+        public void Backtrace_UnnamedLambdaFrame1() {
+            var trace = System.Linq.Expressions.Expression.Lambda<Func<System.Diagnostics.StackTrace>>(
+                System.Linq.Expressions.Expression.New(typeof(System.Diagnostics.StackTrace))
+            ).Compile()();
+            var method = trace.GetFrame(0).GetMethod();
+            Assert(method != null && method.Name.StartsWith("lambda_method", StringComparison.Ordinal));
+            Assert(!RubyStackTraceBuilder.IsVisibleClrFrame(method));
+        }
+
+        /// <summary>
+        /// Under the C locale (US-ASCII, Docker's default) a non-ASCII path is its UTF-8 bytes in a BINARY string. The
+        /// frames of a file in such a directory were US-ASCII strings of characters it has none for, and require_relative,
+        /// caller_locations(0)[0].path and the error report raised "invalid byte sequence in US-ASCII"; load of the
+        /// BINARY path Dir.children returns, and File.expand_path of a UTF-8 name in such a directory, read each byte as a
+        /// character of its own.
+        /// </summary>
+        public void Backtrace_AsciiLocalePaths1() {
+            if (OperatingSystem.IsWindows()) {
+                return;
+            }
+
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+Dir.mktmpdir do |t|
+  d = File.join(t, ""café"")
+  Dir.mkdir(d)
+  File.write(File.join(d, 'lib.rb'), ""LIB = caller_locations(0)[0].path\n"")
+  File.write(File.join(d, 'm.rb'), ""require_relative 'lib'\nM = caller(0)[0]\n"")
+  old = Encoding.default_external
+  Encoding.default_external = Encoding::US_ASCII
+  begin
+    dc = Dir.children(t).first
+    p dc.encoding
+    load File.join(t.b, dc, 'm.rb')
+    p [LIB, M].map(&:encoding), [LIB, M].all?(&:valid_encoding?)
+    p LIB.b.end_with?(""café/lib.rb"".b), M.b.include?(""café/m.rb:2"".b)
+    p File.expand_path('x', File.dirname(LIB)).end_with?(""café/x"")
+  ensure
+    Encoding.default_external = old
+  end
+end
+", @"
+#<Encoding:BINARY (ASCII-8BIT)>
+[#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>]
+true
+true
+true
+true
+");
+        }
+
+        /// <summary>
         /// An exception a library method throws whose class has an initialize written in Ruby - SystemCallError's, in the
         /// prelude - is replaced by a new one when it is rescued; the backtrace went with the thrown one, and Dir.mkdir's
         /// Errno::ENOENT had none - a re-raise of it (FileUtils.mkdir_p) got one from the `raise' instead. A LoadError of

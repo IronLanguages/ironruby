@@ -3257,6 +3257,8 @@ namespace IronRuby.Runtime {
             var site = comparisonStorage.GetCallSite("===");
             bool result = IsTrue(site.Target(site, classObject, context.CurrentException));
             if (result) {
+                // the frames the exception unwound to get here are no part of what is raised from here on
+                Precompiled.PrecompiledFrames.ForgetLeft();
                 TraceRescue(scope, context.CurrentException);
             }
             return result;
