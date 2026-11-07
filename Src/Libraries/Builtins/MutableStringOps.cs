@@ -1740,9 +1740,11 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// <paramref name="defaultSeparator"/> is set when the separator is $/ rather than an
-        /// argument: MRI's chompped_length takes "\n" for a newline in the receiver's own encoding
-        /// then, and otherwise only when it is a whole character of that encoding - "\n" is not
-        /// one in UTF-16 - and anything else has to be compatible with the receiver.
+        /// argument. MRI's chompped_length chomps a trailing newline (and a CR before it, or a
+        /// lone CR) in the receiver's own encoding when the separator is $/, or when it is one
+        /// "\n" judged in the separator's OWN encoding: a single unit of that encoding, so a UTF-8
+        /// "\n" chomps a UTF-16 receiver and a UTF-16 "\n" a UTF-32 one, without the two being
+        /// compatible. Any other separator has to be compatible with the receiver.
         /// </summary>
         private static MutableString InternalChomp(MutableString/*!*/ self, MutableString separator, bool defaultSeparator) {
             if (separator == null) {
@@ -1757,8 +1759,9 @@ namespace IronRuby.Builtins {
             // Remove single trailing CR/LFs
             MutableString result = self.CloneDerived();
             int length = result.GetCharCount();
-            bool newline = separator.StartsWith('\n') && separator.GetLength() == 1 &&
-                (defaultSeparator || self.Encoding.IsAsciiIdentity || separator.Encoding == self.Encoding);
+            bool newline = defaultSeparator && separator.StartsWith('\n') && separator.GetLength() == 1 ||
+                separator.GetByteCount() == separator.Encoding.MinBytesPerChar &&
+                separator.GetCharCount() == 1 && separator.GetChar(0) == '\n';
             if (!newline) {
                 self.RequireCompatibleEncoding(separator);
             }
@@ -3069,9 +3072,13 @@ namespace IronRuby.Builtins {
             // receiver takes on the replacement's encoding, and an incompatible pair raises.
             // Appending it a char at a time would encode the chars in the receiver's encoding
             // ("ab".b.sub("a", "\u00e9") was "\xE9b").
+            // Read as characters throughout: Length counts bytes while the content is binary - a
+            // UTF-16 or UTF-32 replacement, say - but GetChar indexes characters.
+            replacement.PrepareForCharacterRead();
+            int replacementLength = replacement.GetCharCount();
             int backslashCount = 0;
             int runStart = 0;
-            for (int i = 0; i < replacement.Length; i++) {
+            for (int i = 0; i < replacementLength; i++) {
                 char c = replacement.GetChar(i);
                 if (c == '\\') {
                     if (backslashCount == 0) {
@@ -3117,7 +3124,7 @@ namespace IronRuby.Builtins {
                 }
             }
             if (backslashCount == 0) {
-                AppendReplacementPiece(result, replacement, runStart, replacement.Length - runStart);
+                AppendReplacementPiece(result, replacement, runStart, replacementLength - runStart);
             } else {
                 AppendBackslashes(backslashCount, result, 1);
             }

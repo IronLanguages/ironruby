@@ -178,6 +178,7 @@ namespace IronRuby.Tests {
                 RegexCondition1,
                 RegexCondition2,
                 Regex_ByteEscapes1,
+                Regex_ByteEscapeComments1,
                 
                 Scenario_RubyScopeParsing,
                 Scenario_RubyScopes1,
@@ -678,6 +679,7 @@ namespace IronRuby.Tests {
                 ClrClosedInterfaceExtensions1,
                 ClrClosedInterfaceExtensions2,
                 HostingDefaultOptions1,
+                HostingEncodingOption1,
                 Interactive1,
                 Interactive2,
 
@@ -908,6 +910,8 @@ namespace IronRuby.Tests {
                 Encoding_StatelessIso2022Jp1,
                 Encoding_AsciiIncompatible1,
                 Encoding_AsciiIncompatibleLines1,
+                Encoding_AsciiIncompatibleGsub1,
+                Encoding_AsciiIncompatibleChomp1,
                 Marshal_Misc1,
                 Marshal_LoadFloat1,
                 Integer_SqrtPowDigits1,
@@ -998,6 +1002,7 @@ namespace IronRuby.Tests {
                 MethodDef_SymbolInBody1,
                 ToIntegerConversion1,
                 Kernel_IntegerFloat1,
+                Kernel_FloatOptions1,
                 LibraryKeywordsArity1,
                 PreludeKeywordsArity1,
                 LibraryKeywordsStored1,

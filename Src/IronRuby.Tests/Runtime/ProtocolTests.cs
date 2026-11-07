@@ -349,6 +349,19 @@ ArgumentError: expected true or false as exception: 1
 ");
         }
 
+        /// <summary>Float() checks its options before it returns a Float argument as it is.</summary>
+        public void Kernel_FloatOptions1() {
+            TestOutput(@"
+def t; r = yield; r.inspect; rescue => e; ""#{e.class}: #{e.message}""; end
+puts t { Float(1.0, foo: 1) }, t { Float(1.0, exception: 3) }, t { Float(1.0, exception: false) }, t { Float(2.5, exception: true) }
+", @"
+ArgumentError: unknown keyword: :foo
+ArgumentError: expected true or false as exception: 3
+1.0
+2.5
+");
+        }
+
         public void ToIntegerConversion1() {
             AssertOutput(delegate() {
                 CompilerTest(@"

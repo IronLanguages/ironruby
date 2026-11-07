@@ -399,6 +399,18 @@ a = 'ba'.gsub /b/, '1'
             AssertExceptionThrown<SyntaxErrorException>(() => Engine.Execute("}"));
         }
 
+        /// <summary>
+        /// -E takes "locale" besides the names of real encodings, as MRI's does; "external" and
+        /// "filesystem", which Encoding.find knows, are unknown encoding names there.
+        /// </summary>
+        public void HostingEncodingOption1() {
+            foreach (var arg in new[] { "-Eexternal", "-Efilesystem", "-Eutf-8:external", "--external-encoding=filesystem" }) {
+                AssertExceptionThrown<Microsoft.Scripting.Hosting.Shell.InvalidOptionException>(() =>
+                    new IronRuby.Hosting.RubyOptionsParser().Parse(new[] { arg, "-e", "1" }, new ScriptRuntimeSetup(), Ruby.CreateRubySetup(), PlatformAdaptationLayer.Default));
+            }
+            new IronRuby.Hosting.RubyOptionsParser().Parse(new[] { "-Elocale:locale", "-e", "1" }, new ScriptRuntimeSetup(), Ruby.CreateRubySetup(), PlatformAdaptationLayer.Default);
+        }
+
         public void Interactive1() {
             ScriptScope scope = Runtime.CreateScope();
             AssertOutput(() => Engine.CreateScriptSourceFromString("", SourceCodeKind.InteractiveCode).Execute(scope), "");

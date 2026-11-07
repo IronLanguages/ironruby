@@ -2554,6 +2554,55 @@ p u.upto(u).to_a.size
 ");
         }
 
+        /// <summary>
+        /// sub/gsub on UTF-16/32 with a String replacement read the replacement as characters (its
+        /// byte length overran them), and a String pattern is escaped by character, not by byte.
+        /// </summary>
+        public void Encoding_AsciiIncompatibleGsub1() {
+            TestOutput(@"
+u = ->(s) { s.encode(""UTF-16LE"") }
+p u[""abcb""].gsub(u[""b""], u[""x""]).bytes, u[""abc""].sub(u[""b""], u[""\\0\\0""]).bytes
+p u[""a\r\nb""].gsub(u[""\r\n""], u[""\n""]).encode(""UTF-8""), u[""x.y""].gsub(u["".""], u[""Z""]).encode(""UTF-8""), u[""x y""].sub(u["" ""], u[""_""]).encode(""UTF-8"")
+p ""a.b"".encode(""UTF-32BE"").gsub(""."".encode(""UTF-32BE""), ""-"".encode(""UTF-32BE"")).encode(""UTF-8"")
+p Regexp.escape(u[""a.b""]).encode(""UTF-8"")
+", @"
+[97, 0, 120, 0, 99, 0, 120, 0]
+[97, 0, 98, 0, 98, 0, 99, 0]
+""a\nb""
+""xZy""
+""x_y""
+""a-b""
+""a\\.b""
+");
+        }
+
+        /// <summary>
+        /// MRI's chompped_length judges a separator in its own encoding: one "\n" that is a whole
+        /// character of it chomps a newline (and a CR) of the receiver's encoding, compatible or
+        /// not. Any other separator has to be compatible with the receiver.
+        /// </summary>
+        public void Encoding_AsciiIncompatibleChomp1() {
+            TestOutput(@"
+require 'ruby4'
+u = ->(s) { s.encode(""UTF-16LE"") }
+p u[""abc\n""].chomp(""\n"").bytes, u[""abc\r\n""].chomp(""\n"").bytes, u[""abc\r""].chomp(""\n"").bytes, u[""abc""].chomp(""\n"").bytes
+s = u[""a\n""]; p s.chomp!(""\n"").bytes, s.chomp!(""\n"")
+p ""a\n"".encode(""UTF-32LE"").chomp(u[""\n""]).bytes, ""a\n"".force_encoding(""UTF-16LE"").chomp(""\n"").bytes
+p((u[""a\n""].chomp(""\r\n"") rescue $!), (u[""a\n""].each_line(""\n"") { } rescue $!))
+", @"
+[97, 0, 98, 0, 99, 0]
+[97, 0, 98, 0, 99, 0]
+[97, 0, 98, 0, 99, 0]
+[97, 0, 98, 0, 99, 0]
+[97, 0]
+nil
+[97, 0, 0, 0]
+[97, 10]
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+");
+        }
+
 
         public void Io_Messages1() {
             TestOutput(@"

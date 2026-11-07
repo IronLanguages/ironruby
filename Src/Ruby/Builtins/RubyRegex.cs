@@ -277,14 +277,22 @@ namespace IronRuby.Builtins {
             return DecodeByteEscapes(source, encoding);
         }
 
+        /// <remarks>
+        /// Comments are passed over undecoded, as Onigmo never reads an escape in them: a (?#...)
+        /// group, and in extended mode (/x, or (?x) for the rest of a group) a # up to the end of
+        /// the line outside a character class.
+        /// </remarks>
         private string/*!*/ DecodeByteEscapes(string/*!*/ source, RubyEncoding/*!*/ encoding) {
             StringBuilder result = null;
             var run = new List<byte>();
             int copied = 0;
             int i = 0;
+            bool extended = (_options & RubyRegexOptions.Extended) != 0;
+            var groups = new Stack<bool>();
+            int classDepth = 0;
             while (i < source.Length) {
                 if (source[i] != '\\') {
-                    i++;
+                    i = SkipNonEscape(source, i, ref extended, groups, ref classDepth);
                     continue;
                 }
 
@@ -331,6 +339,80 @@ namespace IronRuby.Builtins {
                 return source;
             }
             return result.Append(source, copied, source.Length - copied).ToString();
+        }
+
+        /// <summary>
+        /// Steps over the character at <paramref name="i"/>, which is not a backslash, or over
+        /// the whole comment that starts there, keeping track of character classes, groups and
+        /// whether extended mode is on. Returns where to carry on.
+        /// </summary>
+        private static int SkipNonEscape(string/*!*/ source, int i, ref bool extended, Stack<bool>/*!*/ groups, ref int classDepth) {
+            char c = source[i];
+            if (classDepth > 0) {
+                if (c == '[') {
+                    classDepth++;
+                } else if (c == ']') {
+                    classDepth--;
+                }
+                return i + 1;
+            }
+
+            switch (c) {
+                case '[':
+                    classDepth = 1;
+                    return i + 1;
+
+                case '#':
+                    if (!extended) {
+                        return i + 1;
+                    }
+                    int eol = source.IndexOf('\n', i);
+                    return eol < 0 ? source.Length : eol + 1;
+
+                case ')':
+                    if (groups.Count > 0) {
+                        extended = groups.Pop();
+                    }
+                    return i + 1;
+
+                case '(':
+                    if (i + 2 < source.Length && source[i + 1] == '?' && source[i + 2] == '#') {
+                        // (?#...) ends at the first ) that is not escaped
+                        int j = i + 3;
+                        while (j < source.Length && source[j] != ')') {
+                            j += source[j] == '\\' ? 2 : 1;
+                        }
+                        return Math.Min(j + 1, source.Length);
+                    }
+
+                    // (?imx-imx) sets the options for the rest of the group, (?imx-imx:...) inside it
+                    if (i + 1 < source.Length && source[i + 1] == '?') {
+                        int j = i + 2;
+                        bool on = true, flagExtended = extended;
+                        while (j < source.Length && "imxadu-".IndexOf(source[j]) >= 0) {
+                            if (source[j] == '-') {
+                                on = false;
+                            } else if (source[j] == 'x') {
+                                flagExtended = on;
+                            }
+                            j++;
+                        }
+                        if (j > i + 2 && j < source.Length && source[j] == ')') {
+                            extended = flagExtended;
+                            return j + 1;
+                        }
+                        if (j > i + 2 && j < source.Length && source[j] == ':') {
+                            groups.Push(extended);
+                            extended = flagExtended;
+                            return j + 1;
+                        }
+                    }
+                    groups.Push(extended);
+                    return i + 1;
+
+                default:
+                    return i + 1;
+            }
         }
 
         /// <summary>

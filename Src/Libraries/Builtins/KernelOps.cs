@@ -269,12 +269,13 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
         public static object ToFloat(UnaryOpStorage/*!*/ toF, object self, object value, [Keywords, Optional]object options) {
+            // the options are checked first, even for a Float: Float(1.0, foo: 1) raises
+            RubyContext context = toF.Context;
+            bool raise = (options == Missing.Value) || TakeExceptionOption(context, ref options, Missing.Value, 1);
+
             if (value is double) {
                 return value;
             }
-
-            RubyContext context = toF.Context;
-            bool raise = (options == Missing.Value) || TakeExceptionOption(context, ref options, Missing.Value, 1);
 
             if (value is int i) {
                 return (double)i;
