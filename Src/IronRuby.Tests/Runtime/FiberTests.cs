@@ -249,7 +249,9 @@ end
 Thread.pass until ready
 5.times do |i|
   t.raise 'between two calls of the block'
-  Thread.pass until rescued > i || !t.alive?
+  # a lost raise fails the test (rescued stays short) instead of waiting out the loop
+  deadline = Time.now + 10
+  Thread.pass until rescued > i || !t.alive? || Time.now > deadline
 end
 stop = true
 p [(t.value rescue $!.message), rescued]
