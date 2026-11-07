@@ -192,8 +192,9 @@ nil
 require 'ruby4'
 wm = ObjectSpace::WeakMap.new
 p wm.each.equal?(wm)
-k = 'a'
-wm[k] = 'b'
+# the value is held weakly too: without a reference of its own a GC empties the map
+k, v = 'a', 'b'
+wm[k] = v
 [:each, :each_pair, :each_key, :each_value].each { |m| p((wm.send(m) rescue $!)) }
 p ObjectSpace::WeakKeyMap.instance_methods(false).sort
 
