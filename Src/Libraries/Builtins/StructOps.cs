@@ -13,16 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
-using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
@@ -103,6 +97,7 @@ namespace IronRuby.Builtins {
         // a flagged Hash after the positional values; a Hash passed as a value is not flagged, and
         // stays a positional argument (MRI's rb_struct_initialize_m tells them apart the same way).
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static object Initialize(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slowPath,
             RubyStruct/*!*/ self, params object[]/*!*/ items) {
 
@@ -132,6 +127,9 @@ namespace IronRuby.Builtins {
             // Without the prelude (the test harness runs the libraries alone) there is no slow path:
             // store what was given, as the C# `def initialize(*args)' did.
             if (!self.ImmediateClass.ResolveMethod("__struct_initialize_slow__", VisibilityContext.AllVisible).Found) {
+                if (keywords != null) {
+                    items[positional] = keywords;
+                }
                 self.SetValues(items);
                 return null;
             }
@@ -330,6 +328,14 @@ namespace IronRuby.Builtins {
         [RubyMethod("select")]
         public static object Select(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, RubyStruct/*!*/ self) {
             return Enumerable.Select(each, predicate, self);
+        }
+
+        // a method of its own to have a frame of its own (see IListOps.Map)
+        [RubyMethod("filter")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Select")]
+        public static object Filter(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, RubyStruct/*!*/ self) {
+            return Enumerable.Filter(each, predicate, self);
         }
 
         // equivalent to Array#values_at over the data array

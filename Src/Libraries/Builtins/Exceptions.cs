@@ -17,10 +17,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Runtime.Remoting;
 using System.Security;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
@@ -212,6 +210,33 @@ namespace IronRuby.Builtins {
         public static MutableString GetPath(RubyContext/*!*/ context, SyntaxError/*!*/ self) {
             return self.File == null ? null : context.EncodePath(self.File);
         }
+
+        /// <summary>
+        /// A SyntaxError made with no message at all says "compile error" (an explicit nil still
+        /// gives the class name, as for any exception). SyntaxError.new is the constructor, a
+        /// subclass's #new is #allocate and #initialize.
+        /// </summary>
+        [RubyConstructor]
+        public static SyntaxError/*!*/ Create(RubyClass/*!*/ self) {
+            return Create(self, MutableString.CreateAscii("compile error"));
+        }
+
+        [RubyConstructor]
+        public static SyntaxError/*!*/ Create(RubyClass/*!*/ self, object message) {
+            var result = new SyntaxError(RubyExceptionData.GetClrMessage(self, message));
+            RubyExceptionData.InitializeException(result, message);
+            return result;
+        }
+
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static Exception/*!*/ Initialize(RubyContext/*!*/ context, SyntaxError/*!*/ self) {
+            return ExceptionOps.ReinitializeException(context, self, MutableString.CreateAscii("compile error"));
+        }
+
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static Exception/*!*/ Initialize(RubyContext/*!*/ context, SyntaxError/*!*/ self, object message) {
+            return ExceptionOps.ReinitializeException(context, self, message);
+        }
     }
 
     [RubyException("SystemStackError", Extends = typeof(SystemStackError), Inherits = typeof(Exception))]
@@ -235,6 +260,12 @@ namespace IronRuby.Builtins {
     public static class IndexErrorOps {
     }
 
+    // What a CLR array or indexer throws for an index out of its bounds: an IndexError to Ruby code, as Ruby's own
+    // out-of-bounds errors are (it was Ruby's IndexError itself until IndexError had to be subclassable).
+    [RubyClass(Extends = typeof(IndexOutOfRangeException), Inherits = typeof(IndexError), Restrictions = ModuleRestrictions.None)]
+    public static class IndexOutOfRangeExceptionOps {
+    }
+
     [RubyException("RangeError", Extends = typeof(ArgumentOutOfRangeException), Inherits = typeof(SystemException))]
     [HideMethod("message")]
     public static class RangeErrorOps {
@@ -248,7 +279,7 @@ namespace IronRuby.Builtins {
         /// :receiver. NoMethodError inherits this parsing through NoMethodErrorOps.Factory.
         /// </summary>
         [RubyConstructor]
-        public static MemberAccessException/*!*/ Factory(RubyClass/*!*/ self, params object[]/*!*/ args) {
+        public static MemberAccessException/*!*/ Factory(RubyScope/*!*/ scope, RubyClass/*!*/ self, params object[]/*!*/ args) {
             object receiver;
             bool hasReceiver = TryTakeReceiverKeyword(ref args, out receiver);
             if (args.Length > 2) {
@@ -264,6 +295,7 @@ namespace IronRuby.Builtins {
             if (hasReceiver) {
                 data.SetReceiver(receiver);
             }
+            data.LocalVariables = scope.GetLocalVariableSymbols();
             return result;
         }
 
@@ -279,6 +311,17 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("no receiver is available");
             }
             return data.Receiver;
+        }
+
+        /// <summary>
+        /// The local variables of the scope the error was made in - where an undefined local
+        /// variable or method was named, or NameError.new was called - which did_you_mean offers
+        /// as corrections.
+        /// </summary>
+        [RubyMethod("local_variables")]
+        public static RubyArray/*!*/ GetLocalVariables(Exception/*!*/ self) {
+            var data = RubyExceptionData.GetInstance(self);
+            return data.LocalVariables ?? (data.LocalVariables = new RubyArray());
         }
 
         /// <summary>
@@ -318,7 +361,7 @@ namespace IronRuby.Builtins {
         /// NoMethodError.new([message [, name [, args [, priv]]]] [, receiver: obj]).
         /// </summary>
         [RubyConstructor]
-        public static MissingMethodException/*!*/ Factory(RubyClass/*!*/ self, params object[]/*!*/ allArgs) {
+        public static MissingMethodException/*!*/ Factory(RubyScope/*!*/ scope, RubyClass/*!*/ self, params object[]/*!*/ allArgs) {
             object receiver;
             bool hasReceiver = NameErrorOps.TryTakeReceiverKeyword(ref allArgs, out receiver);
             if (allArgs.Length > 4) {
@@ -340,6 +383,7 @@ namespace IronRuby.Builtins {
             }
             data.Arguments = args;
             data.PrivateCall = privateCall;
+            data.LocalVariables = scope.GetLocalVariableSymbols();
             return result;
         }
 
@@ -473,8 +517,18 @@ namespace IronRuby.Builtins {
             // Errno constant (see Src/StdLib/ironruby/ruby4.rb), so prefer that. A plain
             // SystemCallError has no number, and MRI answers nil there.
             object number;
-            if (context.GetClassOf(self).TryGetConstant(null, "Errno", out number) && number is int) {
+            RubyClass cls = context.GetClassOf(self);
+            if (cls.TryGetConstant(null, "Errno", out number) && number is int) {
                 return number;
+            }
+            // Without the prelude the constant is missing; the class still says which error it is.
+            for (RubyClass c = cls; c != null; c = c.SuperClass) {
+                if (c.Name != null && c.Name.StartsWith("Errno::", StringComparison.Ordinal)) {
+                    int errno = RubyErrno.GetNumber(c.Name.Substring("Errno::".Length));
+                    if (errno != 0) {
+                        return errno;
+                    }
+                }
             }
             var external = self as ExternalException;
             if (external != null && external.ErrorCode != unchecked((int)0x80004005)) {
@@ -486,96 +540,6 @@ namespace IronRuby.Builtins {
         [RubyConstructor]
         public static ExternalException/*!*/ Factory(RubyClass/*!*/ self, [DefaultProtocol]MutableString message) {
             ExternalException result = new ExternalException(RubyExceptions.MakeMessage(ref message, "unknown error"));
-            RubyExceptionData.InitializeException(result, message);
-            return result;
-        }
-
-        [RubyConstructor]
-        public static ExternalException/*!*/ Factory(RubyClass/*!*/ self, int errorCode) {
-            switch (errorCode) {
-                // TODO:
-                //case 0: return RubyExceptions.CreateNOERROR();
-                //case 1: return RubyExceptions.CreateEPERM();
-                //case 2: return RubyExceptions.CreateENOENT(); TODO: types don't match
-                //case 3: return RubyExceptions.CreateESRCH();
-                //case 4: return RubyExceptions.CreateEINTR();
-                //case 5: return RubyExceptions.CreateEIO();
-                //case 6: return RubyExceptions.CreateENXIO();
-                //case 7: return RubyExceptions.CreateE2BIG();
-                //case 8: return RubyExceptions.CreateENOEXEC(); 
-                //case 9: return RubyExceptions.CreateEBADF();     TODO: types don't match
-                //case 10: return new Errno.ChildError();
-                //case 11: return RubyExceptions.CreateEAGAIN();
-                //case 12: return RubyExceptions.CreateENOMEM();
-                //case 13: return RubyExceptions.CreateEACCES();    TODO: types don't match
-                //case 14: return RubyExceptions.CreateEFAULT();
-                //case 15: break;
-                //case 16: return RubyExceptions.CreateEBUSY();
-                //case 17: return RubyExceptions.CreateEEXIST();    TODO: types don't match
-                //case 18: return RubyExceptions.CreateEXDEV();
-                //case 19: return RubyExceptions.CreateENODEV();
-                //case 20: return RubyExceptions.CreateENOTDIR();
-                //case 21: return RubyExceptions.CreateEISDIR();
-                //case 22: return RubyExceptions.CreateEINVAL();     TODO: types don't match
-                //case 23: return RubyExceptions.CreateENFILE();
-                //case 24: return RubyExceptions.CreateEMFILE();
-                //case 25: return RubyExceptions.CreateENOTTY();
-                //case 26: break;
-                //case 27: return RubyExceptions.CreateEFBIG();
-                //case 28: return RubyExceptions.CreateENOSPC();
-                //case 29: return RubyExceptions.CreateESPIPE();
-                //case 30: return RubyExceptions.CreateEROFS();
-                //case 31: return RubyExceptions.CreateEMLINK();
-                //case 32: return RubyExceptions.CreateEPIPE();
-                //case 33: return RubyExceptions.CreateEDOM();
-                //case 34: return RubyExceptions.CreateERANGE();
-                //case 35: break;
-                //case 36: return RubyExceptions.CreateEDEADLK();
-                //case 37: break;
-                //case 38: return RubyExceptions.CreateENAMETOOLONG();
-                //case 39: return RubyExceptions.CreateENOLCK();
-                //case 40: return RubyExceptions.CreateENOSYS();
-                //case 41: return RubyExceptions.CreateENOTEMPTY();
-                //case 42: return RubyExceptions.CreateEILSEQ();
-
-                // case 10035: return RubyExceptions.CreateEWOULDBLOCK();
-                // case 10036: return RubyExceptions.CreateEINPROGRESS();
-                // case 10037: return RubyExceptions.CreateEALREADY();
-                // case 10038: return RubyExceptions.CreateENOTSOCK();
-                // case 10039: return RubyExceptions.CreateEDESTADDRREQ();
-                // case 10040: return RubyExceptions.CreateEMSGSIZE();
-                // case 10041: return RubyExceptions.CreateEPROTOTYPE();
-                // case 10042: return RubyExceptions.CreateENOPROTOOPT();
-                // case 10043: return RubyExceptions.CreateEPROTONOSUPPORT();
-                // case 10044: return RubyExceptions.CreateESOCKTNOSUPPORT();
-                // case 10045: return RubyExceptions.CreateEOPNOTSUPP();
-                // case 10046: return RubyExceptions.CreateEPFNOSUPPORT();
-                // case 10047: return RubyExceptions.CreateEAFNOSUPPORT();
-                case 10048: return new Errno.AddressInUseError();
-                // case 10049: return RubyExceptions.CreateEADDRNOTAVAIL();
-                // case 10050: return RubyExceptions.CreateENETDOWN();
-                // case 10051: return RubyExceptions.CreateENETUNREACH();
-                // case 10052: return RubyExceptions.CreateENETRESET();
-                case 10053: return new Errno.ConnectionAbortedError();
-                case 10054: return new Errno.ConnectionResetError();
-                // case 10055: return RubyExceptions.CreateENOBUFS();
-                // case 10056: return RubyExceptions.CreateEISCONN();
-                case 10057: return new Errno.NotConnectedError();
-                // case 10058: return RubyExceptions.CreateESHUTDOWN();
-                // case 10059: return RubyExceptions.CreateETOOMANYREFS();
-                // case 10060: return RubyExceptions.CreateETIMEDOUT();
-                case 10061: return new Errno.ConnectionRefusedError();
-                // case 10062: return RubyExceptions.CreateELOOP();
-                case 10064: return new Errno.HostDownError();
-                // case 10065: return RubyExceptions.CreateEHOSTUNREACH();
-                // case 10068: return RubyExceptions.CreateEUSERS();
-                // case 10069: return RubyExceptions.CreateEDQUOT();
-                // case 10070: return RubyExceptions.CreateESTALE();
-                // case 10071: return RubyExceptions.CreateEREMOTE();
-            }
-
-            var message = MutableString.CreateAscii("Unknown Error");
-            ExternalException result = new ExternalException(RubyExceptions.MakeMessage(ref message, "Unknown Error"), errorCode);
             RubyExceptionData.InitializeException(result, message);
             return result;
         }

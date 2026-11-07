@@ -13,18 +13,11 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Diagnostics;
-using System.Dynamic;
-using System.Reflection;
 using System.Runtime.CompilerServices;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
@@ -35,12 +28,9 @@ namespace IronRuby.Builtins {
     using AstFactory = IronRuby.Compiler.Ast.AstFactory;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
 
-    using BlockCallTarget0 = Func<BlockParam, object, object>;
     using BlockCallTarget1 = Func<BlockParam, object, object, object>;
     using BlockCallTarget2 = Func<BlockParam, object, object, object, object>;
     using BlockCallTarget3 = Func<BlockParam, object, object, object, object, object>;
-    using BlockCallTarget4 = Func<BlockParam, object, object, object, object, object, object>;
-    using BlockCallTargetN = Func<BlockParam, object, object[], object>;
     using BlockCallTargetUnsplatN = Func<BlockParam, object, object[], RubyArray, object>;
     using BlockCallTargetUnsplatProcN = Func<BlockParam, object, object[], RubyArray, Proc, object>;
 
@@ -81,6 +71,7 @@ namespace IronRuby.Builtins {
             public RubyLambdaMethodInfo Method;
             public RefinementActivation RefinementOverride;
             public string SymbolName;
+            public bool IsIsolated;
         }
 
         private RareState _rare;
@@ -159,6 +150,15 @@ namespace IronRuby.Builtins {
             internal set { if (value != null || _rare != null) { Rare.SymbolName = value; } }
         }
 
+        /// <summary>
+        /// The proc is isolated from the scopes around it, as CRuby isolates the block of Ractor.new
+        /// and a shareable proc: code it evals cannot reach their locals, and it has no binding.
+        /// </summary>
+        public bool IsIsolated {
+            get { var r = _rare; return r != null && r.IsIsolated; }
+            set { if (value || _rare != null) { Rare.IsIsolated = value; } }
+        }
+
         public string SourcePath {
             get { return _dispatcher.SourcePath; }
         }
@@ -183,7 +183,20 @@ namespace IronRuby.Builtins {
         protected Proc(Proc/*!*/ proc)
             : this(proc.Kind, proc.Self, proc.LocalScope, proc.Dispatcher) {
             Converter = proc.Converter;
+            IsIsolated = proc.IsIsolated;
             SymbolName = proc.SymbolName;
+        }
+
+        /// <summary>
+        /// A copy of the proc whose body runs with <paramref name="self"/> as self (Ractor.shareable_proc,
+        /// Ractor.shareable_lambda); a lambda if <paramref name="lambda"/> is set.
+        /// </summary>
+        public Proc/*!*/ CopyWithSelf(object self, bool lambda) {
+            var result = new Proc(lambda ? ProcKind.Lambda : Kind, self, _scope, _dispatcher);
+            result.Converter = Converter;
+            result.SymbolName = SymbolName;
+            result.IsIsolated = true;
+            return result;
         }
 
         /// <summary>
@@ -389,10 +402,6 @@ namespace IronRuby.Builtins {
             return Create(context, 1, BlockDispatcher.MakeAttributes(BlockSignatureAttributes.None, -1), clrMethod);
         }
 
-        public static Proc/*!*/ CreateSimple(RubyContext/*!*/ context, BlockCallTarget1/*!*/ clrMethod) {
-            return Create(context, 1, BlockSignatureAttributes.None, clrMethod);
-        }
-
         public static Proc/*!*/ Create(RubyContext/*!*/ context, BlockCallTarget2/*!*/ clrMethod) {
             return Create(context, 2, BlockSignatureAttributes.None, clrMethod);
         }
@@ -455,6 +464,8 @@ namespace IronRuby.Builtins {
 
             procDispatcher.SetMethod(block);
             procDispatcher.ParameterSignature = SymbolProcSignature;
+            // keywords given to the proc are the method's: the rest list keeps them marked, and the splat passes them on
+            procDispatcher.Ruby2Keywords = true;
 
             // MRI's symbol proc is a lambda: it reports #lambda? true, arity -2 and
             // [[:req], [:rest]] for #parameters

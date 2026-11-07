@@ -15,10 +15,8 @@
 
 using System;
 using System.IO;
-using System.Threading;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
 using System.Text;
 
 namespace IronRuby.Builtins {

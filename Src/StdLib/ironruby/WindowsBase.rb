@@ -13,5 +13,4 @@
 #
 # ****************************************************************************
 
-version = System::Environment.Version.Major == 4 ? "4.0.0.0" : "3.0.0.0"
-require "WindowsBase, Version=#{version}, Culture=neutral, PublicKeyToken=31bf3856ad364e35"
+require "WindowsBase, Culture=neutral, PublicKeyToken=31bf3856ad364e35"

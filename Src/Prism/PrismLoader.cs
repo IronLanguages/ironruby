@@ -29,6 +29,21 @@ namespace IronRuby.Prism {
         // there is no __END__. Computed by PrismParser while the UTF-8 byte array is
         // still around: prism's locations are byte offsets, not char indices.
         public int DataOffset = -1;
+
+        // What PrismParser.FormatErrors needs to lay out the errors; set only when there are some.
+        public PrismErrorSource ErrorSource;
+    }
+
+    public sealed class PrismErrorSource {
+        internal readonly byte[]/*!*/ Source;
+        internal readonly byte[]/*!*/ Options;
+        internal readonly System.Text.Encoding/*!*/ Encoding;
+
+        internal PrismErrorSource(byte[]/*!*/ source, byte[]/*!*/ options, System.Text.Encoding/*!*/ encoding) {
+            Source = source;
+            Options = options;
+            Encoding = encoding;
+        }
     }
 
     /// <summary>

@@ -14,7 +14,6 @@
  * ***************************************************************************/
 
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
 using System.Diagnostics;
 
 namespace IronRuby.Compiler.Ast {

@@ -22,9 +22,7 @@ using System.Text;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
 
@@ -218,17 +216,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: casecmp, capitalize, downcase, swapcase, upcase
-
-        #endregion
-
-        #region TODO: center
-
-        #endregion
-
-        #region TODO: chomp, chop
-        #endregion
-
         #region dump, inspect
 
         [RubyMethod("inspect", RubyMethodAttributes.PublicInstance)]
@@ -253,10 +240,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: each, each_byte, each_line
-
-        #endregion
-
         #region empty?, size, length, encoding
 
         [RubyMethod("empty?")]
@@ -274,20 +257,6 @@ namespace IronRuby.Builtins {
             return RubyEncoding.UTF8;
         }
 
-        #endregion
-
-        #region TODO: sub, gsub
-        #endregion
-
-        #region TODO: index, rindex
-
-
-        #endregion
-
-        #region TODO: delete
-        #endregion
-
-        #region TODO: count
         #endregion
 
         #region include?
@@ -329,12 +298,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: scan
-        #endregion
-
-        #region TODO: succ
-        #endregion
-
         #region split
 
         // TODO: return an array of CLR strings, not mutable strings
@@ -358,12 +321,6 @@ namespace IronRuby.Builtins {
             return MutableStringOps.Split(stringCast, MutableString.Create(self, RubyEncoding.UTF8), regexp, limit);
         }
 
-        #endregion
-
-        #region TODO: strip, lstrip, rstrip
-        #endregion
-
-        #region TODO: squeeze
         #endregion
 
         #region to_i, hex, oct
@@ -415,7 +372,7 @@ namespace IronRuby.Builtins {
         #region to_f, to_s, to_str, to_clr_string, to_sym, intern
 
         [RubyMethod("to_f")]
-        public static double ToDouble(string/*!*/ self) {
+        public static double ToDouble(RubyContext/*!*/ context, string/*!*/ self) {
             // The tokenizer parses *literals*, where an underscore may sit anywhere between
             // digits and the whole string has to be consumed. #to_f is the lenient form: it
             // takes the longest valid prefix and answers 0.0 when there is none, and an
@@ -426,12 +383,12 @@ namespace IronRuby.Builtins {
             }
 
             double result;
-            if (Double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
-                return result;
+            if (!Double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
+                // Out of range: MRI answers +/-Infinity rather than failing.
+                result = cleaned[0] == '-' ? Double.NegativeInfinity : Double.PositiveInfinity;
             }
-
-            // Out of range: MRI answers +/-Infinity rather than failing.
-            return cleaned[0] == '-' ? Double.NegativeInfinity : Double.PositiveInfinity;
+            RubyOps.WarnIfFloatOutOfRange(context, cleaned, result);
+            return result;
         }
 
         /// <summary>
@@ -535,9 +492,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: upto
-        #endregion
-
         #region replace, reverse
 
         // Ruby replace is a mutating operation, we fallback to System.String::Replace.
@@ -553,37 +507,6 @@ namespace IronRuby.Builtins {
 
             return result.ToString();
         }
-
-        #endregion
-
-        #region TODO: tr, tr_s
-        #endregion
-
-        #region TODO: ljust
-        #endregion
-
-        #region TODO: rjust
-        #endregion
-
-        #region TODO: unpack
-        #endregion
-
-        #region TODO: sum
-        #endregion
-
-        #region TODO: Encodings (1.9)
-
-        //ascii_only?
-        //bytes
-        //bytesize
-        //chars
-        //codepoints
-        //each_byte
-        //each_char
-        //each_codepoint
-        //encode
-        //encoding
-        //valid_esncoding?
 
         #endregion
 

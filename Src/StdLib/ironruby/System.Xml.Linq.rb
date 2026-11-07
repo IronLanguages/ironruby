@@ -13,5 +13,4 @@
 #
 # ****************************************************************************
 
-version = System::Environment.Version.Major == 4 ? "4.0.0.0" : "3.5.0.0"
-require "System.Xml.Linq, Version=#{version}, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+require "System.Xml.Linq, Culture=neutral, PublicKeyToken=b77a5c561934e089"

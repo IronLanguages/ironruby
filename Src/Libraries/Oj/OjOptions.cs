@@ -143,8 +143,6 @@ namespace IronRuby.StandardLibrary.Oj {
 
         internal static readonly byte[] Empty = new byte[0];
 
-        internal int CreateIdLen { get { return CreateId == null ? 0 : CreateId.Length; } }
-
         internal Options/*!*/ Clone() {
             var result = (Options)MemberwiseClone();
             return result;
@@ -283,10 +281,6 @@ namespace IronRuby.StandardLibrary.Oj {
                 Array.Resize(ref bytes, nul);
             }
             return bytes;
-        }
-
-        private static bool IsClass(object v) {
-            return v is RubyClass;
         }
 
         private static void CheckClass(RubyContext/*!*/ context, object v) {

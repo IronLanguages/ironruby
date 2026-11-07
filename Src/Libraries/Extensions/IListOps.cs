@@ -22,13 +22,11 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Osr;
-using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Builtins {
     using EachSite = Func<CallSite, object, Proc, object>;
@@ -227,8 +225,8 @@ namespace IronRuby.Builtins {
             // Since Ruby 3.0 none of these methods hand back the receiver's subclass:
             // MyArray[1, 2, 3].reverse, #uniq, #flatten, #[0, 2] and the rest are all
             // plain Arrays.
-            var array = list as RubyArray;
-            if (array != null) {
+            // A CLR array has no allocator and cannot grow: its #sort, #reverse, ... are Arrays too.
+            if (list is RubyArray || list is System.Array) {
                 return new RubyArray();
             }
             
@@ -261,6 +259,16 @@ namespace IronRuby.Builtins {
             // ARGV.replace(argv) where argv *is* ARGV, so `rails db:migrate db:seed` lost
             // every task after the first and railsbench served 404s from an unseeded database.
             if (ReferenceEquals(self, other)) {
+                return self;
+            }
+            if (self.IsFixedSize) {
+                // A CLR array (#sort!, #shuffle!, ...): Clear would zero it before Add failed.
+                if (self.Count != other.Count) {
+                    throw new NotSupportedException("Collection was of a fixed size.");
+                }
+                for (int i = 0; i < self.Count; i++) {
+                    self[i] = other[i];
+                }
                 return self;
             }
             self.Clear();
@@ -304,7 +312,6 @@ namespace IronRuby.Builtins {
                 AddRange(result, self);
             }
 
-            allocateStorage.Context.TaintObjectBy(result, self);
             return result;
         }
 
@@ -908,13 +915,25 @@ namespace IronRuby.Builtins {
 
         #region collect!, map!, compact, compact!
 
+        // A method of several names is a CLR method per name where its frame can show in a backtrace -
+        // under a block that raises - since MRI names the frame by the name called (see IListOps.Map).
         [RubyMethod("collect!")]
-        [RubyMethod("map!")]
         public static object CollectInPlace(BlockParam collector, IList/*!*/ self) {
+            return CollectInPlace(collector, self, "collect!");
+        }
+
+        [RubyMethod("map!")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("CollectInPlace")]
+        public static object MapInPlace(BlockParam collector, IList/*!*/ self) {
+            return CollectInPlace(collector, self, "map!");
+        }
+
+        private static object CollectInPlace(BlockParam collector, IList/*!*/ self, string/*!*/ name) {
             if (collector == null) {
                 // The Enumerator itself is fine to hand out; its #each comes back through here
                 // with a block and raises then, which is what MRI does.
-                return new Enumerator(self, "collect!");
+                return new Enumerator(self, name);
             }
             // The check belongs to the method rather than to the loop, so that an empty frozen
             // array - where the loop never runs - raises too.
@@ -950,7 +969,6 @@ namespace IronRuby.Builtins {
                         compacted.Add(item);
                     }
                 }
-                allocateStorage.Context.TaintObjectBy(compacted, self);
                 return compacted;
             }
 
@@ -961,8 +979,6 @@ namespace IronRuby.Builtins {
                     result.Add(item);
                 }
             }
-
-            allocateStorage.Context.TaintObjectBy(result, self);
 
             return result;
         }
@@ -1212,13 +1228,27 @@ namespace IronRuby.Builtins {
         // given block - two block invocations and a packed argument array per element. Like MRI's,
         // they do not call an #each that a subclass defines.
 
-        [RubyMethod("collect")]
+        //
+        // MRI defines each name as a method of its own, and a backtrace names a frame by the method called:
+        // under a block that raises, `ary.collect' says Array#collect and `ary.map' Array#map. A backtrace
+        // here names a library frame by its CLR method, so the second name is a method that calls the first
+        // (the outermost of library frames calling one another is reported); NoInlining keeps its frame and
+        // [SameRubyMethod] keeps the two one method to Ruby (UnboundMethod#==), as MRI's are one C function.
+        // Without a block one method does for all names: [CalledName] tells it which the Enumerator calls.
+
         [RubyMethod("map")]
-        public static Enumerator/*!*/ GetMapEnumerator(IList/*!*/ self) {
-            return new Enumerator(self, "map");
+        [RubyMethod("collect")]
+        public static Enumerator/*!*/ GetMapEnumerator([CalledName]string/*!*/ name, IList/*!*/ self) {
+            return new Enumerator(self, name);
         }
 
         [RubyMethod("collect")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Map")]
+        public static object Collect([NotNull]BlockParam/*!*/ collector, IList/*!*/ self) {
+            return Map(collector, self);
+        }
+
         [RubyMethod("map")]
         public static object Map([NotNull]BlockParam/*!*/ collector, IList/*!*/ self) {
             var result = new RubyArray(self.Count);
@@ -1243,11 +1273,17 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("filter")]
         [RubyMethod("select")]
-        public static Enumerator/*!*/ GetSelectEnumerator(IList/*!*/ self) {
-            return new Enumerator(self, "select");
+        public static Enumerator/*!*/ GetSelectEnumerator([CalledName]string/*!*/ name, IList/*!*/ self) {
+            return new Enumerator(self, name);
         }
 
         [RubyMethod("filter")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Select")]
+        public static object Filter([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
+            return Select(predicate, self);
+        }
+
         [RubyMethod("select")]
         public static object Select([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
             var result = new RubyArray();
@@ -1764,11 +1800,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("find_index")]
         [RubyMethod("index")]
-        public static Enumerator/*!*/ GetFindIndexEnumerator(BlockParam predicate, IList/*!*/ self) {
+        public static Enumerator/*!*/ GetFindIndexEnumerator([CalledName]string/*!*/ name, BlockParam predicate, IList/*!*/ self) {
             Debug.Assert(predicate == null);
             // The Enumerator finds the index once it is given a block, so it reports no size:
             // it answers one number, not one element per element of the receiver.
-            return new Enumerator(self, "find_index");
+            return new Enumerator(self, name);
         }
 
         [RubyMethod("rindex")]
@@ -1777,8 +1813,14 @@ namespace IronRuby.Builtins {
             return new Enumerator(self, "rindex");
         }
 
-        [RubyMethod("find_index")]
         [RubyMethod("index")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("FindIndex")]
+        public static object Index([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
+            return FindIndex(predicate, self);
+        }
+
+        [RubyMethod("find_index")]
         public static object FindIndex([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
             for (int i = 0; i < self.Count; i++) {
                 object blockResult;
@@ -1848,32 +1890,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region indexes, indices, values_at
-
-        [RubyMethod("indexes")]
-        [RubyMethod("indices")]
-        public static object Indexes(ConversionStorage<int>/*!*/ fixnumCast,
-            UnaryOpStorage/*!*/ allocateStorage,
-            IList/*!*/ self, params object[]/*!*/ values) {
-            fixnumCast.Context.ReportWarning("Array#indexes and Array#indices are deprecated; use Array#values_at");
-
-            RubyArray result = new RubyArray();
-
-            for (int i = 0; i < values.Length; ++i) {
-                Range range = values[i] as Range;
-                if (range != null) {
-                    IList fragment = GetElements(fixnumCast, allocateStorage, self, range);
-                    if (fragment != null) {
-                        result.Add(fragment);
-                    }
-                } else {
-                    result.Add(GetElement(self, Protocols.CastToFixnum(fixnumCast, values[i])));
-                }
-            }
-
-            return result;
-
-        }
+        #region values_at
 
         [RubyMethod("values_at")]
         public static RubyArray/*!*/ ValuesAt(ConversionStorage<int>/*!*/ fixnumCast,
@@ -1962,7 +1979,9 @@ namespace IronRuby.Builtins {
             }
 
             // calculate length:
-            MutableString any = separator;
+            // The result starts out in the first string's encoding, and the separator is appended
+            // to that, as in MRI: an incompatible pair is reported in that order.
+            MutableString any = null;
             int length = (separator != null) ? (isBinary.HasValue && isBinary.Value ? separator.GetByteCount() : separator.GetCharCount()) * (parts.Count - 1) : 0;
             for (int i = 0, n = parts.Count; i < n; i++) {
                 var part = parts[i];
@@ -1973,6 +1992,7 @@ namespace IronRuby.Builtins {
                     }
                 }
             }
+            any ??= separator;
 
             if (any == null) {
                 return MutableString.CreateEmpty(RubyEncoding.Ascii);
@@ -1991,16 +2011,9 @@ namespace IronRuby.Builtins {
 
                 if (part != null) {
                     result.Append(part);
-                    result.TaintBy(part);
                 }
             }
 
-            if (separator != null) {
-                result.TaintBy(separator);
-            }
-            if (!result.IsTainted || !result.IsUntrusted) {
-                result.TaintBy(self, conversions.Context);
-            }
             return result;
         }
 
@@ -2076,7 +2089,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region length, size, empty?, nitems
+        #region length, size, count, empty?
 
         [RubyMethod("length")]
         [RubyMethod("size")]
@@ -2129,17 +2142,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("empty?")]
         public static bool Empty(IList/*!*/ self) {
             return self.Count == 0;
-        }
-
-        [RubyMethod("nitems")]
-        public static int NumberOfNonNilItems(IList/*!*/ self) {
-            int count = 0;
-            foreach (object obj in self) {
-                if (obj != null) {
-                    count++;
-                }
-            }
-            return count;
         }
 
         #endregion

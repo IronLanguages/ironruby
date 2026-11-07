@@ -15,12 +15,8 @@
 
 using System;
 using IronRuby.Builtins;
-using System.Text;
-using System.Diagnostics;
 using System.Collections.Generic;
 using IronRuby.Runtime;
-using Microsoft.Scripting;
-using System.Runtime.CompilerServices;
 using System.Collections;
 using Microsoft.Scripting.Utils;
 
@@ -128,22 +124,14 @@ namespace IronRuby.Tests {
             RubyArray a;
 
             a = new RubyArray(new object[] { 1, 2, 8 });
-            Assert(!a.IsTainted && !a.IsFrozen && !a.IsReadOnly && !((IList)a).IsFixedSize && !((ICollection)a).IsSynchronized);
+            Assert(!a.IsFrozen && !a.IsReadOnly && !((IList)a).IsFixedSize && !((ICollection)a).IsSynchronized);
             Assert(ReferenceEquals(((ICollection)a).SyncRoot, a));
-
-            a.IsTainted = true;
-            Assert(a.IsTainted);
-            a.IsTainted = false;
-            Assert(!a.IsTainted);
 
             a[1] = 5;
             Assert((int)a[0] == 1 && (int)a[1] == 5 && (int)a[2] == 8);
 
             ((IRubyObjectState)a).Freeze();
             Assert(a.IsFrozen);
-
-            AssertExceptionThrown<RuntimeError>(() => a.IsTainted = true);
-            Assert(!a.IsTainted);
 
             AssertExceptionThrown<RuntimeError>(() => a[1] = 1);
             Assert((int)a[0] == 1 && (int)a[1] == 5 && (int)a[2] == 8);

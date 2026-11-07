@@ -16,8 +16,6 @@
 using System;
 using System.Text.RegularExpressions;
 using IronRuby.Builtins;
-using System.Text;
-using System.Diagnostics;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -398,143 +396,86 @@ puts(/foo/ =~ 'xxxfoo')     # a literal calls a redefined Regexp#=~ too (MRI 1.9
 =~
 ");
         }
+
+        /// <summary>
+        /// Byte escapes in a regexp of a multibyte encoding spell characters of it (/\xa4\xa2/e is one
+        /// character), and every match operation answers character offsets: the regex runs on the
+        /// string's own characters rather than on a k-coded decoding of its bytes.
+        /// </summary>
+        public void Regex_ByteEscapes1() {
+            TestOutput(@"
+s = ""あaいbあ"".encode(""EUC-JP"")
+re = Regexp.new('\xa4\xa2'.force_encoding(""EUC-JP""))
+p s =~ re, s.index(re, 1), s.rindex(re), re.encoding
+m = s.match(re, 1)
+p [m.begin(0), m.end(0), m.byteoffset(0), m.pre_match.size, $~.begin(0)]
+p s.scan(re).size, s.gsub(re, ""x"").encode(""UTF-8""), s.index(/b/e, 2), s =~ /\xa4\xa4/e
+w = ""あaいb"".encode(""Windows-31J"")
+p w =~ /\x82\xa2/s, w.split(/\x82\xa2/s).map(&:bytesize)
+p ""ああ"".encode(""EUC-JP"") =~ Regexp.new('\xa4\xa2*'.force_encoding(""EUC-JP"")), $~[0].bytesize
+p ""あaいb"" =~ /\xe3\x81\x84/, ""あaいb"".match(/b/u).byteoffset(0), ""あaいb"".match(/[\xe3\x81\x82-\xe3\x81\x84]+/)[0].size
+p((Regexp.new('\xe3\x81') rescue $!), (Regexp.new('\xff', Regexp::IGNORECASE) rescue $!))
+require 'strscan'
+ss = StringScanner.new(s)
+p ss.scan(re).bytesize, ss.scan(/a/e), ss.scan(/./e).bytesize, ss.pos, ss.charpos
+p((""abc"".encode(""UTF-16LE"") =~ /b/ rescue $!), (""abc"".encode(""UTF-16LE"") =~ /b/n rescue $!))
+p((""\xff"".force_encoding(""BINARY"").sub(""é"", """") rescue $!), (""abc"".encode(""UTF-16LE"").sub(""b"", """") rescue $!))
+", @"
+0
+4
+4
+#<Encoding:EUC-JP>
+[4, 5, [6, 8], 4, 4]
+2
+""xaいbx""
+3
+2
+2
+[3, 1]
+0
+4
+2
+[7, 8]
+1
+#<RegexpError: too short escaped multibyte character: /\xe3\x81/>
+#<RegexpError: invalid multibyte escape: /\xff/i>
+2
+""a""
+2
+5
+3
+#<Encoding::CompatibilityError: incompatible encoding regexp match (US-ASCII regexp with UTF-16LE string)>
+#<Encoding::CompatibilityError: incompatible encoding regexp match (US-ASCII regexp with UTF-16LE string)>
+#<Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+");
+        }
+
+        /// <summary>
+        /// Onigmo reads no escape inside a comment, so a byte escape that spells no character there
+        /// is no error: (?#...), and under /x, or (?x) for the rest of a group, # to the end of the line.
+        /// </summary>
+        public void Regex_ByteEscapeComments1() {
+            TestOutput(@"
+p Regexp.new(""a(?#\\xff)b"") =~ ""ab"", Regexp.new(""a # \\xff\nb"", Regexp::EXTENDED) =~ ""ab""
+p Regexp.new(""(?x)a # \\xff\nb"") =~ ""ab"", Regexp.new(""(?x:a # \\xff\n)b"") =~ ""ab"", Regexp.new(""a(?#\\)\\xff)b"") =~ ""ab""
+p /a#\xff/x =~ ""a"", /a(?#\xff)/ =~ ""a"", Regexp.new(""a # caf\\xc3\\xa9\n\\xc3\\xa9"", Regexp::EXTENDED) =~ ""aé""
+p((Regexp.new(""(?x:a)# \\xff"") rescue $!), (Regexp.new(""[#\\xff]"", Regexp::EXTENDED) rescue $!))
+", @"
+0
+0
+0
+0
+0
+0
+0
+0
+#<RegexpError: invalid multibyte escape: /(?x:a)# \xff/>
+#<RegexpError: invalid multibyte escape: /[#\xff]/x>
+");
+        }
+
         
-#if OBSOLETE //? 
-        [Options(NoRuntime = true)]
-        public void RegexEncoding1() {
-            MatchData m;
-            // the k-coding of the pattern string is irrelevant:
-            foreach (var pe in new[] {  RubyEncoding.Binary }) {
-                var p = MutableString.CreateBinary(new byte[] { 0x82, 0xa0, (byte)'{', (byte)'2', (byte)'}' }, pe);
-
-                var r = new RubyRegex(p, RubyRegexOptions.NONE);
-                var rs = new RubyRegex(p, RubyRegexOptions.SJIS);
-
-                // the k-coding of the string is irrelevant:
-                foreach (var se in new[] { RubyEncoding.Binary }) {
-                    var s = MutableString.CreateBinary(new byte[] { 0x82, 0xa0,  0xa0 }, se);
-                    var t = MutableString.CreateBinary(new byte[] { 0x82, 0xa0,  0xa0,  0x82, 0xa0,  0xa0, 0xff }, se);
-                    var u = MutableString.CreateBinary(new byte[] { 0x82, 0xa0,  0x82, 0xa0,  0x82, 0xa0 }, se);
-
-                    // /あ{2}/ does not match "あ\xa0"
-                    m = r.Match(RubyEncoding.KCodeSJIS, s);
-                    Assert(m == null);
-
-                    // /\x82\xa0{2}/ matches "[ \x82\xa0\xa0 ] \x82\xa0\xa0\xff"
-                    m = r.Match(null, s);
-                    Assert(m != null && m.Index == 0);
-
-                    // /\x82\xa0{2}/ matches "\x82\xa0\xa0 [ \x82\xa0\xa0 ] \xff" starting from byte #1:
-                    m = r.Match(null, t, 1, false);
-                    Assert(m != null && m.Index == 3 && m.Length == 3);
-
-                    // /あ{2}/s does not match "あ\xa0", current KCODE is ignored
-                    m = rs.Match(null, s);
-                    Assert(m == null);
-
-                    // /あ{2}/s does not match "あ\xa0", current KCODE is ignored
-                    m = rs.Match(RubyEncoding.KCodeUTF8, s);
-                    Assert(m == null);
-
-                    // /あ{2}/s matches "ああ\xff", current KCODE is ignored
-                    m = rs.Match(RubyEncoding.KCodeUTF8, u, 2, false);
-                    Assert(m != null && m.Index == 2 && m.Length == 4);
-
-
-                    // /あ{2}/ does not match "あ\xa0あ\xa0"
-                    m = r.LastMatch(RubyEncoding.KCodeSJIS, t);
-                    Assert(m == null);
-
-                    // /\x82\xa0{2}/ matches "\x82\xa0\xa0 [ \x82\xa0\xa0 ] \xff"
-                    m = r.LastMatch(null, t);
-                    Assert(m != null && m.Index == 3);
-
-                    // /あ{2}/s does not match "あ\xa0あ\xa0", current KCODE is ignored
-                    m = rs.LastMatch(null, t);
-                    Assert(m == null);
-
-                    // /あ{2}/s does not match "あ\xa0あ\xa0", current KCODE is ignored
-                    m = rs.LastMatch(RubyEncoding.KCodeUTF8, t);
-                    Assert(m == null);
-                }
-            }
-        }
-
-        [Options(NoRuntime = true)]
-        public void RegexEncoding2() {
-            var SJIS = RubyEncoding.KCodeSJIS.StrictEncoding;
-
-            // 1.9 encodings:
-            var invalidUtf8 = MutableString.CreateBinary(new byte[] { 0x80 }, RubyEncoding.UTF8);
-            AssertExceptionThrown<ArgumentException>(() => new RubyRegex(invalidUtf8, RubyRegexOptions.NONE));
-
-            // LastMatch
-
-            MatchData m;
-            var u = MutableString.CreateBinary(SJIS.GetBytes("あああ"), RubyEncoding.KCodeSJIS);
-            var p = MutableString.CreateBinary(SJIS.GetBytes("あ{2}"), RubyEncoding.KCodeSJIS);
-
-            var rs = new RubyRegex(p, RubyRegexOptions.SJIS);
-
-            // /あ{2}/ matches "あああ", the resulting index is in bytes:
-            m = rs.LastMatch(null, u);
-            Assert(m != null && m.Index == 2);
-
-            rs = new RubyRegex(MutableString.CreateBinary(SJIS.GetBytes("あ")), RubyRegexOptions.SJIS);
-
-            // "start at" in the middle of a character:
-            m = rs.LastMatch(null, u, 0);
-            Assert(m != null && m.Index == 0);
-
-            m = rs.LastMatch(null, u, 1);
-            Assert(m != null && m.Index == 0);
-
-            m = rs.LastMatch(null, u, 2);
-            Assert(m != null && m.Index == 2);
-
-            m = rs.LastMatch(null, u, 3);
-            Assert(m != null && m.Index == 2);
-
-            // Split
-            
-            u = MutableString.CreateBinary(SJIS.GetBytes("あちあちあ"), RubyEncoding.UTF8);
-            rs = new RubyRegex(MutableString.CreateBinary(SJIS.GetBytes("ち")), RubyRegexOptions.SJIS);
-            var parts = rs.Split(null, u);
-            Assert(parts.Length == 3);
-            foreach (var part in parts) {
-                Assert(part.Encoding == RubyEncoding.KCodeSJIS);
-                Assert(part.ToString() == "あ");
-            }
-
-            // groups
-
-            rs = new RubyRegex(MutableString.CreateBinary(SJIS.GetBytes("ち(a(あ+)(b+))+あ")), RubyRegexOptions.SJIS);
-            u = MutableString.CreateBinary(SJIS.GetBytes("ちaああbaあbbbあ"));
-
-            m = rs.Match(null, u);
-            Assert(m.GroupCount == 4);
-
-            int s, l;
-            Assert(m.GetGroupStart(0) == (s = 0));
-            Assert(m.GetGroupLength(0) == (l = u.GetByteCount()));
-            Assert(m.GetGroupEnd(0) == s + l);
-
-            // the group has 2 captures, the last one is its value:
-            Assert(m.GetGroupStart(1) == (s = SJIS.GetByteCount("ちaああb")));
-            Assert(m.GetGroupLength(1) == (l = SJIS.GetByteCount("aあbbb")));
-            Assert(m.GetGroupEnd(1) == s + l);
-
-            // the group has 2 captures, the last one is its value:
-            Assert(m.GetGroupStart(2) == (s = SJIS.GetByteCount("ちaああba")));
-            Assert(m.GetGroupLength(2) == (l = SJIS.GetByteCount("あ")));
-            Assert(m.GetGroupEnd(2) == s + l);
-
-            // the group has 2 captures, the last one is its value:
-            Assert(m.GetGroupStart(3) == (s = SJIS.GetByteCount("ちaああbaあ")));
-            Assert(m.GetGroupLength(3) == (l = SJIS.GetByteCount("bbb")));
-            Assert(m.GetGroupEnd(3) == s + l);
-        }
-#endif
     }
 }
 

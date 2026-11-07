@@ -13,25 +13,13 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
-using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
-using IronRuby.Builtins;
-using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using System;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = Expression;
-    using AstUtils = Microsoft.Scripting.Ast.Utils;
     
     public sealed class Statements : IEnumerable<Expression> {
         private static readonly Statements _Empty = new Statements();

@@ -10,9 +10,7 @@
 using System;
 using System.Globalization;
 using System.Numerics;
-using System.Text;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
 

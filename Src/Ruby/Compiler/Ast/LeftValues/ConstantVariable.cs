@@ -13,15 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Diagnostics;
-using System.Dynamic;
 using System.Reflection;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
@@ -31,7 +26,6 @@ using IronRuby.Runtime;
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
     using System.Collections.Generic;
-    using System.Threading;
     
     internal enum StaticScopeKind {
         Global,
@@ -127,7 +121,7 @@ namespace IronRuby.Compiler.Ast {
             var names = new[] { Name };
             if (!tryRead) {
                 return Methods.GetExpressionQualifiedConstant.OpCall(targetValue, gen.CurrentScopeVariable,
-                    Ast.Constant(new ExpressionQualifiedConstantSiteCache()), Ast.Constant(names));
+                    Ast.Constant(new ExpressionQualifiedConstantSiteCache(gen.IsCoreLibrary)), Ast.Constant(names));
             }
 
             // the target expression may assign a temporary, so evaluate it exactly once
@@ -136,7 +130,7 @@ namespace IronRuby.Compiler.Ast {
                 Methods.IsDefinedExpressionQualifiedConstant.OpCall(Ast.Assign(qualifier, targetValue), gen.CurrentScopeVariable,
                     Ast.Constant(new ExpressionQualifiedIsDefinedConstantSiteCache()), Ast.Constant(names)),
                 AstUtils.Box(Methods.GetExpressionQualifiedConstant.OpCall(qualifier, gen.CurrentScopeVariable,
-                    Ast.Constant(new ExpressionQualifiedConstantSiteCache()), Ast.Constant(names))),
+                    Ast.Constant(new ExpressionQualifiedConstantSiteCache(gen.IsCoreLibrary)), Ast.Constant(names))),
                 AstUtils.Constant(null, typeof(object))
             );
         }
@@ -198,7 +192,7 @@ namespace IronRuby.Compiler.Ast {
                 siteCache = new ExpressionQualifiedIsDefinedConstantSiteCache();
                 op = Methods.IsDefinedExpressionQualifiedConstant;
             } else {
-                siteCache = new ExpressionQualifiedConstantSiteCache();
+                siteCache = new ExpressionQualifiedConstantSiteCache(gen.IsCoreLibrary);
                 op = Methods.GetExpressionQualifiedConstant;
             }
 
@@ -220,6 +214,8 @@ namespace IronRuby.Compiler.Ast {
         //     } else {
         //       <result> = ((WeakReference)value).Target;
         //     }
+        //   } else if (value.GetType() == typeof(RactorCheckedConstant)) {
+        //     <result> = ReadRactorCheckedConstant(value);
         //   } else {
         //     <result> = value;
         //   }
@@ -249,7 +245,7 @@ namespace IronRuby.Compiler.Ast {
                         OpCall(gen.CurrentScopeVariable, siteVar, name); 
 
             } else {
-                siteCache = (ConstantSiteCache)new ConstantSiteCache();
+                siteCache = new ConstantSiteCache(gen.IsCoreLibrary);
                 gen.CurrentScope.GetConstantSiteCacheVariables(out siteVar, out valueVar);
                 versionField = Fields.ConstantSiteCache_Version;
                 valueField = Fields.ConstantSiteCache_Value;
@@ -270,7 +266,12 @@ namespace IronRuby.Compiler.Ast {
                 readValue = Ast.Condition(
                     Ast.TypeEqual(Ast.Assign(valueVar, Ast.Field(siteVar, valueField)), typeof(WeakReference)),
                     weakValue,
-                    valueVar
+                    // a value cached once Ractors have started, which a non-main Ractor may not see
+                    Ast.Condition(
+                        Ast.TypeEqual(valueVar, typeof(RactorCheckedConstant)),
+                        Methods.ReadRactorCheckedConstant.OpCall(valueVar),
+                        valueVar
+                    )
                 );
 
                 fallback = (isQualified ? Methods.GetQualifiedConstant : Methods.GetUnqualifiedConstant).

@@ -85,7 +85,6 @@ namespace IronRuby.Builtins {
                     stream = context.DomainManager.Platform.OpenInputFileStream(path, fileMode, access, FileShare.ReadWrite);
                 } catch (FileNotFoundException) {
                     throw RubyExceptions.CreateENOENT(String.Format("No such file or directory - {0}", path));
-#if FEATURE_FILESYSTEM
                 } catch (DirectoryNotFoundException e) {
                     // The CLR says this for a missing directory on the way to the file and for a
                     // file standing where a directory should be alike; MRI names the path, and
@@ -101,8 +100,11 @@ namespace IronRuby.Builtins {
                     }
                     throw RubyExceptions.CreateENOENT(e, "No such file or directory - {0}", path);
                 } catch (PathTooLongException e) {
-                    throw RubyExceptions.CreateENOENT(e.Message, e);
-#endif
+                    // open(2) says ENAMETOOLONG; win32.c maps ERROR_FILENAME_EXCED_RANGE to ENOENT.
+                    if (System.IO.Path.DirectorySeparatorChar == '/') {
+                        throw RubyExceptions.CreateErrno(context, RubyErrno.GetNumber("ENAMETOOLONG"), path);
+                    }
+                    throw RubyExceptions.CreateENOENT(e, "No such file or directory - {0}", path);
                 } catch (IOException e) {
                     if ((mode & IOMode.ErrorIfExists) != 0) {
                         throw RubyExceptions.CreateEEXIST(path);
@@ -119,6 +121,11 @@ namespace IronRuby.Builtins {
                     // path of a method defined in "<internal:kernel>" and expects a SystemCallError.
                     if (e.HResult == HResultInvalidName) {
                         throw RubyExceptions.CreateEINVAL(e, "{0}", path);
+                    }
+                    // Any other errno open(2) gave (ELOOP for a symbolic link loop, ...) is its Errno,
+                    // not the IOError a bare IOException surfaces as.
+                    if (e.HResult > 0 && System.IO.Path.DirectorySeparatorChar == '/') {
+                        throw RubyExceptions.CreateErrno(context, e.HResult, path);
                     }
                     throw;
                 } catch (UnauthorizedAccessException) {

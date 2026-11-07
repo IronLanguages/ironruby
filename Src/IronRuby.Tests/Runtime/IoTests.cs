@@ -16,13 +16,11 @@
 using System;
 using IronRuby.Builtins;
 using System.Text;
-using System.Diagnostics;
 using System.Collections.Generic;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
 using System.IO;
 using Microsoft.Scripting.Utils;
-using System.Text.RegularExpressions;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -35,12 +33,37 @@ hello
 ");
         }
 
-        private class TestStream : MemoryStream {
-            private readonly bool _canSeek;
+        /// <summary>
+        /// IO.popen(cmd, "r+") moves bytes: ones that are not valid UTF-8 used to be decoded by the
+        /// pipe writer's encoding (and raise), and #getbyte returned a decoded character.
+        /// </summary>
+        public void IO_PopenDuplexBytes1() {
+            if (OperatingSystem.IsWindows()) {
+                return;
+            }
 
-            public TestStream(bool canSeek, byte[] data) 
+            TestOutput(@"
+IO.popen('cat', 'r+b') do |io|
+  io.write(""\xff\x00\x80\xC3\xA9"".force_encoding(""BINARY""))
+  io.close_write
+  p io.read.bytes
+end
+IO.popen('cat', 'r+') do |io|
+  io.write(""hé!"")
+  io.close_write
+  p io.getc, io.getbyte, io.getbyte
+end
+", @"
+[255, 0, 128, 195, 169]
+""h""
+195
+169
+");
+        }
+
+        private class TestStream : MemoryStream {
+            public TestStream(byte[] data) 
                 : base(data) {
-                _canSeek = canSeek;
             }
 
             public override bool CanSeek {
@@ -56,7 +79,7 @@ hello
         public void File_AppendBytes1() {
             string s;
             string crlf = "\r\n";
-            var stream = new TestStream(false, B(
+            var stream = new TestStream(B(
                 "ab\r\r\n" +
                 "e" + (s = "fgh" + crlf + "ijkl" + crlf + "mnop" + crlf + crlf + crlf + crlf + "qrst") +
                 crlf + "!"
@@ -87,7 +110,7 @@ hello
             Assert(io.AppendBytes(buffer, 10, false) == 0);
             Assert(buffer.ToString() == "");
 
-            stream = new TestStream(false, B(s = "abcd" + crlf + "xyz" + crlf + "qqq;"));
+            stream = new TestStream(B(s = "abcd" + crlf + "xyz" + crlf + "qqq;"));
             io = new RubyBufferedStream(stream);
             buffer = MutableString.CreateBinary();
             Assert(io.AppendBytes(buffer, Int32.MaxValue, true) == s.Length);
@@ -120,7 +143,7 @@ hello
 
         [Options(NoRuntime = true)]
         public void File_ReadLine1() {
-            var stream = new TestStream(false, B(
+            var stream = new TestStream(B(
                 "a\r\n\r\nbbbbbbbbbbbbbbbbbbbbb1bbbbbbbbbbbbb2bbbbbbbbbbbbbbbbbbbbb3bbbbbbbbbbbbb4\rc\nd\n\n\n\nef")
             );
 
@@ -151,6 +174,43 @@ hello
             }
         }
 
+        /// <summary>
+        /// A non-seekable stream that hands its data back in the given pieces, the way a pipe does.
+        /// </summary>
+        private class ChunkedStream : MemoryStream {
+            private readonly int[] _chunks;
+            private int _next;
+
+            public ChunkedStream(byte[] data, params int[] chunks)
+                : base(data) {
+                _chunks = chunks;
+            }
+
+            public override bool CanSeek => false;
+
+            public override int Read(byte[] buffer, int offset, int count) {
+                int chunk = _next < _chunks.Length ? _chunks[_next++] : count;
+                return base.Read(buffer, offset, Math.Min(count, chunk));
+            }
+        }
+
+        /// <summary>
+        /// Topping up a buffer whose data no longer starts at its beginning: the new bytes go after
+        /// the buffered ones, not over the bytes the earlier reads have already consumed.
+        /// </summary>
+        [Options(NoRuntime = true)]
+        public void File_LoadBufferOffset1() {
+            var io = new RubyBufferedStream(new ChunkedStream(B("ab\n\r\ncd"), 4, 2), false, 16);
+
+            TestReadLine(io, true, "ab\n");
+            // "\r" is buffered after the consumed line; peeking past it reads the "\n" of the next chunk
+            Assert(io.PeekByteNormalizeEoln(false) == '\n');
+            Assert(io.ReadByteNormalizeEoln(false) == '\n');
+            Assert(io.ReadByte() == 'c');
+            Assert(io.ReadByte() == 'd');
+            Assert(io.ReadByte() == -1);
+        }
+
         private void TestReadLine(RubyBufferedStream/*!*/ io, bool preserveEolns, string expected) {
             var s = io.ReadLine(RubyEncoding.Binary, preserveEolns, -1);
             Assert(s == null && expected == null || s.ToString() == expected);
@@ -177,7 +237,7 @@ hello
             foreach (var c in cases) {
                 foreach (int bufferSize in new[] { 1, 2, 3, 4, 5, 7, 100 }) {
                     foreach (bool seekable in new[] { false, true }) {
-                        var stream = seekable ? new MemoryStream(B(c[0])) : new TestStream(false, B(c[0]));
+                        var stream = seekable ? new MemoryStream(B(c[0])) : new TestStream(B(c[0]));
                         var io = new RubyBufferedStream(stream, false, bufferSize);
                         var separator = MutableString.CreateBinary(B(c[1]));
                         int limit = Int32.Parse(c[2]);
@@ -209,7 +269,7 @@ hello
             }
 
             foreach (bool seekable in new[] { false, true }) {
-                var stream = seekable ? new MemoryStream(data) : new TestStream(false, data);
+                var stream = seekable ? new MemoryStream(data) : new TestStream(data);
                 var io = new RubyBufferedStream(stream, false, 16);
                 Assert(io.PeekByte() == data[0]);
 
@@ -221,6 +281,39 @@ hello
 
                 buffer = MutableString.CreateBinary();
                 Assert(io.AppendBytes(buffer, Int32.MaxValue, true) == 0);
+            }
+        }
+
+        // A stream that, like a socket's, must not be read once its data is all in the buffer: a
+        // socket's Read waits for the socket to become readable even when asked for no bytes.
+        private sealed class NoReadStream : TestStream {
+            public bool Forbidden;
+
+            public NoReadStream(byte[] data)
+                : base(data) {
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) {
+                if (Forbidden) {
+                    throw new InvalidOperationException("read from a stream whose data is all buffered");
+                }
+                return base.Read(buffer, offset, count);
+            }
+        }
+
+        [Options(NoRuntime = true)]
+        public void File_AppendBytesFromBuffer1() {
+            // `gets' then `read(n)' of bytes gets has already buffered (Net::HTTP's test server reads a
+            // request body that way): the read is answered from the buffer alone.
+            foreach (bool preserveEndOfLines in new[] { true, false }) {
+                var stream = new NoReadStream(B("POST /\r\n\r\ntest=test"));
+                var io = new RubyBufferedStream(stream, false, 64);
+                Assert(io.ReadLineOrParagraph(MutableString.CreateAscii("\r\n\r\n"), RubyEncoding.Binary, true, Int32.MaxValue).ToString() == "POST /\r\n\r\n");
+                stream.Forbidden = true;
+                var buffer = MutableString.CreateBinary();
+                Assert(io.AppendBytes(buffer, 9, preserveEndOfLines) == 9);
+                Assert(buffer.ToString() == "test=test");
+                Assert(!io.DataBuffered);
             }
         }
 
@@ -253,57 +346,6 @@ hello
             }
         }
 
-#if OBSOLETE // KCODE
-        [Options(Pal = typeof(Pal1))]
-        public void Dir1() {
-            RubyClass dir = Context.GetClass(typeof(RubyDir));
-            Pal1 pal = (Pal1)Context.Platform;
-            var sjis = RubyEncoding.KCodeSJIS.StrictEncoding.GetBytes("ﾎ");
-            var toPath = new ConversionStorage<MutableString>(Context);
-            
-            // transcode to UTF8 if no KCODE specified
-            Context.KCode = null;
-            RubyDir.MakeDirectory(toPath, dir, MutableString.CreateBinary(new byte[] { 0xce, 0xa3 }, RubyEncoding.Binary), null);
-            Assert(pal.Entries["Σ"]);
-            pal.Entries.Clear();
-
-            // transcode to UTF8 if no KCODE specified
-            Context.KCode = null;
-            RubyDir.MakeDirectory(toPath, dir, MutableString.CreateMutable("ﾎｱ", RubyEncoding.KCodeSJIS), null);
-            Assert(pal.Entries["α"]);
-            Assert(FileTest.IsDirectory(toPath, Context.KernelModule, MutableString.CreateMutable("ﾎｱ", RubyEncoding.KCodeSJIS)));
-            Assert(FileTest.IsDirectory(toPath, Context.KernelModule, MutableString.CreateMutable("α", RubyEncoding.KCodeUTF8)));
-            pal.Entries.Clear();
-
-            // transcode to KCODE if specified
-            Context.KCode = RubyEncoding.KCodeUTF8;
-            RubyDir.MakeDirectory(toPath, dir, MutableString.CreateBinary(new byte[] { 0xce, 0xa3 }, RubyEncoding.KCodeSJIS), null);
-            Assert(pal.Entries["Σ"]);
-            pal.Entries.Clear();
-
-            // transcode to KCODE if specified
-            Context.KCode = RubyEncoding.KCodeSJIS;
-            RubyDir.MakeDirectory(toPath, dir, MutableString.CreateBinary(sjis, RubyEncoding.Binary), null);
-            Assert(pal.Entries["ﾎ"]);
-            pal.Entries.Clear();
-
-            // ignore entries whose name cannot be encoded using the current KCODE
-            Context.KCode = RubyEncoding.KCodeSJIS;
-            AssertExceptionThrown<EncoderFallbackException>(() => RubyEncoding.KCodeSJIS.StrictEncoding.GetBytes("Ԋ"));
-            pal.Entries["Ԋ"] = true;
-            pal.Entries["ﾎ"] = true;
-            var entries = RubyDir.GetEntries(toPath, dir, MutableString.CreateEmpty());
-
-            Assert(entries.Count == 3);
-            foreach (MutableString entry in entries) {
-                Assert(entry.Encoding == RubyEncoding.KCodeSJIS);
-            }
-
-            Assert(((MutableString)entries[0]).Equals(MutableString.CreateAscii(".")));
-            Assert(((MutableString)entries[1]).Equals(MutableString.CreateAscii("..")));
-            Assert(((MutableString)entries[2]).Equals(MutableString.Create("ﾎ", RubyEncoding.KCodeSJIS)));
-        }
-#endif
         [Options(Pal = typeof(Pal1))]
         public void Dir2() {
             RubyClass dir = Context.GetClass(typeof(RubyDir));

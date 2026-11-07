@@ -14,7 +14,6 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.Fiddle {

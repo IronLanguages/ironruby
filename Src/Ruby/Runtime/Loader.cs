@@ -22,13 +22,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Security;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -60,14 +57,6 @@ namespace IronRuby.Runtime {
     // TODO: thread safety
     public sealed class Loader {
 
-        internal enum FileKind {
-            RubySourceFile,
-            NonRubySourceFile,
-            Assembly,
-            Type,
-            Unknown,
-        }
-
         private RubyContext/*!*/ _context;
 
         // $:
@@ -91,35 +80,10 @@ namespace IronRuby.Runtime {
         // (ResolveAssembly).
         private static readonly ConditionalWeakTable<Assembly, string>/*!*/ _AssemblyFilesOfAllRuntimes = new ConditionalWeakTable<Assembly, string>();
 
-#if FEATURE_FILESYSTEM
-        // TODO: static
-        // maps full normalized path to compiled code:
-        private Dictionary<string, CompiledFile> _compiledFiles;
-        private readonly object/*!*/ _compiledFileMutex = new object();
-
-        private struct CompiledFile {
-            public readonly ScriptCode/*!*/ CompiledCode;
-            // a precompiled file (see RegisterPrecompiledFile): whether its source is still what it was compiled from; null for saved code
-            public readonly Func<bool> IsCurrent;
-
-            public CompiledFile(ScriptCode/*!*/ compiledCode)
-                : this(compiledCode, null) {
-            }
-
-            public CompiledFile(ScriptCode/*!*/ compiledCode, Func<bool> isCurrent) {
-                Assert.NotNull(compiledCode);
-
-                CompiledCode = compiledCode;
-                IsCurrent = isCurrent;
-            }
-        }
-
-        // counters:
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
-        private int _cacheHitCount;
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
-        private int _compiledFileCount;
-#endif
+        // Files compiled ahead of time (RegisterPrecompiledFile), by full path: the code, and whether the
+        // source is still what it was compiled from (null: not checked). Null until one is registered.
+        private Dictionary<string, (ScriptCode Code, Func<bool> IsCurrent)> _precompiledFiles;
+        private readonly object/*!*/ _precompiledFilesLock = new object();
 
         /// <summary>
         /// TODO: Thread safety: the user of this object is responsible for locking it.
@@ -167,11 +131,9 @@ namespace IronRuby.Runtime {
             _loadedFiles = new RubyArray();
             _unfinishedFiles = new Dictionary<string, Thread>();
 
-#if FEATURE_ASSEMBLY_RESOLVE
             if (!context.RubyOptions.NoAssemblyResolveHook) {
                 new AssemblyResolveHolder(this).HookAssemblyResolve();
             }
-#endif
         }
 
         private RubyArray/*!*/ MakeLoadPaths(RubyOptions/*!*/ options) {
@@ -188,9 +150,8 @@ namespace IronRuby.Runtime {
                 }
             }
 
+            // No ".": MRI dropped the current directory from $LOAD_PATH in 1.9.2.
             AddStandardLibraryPath(loadPaths, options.StandardLibraryPath, options.ApplicationBase);
-            // TODO: remove?
-            loadPaths.Add(MutableString.CreateAscii("."));
             return loadPaths;
         }
 
@@ -214,7 +175,6 @@ namespace IronRuby.Runtime {
         }
 
         private void AddStandardLibraryPath(RubyArray/*!*/ loadPaths, string path, string applicationBaseDir) {
-#if FEATURE_FILESYSTEM
             bool isFullPath;
             if (path != null) {
                 try {
@@ -235,15 +195,11 @@ namespace IronRuby.Runtime {
             }
 
             if (!isFullPath) {
-                try {
-                    if (String.IsNullOrEmpty(applicationBaseDir)) {
-                        applicationBaseDir = _context.Platform.GetEnvironmentVariable(RubyContext.BinDirEnvironmentVariable);
-                        if (!Directory.Exists(applicationBaseDir)) {
-                            applicationBaseDir = AppDomain.CurrentDomain.BaseDirectory;
-                        }
+                if (String.IsNullOrEmpty(applicationBaseDir)) {
+                    applicationBaseDir = _context.Platform.GetEnvironmentVariable(RubyContext.BinDirEnvironmentVariable);
+                    if (!Directory.Exists(applicationBaseDir)) {
+                        applicationBaseDir = AppDomain.CurrentDomain.BaseDirectory;
                     }
-                } catch (SecurityException) {
-                    applicationBaseDir = null;
                 }
 
                 try {
@@ -276,7 +232,6 @@ namespace IronRuby.Runtime {
                 _context.SetInstanceVariable(entry, "@gem_prelude_index", entry);
                 entry.Freeze();
             }
-#endif
             }
 
         // bin/<config>/net8.0 of a project under Src/: the nearest ancestor with a StdLib/ironruby directory.
@@ -296,53 +251,6 @@ namespace IronRuby.Runtime {
             return null;
         }
 
-#if FEATURE_FILESYSTEM
-        private Dictionary<string, CompiledFile>/*!*/ LoadCompiledCode() {
-            Debug.Assert(_context.RubyOptions.LoadFromDisk);
-
-            Dictionary<string, CompiledFile> result = new Dictionary<string, CompiledFile>();
-            Utils.Log("LOADING", "LOADER");
-
-            ScriptCode[] codes = SavableScriptCode.LoadFromAssembly(_context.DomainManager,
-                Assembly.Load(Path.GetFileName(_context.RubyOptions.MainFile))
-            );
-
-            for (int i = 0; i < codes.Length; i++) {
-                string path = codes[i].SourceUnit.Path;
-                string fullPath = Platform.GetFullPath(path);
-                result[fullPath] = new CompiledFile(codes[i]);
-            }
-
-            return result;
-        }
-
-        internal void SaveCompiledCode() {
-            string savePath = _context.RubyOptions.SavePath;
-            if (savePath != null) {
-                lock (_compiledFileMutex) {
-                    var assemblyPath = Path.Combine(savePath, (Path.GetFileName(_context.RubyOptions.MainFile) ?? "snippets") + ".dll");
-
-                    Utils.Log(String.Format("SAVING to {0}", Path.GetFullPath(assemblyPath)), "LOADER");
-
-                    // TODO: allocate eagerly (as soon as config gets fixed)
-                    if (_compiledFiles == null) {
-                        _compiledFiles = new Dictionary<string, CompiledFile>();
-                    }
-
-                    SavableScriptCode[] codes = new SavableScriptCode[_compiledFiles.Count];
-                    int i = 0;
-                    foreach (CompiledFile file in _compiledFiles.Values) {
-                        codes[i++] = (SavableScriptCode)file.CompiledCode;
-                    }
-
-                    SavableScriptCode.SaveToAssembly(assemblyPath, codes);
-                }
-            }
-        }
-
-        // Files compiled ahead of time into an assembly (Util/aot) that the host registered.
-        private bool _hasPrecompiledFiles;
-
         /// <summary>
         /// Makes require/load of <paramref name="fullPath"/> run <paramref name="code"/> instead of
         /// compiling the file's source. The file is still resolved on the load path as usual.
@@ -352,55 +260,35 @@ namespace IronRuby.Runtime {
         /// too: the precompiled code has no coverage counters.
         /// </summary>
         internal void RegisterPrecompiledFile(string/*!*/ fullPath, ScriptCode/*!*/ code, Func<bool> isCurrent) {
-            lock (_compiledFileMutex) {
-                if (_compiledFiles == null) {
-                    _compiledFiles = new Dictionary<string, CompiledFile>();
-                }
-                _compiledFiles[Platform.GetFullPath(fullPath)] = new CompiledFile(code, isCurrent);
-                _hasPrecompiledFiles = true;
+            Assert.NotNull(code);
+            lock (_precompiledFilesLock) {
+                (_precompiledFiles ??= new Dictionary<string, (ScriptCode, Func<bool>)>())[Platform.GetFullPath(fullPath)] = (code, isCurrent);
             }
         }
 
-        private bool TryGetCompiledFile(string/*!*/ fullPath, out CompiledFile compiledFile) {
-            if (!_context.RubyOptions.LoadFromDisk && !_hasPrecompiledFiles) {
-                compiledFile = default(CompiledFile);
-                return false;
+        private ScriptCode TryGetPrecompiledFile(string/*!*/ fullPath) {
+            if (_precompiledFiles == null) {
+                return null;
             }
 
-            lock (_compiledFileMutex) {
-                if (_compiledFiles == null) {
-                    _compiledFiles = LoadCompiledCode();
+            lock (_precompiledFilesLock) {
+                if (!_precompiledFiles.TryGetValue(fullPath, out var file)) {
+                    return null;
                 }
-
-                if (!_compiledFiles.TryGetValue(fullPath, out compiledFile)) {
-                    return false;
-                }
-                if (compiledFile.IsCurrent != null) {
+                if (file.IsCurrent != null) {
                     if (_context.Coverage != null) {
-                        return false;
+                        return null;
                     }
                     // checked at every load, not only the first: `load' of a file edited since runs the edit
-                    if (!compiledFile.IsCurrent()) {
-                        _compiledFiles.Remove(fullPath);
-                        return false;
+                    if (!file.IsCurrent()) {
+                        _precompiledFiles.Remove(fullPath);
+                        return null;
                     }
                 }
-                return true;
+                return file.Code;
             }
         }
 
-        private void AddCompiledFile(string/*!*/ fullPath, ScriptCode/*!*/ compiledCode) {
-            if (_context.RubyOptions.SavePath != null) {
-                lock (_compiledFileMutex) {
-                    // TODO: allocate eagerly (as soon as config gets fixed)
-                    if (_compiledFiles == null) {
-                        _compiledFiles = new Dictionary<string, CompiledFile>();
-                    }
-                    _compiledFiles[fullPath] = new CompiledFile(compiledCode);
-                }
-            }
-        }
-#endif
         public bool LoadFile(Scope globalScope, object self, MutableString/*!*/ path, LoadFlags flags) {
             object loaded;
             return LoadFile(globalScope, self, path, flags, out loaded);
@@ -422,15 +310,15 @@ namespace IronRuby.Runtime {
 
             string assemblyName, typeName;
 
-            string strPath = path.ConvertToString();
+            string strPath = _context.DecodePath(path);
             if (TryParseAssemblyName(strPath, out typeName, out assemblyName)) {
 
-                if (AlreadyLoaded(strPath, (string)null, flags)) {
-                    loaded = ((flags & LoadFlags.ResolveLoaded) != 0) ? GetAssembly(assemblyName, true, false) : null;
+                if (AlreadyLoaded(strPath, flags, ArrayUtils.EmptyStrings)) {
+                    loaded = ((flags & LoadFlags.ResolveLoaded) != 0) ? GetAssembly(assemblyName, true) : null;
                     return false;
                 }
 
-                Assembly assembly = LoadAssembly(assemblyName, typeName, false, false);
+                Assembly assembly = LoadAssembly(assemblyName, typeName, false);
                 if (assembly != null) {
                     FileLoaded(path.Clone(), flags);
                     loaded = assembly;
@@ -443,41 +331,19 @@ namespace IronRuby.Runtime {
 
         #region Assemblies
 
-        public Assembly LoadAssembly(string/*!*/ assemblyName, string typeName, bool throwOnError, bool tryPartialName) {
-            Assembly assembly = GetAssembly(assemblyName, throwOnError, tryPartialName);
+        public Assembly LoadAssembly(string/*!*/ assemblyName, string typeName, bool throwOnError) {
+            Assembly assembly = GetAssembly(assemblyName, throwOnError);
             return (assembly != null && LoadAssembly(assembly, typeName, throwOnError)) ? assembly : null;
         }
         
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
-        private Assembly GetAssembly(string/*!*/ assemblyName, bool throwOnError, bool tryPartialName) {
+        private Assembly GetAssembly(string/*!*/ assemblyName, bool throwOnError) {
             try {
                 return Platform.LoadAssembly(assemblyName);
+            } catch (Exception) when (!throwOnError) {
+                return null;
             } catch (Exception e) {
-                if (!tryPartialName || !(e is FileNotFoundException)) {
-                    if (throwOnError) {
-                        throw RubyExceptions.CreateLoadError(e);
-                    } else {
-                        return null;
-                    }
-                }
+                throw RubyExceptions.CreateLoadError(e);
             }
-
-#pragma warning disable 618,612 // csc, gmcs
-            Assembly assembly;
-            try { 
-                assembly = Assembly.LoadWithPartialName(assemblyName);
-            } catch (Exception e) {
-                if (throwOnError) {
-                    throw RubyExceptions.CreateLoadError(e);
-                } else {
-                    return null;
-                }
-            }
-            if (assembly == null && throwOnError) {
-                throw RubyExceptions.CreateLoadError(String.Format("Assembly '{0}' not found", assemblyName));
-            }
-#pragma warning restore 618,612
-            return assembly;
         }
         
         private bool LoadAssembly(Assembly/*!*/ assembly, string typeName, bool throwOnError) {
@@ -488,10 +354,7 @@ namespace IronRuby.Runtime {
                 initializerType = assembly.GetType(typeName);
                 if (initializerType == null) {
                     if (throwOnError) {
-                        throw new TypeLoadException(
-                            String.Format("Unhandled Exception: System.TypeLoadException: Could not load type '{0}' from assembly '{1}'.", 
-                                typeName, assembly.FullName)
-                        );
+                        throw new TypeLoadException(String.Format("Could not load type '{0}' from assembly '{1}'.", typeName, assembly.FullName));
                     }
                     return false;
                 }
@@ -552,32 +415,22 @@ namespace IronRuby.Runtime {
             return false;
         }
 
-#if FEATURE_ASSEMBLY_RESOLVE
         private sealed class AssemblyResolveHolder {
-            private readonly WeakReference _loader;
+            private readonly WeakReference<Loader> _loader;
 
             [ThreadStatic]
             private static HashSet<string> _assembliesBeingResolved;
 
             public AssemblyResolveHolder(Loader/*!*/ loader) {
-                _loader = new WeakReference(loader);
+                _loader = new WeakReference<Loader>(loader);
             }
 
             internal void HookAssemblyResolve() {
-                try {
-                    HookAssemblyResolveInternal();
-                } catch (System.Security.SecurityException) {
-                    // We may not have SecurityPermissionFlag.ControlAppDomain. 
-                }
-            }
-
-            private void HookAssemblyResolveInternal() {
                 AppDomain.CurrentDomain.AssemblyResolve += AssemblyResolveEvent;
             }
 
             private Assembly AssemblyResolveEvent(object sender, ResolveEventArgs args) {
-                Loader loader = (Loader)_loader.Target;
-                if (loader != null) {
+                if (_loader.TryGetTarget(out Loader loader)) {
                     string assemblyName = args.Name;
                     Utils.Log(String.Format("assembly resolve event: {0}", assemblyName), "RESOLVE_ASSEMBLY");
 
@@ -726,7 +579,6 @@ namespace IronRuby.Runtime {
                 && (token == null || token.Length == 0 || token.AsSpan().SequenceEqual(definition.GetPublicKeyToken()));
         }
 
-#endif
         /// <summary>
         /// Loads the assembly in the file at <paramref name="path"/>, remembering the file and that this runtime
         /// loaded it (ResolveAssembly).
@@ -786,7 +638,7 @@ namespace IronRuby.Runtime {
 
             if (files.Count == 0) {
                 // MRI: doesn't throw an exception if the path is in $" (performs resolution first though):
-                if (AlreadyLoaded(path, null, flags, sourceFileExtensions)) {
+                if (AlreadyLoaded(path, flags, sourceFileExtensions)) {
                     loaded = null;
                     return false;
                 }
@@ -925,7 +777,12 @@ namespace IronRuby.Runtime {
                     }
                 }
 
-                FileLoaded(MutableString.Create(file.Path, pathEncoding), flags);
+                // a non-ASCII path given in BINARY (or US-ASCII) - what the C locale's path layer hands out - was the file
+                // system's UTF-8 bytes (see RubyContext.DecodePath), and is recorded in the filesystem encoding, as MRI
+                // does, not one byte per character
+                FileLoaded((pathEncoding == RubyEncoding.Binary || pathEncoding == RubyEncoding.Ascii) && !file.Path.IsAscii() ?
+                    _context.EncodePath(file.Path) :
+                    MutableString.Create(file.Path, pathEncoding), flags);
                 succeeded = true;
             } finally {
                 EndAutoloads(autoloads, file.Path, succeeded);
@@ -957,35 +814,25 @@ namespace IronRuby.Runtime {
         private ScriptCode/*!*/ CompileRubySource(SourceUnit/*!*/ sourceUnit, LoadFlags flags) {
             Assert.NotNull(sourceUnit);
             
-            // TODO: check file timestamp
-            string fullPath = Platform.GetFullPath(sourceUnit.Path);
             _context.RegisterSourceFileLocation(sourceUnit.Path);
 
-#if FEATURE_FILESYSTEM
-            CompiledFile compiledFile;
-            // a saved or precompiled top level is a file's, not the anonymous module `load(file, true)' wraps it in
-            if ((flags & LoadFlags.LoadIsolated) == 0 && TryGetCompiledFile(fullPath, out compiledFile)) {
-                Utils.Log(String.Format("{0}: {1}", ++_cacheHitCount, sourceUnit.Path), "LOAD_CACHED");
-
-                return compiledFile.CompiledCode;
-            } 
-
-            Utils.Log(String.Format("{0}: {1}", ++_compiledFileCount, sourceUnit.Path), "LOAD_COMPILED");
-            if (IronRuby.Runtime.Precompiled.PrecompiledCode.Trace) {
-                Console.Error.WriteLine("IronRuby.Startup: compiling " + fullPath);
+            // a precompiled top level is a file's, not the anonymous module `load(file, true)' wraps it in
+            if ((flags & LoadFlags.LoadIsolated) == 0) {
+                ScriptCode precompiled = TryGetPrecompiledFile(Platform.GetFullPath(sourceUnit.Path));
+                if (precompiled != null) {
+                    return precompiled;
+                }
             }
-#endif
 
-            RubyCompilerOptions options = new RubyCompilerOptions(_context.RubyOptions) {
+            if (IronRuby.Runtime.Precompiled.PrecompiledCode.Trace) {
+                Console.Error.WriteLine("IronRuby.Startup: compiling " + Platform.GetFullPath(sourceUnit.Path));
+            }
+
+            RubyCompilerOptions options = new RubyCompilerOptions() {
                 FactoryKind = (flags & LoadFlags.LoadIsolated) != 0 ? TopScopeFactoryKind.WrappedFile : TopScopeFactoryKind.File
             };
 
-            ScriptCode compiledCode = sourceUnit.Compile(options, _context.RuntimeErrorSink);
-
-#if FEATURE_FILESYSTEM
-            AddCompiledFile(fullPath, compiledCode);
-#endif
-            return compiledCode;
+            return sourceUnit.Compile(options, _context.RuntimeErrorSink);
         }
 
         internal Scope Execute(Scope globalScope, ScriptCode/*!*/ code) {
@@ -1090,7 +937,7 @@ namespace IronRuby.Runtime {
             // name too: MRI appends .rb and .so to it just the same.
             bool bareName = extension.Length == 0 ||
                 (!IsKnownExtension(extension, sourceFileExtensions ?? ArrayUtils.EmptyStrings) &&
-                 _LibraryExtensions.IndexOf(extension, DlrConfiguration.FileExtensionComparer) == -1);
+                 !_LibraryExtensions.Contains(extension, DlrConfiguration.FileExtensionComparer));
             if (appendExtensions && bareName && result.Count > 1 && result[0].SourceUnit == null) {
                 result = result.Where((f) => f.SourceUnit != null).Concat(result.Where((f) => f.SourceUnit == null)).ToList();
             }
@@ -1160,7 +1007,7 @@ namespace IronRuby.Runtime {
                     throw RubyExceptions.CreateImplicitConversionError("nil", "String");
                 }
 
-                result[i] = Protocols.CastToPath(toPath, loadPaths[i]).ConvertToString();
+                result[i] = _context.DecodePath(Protocols.CastToPath(toPath, loadPaths[i]));
             }
 
             return result;
@@ -1179,7 +1026,7 @@ namespace IronRuby.Runtime {
                 return GetSourceUnit(path, expandedPath, extension, false);
             } 
             
-            if (_LibraryExtensions.IndexOf(extension, DlrConfiguration.FileExtensionComparer) != -1) {
+            if (_LibraryExtensions.Contains(extension, DlrConfiguration.FileExtensionComparer)) {
                 if (Platform.FileExists(expandedPath)) {
                     return new ResolvedFile(expandedPath, null);
                 }
@@ -1210,7 +1057,7 @@ namespace IronRuby.Runtime {
         private static readonly string[] _LibraryExtensions = new string[] { ".dll", ".so", ".exe" };
 
         private static bool IsKnownExtension(string/*!*/ extension, string[]/*!*/ knownExtensions) {
-            return extension.Length > 0 && knownExtensions.IndexOf(extension, DlrConfiguration.FileExtensionComparer) >= 0;
+            return extension.Length > 0 && knownExtensions.Contains(extension, DlrConfiguration.FileExtensionComparer);
         }
 
         private ResolvedFile GetSourceUnit(string/*!*/ path, string/*!*/ fullPath, string/*!*/ extension, bool extensionAppended) {
@@ -1260,7 +1107,7 @@ namespace IronRuby.Runtime {
         private readonly ConversionStorage<MutableString>/*!*/ _toStrStorage;
 
         internal object[]/*!*/ GetLoadPaths() {
-            lock (_loadedFiles) {
+            lock (_loadPaths) {
                 return _loadPaths.ToArray();
             }
         }
@@ -1274,20 +1121,6 @@ namespace IronRuby.Runtime {
                     _loadPaths.Add(_context.EncodePath(path));
                 }
             }
-        }
-
-        internal void InsertLoadPaths(IEnumerable<string/*!*/>/*!*/ paths, int index) {
-            Assert.NotNullItems(paths);
-
-            lock (_loadPaths) {
-                foreach (string path in paths) {
-                    _loadPaths.Insert(0, _context.EncodePath(path));
-                }
-            }
-        }
-
-        internal void InsertLoadPaths(IEnumerable<string/*!*/>/*!*/ paths) {
-            InsertLoadPaths(paths, 0);
         }
 
         #region Autoloads
@@ -1385,7 +1218,7 @@ namespace IronRuby.Runtime {
 
             List<RubyModule.AutoloadedConstant> result = null;
             foreach (var autoload in candidates) {
-                if (ResolveFeature(autoload.Path.ConvertToString()) == fullPath) {
+                if (ResolveFeature(_context.DecodePath(autoload.Path)) == fullPath) {
                     if (result == null) {
                         result = new List<RubyModule.AutoloadedConstant>();
                         _context.EnterAutoload();
@@ -1437,6 +1270,24 @@ namespace IronRuby.Runtime {
             get { return _corePreludeThread == Thread.CurrentThread; }
         }
 
+        /// <summary>
+        /// Runs the load of a file a core autoload names - set.rb, for the Set MRI has from the start -
+        /// as part of the core prelude, whenever it happens: its helpers are unlisted, its constants have no
+        /// location and its autoloads are core too, as they would be had the prelude loaded it up front.
+        /// A thread that finds another one in the prelude just loads the file.
+        /// </summary>
+        internal bool LoadAsCorePrelude(Func<bool>/*!*/ load) {
+            var thread = Thread.CurrentThread;
+            if (_corePreludeDirectory == null || Interlocked.CompareExchange(ref _corePreludeThread, thread, null) != null) {
+                return load();
+            }
+            try {
+                return load();
+            } finally {
+                _corePreludeThread = null;
+            }
+        }
+
         // Set while the core prelude (gem_prelude.rb and everything it requires, or ruby4.rb) loads,
         // on whichever thread: RubyContext.CompilationThreshold reads it.
         private volatile bool _loadingCorePrelude;
@@ -1450,10 +1301,8 @@ namespace IronRuby.Runtime {
         /// lists the features MRI has in $" from the start.
         /// </summary>
         internal void LoadCorePrelude(Scope/*!*/ globalScope, object self, string/*!*/ path) {
-#if FEATURE_FILESYSTEM
             // the prelude, rubygems and the rest of startup compiled ahead of time, if there is such a library
             IronRuby.Runtime.Precompiled.PrecompiledCode.TryRegisterStartupLibrary(_context);
-#endif
             _corePreludeLoaderThread = Thread.CurrentThread;
             _loadingCorePrelude = true;
             PhaseTimer.MarkPrelude(true);
@@ -1564,22 +1413,13 @@ namespace IronRuby.Runtime {
             }
         }
 
-        private bool AlreadyLoaded(string/*!*/ path, string fullPath, LoadFlags flags) {
-            return AlreadyLoaded(path, fullPath, flags, ArrayUtils.EmptyStrings);
-        }
-        
-        private bool AlreadyLoaded(string/*!*/ path, string fullPath, LoadFlags flags, string[]/*!*/ sourceFileExtensions) {
-            Debug.Assert(fullPath == null || RubyUtils.GetExtension(path) == RubyUtils.GetExtension(fullPath));
-            return (flags & LoadFlags.LoadOnce) != 0 && AnyFileLoaded(GetPathsToTestLoaded(path, fullPath, flags, sourceFileExtensions));
+        private bool AlreadyLoaded(string/*!*/ path, LoadFlags flags, string[]/*!*/ sourceFileExtensions) {
+            return (flags & LoadFlags.LoadOnce) != 0 && AnyFileLoaded(GetPathsToTestLoaded(path, flags, sourceFileExtensions));
         }
 
-        private IEnumerable<MutableString>/*!*/ GetPathsToTestLoaded(string/*!*/ path, string fullPath, LoadFlags flags, string[]/*!*/ sourceFileExtensions) {
+        private IEnumerable<MutableString>/*!*/ GetPathsToTestLoaded(string/*!*/ path, LoadFlags flags, string[]/*!*/ sourceFileExtensions) {
             List<MutableString> paths = new List<MutableString>();
             paths.Add(_context.EncodePath(path));
-
-            if (fullPath != null) {
-                paths.Add(_context.EncodePath(path));
-            }
 
             if ((flags & LoadFlags.AppendExtensions) != 0 && RubyUtils.GetExtension(path).Length == 0) {
                 foreach (var extension in sourceFileExtensions) {

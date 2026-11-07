@@ -35,7 +35,7 @@ namespace IronRuby.Aot {
 
         public static Expression<Func<RubyScope, object, object>> ParseFile(RubyContext context, string path) {
             var unit = context.CreateFileUnit(Path.GetFullPath(path));
-            var options = new RubyCompilerOptions(context.RubyOptions) { FactoryKind = TopScopeFactoryKind.File };
+            var options = new RubyCompilerOptions() { FactoryKind = TopScopeFactoryKind.File };
             var lambda = context.ParseSourceCode<Func<RubyScope, object, object>>(unit, options, ErrorSink.Default);
             if (lambda == null) throw new InvalidOperationException("syntax error in " + path);
             return lambda;

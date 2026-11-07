@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -181,6 +177,14 @@ namespace IronRuby.Runtime.Conversions {
             get { return Methods.CreateImplicitConversionError; }
         }
 
+        /// <summary>
+        /// True if a to_xxx the object defines is called without asking an overridden respond_to? first;
+        /// respond_to? is then only asked when there is no such method.
+        /// </summary>
+        internal virtual bool CallsDefinedMethodDirectly {
+            get { return false; }
+        }
+
         public override Type/*!*/ ReturnType {
             get { 
                 return (ConversionResultValidator != null) ? ConversionResultValidator.ReturnType : typeof(object); 
@@ -276,6 +280,13 @@ namespace IronRuby.Runtime.Conversions {
                             targetClass.ResolveMethodForSiteNoLock(Symbols.RespondToMissing, VisibilityContext.AllVisible).Info,
                             targetClass.Context.KernelModule
                         );
+                    }
+                } else if (conversions.Length == 1 && conversions[0].CallsDefinedMethodDirectly) {
+                    var method = targetClass.ResolveMethodForSiteNoLock(conversions[0].ToMethodName, VisibilityContext.AllVisible).Info;
+                    if (method != null) {
+                        respondToMethod = MethodResolutionResult.NotFound;
+                        selectedConversion = conversions[0];
+                        conversionMethod = method;
                     }
                 }
             }
@@ -655,6 +666,9 @@ namespace IronRuby.Runtime.Conversions {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToProc; } }
         protected override string/*!*/ TargetTypeName { get { return "Proc"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToProcValidator; } }
+
+        // &obj: MRI's vm_to_proc calls a #to_proc the object has without asking respond_to?.
+        internal override bool CallsDefinedMethodDirectly { get { return true; } }
     }
 
     #region String, Path, Symbol, Regex
@@ -707,6 +721,11 @@ namespace IronRuby.Runtime.Conversions {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToStr; } }
         protected override string/*!*/ TargetTypeName { get { return "Regexp"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToRegexValidator; } }
+
+        // MRI's get_pat: something that is neither a Regexp nor a String was meant to be a Regexp.
+        protected override MethodInfo/*!*/ ConversionErrorFactory {
+            get { return Methods.CreateWrongArgumentTypeError; }
+        }
     }
 
     // TODO: remove (replace by MutableString/RubySymbol conversion)
@@ -1112,7 +1131,7 @@ namespace IronRuby.Runtime.Conversions {
     /// </summary>
     public sealed class ConvertToIAction : ConvertToIntegerValueAction<ConvertToIAction> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToI; } }
-        protected override MethodInfo ConversionResultValidator { get { return Methods.ToIntegerValidator; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.ToIValidator; } }
 
         // Kernel#Integer(x) and "%d" % x end here; MRI words those "can't convert nil into
         // Integer", not "no implicit conversion ...".

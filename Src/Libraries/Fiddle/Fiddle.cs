@@ -33,7 +33,6 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.Fiddle {
 

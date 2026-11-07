@@ -18,11 +18,9 @@ using System.Linq;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Dynamic;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Hosting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -32,40 +30,17 @@ using IronRuby.Builtins;
 
 namespace IronRuby.Tests {
 
-    class ErrorLogRecord {
-        public string Message;
-        public SourceSpan Span;
-        public int Code;
-        public Severity Severity;
-    }
+    record ErrorLogRecord(string Message, SourceSpan Span, int Code, Severity Severity);
 
+    /// <summary>
+    /// Counts and records the parse errors and warnings of a test's code, without printing them.
+    /// </summary>
     class LoggingErrorSink : ErrorCounter {
-
-        public List<ErrorLogRecord> Errors = new List<ErrorLogRecord>();
-        private bool _suppressOutput;
-
-        public LoggingErrorSink() {
-            _suppressOutput = true;
-        }
-
-        public LoggingErrorSink(bool suppressOutput) {
-            _suppressOutput = suppressOutput;
-        }
+        public readonly List<ErrorLogRecord> Errors = new();
 
         public override void Add(SourceUnit source, string/*!*/ message, SourceSpan span, int errorCode, Severity severity) {
-            base.CountError(severity);
-
-            if (!_suppressOutput) {
-                Console.Error.WriteLine("{0}({1}:{2}): {3}: RB{4}: {5}", source.Path, span.Start.Line, span.Start.Column,
-                    severity, errorCode, message);
-            }
-
-            ErrorLogRecord info = new ErrorLogRecord();
-            info.Message = message;
-            info.Span = span;
-            info.Code = errorCode;
-            info.Severity = severity;
-            Errors.Add(info);
+            CountError(severity);
+            Errors.Add(new ErrorLogRecord(message, span, errorCode, severity));
         }
     }
 
@@ -106,7 +81,7 @@ namespace IronRuby.Tests {
         }
 
         public void CompilerTest(string/*!*/ code, int expectedCompilerWarningCount, int expectedRuntimeWarningCount) {
-            LoggingErrorSink log = new LoggingErrorSink(true);
+            var log = new LoggingErrorSink();
             CompilerTest(code, log);
             Assert(log.ErrorCount == 0 && log.FatalErrorCount == 0, "Compile time error: " + DescribeLog(log));
             Assert(log.WarningCount == expectedCompilerWarningCount, String.Format(
@@ -116,29 +91,15 @@ namespace IronRuby.Tests {
         }
 
         private static string/*!*/ DescribeLog(LoggingErrorSink/*!*/ log) {
-            var parts = new List<string>();
-            foreach (var e in log.Errors) {
-                parts.Add(String.Format("{0} at {1}: {2}", e.Severity, e.Span.Start.Line, e.Message));
-            }
-            return String.Join("; ", parts);
+            return String.Join("; ", log.Errors.Select(e => $"{e.Severity} at {e.Span.Start.Line}: {e.Message}"));
         }
 
         public void CompilerTest(string/*!*/ code, ErrorSink/*!*/ sink) {
             Debug.Assert(code != null && sink != null);
-            SourceUnit source;
-
             string name = _driver.TestRuntime.TestName;
+            SourceUnit source = _driver.TestRuntime.Context.CreateSnippet(code, name + ".rb", SourceCodeKind.File);
 
-            if (_driver.SaveToAssemblies) {
-                string path = Path.Combine(Snippets.Shared.SnippetsDirectory, name + ".rb");
-                Directory.CreateDirectory(Snippets.Shared.SnippetsDirectory);
-                File.WriteAllText(path, code);
-                source = _driver.TestRuntime.Context.CreateFileUnit(path);
-            } else {
-                source = _driver.TestRuntime.Context.CreateSnippet(code, name + ".rb", SourceCodeKind.File);
-            }
-
-            ScriptCode compiledCode = source.Compile(new RubyCompilerOptions(Context.RubyOptions), sink);
+            ScriptCode compiledCode = source.Compile(new RubyCompilerOptions(), sink);
             if (compiledCode != null) {
                 compiledCode.Run(new Scope());
             }
@@ -155,19 +116,6 @@ namespace IronRuby.Tests {
         private void AssertEquals<T>(object actual, T expected)
             where T : IEquatable<T> {
             Assert(actual is T && ((T)actual).Equals(expected));
-        }
-
-        [DebuggerHiddenAttribute]
-        private void XAssertOutput(Action f, string expectedOutput) {
-            Driver.ColorWrite(ConsoleColor.Yellow, "Assertion check skipped.");
-            // just run the code
-            f();
-        }
-
-        private void XAssertOutput(Action f, string expectedOutput, OutputFlags flags) {
-            Driver.ColorWrite(ConsoleColor.Yellow, "Assertion check skipped.");
-            // just run the code
-            f();
         }
 
         [DebuggerHiddenAttribute]
@@ -199,11 +147,6 @@ namespace IronRuby.Tests {
         }
 
         [DebuggerHiddenAttribute]
-        private void XTestOutput(string code, string expectedOutput) {
-            XAssertOutput(() => CompilerTest(code), expectedOutput);
-        }
-
-        [DebuggerHiddenAttribute]
         private void TestOutputWithEval(string code, string expectedOutput) {
             UsingEval((eval) => AssertOutput(() => CompilerTest(Eval(eval, code)), expectedOutput));
         }
@@ -211,11 +154,6 @@ namespace IronRuby.Tests {
         [DebuggerHiddenAttribute]
         private void TestOutputWithEval(string code, string expectedOutput, int expectedCompilerWarningCount) {
             UsingEval((eval) => AssertOutput(() => CompilerTest(Eval(eval, code), expectedCompilerWarningCount, 0), expectedOutput));
-        }
-
-        [DebuggerHiddenAttribute]
-        private void XTestOutputWithEval(string code, string expectedOutput) {
-            UsingEval((eval) => XAssertOutput(() => CompilerTest(Eval(eval, code)), expectedOutput));
         }
 
         [DebuggerHiddenAttribute]
@@ -345,27 +283,13 @@ namespace IronRuby.Tests {
         public void AreBagsEqual<T>(IEnumerable<T> x, IEnumerable<T> y) {
             if (x == null && y == null) return;
 
-            var bag = new HashSet<Key<T, int>>(GroupWithCount(x));
+            var bag = new HashSet<(T, int)>(GroupWithCount(x));
             bag.SymmetricExceptWith(GroupWithCount(y));
             Assert(bag.Count == 0);
         }
 
-        private IEnumerable<Key<T, int>> GroupWithCount<T>(IEnumerable<T> sequence) {
-            Dictionary<T, int> groups = new Dictionary<T, int>();
-            foreach (var item in sequence) {
-                int count;
-                if (groups.TryGetValue(item, out count)) {
-                    count++;
-                } else {
-                    count = 1;
-                }
-
-                groups[item] = count;
-            }
-
-            foreach (var entry in groups) {
-                yield return Key.Create(entry.Key, entry.Value);
-            }
+        private static IEnumerable<(T, int)> GroupWithCount<T>(IEnumerable<T> sequence) {
+            return sequence.GroupBy(item => item).Select(group => (group.Key, group.Count()));
         }
 
         /// <summary>
@@ -389,31 +313,5 @@ namespace IronRuby.Tests {
                 Debugger.Break();
             }
         }
-
-        #region Bugs
-
-        // Helpers for tests which are currently failing. Using these helpers will ensure that when the bug is fixed, 
-        // you are forced to update the test case. In the meantime, it makes sure that the test can atleast be executed
-        // and documents the incorrect result
-
-        [DebuggerHidden]
-        internal void AreEqualBug(object x, object y, object buggyResult) {
-            // Once the bug is fixed, the result should be "y".
-            AreEqual(x, buggyResult);
-        }
-
-        [DebuggerHidden]
-        internal void AreEqualBug<T>(Action f, object y) where T : Exception {
-            // Once the bug is fixed, the result should be "y" and no exception should be thrown
-            AssertExceptionThrown<T>(f);
-        }
-
-        [DebuggerHidden]
-        internal void AssertExceptionThrownBug<T>(Action f, object buggyResult) where T : Exception {
-            // f should throw an exception once the bug is fixed
-            f();
-        }
-
-        #endregion
     }
 }

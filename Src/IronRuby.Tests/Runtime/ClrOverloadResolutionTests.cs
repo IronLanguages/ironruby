@@ -328,5 +328,75 @@ Put(String, Int32)
 TypeError: no implicit conversion of System::Text::StringBuilder into String or Integer
 ");
         }
+
+        /// <summary>
+        /// A Ruby Array passed for one of several collection parameters (String.Join's String[] and Object[], LINQ Sum's
+        /// IEnumerable of Int32, Int64, Double, ...) goes to the one its items fit: Object[] for [1, 2], whose items are no
+        /// Strings, IEnumerable&lt;int&gt; for [1, 2, 3], IEnumerable&lt;double&gt; for [1.5, 2]. A site called with other items
+        /// binds again, and so does one whose binding found no single overload.
+        /// </summary>
+        public void ClrOverloadArrayItems1() {
+            TestOutput(@"
+E = System::Linq::Enumerable
+def join(items) = System::String.Join(',', items)
+def sum(items) = (E.Sum(items) rescue $!.class)
+p join([1, 2]), join(['a', 'b']), join([1, 'b']), join([:a, nil, 2.5])
+p sum([1, 2, 3]), sum([1.5, 2]), sum([1, nil, 2]), sum([1, 2**40])
+p sum(['a']), sum([1, 2, 3]), sum([2**70, 1]), sum([1, 2])
+p E.Average([1, 2]), E.Min([3, 1, 2]), E.Count([1, 2, 3])
+items = [1, 2]
+p join(items)
+items[0] = 'x'
+p join(items)
+", @"
+'1,2'
+'a,b'
+'1,b'
+'a,,2.5'
+6
+3.5
+3
+1099511627777
+System::Reflection::AmbiguousMatchException
+6
+System::Reflection::AmbiguousMatchException
+3
+1.5
+1
+3
+'1,2'
+'x,2'
+");
+        }
+
+        /// <summary>
+        /// An Integer in a BigInteger is beyond Int64, so of the numeric overloads it converts to only explicitly the
+        /// Double one is best (Integer#to_f): Math.Abs(2**70) is a Float. Where no overload is best the error names Int64
+        /// parameters System::Int64, not a second Integer.
+        /// </summary>
+        public void ClrOverloadBignum1() {
+            TestOutput(@"
+p System::Math.Abs(2**70), System::Math.Abs(-(2**70)).class, System::Math.Floor(2**70)
+p System::Math.Abs(-3), System::Math.Abs(-(2**40)), System::Math.Abs(-3.5)
+begin
+  System::Math.Max(2**70, 1)
+rescue => e
+  p e.class, e.message.include?('Max(System::Int64, System::Int64)'), e.message.include?('Max(Integer, Integer)')
+end
+p System::Collections::Generic::List[System::Int64], System::Collections::Generic::List[System::Numerics::BigInteger]
+", @"
+1.1805916207174113e+21
+Float
+1.1805916207174113e+21
+3
+1099511627776
+3.5
+System::Reflection::AmbiguousMatchException
+true
+true
+System::Collections::Generic::List[System::Int64]
+System::Collections::Generic::List[System::Numerics::BigInteger]
+");
+        }
     }
 }

@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -35,13 +31,8 @@ namespace IronRuby.Compiler {
     using MSAst = Microsoft.Scripting.Ast;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
     using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
-    using Microsoft.Scripting.Interpreter;
 
     public static partial class Fields {
-        private static FieldInfo _StrongBox_Value;
-        
-        public static FieldInfo StrongBox_Value { get { return _StrongBox_Value ?? (_StrongBox_Value = GetField(typeof(StrongBox<object>), "Value")); } }
-        
         internal static FieldInfo/*!*/ GetField(Type/*!*/ type, string/*!*/ name) {
             var field = type.GetDeclaredField(name);
             Debug.Assert(field != null, type.Name + "::" + name);

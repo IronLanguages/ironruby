@@ -13,15 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using System.Collections.Generic;
 using System.Diagnostics;
 
 namespace IronRuby.Compiler.Ast {

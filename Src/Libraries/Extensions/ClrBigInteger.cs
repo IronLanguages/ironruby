@@ -93,8 +93,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self + other as Float</returns>
         [RubyMethod("+")]
-        public static object Add(BigInteger/*!*/ self, double other) {
-            return Protocols.ToDouble(self) + other;
+        public static object Add(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return Protocols.ConvertToDouble(context, self) + other;
         }
 
         /// <summary>
@@ -154,8 +154,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self - other as Float</returns>
         [RubyMethod("-")]
-        public static object Subtract(BigInteger/*!*/ self, double other) {
-            return Protocols.ToDouble(self) - other;
+        public static object Subtract(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return Protocols.ConvertToDouble(context, self) - other;
         }
 
         /// <summary>
@@ -197,8 +197,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self * other as Float</returns>
         [RubyMethod("*")]
-        public static object Multiply(BigInteger/*!*/ self, double other) {
-            return Protocols.ToDouble(self) * other;
+        public static object Multiply(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return Protocols.ConvertToDouble(context, self) * other;
         }
 
         /// <summary>
@@ -244,8 +244,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self / other as Float</returns>
         [RubyMethod("/")]
-        public static object DivideOp(BigInteger/*!*/ self, double other) {
-            return Protocols.ToDouble(self) / other;
+        public static object DivideOp(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return Protocols.ConvertToDouble(context, self) / other;
         }
 
         /// <summary>
@@ -253,8 +253,12 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self divided by other as Float</returns>
         [RubyMethod("div")]
-        public static object Divide(BigInteger/*!*/ self, double other) {
-            return DivMod(self, other)[0];
+        public static object Divide(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            // rb_big_divide: the zero check comes before the conversion, so it does not warn.
+            if (other == 0.0) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            return ClrFloat.Floor(Protocols.ConvertToDouble(context, self) / other);
         }
 
         /// <summary>
@@ -287,7 +291,7 @@ namespace IronRuby.Builtins {
         /// that the quotient lands in double's range with bits to spare, and put the shift back
         /// afterwards.
         /// </summary>
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
             if (other.IsZero()) {
                 // Dividing by zero answers what a Float would: a signed infinity, or NaN for 0/0.
@@ -443,12 +447,12 @@ namespace IronRuby.Builtins {
         /// <returns>self ** exponent as Float</returns>
         /// <remarks>Converts self to Float (directly) then calls System.Math.Pow</remarks>
         [RubyMethod("**")]
-        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, BigInteger/*!*/ self, double exponent) {
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, RubyContext/*!*/ context, BigInteger/*!*/ self, double exponent) {
             if (self.Sign < 0 && ClrInteger.IsFractional(exponent)) {
                 // a Complex (rational.rb)
-                return ClrInteger.PowerSlow(slow, self, exponent, () => Math.Pow(Protocols.ToDouble(self), exponent));
+                return ClrInteger.PowerSlow(slow, self, exponent, () => Math.Pow(Protocols.ConvertToDouble(context, self), exponent));
             }
-            return Math.Pow(Protocols.ToDouble(self), exponent);
+            return Math.Pow(Protocols.ConvertToDouble(context, self), exponent);
         }
 
         /// <summary>
@@ -494,15 +498,13 @@ namespace IronRuby.Builtins {
         /// Returns self modulo other, where other is Float.
         /// </summary>
         /// <returns>self modulo other, as Float</returns>
-        /// <remarks>Calls divmod directly to get the modulus.</remarks>
+        /// <remarks>
+        /// MRI coerces self to a Float (warning when it is out of range) and answers Float#%,
+        /// so a Bignum too large for a double is Infinity % other, which is NaN.
+        /// </remarks>
         [RubyMethod("%"), RubyMethod("modulo")]
-        public static object Modulo(BigInteger/*!*/ self, double other) {
-            // Integer#%, unlike Float#%, does not answer NaN for a zero divisor
-            if (other == 0.0) {
-                throw new DivideByZeroException("divided by 0");
-            }
-            RubyArray result = DivMod(self, other);
-            return result[1];
+        public static object Modulo(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return ClrFloat.Modulo(Protocols.ConvertToDouble(context, self), other);
         }
 
         /// <summary>
@@ -561,26 +563,9 @@ namespace IronRuby.Builtins {
         /// <returns>[self div other, self modulo other] as RubyArray</returns>
         /// <remarks>Normalizes div to Fixnum as necessary</remarks>
         [RubyMethod("divmod")]
-        public static RubyArray DivMod(BigInteger/*!*/ self, double other) {
-            if (Double.IsNaN(other)) {
-                throw new FloatDomainError("NaN");
-            }
-            if (other == 0.0) {
-                throw new DivideByZeroException("divided by 0");
-            }
-
-            double selfFloat = Protocols.ToDouble(self);
-            // Ruby floors the quotient and gives the remainder the sign of the divisor;
-            // C#'s % takes the sign of the dividend and truncates towards zero.  Derive
-            // the remainder from % rather than from div * other, which loses every
-            // significant digit once self is far outside double's exact integer range.
-            BigInteger div = new BigInteger(Math.Floor(selfFloat / other));
-            double mod = selfFloat % other;
-            if (mod != 0.0 && (mod < 0.0) != (other < 0.0)) {
-                mod += other;
-            }
-
-            return RubyOps.MakeArray2(Protocols.Normalize(div), mod);
+        public static RubyArray DivMod(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            // Float#divmod on self as a Float, which is what MRI's coercion amounts to.
+            return ClrFloat.DivMod(Protocols.ConvertToDouble(context, self), other);
         }
 
         /// <summary>
@@ -636,11 +621,13 @@ namespace IronRuby.Builtins {
         /// </example>
         /// <returns>Float</returns>
         [RubyMethod("remainder")]
-        public static double Remainder(BigInteger/*!*/ self, double other) {
+        public static double Remainder(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            // Converted (and warned about) before the zero check, as MRI's coercion does.
+            double dividend = Protocols.ConvertToDouble(context, self);
             if (other == 0.0) {
                 throw new DivideByZeroException("divided by 0");
             }
-            return Protocols.ToDouble(self) % other;
+            return dividend % other;
         }
 
         /// <summary>
@@ -852,10 +839,6 @@ namespace IronRuby.Builtins {
             int? c = CompareToFloat(self, other);
             return c.HasValue && c.Value == 0;
         }
-
-        #endregion
-
-        #region eql?
 
         #endregion
 
@@ -1254,6 +1237,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("coerce")]
         public static RubyArray/*!*/ Coerce(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
             return RubyOps.MakeArray2(Protocols.Normalize(other), Protocols.Normalize(self));
+        }
+
+        /// <summary>
+        /// [other, self as a Float], warning when self is out of the Float range as MRI's
+        /// rb_big2dbl does.
+        /// </summary>
+        [RubyMethod("coerce")]
+        public static RubyArray/*!*/ Coerce(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return RubyOps.MakeArray2(other, Protocols.ConvertToDouble(context, self));
         }
 
         [RubyMethod("coerce")]

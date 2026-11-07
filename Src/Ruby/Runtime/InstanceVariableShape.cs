@@ -96,10 +96,6 @@ namespace IronRuby.Runtime {
             get { return _parent; }
         }
 
-        internal string LastName {
-            get { return _name; }
-        }
-
         internal bool IsSentinel {
             get { return _count < 0; }
         }
@@ -226,10 +222,6 @@ namespace IronRuby.Runtime {
                 }
             }
             return result;
-        }
-
-        internal static int ShapeCount {
-            get { return _ShapeCount; }
         }
 
         public override string/*!*/ ToString() {
@@ -379,9 +371,18 @@ namespace IronRuby.Runtime {
         internal readonly string/*!*/ Name;
         internal Entry/*!*/ Cache = EmptyEntry;
 
-        public InstanceVariableSite(string/*!*/ name) {
+        // In the core library written in Ruby (RubyStackTraceBuilder.IsInternalFile), which stands
+        // in for CRuby's C code: Ractor isolation does not apply to it (RactorIsolation).
+        internal readonly bool IsCoreLibrary;
+
+        public InstanceVariableSite(string/*!*/ name)
+            : this(name, false) {
+        }
+
+        public InstanceVariableSite(string/*!*/ name, bool isCoreLibrary) {
             Debug.Assert(name != null);
             Name = name;
+            IsCoreLibrary = isCoreLibrary;
         }
 
         // A release: a thread that reads the new entry sees it fully constructed (its reads of

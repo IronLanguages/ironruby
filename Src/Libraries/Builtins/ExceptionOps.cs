@@ -13,29 +13,17 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
-using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using System.Dynamic;
-using System.Diagnostics;
 using System.Reflection;
-using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
 
 namespace IronRuby.Builtins {
-    using Ast = Expression;
-    using AstFactory = IronRuby.Compiler.Ast.AstFactory;
-    using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     // Exception
     // -- fatal
@@ -154,7 +142,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("set_backtrace", RubyMethodAttributes.PublicInstance)]
         public static RubyArray SetBacktrace(Exception/*!*/ self, RubyArray backtrace) {
             if (backtrace != null && !CollectionUtils.TrueForAll(backtrace, (item) => item is MutableString)) {
-                throw RubyExceptions.CreateTypeError("backtrace must be Array of String");
+                throw RubyExceptions.CreateTypeError("backtrace must be an Array of String or an Array of Thread::Backtrace::Location");
             }
 
             return RubyExceptionData.GetInstance(self).Backtrace = backtrace;
@@ -163,7 +151,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("set_backtrace", RubyMethodAttributes.PublicInstance)]
         public static RubyArray SetBacktrace(Exception/*!*/ self, object backtrace) {
             // anything but nil, a String or an Array of Strings
-            throw RubyExceptions.CreateTypeError("backtrace must be Array of String");
+            throw RubyExceptions.CreateTypeError("backtrace must be an Array of String or an Array of Thread::Backtrace::Location");
         }
 
         /// <summary>

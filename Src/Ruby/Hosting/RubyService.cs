@@ -13,11 +13,6 @@
  *
  * ***************************************************************************/
 
-#if !FEATURE_REMOTING
-using MarshalByRefObject = System.Object;
-#endif
-
-using System;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Hosting;
 using Microsoft.Scripting.Hosting.Providers;
@@ -25,14 +20,12 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Hosting {
-    public sealed class RubyService : MarshalByRefObject {
-        private readonly ScriptEngine/*!*/ _engine;
+    public sealed class RubyService {
         private readonly RubyContext/*!*/ _context;
 
         internal RubyService(RubyContext/*!*/ context, ScriptEngine/*!*/ engine) {
             Assert.NotNull(context, engine);
             _context = context;
-            _engine = engine;
         }
 
         /// <summary>
@@ -71,12 +64,5 @@ namespace IronRuby.Hosting {
         private bool RequireFile(string/*!*/ path, Scope scope) {
             return _context.Loader.LoadFile(scope, null, _context.EncodePath(path), LoadFlags.Require);
         }
-
-#if FEATURE_REMOTING
-        public override object InitializeLifetimeService() {
-            // track the engines lifetime
-            return _engine.InitializeLifetimeService();
-        }
-#endif
     }
 }

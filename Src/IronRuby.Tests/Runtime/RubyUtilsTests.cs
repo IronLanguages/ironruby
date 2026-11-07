@@ -16,7 +16,6 @@
 using System;
 using IronRuby.Runtime;
 using IronRuby.Builtins;
-using System.Collections.Generic;
 using System.Text;
 
 namespace IronRuby.Tests {

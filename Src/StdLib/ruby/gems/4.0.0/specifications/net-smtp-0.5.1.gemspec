@@ -18,7 +18,7 @@ Gem::Specification.new do |s|
   s.rubygems_version = "3.7.0.dev".freeze
   s.summary = "Simple Mail Transfer Protocol client library for Ruby.".freeze
 
-  s.installed_by_version = "4.0.16".freeze
+  s.installed_by_version = "4.0.20".freeze
 
   s.specification_version = 4
 

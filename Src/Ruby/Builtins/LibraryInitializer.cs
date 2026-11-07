@@ -18,7 +18,6 @@ using System.Diagnostics;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Actions.Calls;
 
 namespace IronRuby.Builtins {
 
@@ -131,10 +130,6 @@ namespace IronRuby.Builtins {
 
         internal static int MaxOverloads = 4;
 
-        private static bool SkipDefinition(RubyModule/*!*/ module, int attributes) {
-            return ((RubyCompatibility)(attributes >> RubyMethodAttribute.CompatibilityEncodingShift) > module.Context.RubyOptions.Compatibility);
-        }
-
         // thread-safe:
         internal static void DefineLibraryMethod(RubyModule/*!*/ module, string/*!*/ name, int attributes, LibraryOverload/*!*/[]/*!*/ overloads) {
             var flags = (RubyMemberFlags)(attributes & (int)RubyMethodAttributes.MemberFlagsMask);
@@ -147,13 +142,11 @@ namespace IronRuby.Builtins {
         public static void DefineLibraryMethod(RubyModule/*!*/ module, string/*!*/ name, int attributes, 
             uint[]/*!*/ overloadAttributes, params Delegate[]/*!*/ overloads) {
 
-            if (!SkipDefinition(module, attributes)) {
-                var infos = new LibraryOverload[overloads.Length];
-                for (int i = 0; i < overloads.Length; i++) {
-                    infos[i] = LibraryOverload.Create(overloads[i], overloadAttributes[i]);
-                }
-                DefineLibraryMethod(module, name, attributes, infos);
+            var infos = new LibraryOverload[overloads.Length];
+            for (int i = 0; i < overloads.Length; i++) {
+                infos[i] = LibraryOverload.Create(overloads[i], overloadAttributes[i]);
             }
+            DefineLibraryMethod(module, name, attributes, infos);
         }
 
         // thread-safe:
@@ -161,11 +154,9 @@ namespace IronRuby.Builtins {
         public static void DefineLibraryMethod(RubyModule/*!*/ module, string/*!*/ name, int attributes, 
             uint overloadAttributes1, Delegate/*!*/ overload1) {
 
-            if (!SkipDefinition(module, attributes)) {
-                DefineLibraryMethod(module, name, attributes, new[] { 
-                    LibraryOverload.Create(overload1, overloadAttributes1)
-                });
-            }
+            DefineLibraryMethod(module, name, attributes, new[] { 
+                LibraryOverload.Create(overload1, overloadAttributes1)
+            });
         }
 
         // thread-safe:
@@ -174,12 +165,10 @@ namespace IronRuby.Builtins {
             uint overloadAttributes1, uint overloadAttributes2, 
             Delegate/*!*/ overload1, Delegate/*!*/ overload2) {
 
-            if (!SkipDefinition(module, attributes)) {
-                DefineLibraryMethod(module, name, attributes, new[] { 
-                    LibraryOverload.Create(overload1, overloadAttributes1),
-                    LibraryOverload.Create(overload2, overloadAttributes2),
-                });
-            }
+            DefineLibraryMethod(module, name, attributes, new[] { 
+                LibraryOverload.Create(overload1, overloadAttributes1),
+                LibraryOverload.Create(overload2, overloadAttributes2),
+            });
         }
 
         // thread-safe:
@@ -188,13 +177,11 @@ namespace IronRuby.Builtins {
             uint overloadAttributes1, uint overloadAttributes2, uint overloadAttributes3, 
             Delegate/*!*/ overload1, Delegate/*!*/ overload2, Delegate/*!*/ overload3) {
 
-            if (!SkipDefinition(module, attributes)) {
-                DefineLibraryMethod(module, name, attributes, new[] { 
-                    LibraryOverload.Create(overload1, overloadAttributes1),
-                    LibraryOverload.Create(overload2, overloadAttributes2),
-                    LibraryOverload.Create(overload3, overloadAttributes3),
-                });
-            }
+            DefineLibraryMethod(module, name, attributes, new[] { 
+                LibraryOverload.Create(overload1, overloadAttributes1),
+                LibraryOverload.Create(overload2, overloadAttributes2),
+                LibraryOverload.Create(overload3, overloadAttributes3),
+            });
         }
 
         // thread-safe:
@@ -203,14 +190,12 @@ namespace IronRuby.Builtins {
             uint overloadAttributes1, uint overloadAttributes2, uint overloadAttributes3, uint overloadAttributes4,
             Delegate/*!*/ overload1, Delegate/*!*/ overload2, Delegate/*!*/ overload3, Delegate/*!*/ overload4) {
 
-            if (!SkipDefinition(module, attributes)) {
-                DefineLibraryMethod(module, name, attributes, new[] { 
-                    LibraryOverload.Create(overload1, overloadAttributes1),
-                    LibraryOverload.Create(overload2, overloadAttributes2),
-                    LibraryOverload.Create(overload3, overloadAttributes3),
-                    LibraryOverload.Create(overload4, overloadAttributes4),
-                });
-            }
+            DefineLibraryMethod(module, name, attributes, new[] { 
+                LibraryOverload.Create(overload1, overloadAttributes1),
+                LibraryOverload.Create(overload2, overloadAttributes2),
+                LibraryOverload.Create(overload3, overloadAttributes3),
+                LibraryOverload.Create(overload4, overloadAttributes4),
+            });
         }
 
         // thread-safe:
@@ -239,8 +224,26 @@ namespace IronRuby.Builtins {
 
         #region Constants
 
+        /// <summary>
+        /// The value of a [RubyConstant] field the platform has no such constant for (File::DIRECT
+        /// on macOS, Fcntl::F_GETPIPE_SZ outside Linux): MRI leaves those undefined, so that
+        /// const_defined? can tell, rather than defining them as 0 or nil.
+        /// </summary>
+        public static readonly object Undefined = System.Reflection.Missing.Value;
+
+        /// <summary>
+        /// <paramref name="value"/> as a [RubyConstant], or <see cref="Undefined"/> where it is 0 -
+        /// the open(2) flags IOModeNative has no value for on this platform.
+        /// </summary>
+        public static object PlatformConstant(int value) {
+            return value != 0 ? (object)value : Undefined;
+        }
+
         // thread-safe:
         public static void SetBuiltinConstant(RubyModule/*!*/ module, string/*!*/ name, object value) {
+            if (value == Undefined) {
+                return;
+            }
             // TODO: hoist the lock?
             using (module.Context.ClassHierarchyLocker()) {
                 module.SetConstantNoMutateNoLock(name, value);
@@ -249,6 +252,9 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         public static void SetConstant(RubyModule/*!*/ module, string/*!*/ name, object value) {
+            if (value == Undefined) {
+                return;
+            }
             module.SetConstant(name, value);
         }
 

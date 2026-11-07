@@ -7,7 +7,6 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;

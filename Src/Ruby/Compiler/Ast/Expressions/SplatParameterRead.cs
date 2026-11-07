@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
@@ -49,6 +45,8 @@ namespace IronRuby.Compiler.Ast {
         private readonly Expression/*!*/ _arguments;
         private readonly int _count1, _count2;
         private readonly Expression _defaultValue;
+        // CheckArity: the names of the required keywords, which MRI's arity error lists
+        private readonly string[] _requiredKeywords;
 
         public Expression/*!*/ Arguments {
             get { return _arguments; }
@@ -58,7 +56,8 @@ namespace IronRuby.Compiler.Ast {
             get { return _defaultValue; }
         }
 
-        private SplatParameterRead(ReadKind kind, Expression/*!*/ arguments, int count1, int count2, Expression defaultValue, SourceSpan location)
+        private SplatParameterRead(ReadKind kind, Expression/*!*/ arguments, int count1, int count2, Expression defaultValue, SourceSpan location,
+            string[] requiredKeywords = null)
             : base(location) {
             Assert.NotNull(arguments);
             _kind = kind;
@@ -66,6 +65,7 @@ namespace IronRuby.Compiler.Ast {
             _count1 = count1;
             _count2 = count2;
             _defaultValue = defaultValue;
+            _requiredKeywords = requiredKeywords;
         }
 
         /// <summary>A copy of the arguments as they arrived (for a parameterless `super`).</summary>
@@ -89,8 +89,9 @@ namespace IronRuby.Compiler.Ast {
         }
 
         /// <summary>Raises ArgumentError unless there are minimum..maximum arguments (maximum &lt; 0: no cap).</summary>
-        public static SplatParameterRead/*!*/ CheckArity(Expression/*!*/ arguments, int minimum, int maximum, SourceSpan location) {
-            return new SplatParameterRead(ReadKind.CheckArity, arguments, minimum, maximum, null, location);
+        public static SplatParameterRead/*!*/ CheckArity(Expression/*!*/ arguments, int minimum, int maximum, string[]/*!*/ requiredKeywords,
+            SourceSpan location) {
+            return new SplatParameterRead(ReadKind.CheckArity, arguments, minimum, maximum, null, location, requiredKeywords);
         }
 
         /// <summary>The next argument, nil if none is left.</summary>
@@ -129,7 +130,8 @@ namespace IronRuby.Compiler.Ast {
 
                 case ReadKind.CheckArity:
                     return Ast.Block(
-                        Methods.CheckSplatArity.OpCall(arguments, AstUtils.Constant(_count1), AstUtils.Constant(_count2)),
+                        Methods.CheckSplatArity.OpCall(arguments, AstUtils.Constant(_count1), AstUtils.Constant(_count2),
+                            AstUtils.Constant(IronRuby.Runtime.Calls.RubyParameterSignature.DescribeRequiredKeywords(_requiredKeywords))),
                         AstUtils.Constant(null, typeof(object))
                     );
 

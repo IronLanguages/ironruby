@@ -23,11 +23,9 @@ using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
     [Flags]
@@ -86,7 +84,6 @@ namespace IronRuby.Builtins {
     [DebuggerTypeProxy(typeof(RubyModule.DebugView))]
     [ReflectionCached]
     public partial class RubyModule : IDuplicable, IRubyObject {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
         public static readonly RubyModule[]/*!*/ EmptyArray = new RubyModule[0];
 
         // interlocked
@@ -212,10 +209,6 @@ namespace IronRuby.Builtins {
             get { return ReferenceEquals(this, Context.BasicObjectClass); }
         }
 
-        public bool IsComClass {
-            get { return ReferenceEquals(this, Context.ComObjectClass); }
-        }
-
         internal virtual RubyClass GetSuperClass() {
             return null;
         }
@@ -305,6 +298,11 @@ namespace IronRuby.Builtins {
         // one is (guarded by the class hierarchy lock, like _constants)
         private HashSet<string> _deprecatedConstants;
 
+        // private constants of IronRuby's own Ruby code that MRI has no counterpart of, hidden with
+        // Module#__hide_constant__ from const_defined?, const_get and the rest of constant reflection;
+        // null until one is. Replaced (under the class hierarchy lock) rather than changed: read without a lock.
+        private HashSet<string> _hiddenConstants;
+
         // what Module#name hands out; see GetNameString. Cleared whenever the name changes.
         private MutableString _nameString;
 
@@ -328,6 +326,9 @@ namespace IronRuby.Builtins {
         private MemberTableState _methodsState = MemberTableState.Uninitialized;
         private Dictionary<string, RubyMemberInfo> _methods;
         private Action<RubyModule> _methodsInitializer;
+
+        // Names of the helpers the core prelude defines in this module for its own use (see IsUnlisted).
+        private HashSet<string> _preludeHelpers;
 
         // class variable table:
         private Dictionary<string, object> _classVariables;
@@ -362,7 +363,7 @@ namespace IronRuby.Builtins {
         // { (name, activation, the group lookup found or NoBaseGroup) -> the method group a call of name sees
         // there }: the CLR method group extended by the active extension methods, or a group of those
         // alone (null if none applies).  For the class version in _scopedExtensionGroupsVersion; classes only.
-        private Dictionary<Key<string, RefinementActivation, object>, RubyMemberInfo> _scopedExtensionGroups;
+        private Dictionary<(string, RefinementActivation, object), RubyMemberInfo> _scopedExtensionGroups;
         private int _scopedExtensionGroupsVersion;
         private static readonly object NoBaseGroup = new object();
 
@@ -1130,18 +1131,6 @@ namespace IronRuby.Builtins {
             GetInstanceData().Freeze();
         }
 
-        // thread-safe:
-        public bool IsTainted {
-            get { return GetInstanceData().IsTainted; }
-            set { GetInstanceData().IsTainted = value; }
-        }
-
-        // thread-safe:
-        public bool IsUntrusted {
-            get { return GetInstanceData().IsUntrusted; }
-            set { GetInstanceData().IsUntrusted = value; }
-        }
-
         int IRubyObject.BaseGetHashCode() {
             return base.GetHashCode();
         }
@@ -1302,6 +1291,10 @@ namespace IronRuby.Builtins {
             public bool Loaded { get { return _loaded; } }
             public MutableString/*!*/ Path { get { return _path; } }
 
+            // Declared by the core prelude, for a class MRI has from the start (Set): #autoload? does
+            // not name a file for it, since there is none to MRI.
+            internal bool IsCore { get; set; }
+
             // The file name without directory or .rb extension - what a #require of some other
             // spelling of the same file has to share with it before resolving both is worth it.
             internal string/*!*/ FeatureName { get { return _featureName; } }
@@ -1443,7 +1436,9 @@ namespace IronRuby.Builtins {
 
                  using (autoloadScope.Context.ClassHierarchyUnlocker()) {
                      _loaded = true;
-                     return RequireFromMain(autoloadScope);
+                     return IsCore
+                         ? autoloadScope.Context.Loader.LoadAsCorePrelude(() => RequireFromMain(autoloadScope))
+                         : RequireFromMain(autoloadScope);
                  }
             }
 
@@ -1475,7 +1470,7 @@ namespace IronRuby.Builtins {
         // autoload of __FILE__), is satisfied from the start. Every autoload is registered with the
         // loader, which is what lets a direct #require of the same file stand in for it.
         private AutoloadedConstant/*!*/ CreateAutoload(MutableString/*!*/ path, string requiredFeature) {
-            var result = new AutoloadedConstant(path);
+            var result = new AutoloadedConstant(path) { IsCore = _context.Loader.IsLoadingCorePrelude };
             if (requiredFeature != null) {
                 result.RequiredAs(requiredFeature);
             }
@@ -1536,6 +1531,38 @@ namespace IronRuby.Builtins {
         /// <summary>True if this module itself declared the constant private.</summary>
         public bool IsPrivateConstant(string/*!*/ name) {
             return _privateConstants != null && _privateConstants.Contains(name);
+        }
+
+        /// <summary>
+        /// Module#__hide_constant__: makes the constant private, and leaves it out of constant reflection
+        /// too - IronRuby's Ruby code keeps its own state in constants that MRI keeps in C, where Ruby
+        /// cannot see it. The code nested in the module still reads it by name, as it reads a private one.
+        /// </summary>
+        public void HideConstant(string/*!*/ name) {
+            SetConstantVisibility(name, true);
+            using (Context.ClassHierarchyLocker()) {
+                var names = _hiddenConstants;
+                if (names == null || !names.Contains(name)) {
+                    Volatile.Write(ref _hiddenConstants, names != null ? new HashSet<string>(names) { name } : new HashSet<string> { name });
+                }
+                Context.NoteHiddenConstant(name);
+            }
+        }
+
+        /// <summary>True if this module itself hid the constant (<see cref="HideConstant"/>).</summary>
+        public bool IsHiddenConstant(string/*!*/ name) {
+            var names = Volatile.Read(ref _hiddenConstants);
+            return names != null && names.Contains(name);
+        }
+
+        /// <summary>
+        /// True if the module that declares <paramref name="name"/> - this one or the first
+        /// ancestor that has it - hid it.
+        /// </summary>
+        public bool IsHiddenConstantInAncestors(string/*!*/ name) {
+            Context.RequiresClassHierarchyLock();
+            var owner = GetConstantOwnerNoLock(name);
+            return owner != null && owner.IsHiddenConstant(name);
         }
 
         /// <summary>
@@ -1789,6 +1816,7 @@ namespace IronRuby.Builtins {
                         // Load() marks itself loaded before running the file, so "not loaded yet"
                         // alone would hide the pending autoload from every thread for its duration.
                         if ((autoloaded = storage.Value as AutoloadedConstant) != null
+                            && !autoloaded.IsCore
                             && (!autoloaded.Loaded || autoloaded.IsLoading)
                             && !autoloaded.IsLoadingOnCurrentThread
                             && !autoloaded.IsSatisfied(Context.Loader)) {
@@ -2167,9 +2195,6 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         public void AddMethodAlias(string/*!*/ newName, string/*!*/ oldName) {
-            // MRI 1.8: if (newName == oldName) return;
-            // MRI 1.9: no check
-
             RubyMemberInfo method;
             using (Context.ClassHierarchyLocker()) {
                 // MRI: aliases a super-forwarder not the real method.
@@ -2296,6 +2321,14 @@ namespace IronRuby.Builtins {
 
             InitializeMethodsNoLock();
             _methods[name] = method;
+
+            if (IsHelperName(name)) {
+                if (_context.Loader.IsLoadingCorePrelude) {
+                    (_preludeHelpers ??= new HashSet<string>()).Add(name);
+                } else {
+                    _preludeHelpers?.Remove(name);
+                }
+            }
 
             // A refinement is in no one's ancestors, so PrepareMethodUpdate reaches no class: the calls it
             // changes are those of the module it refines.
@@ -2473,13 +2506,6 @@ namespace IronRuby.Builtins {
         // thread-safe:
         public void HideMethod(string/*!*/ name) {
             SetMethodNoEvent(Context, name, RubyMethodInfo.HiddenMethod);
-        }
-
-        // thread-safe:
-        public MethodResolutionResult ResolveMethodForSite(string/*!*/ name, VisibilityContext visibility) {
-            using (Context.ClassHierarchyLocker()) {
-                return ResolveMethodForSiteNoLock(name, visibility);
-            }
         }
 
         // thread-safe:
@@ -2762,12 +2788,12 @@ namespace IronRuby.Builtins {
 
             int version = Version.Method;
             if (_scopedExtensionGroups == null || _scopedExtensionGroupsVersion != version) {
-                _scopedExtensionGroups = new Dictionary<Key<string, RefinementActivation, object>, RubyMemberInfo>();
+                _scopedExtensionGroups = new Dictionary<(string, RefinementActivation, object), RubyMemberInfo>();
                 _scopedExtensionGroupsVersion = version;
             }
 
             var baseGroup = result.Found ? (RubyMethodGroupInfo)result.Info : null;
-            var key = Key.Create(name, refinements, (object)baseGroup ?? NoBaseGroup);
+            var key = (name, refinements, (object)baseGroup ?? NoBaseGroup);
             RubyMemberInfo group;
             if (!_scopedExtensionGroups.TryGetValue(key, out group)) {
                 var present = new HashSet<MethodBase>();
@@ -2998,6 +3024,15 @@ namespace IronRuby.Builtins {
                         return true;
                     }
                 }
+
+                // IComparable.CompareTo and IEnumerable.GetEnumerator of a Ruby class that defines <=> or mixes in Enumerable
+                // (see GetImpliedClrInterface). Only a <=> written in Ruby: a library one (System::IComparable's) calls CompareTo.
+                if (name == "CompareTo" && TryGetDefinedMethod("<=>", out method) && method.IsRubyMember && !(method is RubyLibraryMethodInfo)) {
+                    return true;
+                }
+                if (name == "GetEnumerator" && GetImpliedClrInterface() == typeof(System.Collections.IEnumerable) && TryGetDefinedMethod("to_a", out method)) {
+                    return true;
+                }
             }
 
             return !skipHidden && TryGetClrMember(name, virtualLookup, out method);
@@ -3019,7 +3054,7 @@ namespace IronRuby.Builtins {
                 // Note: Do not allow mangling for CLR virtual lookups - we want to match the overridden name exactly as is, 
                 // so that it corresponds to the base method call the override stub performs.
                 bool mapNames = (Restrictions & ModuleRestrictions.NoNameMapping) == 0;
-                bool unmangleNames = !virtualLookup && mapNames;
+                bool unmangleNames = !virtualLookup && (mapNames || IsUnmangledBuiltin());
 
                 if (IsModuleType(_typeTracker.Type) ?
                     TryGetDefaultInterfaceMember(name, unmangleNames, out method) :
@@ -3031,6 +3066,15 @@ namespace IronRuby.Builtins {
 
             method = null;
             return false;
+        }
+
+        /// <summary>
+        /// Integer and Float map no names (<see cref="ModuleRestrictions.NoNameMapping"/>), yet the CLR instance methods of
+        /// their Int32 and Double take snake_case names as any CLR type's do: 5.to_string("X"), 1.5.compare_to(2.0). Such a
+        /// member is still left out of the method lists (<see cref="IsUnlisted"/>), and an operator or indexer is not mapped.
+        /// </summary>
+        private bool IsUnmangledBuiltin() {
+            return _typeTracker.Type.IsPrimitive && this is RubyClass cls && !cls.IsSingletonClass;
         }
 
         // The public instance members of an interface and its base interfaces that have a default implementation (C# 8),
@@ -3303,6 +3347,56 @@ namespace IronRuby.Builtins {
 
                 return false;
             });
+        }
+
+        /// <summary>
+        /// Whether Module#instance_methods, Kernel#methods and the rest of that family leave out a member <paramref name="owner"/>
+        /// has - one that stays callable, but that MRI has no counterpart of, so that the lists come out as MRI's:
+        /// <list type="bullet">
+        /// <item>A CLR member of the type behind a Ruby built-in (a module that maps no names, see
+        /// <see cref="ModuleRestrictions.NoNameMapping"/>): Object#GetHashCode, Object.ReferenceEquals,
+        /// LocalJumpError#ExitValue - or a library method standing in for one (NilClass#GetType). A CLR type's own
+        /// members are listed: only the built-ins are Ruby's classes.</item>
+        /// <item>IronRuby's own helpers, whose names start with two underscores (__ir_inspect__, __cmp_operand__):
+        /// those a library defines with [RubyMethod], and those the core prelude (ruby4.rb and the files it
+        /// requires) defines, aliases or makes private while it loads. MRI's own methods of that shape are listed,
+        /// as is a method of that name that a program defines.</item>
+        /// </list>
+        /// </summary>
+        public static bool IsUnlisted(RubyModule/*!*/ owner, string/*!*/ name, RubyMemberInfo/*!*/ member) {
+            if (member.IsInteropMember || member is RubyLibraryMethodInfo && IsSystemObjectMethodName(name)) {
+                return (owner.Restrictions & ModuleRestrictions.NoNameMapping) != 0;
+            }
+
+            return IsHelperName(name) && (member is RubyLibraryMethodInfo || owner._preludeHelpers != null && owner._preludeHelpers.Contains(name));
+        }
+
+        private static bool IsSystemObjectMethodName(string/*!*/ name) {
+            switch (name) {
+                case "Equals":
+                case "GetHashCode":
+                case "GetType":
+                case "ToString":
+                case "ReferenceEquals":
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool IsHelperName(string/*!*/ name) {
+            if (!name.StartsWith("__", StringComparison.Ordinal)) {
+                return false;
+            }
+
+            switch (name) {
+                case "__send__":
+                case "__id__":
+                case "__method__":
+                case "__callee__":
+                case "__dir__":
+                    return false;
+            }
+            return true;
         }
 
         public void ForEachMember(bool inherited, RubyMethodAttributes attributes, Action<string/*!*/, RubyModule/*!*/, RubyMemberInfo/*!*/>/*!*/ action) {
@@ -3811,12 +3905,35 @@ namespace IronRuby.Builtins {
             get { return true; }
         }
 
-        internal List<Type> GetImplementedInterfaces() {
+        /// <summary>
+        /// The CLR interface the type of a Ruby class mixing in this module implements although the module is not a CLR interface:
+        /// Comparable makes the class an IComparable (CompareTo calls &lt;=&gt;), Enumerable an IEnumerable (GetEnumerator
+        /// lists Enumerable#to_a), so that CLR code can sort and iterate its instances.
+        /// </summary>
+        internal Type GetImpliedClrInterface() {
+            if ((_restrictions & ModuleRestrictions.Builtin) != ModuleRestrictions.Builtin || _typeTracker != null) {
+                return null;
+            }
+            switch (_name) {
+                case "Comparable": return typeof(IComparable);
+                case "Enumerable": return typeof(System.Collections.IEnumerable);
+                default: return null;
+            }
+        }
+
+        internal List<Type> GetImplementedInterfaces(Type/*!*/ baseType) {
             List<Type> interfaces = new List<Type>();
             using (Context.ClassHierarchyLocker()) {
                 foreach (RubyModule m in _mixins) {
                     if (m.IsInterface && !m.TypeTracker.Type.IsGenericTypeDefinition && !interfaces.Contains(m.TypeTracker.Type)) {
                         interfaces.Add(m.TypeTracker.Type);
+                    }
+
+                    // only where a type can be generated for it (a Struct's RubyStruct is sealed, NativeAOT emits no types)
+                    Type implied = m.GetImpliedClrInterface();
+                    if (implied != null && !implied.IsAssignableFrom(baseType) && !interfaces.Contains(implied) &&
+                        !baseType.IsSealed && System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported) {
+                        interfaces.Add(implied);
                     }
                 }
             }
@@ -3997,18 +4114,6 @@ namespace IronRuby.Builtins {
             [DebuggerDisplay("{GetModuleName(A),nq}", Name = "{GetClassKind(),nq}", Type = "")]
             public object A {
                 get { return _obj.ImmediateClass; }
-            }
-
-            [DebuggerDisplay("{B}", Name = "tainted?", Type = "")]
-            public bool B {
-                get { return _obj.IsTainted; }
-                set { _obj.IsTainted = value; }
-            }
-
-            [DebuggerDisplay("{C}", Name = "untrusted?", Type = "")]
-            public bool C {
-                get { return _obj.IsUntrusted; }
-                set { _obj.IsUntrusted = value; }
             }
 
             [DebuggerDisplay("{D}", Name = "frozen?", Type = "")]

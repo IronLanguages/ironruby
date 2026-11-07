@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -25,7 +21,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 
@@ -108,8 +103,8 @@ namespace IronRuby.Compiler.Ast {
         public Parameters(LeftValue/*!*/[] mandatory, int leadingMandatoryCount, SimpleAssignmentExpression/*!*/[] optional, LeftValue unsplat, LocalVariable block, SourceSpan location)
             : base(location) {
 
-            mandatory = mandatory ?? LeftValue.EmptyArray;
-            optional = optional ?? SimpleAssignmentExpression.EmptyArray;
+            mandatory = mandatory ?? Array.Empty<LeftValue>();
+            optional = optional ?? Array.Empty<SimpleAssignmentExpression>();
 
             Debug.Assert(leadingMandatoryCount >= 0 && leadingMandatoryCount <= mandatory.Length);
             Debug.Assert(leadingMandatoryCount == mandatory.Length || optional != null || unsplat != null);
@@ -172,7 +167,7 @@ namespace IronRuby.Compiler.Ast {
                         Ast.Equal(_optional[i].Left.TransformRead(gen), singleton),
                         Ast.Block(
                             _optional[i].Left.TransformWrite(gen, AstUtils.Constant(null, typeof(object))),
-                            _optional[i].TransformRead(gen) // assignment
+                            TransformDefault(gen, _optional[i])
                         )
                     ));
                 }
@@ -189,7 +184,7 @@ namespace IronRuby.Compiler.Ast {
                         // "no argument given" sentinel.
                         _optional[i].Left.TransformWrite(gen, AstUtils.Constant(null, typeof(object))),
                         result,
-                        _optional[i].TransformRead(gen) // assignment
+                        TransformDefault(gen, _optional[i])
                     )
                 );
             }
@@ -200,6 +195,24 @@ namespace IronRuby.Compiler.Ast {
                 result,
                 AstUtils.Empty()
             );
+        }
+
+        /// <summary>
+        /// optional = default. The binding of the parameter is the one assignment of it the scope counts
+        /// (AstGenerator.CountParameterAssignments), but the default value is code of its own: an assignment
+        /// in it, as of a in def m(a, b = (a = 3)), is another, which a shareable proc must see.
+        /// </summary>
+        private static MSA.Expression/*!*/ TransformDefault(AstGenerator/*!*/ gen, SimpleAssignmentExpression/*!*/ optional) {
+            Debug.Assert(optional.Operation == null);
+            bool binding = gen.BindingParameters;
+            gen.BindingParameters = false;
+            MSA.Expression value;
+            try {
+                value = optional.Right.TransformRead(gen);
+            } finally {
+                gen.BindingParameters = binding;
+            }
+            return optional.Left.TransformWrite(gen, value);
         }
 
         internal void TransformForSuperCall(AstGenerator/*!*/ gen, CallSiteBuilder/*!*/ siteBuilder) {

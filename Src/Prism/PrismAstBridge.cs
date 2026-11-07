@@ -55,11 +55,19 @@ namespace IronRuby.Prism {
         private readonly Dictionary<LocalVariable, LocalVariable[]>/*!*/ _deconstructCache =
             new Dictionary<LocalVariable, LocalVariable[]>();
 
+        // The Ruby-written core: its @__name__ instance variables are its own hidden state (RubyUtils.GetCoreStateInstanceVariableName).
+        private readonly bool _hidesCoreState;
+
+        private string/*!*/ IvarName(string/*!*/ name) {
+            return _hidesCoreState && RubyUtils.IsCoreStateInstanceVariableName(name) ? RubyUtils.GetCoreStateInstanceVariableName(name) : name;
+        }
+
         private PrismAstBridge(string/*!*/ source, string path, RubyEncoding/*!*/ encoding) {
             _source = source;
             // an eval with a starting line below 1 carries the difference in its file name
             _lineOffset = RubyUtils.DecodeEvalLineOffset(ref path);
             _path = path;
+            _hidesCoreState = RubyUtils.KeepsHiddenState(path);
             _encoding = encoding;
             var lineStarts = new List<int> { 0 };
             for (int i = source.IndexOf('\n'); i >= 0; i = source.IndexOf('\n', i + 1)) {
@@ -71,6 +79,9 @@ namespace IronRuby.Prism {
 
         // IR_EAGER_DEF_BODIES=1 maps every method body at parse time, as before lazy mapping (for measuring it)
         private static readonly bool _EagerDefBodies = Environment.GetEnvironmentVariable("IR_EAGER_DEF_BODIES") == "1";
+
+        // eval in an isolated proc: the outer locals it may not use (RubyCompilerOptions.IsolatedLocalNames)
+        private ICollection<string> _isolatedLocalNames;
 
         public static SourceUnitTree Parse(SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options, ErrorSink/*!*/ errorSink) {
             // eval("...", binding, file, line) reports __LINE__ and backtraces from `line`, which is
@@ -95,7 +106,7 @@ namespace IronRuby.Prism {
                 }
                 return ParseText(code, sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
                     options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval,
-                    options.EvalSourceEncoding, commandLine, mainScript);
+                    options.EvalSourceEncoding, commandLine, mainScript, options.IsolatedLocalNames);
             } finally {
                 PhaseTimer.Exit(timed);
             }
@@ -130,7 +141,8 @@ namespace IronRuby.Prism {
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
             SourceUnit sourceUnit, ErrorSink errorSink, int startLine, bool evalOutsideMethod = false, bool isEval = false,
-            RubyEncoding evalSourceEncoding = null, byte commandLine = 0, bool mainScript = false) {
+            RubyEncoding evalSourceEncoding = null, byte commandLine = 0, bool mainScript = false,
+            ICollection<string> isolatedLocalNames = null) {
 
             // --enable/--disable=frozen-string-literal only sets the default; the magic comment
             // in a file still wins, and prism applies that rule itself.
@@ -168,6 +180,15 @@ namespace IronRuby.Prism {
                 sourceUnit.Path != null && sourceUnit.Path == context.RubyOptions.MainFile) {
                 sourceEncoding = kcode;
                 encodingName = kcode.Name;
+            } else if (kcode == null && context != null && !isEval && declaredEncodingName == null &&
+                (sourceUnit.Path == "-e" || sourceUnit.Path == "-") && sourceUnit.Path == context.RubyOptions.MainFile) {
+                // Without -K, -e and a program read from stdin are in the locale's encoding (a file
+                // is UTF-8): under LANG=C their literals and __ENCODING__ are US-ASCII. Their bytes
+                // reach here as UTF-8 (with escapes for what is not), so only prism is told.
+                RubyEncoding locale = context.RubyOptions.LocaleEncoding;
+                if (locale != RubyEncoding.UTF8 && locale.IsAsciiIdentity) {
+                    encodingName = locale.Name;
+                }
             }
 
             // Method bodies are mapped when the method is first called (see Def) - most methods a file
@@ -194,9 +215,18 @@ namespace IronRuby.Prism {
             bridge._errorSink = errorSink;
             bridge._evalOutsideMethod = evalOutsideMethod;
             bridge._isEval = isEval;
+            bridge._isolatedLocalNames = isolatedLocalNames;
 
             if (result.Errors.Count > 0) {
                 if (errorSink != null && sourceUnit != null) {
+                    // A SyntaxError's message is MRI's: "syntax errors found" and prism's picture of where,
+                    // at the line of the first error prism found (not the first in the source). Any other
+                    // sink - a host's - is told of each error.
+                    string formatted = (errorSink is RuntimeErrorSink) ? SyntaxErrorDescription(result, bridge._startLine + bridge._lineOffset) : null;
+                    if (formatted != null) {
+                        errorSink.Add(sourceUnit, formatted, bridge.Span(result.Errors[0].Location), 0, Severity.FatalError);
+                        return null;
+                    }
                     foreach (var error in result.Errors) {
                         errorSink.Add(sourceUnit, error.Message, bridge.Span(error.Location), 0, Severity.FatalError);
                     }
@@ -216,6 +246,33 @@ namespace IronRuby.Prism {
             }
 
             return bridge.Program((Pm.ProgramNode)result.Root, outerLocalNames, result.DataOffset);
+        }
+
+        /// <summary>
+        /// What a SyntaxError says after its "file:line: ": prism's layout of the errors (see
+        /// PrismParser.FormatErrors) without the location prism puts in front of it, which the
+        /// error sink adds - eval decodes the file name and line its own way. Colored, as MRI's is,
+        /// when $stderr is a terminal (bold only under NO_COLOR).
+        /// </summary>
+        private static string SyntaxErrorDescription(PrismParseResult/*!*/ result, int startLine) {
+            int formatType = 1;
+            if (!Console.IsErrorRedirected) {
+                formatType = String.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR")) ? 3 : 2;
+            }
+            string formatted;
+            try {
+                formatted = PrismParser.FormatErrors(result, formatType, startLine);
+            } catch (Exception) {
+                // no layout: the first error's message, as before
+                return null;
+            }
+            if (formatted == null) {
+                return null;
+            }
+            string header = (result.Errors.Count > 1) ? ": syntax errors found\n" : ": syntax error found\n";
+            int end = formatted.IndexOf('\n');
+            int at = (end < 0) ? -1 : formatted.LastIndexOf(header, end, StringComparison.Ordinal);
+            return (at < 0) ? null : formatted.Substring(at + 2);
         }
 
         /// <summary>
@@ -380,11 +437,11 @@ namespace IronRuby.Prism {
 
         private SourceUnitTree/*!*/ Program(Pm.ProgramNode/*!*/ node, List<string> outerLocalNames, int dataOffset) {
             var scope = new TopStaticLexicalScope(
-                outerLocalNames != null ? new RuntimeLexicalScope(outerLocalNames) : null);
+                outerLocalNames != null ? new RuntimeLexicalScope(outerLocalNames, _isolatedLocalNames) : null);
             _scopes.Push(scope);
             var statements = BuildStatements(HoistPreExecution(node.Statements));
             _scopes.Pop();
-            return new SourceUnitTree(scope, statements, null, _encoding, dataOffset);
+            return new SourceUnitTree(scope, statements, _encoding, dataOffset);
         }
 
         /// <summary>
@@ -636,19 +693,19 @@ namespace IronRuby.Prism {
                         CurrentScope.ResolveOrAddVariable(andWrite.Name, span), Expr(andWrite.Value), "&&", span);
 
                 case Pm.InstanceVariableReadNode ivarRead:
-                    return new InstanceVariable(ivarRead.Name, span);
+                    return new InstanceVariable(IvarName(ivarRead.Name), span);
                 case Pm.InstanceVariableWriteNode ivarWrite:
                     return new SimpleAssignmentExpression(
-                        new InstanceVariable(ivarWrite.Name, span), Expr(ivarWrite.Value), null, span);
+                        new InstanceVariable(IvarName(ivarWrite.Name), span), Expr(ivarWrite.Value), null, span);
                 case Pm.InstanceVariableOperatorWriteNode ivarOp:
                     return new SimpleAssignmentExpression(
-                        new InstanceVariable(ivarOp.Name, span), Expr(ivarOp.Value), ivarOp.BinaryOperator, span);
+                        new InstanceVariable(IvarName(ivarOp.Name), span), Expr(ivarOp.Value), ivarOp.BinaryOperator, span);
                 case Pm.InstanceVariableOrWriteNode ivarOr:
                     return new SimpleAssignmentExpression(
-                        new InstanceVariable(ivarOr.Name, span), Expr(ivarOr.Value), "||", span);
+                        new InstanceVariable(IvarName(ivarOr.Name), span), Expr(ivarOr.Value), "||", span);
                 case Pm.InstanceVariableAndWriteNode ivarAnd:
                     return new SimpleAssignmentExpression(
-                        new InstanceVariable(ivarAnd.Name, span), Expr(ivarAnd.Value), "&&", span);
+                        new InstanceVariable(IvarName(ivarAnd.Name), span), Expr(ivarAnd.Value), "&&", span);
 
                 case Pm.GlobalVariableReadNode gvarRead:
                     return new IronRuby.Compiler.Ast.GlobalVariable(gvarRead.Name.Substring(1), span);
@@ -1308,11 +1365,6 @@ namespace IronRuby.Prism {
                 case Pm.CallOperatorWriteNode _:
                     return DefinedAs(new IsDefinedExpression(Expr(node), span), "assignment", span);
 
-                // 1.8 answered with the variable's own name ($&, $1, ...); 1.9+ says "global-variable"
-                case Pm.BackReferenceReadNode _:
-                case Pm.NumberedReferenceReadNode _:
-                    return DefinedAs(new IsDefinedExpression(Expr(node), span), "global-variable", span);
-
                 // an array literal is only defined if every element is
                 case Pm.ArrayNode array:
                     return DefinedAs(ElementsDefined(array, span), "expression", span);
@@ -1674,7 +1726,7 @@ namespace IronRuby.Prism {
                 case Pm.RequiredParameterNode requiredParam:
                     return CurrentScope.ResolveOrAddVariable(requiredParam.Name, span);
                 case Pm.InstanceVariableTargetNode ivar:
-                    return new InstanceVariable(ivar.Name, span);
+                    return new InstanceVariable(IvarName(ivar.Name), span);
                 case Pm.GlobalVariableTargetNode gvar:
                     return new IronRuby.Compiler.Ast.GlobalVariable(gvar.Name.Substring(1), span);
                 case Pm.ClassVariableTargetNode cvar:
@@ -2496,7 +2548,7 @@ namespace IronRuby.Prism {
                 int minimum = node.Requireds.Length + postCount;
                 int maximum = node.Rest != null ? -1 : minimum + node.Optionals.Length;
                 if (minimum > 0 || maximum >= 0) {
-                    statements.Add(ArityCheck(args, minimum, maximum, span));
+                    statements.Add(SplatParameterRead.CheckArity(args, minimum, maximum, RequiredKeywordNames(node), span));
                 }
             }
 
@@ -2541,7 +2593,7 @@ namespace IronRuby.Prism {
             if (node.Block is Pm.BlockParameterNode block) {
                 blockParam = DefineParameter(block.Name ?? "?block?", Span(node.Block));
             }
-            return new Parameters(LeftValue.EmptyArray, 0, null, args, blockParam, span) {
+            return new Parameters(Array.Empty<LeftValue>(), 0, null, args, blockParam, span) {
                 SuperSplat = superArgs
             };
         }
@@ -2586,7 +2638,7 @@ namespace IronRuby.Prism {
             }
 
             if (strict) {
-                foreach (var check in KeywordSeparationChecks(kwVar, mandatory, optionalPositionals, true, span)) {
+                foreach (var check in KeywordSeparationChecks(kwVar, mandatory, optionalPositionals, true, RequiredKeywordNames(node), span)) {
                     prologue.Add(check);
                 }
             }
@@ -2608,7 +2660,7 @@ namespace IronRuby.Prism {
         ///   m("a" =&gt; 1, b: 2)   # the keywords landed in a:  given 0, expected 1
         /// </summary>
         private List<Expression>/*!*/ KeywordSeparationChecks(LocalVariable/*!*/ kwVar, List<LeftValue>/*!*/ mandatory,
-            int optionalPositionals, bool acceptsKeywords, SourceSpan span) {
+            int optionalPositionals, bool acceptsKeywords, string[]/*!*/ requiredKeywords, SourceSpan span) {
 
             var checks = new List<Expression>();
             int count = mandatory.Count;
@@ -2619,14 +2671,14 @@ namespace IronRuby.Prism {
                 checks.Add(new IfExpression(
                     new KeywordArgumentsTest(lastMandatory, span),
                     new Statements(acceptsKeywords
-                        ? RaiseArityError(count - 1, expected, span)
+                        ? RaiseArityError(count - 1, expected, requiredKeywords, span)
                         : RaiseError("ArgumentError", "no keywords accepted", span)),
                     new List<ElseIfClause>(), span));
             }
 
             checks.Add(new UnlessExpression(
                 new KeywordArgumentsTest(kwVar, span),
-                new Statements(RaiseArityError(count + optionalPositionals + 1, expected, span)), null, span));
+                new Statements(RaiseArityError(count + optionalPositionals + 1, expected, requiredKeywords, span)), null, span));
 
             if (!acceptsKeywords) {
                 checks.Add(new UnlessExpression(
@@ -2646,29 +2698,32 @@ namespace IronRuby.Prism {
             optional.Add(new SimpleAssignmentExpression(kwVar, new HashConstructor(new Maplet[0], true, span), null, span));
 
             var prologue = new Statements();
-            foreach (var check in KeywordSeparationChecks(kwVar, mandatory, 0, false, span)) {
+            foreach (var check in KeywordSeparationChecks(kwVar, mandatory, 0, false, new string[0], span)) {
                 prologue.Add(check);
             }
             return prologue;
         }
 
         /// <summary>
-        /// `raise ArgumentError, "wrong number of arguments (given N, expected ...)"` unless
-        /// the splat holding the positional arguments has between <paramref name="minimum"/>
-        /// and <paramref name="maximum"/> entries. A negative maximum means a rest parameter
-        /// took the cap off, which MRI reports as "expected N+".
+        /// MRI's arity error lists the required keywords, given or not:
+        /// "wrong number of arguments (given 2, expected 1; required keyword: k)".
         /// </summary>
-        private Expression/*!*/ ArityCheck(LocalVariable/*!*/ args, int minimum, int maximum, SourceSpan span) {
-            return SplatParameterRead.CheckArity(args, minimum, maximum, span);
+        private static string[]/*!*/ RequiredKeywordNames(Pm.ParametersNode node) {
+            var names = new List<string>();
+            if (node != null) {
+                foreach (var keyword in node.Keywords) {
+                    if (keyword is Pm.RequiredKeywordParameterNode required) {
+                        names.Add(required.Name);
+                    }
+                }
+            }
+            return names.ToArray();
         }
 
-        private Expression/*!*/ RaiseArityError(int given, int expected, SourceSpan span) {
-            return RaiseArityError(given, expected.ToString(), span);
-        }
-
-        private Expression/*!*/ RaiseArityError(int given, string/*!*/ expected, SourceSpan span) {
+        private Expression/*!*/ RaiseArityError(int given, string/*!*/ expected, string[]/*!*/ requiredKeywords, SourceSpan span) {
             return RaiseError("ArgumentError",
-                "wrong number of arguments (given " + given + ", expected " + expected + ")", span);
+                "wrong number of arguments (given " + given + ", expected " + expected +
+                RubyParameterSignature.DescribeRequiredKeywords(requiredKeywords) + ")", span);
         }
 
         /// <summary>

@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -114,11 +110,10 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// The object maintains a state (frozen, tainted flags and instance variables).
+        /// The object maintains a state (frozen flag and instance variables).
         /// <code>
         /// obj.instance_variable_set(:@foo, 'bar')
         /// puts obj.instance_variable_get(:@foo)     # => 'bar'
-        /// puts obj.taint.tainted?                   # => true
         /// </code>
         /// </summary>
         public static bool HasObjectState(object obj) {
@@ -174,24 +169,27 @@ namespace IronRuby.Runtime {
         /// Ruby 4.0 lets an object name the instance variables its #inspect shows, by answering an
         /// array of names from a private #instance_variables_to_inspect. A name that the object
         /// does not have is simply not shown; nil means "all of them", and anything else is an
-        /// error. Objects that do not define the method at all - which is nearly all of them -
-        /// pay one method lookup.
+        /// error. Objects that do not define the method - which is nearly all of them, they have
+        /// Kernel's - pay one method lookup.
         /// </summary>
         private static IEnumerable<KeyValuePair<string, object>>/*!*/ SelectInspectedVariables(
             RubyContext/*!*/ context, object obj, IEnumerable<KeyValuePair<string, object>>/*!*/ vars) {
 
             // The runtime's own slots in the instance variable table - the finalizer that
             // ObjectSpace.define_finalizer attaches is one, spelled with angle brackets so that
-            // it cannot collide with a Ruby name - have no business in an #inspect.
+            // it cannot collide with a Ruby name - have no business in an #inspect, nor has the
+            // @__name__ state of the Ruby-written core classes.
             var visible = new List<KeyValuePair<string, object>>();
             foreach (KeyValuePair<string, object> var in vars) {
-                if (var.Key.Length == 0 || var.Key[0] != '<') {
+                if (RubyContext.IsVisibleInstanceVariableName(var.Key)) {
                     visible.Add(var);
                 }
             }
             vars = visible;
 
-            if (!context.ResolveMethod(obj, "instance_variables_to_inspect", VisibilityContext.AllVisible).Found) {
+            // Kernel's own answers nil:
+            var hook = context.ResolveMethod(obj, "instance_variables_to_inspect", VisibilityContext.AllVisible);
+            if (!hook.Found || hook.Info is RubyLibraryMethodInfo && hook.Info.DeclaringModule == context.KernelModule) {
                 return vars;
             }
 
@@ -228,10 +226,6 @@ namespace IronRuby.Runtime {
 
             var context = tosConversion.Context;
             using (IDisposable handle = RubyUtils.InfiniteInspectTracker.TrackObject(obj)) {
-                if (handle == null) {
-                    return MutableString.CreateAscii("...");
-                }
-
                 MutableString str = MutableString.CreateMutable(context.GetIdentifierEncoding());
                 str.Append("#<");
                 str.Append(context.GetClassDisplayName(obj));
@@ -239,6 +233,11 @@ namespace IronRuby.Runtime {
                 // Ruby prints 2*object_id for objects
                 str.Append(':');
                 AppendFormatHexObjectId(str, GetObjectId(context, obj));
+
+                // an object met again inside its own inspect: MRI's rb_obj_inspect gives "#<Foo:0x... ...>"
+                if (handle == null) {
+                    return str.Append(" ...>");
+                }
 
                 RubyInstanceData data = context.TryGetInstanceData(obj);
                 if (data != null) {
@@ -260,18 +259,15 @@ namespace IronRuby.Runtime {
 
                         var tosSite = tosConversion.GetSite(ConvertToSAction.Make(context));
                         str.Append(tosSite.Target(tosSite, inspectedValue));
-
-                        str.TaintBy(var.Value, context);
                     }
                 }
                 str.Append(">");
 
-                str.TaintBy(obj, context);
                 return str;
             }
         }
 
-        public static MutableString/*!*/ FormatObjectPrefix(RubyContext/*!*/ context, string/*!*/ className, long objectId, bool isTainted, bool isUntrusted) {
+        public static MutableString/*!*/ FormatObjectPrefix(RubyContext/*!*/ context, string/*!*/ className, long objectId) {
             MutableString str = MutableString.CreateMutable(context.GetIdentifierEncoding());
             str.Append("#<");
             str.Append(className);
@@ -279,30 +275,23 @@ namespace IronRuby.Runtime {
             // Ruby prints 2*object_id for objects
             str.Append(':');
             AppendFormatHexObjectId(str, objectId);
-
-            str.IsTainted |= isTainted;
-            str.IsUntrusted |= isUntrusted;
             return str;
         }
 
-        public static MutableString/*!*/ FormatObject(RubyContext/*!*/ context, string/*!*/ className, long objectId, bool isTainted, bool isUntrusted) {
-            return FormatObjectPrefix(context, className, objectId, isTainted, isUntrusted).Append(">");
+        public static MutableString/*!*/ FormatObject(RubyContext/*!*/ context, string/*!*/ className, long objectId) {
+            return FormatObjectPrefix(context, className, objectId).Append(">");
         }
 
         public static MutableString/*!*/ ObjectToMutableString(RubyContext/*!*/ context, object obj) {
-            bool tainted, untrusted;
-            context.GetObjectTrust(obj, out tainted, out untrusted);
-            return FormatObject(context, context.GetClassDisplayName(obj), GetObjectId(context, obj), tainted, untrusted);
+            return FormatObject(context, context.GetClassDisplayName(obj), GetObjectId(context, obj));
         }
 
         public static MutableString/*!*/ ObjectToMutableStringPrefix(RubyContext/*!*/ context, object obj) {
-            bool tainted, untrusted;
-            context.GetObjectTrust(obj, out tainted, out untrusted);
-            return FormatObjectPrefix(context, context.GetClassDisplayName(obj), GetObjectId(context, obj), tainted, untrusted);
+            return FormatObjectPrefix(context, context.GetClassDisplayName(obj), GetObjectId(context, obj));
         }
 
         public static MutableString/*!*/ AppendFormatHexObjectId(MutableString/*!*/ str, long objectId) {
-            return str.AppendFormat("0x{0:x7}", 2 * objectId);
+            return str.AppendFormat("0x{0:x16}", 2 * objectId);
         }
 
         public static MutableString/*!*/ ObjectToMutableString(IRubyObject/*!*/ self) {
@@ -312,9 +301,7 @@ namespace IronRuby.Runtime {
                 // an anonymous class has no Name to print, and MRI does not leave a blank there:
                 // it uses how the class describes itself, "#<#<Class:0x...>:0x...>"
                 self.ImmediateClass.GetNonSingletonClass().GetNonNullName(context),
-                self.GetInstanceData().ObjectId, 
-                self.IsTainted,
-                self.IsUntrusted
+                self.GetInstanceData().ObjectId
             );
         }
 
@@ -652,9 +639,7 @@ namespace IronRuby.Runtime {
             "public_methods",
             "send",
             "singleton_methods",
-            "taint",
             // "type", Kernel#type is deprecated
-            "untaint",
         };
 
         internal static readonly HashSet<string> NotMangledObject = new HashSet<string>() {
@@ -681,9 +666,7 @@ namespace IronRuby.Runtime {
             "PublicMethods",
             "Send",
             "SingletonMethods",
-            "Taint",
             // "Type", Kernel#type is deprecated
-            "Untaint",
         };
 
         public static void CheckConstantName(string name) {
@@ -705,6 +688,48 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static string/*!*/ GetHiddenInstanceVariableName(string/*!*/ name) {
             return "<ir>" + name;
+        }
+
+        // Library files outside the core (RubyStackTraceBuilder.IsInternalFile) that stand in for a C
+        // extension and keep their objects' state the same way.
+        private static readonly string[]/*!*/ _HiddenStateLibraryFiles = {
+            "/ironruby/coverage.rb", "/ironruby/json.rb", "/ironruby/io/console.rb",
+        };
+
+        /// <summary>
+        /// True for the Ruby-written parts of IronRuby whose @__name__ instance variables are their own
+        /// state - what MRI keeps in a C struct - rather than the object's (see <see cref="GetCoreStateInstanceVariableName"/>).
+        /// </summary>
+        public static bool KeepsHiddenState(string path) {
+            if (path == null) {
+                return false;
+            }
+            if (RubyStackTraceBuilder.IsInternalFile(path)) {
+                return true;
+            }
+            path = path.Replace('\\', '/');
+            foreach (var suffix in _HiddenStateLibraryFiles) {
+                if (path.EndsWith(suffix, StringComparison.Ordinal)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The name an @__name__ instance variable written in the Ruby-written core (<see cref="KeepsHiddenState"/>)
+        /// is kept under: a hidden one (<see cref="GetHiddenInstanceVariableName"/>), so that #instance_variables,
+        /// #inspect and Marshal do not see it - MRI keeps that state in C - while the same spelling in any other
+        /// code is an ordinary instance variable, as it is in MRI (gems use @__memoized__, @__Lock__ and the like).
+        /// C# code and the core's reflective calls (__ir_hidden_ivar__) reach it by this name too.
+        /// </summary>
+        public static string/*!*/ GetCoreStateInstanceVariableName(string/*!*/ name) {
+            Debug.Assert(IsCoreStateInstanceVariableName(name));
+            return GetHiddenInstanceVariableName(name);
+        }
+
+        public static bool IsCoreStateInstanceVariableName(string/*!*/ name) {
+            return name.Length > 5 && name.StartsWith("@__", StringComparison.Ordinal) && name.EndsWith("__", StringComparison.Ordinal);
         }
 
         public static void CheckInstanceVariableName(string name) {
@@ -782,6 +807,13 @@ namespace IronRuby.Runtime {
                 // outside the lock: Warning.warn can be overridden in Ruby
                 if (deprecatedOwner != null) {
                     context.ReportConstantDeprecation(deprecatedOwner, name);
+                }
+                if (context.RactorsStarted && !RactorIsolation.IsTriviallyShareable(value)) {
+                    RubyModule constantOwner;
+                    using (context.ClassHierarchyLocker()) {
+                        constantOwner = owner.GetConstantOwnerNoLock(name) ?? context.ObjectClass;
+                    }
+                    RactorIsolation.CheckConstantRead(context, constantOwner, name, value);
                 }
                 return value;
             }
@@ -876,6 +908,11 @@ namespace IronRuby.Runtime {
             RubyEncoding/*!*/ encoding) {
             Assert.NotNull(owner, name);
 
+            if (owner.Context.RactorsStarted) {
+                RactorIsolation.CheckConstantWrite(owner.Context, value);
+            }
+
+            bool hadLocation = owner.TryGetConstantLocation(name, out string previousPath, out int previousLine);
             owner.SetConstantLocation(name, sourcePath, sourceLine);
             owner.SetConstantEncoding(name, encoding);
 
@@ -883,6 +920,9 @@ namespace IronRuby.Runtime {
                 // MRI names the owner unless it is Object: "already initialized constant M::X",
                 // and an anonymous owner by its inspect form, "#<Module:0x...>::X"
                 owner.Context.ReportWarning("already initialized constant " + owner.MakeNestedModuleName(name));
+                if (hadLocation) {
+                    owner.Context.ReportWarningAt(previousPath, previousLine, "previous definition of " + name + " was here");
+                }
             }
 
             // Initializes anonymous module's name, publishes the module:
@@ -1144,8 +1184,6 @@ namespace IronRuby.Runtime {
 
         #region Tracking operations that have the potential for infinite recursion
 
-        public static readonly MutableString InfiniteRecursionMarker = MutableString.CreateAscii("[...]").Freeze();
-
         public class RecursionTracker {
             // The set of objects an operation is already inside must be per thread: the
             // trackers themselves are process-wide singletons, so a Dictionary held here is
@@ -1155,31 +1193,24 @@ namespace IronRuby.Runtime {
             // comparing or inspecting arrays (RubyGems installs each gem on a thread of its
             // own) corrupted the dictionary and failed with IndexOutOfRangeException or
             // "a concurrent update was performed on this collection".
-            private readonly System.Threading.ThreadLocal<Dictionary<object, bool>>/*!*/ _infiniteTracker =
-                new System.Threading.ThreadLocal<Dictionary<object, bool>>(
-                    () => new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance)
-                );
+            private readonly System.Threading.ThreadLocal<HashSet<object>>/*!*/ _infiniteTracker =
+                new System.Threading.ThreadLocal<HashSet<object>>(() => new HashSet<object>(ReferenceEqualityComparer.Instance));
 
-            private Dictionary<object, bool> TryPushInfinite(object obj) {
-                Dictionary<object, bool> infinite = _infiniteTracker.Value;
-                if (infinite.ContainsKey(obj)) {
-                    return null;
-                }
-                infinite.Add(obj, true);
-                return infinite;
-            }
-
+            /// <summary>
+            /// Marks <paramref name="obj"/> as being inside the operation on this thread until the result is disposed.
+            /// Null if it already is: the operation has recursed into it.
+            /// </summary>
             public IDisposable TrackObject(object obj) {
                 obj = CustomStringDictionary.NullToObj(obj);
-                Dictionary<object, bool> tracker = TryPushInfinite(obj);
-                return (tracker == null) ? null : new RecursionHandle(tracker, obj);
+                HashSet<object> tracker = _infiniteTracker.Value;
+                return tracker.Add(obj) ? new RecursionHandle(tracker, obj) : null;
             }
 
-            private class RecursionHandle : IDisposable {
-                private readonly Dictionary<object, bool>/*!*/ _tracker;
+            private sealed class RecursionHandle : IDisposable {
+                private readonly HashSet<object>/*!*/ _tracker;
                 private readonly object _obj;
 
-                internal RecursionHandle(Dictionary<object, bool>/*!*/ tracker, object obj) {
+                internal RecursionHandle(HashSet<object>/*!*/ tracker, object obj) {
                     _tracker = tracker;
                     _obj = obj;
                 }
@@ -1195,13 +1226,6 @@ namespace IronRuby.Runtime {
 
         public static RecursionTracker InfiniteInspectTracker {
             get { return _infiniteInspectTracker; }
-        }
-
-        [MultiRuntimeAware]
-        private static readonly RecursionTracker _infiniteToSTracker = new RecursionTracker();
-
-        public static RecursionTracker InfiniteToSTracker {
-            get { return _infiniteToSTracker; }
         }
 
         #endregion
@@ -1259,15 +1283,17 @@ namespace IronRuby.Runtime {
             int blockLevels;
             string baseLabel = targetScope.GetFrameBaseLabel(out blockLevels);
 
-            return new RubyCompilerOptions(targetScope.RubyContext.RubyOptions) {
+            return new RubyCompilerOptions() {
                 IsEval = true,
                 EvalFrameBaseLabel = baseLabel,
                 EvalFrameBlockLevels = blockLevels,
                 FactoryKind = isModuleEval ? TopScopeFactoryKind.ModuleEval : TopScopeFactoryKind.None,
                 LocalNames = targetScope.GetVisibleLocalNames(),
+                IsolatedLocalNames = targetScope.GetIsolatedLocalNames(),
                 TopLevelMethodName = (methodScope != null) ? methodScope.DefinitionName : null,
                 TopLevelParameterNames = (methodScope != null) ? methodScope.GetVisibleParameterNames() : null,
                 TopLevelHasUnsplatParameter = (methodScope != null) ? methodScope.HasUnsplatParameter : false,
+                TopLevelParameterSignature = (methodScope != null) ? IronRuby.Compiler.Ast.SuperCall.GetKeywordSignature(methodScope._variableNames) : null,
                 InitialLocation = new SourceLocation(0, line <= 0 ? 1 : line, 1),
             };
         }
@@ -1351,7 +1377,8 @@ namespace IronRuby.Runtime {
                 Utils.Log(new String('-', 50), "EVAL_ERROR");
 
                 // MRI names the file and the line the error is on in front of the message, so
-                // that code which evaluated a string knows which string and where in it.
+                // that code which evaluated a string knows which string and where in it: the
+                // line the parser saw is not the one to name when eval started below line 1.
                 if (e.HasLineInfo && e.File != null) {
                     // A SourceLocation cannot start before line 1, so a zero or negative starting
                     // line was compiled from 1 and is put back here: eval with a line of -100
@@ -1359,10 +1386,7 @@ namespace IronRuby.Runtime {
                     int reportedLine = (line <= 0) ? e.Line - 1 + line : e.Line;
                     string errorFile = e.File;
                     DecodeEvalLineOffset(ref errorFile);
-                    throw new SyntaxError(
-                        String.Format("{0}:{1}: {2}", errorFile, reportedLine, e.Message),
-                        errorFile, reportedLine, e.Column, e.LineSourceCode
-                    );
+                    throw new SyntaxError(e.Description, errorFile, reportedLine);
                 }
                 throw;
             }
@@ -1598,8 +1622,6 @@ namespace IronRuby.Runtime {
 
         #region Exceptions
 
-#if FEATURE_THREAD
-#if FEATURE_EXCEPTION_STATE
         // Unwinds only discarded fiber stacks. Set before throwing, cleared by the worker
         // boundary after CLR finally cleanup has completed; Ruby ensure bodies consult it.
         public sealed class FiberReclaimSignal : StackUnwinder {
@@ -2309,20 +2331,6 @@ namespace IronRuby.Runtime {
             }
             return e;
         }
-#else
-        public static Exception GetVisibleException(Exception e) { return e; }
-
-        public static void ExitThread(Thread/*!*/ thread) {
-            thread.Abort();
-        }
-
-        public static bool IsRubyThreadExit(Exception e) {
-            return e is ThreadAbortException;
-        }
-#endif
-#else
-        public static Exception GetVisibleException(Exception e) { return e; }
-#endif
         #endregion
 
         #region Paths
@@ -2477,11 +2485,7 @@ namespace IronRuby.Runtime {
                         // This will always succeed with a non-null string, but it can fail
                         // if the Personal folder was renamed or deleted. In this case it returns
                         // an empty string.
-#if FEATURE_FILESYSTEM // TODO: virtualize via PAL?
                         result = Environment.GetFolderPath(Environment.SpecialFolder.Personal);
-#else
-                        result = null;
-#endif
                     } else {
                         result = userEnvironment;
                     }

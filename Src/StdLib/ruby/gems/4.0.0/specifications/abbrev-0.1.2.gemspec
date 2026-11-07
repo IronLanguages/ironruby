@@ -19,5 +19,5 @@ Gem::Specification.new do |s|
   s.rubygems_version = "3.5.0.dev".freeze
   s.summary = "Calculates a set of unique abbreviations for a given set of strings".freeze
 
-  s.installed_by_version = "4.0.16".freeze
+  s.installed_by_version = "4.0.20".freeze
 end

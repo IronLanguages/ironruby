@@ -20,6 +20,7 @@ class_attr = System::Type.get_type("IronRuby.Runtime.RubyClassAttribute, IronRub
 irubyobject = System::Type.get_type("IronRuby.Runtime.IRubyObject, IronRuby")
 ruby_class = System::Type.get_type("IronRuby.Builtins.RubyClass, IronRuby")
 ruby_context = System::Type.get_type("IronRuby.Runtime.RubyContext, IronRuby")
+object_state = System::Type.get_type("IronRuby.Runtime.IRubyObjectState, IronRuby")
 exception = System::Exception.to_clr_type
 # RubyTypeDispenser's hand-written subclasses
 existing = %w[System.Object IronRuby.Builtins.MutableString IronRuby.Builtins.Proc IronRuby.Builtins.RubyRegex
@@ -104,6 +105,11 @@ bases.sort_by { |b| b.full_name.to_s }.each do |base|
   name = base.full_name.to_s.gsub(/[.+`]/, "_") + "_Subclass"
   to_string = base.get_method("ToString", System::Type.EmptyTypes).declaring_type == System::Object.to_clr_type ?
     "global::IronRuby.Runtime.RubyOps.ObjectToString(this)" : "base.ToString()"
+  # A base that keeps its own frozen state (BigDecimal) already has public IsFrozen/Freeze members:
+  # implement the interface explicitly, as RubyTypeBuilder does, instead of hiding them.
+  frozen = object_state.is_assignable_from(base) ?
+    "bool IRubyObjectState.IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }\n        void IRubyObjectState.Freeze()" :
+    "public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }\n        public void Freeze()"
   s = +""
   s << "    [global::System.Diagnostics.DebuggerTypeProxy(typeof(global::IronRuby.Builtins.RubyObject.DebugView))]\n" if false
   s << "    public sealed class #{name} : #{cs_name(base)}, IRubyObject, IRubyDynamicMetaObjectProvider, IRubyType {\n"
@@ -119,10 +125,7 @@ bases.sort_by { |b| b.full_name.to_s }.each do |base|
         public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
         public RubyInstanceData TryGetInstanceData() { return _instanceData; }
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }
-        public bool IsFrozen { get { return RubyOps.IsObjectFrozen(_instanceData); } }
-        public void Freeze() { RubyOps.FreezeObject(ref _instanceData); }
-        public bool IsTainted { get { return RubyOps.IsObjectTainted(_instanceData); } set { RubyOps.SetObjectTaint(ref _instanceData, value); } }
-        public bool IsUntrusted { get { return RubyOps.IsObjectUntrusted(_instanceData); } set { RubyOps.SetObjectTrustiness(ref _instanceData, value); } }
+        #{frozen} { RubyOps.FreezeObject(ref _instanceData); }
         public int BaseGetHashCode() { return base.GetHashCode(); }
         public bool BaseEquals(object other) { return base.Equals(other); }
         public string/*!*/ BaseToString() { return #{to_string}; }

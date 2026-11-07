@@ -524,6 +524,36 @@ bye
 ");
         }
 
+        /// <summary>
+        /// Class.new and `class X &lt; S' take what MRI's rb_check_inheritable does: not Class itself, nor a singleton
+        /// class. A subclass of a class with no allocator (Integer) has none either.
+        /// </summary>
+        public void ModuleClassNew3() {
+            TestOutput(@"
+[Class, Object.new.singleton_class, 1, nil].each do |s|
+  Class.new(s) rescue puts ""#{$!.class}: #{$!.message}""
+end
+begin
+  class X < Class; end
+rescue TypeError => e
+  puts e.message
+end
+p defined?(X)
+Class.new(Integer).allocate rescue puts ""#{$!.class}: #{$!.message.sub(/0x\h+/, 'X')}""
+p Class.new(Class.new).superclass.superclass, Class.new(Module).new.class.superclass
+", @"
+TypeError: can't make subclass of Class
+TypeError: can't make subclass of singleton class
+TypeError: superclass must be an instance of Class (given an instance of Integer)
+TypeError: superclass must be an instance of Class (given an instance of NilClass)
+can't make subclass of Class
+nil
+TypeError: allocator undefined for #<Class:X>
+Object
+Module
+");
+        }
+
         public void ModuleEvalString1() {
             AssertOutput(delegate() {
                 CompilerTest(@"

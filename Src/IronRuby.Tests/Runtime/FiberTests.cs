@@ -312,5 +312,128 @@ p [a, b, ensured]
 [:killed, :killed, true]
 ");
         }
+
+        /// <summary>
+        /// Keywords given to Fiber#resume / #transfer reach the fiber's block as keywords and come
+        /// back from Fiber.yield as a plain Hash; Fiber.schedule hands them on to the scheduler.
+        /// The FiberError messages for resuming a fiber that is resumed or was left by #transfer,
+        /// and transferring to a yielding one, and the storage rules, are MRI 4.0's.
+        /// </summary>
+        public void Fiber_Keywords1() {
+            TestOutput(@"
+require 'ruby4'
+Warning[:experimental] = false
+p Fiber.new { |**k| k }.resume(x: 1)
+p Fiber.new { |*a, **k| [a, k] }.resume(1, x: 1)
+p Fiber.new { |*a| [a, Hash.ruby2_keywords_hash?(a[0])] }.resume(x: 1)
+p Fiber.new { |a, b: 2| [a, b] }.resume({b: 5})
+p Fiber.new { |**k| k }.transfer(y: 2)
+f = Fiber.new { |**kw| r = Fiber.yield(**kw, y: 2); [r, Hash.ruby2_keywords_hash?(r)] }
+r = f.resume(x: 1)
+p [r, Hash.ruby2_keywords_hash?(r)], f.resume(z: 3)
+f = Fiber.new { begin; Fiber.yield; rescue => e; [e.class, e.message, e.cause] end }
+f.resume
+p f.raise(RuntimeError, 'boom', cause: nil)
+
+class Sched
+  def block(*); end
+  def unblock(*); end
+  def kernel_sleep(*); end
+  def io_wait(*); end
+  def fiber_interrupt(*); end
+  def fiber(*args, **kw, &blk)
+    p [:fiber, args, kw]
+    Fiber.new(blocking: false, **kw, &blk).tap(&:resume)
+  end
+end
+Thread.new do
+  Fiber.set_scheduler(Sched.new)
+  Fiber.schedule(storage: {a: 1}) { p Fiber[:a] }
+end.join
+
+def err; yield; rescue => e; puts ""#{e.class}: #{e.message}""; end
+f = Fiber.new { Fiber.yield 1 }
+f.resume
+err { f.transfer }
+f2 = nil
+f1 = Fiber.new { f2.resume }
+f2 = Fiber.new { f1.resume }
+err { f1.resume }
+root = Fiber.current
+g = Fiber.new { root.transfer; :done }
+g.transfer
+err { g.resume }
+err { Fiber[1] }
+err { Fiber.new(storage: {'a' => 1}) { } }
+err { Fiber.new(storage: {a: 1}.freeze) { } }
+p Fiber.new(storage: nil) { Fiber.current.storage }.resume
+o = Object.new; def o.to_str; 'q'; end
+Fiber[o] = 3
+p Fiber[:q]
+", @"
+{x: 1}
+[[1], {x: 1}]
+[[{x: 1}], false]
+[{b: 5}, 2]
+{y: 2}
+[{x: 1, y: 2}, false]
+[{z: 3}, false]
+[RuntimeError, ""boom"", nil]
+[:fiber, [], {storage: {a: 1}}]
+1
+FiberError: attempt to transfer to a yielding fiber
+FiberError: attempt to resume a resumed fiber (double resume)
+FiberError: attempt to resume a transferring fiber
+TypeError: 1 is not a symbol nor a string
+TypeError: wrong argument type String (expected Symbol)
+FrozenError: storage must not be frozen
+nil
+3
+");
+        }
+
+        /// <summary>
+        /// ObjectSpace::WeakMap#each and friends without a block are MRI's LocalJumpError (an empty map
+        /// yields nothing and answers itself); WeakKeyMap has no include?/member?.
+        /// IO#write_nonblock converts a non-String with #to_s and still never blocks.
+        /// </summary>
+        public void WeakMap_NoBlock1() {
+            TestOutput(@"
+require 'ruby4'
+wm = ObjectSpace::WeakMap.new
+p wm.each.equal?(wm)
+# the value is held weakly too: without a reference of its own a GC empties the map
+k, v = 'a', 'b'
+wm[k] = v
+[:each, :each_pair, :each_key, :each_value].each { |m| p((wm.send(m) rescue $!)) }
+p ObjectSpace::WeakKeyMap.instance_methods(false).sort
+
+r, w = IO.pipe
+o = Object.new
+def o.to_s; 'hello'; end
+p w.write_nonblock(o), w.write_nonblock(:sym), r.read_nonblock(100)
+big = 'x' * 1_000_000
+begin
+  loop { w.write_nonblock(big) }
+rescue IO::WaitWritable => e
+  p e.class
+end
+p w.write_nonblock(12345, exception: false)
+p((w.write_nonblock(:a) rescue $!.class))
+", @"
+true
+#<LocalJumpError: no block given>
+#<LocalJumpError: no block given>
+#<LocalJumpError: no block given>
+#<LocalJumpError: no block given>
+[:[], :[]=, :clear, :delete, :getkey, :inspect, :key?]
+5
+3
+""hellosym""
+IO::EAGAINWaitWritable
+:wait_writable
+IO::EAGAINWaitWritable
+");
+        }
     }
 }

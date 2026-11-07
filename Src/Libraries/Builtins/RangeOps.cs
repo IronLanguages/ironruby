@@ -18,8 +18,6 @@ using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Reflection;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Utils;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
@@ -29,7 +27,6 @@ using IronRuby.Runtime.Conversions;
 namespace IronRuby.Builtins {
     using UnaryOp = Func<CallSite, object, object>;
     using BinaryOp = Func<CallSite, object, object, object>;
-    using BinaryOpSite = CallSite<Func<CallSite, object, object, object>>;
 
     /// <summary>
     /// A Range represents an interval�a set of values with a start and an end.
@@ -133,6 +130,12 @@ namespace IronRuby.Builtins {
         public static object Last(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ lastN, [NotNull]Range/*!*/ self, object count) {
             var site = lastN.GetCallSite("__last_n__", 1);
             return site.Target(site, self, count);
+        }
+
+        // MRI counts the arguments of #first, #last, #min and #max against a single count: "expected 1".
+        [RubyMethod("first"), RubyMethod("last"), RubyMethod("min"), RubyMethod("max")]
+        public static object CountArity([NotNull]Range/*!*/ self, object count, object extra, params object[]/*!*/ more) {
+            throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 1)", 2 + more.Length);
         }
 
         /// <summary>
@@ -713,7 +716,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("step")]
         public static Enumerator/*!*/ GetStepEnumerator(StepStorage/*!*/ storage, Range/*!*/ self, [Optional]object step) {
-            return new Enumerator((_, block) => Step(storage, block, self, step));
+            return step != Missing.Value ? new Enumerator(self, "step", step) : new Enumerator(self, "step");
         }
 
         /// <summary>

@@ -52,7 +52,7 @@ module NKF
     "E" => "EUC-JP",
     "W" => "UTF-8",
   }
-  private_constant :ENCODINGS
+  __hide_constant__ :ENCODINGS
 
   class << self
     # NKF.nkf(opt, str) -> String

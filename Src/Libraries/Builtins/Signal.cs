@@ -63,6 +63,13 @@ namespace IronRuby.Builtins {
             }
 
             int number = PosixSignals.ToNumber(context, signalId, true);
+
+            // a non-main Ractor's handler runs in the main Ractor, so a block has to be isolated (CRuby's rb_proc_isolate)
+            var handler = command as Proc;
+            if (handler != null && RactorIsolation.IsNonMain(context) && !Shareability.IsShareable(context, handler)) {
+                RubyRactor.Isolate(handler);
+            }
+
             if (number == SignalExit) {
                 // EXIT is not a signal at all - nothing sends it - so it is the runtime's
                 // shutdown that has to run it, which is what this hands over.

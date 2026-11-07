@@ -13,14 +13,9 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System.Dynamic;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime;
 using System.Reflection;

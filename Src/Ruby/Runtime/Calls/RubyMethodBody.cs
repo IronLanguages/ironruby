@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -25,10 +21,7 @@ using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Ast;
-using IronRuby.Compiler.Generation;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using AstUtils = Microsoft.Scripting.Ast.Utils;
 using MethodDeclaration = IronRuby.Compiler.Ast.MethodDefinition;
 
 namespace IronRuby.Runtime.Calls {
@@ -80,6 +73,15 @@ namespace IronRuby.Runtime.Calls {
         /// method marks the aliases made of it, before or after.
         /// </summary>
         private bool _ruby2Keywords;
+
+        // What Method#== compares: the body itself, or the body of the method this one was made the same as
+        // (RubyMethodInfo.MakeEquivalentTo).
+        private RubyMethodBody _equivalenceKey;
+
+        internal RubyMethodBody/*!*/ EquivalenceKey {
+            get { return _equivalenceKey ?? this; }
+            set { _equivalenceKey = value; }
+        }
 
         public bool Ruby2Keywords {
             get { return _ruby2Keywords; }

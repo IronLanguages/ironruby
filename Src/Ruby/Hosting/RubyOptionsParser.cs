@@ -17,7 +17,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Security;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
@@ -40,7 +39,9 @@ namespace IronRuby.Hosting {
         private string _internalEncodingName;
         private bool _disableRubyGems;
         private bool _disableRubyOpt;
-        private bool _enableDidYouMean;
+        private bool _disableDidYouMean;
+        private bool _disableErrorHighlight;
+        private bool _disableSyntaxSuggest;
         private readonly List<string>/*!*/ _stdLibPaths = new List<string>();
         private readonly List<string>/*!*/ _warningCategoryFlags = new List<string>();
 
@@ -106,21 +107,30 @@ namespace IronRuby.Hosting {
                     _disableRubyOpt = !enable;
                     break;
 
-                // did_you_mean is only loaded when asked for: it hooks every NameError message,
-                // which is more than the default startup should take on.
+                // did_you_mean, error_highlight and syntax_suggest are on by default, as in MRI,
+                // but loaded on first use (see ironruby/error_extensions.rb): requiring them at
+                // startup costs half a second.
                 case "did_you_mean":
-                    _enableDidYouMean = enable;
+                    _disableDidYouMean = !enable;
+                    break;
+
+                case "error_highlight":
+                    _disableErrorHighlight = !enable;
+                    break;
+
+                case "syntax_suggest":
+                    _disableSyntaxSuggest = !enable;
                     break;
 
                 case "all":
                     _disableRubyGems = !enable;
                     _disableRubyOpt = !enable;
-                    _enableDidYouMean = enable;
+                    _disableDidYouMean = !enable;
+                    _disableErrorHighlight = !enable;
+                    _disableSyntaxSuggest = !enable;
                     LanguageSetup.Options["FrozenStringLiteral"] = enable ? 1 : -1;
                     break;
 
-                case "error_highlight":
-                case "syntax_suggest":
                 case "jit":
                 case "yjit":
                 case "zjit":
@@ -159,10 +169,23 @@ namespace IronRuby.Hosting {
         /// one is an error ("-Eascii:ascii -U").
         /// </summary>
         private static void SetEncodingOnce(string/*!*/ type, ref string name, string/*!*/ value) {
+            // The name is resolved once the runtime exists (the locale and its kin depend on it),
+            // but one that names nothing is an error of the command line, reported as MRI does.
+            if (RubyEncoding.FindByName(value) == null && !IsRuntimeEncodingName(value)) {
+                throw new InvalidOptionException(String.Format("ir: unknown encoding name - {0} (RuntimeError)", value));
+            }
             if (name != null && !String.Equals(name, value, StringComparison.OrdinalIgnoreCase)) {
                 throw new InvalidOptionException(String.Format("ir: {0} already set to {1} (RuntimeError)", type, name));
             }
             name = value;
+        }
+
+        /// <summary>
+        /// MRI's -E takes "locale" besides the names of real encodings; "external" and
+        /// "filesystem", which Encoding.find also knows, are unknown encoding names there.
+        /// </summary>
+        private static bool IsRuntimeEncodingName(string/*!*/ name) {
+            return name.Equals("locale", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -532,8 +555,8 @@ namespace IronRuby.Hosting {
                 return;
             }
 
-            if (arg.StartsWith("-C", StringComparison.Ordinal) ||
-                arg.StartsWith("-T", StringComparison.Ordinal)) {
+            // -T was $SAFE's switch (-C is handled above)
+            if (arg.StartsWith("-T", StringComparison.Ordinal)) {
                 throw new InvalidOptionException(String.Format("Option '{0}' not supported", arg));
             }
 
@@ -650,18 +673,6 @@ namespace IronRuby.Hosting {
                     RubyOptions.ShowRules = true;
                     break;
 
-                case "-save":
-                    LanguageSetup.Options["SavePath"] = optionValue ?? AppDomain.CurrentDomain.BaseDirectory;
-                    break;
-
-                case "-load":
-                    LanguageSetup.Options["LoadFromDisk"] = ScriptingRuntimeHelpers.True;
-                    break;
-
-                case "-useThreadAbortForSyncRaise":
-                    RubyOptions.UseThreadAbortForSyncRaise = true;
-                    break;
-
                 case "-compileRegexps":
                     RubyOptions.CompileRegexps = true;
                     break;
@@ -678,7 +689,7 @@ namespace IronRuby.Hosting {
                 case "-1.8.7":
                 case "-1.9":
                 case "-2.0":
-                    throw new InvalidOptionException(String.Format("Option '{0}' is no longer supported. The compatible Ruby version is 1.9.", optionName));
+                    throw new InvalidOptionException(String.Format("Option '{0}' is no longer supported: IronRuby targets Ruby 4.0 only.", optionName));
 
                 case "-X":
                     switch (optionValue) {
@@ -782,13 +793,9 @@ namespace IronRuby.Hosting {
 
         protected override void AfterParse() {
             if (!_disableRubyOpt) {
-                try {
-                    string rubyopt = Environment.GetEnvironmentVariable("RUBYOPT");
-                    if (rubyopt != null) {
-                        ProcessRubyOpt(rubyopt);
-                    }
-                } catch (SecurityException) {
-                    // nop
+                string rubyopt = Environment.GetEnvironmentVariable("RUBYOPT");
+                if (rubyopt != null) {
+                    ProcessRubyOpt(rubyopt);
                 }
             }
 
@@ -800,20 +807,23 @@ namespace IronRuby.Hosting {
                 _loadPaths.InsertRange(0, existingSearchPaths);
             }
 
-            try {
-                string rubylib = Environment.GetEnvironmentVariable("RUBYLIB");
-                if (rubylib != null) {
-                    _loadPaths.AddRange(GetPaths(rubylib));
-                }
-            } catch (SecurityException) {
-                // nop
+            string rubylib = Environment.GetEnvironmentVariable("RUBYLIB");
+            if (rubylib != null) {
+                _loadPaths.AddRange(GetPaths(rubylib));
             }
             _loadPaths.AddRange(_stdLibPaths);
             LanguageSetup.Options["SearchPaths"] = _loadPaths;
 
             if (!_disableRubyGems) {
-                if (_enableDidYouMean) {
-                    _requiredPaths.Insert(0, "did_you_mean");
+                // in MRI's order: did_you_mean's suggestions follow error_highlight's snippet
+                if (!_disableSyntaxSuggest) {
+                    _requiredPaths.Insert(0, "ironruby/syntax_suggest");
+                }
+                if (!_disableDidYouMean) {
+                    _requiredPaths.Insert(0, "ironruby/did_you_mean");
+                }
+                if (!_disableErrorHighlight) {
+                    _requiredPaths.Insert(0, "ironruby/error_highlight");
                 }
                 _requiredPaths.Insert(0, "gem_prelude.rb");
             } else {
@@ -829,7 +839,7 @@ namespace IronRuby.Hosting {
             LanguageSetup.Options["WarningCategoryFlags"] = _warningCategoryFlags;
             LanguageSetup.Options["ExternalEncoding"] = _externalEncodingName;
             LanguageSetup.Options["InternalEncoding"] = _internalEncodingName;
-            LanguageSetup.Options["LocaleEncoding"] = _defaultEncoding ?? GetLocaleEncoding();
+            LanguageSetup.Options["LocaleEncoding"] = GetLocaleEncoding();
 
 #if DEBUG
             // Can be set to nl-BE, ja-JP, etc
@@ -894,21 +904,14 @@ namespace IronRuby.Hosting {
         }
 
         /// <summary>
-        /// The C (or POSIX) locale named in LC_ALL, LC_CTYPE or LANG - the first one set wins, as
-        /// in setlocale(3) - has the ASCII codeset, which is what MRI takes as the locale
-        /// encoding. .NET would answer UTF-8 for it.
+        /// MRI's locale encoding: the encoding named by the codeset of the environment's locale
+        /// (nl_langinfo), UTF-8 if Ruby has no such encoding. So LANG=C is US-ASCII, and so is a
+        /// LANG naming a locale that is not installed, which .NET would answer UTF-8 for.
         /// </summary>
         private static RubyEncoding/*!*/ GetLocaleEncoding() {
-            if (Environment.OSVersion.Platform == PlatformID.Unix) {
-                foreach (var name in new[] { "LC_ALL", "LC_CTYPE", "LANG" }) {
-                    string value = Environment.GetEnvironmentVariable(name);
-                    if (!String.IsNullOrEmpty(value)) {
-                        if (value == "C" || value == "POSIX") {
-                            return RubyEncoding.Ascii;
-                        }
-                        break;
-                    }
-                }
+            string charmap = RubyEncoding.LocaleCharmap;
+            if (charmap != null) {
+                return RubyEncoding.FindByName(charmap) ?? RubyEncoding.UTF8;
             }
             return RubyEncoding.GetRubyEncoding(Console.InputEncoding);
         }
@@ -937,7 +940,6 @@ namespace IronRuby.Hosting {
                 { "-rlibrary",                   "require the library, before executing your script" },
              // { "-s",                          "enable some switch parsing for switches after script name" },
                 { "-S",                          "look for the script using PATH environment variable" },
-             // { "-T[level]",                   "turn on tainting checks" },
                 { "-v",                          "print version number, then turn on verbose mode" },
                 { "-w",                          "turn warnings on for your script" },
                 { "-W[level]",                   "set warning level; 0=silence, 1=medium (default), 2=verbose" },
@@ -945,7 +947,7 @@ namespace IronRuby.Hosting {
              // { "--copyright",                 "print the copyright" },
                 { "--version",                   "print the version" },
 
-                { "-trace",                      "enable support for set_trace_func" },
+                { "-trace",                      "compile every frame in full (set_trace_func and TracePoint work without it)" },
                 { "-profile",                    "enable support for 'pi = IronRuby::Clr.profile { block_to_profile }'" },
                 
                 { "-X:ExceptionDetail",          "enable ExceptionDetail mode" },
@@ -967,9 +969,6 @@ namespace IronRuby.Hosting {
                 { "-DT*",                        "disables tracing of all events [debug only]" },
                 { "-ET",                         "enables tracing of specified events [debug only]" },
                 { "-ET*",                        "enables tracing of all events [debug only]" },
-                { "-save [path]",                "save generated code to given path [debug only]" },
-                { "-load",                       "load pre-compiled code [debug only]" },
-                { "-useThreadAbortForSyncRaise", "for testing purposes [debug only]" },
                 { "-compileRegexps",             "faster throughput, slower startup [debug only]" },
                 { "-X:AssembliesDir <dir>",      "set the directory for saving generated assemblies [debug only]" },
                 { "-X:SaveAssemblies",           "save generated assemblies [debug only]" },

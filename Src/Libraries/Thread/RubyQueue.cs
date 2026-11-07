@@ -21,7 +21,6 @@ using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.StandardLibrary.Threading {
     /// <summary>
@@ -215,14 +214,14 @@ namespace IronRuby.StandardLibrary.Threading {
         [RubyMethod("deq")]
         [RubyMethod("pop")]
         [RubyMethod("shift")]
-        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, [NotNull]Hash/*!*/ options) {
+        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, [Keywords, NotNull]Hash/*!*/ options) {
             return self.Dequeue(GetTimeoutMilliseconds(context, GetTimeoutOption(context, options)));
         }
 
         [RubyMethod("deq")]
         [RubyMethod("pop")]
         [RubyMethod("shift")]
-        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, bool nonBlocking, [NotNull]Hash/*!*/ options) {
+        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, bool nonBlocking, [Keywords, NotNull]Hash/*!*/ options) {
             if (nonBlocking && options.Count > 0) {
                 throw RubyExceptions.CreateArgumentError("can't set a timeout if non_block is enabled");
             }
@@ -295,6 +294,12 @@ namespace IronRuby.StandardLibrary.Threading {
         public static object Freeze(RubyContext/*!*/ context, RubyQueue/*!*/ self) {
             throw RubyExceptions.CreateTypeError("cannot freeze {0}",
                 context.Inspect(self).ToString());
+        }
+
+        /// <summary>MRI's Queue (and so SizedQueue) refuses Marshal by name.</summary>
+        [RubyMethod("marshal_dump")]
+        public static object MarshalDump(RubyContext/*!*/ context, RubyQueue/*!*/ self) {
+            throw RubyExceptions.CreateTypeError("can't dump {0}", context.GetClassDisplayName(self));
         }
     }
 }

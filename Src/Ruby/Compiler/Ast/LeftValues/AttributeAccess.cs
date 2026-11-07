@@ -13,13 +13,8 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -77,7 +72,7 @@ namespace IronRuby.Compiler.Ast {
                     AstUtils.Box(MethodCall.TransformRead(this, gen, false, _name, target, null, null, null, rightValue))
                 );
             }
-            return MethodCall.TransformRead(this, gen, _qualifier.NodeType == NodeTypes.SelfReference, _name, targetValue, null, null, null, rightValue);
+            return MethodCall.TransformRead(this, gen, _qualifier is SelfReference, _name, targetValue, null, null, null, rightValue);
         }
     }
 }

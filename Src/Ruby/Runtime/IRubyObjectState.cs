@@ -22,12 +22,6 @@ namespace IronRuby.Runtime {
         bool IsFrozen { get; }
 
         [Emitted]
-        bool IsTainted { get; set; }
-
-        [Emitted]
-        bool IsUntrusted { get; set; }
-
-        [Emitted]
         void Freeze();
     }
 }

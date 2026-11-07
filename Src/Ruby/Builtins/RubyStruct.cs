@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -25,7 +21,6 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Runtime.Serialization;
 using IronRuby.Compiler;
-using IronRuby.Compiler.Ast;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
@@ -88,7 +83,6 @@ namespace IronRuby.Builtins {
 
         #region Construction
 
-#if FEATURE_SERIALIZATION
         public RubyStruct(SerializationInfo/*!*/ info, StreamingContext context) 
             : base(info, context) {
             // TODO: deserialize _data
@@ -98,7 +92,6 @@ namespace IronRuby.Builtins {
             base.GetObjectData(info, context);
             // TODO: serialize _data
         }
-#endif
 
         // This class should not have a default constructor (or one that takes RubyClass or RubyContext)!
         // Struct class provides its own allocator (Struct#new), 
@@ -219,7 +212,9 @@ namespace IronRuby.Builtins {
             if (TryGetIndex(name, out index)) {
                 return index;
             }
-            throw RubyExceptions.CreateNameError(String.Format("no member '{0}' in struct", name));
+            // with the name and the struct, as MRI's: did_you_mean suggests the members
+            throw RubyExceptions.WithNameAndReceiver(ImmediateClass.Context,
+                RubyExceptions.CreateNameError(String.Format("no member '{0}' in struct", name)), name, this);
         }
 
         // Structs whose #hash is being computed on this thread, outermost first.
@@ -276,12 +271,17 @@ namespace IronRuby.Builtins {
             return self._data[index];
         }
 
+        /// <summary>
+        /// The member writer: the value is a positional argument, even a Hash passed as keywords (s.send(:a=, k: 1)), and kept,
+        /// it stops saying so (<see cref="RubyOps.ClearKeywordArguments"/>) - here rather than in the rule, which is interpreted
+        /// for its first calls.
+        /// </summary>
         [Emitted]
         public static object SetValue(RubyStruct/*!*/ self, int index, object value) {
             if (self.IsFrozen) {
                 throw RubyExceptions.CreateObjectFrozenErrorFor(self, "Struct");
             }
-            return self._data[index] = value;
+            return self._data[index] = RubyOps.ClearKeywordArguments(value);
         }
 
         #endregion
@@ -346,7 +346,7 @@ namespace IronRuby.Builtins {
             get {
                 var data = ImmediateClass.GetNonSingletonClass().TryGetInstanceData();
                 object value;
-                return data != null && data.TryGetInstanceVariable("@__keyword_init__", out value) && RubyOps.IsTrue(value);
+                return data != null && data.TryGetInstanceVariable(IronRuby.Runtime.RubyUtils.GetCoreStateInstanceVariableName("@__keyword_init__"), out value) && RubyOps.IsTrue(value);
             }
         }
     }

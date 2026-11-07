@@ -34,3 +34,20 @@ class MSpecScript
   ]
 
 end
+
+# mspec's fixnum_max/fixnum_min helpers (mspec/helpers/numeric.rb) know the Fixnum range only of
+# the implementations they name - MRI's from RbConfig::LIMITS, constants for JRuby, TruffleRuby,
+# Rubinius and Opal - and raise "unknown implementation" for any other, which turned every spec
+# of the Fixnum/Bignum boundary into an error. IronRuby publishes its range where MRI does.
+unless RUBY_ENGINE == "ruby"
+  require "mspec/helpers/numeric"
+  require "rbconfig/sizeof"
+
+  def fixnum_max
+    RbConfig::LIMITS["FIXNUM_MAX"]
+  end
+
+  def fixnum_min
+    RbConfig::LIMITS["FIXNUM_MIN"]
+  end
+end

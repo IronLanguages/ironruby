@@ -18,7 +18,6 @@ using System.Diagnostics;
 using System.IO;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
-using System.Collections.Generic;
 
 namespace IronRuby.Builtins {
     /// <summary>
@@ -49,6 +48,10 @@ namespace IronRuby.Builtins {
         // IO#syswrite and IO#sysseek warn about.
         private bool _writePending;
         private bool _writeFlushFailed;
+
+        // IO#timeout: the IO whose timeout bounds a read or a write that has to wait for the
+        // underlying stream; null when it has none.
+        private RubyIO _timeoutOwner;
 
         private const byte CR = (byte)'\r';
         private const byte LF = (byte)'\n';
@@ -82,6 +85,38 @@ namespace IronRuby.Builtins {
             get { return _stream; }
         }
 
+        internal RubyIO TimeoutOwner {
+            get { return _timeoutOwner; }
+            set { _timeoutOwner = value; }
+        }
+
+        private int BaseRead(byte[]/*!*/ buffer, int offset, int count) {
+            var owner = _timeoutOwner;
+            if (owner == null || count == 0) {
+                return _stream.Read(buffer, offset, count);
+            }
+            owner.WaitForStream(true);
+            try {
+                return _stream.Read(buffer, offset, count);
+            } catch (TimeoutException) {
+                throw owner.CreateTimeoutError();
+            }
+        }
+
+        private void BaseWrite(byte[]/*!*/ buffer, int offset, int count) {
+            var owner = _timeoutOwner;
+            if (owner == null || count == 0) {
+                _stream.Write(buffer, offset, count);
+                return;
+            }
+            owner.WaitForStream(false);
+            try {
+                _stream.Write(buffer, offset, count);
+            } catch (TimeoutException) {
+                throw owner.CreateTimeoutError();
+            }
+        }
+
         public bool DataBuffered {
             get { return _bufferCount > 0; }
         }
@@ -99,7 +134,8 @@ namespace IronRuby.Builtins {
                 _bufferStart = 0;
             }
 
-            bytesRead = _stream.Read(_buffer, _bufferCount, count);
+            // the buffered bytes start at _bufferStart: the new ones go right after them
+            bytesRead = BaseRead(_buffer, _bufferStart + _bufferCount, count);
             _bufferCount += bytesRead;
             return bytesRead;
         }
@@ -195,7 +231,7 @@ namespace IronRuby.Builtins {
 
         public override void Write(byte[]/*!*/ buffer, int offset, int count) {
             FlushRead();
-            _stream.Write(buffer, offset, count);
+            BaseWrite(buffer, offset, count);
             _writePending = true;
         }
 
@@ -207,10 +243,11 @@ namespace IronRuby.Builtins {
         public int WriteBytes(byte[]/*!*/ buffer, int offset, int count, bool preserveEndOfLines) {
             ContractUtils.RequiresArrayRange(buffer.Length, offset, count, "offset", "count");
             FlushRead();
-            _writePending |= count > 0;
 
+            // pending once something went out: a write that timed out (IO#timeout) left nothing
             if (preserveEndOfLines) {
-                _stream.Write(buffer, offset, count);
+                BaseWrite(buffer, offset, count);
+                _writePending |= count > 0;
                 return count;
             } else {
                 int bytesWritten = 0;
@@ -221,8 +258,9 @@ namespace IronRuby.Builtins {
                     while (j < end && buffer[j] != LF) {
                         j++;
                     }
-                    _stream.Write(buffer, i, j - i);
+                    BaseWrite(buffer, i, j - i);
                     bytesWritten += j - i;
+                    _writePending = true;
 
                     if (j < end) {
                         _stream.WriteByte(CR);
@@ -268,7 +306,14 @@ namespace IronRuby.Builtins {
 
         // TODO: read in full buffer (underlying FileStream will buffer it anyways)
         public override int ReadByte() {
-            return (_bufferCount > 0) ? ReadBufferByte() : _stream.ReadByte();
+            if (_bufferCount > 0) {
+                return ReadBufferByte();
+            }
+            if (_timeoutOwner != null) {
+                var one = new byte[1];
+                return BaseRead(one, 0, 1) == 1 ? one[0] : -1;
+            }
+            return _stream.ReadByte();
         }
 
         public override int Read(byte[]/*!*/ buffer, int offset, int count) {
@@ -277,7 +322,8 @@ namespace IronRuby.Builtins {
                 Buffer.BlockCopy(_buffer, _bufferStart, buffer, offset, c);
                 ConsumeBuffered(c);
             }
-            return c + _stream.Read(buffer, offset + c, count - c);
+            // what is buffered is answered without waiting for more
+            return c + ((c > 0 && _timeoutOwner != null) ? 0 : BaseRead(buffer, offset + c, count - c));
         }
 
         /// <summary>
@@ -370,7 +416,7 @@ namespace IronRuby.Builtins {
             }
 
             var bytes = new byte[count];
-            int read = _stream.Read(bytes, 0, count);
+            int read = BaseRead(bytes, 0, count);
             if (read > 0) {
                 buffer.Append(bytes, 0, read);
             }
@@ -409,14 +455,31 @@ namespace IronRuby.Builtins {
                     // stream of unknown length is read in pieces of moderate size: a pipe hands
                     // back what it has anyway, and its stream may allocate as much as is asked for.
                     int free = buffer.Capacity - done;
-                    buffer.Append(_stream, sized && free > 0 ? free : Math.Min(Math.Max(free, chunk), MaxUnsizedChunk));
+                    AppendFromStream(buffer, sized && free > 0 ? free : Math.Min(Math.Max(free, chunk), MaxUnsizedChunk));
                     bytesRead = buffer.GetByteCount() - done;
                     done += bytesRead;
                     // read until the stream really ends: a short read is normal on a pipe,
                     // where the child may not have written the rest yet
                 } while (bytesRead > 0);
-            } else {
-                buffer.Append(_stream, remaining);
+            } else if (remaining > 0) {
+                // Only for bytes the buffer did not have: a read of none from a socket still waits for
+                // it to become readable, which kept `gets' then `read(n)' of what gets had already
+                // buffered waiting for more data that might never come.
+                AppendFromStream(buffer, remaining);
+            }
+        }
+
+        private void AppendFromStream(MutableString/*!*/ buffer, int count) {
+            var owner = _timeoutOwner;
+            if (owner == null) {
+                buffer.Append(_stream, count);
+                return;
+            }
+            owner.WaitForStream(true);
+            try {
+                buffer.Append(_stream, count);
+            } catch (TimeoutException) {
+                throw owner.CreateTimeoutError();
             }
         }
 

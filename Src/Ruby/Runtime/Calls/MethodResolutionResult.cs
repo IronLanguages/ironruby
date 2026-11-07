@@ -13,11 +13,8 @@
  *
  * ***************************************************************************/
 
-using System;
 using System.Collections.Generic;
-using System.Text;
 using IronRuby.Builtins;
-using System.Diagnostics;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime.Calls {

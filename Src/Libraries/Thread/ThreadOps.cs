@@ -12,20 +12,16 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_THREAD
 
-using System;
 using System.Threading;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.Threading {
     /// <summary>
     /// These methods are loaded only after doing "require 'thread'"
     /// </summary>
-    [RubyClass(Extends = typeof(Thread), Inherits = typeof(object), BuildConfig = "FEATURE_THREAD")]
+    [RubyClass(Extends = typeof(Thread), Inherits = typeof(object))]
     public static class ThreadOps {
         // Thread.exclusive, the last method here, went with Ruby 3.0; Thread.critical= with 1.9.
     }
 }
-#endif

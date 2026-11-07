@@ -324,7 +324,8 @@ end
         }
 
         /// <summary>
-        /// Order of evaluation inside rescue clauses.
+        /// Order of evaluation inside rescue clauses: each class is evaluated and compared before the next one
+        /// is evaluated, and the ones after a match are not evaluated (G here), as in MRI.
         /// </summary>
         public void Scenario_RubyExceptions12A() {
             AssertOutput(delegate() {
@@ -364,15 +365,14 @@ foo
 ");
             }, @"
 r(A)
-r(B)
-r(C)
 cmp(A, F)
+r(B)
 cmp(B, F)
+r(C)
 cmp(C, F)
 r(E)
-r(F)
-r(G)
 cmp(E, F)
+r(F)
 cmp(F, F)
 rescued 2
 ");
@@ -688,7 +688,7 @@ end
 ", @"
 ?to_a
 to_a
-#<TypeError: can't convert C into Array (C#to_a gives Integer)>
+#<TypeError: can't convert C to Array (C#to_a gives Integer)>
 ");
         }
 
@@ -717,6 +717,67 @@ end
 foo(0)
 foo(1)
 #<E: E>
+");
+        }
+
+        /// <summary>
+        /// Splatted class lists of a rescue clause are evaluated only up to the one that matches, as plain
+        /// ones are (Scenario_RubyExceptions12A).
+        /// </summary>
+        public void RescueListEvaluation1() {
+            TestOutput(@"
+x = []
+begin; raise TypeError; rescue *(x << 1; [ArgumentError]), *(x << 2; [TypeError]), *(x << 3; [NameError]); end
+p x
+x = []
+begin; raise TypeError; rescue (x << 1; ArgumentError), *(x << 2; [TypeError]), (x << 3; NameError) => e; x << e.class; end
+p x
+x = []
+begin; raise TypeError; rescue (x << 1; ArgumentError); rescue (x << 2; TypeError); rescue (x << 3; NameError); end
+p x
+", @"
+[1, 2]
+[1, 2, TypeError]
+[1, 2]
+");
+        }
+
+        /// <summary>
+        /// A bare rescue, a rescue list and a splatted one all match by calling ===, so a redefined
+        /// Module#=== or StandardError.=== is seen.
+        /// </summary>
+        public void RescueCallsCaseEquality1() {
+            TestOutput(@"
+class Module
+  alias old_eqq ===
+  def ===(o); $log << [self, o.class] if $log; old_eqq(o); end
+end
+$log = []
+begin; raise 'x'; rescue; end
+p $log
+$log = []
+begin; raise TypeError; rescue ArgumentError, TypeError; end
+p $log
+$log = []
+begin; raise TypeError; rescue *[ArgumentError, TypeError]; end
+p $log
+$log = nil
+class Module; alias === old_eqq; end
+class << StandardError; def ===(o); puts 'StandardError.==='; super; end; end
+begin; raise IOError; rescue; puts 'rescued'; end
+begin
+  begin; raise Exception; rescue; puts 'wrong'; end
+rescue Exception
+  puts 'not a StandardError'
+end
+", @"
+[[StandardError, RuntimeError]]
+[[ArgumentError, TypeError], [TypeError, TypeError]]
+[[ArgumentError, TypeError], [TypeError, TypeError]]
+StandardError.===
+rescued
+StandardError.===
+not a StandardError
 ");
         }
 
@@ -794,18 +855,364 @@ end
 begin
   require 'non-existent'
 rescue SecurityError
-  puts 'Caught SecurityError'  # partial trust: current directory detection
+  puts 'Caught SecurityError'
 rescue LoadError
   puts 'Caught LoadError'
 end
-", _driver.PartialTrust ? @"
-initSE
-Caught SecurityError
-" : @"
+", @"
 initLE
 Caught LoadError
 ");
         }
 
+        /// <summary>
+        /// A subclass of SystemCallError reads its errno from its Errno constant, which for a class outside
+        /// Errno is the Errno module (a TypeError, as in MRI). The location is shown only with a message.
+        /// The text of errno 7 is the C library's: Windows' CRT calls E2BIG "Arg list too long".
+        /// </summary>
+        public void SystemCallErrorSubclass1() {
+            TestOutput(@"
+require 'ruby4'
+class MyErr < SystemCallError; end
+class MyErr2 < SystemCallError; Errno = 7; end
+class E2 < Errno::ENOENT; end
+[
+  -> { MyErr.new('a', 10054) }, -> { MyErr.new }, -> { MyErr.new(1, 2, 3) },
+  -> { MyErr2.new('q', 'f') }, -> { E2.new('x', 3) }, -> { SystemCallError.new(nil, 2, 'fn') },
+].each { |l| p((l.call rescue $!)) }
+", @"
+#<TypeError: no implicit conversion of Module into Integer>
+#<TypeError: no implicit conversion of Module into Integer>
+#<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
+#<MyErr2: " + (Environment.OSVersion.Platform == PlatformID.Win32NT ? "Arg" : "Argument") + @" list too long @ f - q>
+#<E2: No such file or directory @ 3 - x>
+#<Errno::ENOENT: No such file or directory>
+");
+        }
+
+        /// <summary>
+        /// Errno numbers and messages are the platform's, as MRI takes them from its C library: the
+        /// CLR-backed classes said ECONNREFUSED was 10061 "No connection could be made because the
+        /// target machine actively refused it." on Linux too, where MRI says 111 "Connection refused".
+        /// A name the platform has no error for is Errno::NOERROR. Errno::ENOEXEC.new made an EBADF.
+        /// </summary>
+        public void Errno_PlatformTable1() {
+            TestOutput(@"
+win = RUBY_PLATFORM =~ /mswin|mingw/
+mac = RUBY_PLATFORM =~ /darwin/
+# Without the prelude: the C# classes on their own.
+refused = win ? 10061 : mac ? 61 : 111
+e = Errno::ECONNREFUSED.new('x')
+p e.errno == refused, e.message == (win ? 'No connection could be made because the target machine actively refused it. - x' : 'Connection refused - x')
+p Errno::EINTR.new.message == (win ? 'Interrupted function call' : 'Interrupted system call')
+p Errno::EADDRINUSE.new.errno == (win ? 10048 : mac ? 48 : 98)
+p Errno::ENOEXEC.new.class
+
+require 'ruby4'
+p Errno::ECONNREFUSED::Errno == refused, SystemCallError.new(refused).class
+p Errno::EWOULDBLOCK.equal?(Errno::EAGAIN) == !win
+p Errno::EAUTH.equal?(Errno::NOERROR) == !mac, Errno::ENOKEY.equal?(Errno::NOERROR) == !!(win || mac)
+p Errno::ECONNRESET.new.message == SystemCallError.new(Errno::ECONNRESET::Errno).message
+", @"
+true
+true
+true
+true
+Errno::ENOEXEC
+true
+Errno::ECONNREFUSED
+true
+true
+true
+true
+");
+        }
+
+        /// <summary>
+        /// Socket errors say which call failed, as MRI does, and name resolution is Socket::ResolutionError
+        /// with the platform's EAI_* code for TCPServer too (EAI_NONAME was BSD's 8 on Linux, where it is -2).
+        /// </summary>
+        public void Errno_SocketCalls1() {
+            TestOutput(@"
+require 'ruby4'
+require 'socket'
+win = RUBY_PLATFORM =~ /mswin|mingw/
+mac = RUBY_PLATFORM =~ /darwin/
+p Socket::EAI_NONAME == (win ? 11001 : mac ? 8 : -2), Socket::EAI_AGAIN == (win ? 11002 : mac ? 2 : -3)
+s = TCPServer.new('127.0.0.1', 0)
+port = s.addr[1]
+begin; TCPServer.new('127.0.0.1', port); rescue => e; p e.class; puts e.message[/ - .*/].sub(port.to_s, 'PORT'); end
+s.close
+begin; TCPSocket.new('127.0.0.1', port); rescue => e; p e.class; puts e.message[/ - .*/].sub(port.to_s, 'PORT'); end
+[-> { TCPServer.new('no.such.host.invalid', 0) }, -> { TCPSocket.new('no.such.host.invalid', 80) }].each do |l|
+  begin
+    l.call
+  rescue SocketError => e
+    p [e.class, e.message[/\Agetaddrinfo(\(3\))?: /], [Socket::EAI_NONAME, Socket::EAI_AGAIN].include?(e.error_code)]
+  end
+end
+", @"
+true
+true
+Errno::EADDRINUSE
+ - bind(2) for ""127.0.0.1"" port PORT
+Errno::ECONNREFUSED
+ - connect(2) for ""127.0.0.1"" port PORT
+[Socket::ResolutionError, ""getaddrinfo: "", true]
+[Socket::ResolutionError, ""getaddrinfo(3): "", true]
+");
+        }
+
+        /// <summary>
+        /// Socket.getaddrinfo and Addrinfo.getaddrinfo name the call once (it was "getaddrinfo: getaddrinfo: ..."),
+        /// and a service that is not one is Socket::ResolutionError with EAI_SERVICE, as in MRI, not a plain
+        /// SocketError - nor port 0 for Addrinfo, which also reads a service name for Addrinfo.tcp.
+        /// </summary>
+        public void Errno_SocketResolution1() {
+            TestOutput(@"
+require 'ruby4'
+require 'socket'
+[-> { Socket.getaddrinfo('no.such.host.invalid', 80) }, -> { Addrinfo.getaddrinfo('no.such.host.invalid', 80) }].each do |l|
+  begin
+    l.call
+  rescue SocketError => e
+    p [e.class, e.message.scan('getaddrinfo').size]
+  end
+end
+[-> { Socket.getaddrinfo('localhost', 'nosuchservice') }, -> { Socket.getaddrinfo(nil, 'nosuchservice', nil, :STREAM) },
+ -> { Addrinfo.getaddrinfo('localhost', 'nosuchservice') }, -> { Addrinfo.tcp('localhost', 'nosuchservice') }].each do |l|
+  begin
+    l.call
+  rescue SocketError => e
+    p [e.class, e.message, e.error_code == Socket::EAI_SERVICE]
+  end
+end
+p Addrinfo.tcp('localhost', 'http').ip_port, Addrinfo.udp('localhost', '53').ip_port, Addrinfo.getaddrinfo('localhost', 'http').first.ip_port
+", @"
+[Socket::ResolutionError, 1]
+[Socket::ResolutionError, 1]
+[Socket::ResolutionError, ""getaddrinfo: Servname not supported for ai_socktype"", true]
+[Socket::ResolutionError, ""getaddrinfo: Servname not supported for ai_socktype"", true]
+[Socket::ResolutionError, ""getaddrinfo: Servname not supported for ai_socktype"", true]
+[Socket::ResolutionError, ""getaddrinfo: Servname not supported for ai_socktype"", true]
+80
+53
+80
+");
+        }
+
+        /// <summary>
+        /// Socket#connect and #bind name the address, a would-block read names its call, and a socket
+        /// option on a closed socket is IOError before anything reaches the kernel (it was EBADF).
+        /// </summary>
+        public void Errno_SocketCalls2() {
+            TestOutput(@"
+require 'ruby4'
+require 'socket'
+s = TCPServer.new('127.0.0.1', 0)
+port = s.addr[1]
+def t(port)
+  yield
+rescue => e
+  puts ""#{e.class}#{e.message[/ - .*/]&.sub(port.to_s, 'PORT')}""
+end
+t(port) { Socket.new(:INET, :STREAM).bind(Socket.sockaddr_in(port, '127.0.0.1')) }
+c = TCPSocket.new('127.0.0.1', port)
+t(port) { c.recv_nonblock(1) }
+x = Socket.new(:INET, :STREAM)
+x.close
+t(port) { x.getsockopt(:SOCKET, :TYPE) }
+t(port) { x.setsockopt(:SOCKET, :REUSEADDR, true) }
+c.close
+s.close
+t(port) { Socket.new(:INET, :STREAM).connect(Socket.sockaddr_in(port, '127.0.0.1')) }
+", @"
+Errno::EADDRINUSE - bind(2) for 127.0.0.1:PORT
+IO::EAGAINWaitReadable - recvfrom(2) would block
+IOError
+IOError
+Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
+");
+        }
+
+        /// <summary>
+        /// A UDP socket an ICMP "port unreachable" has failed is ECONNREFUSED on the next read (recv
+        /// waited forever, read_nonblock said EAGAIN), and a name gethostbyname cannot resolve is
+        /// Socket::ResolutionError (a plain SocketError). connect(2) with a timeout - IO#timeout,
+        /// Addrinfo#connect(timeout:), Socket.tcp - reads SO_ERROR for the verdict as CRuby does since
+        /// [Bug #22223]; Addrinfo#connect and Socket.tcp ignored the timeout altogether.
+        /// Windows reports the ICMP error as WSAECONNRESET (CRuby's ECONNRESET there too), and retries
+        /// a refused connect for about two seconds, so a connect with no time at all has timed out.
+        /// </summary>
+        public void Errno_SocketCalls3() {
+            bool windows = Environment.OSVersion.Platform == PlatformID.Win32NT;
+            string icmp = windows ? "Errno::ECONNRESET" : "Errno::ECONNREFUSED";
+            TestOutput(@"
+require 'ruby4'
+require 'socket'
+def t
+  r = yield
+  puts r.inspect
+rescue StandardError => e
+  puts ""#{e.class}#{e.message[/ - .*/]&.gsub(/\d{4,5}/, 'PORT')}""
+end
+closed = (s = UDPSocket.new; s.bind('127.0.0.1', 0); port = s.addr[1]; s.close; port)
+u = UDPSocket.new
+u.connect('127.0.0.1', closed)
+[-> { u.recv(10) }, -> { u.read_nonblock(10) }, -> { u.recvfrom_nonblock(10) }].each do |l|
+  u.send('x', 0)
+  sleep 0.1
+  t(&l)
+end
+u.close
+t { Socket.gethostbyname('no.such.host.invalid') }
+t { Socket.gethostbyname('no.such.host.invalid') rescue $!.error_code == Socket::EAI_NONAME || $!.error_code == Socket::EAI_AGAIN }
+
+server = TCPServer.new('127.0.0.1', 0)
+port = server.addr[1]
+t { Socket.tcp('127.0.0.1', port, connect_timeout: 5) { |c| c.remote_address.ip_port == port } }
+t { Socket.tcp('127.0.0.1', port, open_timeout: 0) { |c| c.remote_address.ip_port == port } }
+t { Addrinfo.tcp('127.0.0.1', port).connect(timeout: 5) { |c| c.remote_address.ip_port == port } }
+t { s = Socket.new(:INET, :STREAM); s.timeout = 5; s.connect(Socket.sockaddr_in(port, '127.0.0.1')); s.getpeername == Socket.sockaddr_in(port, '127.0.0.1') }
+t { Socket.tcp('127.0.0.1', port, open_timeout: 1, connect_timeout: 1) }
+server.close
+t { Socket.tcp('127.0.0.1', port, connect_timeout: 5) }
+t { Addrinfo.tcp('127.0.0.1', port).connect(timeout: 0) }
+t { s = Socket.new(:INET, :STREAM); s.timeout = 5; s.connect(Socket.sockaddr_in(port, '127.0.0.1')) }
+t { TCPSocket.new('127.0.0.1', port, connect_timeout: 5) }
+", icmp + @" - recvfrom(2)
+" + icmp + @"
+" + icmp + @" - recvfrom(2)
+Socket::ResolutionError
+true
+true
+true
+true
+true
+ArgumentError
+Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
+" + (windows ? "Errno::ETIMEDOUT - user specified timeout" : "Errno::ECONNREFUSED - connect(2)") + @" for 127.0.0.1:PORT
+Errno::ECONNREFUSED - connect(2) for 127.0.0.1:PORT
+Errno::ECONNREFUSED - connect(2) for ""127.0.0.1"" port PORT
+");
+        }
+
+        /// <summary>
+        /// File.rename is rename(2): a directory renamed onto a file is ENOTDIR and a file onto a
+        /// directory EISDIR - the emulation deleted the file at the target first, and lost it. A name
+        /// too long for the file system is ENAMETOOLONG (Dir.mkdir said EEXIST, File.open ENOENT with
+        /// .NET's text) and a symbolic link loop is ELOOP (File.open said IOError).
+        /// </summary>
+        public void Errno_FileCalls1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+win = RUBY_PLATFORM =~ /mswin|mingw/
+Dir.mktmpdir do |d|
+  def t(d)
+    yield
+    puts 'ok'
+  rescue SystemCallError => e
+    puts ""#{e.class}: #{e.message.sub(d, 'D').sub(d, 'D')}""
+  end
+  f = File.join(d, 'f')
+  File.write(f, 'data')
+  Dir.mkdir(File.join(d, 'sub'))
+  t(d) { File.rename(File.join(d, 'sub'), f) }
+  t(d) { File.rename(f, File.join(d, 'sub')) }
+  p File.read(f), File.directory?(File.join(d, 'sub'))
+  t(d) { File.rename(f, File.join(d, 'g')); File.rename(File.join(d, 'g'), f) }
+  unless win
+    t(d) { Dir.mkdir(File.join(d, 'a' * 300)) rescue raise $!.class }
+    t(d) { File.open(File.join(d, 'a' * 300)) rescue raise $!.class }
+    File.symlink(File.join(d, 'l1'), File.join(d, 'l2'))
+    File.symlink(File.join(d, 'l2'), File.join(d, 'l1'))
+    t(d) { File.open(File.join(d, 'l1')) }
+  else
+    # Windows has no ENAMETOOLONG for open (win32.c says ENOENT), and a symbolic link needs a privilege.
+    puts 'Errno::ENAMETOOLONG: File name too long', 'Errno::ENAMETOOLONG: File name too long', 'Errno::ELOOP: Too many levels of symbolic links - D/l1'
+  end
+end
+", @"
+Errno::ENOTDIR: Not a directory - (D/sub, D/f)
+Errno::EISDIR: Is a directory - (D/f, D/sub)
+""data""
+true
+ok
+Errno::ENAMETOOLONG: File name too long
+Errno::ENAMETOOLONG: File name too long
+Errno::ELOOP: Too many levels of symbolic links - D/l1
+");
+        }
+
+        /// <summary>
+        /// Objects Marshal cannot write are refused the way MRI words it: Queue and SizedQueue by name
+        /// ("can't dump Thread::Queue"), and a Fiber as native data rather than by the Proc it holds.
+        /// </summary>
+        public void Marshal_Undumpable1() {
+            TestOutput(@"
+require 'ruby4'
+[Thread::Queue.new, Thread::SizedQueue.new(1), Thread::ConditionVariable.new, Thread::Mutex.new, Fiber.new {}].each do |o|
+  begin
+    Marshal.dump(o)
+  rescue TypeError => e
+    puts e.message
+  end
+end
+", @"
+can't dump Thread::Queue
+can't dump Thread::SizedQueue
+can't dump Thread::ConditionVariable
+no _dump_data is defined for class Thread::Mutex
+no _dump_data is defined for class Fiber
+");
+        }
+
+        /// <summary>
+        /// Zlib.gunzip reports a bad gzip string with GzipFile's errors and MRI's messages, not the zlib
+        /// stream's ("incorrect header check", "buffer error"); Zlib::Inflate.inflate of a stream that
+        /// stops short is a BufError rather than the part that did inflate.
+        /// </summary>
+        public void Zlib_GunzipErrors1() {
+            TestOutput(@"
+require 'ruby4'
+require 'zlib'
+require 'stringio'
+good = Zlib.gzip('hello')
+def t
+  r = yield
+  puts ""ok #{r}""
+rescue Zlib::Error => e
+  puts ""#{e.class}: #{e.message}""
+end
+t { Zlib.gunzip('') }
+t { Zlib.gunzip('hello world, not gzip') }
+t { s = good.dup; s.setbyte(2, 7); Zlib.gunzip(s) }
+t { s = good.dup; s.setbyte(3, 0x02); Zlib.gunzip(s) }
+t { s = good.dup; s.setbyte(3, 0x20); Zlib.gunzip(s) }
+t { Zlib.gunzip(good[0, 15]) }
+t { Zlib.gunzip(good[0, good.size - 8]) }
+t { Zlib.gunzip(good[0, good.size - 4]) }
+t { s = good.dup; s.setbyte(s.size - 8, s.getbyte(s.size - 8) ^ 1); Zlib.gunzip(s) }
+t { s = good.dup; s.setbyte(s.size - 1, 1); Zlib.gunzip(s) }
+t { Zlib.gunzip(good + 'xyz') }
+t { s = good.dup; s.setbyte(3, 0x20); Zlib::GzipReader.new(StringIO.new(s)).read }
+t { Zlib::Inflate.inflate(Zlib::Deflate.deflate('hello')[0, 4]) }
+", @"
+Zlib::GzipFile::Error: unexpected end of string
+Zlib::GzipFile::Error: not in gzip format
+Zlib::GzipFile::Error: unsupported compression method 7
+Zlib::GzipFile::Error: multi-part gzip file is not supported
+Zlib::GzipFile::Error: encrypted gzip file is not supported
+Zlib::GzipFile::Error: unexpected end of file
+Zlib::GzipFile::NoFooter: footer is not found
+Zlib::GzipFile::Error: unexpected end of string
+Zlib::GzipFile::CRCError: invalid compressed data -- crc error
+Zlib::GzipFile::LengthError: invalid compressed data -- length error
+ok hello
+Zlib::GzipFile::Error: encrypted gzip file is not supported
+Zlib::BufError: buffer error
+");
+        }
     }
 }

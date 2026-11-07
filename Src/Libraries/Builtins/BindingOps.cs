@@ -15,8 +15,6 @@
 
 using System;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
     [RubyClass("Binding", Extends = typeof(Binding))]

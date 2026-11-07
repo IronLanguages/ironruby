@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -32,7 +28,6 @@ using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Runtime.Conversions {
     using Ast = Expression;
-    using Microsoft.Scripting.Generation;
 
     public sealed class GenericConversionAction : RubyConversionAction {
         private readonly Type/*!*/ _type;
