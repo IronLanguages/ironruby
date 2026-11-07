@@ -93,6 +93,10 @@ namespace IronRuby.Builtins {
         private readonly List<RactorPort>/*!*/ _openPorts = new List<RactorPort>();
         private readonly List<RactorPort>/*!*/ _monitors = new List<RactorPort>();
         private readonly Dictionary<RubySymbol, object>/*!*/ _locals = new Dictionary<RubySymbol, object>();
+
+        // Ractor.store_if_absent holds this while its block runs, CRuby's local_storage_store_lock.
+        // Not _locals: the block may run code - another thread's Ractor[]= - that needs that one.
+        private readonly object/*!*/ _storeLock = new object();
         private int _lastPortId;
 
         // the globals the Ractor has its own of; null for the main Ractor
@@ -699,10 +703,12 @@ namespace IronRuby.Builtins {
         public static object StoreIfAbsent(BlockParam block, RubyClass/*!*/ self, object key) {
             var ractor = GetCurrent(self.Context);
             var symbol = ToLocalKey(self.Context, key);
-            lock (ractor._locals) {
+            lock (ractor._storeLock) {
                 object value;
-                if (ractor._locals.TryGetValue(symbol, out value)) {
-                    return value;
+                lock (ractor._locals) {
+                    if (ractor._locals.TryGetValue(symbol, out value)) {
+                        return value;
+                    }
                 }
                 if (block == null) {
                     throw RubyExceptions.NoBlockGiven();
@@ -710,8 +716,7 @@ namespace IronRuby.Builtins {
                 if (block.Yield(symbol, out value)) {
                     return value;
                 }
-                ractor._locals[symbol] = value;
-                return value;
+                return ractor.SetLocal(symbol, value);
             }
         }
 
@@ -1066,20 +1071,34 @@ namespace IronRuby.Builtins {
             return true;
         }
 
+        // A loop over a stack of its own rather than a recursion: a graph nested deeper than the
+        // thread's stack goes (an array in an array, 20000 deep) must not end the process.
         private static bool IsShareable(RubyContext/*!*/ context, object obj, HashSet<object>/*!*/ visited) {
-            object dummy;
-            if (IsAlwaysShareable(obj) || _shareable.TryGetValue(obj, out dummy) || !visited.Add(obj)) {
-                return true;
-            }
-            if (!context.IsObjectFrozen(obj) || obj is Proc || obj is RubyMethod || IsNeverShareable(context, obj)) {
-                return false;
-            }
-            foreach (var reference in GetReferences(context, obj)) {
-                if (!IsShareable(context, reference, visited)) {
+            var pending = new Stack<object>();
+            pending.Push(obj);
+            while (pending.Count > 0) {
+                obj = pending.Pop();
+                object dummy;
+                if (IsAlwaysShareable(obj) || _shareable.TryGetValue(obj, out dummy) || !visited.Add(obj)) {
+                    continue;
+                }
+                if (!context.IsObjectFrozen(obj) || obj is Proc || obj is RubyMethod || IsNeverShareable(context, obj)) {
                     return false;
                 }
+                PushReferences(context, obj, pending);
             }
             return true;
+        }
+
+        /// <summary>
+        /// Pushes the references of <paramref name="obj"/> last first, so that they come off the
+        /// stack in the order a recursive walk would visit them.
+        /// </summary>
+        private static void PushReferences(RubyContext/*!*/ context, object/*!*/ obj, Stack<object>/*!*/ pending) {
+            var references = new List<object>(GetReferences(context, obj));
+            for (int i = references.Count - 1; i >= 0; i--) {
+                pending.Push(references[i]);
+            }
         }
 
         /// <summary>
@@ -1174,13 +1193,19 @@ namespace IronRuby.Builtins {
                 return;
             }
             var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
-            Visit(obj, visited);
+            // depth first, in the order a recursion would take, but on a stack of its own so that
+            // a deeply nested graph does not run the thread out of stack
+            var pending = new Stack<object>();
+            pending.Push(obj);
+            while (pending.Count > 0) {
+                Visit(pending.Pop(), visited, pending);
+            }
             foreach (var item in visited) {
                 MarkShareable(item);
             }
         }
 
-        private void Visit(object obj, HashSet<object>/*!*/ visited) {
+        private void Visit(object obj, HashSet<object>/*!*/ visited, Stack<object>/*!*/ pending) {
             object dummy;
             if (IsAlwaysShareable(obj) || _shareable.TryGetValue(obj, out dummy) || !visited.Add(obj)) {
                 return;
@@ -1217,9 +1242,7 @@ namespace IronRuby.Builtins {
             }
 
             Freeze(obj);
-            foreach (var reference in GetReferences(_context, obj)) {
-                Visit(reference, visited);
-            }
+            PushReferences(_context, obj, pending);
         }
 
         private void Freeze(object/*!*/ obj) {
@@ -1261,6 +1284,11 @@ namespace IronRuby.Builtins {
             }
             if (_copies.TryGetValue(obj, out copy)) {
                 return copy;
+            }
+            // The copy recurses once per level of nesting: a graph deeper than the thread's stack
+            // goes is a SystemStackError, as in MRI, rather than the end of the process.
+            if (!RuntimeHelpers.TryEnsureSufficientExecutionStack()) {
+                throw new SystemStackError("stack level too deep");
             }
 
             // a move takes the object's slot over, which MRI can do only for its built-in kinds of object

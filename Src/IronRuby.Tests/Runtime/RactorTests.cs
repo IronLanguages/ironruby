@@ -396,6 +396,73 @@ TypeError: 1 is not a symbol nor a string
 ");
         }
 
+        /// <summary>
+        /// Ractor.store_if_absent's block runs under a lock of its own, not the one Ractor[] and
+        /// Ractor[]= take, so a block that waits on another thread using them does not deadlock.
+        /// </summary>
+        public void Ractor_Locals2() {
+            TestOutput(RactorPrologue + @"
+p Ractor.store_if_absent(:rl2_x) { Thread.new { Ractor[:rl2_y] = 1; Ractor[:rl2_y] + 1 }.value }
+p Ractor[:rl2_x], Ractor[:rl2_y]
+p Ractor.new { Ractor.store_if_absent(:a) { Thread.new { Ractor[:b] = 3 }.value } + Ractor[:b] }.value
+", @"
+2
+2
+1
+6
+");
+        }
+
+        /// <summary>
+        /// Inside a Ractor, Thread.main is the Ractor's main thread and Thread.list (and the "only
+        /// thread" check of Thread.stop) sees only the Ractor's own threads, as in MRI.
+        /// </summary>
+        public void Ractor_Threads1() {
+            TestOutput(RactorPrologue + @"
+th0 = Thread.new { sleep }
+p Thread.list.include?(th0), Thread.main == Thread.current
+p Ractor.new {
+  th = Thread.new { sleep 0.05; Thread.main }
+  [Thread.main == Thread.current, th.value == Thread.current, Thread.list.size, Thread.list.include?(Thread.current),
+   (Thread.stop rescue $!.class)]
+}.value
+p Thread.list.include?(th0), Thread.main == Thread.current
+th0.kill.join
+", @"
+true
+true
+[true, true, 1, true, ThreadError]
+true
+true
+");
+        }
+
+        /// <summary>
+        /// Ractor.shareable?, Ractor.make_shareable and a message copy over a deeply nested graph: a
+        /// copy deeper than the stack goes is a SystemStackError, not the end of the process.
+        /// </summary>
+        public void Ractor_DeepGraph1() {
+            TestOutput(RactorPrologue + @"
+def deep(n) = (a = []; n.times { a = [a] }; a)
+a = deep(2000)
+r = Ractor.new { Ractor.receive.flatten.size }
+r.send(a)
+p Ractor.shareable?(a), r.value, Ractor.shareable?(Ractor.make_shareable(a))
+a = deep(1_000_000)
+r = Ractor.new { Ractor.receive; :got }
+p Ractor.shareable?(a), (begin; r.send(a); rescue SystemStackError => e; e.class; end)
+r.send(1)
+p r.value
+", @"
+false
+0
+true
+false
+SystemStackError
+:got
+");
+        }
+
         // Each runs its Ractor's block and prints its value, or the error that ended the Ractor.
         private const string RactorIsolationPrologue = RactorPrologue + @"
 Thread.report_on_exception = false

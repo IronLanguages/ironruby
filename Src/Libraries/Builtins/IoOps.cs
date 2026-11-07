@@ -726,8 +726,10 @@ namespace IronRuby.Builtins {
 
         private static void ApplyTimeout(RubyContext/*!*/ context, RubyIO/*!*/ self, object timeout, int milliseconds) {
             object seconds = (milliseconds == Timeout.Infinite) ? null : (object)(milliseconds / 1000.0);
+            // The wait comes before a read of the stream underneath the IO's buffer, so what that
+            // buffer holds must not count as ready: the read would then block with no bound.
             self.SetTimeout(timeout, milliseconds, isRead =>
-                WaitForEvents(context, self, isRead ? Readable : Writable, seconds) != null
+                WaitForEvents(context, self, isRead ? Readable : Writable, seconds, true) != null
             );
         }
 
@@ -933,12 +935,21 @@ namespace IronRuby.Builtins {
         }
 
         private static bool IsReady(RubyIO/*!*/ io, Readiness kind) {
+            return IsReady(io, kind, false);
+        }
+
+        /// <summary>
+        /// Whether the IO is ready for <paramref name="kind"/>. With <paramref name="ignoreBuffer"/>
+        /// the IO's own read buffer does not count: the question is then whether a read of the
+        /// stream underneath would block, which is what IO#timeout has to wait for.
+        /// </summary>
+        private static bool IsReady(RubyIO/*!*/ io, Readiness kind, bool ignoreBuffer) {
             if (io.Closed) {
                 throw RubyExceptions.CreateIOError("closed stream");
             }
 
             var stream = io.GetStream();
-            if (kind == Readiness.Read && stream.DataBuffered) {
+            if (kind == Readiness.Read && !ignoreBuffer && stream.DataBuffered) {
                 return true;
             }
 
@@ -1130,6 +1141,10 @@ namespace IronRuby.Builtins {
         /// interruptible by Thread#kill and reports the thread as sleeping while it runs.
         /// </summary>
         private static object WaitForEvents(RubyContext/*!*/ context, RubyIO/*!*/ io, int events, object timeout) {
+            return WaitForEvents(context, io, events, timeout, false);
+        }
+
+        private static object WaitForEvents(RubyContext/*!*/ context, RubyIO/*!*/ io, int events, object timeout, bool ignoreBuffer) {
             int milliseconds = ToTimeInterval(context, timeout);
             long deadline = (milliseconds == Timeout.Infinite)
                 ? Int64.MaxValue
@@ -1142,14 +1157,14 @@ namespace IronRuby.Builtins {
             if ((events & Priority) != 0) { watched.Add(io); kinds.Add(IoReadiness.Error); }
 
             return WaitUntilReady<object>(watched, kinds, deadline, () => {
-                int ready = ReadyEvents(io, events);
+                int ready = ReadyEvents(io, events, ignoreBuffer);
                 return (ready != 0) ? ScriptingRuntimeHelpers.Int32ToObject(ready) : null;
             });
         }
 
-        private static int ReadyEvents(RubyIO/*!*/ io, int events) {
+        private static int ReadyEvents(RubyIO/*!*/ io, int events, bool ignoreBuffer) {
             int ready = 0;
-            if ((events & Readable) != 0 && IsReady(io, Readiness.Read)) {
+            if ((events & Readable) != 0 && IsReady(io, Readiness.Read, ignoreBuffer)) {
                 ready |= Readable;
             }
             if ((events & Writable) != 0 && IsReady(io, Readiness.Write)) {
@@ -1897,6 +1912,15 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("read")]
         public static MutableString Read(RubyIO/*!*/ self, [DefaultProtocol]int bytes, [DefaultProtocol, Optional]MutableString buffer) {
+            return Read(self, bytes, buffer, true);
+        }
+
+        /// <summary>
+        /// IO#read(n) reads n bytes, or what is left before the end of the stream: a pipe or a
+        /// socket hands back what it has so far, and the rest is waited for (each wait bounded by
+        /// IO#timeout). #sysread is a single read, and answers what that one read brought.
+        /// </summary>
+        private static MutableString Read(RubyIO/*!*/ self, int bytes, MutableString buffer, bool fully) {
             self.RequireReadable();
             if (bytes < 0) {
                 throw RubyExceptions.CreateArgumentError("negative length {0} given", bytes);
@@ -1904,6 +1928,12 @@ namespace IronRuby.Builtins {
 
             buffer = PrepareReadBuffer(self, buffer);
             int bytesRead = self.AppendBytes(buffer, bytes);
+            if (fully && bytesRead > 0) {
+                int more;
+                while (bytesRead < bytes && (more = self.AppendBytes(buffer, bytes - bytesRead)) > 0) {
+                    bytesRead += more;
+                }
+            }
             return (bytesRead == 0 && bytes != 0) ? null : buffer;
         }
 
@@ -1929,7 +1959,7 @@ namespace IronRuby.Builtins {
             // TODO: sysopen does that?
             stream.Flush();
 
-            var result = Read(self, bytes, buffer);
+            var result = Read(self, bytes, buffer, false);
             if (result == null) {
                 throw new EOFError("end of file reached");
             }

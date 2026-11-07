@@ -104,6 +104,82 @@ false
         }
 
         /// <summary>
+        /// IO#timeout is each IO's own even when two IOs share one stream, as a Ractor's $stdin
+        /// shares the main Ractor's (RubyIO.CreateSharedView): a timeout on one does not bound
+        /// the reads of the other.
+        /// </summary>
+        public void Io_Timeout4() {
+            var r = Engine.Execute<IronRuby.Builtins.RubyIO>("$tmo4_r, $tmo4_w = IO.pipe; $tmo4_r");
+            Context.DefineGlobalVariable("tmo4_v", r.CreateSharedView());
+            TestOutput(@"
+require 'ruby4'
+r, w, v = $tmo4_r, $tmo4_w, $tmo4_v
+r.timeout = 0.05
+p v.timeout
+th = Thread.new { sleep 0.2; w << ""a"" }
+p v.read(1)
+th.join
+p((r.read(1) rescue $!.class))
+r.timeout = nil
+v.timeout = 0.05
+th = Thread.new { sleep 0.2; w << ""b"" }
+p r.read(1)
+th.join
+p((v.read(1) rescue $!.class))
+", @"
+nil
+""a""
+IO::TimeoutError
+""b""
+IO::TimeoutError
+");
+        }
+
+        /// <summary>
+        /// IO#timeout when the IO's own buffer already holds part of what a read wants: the wait
+        /// for the rest looks at the pipe(2) underneath, not at the buffer, so it times out rather
+        /// than blocking in the read for ever. IO#read(n) waits for all n bytes, as in MRI.
+        /// </summary>
+        public void Io_Timeout3() {
+            TestOutput(@"
+require 'ruby4'
+r, w = IO.pipe
+r.timeout = 0.05
+w << ""abc\npartial""
+p r.gets
+p((r.gets rescue $!.class))
+r, w = IO.pipe
+r.timeout = 0.05
+w << ""ab""
+p r.getc
+p((r.read(5) rescue $!.class))
+r, w = IO.pipe
+r.timeout = 0.05
+w << ""x\ny""
+a = []
+p((r.each_line { |l| a << l } rescue [$!.class, a]))
+r, w = IO.pipe
+r.timeout = 2
+w << ""ab""
+th = Thread.new { sleep 0.05; w << ""cde\n"" }
+p r.read(5)
+p r.gets
+th.join
+w.close
+p r.read(5)
+", @"
+""abc\n""
+IO::TimeoutError
+""a""
+IO::TimeoutError
+[IO::TimeoutError, [""x\n""]]
+""abcde""
+""\n""
+nil
+");
+        }
+
+        /// <summary>
         /// Kernel#set_trace_func works without -trace (it is a TracePoint underneath, as in MRI), and
         /// Thread#set_trace_func / #add_trace_func hook one thread, the latest added hook first.
         /// </summary>
