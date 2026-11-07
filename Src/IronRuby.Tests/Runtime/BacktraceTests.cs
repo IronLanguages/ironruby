@@ -299,6 +299,34 @@ p here
         }
 
         /// <summary>
+        /// The frames a rescued exception unwound keep their lines for its backtrace only: a recursive call that raised
+        /// and was rescued left a frame of the same method above the live one, and an exception the live one raised
+        /// after that was reported at the line of the call that had raised (10 here, not 8).
+        /// </summary>
+        public void Backtrace_CompiledLines2() {
+            TestOutput(@"
+def foo(n)
+  if n > 0
+    begin
+      foo(n-1)
+    rescue
+    end
+    raise 'outer'
+  else
+    raise 'inner'
+  end
+end
+begin
+  foo(1)
+rescue => e
+  p e.backtrace.first(2).map { |f| f[/:(\d+)/, 1].to_i }
+end
+", @"
+[8, 14]
+");
+        }
+
+        /// <summary>
         /// An exception a library method throws whose class has an initialize written in Ruby - SystemCallError's, in the
         /// prelude - is replaced by a new one when it is rescued; the backtrace went with the thrown one, and Dir.mkdir's
         /// Errno::ENOENT had none - a re-raise of it (FileUtils.mkdir_p) got one from the `raise' instead. A LoadError of
