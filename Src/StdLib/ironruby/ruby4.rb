@@ -987,21 +987,13 @@ class Range
   end
   private :__reverse_each_size__
 
-  # The built-in #first/#last only answer the no-argument form, and because they
-  # are defined on Range they hide Enumerable#first(n) rather than falling
-  # through to it - so `(0..Float::INFINITY).first(3)` was an ArgumentError.
-  unless method_defined?(:__first_without_count__)
-    alias :__first_without_count__ :first
-    alias :__last_without_count__ :last
-
-    def first(*args)
-      if args.empty?
-        raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
-        return __first_without_count__
-      end
+  # #first(n) and #last(n): the C# #first and #last (RangeOps) answer the form without a
+  # count and hand the count here - an Enumerable#first(n) they would otherwise hide, so
+  # `(0..Float::INFINITY).first(3)` was an ArgumentError.
+  unless private_method_defined?(:__first_n__)
+    def __first_n__(count)
       raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
-      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size > 1
-      n = __to_count__(args[0])
+      n = __to_count__(count)
       raise ArgumentError, "negative array size (or size too big)" if n < 0
       b = self.begin
       e = self.end
@@ -1016,32 +1008,30 @@ class Range
         return __int_run__(b, last_value)
       end
       result = []
-      return result if n == 0
+      # MRI's first_i stops at the first element even for none, so #each is still asked
+      # (a Float range is "can't iterate from Float" for first(0) too)
       each do |item|
+        break if n == 0
         result << item
         break if result.size == n
       end
       result
     end
 
-    def last(*args)
-      if args.empty?
-        raise RangeError, "cannot get the last element of endless range" if self.end.nil?
-        return __last_without_count__
-      end
+    def __last_n__(count)
       raise RangeError, "cannot get the last element of endless range" if self.end.nil?
-      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size > 1
-      n = __to_count__(args[0])
+      n = __to_count__(count)
       raise ArgumentError, "negative array size" if n < 0
       b = self.begin
       e = self.end
       # MRI's rb_int_range_last: the last n of an Integer range, without building all of it
       # first (to_a.last(n) made (1..10**6).last(3) a million-element Array). MRI takes this
       # path for a subclass too, whatever its #each.
-      if ::Integer === b && ::Integer === e
+      # (..5).last(2) too: a beginless Integer range counts down from its end.
+      if (b.nil? || ::Integer === b) && ::Integer === e
         top = exclude_end? ? e - 1 : e
         first_value = top - n + 1
-        first_value = b if first_value < b
+        first_value = b if !b.nil? && first_value < b
         return __int_run__(first_value, top)
       end
       to_a.last(n)
@@ -1060,6 +1050,7 @@ class Range
       result
     end
     private :__int_run__
+    private :__first_n__, :__last_n__
 
     # #first and #last take a count, not an arbitrary object: anything that is
     # not an Integer has to offer #to_int and have it answer one.
@@ -3783,35 +3774,19 @@ class Numeric
   private :__step_scan_args__
 
   def step(*args, **kw, &block)
-    # Integer#step(limit[, step]) { } with Integers, the common case: the loop directly,
-    # without scanning the arguments or going through ArithmeticSequence.
-    if block && kw.empty? && ::Integer === self && (args.size == 1 || args.size == 2) && ::Integer === args[0]
-      unit = args.size == 2 ? args[1] : 1
-      if ::Integer === unit && unit != 0
-        i = self
-        limit = args[0]
-        if unit > 0
-          while i <= limit
-            yield i
-            i += unit
-          end
-        else
-          while i >= limit
-            yield i
-            i += unit
-          end
-        end
-        return self
-      end
-    end
+    __ir_step_slow__(args, kw, &block)
+  end
+
+  # Numeric#step. Integer#step (Integer.cs) loops over Fixnums itself and comes here with
+  # everything else: the positional arguments as an Array, the keywords as a Hash or nil.
+  def __ir_step_slow__(args, kw, &block)
+    kw ||= {}
     unless block
       to, unit = __step_extract_args__(args, kw)
       unit = 1 if unit.nil?
       ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
       if (to.nil? || to.is_a?(::Numeric)) && unit.is_a?(::Numeric)
-        shown = args.empty? && (kw.nil? || kw.empty?) ? "" : "(#{(args.map(&:inspect) + (kw || {}).map { |k, v| "#{k}: #{v.inspect}" }).join(', ')})"
-        return ::Enumerator::ArithmeticSequence.__build__(
-          self, to, unit, false, self, "(#{inspect}.step#{shown})")
+        return ::Enumerator::ArithmeticSequence.__build__(self, to, unit, false, self, [:num, args, kw])
       end
       recv = self
       e = ::Enumerator.new { |y| recv.step(*args, **kw) { |v| y << v } }
@@ -3828,6 +3803,7 @@ class Numeric
     ::Enumerator::ArithmeticSequence.__step_each__(self, to, unit, false, &block)
     self
   end
+  private :__ir_step_slow__
 end
 
 class Numeric
@@ -6523,21 +6499,8 @@ class Enumerator
         stop = fin.to_f
         step = unit.to_f
         n = __float_step_size__(beg, stop, step, excl)
-        if step.infinite?
-          block.call(beg) if n > 0
-        elsif step == 0
-          loop { block.call(beg) }
-        else
-          i = 0
-          # n may be NaN (Infinity.step(Infinity, 1)); 0 < NaN is false, so
-          # nothing is yielded, which is what MRI's for(;i<n;) loop does.
-          while i < n
-            d = i * step + beg
-            d = stop if step >= 0 ? stop < d : d < stop
-            block.call(d)
-            i += 1
-          end
-        end
+        # the loop is C# (KernelOps.FloatStep)
+        ::Kernel.__ir_float_step__(beg, stop, step, n.to_f, &block)
         return
       end
 
@@ -6545,7 +6508,7 @@ class Enumerator
       cmp = desc ? :< : :>
       loop do
         break if excl ? (i == fin || i.__send__(cmp, fin)) : i.__send__(cmp, fin)
-        block.call(i)
+        yield(i)
         i += unit
       end
     end
@@ -6574,9 +6537,11 @@ class Enumerator
       @__exclude_end__ = exclude_end
       @__source__ = source
       @__inspect_str__ = inspect_str
-      initialize(nil) do |y|
-        __arith_each__ { |v| y << v }
-      end
+      # what Enumerator#initialize(nil) { } would set, without its `*args, &block' call
+      seq = self
+      @__generator__ = ::Kernel.proc { |y| seq.__send__(:__arith_each__) { |v| y << v } }
+      @__initialized__ = true
+      self
     end
     private :__arith_init__
 
@@ -6640,9 +6605,27 @@ class Enumerator
       [self.begin, self.end, step, exclude_end?].hash
     end
 
+    # @__inspect_str__ is the text, or how the sequence was written - worked out only when asked
+    # for, since building it was a good part of what making a sequence cost
     def inspect
-      return @__inspect_str__ if @__inspect_str__
-      "((#{@__source__.inspect}).%(#{@__step__.inspect}))"
+      form = @__inspect_str__
+      case form
+      when ::String then form
+      when :step then "((#{@__source__.inspect}).step)"
+      when ::Array
+        case form[0]
+        when :step then "((#{@__source__.inspect}).step(#{form[1].inspect}))"
+        when :% then "((#{@__source__.inspect}).%(#{form[1].inspect}))"
+        else
+          # Numeric#step: [:num, args, kw]
+          args = form[1]
+          kw = form[2]
+          shown = args.empty? && (kw.nil? || kw.empty?) ? "" : "(#{(args.map(&:inspect) + (kw || {}).map { |k, v| "#{k}: #{v.inspect}" }).join(', ')})"
+          "(#{@__source__.inspect}.step#{shown})"
+        end
+      else
+        "((#{@__source__.inspect}).%(#{@__step__.inspect}))"
+      end
     end
     alias :to_s :inspect
   end
@@ -11282,7 +11265,7 @@ class Range
   # in the #succ walk from begin to end, which is why ("a".."z") does not
   # include "cc". Anything else has to be walked, and a range with no beginning
   # or no end cannot be walked at all.
-  def include?(value)
+  def __include__(value)
     b = self.begin
     e = self.end
     # Integers all round: the comparison #cover? would make, without the class tests below.
@@ -11305,7 +11288,7 @@ class Range
     each { |x| return true if x == value }
     false
   end
-  alias :member? :include?
+  private :__include__
 
   def __linear__(x)
     x.is_a?(::Numeric) || x.is_a?(::Time)
@@ -11539,8 +11522,7 @@ class Range
       if block
         ::Kernel.raise(::ArgumentError, "#step iteration for beginless ranges is meaningless")
       end
-      written = n.nil? ? "((#{inspect}).step)" : "((#{inspect}).step(#{n.inspect}))"
-      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, written)
+      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, n.nil? ? :step : [:step, n])
     end
 
     ::Kernel.raise(::ArgumentError, "step can't be 0") if numeric && unit == 0
@@ -11548,8 +11530,7 @@ class Range
     unless block
       if numeric
         # inspected the way it was written: ((1..10).step) or ((1..10).step(2))
-        written = n.nil? ? "((#{inspect}).step)" : "((#{inspect}).step(#{n.inspect}))"
-        return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, written)
+        return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, n.nil? ? :step : [:step, n])
       end
       range = self
       return ::Enumerator.new { |y| range.step(*args) { |x| y << x } }.__set_inspect__(self, :step, args)
@@ -11573,7 +11554,7 @@ class Range
 
   def %(n)
     seq = step(n)
-    seq.instance_variable_set(:@__inspect_str__, "((#{inspect}).%(#{n.inspect}))") if seq.is_a?(::Enumerator::ArithmeticSequence)
+    seq.instance_variable_set(:@__inspect_str__, [:%, n]) if seq.is_a?(::Enumerator::ArithmeticSequence)
     seq
   end
 
@@ -11645,7 +11626,9 @@ class Range
   # MRI's range_max: a block, a count, or an exclusive end that is not a number means
   # Enumerable's walk (which a beginless range cannot do); otherwise the end answers, one
   # less for an exclusive Integer end - and only an Integer begin may exclude it.
-  def max(*args, &block)
+  # #min, #max, #include? and #member? are C# (RangeOps): an Integer or Float range without a
+  # block or count is answered there, and anything else comes here.
+  def __max__(*args, &block)
     e = self.end
     raise RangeError, "cannot get the maximum of endless range" if e.nil?
     raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size > 1
@@ -11672,7 +11655,7 @@ class Range
       if b.nil?
         raise RangeError, "cannot get the maximum of beginless range with custom comparison method"
       end
-      return super(&block)
+      return ::Enumerable.instance_method(:max).bind_call(self, &block)
     end
 
     c = b.nil? ? -1 : (b <=> e)
@@ -11688,7 +11671,7 @@ class Range
     e
   end
 
-  def min(*args, &block)
+  def __min__(*args, &block)
     b = self.begin
     raise RangeError, "cannot get the minimum of beginless range" if b.nil?
     raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size > 1
@@ -11702,7 +11685,7 @@ class Range
       if self.end.nil?
         raise RangeError, "cannot get the minimum of endless range with custom comparison method"
       end
-      return super(&block)
+      return ::Enumerable.instance_method(:min).bind_call(self, &block)
     end
 
     e = self.end
@@ -11710,6 +11693,8 @@ class Range
     return nil if c.nil? || c > 0 || (c == 0 && exclude_end?)
     b
   end
+
+  private :__min__, :__max__
 
   def minmax(&block)
     return super(&block) if block

@@ -20,6 +20,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Osr;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
@@ -79,6 +80,36 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        // A Fixnum and an Integer ndigits: long arithmetic (NumericRounding.TryRoundFixnum).
+
+        [RubyMethod("round")]
+        public static object Round(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Round, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.RoundInteger(new BigInteger(self), ndigits, NumericRounding.Half.Up);
+        }
+
+        [RubyMethod("floor")]
+        public static object Floor(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Floor, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.FloorInteger(new BigInteger(self), ndigits);
+        }
+
+        [RubyMethod("ceil")]
+        public static object Ceil(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Ceil, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.CeilInteger(new BigInteger(self), ndigits);
+        }
+
+        [RubyMethod("truncate")]
+        public static object Truncate(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Truncate, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.TruncateInteger(new BigInteger(self), ndigits);
+        }
+
         /// <summary>
         /// Rounds self to a multiple of 10**(-ndigits). A non-negative ndigits returns self.
         /// Accepts the <c>half:</c> option (:up, :down or :even).
@@ -104,6 +135,10 @@ namespace IronRuby.Builtins {
             int nd = (ndigits == Missing.Value) ? 0 : NumericRounding.GetNDigits(integerCast, ndigits);
             if (nd >= 0) {
                 return self;
+            }
+            object fixnumResult;
+            if (self is int && NumericRounding.TryRoundFixnum((int)self, nd, NumericRounding.IntegerRounding.Round, half, out fixnumResult)) {
+                return fixnumResult;
             }
             return NumericRounding.RoundInteger(ToBigInteger(self), nd, half);
         }
@@ -143,6 +178,12 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
+
+        /// <summary>numeric_to_c: self + 0i (complex.rb's Numeric#to_c, for the commonest receivers).</summary>
+        [RubyMethod("to_c")]
+        public static RubyComplex/*!*/ ToComplex(RubyContext/*!*/ context, object/*!*/ self) {
+            return new RubyComplex(context.GetClass(typeof(RubyComplex)), self, ScriptingRuntimeHelpers.Int32ToObject(0));
+        }
 
         #region numerator/ord, denominator
 
@@ -469,6 +510,88 @@ namespace IronRuby.Builtins {
         public static object Pred(BinaryOpStorage/*!*/ subStorage, object/*!*/ self) {
             var site = subStorage.GetCallSite("-");
             return site.Target(site, self, ClrInteger.One);
+        }
+
+        #endregion
+
+        #region step
+
+        // Integer#step(limit[, step]) { } with Fixnums, the common case, loops here. Everything
+        // else - no block, a Float or Rational, a Bignum, the by:/to: keywords - goes to the
+        // prelude's Numeric step (__ir_step_slow__ in ruby4.rb). The prelude's own entry point
+        // takes *args and **kw, a signature the JIT does not compile, so a short Fixnum step
+        // spent most of its time getting into it.
+
+        [RubyMethod("step")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
+            BlockParam block, int self, int limit) {
+            if (block == null) {
+                return StepSlow(slow, null, self, new object[] { ScriptingRuntimeHelpers.Int32ToObject(limit) });
+            }
+            return StepImpl(block, self, limit, 1);
+        }
+
+        [RubyMethod("step")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
+            BlockParam block, int self, int limit, int step) {
+            if (block == null || step == 0) {
+                return StepSlow(slow, block, self, new object[] {
+                    ScriptingRuntimeHelpers.Int32ToObject(limit), ScriptingRuntimeHelpers.Int32ToObject(step)
+                });
+            }
+            return StepImpl(block, self, limit, step);
+        }
+
+        [RubyMethod("step")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [ReceivesKeywords]
+        public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
+            BlockParam block, object/*!*/ self, params object[]/*!*/ args) {
+            return StepSlow(slow, block, self, args);
+        }
+
+        private static object StepImpl(BlockParam/*!*/ block, int self, int limit, int step) {
+            // in a long: i + step must not wrap round past Int32.MaxValue or MinValue
+            long i = self;
+            if (step > 0) {
+                while (i <= limit) {
+                    object result;
+                    if (block.Yield((int)i, out result)) {
+                        return result;
+                    }
+                    i += step;
+                }
+            } else {
+                while (i >= limit) {
+                    object result;
+                    if (block.Yield((int)i, out result)) {
+                        return result;
+                    }
+                    i += step;
+                }
+            }
+            return self;
+        }
+
+        // The prelude takes the positional arguments as an Array and the keywords as a Hash: a
+        // trailing keyword hash is split off here, where it can still be told from a positional one.
+        private static object StepSlow(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
+            BlockParam block, object self, object[]/*!*/ args) {
+            Hash keywords = (args.Length > 0) ? args[args.Length - 1] as Hash : null;
+            int count = args.Length;
+            if (keywords != null && keywords.IsKeywordArguments) {
+                count--;
+            } else {
+                keywords = null;
+            }
+            var positional = new RubyArray(count);
+            for (int k = 0; k < count; k++) {
+                positional.Add(args[k]);
+            }
+            var site = slow.GetCallSite("__ir_step_slow__", new RubyCallSignature(2, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            return site.Target(site, self, (block != null) ? block.Proc : null, positional, keywords);
         }
 
         #endregion
@@ -917,7 +1040,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("pow")]
         public static object Pow(BinaryOpStorage/*!*/ powStorage, int self, int other) {
             if (other >= 0) {
-                return ClrInteger.Power(self, other);
+                return ClrInteger.PowerNonNegativeFixnum(self, other);
             }
             var site = powStorage.GetCallSite("**");
             return site.Target(site, self, other);

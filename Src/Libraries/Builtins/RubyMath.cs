@@ -277,6 +277,15 @@ namespace IronRuby.Builtins {
             if (!TryGetDouble(x, out dx) || !TryGetDouble(y, out dy)) {
                 return General(general, "__ir_hypot__", self, x, y);
             }
+            return HypotDouble(dx, dy);
+        }
+
+        /// <summary>
+        /// C's hypot(): x*x + y*y with one rounding (a fused multiply-add) while neither square can
+        /// overflow or underflow - the scaled form below rounds twice more, and came out a unit in
+        /// the last place off libm's for (3.5).hypot(1) - and scaled by the larger one otherwise.
+        /// </summary>
+        internal static double HypotDouble(double dx, double dy) {
             dx = SM.Abs(dx);
             dy = SM.Abs(dy);
             // an infinity wins over a NaN, which is what C's hypot() promises
@@ -284,9 +293,31 @@ namespace IronRuby.Builtins {
             if (double.IsNaN(dx) || double.IsNaN(dy)) return double.NaN;
             if (dx < dy) { double t = dx; dx = dy; dy = t; }
             if (dy == 0.0) return dx;
-            // scaling by the larger operand keeps x*x from overflowing for x ~ 1e300
-            double r = dy / dx;
-            return dx * SM.Sqrt(1.0 + r * r);
+            // y too small beside x to change it: x*x + y*y rounds to x*x
+            if (dy < dx * 7.450580596923828e-09) { return dx; }       // 2**-27
+            // squares that would overflow or underflow are taken of the two scaled by a power of
+            // two, which is exact, and the result scaled back
+            double scale = 1.0;
+            if (dx > 1e150) {
+                scale = 4.149515568880993e+180;                          // 2**600
+                dx *= 2.409919865102884e-181;                            // 2**-600
+                dy *= 2.409919865102884e-181;
+            } else if (dy < 1e-150) {
+                scale = 2.409919865102884e-181;
+                dx *= 4.149515568880993e+180;
+                dy *= 4.149515568880993e+180;
+            }
+            // x*x + y*y to about twice double precision: each square exactly as a sum of two
+            // doubles (the low half by a fused multiply-add), the four added without losing the
+            // small ones; then one Newton step on the square root, whose own square is again
+            // taken exactly. That is within a hair of the correctly rounded result libm gives.
+            double sx = dx * dx, ex = SM.FusedMultiplyAdd(dx, dx, -sx);
+            double sy = dy * dy, ey = SM.FusedMultiplyAdd(dy, dy, -sy);
+            double sum = sx + sy;
+            double err = ((sx - sum) + sy) + (ex + ey);
+            double h = SM.Sqrt(sum + err);
+            double hh = h * h, he = SM.FusedMultiplyAdd(h, h, -hh);
+            return (h + (((sum - hh) - he) + err) / (2.0 * h)) * scale;
         }
 
         [RubyMethodAttribute("frexp", RubyMethodAttributes.PrivateInstance)]

@@ -7,10 +7,10 @@
 # comment says nothing more, the method does what that function does, in the same order,
 # because ruby/spec watches which methods a mock operand is sent and in what order.
 #
-# A Rational is two Integers in @__numerator__ and @__denominator__ (hidden from
-# #instance_variables, as MRI keeps them in a C struct), the denominator positive,
-# frozen from birth. rational.c undefines Rational.new and Rational.allocate; instances
-# are made by __new_internal__ (nurat_s_new_internal), which takes no checks.
+# A Rational is two Integers, the denominator positive, frozen from birth. They are fields
+# of the C# RubyRational (Src/Libraries/Builtins/RubyRational.cs), read by #numerator and
+# #denominator. rational.c undefines Rational.new and Rational.allocate; instances are made
+# by __new_internal__ (nurat_s_new_internal, C#), which takes no checks.
 
 class Numeric
   # rb_num_coerce_bin: other.coerce(self), then the operator on the pair.
@@ -70,23 +70,9 @@ end
 
 class Rational < Numeric
   class << self
-    alias_method :__ir_allocate__, :allocate
-    private :__ir_allocate__
     undef_method :allocate
     undef_method :new
   end
-
-  # nurat_s_new_internal: no canonicalisation, no checks; OBJ_FREEZE.
-  def self.__new_internal__(num, den)
-    __ir_allocate__.__send__(:__ir_set_parts__, num, den)
-  end
-
-  def __ir_set_parts__(num, den)
-    @__numerator__ = num
-    @__denominator__ = den
-    freeze
-  end
-  private :__ir_set_parts__
 
   # rb_rational_raw: Integers (via #to_int) with the sign moved onto the numerator.
   def self.__raw__(num, den)
@@ -169,17 +155,10 @@ class Rational < Numeric
     a > b ? 1 : -1
   end
 
-  def numerator
-    @__numerator__
-  end
-
-  def denominator
-    @__denominator__
-  end
 
   # rb_rational_uminus
   def -@
-    ::Rational.__canonicalize__(-@__numerator__, @__denominator__)
+    ::Rational.__canonicalize__(-numerator, denominator)
   end
 
   # f_addsub
@@ -197,31 +176,9 @@ class Rational < Numeric
   end
   private :__ir_addsub__
 
-  # rb_rational_plus
-  def +(other)
-    if ::Integer === other
-      ::Rational.__canonicalize_no_reduce__(@__numerator__ + other * @__denominator__, @__denominator__)
-    elsif ::Float === other
-      to_f + other
-    elsif ::Rational === other
-      __ir_addsub__(@__numerator__, @__denominator__, other.numerator, other.denominator, :+)
-    else
-      __ir_num_coerce_bin__(other, :+)
-    end
-  end
-
-  # rb_rational_minus
-  def -(other)
-    if ::Integer === other
-      ::Rational.__canonicalize_no_reduce__(@__numerator__ - other * @__denominator__, @__denominator__)
-    elsif ::Float === other
-      to_f - other
-    elsif ::Rational === other
-      __ir_addsub__(@__numerator__, @__denominator__, other.numerator, other.denominator, :-)
-    else
-      __ir_num_coerce_bin__(other, :-)
-    end
-  end
+  # +, -, *, /, quo, <=>, ==, #to_f and #hash are C# (RubyRational): an Integer, a Float or a
+  # Rational operand is answered there, anything else comes back to __ir_num_coerce_bin__ and
+  # __ir_num_coerce_cmp__ above.
 
   # f_muldiv
   def __ir_muldiv__(anum, aden, bnum, bden, k)
@@ -239,38 +196,6 @@ class Rational < Numeric
     ::Rational.__canonicalize_no_reduce__(num, den)
   end
   private :__ir_muldiv__
-
-  # rb_rational_mul
-  def *(other)
-    if ::Integer === other
-      __ir_muldiv__(@__numerator__, @__denominator__, other, 1, :*)
-    elsif ::Float === other
-      to_f * other
-    elsif ::Rational === other
-      __ir_muldiv__(@__numerator__, @__denominator__, other.numerator, other.denominator, :*)
-    else
-      __ir_num_coerce_bin__(other, :*)
-    end
-  end
-
-  # rb_rational_div
-  def /(other)
-    if ::Integer === other
-      ::Kernel.raise(::ZeroDivisionError, "divided by 0") if other == 0
-      __ir_muldiv__(@__numerator__, @__denominator__, other, 1, :/)
-    elsif ::Float === other
-      to_f / other
-    elsif ::Rational === other
-      ::Kernel.raise(::ZeroDivisionError, "divided by 0") if other.numerator == 0
-      if @__numerator__ == 1 && @__denominator__ == 1
-        return ::Rational.__canonicalize_no_reduce__(other.denominator, other.numerator)
-      end
-      __ir_muldiv__(@__numerator__, @__denominator__, other.numerator, other.denominator, :/)
-    else
-      __ir_num_coerce_bin__(other, :/)
-    end
-  end
-  alias quo /
 
   # nurat_fdiv
   def fdiv(other)
@@ -290,12 +215,12 @@ class Rational < Numeric
     other = other.numerator if ::Rational === other && other.denominator == 1
 
     if ::Numeric === other && !(::Float === other)
-      if @__denominator__ == 1
-        if @__numerator__ == 1
+      if denominator == 1
+        if numerator == 1
           return ::Rational.__new_internal__(1, 1)
-        elsif @__numerator__ == -1 && ::Integer === other
+        elsif numerator == -1 && ::Integer === other
           return ::Rational.__new_internal__(other.odd? ? -1 : 1, 1)
-        elsif @__numerator__ == 0
+        elsif numerator == 0
           if ::Numeric.__ir_negative_p__(other)
             ::Kernel.raise(::ZeroDivisionError, "divided by 0")
           else
@@ -307,11 +232,11 @@ class Rational < Numeric
 
     if ::Integer === other && other.abs <= FIXNUM_MAX__
       if other > 0
-        num = @__numerator__ ** other
-        den = @__denominator__ ** other
+        num = numerator ** other
+        den = denominator ** other
       elsif other < 0
-        num = @__denominator__ ** -other
-        den = @__numerator__ ** -other
+        num = denominator ** -other
+        den = numerator ** -other
       else
         num = 1
         den = 1
@@ -340,37 +265,6 @@ class Rational < Numeric
   FIXNUM_MAX__ = 2**62 - 1
   __hide_constant__ :FIXNUM_MAX__
 
-  # rb_rational_cmp
-  def <=>(other)
-    case other
-    when ::Integer
-      return @__numerator__ <=> other if @__denominator__ == 1
-      (@__numerator__ - other * @__denominator__) <=> 0
-    when ::Rational
-      (@__numerator__ * other.denominator - other.numerator * @__denominator__) <=> 0
-    when ::Float
-      ::Rational.__dbl_cmp__(to_f, other)
-    else
-      __ir_num_coerce_cmp__(other, :<=>)
-    end
-  end
-
-  # nurat_eqeq_p
-  def ==(other)
-    if ::Integer === other
-      return true if @__numerator__ == 0 && other == 0
-      return false unless @__denominator__ == 1
-      @__numerator__ == other
-    elsif ::Float === other
-      ::Rational.__dbl_cmp__(to_f, other) == 0
-    elsif ::Rational === other
-      return true if @__numerator__ == 0 && other.numerator == 0
-      @__numerator__ == other.numerator && @__denominator__ == other.denominator
-    else
-      other == self ? true : false
-    end
-  end
-
   # nurat_coerce
   def coerce(other)
     case other
@@ -394,41 +288,41 @@ class Rational < Numeric
 
   # nurat_positive_p / nurat_negative_p
   def positive?
-    @__numerator__ > 0
+    numerator > 0
   end
 
   def negative?
-    @__numerator__ < 0
+    numerator < 0
   end
 
   # rb_rational_abs
   def abs
-    return ::Rational.__new_internal__(-@__numerator__, @__denominator__) if @__numerator__ < 0
+    return ::Rational.__new_internal__(-numerator, denominator) if numerator < 0
     self
   end
   alias magnitude abs
 
   # nurat_floor / nurat_ceil / nurat_truncate: the precision-free forms.
   def __ir_floor__
-    @__numerator__.div(@__denominator__)
+    numerator.div(denominator)
   end
   private :__ir_floor__
 
   def __ir_ceil__
-    -((-@__numerator__).div(@__denominator__))
+    -((-numerator).div(denominator))
   end
   private :__ir_ceil__
 
   def __ir_truncate__
-    return -((-@__numerator__).div(@__denominator__)) if @__numerator__ < 0
-    @__numerator__.div(@__denominator__)
+    return -((-numerator).div(denominator)) if numerator < 0
+    numerator.div(denominator)
   end
   private :__ir_truncate__
 
   # nurat_round_half_up / _down / _even
   def __ir_round_half_up__
-    num = @__numerator__
-    den = @__denominator__
+    num = numerator
+    den = denominator
     neg = num < 0
     num = -num if neg
     num = (num * 2 + den).div(den * 2)
@@ -437,8 +331,8 @@ class Rational < Numeric
   private :__ir_round_half_up__
 
   def __ir_round_half_down__
-    num = @__numerator__
-    den = @__denominator__
+    num = numerator
+    den = denominator
     neg = num < 0
     num = -num if neg
     num = (num * 2 + den - 1).div(den * 2)
@@ -447,8 +341,8 @@ class Rational < Numeric
   private :__ir_round_half_down__
 
   def __ir_round_half_even__
-    num = @__numerator__
-    den = @__denominator__
+    num = numerator
+    den = denominator
     neg = num < 0
     num = -num if neg
     num, rem = (num * 2 + den).divmod(den * 2)
@@ -490,7 +384,7 @@ class Rational < Numeric
 
   # A denominator divides a power of ten only if it is made of twos and fives.
   def __ir_exact_at__(ndigits)
-    d = @__denominator__
+    d = denominator
     twos = 0
     while d.even?
       d >>= 1
@@ -551,12 +445,6 @@ class Rational < Numeric
     __ir_truncate__
   end
 
-  # nurat_to_double: Integer#fdiv divides exactly before rounding, so a quotient of two
-  # numbers past Float::MAX still comes out right.
-  def to_f
-    @__numerator__.fdiv(@__denominator__)
-  end
-
   def to_r
     self
   end
@@ -593,8 +481,8 @@ class Rational < Numeric
     end
     return self if args.empty?
     e = args[0].abs
-    neg = @__numerator__ < 0
-    rat = neg ? ::Rational.__canonicalize__(-@__numerator__, @__denominator__) : self
+    neg = numerator < 0
+    rat = neg ? ::Rational.__canonicalize__(-numerator, denominator) : self
     zero = ::Integer === e && e == 0
     a = zero ? rat : rat - e
     b = zero ? rat : rat + e
@@ -604,23 +492,18 @@ class Rational < Numeric
     ::Rational.__canonicalize__(p, q)
   end
 
-  # nurat_hash
-  def hash
-    [@__numerator__, @__denominator__, ::Rational].hash
-  end
-
   # nurat_to_s / nurat_inspect
   def to_s
-    "#{@__numerator__}/#{@__denominator__}"
+    "#{numerator}/#{denominator}"
   end
 
   def inspect
-    "(#{@__numerator__.inspect}/#{@__denominator__.inspect})"
+    "(#{numerator.inspect}/#{denominator.inspect})"
   end
 
   # nurat_marshal_dump / nurat_marshal_load (by way of Rational::compatible in MRI).
   def marshal_dump
-    [@__numerator__, @__denominator__]
+    [numerator, denominator]
   end
   private :marshal_dump
 
@@ -638,10 +521,7 @@ class Rational < Numeric
     elsif den == 0
       ::Kernel.raise(::ZeroDivisionError, "divided by 0")
     end
-    @__numerator__ = num
-    @__denominator__ = den
-    freeze
-    self
+    __ir_set_parts__(num, den)
   end
   private :marshal_load
 
@@ -990,7 +870,8 @@ module Kernel
 
   # nurat_f_rational. Rational(x) and Rational(x, nil) are different calls - the second
   # is a TypeError - so the arity is read off *args rather than from a default.
-  def Rational(*args, exception: true)
+  # Kernel#Rational is C# (KernelOps.ToRational); what it does not answer itself comes here.
+  def __ir_Rational_slow__(*args, exception: true)
     # Rational(Integer, Integer) and Rational(Rational, Integer) - ActiveSupport's
     # Time#change makes one of each for every Time#advance - go straight to what
     # __convert__ ends with for them: __canonicalize__, and the Rational itself or its
@@ -1008,7 +889,7 @@ module Kernel
     end
     ::Rational.__convert__(args[0], args[1], args.size == 2, ::Kernel.__opts_exception__(exception))
   end
-  module_function :Rational
+  module_function :__ir_Rational_slow__
 end
 
 class Integer
@@ -1025,11 +906,12 @@ class Integer
   end
 
   # numeric.c's rb_int_pow (fix_pow) for what makes a Rational or a Complex: a negative
-  # exponent and a negative base to a fractional power. The rest is the C# Integer#**.
+  # exponent and a negative base to a fractional power, and what has to be coerced. The C#
+  # Integer#** (ClrInteger.Power) answers everything else and hands these here.
   alias_method :__ir_pow__, :**
   private :__ir_pow__
 
-  def **(other)
+  def __ir_pow_slow__(other)
     if ::Integer === other
       return __ir_pow__(other) if other >= 0
       return 1 if self == 1
@@ -1050,6 +932,7 @@ class Integer
       __ir_num_coerce_bin__(other, :**)
     end
   end
+  private :__ir_pow_slow__
 end
 
 class Float

@@ -186,6 +186,9 @@ namespace IronRuby.Runtime.Jit {
         protected void Profile(object self, object[] args) {
             if (_state != Profiling) { return; }
 
+            if (_keywords != null && _keywords.OptionalPositionals > 0) {
+                JitKeywords.ShiftKeywords(args, _positional - _keywords.OptionalPositionals, _positional);
+            }
             if (_keywords != null) {
                 // what the prologue binds the keywords to, if it binds them at all
                 object kw = args[_positional];
@@ -732,6 +735,22 @@ namespace IronRuby.Runtime.Jit {
             var values = new MSA.Expression[_typedCount];
             var defaulted = new List<MSA.ParameterExpression>();
             var fillDefaults = new List<MSA.Expression>();
+            if (_keywords != null && _keywords.OptionalPositionals > 0) {
+                // a keyword hash that landed in an optional positional is moved to where it belongs,
+                // as the generic body would move it (JitKeywords.ShiftKeywords) - which it then finds
+                // already done, should the guards below send the call there
+                var defaultArgument = Ast.Field(null, typeof(RubyOps).GetField("DefaultArgument"));
+                MSA.Expression chain = Ast.Empty();
+                for (int i = _positional - _keywords.OptionalPositionals; i < _positional; i++) {
+                    chain = Ast.IfThenElse(
+                        Ast.NotEqual(args[i], defaultArgument),
+                        Ast.IfThen(
+                            Ast.Call(typeof(RubyOps).GetMethod("IsKeywordArgumentsHash"), args[i]),
+                            Ast.Block(Ast.Assign(args[_positional], args[i]), Ast.Assign(args[i], defaultArgument))),
+                        chain);
+                }
+                fillDefaults.Add(Ast.IfThen(Ast.Equal(args[_positional], defaultArgument), chain));
+            }
             for (int i = 0; i < _positional; i++) {
                 if (_hasDefault != null && _hasDefault[i]) {
                     var v = Ast.Variable(typeof(object), "v" + i);
@@ -757,9 +776,11 @@ namespace IronRuby.Runtime.Jit {
             MSA.ParameterExpression[] keywordValues = null;
             if (_keywords != null) {
                 MSA.Expression kw = args[_positional];
-                // the separation check on the last positional: `m("a" => 1)' gave it the keywords
-                if (_positional > 0 && code.ParameterTypes[_positional - 1] == JT.Obj) {
-                    test = And(test, Ast.Not(Ast.Call(typeof(RubyOps).GetMethod("IsKeywordArgumentsHash"), args[_positional - 1])));
+                // the separation check on the last mandatory positional: `m("a" => 1)' gave it the
+                // keywords (an optional one cannot hold them any more, they were moved above)
+                int lastMandatory = _positional - _keywords.OptionalPositionals - 1;
+                if (lastMandatory >= 0 && code.ParameterTypes[lastMandatory] == JT.Obj) {
+                    test = And(test, Ast.Not(Ast.Call(typeof(RubyOps).GetMethod("IsKeywordArgumentsHash"), args[lastMandatory])));
                 }
                 keywordValues = new MSA.ParameterExpression[_keywords.Count];
                 for (int j = 0; j < keywordValues.Length; j++) {
@@ -839,7 +860,7 @@ namespace IronRuby.Runtime.Jit {
             if (keywordValues != null) {
                 body = Ast.Block(typeof(object), keywordValues, body);
             }
-            if (defaulted.Count > 0) {
+            if (fillDefaults.Count > 0) {
                 fillDefaults.Add(body);
                 body = Ast.Block(typeof(object), defaulted, fillDefaults);
             }
@@ -1167,7 +1188,18 @@ namespace IronRuby.Runtime.Jit {
                     hasDefault = null;
                     defaults = null;
                 }
+            } else if (keywords != null && keywords.OptionalPositionals > 0) {
+                // optional positionals before the keywords: the entry fills in their literal defaults
+                hasDefault = new bool[arity];
+                defaults = new object[arity];
+                for (int i = 0; i < keywords.OptionalPositionals; i++) {
+                    hasDefault[mandatoryCount + i] = true;
+                    defaults[mandatoryCount + i] = keywords.OptionalDefaults[i];
+                }
             }
+            // A method whose keywords follow optional positionals is only taken as a keyword method:
+            // the entry has to move a misplaced keyword hash first, which only that kind does.
+            if (ps.KeywordsAfterOptionals && keywords == null) { return false; }
             // A body the compiler can never accept, whatever types it is called with, is not
             // wrapped at all. Once wrapped, the trampoline is what the runtime caches and bakes
             // into call site rules, so a method declined later still pays one extra indirect
@@ -1178,10 +1210,12 @@ namespace IronRuby.Runtime.Jit {
             }
 
             // over the typed body's parameters: the positionals, then a keyword method's keyword locals
-            int typedCount = mandatoryCount + ((keywords != null) ? keywords.Count : ps.Optional.Length);
+            int positionalCount = mandatoryCount + ((keywords != null) ? keywords.OptionalPositionals : 0);
+            int typedCount = positionalCount + ((keywords != null) ? keywords.Count : ps.Optional.Length);
             for (int i = 0; i < typedCount; i++) {
                 string name = (i < mandatoryCount) ? ((LocalVariable)ps.Mandatory[i]).Name
-                    : (keywords != null) ? keywords.LocalNames[i - mandatoryCount]
+                    : (i < positionalCount) ? ((LocalVariable)ps.Optional[i - mandatoryCount].Left).Name
+                    : (keywords != null) ? keywords.LocalNames[i - positionalCount]
                     : ((LocalVariable)ps.Optional[i - mandatoryCount].Left).Name;
                 if (!otherUses.Contains(name)) {
                     if (storedOnly == null) { storedOnly = new bool[typedCount]; }

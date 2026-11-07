@@ -66,14 +66,36 @@ namespace IronRuby.Runtime.Jit {
 
         internal int Count { get { return LocalNames.Length; } }
 
+        // The optional positional parameters before the keyword hash (Parameters.KeywordsAfterOptionals):
+        // `def m(a, b = 1, k: 2)' has one. Each has a literal default (OptionalDefaults); a call that
+        // leaves one out may have put its keyword hash there, which the entry moves into place first.
+        internal int OptionalPositionals;
+        internal object[] OptionalDefaults;
+
         /// <summary>
         /// The keyword signature of a method whose parameters are mandatory positionals plus
         /// keywords lowered by LowerKeywords, or null if the method is anything else.
         /// </summary>
         internal static JitKeywords TryRecognize(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context) {
             var ps = ast.Parameters;
-            if (ps.Optional.Length != 1 || ps.Unsplat != null || ps.Block != null) { return null; }
-            var kwVar = ps.Optional[0].Left as LocalVariable;
+            if (ps.Unsplat != null || ps.Block != null) { return null; }
+            if (ps.Optional.Length != 1 && !(ps.KeywordsAfterOptionals && ps.Optional.Length > 1)) { return null; }
+            int optionalPositionals = ps.Optional.Length - 1;
+            object[] optionalDefaults = null;
+            if (optionalPositionals > 0) {
+                // only defaults the entry can fill in up front: nil, true, false, a Fixnum or a Float
+                optionalDefaults = new object[optionalPositionals];
+                for (int k = 0; k < optionalPositionals; k++) {
+                    var opt = ps.Optional[k];
+                    var literal = opt.Right as Literal;
+                    object v = (literal != null) ? literal.Value : null;
+                    if (!(opt.Left is LocalVariable) || literal == null || !(v == null || v is bool || v is int || v is double)) {
+                        return null;
+                    }
+                    optionalDefaults[k] = v;
+                }
+            }
+            var kwVar = ps.Optional[optionalPositionals].Left as LocalVariable;
             if (kwVar == null || kwVar.Name != "?kw?") { return null; }
 
             var body = ast.Body;
@@ -120,6 +142,8 @@ namespace IronRuby.Runtime.Jit {
             if (names.Length == 0 || names.Length > MaxKeywords) { return null; }
 
             var result = new JitKeywords();
+            result.OptionalPositionals = optionalPositionals;
+            result.OptionalDefaults = optionalDefaults;
             result.RequiredCount = match.RequiredCountOrPosition;
             result.MatchNames = new RubySymbol[names.Length];
             for (int j = 0; j < names.Length; j++) {
@@ -184,6 +208,25 @@ namespace IronRuby.Runtime.Jit {
             result.Required = required.ToArray();
             result.DefaultExprs = anyDefaultExpr ? defaultExprs.ToArray() : null;
             return result;
+        }
+
+        /// <summary>
+        /// What the generic body does first (Parameters.TransformOptionalsInitialization): a call that
+        /// passed no keyword hash where it belongs but left an optional positional out may have put it
+        /// in the last optional positional it did pass. <paramref name="args"/> holds the delegate's
+        /// positional parameters and then the keyword hash, at <paramref name="keywordIndex"/>.
+        /// </summary>
+        internal static void ShiftKeywords(object[]/*!*/ args, int firstOptional, int keywordIndex) {
+            if (args[keywordIndex] != RubyOps.DefaultArgument) { return; }
+            for (int i = keywordIndex - 1; i >= firstOptional; i--) {
+                if (args[i] != RubyOps.DefaultArgument) {
+                    if (RubyOps.IsKeywordArgumentsHash(args[i])) {
+                        args[keywordIndex] = args[i];
+                        args[i] = RubyOps.DefaultArgument;
+                    }
+                    return;
+                }
+            }
         }
 
         private static bool IsVar(RExpr node, LocalVariable/*!*/ kwVar) {

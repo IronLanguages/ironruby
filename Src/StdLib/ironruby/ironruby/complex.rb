@@ -2,9 +2,9 @@
 # on Numeric, Float and String, and Kernel#Complex. Loaded by ruby4.rb as part of the
 # core prelude, after rational.rb.
 #
-# A Complex is a real part in @__real__ and an imaginary part in @__image__ (hidden from
-# #instance_variables, as MRI keeps them in a C struct), frozen from birth. complex.c
-# undefines Complex.new and Complex.allocate; instances are made by __raw__ (nucomp_s_new_internal).
+# A Complex is a real part in self.real and an imaginary part in self.imaginary (MRI's names, which
+# its marshal format carries), frozen from birth. complex.c undefines Complex.new and
+# Complex.allocate; instances are made by __raw__ (nucomp_s_new_internal).
 #
 # complex.c does its arithmetic through f_add, f_mul and friends rather than calling +
 # and * directly: they skip an exact 0 or 1 operand, which is what keeps an exact zero
@@ -13,23 +13,13 @@
 
 class Complex < Numeric
   class << self
-    alias_method :__ir_allocate__, :allocate
-    private :__ir_allocate__
     undef_method :allocate
     undef_method :new
   end
 
-  # nucomp_s_new_internal: no canonicalisation, no checks; OBJ_FREEZE.
-  def self.__raw__(real, imag)
-    __ir_allocate__.__send__(:__ir_set_parts__, real, imag)
-  end
-
-  def __ir_set_parts__(real, imag)
-    @__real__ = real
-    @__image__ = imag
-    freeze
-  end
-  private :__ir_set_parts__
+  # A Complex's parts are fields of the C# RubyComplex (Src/Libraries/Builtins/RubyComplex.cs),
+  # read by #real and #imaginary; __raw__ (nucomp_s_new_internal: no canonicalisation, no
+  # checks, frozen) and the __ir_set_parts__ #marshal_load uses are C# too.
 
   # --- complex.c's arithmetic helpers ----------------------------------------
 
@@ -315,46 +305,43 @@ class Complex < Numeric
   # `Complex(1) < 2` is a NoMethodError, not a comparison of magnitudes. The undefinition
   # is an entry in Complex's own table, so it also hides what ruby4.rb adds to Numeric
   # later; a name nothing defines yet is given a definition here to undefine.
-  ((::Comparable.instance_methods(false) + ::Comparable.private_instance_methods(false)) +
+  # Comparable's #== is the exception: Complex has its own, which is C# (RubyComplex) and so
+  # already in the table.
+  ((::Comparable.instance_methods(false) + ::Comparable.private_instance_methods(false) - [:==]) +
    %i[% div divmod floor ceil modulo remainder round step truncate i positive? negative?]).each do |m|
     define_method(m) { |*| } unless method_defined?(m) || private_method_defined?(m)
     undef_method(m)
   end
 
   # --- instance methods --------------------------------------------------------
+  #
+  # +, -, *, /, quo, ==, #hash and #abs are C# (RubyComplex) for Integer and Float parts and
+  # operands; the __ir_*_slow__ methods below are the rest of each, which C# calls.
 
-  def real
-    @__real__
-  end
-
-  def imaginary
-    @__image__
-  end
-  alias imag imaginary
 
   # rb_complex_uminus
   def -@
-    ::Complex.__new2__(-@__real__, -@__image__)
+    ::Complex.__new2__(-self.real, -self.imaginary)
   end
 
   # rb_complex_plus
-  def +(other)
+  def __ir_add_slow__(other)
     if ::Complex === other
-      return ::Complex.__new2__(::Complex.__f_add__(@__real__, other.real), ::Complex.__f_add__(@__image__, other.imaginary))
+      return ::Complex.__new2__(::Complex.__f_add__(self.real, other.real), ::Complex.__f_add__(self.imaginary, other.imaginary))
     end
     if ::Numeric === other && ::Complex.__real_p__(other)
-      return ::Complex.__new2__(::Complex.__f_add__(@__real__, other), @__image__)
+      return ::Complex.__new2__(::Complex.__f_add__(self.real, other), self.imaginary)
     end
     __ir_num_coerce_bin__(other, :+)
   end
 
   # rb_complex_minus
-  def -(other)
+  def __ir_sub_slow__(other)
     if ::Complex === other
-      return ::Complex.__new2__(::Complex.__f_sub__(@__real__, other.real), ::Complex.__f_sub__(@__image__, other.imaginary))
+      return ::Complex.__new2__(::Complex.__f_sub__(self.real, other.real), ::Complex.__f_sub__(self.imaginary, other.imaginary))
     end
     if ::Numeric === other && ::Complex.__real_p__(other)
-      return ::Complex.__new2__(::Complex.__f_sub__(@__real__, other), @__image__)
+      return ::Complex.__new2__(::Complex.__f_sub__(self.real, other), self.imaginary)
     end
     __ir_num_coerce_bin__(other, :-)
   end
@@ -385,13 +372,13 @@ class Complex < Numeric
   end
 
   # rb_complex_mul
-  def *(other)
+  def __ir_mul_slow__(other)
     if ::Complex === other
-      real, imag = ::Complex.__comp_mul__(@__real__, @__image__, other.real, other.imaginary)
+      real, imag = ::Complex.__comp_mul__(self.real, self.imaginary, other.real, other.imaginary)
       return ::Complex.__new2__(real, imag)
     end
     if ::Numeric === other && ::Complex.__real_p__(other)
-      return ::Complex.__new2__(::Complex.__f_mul__(@__real__, other), ::Complex.__f_mul__(@__image__, other))
+      return ::Complex.__new2__(::Complex.__f_mul__(self.real, other), ::Complex.__f_mul__(self.imaginary, other))
     end
     __ir_num_coerce_bin__(other, :*)
   end
@@ -400,8 +387,8 @@ class Complex < Numeric
   def __ir_divide__(other, func, id)
     c = ::Complex
     if ::Complex === other
-      ar = @__real__
-      ai = @__image__
+      ar = self.real
+      ai = self.imaginary
       br = other.real
       bi = other.imaginary
       flo = ::Float === ar || ::Float === ai || ::Float === br || ::Float === bi
@@ -423,8 +410,8 @@ class Complex < Numeric
       return c.__new2__(x, y)
     end
     if ::Numeric === other && c.__real_p__(other)
-      x = ::Rational.__canonicalize_value__(c.__send__(func, @__real__, other))
-      y = ::Rational.__canonicalize_value__(c.__send__(func, @__image__, other))
+      x = ::Rational.__canonicalize_value__(c.__send__(func, self.real, other))
+      y = ::Rational.__canonicalize_value__(c.__send__(func, self.imaginary, other))
       return c.__new2__(x, y)
     end
     __ir_num_coerce_bin__(other, id)
@@ -432,10 +419,9 @@ class Complex < Numeric
   private :__ir_divide__
 
   # rb_complex_div
-  def /(other)
+  def __ir_div_slow__(other)
     __ir_divide__(other, :__f_quo__, :quo)
   end
-  alias quo /
 
   # nucomp_fdiv
   def fdiv(other)
@@ -458,17 +444,17 @@ class Complex < Numeric
     return nil unless ::Integer === other
     c = ::Complex
     x = nil
-    if c.__zero__(@__image__)
-      x = @__real__
+    if c.__zero__(self.imaginary)
+      x = self.real
       dir = 0
-    elsif c.__zero__(@__real__)
-      x = @__image__
+    elsif c.__zero__(self.real)
+      x = self.imaginary
       dir = 2
-    elsif c.__eqeq__(@__real__, @__image__)
-      x = @__real__
+    elsif c.__eqeq__(self.real, self.imaginary)
+      x = self.real
       dir = 1
-    elsif c.__eqeq__(@__real__, c.__f_negate__(@__image__))
-      x = @__image__
+    elsif c.__eqeq__(self.real, c.__f_negate__(self.imaginary))
+      x = self.imaginary
       dir = 3
     else
       dir = 0
@@ -508,7 +494,7 @@ class Complex < Numeric
       other = other.real
     end
     if ::Integer === other && other == 1
-      return c.__raw__(@__real__, @__image__)
+      return c.__raw__(self.real, self.imaginary)
     end
 
     result = __ir_pow_special_angle__(other)
@@ -567,13 +553,13 @@ class Complex < Numeric
   end
 
   # nucomp_eqeq_p
-  def ==(other)
+  def __ir_eqeq_slow__(other)
     c = ::Complex
     if ::Complex === other
-      return c.__eqeq__(@__real__, other.real) && c.__eqeq__(@__image__, other.imaginary)
+      return c.__eqeq__(self.real, other.real) && c.__eqeq__(self.imaginary, other.imaginary)
     end
     if ::Numeric === other && c.__real_p__(other)
-      return c.__eqeq__(@__real__, other) && c.__zero__(@__image__)
+      return c.__eqeq__(self.real, other) && c.__zero__(self.imaginary)
     end
     c.__eqeq__(other, self)
   end
@@ -582,13 +568,13 @@ class Complex < Numeric
   def <=>(other)
     c = ::Complex
     return __ir_num_coerce_cmp__(other, :<=>) unless ::Numeric === other
-    return nil unless c.__zero__(@__image__)
+    return nil unless c.__zero__(self.imaginary)
     if ::Complex === other
-      return @__real__ <=> other.real if c.__zero__(other.imaginary)
+      return self.real <=> other.real if c.__zero__(other.imaginary)
     elsif c.__real_p__(other)
-      return @__real__ <=> other
+      return self.real <=> other
     else
-      return @__real__.__send__(:__ir_num_coerce_cmp__, other, :<=>)
+      return self.real.__send__(:__ir_num_coerce_cmp__, other, :<=>)
     end
     nil
   end
@@ -603,37 +589,36 @@ class Complex < Numeric
   end
 
   # rb_complex_abs
-  def abs
+  def __ir_abs_slow__
     c = ::Complex
-    if c.__zero__(@__real__)
-      a = @__image__.abs
-      a = a.to_f if ::Float === @__real__ && !(::Float === @__image__)
+    if c.__zero__(self.real)
+      a = self.imaginary.abs
+      a = a.to_f if ::Float === self.real && !(::Float === self.imaginary)
       return a
     end
-    if c.__zero__(@__image__)
-      a = @__real__.abs
-      a = a.to_f if !(::Float === @__real__) && ::Float === @__image__
+    if c.__zero__(self.imaginary)
+      a = self.real.abs
+      a = a.to_f if !(::Float === self.real) && ::Float === self.imaginary
       return a
     end
-    ::Math.hypot(@__real__, @__image__)
+    ::Math.hypot(self.real, self.imaginary)
   end
-  alias magnitude abs
 
   # nucomp_abs2
   def abs2
     c = ::Complex
-    c.__f_add__(c.__f_mul__(@__real__, @__real__), c.__f_mul__(@__image__, @__image__))
+    c.__f_add__(c.__f_mul__(self.real, self.real), c.__f_mul__(self.imaginary, self.imaginary))
   end
 
   # rb_complex_arg
   def arg
-    ::Math.atan2(@__image__, @__real__)
+    ::Math.atan2(self.imaginary, self.real)
   end
   alias angle arg
   alias phase arg
 
   def rectangular
-    [@__real__, @__image__]
+    [self.real, self.imaginary]
   end
   alias rect rectangular
 
@@ -643,7 +628,7 @@ class Complex < Numeric
 
   # rb_complex_conjugate
   def conjugate
-    ::Complex.__new2__(@__real__, -@__image__)
+    ::Complex.__new2__(self.real, -self.imaginary)
   end
   alias conj conjugate
 
@@ -653,34 +638,34 @@ class Complex < Numeric
 
   # nucomp_denominator / nucomp_numerator
   def denominator
-    ::Complex.__denominator__(@__real__).lcm(::Complex.__denominator__(@__image__))
+    ::Complex.__denominator__(self.real).lcm(::Complex.__denominator__(self.imaginary))
   end
 
   def numerator
     c = ::Complex
     cd = denominator
-    c.__new2__(c.__f_mul__(c.__numerator__(@__real__), c.__f_div__(cd, c.__denominator__(@__real__))),
-               c.__f_mul__(c.__numerator__(@__image__), c.__f_div__(cd, c.__denominator__(@__image__))))
+    c.__new2__(c.__f_mul__(c.__numerator__(self.real), c.__f_div__(cd, c.__denominator__(self.real))),
+               c.__f_mul__(c.__numerator__(self.imaginary), c.__f_div__(cd, c.__denominator__(self.imaginary))))
   end
 
   # nucomp_hash
-  def hash
-    [@__real__, @__image__, ::Complex].hash
+  def __ir_hash_slow__
+    [self.real, self.imaginary, ::Complex].hash
   end
 
   # nucomp_eql_p
   def eql?(other)
     return false unless ::Complex === other
-    @__real__.class == other.real.class && @__image__.class == other.imaginary.class && self == other
+    self.real.class == other.real.class && self.imaginary.class == other.imaginary.class && self == other
   end
 
   # f_format: the imaginary part's sign, its magnitude, then "i" - with a "*" in front
   # when the magnitude does not end in a digit, as in "(3/4)*i" or "Infinity*i".
   def __ir_format__(s, inspecting)
-    impos = !::Complex.__signbit__(@__image__)
-    s << (inspecting ? @__real__.inspect : ::Kernel.String(@__real__))
+    impos = !::Complex.__signbit__(self.imaginary)
+    s << (inspecting ? self.real.inspect : ::Kernel.String(self.real))
     s << (impos ? "+" : "-")
-    mag = @__image__.abs
+    mag = self.imaginary.abs
     s << (inspecting ? mag.inspect : ::Kernel.String(mag))
     s << "*" unless s.end_with?("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
     s << "i"
@@ -697,49 +682,49 @@ class Complex < Numeric
 
   # rb_complex_finite_p / rb_complex_infinite_p
   def finite?
-    ::Complex.__finite__(@__real__) && ::Complex.__finite__(@__image__)
+    ::Complex.__finite__(self.real) && ::Complex.__finite__(self.imaginary)
   end
 
   def infinite?
-    return nil if !::Complex.__infinite__(@__real__) && !::Complex.__infinite__(@__image__)
+    return nil if !::Complex.__infinite__(self.real) && !::Complex.__infinite__(self.imaginary)
     1
   end
 
   # nucomp_to_i / nucomp_to_f / nucomp_to_r / nucomp_rationalize
   def to_i
-    unless ::Complex.__exact_zero__(@__image__)
+    unless ::Complex.__exact_zero__(self.imaginary)
       ::Kernel.raise(::RangeError, "can't convert #{self} into Integer")
     end
-    @__real__.to_i
+    self.real.to_i
   end
 
   def to_f
-    unless ::Complex.__exact_zero__(@__image__)
+    unless ::Complex.__exact_zero__(self.imaginary)
       ::Kernel.raise(::RangeError, "can't convert #{self} into Float")
     end
-    @__real__.to_f
+    self.real.to_f
   end
 
   def to_r
-    if ::Float === @__image__ && @__image__ == 0.0
+    if ::Float === self.imaginary && self.imaginary == 0.0
       # a Float zero imaginary part converts as well as an exact one
-    elsif !::Complex.__exact_zero__(@__image__)
-      imag = ::Rational.__check_to_rational__(@__image__) rescue nil
+    elsif !::Complex.__exact_zero__(self.imaginary)
+      imag = ::Rational.__check_to_rational__(self.imaginary) rescue nil
       if imag.nil? || !(::Rational === imag) || !::Complex.__exact_zero__(imag)
         ::Kernel.raise(::RangeError, "can't convert #{self} into Rational")
       end
     end
-    @__real__.to_r
+    self.real.to_r
   end
 
   def rationalize(*args)
     if args.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
     end
-    unless ::Complex.__exact_zero__(@__image__)
+    unless ::Complex.__exact_zero__(self.imaginary)
       ::Kernel.raise(::RangeError, "can't convert #{self} into Rational")
     end
-    @__real__.rationalize(*args)
+    self.real.rationalize(*args)
   end
 
   def to_c
@@ -748,7 +733,7 @@ class Complex < Numeric
 
   # nucomp_marshal_dump / nucomp_marshal_load (by way of Complex::compatible in MRI).
   def marshal_dump
-    [@__real__, @__image__]
+    [self.real, self.imaginary]
   end
   private :marshal_dump
 
@@ -757,10 +742,7 @@ class Complex < Numeric
     if a.size != 2
       ::Kernel.raise(::ArgumentError, "marshaled complex must have an array whose length is 2 but #{a.size}")
     end
-    @__real__ = a[0]
-    @__image__ = a[1]
-    freeze
-    self
+    __ir_set_parts__(a[0], a[1])
   end
   private :marshal_load
 
@@ -1050,7 +1032,8 @@ end
 module Kernel
   # nucomp_f_complex. Complex(1) is (1+0i) while Complex(1, nil) is a TypeError, so the
   # arity is read off *args rather than from a default.
-  def Complex(*args, exception: true)
+  # Kernel#Complex is C# (KernelOps.ToComplex) for Integers and Floats; the rest comes here.
+  def __ir_Complex_slow__(*args, exception: true)
     if args.size < 1 || args.size > 2
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)")
     end
@@ -1058,7 +1041,7 @@ module Kernel
     return args[0] if args.size == 1 && ::Complex.equal?(::Kernel.instance_method(:class).bind(args[0]).call)
     ::Complex.__convert__(args[0], args[1], args.size == 2, raise_)
   end
-  module_function :Complex
+  module_function :__ir_Complex_slow__
 end
 
 class Numeric
@@ -1108,4 +1091,9 @@ class String
   def to_c
     ::Complex.__parse_string__(self, false)
   end
+end
+
+class Complex
+  private :__ir_add_slow__, :__ir_sub_slow__, :__ir_mul_slow__, :__ir_div_slow__,
+          :__ir_eqeq_slow__, :__ir_hash_slow__, :__ir_abs_slow__
 end

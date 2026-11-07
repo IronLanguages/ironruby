@@ -947,6 +947,15 @@ namespace IronRuby.Tests {
                 ErrorHighlight_Report1,
                 StringIO_LineReaders1,
                 Kernel_ConversionsInjectZip1,
+                Kernel_ConversionsRoundingStep1,
+                Method_OptionalAndKeywordParameters1,
+                Method_OptionalAndKeywordParameters2,
+                Range_MinMaxInclude1,
+                Integer_StepMatchString1,
+                Integer_Power1,
+                Rational_CSharp1,
+                Complex_CSharp1,
+                Rational_ComplexConventions1,
                 Method_LightFrame1,
                 Method_LightFrame2,
                 BigDecimal_Ruby4_1,
@@ -1112,6 +1121,7 @@ namespace IronRuby.Tests {
                 Pack_BerTruncated1,
                 Integer_Int64Shifts1,
                 Integer_OutOfFloatRange1,
+                BasicObject_EqualIdentity1,
             };
         }
     }

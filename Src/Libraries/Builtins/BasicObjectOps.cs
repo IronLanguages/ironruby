@@ -177,16 +177,27 @@ namespace IronRuby.Builtins {
 
         #region ==, !=, !, equal?
 
-        // equal? is an alias of == in BasicObject, so both names sit on both overloads (an
-        // UnboundMethod for one is == to one for the other).
+        // BasicObject#== and #equal? are both rb_obj_equal (identity) in CRuby, but they are two
+        // methods: a class that overrides == (Set, a String subclass) must not change equal?. For
+        // a Ruby-defined class BaseEquals ends in RubyObject.Equals - which calls the Ruby == - or
+        // in a CLR base's Equals (MutableString compares contents), so equal? must not use it:
+        // a == that starts with `equal?(other)` would recurse until the stack overflows.
         [RubyMethod("==")]
-        [RubyMethod("equal?")]
         public static bool ValueEquals([NotNull]IRubyObject/*!*/ self, object other) {
             return self.BaseEquals(other);
         }
 
-        [RubyMethod("==")]
         [RubyMethod("equal?")]
+        public static bool IsEqual(object self, object other) {
+            // Integer, Float, true/false etc. are CLR value types boxed per use: their identity is
+            // their value (CRuby's immediates). Everything else is identical only to itself.
+            if (self is ValueType) {
+                return Object.Equals(self, other);
+            }
+            return ReferenceEquals(self, other);
+        }
+
+        [RubyMethod("==")]
         public static bool ValueEquals(object self, object other) {
             // a String, Regexp or Time compares its contents in Equals; for them this is identity
             if (self is MutableString || self is RubyRegex || self is RubyTime) {

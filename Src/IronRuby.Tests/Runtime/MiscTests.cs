@@ -4011,6 +4011,543 @@ symlink existing: Errno::EEXIST
         }
 
         /// <summary>
+        /// Keyword calls that leave optional positionals out go straight into the JIT's specialized body
+        /// (JitKeywordCall): the call site fills in the literal defaults of the positionals it does not
+        /// pass. The loop runs long enough for the methods to be specialized. The expected output is CRuby's.
+        /// </summary>
+        public void Method_OptionalAndKeywordParameters2() {
+            TestOutput(@"
+require 'ruby4'
+def d1(a, b = 2, k: 3) = [a, b, k]
+def d4(b = 1, k: 2) = [b, k]
+def d5(b = 1, c = 2.5, k: 2, j: nil) = [b, c, k, j]
+def di(a, b = 2, k: 3) = a + b + k
+class DC; def m(a, b = :d, k: 1) = [a, b, k]; end
+o = DC.new
+r = nil
+3000.times do |i|
+  r = [d1(1, k: 9), d1(1, 5, k: 9), d4(k: 6), d4(5, k: 6), d5(k: 1), d5(3, k: 1, j: 2), d5(3, 4, j: 1), di(i, k: 1), di(i, 1, k: 1), o.m(1, k: 2), o.m(1, 2, k: 3)]
+end
+p r
+", @"
+[[1, 2, 9], [1, 5, 9], [1, 6], [5, 6], [1, 2.5, 1, nil], [3, 2.5, 1, 2], [3, 4, 2, 1], 3002, 3001, [1, :d, 2], [1, 2, 3]]
+");
+        }
+
+        /// <summary>
+        /// Complex as a C# type (RubyComplex) with +, -, *, /, ==, #hash and #abs in C# for Integer and Float
+        /// parts, Kernel#Complex and #to_c; Rational parts, coercion and the rest left to complex.rb; Math.hypot
+        /// rounded as libm's is. The expected output is CRuby's.
+        /// </summary>
+        public void Complex_CSharp1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+a = Complex(1, 2); b = Complex(3.5, -1); r = Complex(Rational(1, 2), 3); z = Complex(0, 0)
+t('basic') { [a, a.real, a.imaginary, a.imag, a.frozen?, a.instance_variables, a.class.superclass, Complex(1), Complex(1.5), Complex(""1+2i"")] }
+t('add') { [a + b, a + 1, a + 2.5, a + r, a - b, a - 1, a + Rational(1, 3), -a, a + Complex(0, 0)] }
+t('mul') { [a * b, a * 2, a * 0.5, a * r, a * Complex(0, 1), Complex(Float::INFINITY, 0) * 0, a * z] }
+t('div') { [a / b, a / 2, a / 0.5, a.quo(a), a / r, a.fdiv(2), Complex(1, 1) / Complex(1, -1)] }
+t('div0') { a / 0 }
+t('div0f') { a / 0.0 }
+t('pow') { [a ** 2, a ** -1, a ** 0.5, a ** a, a ** Rational(1, 2), Complex(0, 1) ** 2] }
+t('eq') { [a == Complex(1, 2), a == b, Complex(3) == 3, Complex(3, 0.0) == 3, a == ""x"", a.eql?(Complex(1, 2)), a.eql?(Complex(1.0, 2)), Complex(1, 0) <=> 2, a <=> 1] }
+t('hash') { [a.hash == Complex(1, 2).hash, {a => 1}[Complex(1, 2)], a.hash == Complex(1.0, 2).hash] }
+t('abs') { [a.abs, a.abs2, a.arg, a.polar, a.rectangular, a.conjugate, b.abs, Complex(3, 4).abs, Complex(-0.0, 0).arg] }
+t('fmt') { [a.to_s, a.inspect, b.to_s, r.inspect, Complex(1, Float::NAN).to_s, Complex(1, -0.0).inspect] }
+t('marshal') { [Marshal.load(Marshal.dump(a)), Marshal.load(Marshal.dump(r))] }
+o = Object.new; def o.coerce(x) = [x, Complex(1, 1)]
+t('coerce') { [a + o, a * o] }
+t('bad') { a + ""x"" }
+t('int ops') { [1 + a, 2 * a, 3 - a, 4 / a, 1.5 * a, Rational(1, 2) + a, 2 ** a] }
+t('misc') { [a.real?, 1.real?, a.to_c, 5.to_c, 2.5.to_c, Rational(1, 2).to_c, a.finite?, Complex(Float::INFINITY, 0).infinite?, Complex.polar(1, Math::PI / 2).real.round(10), Complex.rectangular(1, 2)] }
+t('Complex()') { [Complex(1, 2), Complex(""3""), Complex(nil, exception: false), Complex(""x"", exception: false), Complex(1, 2.0)] }
+t('cerr') { Complex(nil) }
+t('hypot') { [Math.hypot(3.5, 1), Math.hypot(3, 4), Math.hypot(1e300, 1e300), Math.hypot(1e-300, 1e-300), Math.hypot(-0.0, 0), Math.hypot(Float::INFINITY, Float::NAN), Math.hypot(5e-324, 5e-324)] }
+t('undef') { [Complex.instance_method(:==).owner, (Complex(1) < 2 rescue $!.class)] }
+t('int32 edge') { m = -2147483648; x = 2147483647; [Complex(m, m) * Complex(m, m), Complex(x, x) * Complex(x, -x), Complex(m, x) * Complex(x, m), Complex(m, 0) * m + Complex(m, 0) * m, Complex(x, x) + Complex(x, x), Complex(m, m) - Complex(x, x)] }
+", @"
+basic: [(1+2i), 1, 2, 2, true, [], Numeric, (1+0i), (1.5+0i), (1+2i)]
+add: [(4.5+1i), (2+2i), (3.5+2i), ((3/2)+5i), (-2.5+3i), (0+2i), ((4/3)+2i), (-1-2i), (1+2i)]
+mul: [(5.5+6.0i), (2+4i), (0.5+1.0i), ((-11/2)+(4/1)*i), (-2+1i), (NaN+0i), (0+0i)]
+div: [(0.11320754716981132+0.6037735849056602i), ((1/2)+1i), (2.0+4.0i), (1+0i), ((26/37)-(8/37)*i), (0.5+1.0i), (0+1i)]
+div0: [ZeroDivisionError, ""divided by 0""]
+div0f: (Infinity+Infinity*i)
+pow: [(-3+4i), ((1/5)-(2/5)*i), (1.272019649514069+0.7861513777574233i), (-0.22251715680177267+0.10070913113607541i), (1.272019649514069+0.7861513777574233i), (-1+0i)]
+eq: [true, false, true, true, false, true, false, -1, nil]
+hash: [true, 1, false]
+abs: [2.23606797749979, 5, 1.1071487177940904, [2.23606797749979, 1.1071487177940904], [1, 2], (1-2i), 3.640054944640259, 5.0, 3.141592653589793]
+fmt: [""1+2i"", ""(1+2i)"", ""3.5-1i"", ""((1/2)+3i)"", ""1+NaN*i"", ""(1-0.0i)""]
+marshal: [(1+2i), ((1/2)+3i)]
+coerce: [(2+3i), (-1+3i)]
+bad: [TypeError, ""String can't be coerced into Complex""]
+int ops: [(2+2i), (2+4i), (2-2i), ((4/5)-(8/5)*i), (1.5+3.0i), ((3/2)+2i), (0.36691394948660344+1.9660554808224875i)]
+misc: [false, true, (1+2i), (5+0i), (2.5+0i), ((1/2)+0i), true, 1, 0.0, (1+2i)]
+Complex(): [(1+2i), (3+0i), nil, nil, (1+2.0i)]
+cerr: [TypeError, ""can't convert nil into Complex""]
+hypot: [3.640054944640259, 5.0, 1.4142135623730952e+300, 1.414213562373095e-300, 0.0, Infinity, 5.0e-324]
+undef: [Complex, NoMethodError]
+int32 edge: [(0+9223372036854775808i), (9223372028264841218+0i), (0+9223372032559808513i), (9223372036854775808+0i), (4294967294+4294967294i), (-4294967295-4294967295i)]
+");
+        }
+
+        /// <summary>
+        /// Kernel#Rational and #Complex in C# follow the library conventions: exception: is a keyword
+        /// ([Keywords]), so a bad or unknown one and the arity are worded as MRI words them, and Kernel.Rational
+        /// is a frame of its own. A Rational/Complex keeps its parts out of #instance_variables, #dup and #clone
+        /// are Numeric's, and the conversion errors say "into"/"to" as CRuby 4.0 does. Also Range#first/#max with
+        /// two counts, Float-range #first(0), Integer#step's keywords and Integer()'s nil base. The expected
+        /// output is CRuby's.
+        /// </summary>
+        public void Rational_ComplexConventions1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+r = Rational(3, 4); c = Complex(1, 2)
+t('R kw') { [Rational(1, 2, exception: false), Rational(nil, exception: false), Rational('1/3', exception: false), Rational(1, **{})] }
+t('R bad kw') { Rational(1, exception: 1) }
+t('R unknown kw') { Rational(1, foo: 1) }
+t('R arity') { [(Rational() rescue $!.message), (Rational(1, 2, 3) rescue $!.message), method(:Rational).arity] }
+t('R nil den') { Rational(1, nil) }
+t('R hash den') { Rational(1, {}) }
+t('R to_r') { o = Object.new; def o.to_r; 1; end; Rational(o) }
+t('C kw') { [Complex(1, 2, exception: false), Complex(nil, exception: false), Complex('1+2i', exception: false)] }
+t('C unknown kw') { Complex(1, foo: 1) }
+t('C arity') { [(Complex() rescue $!.message), (Complex(1, 2, 3) rescue $!.message), method(:Complex).arity] }
+t('C to_c') { o = Object.new; def o.to_c; 1; end; Complex(o) }
+t('C self') { Complex(c).equal?(c) }
+t('state') { [r.instance_variables, c.instance_variables, r.frozen?, c.frozen?] }
+t('copies') { [r.dup.equal?(r), c.clone.equal?(c), r.method(:dup).owner, c.method(:clone).owner] }
+t('clone freeze') { r.clone(freeze: 1) }
+t('clone unfreeze') { c.clone(freeze: false) }
+t('marshal') { [Marshal.load(Marshal.dump(r)), Marshal.load(Marshal.dump(c))] }
+t('backtrace') { [(Kernel.Rational(nil) rescue $!.backtrace[0][/'.*'/]), (Complex(nil) rescue $!.backtrace[0][/'.*'/])] }
+t('Integer nil base') { Integer('10', nil) }
+t('range arity') { [((1..5).first(1, 2) rescue $!.message), ((1..5).max(1, 2) rescue $!.message)] }
+t('float first 0') { (1.0..2.0).first(0) }
+t('step kw') { [1.step(by: 2, to: 5).to_a, 1.step(5, by: 2).to_a] }
+", @"
+R kw: [(1/2), nil, (1/3), (1/1)]
+R bad kw: [ArgumentError, ""expected true or false as exception: 1""]
+R unknown kw: [ArgumentError, ""unknown keyword: :foo""]
+R arity: [""wrong number of arguments (given 0, expected 1..2)"", ""wrong number of arguments (given 3, expected 1..2)"", -1]
+R nil den: [TypeError, ""can't convert nil into Rational""]
+R hash den: [TypeError, ""not an integer""]
+R to_r: [TypeError, ""can't convert Object to Rational (Object#to_r gives Integer)""]
+C kw: [(1+2i), nil, (1+2i)]
+C unknown kw: [ArgumentError, ""unknown keyword: :foo""]
+C arity: [""wrong number of arguments (given 0, expected 1..2)"", ""wrong number of arguments (given 3, expected 1..2)"", -1]
+C to_c: [TypeError, ""can't convert Object to Complex (Object#to_c gives Integer)""]
+C self: true
+state: [[], [], true, true]
+copies: [true, true, Numeric, Numeric]
+clone freeze: [ArgumentError, ""unexpected value for freeze: Integer""]
+clone unfreeze: [ArgumentError, ""can't unfreeze Complex""]
+marshal: [(3/4), (1+2i)]
+backtrace: [""'Kernel.Rational'"", ""'Kernel#Complex'""]
+Integer nil base: [TypeError, ""no implicit conversion from nil to integer""]
+range arity: [""wrong number of arguments (given 2, expected 1)"", ""wrong number of arguments (given 2, expected 1)""]
+float first 0: [TypeError, ""can't iterate from Float""]
+step kw: [[1, 3, 5], [1, 3, 5]]
+");
+        }
+
+        /// <summary>
+        /// Rational as a C# type (RubyRational) with its arithmetic, comparison, #to_f and #hash in C#, and
+        /// Kernel#Rational: Integer, Float, Rational and big operands, coercion, division by zero, NaN,
+        /// Marshal, hash keys, the conversions and errors left to rational.rb. The expected output is CRuby's.
+        /// </summary>
+        public void Rational_CSharp1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+a = Rational(1, 3); b = Rational(-2, 5); big = Rational(2**70, 3); c = Rational(5)
+t('add') { [a + b, a + 1, a + 2**70, a + 0.5, a + big, big + big, a - b, a - 3, b - a, c - c] }
+t('mul') { [a * b, a * 3, a * 0, a * 0.5, big * big, b * -1, a * Rational(3, 1)] }
+t('div') { [a / b, a / 3, a / 0.5, a.quo(b), Rational(1) / a, big / a, a / -2, a / Rational(-1, 2)] }
+t('div0') { a / 0 }
+t('div0r') { a / Rational(0) }
+t('div0f') { a / 0.0 }
+t('cmp') { [a <=> b, a <=> 1, a <=> a, a <=> 0.25, a <=> Float::NAN, a <=> ""x"", big <=> a, c <=> 5] }
+t('eq') { [a == Rational(2, 6), a == b, c == 5, Rational(0) == 0, a == 1.0/3, a == ""x"", Rational(0) == 0.0, big == big] }
+t('to_f') { [a.to_f, b.to_f, big.to_f, Rational(10**400, 3*10**399).to_f, Rational(1, 10**400).to_f] }
+t('hash') { [a.hash == Rational(2, 6).hash, {a => 1}[Rational(1, 3)], {big => 2}[Rational(2**70, 3)], a.eql?(Rational(1, 3)), a.hash == b.hash] }
+o = Object.new; def o.coerce(x) = [x, Rational(1, 2)]
+t('coerce') { [a + o, a * o, a <=> o] }
+t('bad') { a + ""x"" }
+t('int ops') { [1 + a, 2 * a, 3 - a, 4 / a, 1.5 + a, 2**70 + a, 1 <=> a, 1 == Rational(1)] }
+t('misc') { [a.numerator, a.denominator, -a, a.abs, a ** 2, a.round, a.floor, a.ceil, a.truncate, a.to_s, a.inspect, a.to_i, a.zero?, a.positive?] }
+t('marshal') { [Marshal.load(Marshal.dump(a)), Marshal.load(Marshal.dump(big)), a.instance_variables, a.frozen?] }
+t('sum') { (1..10).sum { |i| Rational(1, i) } }
+t('ints') { [Rational(1, 3), Rational(2, 4), Rational(-2, -4), Rational(2, -4), Rational(0, 5), Rational(5), Rational(-5), Rational(2**70, 2**68), Rational(6, 2**70)] }
+t('zero') { Rational(1, 0) }
+t('rat') { [Rational(Rational(1, 2)), Rational(Rational(1, 2), 3), Rational(Rational(1, 2), 1), Rational(1, Rational(1, 2))] }
+t('str') { [Rational(""1/3""), Rational(""0.75""), Rational(""x"", exception: false), Rational(1.5), Rational(nil, exception: false)] }
+t('nil') { Rational(nil) }
+t('nil2') { Rational(1, nil) }
+t('arity0') { Rational() }
+t('arity3') { Rational(1, 2, 3) }
+t('arity4') { Rational(1, 2, 3, 4) }
+t('kw') { [Rational(1, 2, exception: false), Rational(""1/2"", exception: true)] }
+t('badkw') { Rational(1, exception: 1) }
+t('Kernel.') { Kernel.Rational(3, 9) }
+t('arity') { method(:Rational).arity }
+t('int32 edge') { [Rational(2**31 - 1, 2**31 - 2) + Rational(-2**31, 2**31 - 1), Rational(-2**31, 1) * Rational(-2**31, 1), Rational(2**31, 3) / Rational(-2**31, 7), Rational(-2**31, 2**31 - 1) <=> Rational(2**31 - 1, 2**31 - 2), Rational(2**31 - 1) + (2**31 - 1), Rational(2**31, 1) + 1, Rational(-2**31, 3) - Rational(2**31 - 1, 5), Rational(2**31 - 1, -(2**31)), (-2**31) ** -1, (-2**31) ** -2] }
+t('class') { [Rational(1, 3).class, Rational(4, 2).denominator.class] }
+", @"
+add: [(-1/15), (4/3), (3541774862152233910273/3), 0.8333333333333333, (1180591620717411303425/3), (2361183241434822606848/3), (11/15), (-8/3), (-11/15), (0/1)]
+mul: [(-2/15), (1/1), (0/1), 0.16666666666666666, (1393796574908163946345982392040522594123776/9), (2/5), (1/1)]
+div: [(-5/6), (1/9), 0.6666666666666666, (-5/6), (3/1), (1180591620717411303424/1), (-1/6), (-2/3)]
+div0: [ZeroDivisionError, ""divided by 0""]
+div0r: [ZeroDivisionError, ""divided by 0""]
+div0f: Infinity
+cmp: [1, -1, 0, 1, nil, nil, 1, 0]
+eq: [true, false, true, true, true, false, true, true]
+to_f: [0.3333333333333333, -0.4, 3.935305402391371e+20, 3.3333333333333335, 0.0]
+hash: [true, 1, 2, true, false]
+coerce: [(5/6), (1/6), -1]
+bad: [TypeError, ""String can't be coerced into Rational""]
+int ops: [(4/3), (2/3), (8/3), (12/1), 1.8333333333333333, (3541774862152233910273/3), 1, true]
+misc: [1, 3, (-1/3), (1/3), (1/9), 0, 0, 1, 0, ""1/3"", ""(1/3)"", 0, false, true]
+marshal: [(1/3), (1180591620717411303424/3), [], true]
+sum: (7381/2520)
+ints: [(1/3), (1/2), (1/2), (-1/2), (0/1), (5/1), (-5/1), (4/1), (3/590295810358705651712)]
+zero: [ZeroDivisionError, ""divided by 0""]
+rat: [(1/2), (1/6), (1/2), (2/1)]
+str: [(1/3), (3/4), nil, (3/2), nil]
+nil: [TypeError, ""can't convert nil into Rational""]
+nil2: [TypeError, ""can't convert nil into Rational""]
+arity0: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+arity3: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+arity4: [ArgumentError, ""wrong number of arguments (given 4, expected 1..2)""]
+kw: [(1/2), (1/2)]
+badkw: [ArgumentError, ""expected true or false as exception: 1""]
+Kernel.: (1/3)
+arity: -1
+int32 edge: [(1/4611686011984936962), (4611686018427387904/1), (-7/3), -1, (4294967294/1), (2147483649/1), (-17179869181/15), (-2147483647/2147483648), (-1/2147483648), (1/4611686018427387904)]
+class: [Rational, Integer]
+");
+        }
+
+        /// <summary>
+        /// Integer#** in C# with what it hands rational.rb (__ir_pow_slow__): a negative exponent (a Rational),
+        /// a negative base to a fractional power (a Complex), coercion, and MRI's answers for 0 ** NaN and
+        /// Bignum exponents. The expected output is CRuby's.
+        /// </summary>
+        public void Integer_Power1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+t('int') { [3 ** 5, 2 ** 62, 2 ** 64, 3 ** 0, 0 ** 0, (-2) ** 3, 10 ** 20] }
+t('neg') { [3 ** -2, 1 ** -5, (-1) ** -3, (-1) ** -4, 2 ** -1, (2**70) ** -1, (-3) ** -3] }
+t('zero neg') { 0 ** -1 }
+t('float') { [3 ** 0.5, 4 ** 0.5, 0 ** -1.5, 0 ** Float::NAN, 1 ** Float::NAN, 2 ** Float::INFINITY, (-2) ** 2.0, (-8) ** (1.0/3), (-2) ** Float::NAN, (2**70) ** 0.5, (-(2**70)) ** 0.5] }
+t('rational') { [2 ** Rational(1, 2), 4 ** Rational(1, 2), 2 ** Rational(3)] }
+t('complex') { [2 ** Complex(1, 1), 2 ** Complex(2, 0)] }
+t('coerce') { o = Object.new; def o.coerce(x) = [x, 3]; 2 ** o }
+t('bad') { 2 ** ""x"" }
+t('big exp') { [1 ** (2**70), (-1) ** (2**70), 0 ** (2**70)] }
+t('big neg exp') { [2 ** -(2**70)] }
+t('pow') { [3.pow(5), 3.pow(-2), 3.pow(5, 7), (2**70).pow(2)] }
+t('method') { [3.method(:**).arity, 2.method(:**).owner] }
+", @"
+int: [243, 4611686018427387904, 18446744073709551616, 1, 1, -8, 100000000000000000000]
+neg: [(1/9), 1, -1, 1, (1/2), (1/1180591620717411303424), (-1/27)]
+zero neg: [ZeroDivisionError, ""divided by 0""]
+float: [1.7320508075688772, 2.0, Infinity, 0.0, 1.0, Infinity, 4.0, (1.0000000000000002+1.7320508075688772i), (NaN+NaN*i), 34359738368.0, (0.0+34359738368.0i)]
+rational: [1.4142135623730951, 2.0, (8/1)]
+complex: [(1.5384778027279442+1.2779225526272695i), (4+0i)]
+coerce: 8
+bad: [TypeError, ""String can't be coerced into Integer""]
+big exp: [1, 1, 0]
+big neg exp: [ArgumentError, ""exponent is too large""]
+pow: [243, (1/9), 5, 1393796574908163946345982392040522594123776]
+method: [1, Integer]
+");
+        }
+
+        /// <summary>
+        /// Range#min, #max, #include? and #member? in C#, with what they hand the prelude: an Integer or Float
+        /// range answered from its endpoints, Strings, blocks, counts, endless and beginless ranges, a break
+        /// from the block and a subclass's own #max. The expected output is CRuby's.
+        /// </summary>
+        // Integer#step over Fixnums loops in C# (Integer.cs); everything else is the prelude's.
+        // MatchData#string keeps a String subclass and answers a frozen subject itself.
+        public void Integer_StepMatchString1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+def c(*args, **kw); a = []; r = 1.step(*args, **kw) { |v| a << v }; [r, a]; end
+t('fixnum') { [c(10), c(10, 3), c(0), [10.step(1, -4) { }, 7.step(1, -4).to_a]] }
+t('break') { [1.step(100) { |v| break v * 2 if v == 7 }, 1.step(100, 2) { |v| break :x if v > 7 }] }
+def m; 1.step(100) { |v| return v if v == 3 }; :no; end
+t('return') { m }
+t('edges') { a = []; (2**31-3).step(2**31-1, 5) { |v| a << v }; (-2**31+2).step(-2**31, -7) { |v| a << v }; (2**31-2).step(2**31-1) { |v| a << v }; a }
+t('kw') { [c(by: 2, to: 9), c(9, by: 4), c(2.0, 0.5), c(2, 0.5)] }
+t('bignum') { a = []; (2**70).step(2**70+2) { |v| a << v }; a }
+t('enum') { [1.step(10).class, 1.step(10, 3).to_a, 1.step(by: 2).first(2), 1.step(10).size, 1.step(3).map { |x| x * 2 }] }
+t('zero') { 1.step(10, 0) { } }
+t('zero enum') { 1.step(10, 0) }
+t('string step') { 1.step(10, ""x"") { } }
+t('arity') { 1.step(1, 2, 3) { } }
+t('unknown kw') { 1.step(foo: 1) { } }
+t('twice') { 1.step(3, to: 4) { } }
+class S < String; end
+t('md subclass') { m = /b/.match(S.new(""abc"")); [m.string.class, m.string.frozen?] }
+t('md frozen') { f = ""xyz"".freeze; [/y/.match(f).string.equal?(f), (f =~ /z/; $~.string.equal?(f))] }
+t('md mutated') { s = +""abc""; m = s.match(/b/); s << ""d""; [m.string, m.pre_match, m.post_match, m.string.frozen?] }
+", @"
+fixnum: [[1, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], [1, [1, 4, 7, 10]], [1, []], [10, [7, 3]]]
+break: [14, :x]
+return: 3
+edges: [2147483645, -2147483646, 2147483646, 2147483647]
+kw: [[1, [1, 3, 5, 7, 9]], [1, [1, 5, 9]], [1, [1.0, 1.5, 2.0]], [1, [1.0, 1.5, 2.0]]]
+bignum: [1180591620717411303424, 1180591620717411303425, 1180591620717411303426]
+enum: [Enumerator::ArithmeticSequence, [1, 4, 7, 10], [1, 3], 10, [2, 4, 6]]
+zero: [ArgumentError, ""step can't be 0""]
+zero enum: [ArgumentError, ""step can't be 0""]
+string step: [ArgumentError, ""comparison of String with 0 failed""]
+arity: [ArgumentError, ""wrong number of arguments (given 3, expected 0..2)""]
+unknown kw: [ArgumentError, ""unknown keyword: :foo""]
+twice: [ArgumentError, ""to is given twice""]
+md subclass: [S, true]
+md frozen: [true, true]
+md mutated: [""abc"", ""a"", ""c"", true]
+");
+        }
+
+        public void Range_MinMaxInclude1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+t('max') { [(1..10).max, (1...10).max, (5..1).max, (1...1).max, (1..1).max, ('a'..'e').max, ('a'...'e').max, (1.0..2.5).max, (1..2.5).max, (..5).max, (...5).max] }
+t('min') { [(1..10).min, (1...10).min, (5..1).min, (1...1).min, ('a'..'e').min, (1.5..3).min, (1..).min] }
+t('max n') { [(1..10).max(3), (1...10).max(2), (1..10).min(3), ('a'..'e').max(2), (..5).max(2)] }
+t('max block') { [(1..10).max { |a, b| b <=> a }, (1..10).min { |a, b| b <=> a }, (1..10).max(2) { |a, b| b <=> a }] }
+t('break') { (1..10).max { |a, b| break :brk } }
+t('endless max') { (1..).max }
+t('beginless min') { (..5).min }
+t('float excl max') { (1.0...2.0).max }
+t('minmax') { [(1..10).minmax, (1..10).minmax { |a, b| b <=> a }] }
+t('include') { r = (1..10); [r.include?(5), r.include?(10), (1...10).include?(10), r.include?(0), r.include?(5.5), r.member?(3), r.include?(""a""), (1.0..2.0).include?(1.5), (1.0...2.0).include?(2), (1..2.0).include?(2), (1.0..2.0).include?(Float::NAN), (1..Float::INFINITY).include?(10**30)] }
+t('include str') { [('a'..'z').include?('m'), ('a'..'z').include?('cc'), ('a'..'z').member?('z')] }
+r = ('a'..'z'); x = ('a'...'z'); d = ('0'..'9'); w = ('A'..'z')
+p [r.include?('m'), r.include?('a'), r.include?('z'), x.include?('z'), r.include?('cc'), r.include?(''), r.include?('A'), r.member?('q'), d.include?('5'), w.include?('_'), w.include?('['), ('z'..'a').include?('m'), r.include?(""é""), ('a'..'e').include?(:c), r.include?('m'.b), Class.new(String).new('k').then { |s| r.include?(s) }, ('a'..'zz').include?('cc'), ('aa'..'b').include?('az')]
+t('include endless') { [(1..).include?(10**20), (..5).include?(3), (1..nil).include?(0)] }
+t('include obj') { (Time.at(0)..Time.at(10)).include?(Time.at(5)) }
+t('include beginless str') { (..'z').include?('a') }
+t('case') { case 5 when 1..3 then :a when 4..6 then :b end }
+t('sub') { Class.new(Range) { def max; :mine; end }.new(1, 3).max }
+t('respond') { [(1..2).respond_to?(:__max__), (1..2).respond_to?(:include?), Range.instance_method(:max).arity, Range.instance_method(:include?).arity] }
+", @"
+max: [10, 9, nil, nil, 1, ""e"", ""d"", 2.5, 2.5, 5, 4]
+min: [1, 1, nil, nil, ""a"", 1.5, 1]
+max n: [[10, 9, 8], [9, 8], [1, 2, 3], [""e"", ""d""], [5, 4]]
+max block: [1, 10, [1, 2]]
+break: :brk
+endless max: [RangeError, ""cannot get the maximum of endless range""]
+beginless min: [RangeError, ""cannot get the minimum of beginless range""]
+float excl max: [TypeError, ""cannot exclude non Integer end value""]
+minmax: [[1, 10], [10, 1]]
+include: [true, true, false, false, true, true, false, true, false, true, false, true]
+include str: [true, false, true]
+[true, true, true, false, false, false, false, true, true, true, true, false, false, false, true, true, true, false]
+include endless: [true, true, false]
+include obj: true
+include beginless str: [TypeError, ""cannot determine inclusion in beginless/endless ranges""]
+case: :b
+sub: :mine
+respond: [false, true, -1, 1]
+");
+        }
+
+        /// <summary>
+        /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
+        /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
+        /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the
+        /// end runs the methods specialized). Arity errors name the positionals and required keywords as
+        /// MRI does, and #parameters lists required keywords first. The expected output is CRuby's.
+        /// </summary>
+        public void Method_OptionalAndKeywordParameters1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+def m1(a, b = 2, k: 3) = [a, b, k]
+def m2(a, b = 2, c = a + b, k: 3, j:) = [a, b, c, k, j]
+def m3(a, b = {x: 1}, **kw) = [a, b, kw]
+def m4(b = 1, k: 2) = [b, k]
+def m5(a, b = nil, exception: true) = [a, b, exception]
+t(1) { [m1(1), m1(1, 5), m1(1, k: 9), m1(1, 5, k: 9)] }
+t(2) { m1(1, {k: 9}) }
+t(3) { m1(1, 5, {k: 9}) }
+t(4) { m1(1, 5, 6) }
+t(5) { m1(k: 1) }
+t(6) { m1() }
+t(7) { m1(1, z: 2) }
+t(8) { [m2(1, j: 0), m2(1, 4, j: 0), m2(1, 4, 5, j: 0, k: 7)] }
+t(9) { m2(1, 4) }
+t(10) { m2(1, 4, 5, 6, j: 0) }
+t(11) { [m3(1), m3(1, z: 2), m3(1, {y: 2}), m3(1, {y: 2}, z: 3), m3(1, **{})] }
+t(12) { h = {k: 7}; [m1(1, **h), m1(1, 2, **h), m4, m4(5), m4(k: 6), m4(5, k: 6), m4({k: 6})] }
+t(13) { [m5(1), m5(""1"", 16), m5(1, exception: false), m5(1, 2, exception: false)] }
+t(14) { [method(:m1).arity, method(:m2).arity, method(:m3).arity, method(:m4).arity, method(:m1).parameters, method(:m2).parameters] }
+class P; def s(a, b = 2, k: 3) = [:p, a, b, k]; end
+class C < P; def s(a, b = 5, k: 4); super; end; end
+class D < P; def s(a, b = 5, k: 4); b = 9; k = 8; super; end; end
+t(15) { [C.new.s(1), C.new.s(1, 2), C.new.s(1, k: 0), D.new.s(1)] }
+def nil_kw(a, b = 1, k: 2) = [a, b, k]
+t(16) { [nil_kw(1, nil), nil_kw(nil), nil_kw(1, nil, k: nil)] }
+t(18) { send(:m1, 1, k: 4) }
+t(19) { method(:m1).call(1, k: 4) }
+t(20) { pr = method(:m1).to_proc; [pr.(1), pr.(1, k: 2)] }
+o = Object.new
+def o.each_pair(x = 1, sep: "",""); ""#{x}#{sep}""; end
+t(21) { [o.each_pair, o.each_pair(2), o.each_pair(sep: "";""), o.each_pair(3, sep: ""|"")] }
+def opt_hash_default(a, b = {}, k: 1) = [a, b, k]
+t(22) { [opt_hash_default(1), opt_hash_default(1, {z: 1}), opt_hash_default(1, k: 2)] }
+1000.times { m1(1, k: 2); m1(1); m1(1, 2) }
+t(23) { [m1(1), m1(1, 5), m1(1, k: 9), m1(1, 5, k: 9)] }
+# every case again after the JIT has specialized the methods
+def n1(a, b = 2, k: 3) = [a, b, k]
+def n2(a, b = 2, c = 7, k: 3, j:) = [a, b, c, k, j]
+def n4(b = 1, k: 2) = [b, k]
+def m6(a, b = 1.5, k: :x) = [a, b, k]
+def mi(a, b = 2, k: 3) = a + b + k
+r = nil
+3000.times do |i|
+  r = [n1(1), n1(1, 5), n1(1, k: 9), n1(1, 5, k: 9), n2(1, j: 0), n2(1, 4, j: 0), n2(1, 4, 5, j: 0, k: 7),
+       m4, n4(5), n4(k: 6), n4(5, k: 6), n4({k: 6}), m6(1), m6(1, 2.5), m6(1, k: :y), mi(1), mi(1, 2, k: 4), mi(i, k: i)]
+end
+p r
+t(1) { n1(k: 1) }
+t(2) { n1(1, {k: 9}) }
+t(3) { n1(1, 5, 6) }
+t(4) { n1(1, z: 2) }
+t(5) { n2(1, 4) }
+t(6) { mi(1, ""x"") }
+t(7) { mi(""a"", k: 1) }
+t(8) { n1({k: 1}) }
+t(9) { n4({k: 6}, k: 1) }
+def kwreq_order(a, k: 1, j:) = 1
+t(24) { method(:kwreq_order).parameters }
+def mand_only(a, k: 1) = 1
+t(25) { [(mand_only rescue $!.message), (mand_only(1, 2) rescue $!.message)] }
+", @"
+1: [[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9]]
+2: [1, {k: 9}, 3]
+3: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+4: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+5: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+6: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+7: [ArgumentError, ""unknown keyword: :z""]
+8: [[1, 2, 3, 3, 0], [1, 4, 5, 3, 0], [1, 4, 5, 7, 0]]
+9: [ArgumentError, ""missing keyword: :j""]
+10: [ArgumentError, ""wrong number of arguments (given 4, expected 1..3; required keyword: j)""]
+11: [[1, {x: 1}, {}], [1, {x: 1}, {z: 2}], [1, {y: 2}, {}], [1, {y: 2}, {z: 3}], [1, {x: 1}, {}]]
+12: [[1, 2, 7], [1, 2, 7], [1, 2], [5, 2], [1, 6], [5, 6], [{k: 6}, 2]]
+13: [[1, nil, true], [""1"", 16, true], [1, nil, false], [1, 2, false]]
+14: [-2, -3, -2, -1, [[:req, :a], [:opt, :b], [:key, :k]], [[:req, :a], [:opt, :b], [:opt, :c], [:keyreq, :j], [:key, :k]]]
+15: [[:p, 1, 5, 4], [:p, 1, 2, 4], [:p, 1, 5, 0], [:p, 1, 9, 8]]
+16: [[1, nil, 2], [nil, 1, 2], [1, nil, nil]]
+18: [1, 2, 4]
+19: [1, 2, 4]
+20: [[1, 2, 3], [1, 2, 2]]
+21: [""1,"", ""2,"", ""1;"", ""3|""]
+22: [[1, {}, 1], [1, {z: 1}, 1], [1, {}, 2]]
+23: [[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9]]
+[[1, 2, 3], [1, 5, 3], [1, 2, 9], [1, 5, 9], [1, 2, 7, 3, 0], [1, 4, 7, 3, 0], [1, 4, 5, 7, 0], [1, 2], [5, 2], [1, 6], [5, 6], [{k: 6}, 2], [1, 1.5, :x], [1, 2.5, :x], [1, 1.5, :y], 6, 7, 6000]
+1: [ArgumentError, ""wrong number of arguments (given 0, expected 1..2)""]
+2: [1, {k: 9}, 3]
+3: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+4: [ArgumentError, ""unknown keyword: :z""]
+5: [ArgumentError, ""missing keyword: :j""]
+6: [TypeError, ""String can't be coerced into Integer""]
+7: [TypeError, ""no implicit conversion of Integer into String""]
+8: [{k: 1}, 2, 3]
+9: [{k: 6}, 1]
+24: [[:req, :a], [:keyreq, :j], [:key, :k]]
+25: [""wrong number of arguments (given 0, expected 1)"", ""wrong number of arguments (given 2, expected 1)""]
+");
+        }
+
+        /// <summary>
+        /// Kernel#Integer and #Float in C# (the cases they answer themselves and the ones they hand to
+        /// the prelude), Integer#round/floor/ceil/truncate of a Fixnum in long arithmetic, Range#first
+        /// and #last without a count, the lazily inspected ArithmeticSequence, and the Float loop of
+        /// #step in C#, break and return included. The expected output is CRuby's.
+        /// </summary>
+        public void Kernel_ConversionsRoundingStep1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); r = begin; yield; rescue => e; [e.class, e.message]; end; puts ""#{l}: #{r.inspect}""; end
+t('Integer nil radix') { Integer(""10"", nil) }
+t('Integer float radix') { [Integer(""10"", 8.9), Integer(""z"", 8.9, exception: false)] }
+o = Object.new; def o.to_int; 16; end
+t('Integer to_int radix') { Integer(""ff"", o) }
+t('Integer radix non-string') { [Integer(12, 16, exception: false), (Integer(12, 16) rescue $!.message)] }
+t('Integer nil') { [Integer(nil, exception: false), (Integer(nil) rescue $!.message)] }
+t('Integer 3 args') { Integer(""1"", 2, 3) }
+t('Integer 4 args') { Integer(""1"", 2, 3, 4) }
+t('Float 2 args') { Float(1, 2) }
+t('Integer unknown keyword') { Integer(""1"", foo: 1) }
+t('Float unknown keyword') { Float(""1"", foo: 1) }
+t('Integer braced hash') { Integer(""1"", {exception: false}) }
+t('arity') { [method(:Integer).arity, method(:Float).arity] }
+t('Integer values') { [Integer(4.7), Integer(-4.7), Integer(1e30), Integer(2**70), Integer(""0x1f""), Integer(""1_000""), Integer("" 42 "")] }
+t('Integer failures') { [Integer(Float::NAN, exception: false), (Integer(Float::NAN) rescue $!.class), Integer(""zz"", exception: false), Integer(""zz"", 36)] }
+t('Float values') { [Float(1), Float(2**70), Float(""1.5""), Float(""x"", exception: false), Float(nil, exception: false), (Float(nil) rescue $!.class), Float(""1e3""), (Float("""") rescue $!.class)] }
+f = 1.5
+t('Float identity') { Float(f).equal?(f) }
+t('Kernel.') { [Kernel.Integer(""7""), Kernel.Float(""1"")] }
+t('bad exception') { Integer(""1"", exception: 1) }
+t('true radix') { Integer(""1"", true) }
+t('utf16') { Integer(""12"".encode(""UTF-16LE""), exception: false) }
+t('to_i') { r = Object.new; def r.to_i; 3; end; [Integer(r), Integer(Rational(7, 2)), Float(Rational(7, 2))] }
+t('round') { [12345.round(-2), 12350.round(-2), -12350.round(-2), 12350.round(-2, half: :even), 12350.round(-2, half: :down), 25.round(-1, half: :even), 2147483647.round(-9), -2147483648.floor(-9), 5.ceil(-18), 5.ceil(-19), -5.floor(-19), 5.round(-25), 12345.truncate(-3), -12345.truncate(-3), 7.round(2)] }
+t('round as a hash key') { {-3000000000 => :hit}[-2147483648.floor(-9)] }
+t('first/last') { [(1..10).first, (1...10).last, (1..10).first(3), (1..10).last(3), (..5).last(2), (...5).last(3), ('a'..'e').last(2)] }
+t('beginless first') { (..5).first }
+t('endless last') { (1..).last }
+t('step inspect') { r = (1..10); [(r % 3).inspect, r.step(3).inspect, r.step.inspect, 1.step(10, 3).inspect, 1.step(by: 2, to: 5).inspect, 1.0.step(2.0, 0.5).inspect, (r % 3).to_a] }
+t('float step') { a = []; 1.0.step(2.0, 0.3) { |x| a << x }; 2.0.step(1.0, -0.5) { |x| a << x }; (1.0...2.0).step(0.5) { |x| a << x }; a }
+t('float step break') { [1.0.step(2.0, 0.5) { |x| break x * 10 if x > 1.2 }, 1.0.step(2.0, 0.5) { }, (1.0..2.0).step(0.5).map { |x| x * 2 }] }
+def float_step_return; 1.0.step(5.0, 1.0) { |x| return x if x == 3.0 }; :no; end
+t('float step return') { float_step_return }
+", @"
+Integer nil radix: [TypeError, ""no implicit conversion from nil to integer""]
+Integer float radix: [8, nil]
+Integer to_int radix: 255
+Integer radix non-string: [nil, ""base specified for non string value""]
+Integer nil: [nil, ""can't convert nil into Integer""]
+Integer 3 args: [ArgumentError, ""wrong number of arguments (given 3, expected 1..2)""]
+Integer 4 args: [ArgumentError, ""wrong number of arguments (given 4, expected 1..2)""]
+Float 2 args: [ArgumentError, ""wrong number of arguments (given 2, expected 1)""]
+Integer unknown keyword: [ArgumentError, ""unknown keyword: :foo""]
+Float unknown keyword: [ArgumentError, ""unknown keyword: :foo""]
+Integer braced hash: [TypeError, ""no implicit conversion of Hash into Integer""]
+arity: [-2, -2]
+Integer values: [4, -4, 1000000000000000019884624838656, 1180591620717411303424, 31, 1000, 42]
+Integer failures: [nil, FloatDomainError, nil, 1295]
+Float values: [1.0, 1.1805916207174113e+21, 1.5, nil, nil, TypeError, 1000.0, ArgumentError]
+Float identity: true
+Kernel.: [7, 1.0]
+bad exception: [ArgumentError, ""expected true or false as exception: 1""]
+true radix: [TypeError, ""no implicit conversion of true into Integer""]
+utf16: [Encoding::CompatibilityError, ""ASCII incompatible encoding: UTF-16LE""]
+to_i: [3, 3, 3.5]
+round: [12300, 12400, -12400, 12400, 12300, 20, 2000000000, -3000000000, 1000000000000000000, 10000000000000000000, -10000000000000000000, 0, 12000, -12000, 7]
+round as a hash key: :hit
+first/last: [1, 10, [1, 2, 3], [8, 9, 10], [4, 5], [2, 3, 4], [""d"", ""e""]]
+beginless first: [RangeError, ""cannot get the first element of beginless range""]
+endless last: [RangeError, ""cannot get the last element of endless range""]
+step inspect: [""((1..10).%(3))"", ""((1..10).step(3))"", ""((1..10).step)"", ""(1.step(10, 3))"", ""(1.step(by: 2, to: 5))"", ""(1.0.step(2.0, 0.5))"", [1, 4, 7, 10]]
+float step: [1.0, 1.3, 1.6, 1.9, 2.0, 1.5, 1.0, 1.0, 1.5]
+float step break: [15.0, 1.0, [2.0, 3.0, 4.0]]
+float step return: 3.0
+");
+        }
+
+        /// <summary>
         /// Kernel#Integer and #Float with exception: false answer nil from the C# parser instead of
         /// raising and rescuing; a String in an ASCII-incompatible encoding is refused either way,
         /// and Float names a NUL. Array#inject over Fixnums, Array#minmax as [min, max], and
@@ -4447,7 +4984,7 @@ last ""a""..""e"" 2: [""d"", ""e""]
 first 1..3.5 2: [1, 2]
 last 1..3.5 2: [2, 3]
 first ..5 2: ""RangeError: cannot get the first element of beginless range""
-last ..5 2: ""TypeError: can't iterate from NilClass""
+last ..5 2: [4, 5]
 sub first: [:x]
 sub last: [9, 10]
 big last: [999999998, 999999999, 1000000000]
@@ -4810,6 +5347,45 @@ kernel: ""0.33333333333333333333333333333333e0 0.2e1 nil""
 precision too large: ArgumentError: precision too large.
 exception kwarg: ArgumentError: expected true or false as exception: 1
 identity: [false, true, 1]
+");
+        }
+
+        /// <summary>
+        /// BasicObject#equal? is identity, separate from #== - a class whose == calls equal?
+        /// (Set#==) must not recurse through BaseEquals into its own ==.
+        /// </summary>
+        public void BasicObject_EqualIdentity1() {
+            TestOutput(@"
+# Set#== in set.rb (not loadable here: no prelude) has this shape
+class MySet
+  attr_reader :h
+  def initialize(*a); @h = {}; a.each { |x| @h[x] = true }; end
+  def ==(other); if self.equal?(other) then true elsif other.instance_of?(self.class) then @h == other.h else false end; end
+end
+class Eq; def ==(o); equal?(o); end; end
+class Str < String; def ==(o); equal?(o); end; end
+p MySet.new(1).equal?(MySet.new(1)), (s = MySet.new(1)).equal?(s), s == MySet.new(1)
+e = Eq.new; p e.equal?(e), e.equal?(Eq.new), e == e, e == Eq.new
+t = Str.new('a'); p t.equal?(t), t.equal?(Str.new('a')), 'a'.equal?('a')
+p 1.equal?(1), 1.5.equal?(1.5), :a.equal?(:a), nil.equal?(nil), true.equal?(true)
+p BasicObject.new.equal?(BasicObject.new)
+", @"
+false
+true
+true
+true
+false
+true
+false
+true
+false
+false
+true
+true
+true
+true
+true
+false
 ");
         }
     }

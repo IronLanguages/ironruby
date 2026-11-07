@@ -110,6 +110,40 @@ namespace IronRuby.Builtins {
 
         #region Kernel#Integer, Kernel#Float
 
+        // The Float loop of Numeric#step and Range#step (ArithmeticSequence.__step_each__ in
+        // ruby4.rb, after MRI's ruby_float_step): n values beg, beg + step, ..., the last one held
+        // to stop. A method that yields is not one the method JIT takes, so the loop cost ~0.25 us
+        // a value in Ruby.
+        [RubyMethod("__ir_float_step__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__ir_float_step__", RubyMethodAttributes.PublicSingleton)]
+        public static object FloatStep(BlockParam/*!*/ block, object self, double beg, double stop, double step, double n) {
+            object result;
+            if (Double.IsInfinity(step)) {
+                if (n > 0 && block.Yield(beg, out result)) {
+                    return result;
+                }
+            } else if (step == 0) {
+                while (true) {
+                    if (block.Yield(beg, out result)) {
+                        return result;
+                    }
+                }
+            } else {
+                // n may be NaN (Infinity.step(Infinity, 1)); 0 < NaN is false, so nothing is
+                // yielded, which is what MRI's for(;i<n;) loop does.
+                for (double i = 0; i < n; i++) {
+                    double d = i * step + beg;
+                    if (step >= 0 ? stop < d : d < stop) {
+                        d = stop;
+                    }
+                    if (block.Yield(d, out result)) {
+                        return result;
+                    }
+                }
+            }
+            return null;
+        }
+
         /// <summary>
         /// Kernel#Integer(arg, base = 0, exception: true), MRI's rb_convert_to_integer. A non-zero base
         /// goes with a String, so anything else must have #to_str. A String is parsed, an Integer is
@@ -134,6 +168,10 @@ namespace IronRuby.Builtins {
             }
 
             bool raise = TakeExceptionOption(fixnumCast.Context, ref radixOrOptions, options, 2);
+            if (radixOrOptions == null) {
+                // a base given as nil is not a base left out (MRI's NUM2INT), whatever exception: says
+                throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+            }
             int radix = (radixOrOptions == Missing.Value) ? 0 : Protocols.CastToFixnum(fixnumCast, radixOrOptions);
             RubyContext context = fixnumCast.Context;
 
@@ -561,9 +599,8 @@ namespace IronRuby.Builtins {
             return Protocols.ConvertToString(tosConversion, obj);
         }
 
-        // Kernel#Complex and Kernel#Rational are written in Ruby (Src/StdLib/ironruby/ironruby/
-        // complex.rb and rational.rb, ports of MRI's complex.c and rational.c). This is how the C#
-        // library makes a Rational: Kernel.Rational(numerator, denominator).
+        // How the C# library makes a Rational of two Integers it has no RubyRational for yet:
+        // Kernel.Rational(numerator, denominator).
         internal static object/*!*/ ToRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toRational,
             RubyScope/*!*/ scope, object numerator, object denominator) {
 
@@ -571,18 +608,99 @@ namespace IronRuby.Builtins {
             return site.Target(site, scope.RubyContext.KernelModule, numerator, denominator);
         }
 
+        // Kernel#Rational(x, y = <none>, exception: true) (MRI's nurat_f_rational) and Kernel#Complex (nucomp_f_complex).
+        // The cases a program spends its time in are answered here - an Integer over an Integer, a Rational alone, an
+        // Integer or Float pair - and everything else goes to the prelude's port of nurat_convert/nucomp_convert
+        // (Rational.__convert__ in rational.rb, Complex.__convert__ in complex.rb), which knows Strings, Floats, the
+        // #to_r/#to_c protocol and its errors. Rational(x) and Rational(x, nil) are different calls - the second is a
+        // TypeError - so the denominator is optional rather than defaulted. The exception: keyword arrives in place of
+        // the first optional argument that was not given (TakeExceptionOption).
+
+        [RubyMethod("Rational", RubyMethodAttributes.PrivateInstance)]
+        public static object ToRational(CallSiteStorage<Func<CallSite, object, object, object, object, object, object>>/*!*/ convert,
+            RubyContext/*!*/ context, object self, object value, [Optional]object denominator, [Keywords, Optional]object options) {
+
+            RubyClass cls = GetRationalClass(context);
+            if (options == Missing.Value && cls != null) {
+                if (denominator == Missing.Value) {
+                    if (RubyRational.IsIntegerValue(value)) {
+                        return new RubyRational(cls, value, ScriptingRuntimeHelpers.Int32ToObject(1));
+                    }
+                    if (value is RubyRational) {
+                        return value;
+                    }
+                } else if (RubyRational.IsIntegerValue(value) && RubyRational.IsIntegerValue(denominator)) {
+                    return RubyRational.Canonicalize(cls, value, denominator);
+                }
+            }
+
+            bool raise = TakeExceptionOption(context, ref denominator, options, 2);
+            bool given2 = denominator != Missing.Value;
+            var site = convert.GetCallSite("__convert__", 4);
+            return site.Target(site, context.GetClass(typeof(RubyRational)), value, given2 ? denominator : null, given2, raise);
+        }
+
+        // Kernel.Rational and Kernel.Complex: methods of their own, which a backtrace names "Kernel.Rational" as MRI's does.
+        [RubyMethod("Rational", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("ToRational")]
+        public static object SingletonToRational(CallSiteStorage<Func<CallSite, object, object, object, object, object, object>>/*!*/ convert,
+            RubyContext/*!*/ context, object self, object value, [Optional]object denominator, [Keywords, Optional]object options) {
+            return ToRational(convert, context, self, value, denominator, options);
+        }
+
+        private static bool IsIntegerOrFloat(object value) {
+            return value is int || value is long || value is double;
+        }
+
+        [RubyMethod("Complex", RubyMethodAttributes.PrivateInstance)]
+        public static object ToComplex(CallSiteStorage<Func<CallSite, object, object, object, object, object, object>>/*!*/ convert,
+            RubyContext/*!*/ context, object self, object real, [Optional]object imaginary, [Keywords, Optional]object options) {
+
+            RubyClass cls = context.GetClass(typeof(RubyComplex));
+            if (options == Missing.Value) {
+                if (imaginary == Missing.Value) {
+                    if (IsIntegerOrFloat(real)) {
+                        return new RubyComplex(cls, real, ScriptingRuntimeHelpers.Int32ToObject(0));
+                    }
+                    // Complex(c) answers a Complex as it is
+                    if (real is RubyComplex && context.GetClassOf(real) == cls) {
+                        return real;
+                    }
+                } else if (IsIntegerOrFloat(real) && IsIntegerOrFloat(imaginary)) {
+                    return new RubyComplex(cls, real, imaginary);
+                }
+            }
+
+            bool raise = TakeExceptionOption(context, ref imaginary, options, 2);
+            if (imaginary == Missing.Value && real is RubyComplex && context.GetClassOf(real) == cls) {
+                return real;
+            }
+            bool given2 = imaginary != Missing.Value;
+            var site = convert.GetCallSite("__convert__", 4);
+            return site.Target(site, cls, real, given2 ? imaginary : null, given2, raise);
+        }
+
+        [RubyMethod("Complex", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("ToComplex")]
+        public static object SingletonToComplex(CallSiteStorage<Func<CallSite, object, object, object, object, object, object>>/*!*/ convert,
+            RubyContext/*!*/ context, object self, object real, [Optional]object imaginary, [Keywords, Optional]object options) {
+            return ToComplex(convert, context, self, real, imaginary, options);
+        }
+
         // The Rational class of the context that last asked (one per process in practice).
         private static RubyClass _rationalClass;
 
-        private static RubyClass GetRationalClass(RubyContext/*!*/ context) {
+        internal static RubyClass GetRationalClass(RubyContext/*!*/ context) {
             RubyClass cls = _rationalClass;
             if (cls != null && cls.Context == context) {
                 return cls;
             }
             object value;
             cls = context.ObjectClass.TryGetConstant(null, "Rational", out value) ? value as RubyClass : null;
-            // rational.rb's Rational: a Ruby subclass of Numeric whose instances are plain Numerics
-            if (cls == null || cls.IsSingletonClass || cls.Name != "Rational" || cls.GetUnderlyingSystemType() != typeof(Numeric)) {
+            // the Rational class, whose instances are RubyRationals
+            if (cls == null || cls.IsSingletonClass || cls.Name != "Rational" || cls.GetUnderlyingSystemType() != typeof(RubyRational)) {
                 return null;
             }
             _rationalClass = cls;
@@ -601,11 +719,7 @@ namespace IronRuby.Builtins {
             if (cls == null) {
                 return null;
             }
-            var result = new Numeric(cls);
-            context.SetInstanceVariable(result, "@__numerator__", Protocols.Normalize(numerator));
-            context.SetInstanceVariable(result, "@__denominator__", Protocols.Normalize(denominator));
-            result.Freeze();
-            return result;
+            return new RubyRational(cls, Protocols.Normalize(numerator), Protocols.Normalize(denominator));
         }
 
         #endregion
