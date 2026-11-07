@@ -52,6 +52,9 @@ namespace IronRuby.Builtins {
         private Func<bool, bool> _waitForStream;
         private int _timeoutMilliseconds = System.Threading.Timeout.Infinite;
 
+        // Another IO reads and writes the same buffered stream (CreateSharedView: a Ractor's $stdin).
+        private bool _sharesStream;
+
         // #read_nonblock and #write_nonblock fail at once rather than wait out the timeout.
         [ThreadStatic]
         private static bool _inNonBlockingOperation;
@@ -107,6 +110,9 @@ namespace IronRuby.Builtins {
         /// </summary>
         public RubyIO/*!*/ CreateSharedView() {
             var result = new RubyIO(_context);
+            // IO#timeout stays each IO's own: the stream binds to the timeout of whichever of the two
+            // uses it (GetStream).
+            _sharesStream = result._sharesStream = true;
             result._stream = _stream;
             result._fileDescriptor = _fileDescriptor;
             result._mode = _mode;
@@ -293,6 +299,10 @@ namespace IronRuby.Builtins {
             }
 
             RequireInitialized();
+            if (_sharesStream && _stream.TimeoutOwner != (_waitForStream != null ? this : null)) {
+                // the other IO over this stream used it last, with its own timeout (or none)
+                ApplyTimeout(_stream);
+            }
             return _stream;
         }
 
