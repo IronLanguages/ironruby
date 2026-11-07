@@ -3952,7 +3952,7 @@ namespace IronRuby.Runtime {
         /// in a BINARY string (Dir.children: "\xE3\x81\x93.txt"), which DecodePath reads back as
         /// UTF-8; an ASCII name stays US-ASCII.
         /// </summary>
-        private static MutableString TryEncodeRawAsciiPath(string/*!*/ path, RubyEncoding/*!*/ encoding) {
+        internal static MutableString TryEncodeRawAsciiPath(string/*!*/ path, RubyEncoding/*!*/ encoding) {
             if (encoding != RubyEncoding.Ascii || Path.DirectorySeparatorChar == '\\') {
                 return null;
             }

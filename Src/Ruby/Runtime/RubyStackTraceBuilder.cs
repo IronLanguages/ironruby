@@ -260,15 +260,23 @@ namespace IronRuby.Runtime {
                 }
 
                 foreach (var deferred in _deferredMethodNames) {
-                    _trace.Add(MutableString.Create(FormatFrame(file, line, deferred), _encoding));
+                    _trace.Add(CreateFrame(FormatFrame(file, line, deferred)));
                 }
                 _deferredMethodNames.Clear();
 
-                _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
+                _trace.Add(CreateFrame(FormatFrame(file, line, methodName)));
             }
         }
 
         private const int MaxThreadBacktraceDepth = 10000;
+
+        // A frame in the path encoding. Under the C locale (US-ASCII) a frame with a non-ASCII file or method name is its
+        // UTF-8 bytes in a BINARY string, as MRI's is and as the path layer hands out such a path (RubyContext.EncodePath):
+        // a US-ASCII string of those characters was invalid, and require_relative, caller_locations(0)[0].path and the
+        // error report raised "invalid byte sequence in US-ASCII".
+        private MutableString/*!*/ CreateFrame(string/*!*/ frame) {
+            return RubyContext.TryEncodeRawAsciiPath(frame, _encoding) ?? MutableString.Create(frame, _encoding);
+        }
 
         private void SetCompiledFrames(Precompiled.PrecompiledFrames.Frame[] frames) {
             _compiledFrames = frames;
@@ -495,7 +503,7 @@ namespace IronRuby.Runtime {
 
                     foreach (var deferred in _deferredMethodNames) {
                         if (skipFrames == 0) {
-                            _trace.Add(MutableString.Create(FormatFrame(file, line, deferred), _encoding));
+                            _trace.Add(CreateFrame(FormatFrame(file, line, deferred)));
                         } else {
                             skipFrames--;
                             skippedAny = true;
@@ -505,7 +513,7 @@ namespace IronRuby.Runtime {
                     _libraryRun = 0;
 
                     if (skipFrames == 0) {
-                        _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
+                        _trace.Add(CreateFrame(FormatFrame(file, line, methodName)));
                     } else {
                         skipFrames--;
                         skippedAny = true;

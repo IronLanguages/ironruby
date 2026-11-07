@@ -340,6 +340,49 @@ end
         }
 
         /// <summary>
+        /// Under the C locale (US-ASCII, Docker's default) a non-ASCII path is its UTF-8 bytes in a BINARY string. The
+        /// frames of a file in such a directory were US-ASCII strings of characters it has none for, and require_relative,
+        /// caller_locations(0)[0].path and the error report raised "invalid byte sequence in US-ASCII"; load of the
+        /// BINARY path Dir.children returns, and File.expand_path of a UTF-8 name in such a directory, read each byte as a
+        /// character of its own.
+        /// </summary>
+        public void Backtrace_AsciiLocalePaths1() {
+            if (OperatingSystem.IsWindows()) {
+                return;
+            }
+
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+Dir.mktmpdir do |t|
+  d = File.join(t, ""café"")
+  Dir.mkdir(d)
+  File.write(File.join(d, 'lib.rb'), ""LIB = caller_locations(0)[0].path\n"")
+  File.write(File.join(d, 'm.rb'), ""require_relative 'lib'\nM = caller(0)[0]\n"")
+  old = Encoding.default_external
+  Encoding.default_external = Encoding::US_ASCII
+  begin
+    dc = Dir.children(t).first
+    p dc.encoding
+    load File.join(t.b, dc, 'm.rb')
+    p [LIB, M].map(&:encoding), [LIB, M].all?(&:valid_encoding?)
+    p LIB.b.end_with?(""café/lib.rb"".b), M.b.include?(""café/m.rb:2"".b)
+    p File.expand_path('x', File.dirname(LIB)).end_with?(""café/x"")
+  ensure
+    Encoding.default_external = old
+  end
+end
+", @"
+#<Encoding:BINARY (ASCII-8BIT)>
+[#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>]
+true
+true
+true
+true
+");
+        }
+
+        /// <summary>
         /// An exception a library method throws whose class has an initialize written in Ruby - SystemCallError's, in the
         /// prelude - is replaced by a new one when it is rescued; the backtrace went with the thrown one, and Dir.mkdir's
         /// Errno::ENOENT had none - a re-raise of it (FileUtils.mkdir_p) got one from the `raise' instead. A LoadError of

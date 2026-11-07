@@ -909,7 +909,7 @@ namespace IronRuby.Builtins {
                 ExpandTilde(context, DecodePathLike(context, pathStr)),
                 (basePath == null)
                     ? context.Platform.CurrentDirectory
-                    : ExpandTilde(context, DecodePathLike(context, Protocols.CastToPath(toPath, basePath))),
+                    : ExpandTilde(context, DecodeBasePath(context, Protocols.CastToPath(toPath, basePath), pathStr)),
                 false
             );
 
@@ -1010,6 +1010,15 @@ namespace IronRuby.Builtins {
         /// string layer one byte to one character rather than being decoded - decoding it would
         /// replace whatever is not valid in the filesystem encoding, and the bytes would be gone.
         /// </summary>
+        // The directory of File.expand_path: crosses byte for byte only when the result does, which is in the path's
+        // encoding. A BINARY directory under a path that is not - the C locale's non-ASCII directory, which
+        // require_relative takes from the caller's frame, joined with a UTF-8 'lib' - is the file system's UTF-8 bytes
+        // (RubyContext.DecodePath); byte for byte, each became a character of its own: "cafÃ©/lib".
+        private static string/*!*/ DecodeBasePath(RubyContext/*!*/ context, MutableString/*!*/ basePath, MutableString/*!*/ path) {
+            return (basePath.Encoding == RubyEncoding.Binary && path.Encoding != RubyEncoding.Binary) ?
+                context.DecodePath(basePath) : DecodePathLike(context, basePath);
+        }
+
         private static string/*!*/ DecodePathLike(RubyContext/*!*/ context, MutableString/*!*/ path) {
             if (path.Encoding != RubyEncoding.Binary) {
                 return context.DecodePath(path);
