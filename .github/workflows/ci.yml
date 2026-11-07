@@ -427,7 +427,9 @@ jobs:
           EXE=""
           [ "$RUNNER_OS" = Windows ] && EXE=.exe
           cd "Src/IronRuby.Tests/bin/Debug/$TFM"
-          "./IronRuby.Tests$EXE" > results.txt 2>&1 || true
+          # /verbose names each test as it starts, so a run that hangs - and is stopped by
+          # the timeout rather than by the job's own limit an hour later - says where.
+          timeout 1500 "./IronRuby.Tests$EXE" /verbose > results.txt 2>&1 || true
           # A run that died - an access violation in native code ends the process - leaves no
           # "> FAILED" line to count; one that finished ends in PASSED or in its Repro line.
           if ! grep -qE 'PASSED.?$|^Repro: ' results.txt; then
