@@ -630,6 +630,45 @@ RuntimeError: defined with an un-shareable Proc in a different Ractor
         }
 
         /// <summary>
+        /// A default value is code of its own: an assignment in it of an earlier parameter (or of another
+        /// optional) is one more than the parameter binding, so a shareable proc refuses that variable.
+        /// </summary>
+        public void Ractor_IsolatedProcs2() {
+            TestOutput(@"
+Warning[:experimental] = false
+def t(label)
+  r = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message}""; end
+  puts ""#{label}: #{r.inspect}""
+end
+def m1(a, b = (a = 3)) = Ractor.make_shareable(nil.instance_eval { proc { a } }).call
+t('default assigns earlier param') { m1(1) }
+def m2(a, b = a) = Ractor.make_shareable(nil.instance_eval { proc { [a, b] } }).call
+t('default reads param') { m2(1) }
+def m3(a, b = 2, c = (b = 5)) = Ractor.make_shareable(nil.instance_eval { proc { b } }).call
+t('default assigns optional') { m3(1) }
+def m4(b = (x = 2)) = Ractor.make_shareable(nil.instance_eval { proc { [b, x] } }).call
+t('default defines local') { m4 }
+def m5(a, b = [1].each { a = 2 }) = Ractor.make_shareable(nil.instance_eval { proc { a } }).call
+t('default block assigns') { m5(1) }
+def m6(a, b = 1, *r, k: (a = 4)) = Ractor.make_shareable(nil.instance_eval { proc { a } }).call
+t('keyword default assigns') { m6(1) }
+t('block param default') { nil.instance_eval { proc { |a, b = (a = 3)| Ractor.make_shareable(proc { a }).call } }.call(1) }
+t('block param plain') { nil.instance_eval { proc { |a, b = 2| Ractor.make_shareable(proc { [a, b] }).call } }.call(1) }
+t('lambda default') { nil.instance_eval { ->(a, b = (a = 3)) { Ractor.make_shareable(proc { a }).call } }.call(1) }
+", @"
+default assigns earlier param: ""Ractor::IsolationError: cannot make a shareable Proc because the outer variable 'a' may be reassigned.""
+default reads param: [1, 1]
+default assigns optional: ""Ractor::IsolationError: cannot make a shareable Proc because the outer variable 'b' may be reassigned.""
+default defines local: [2, 2]
+default block assigns: ""Ractor::IsolationError: cannot make a shareable Proc because the outer variable 'a' may be reassigned.""
+keyword default assigns: ""Ractor::IsolationError: cannot make a shareable Proc because the outer variable 'a' may be reassigned.""
+block param default: ""Ractor::IsolationError: cannot make a shareable Proc because the outer variable 'a' may be reassigned.""
+block param plain: [1, 2]
+lambda default: ""Ractor::IsolationError: cannot make a shareable Proc because the outer variable 'a' may be reassigned.""
+");
+        }
+
+        /// <summary>
         /// A non-main Ractor's require is the main Ractor's (Ractor._require): the file runs free of
         /// the isolation checks. trap in a non-main Ractor isolates its block.
         /// </summary>

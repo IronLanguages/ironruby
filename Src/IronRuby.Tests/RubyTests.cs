@@ -974,6 +974,7 @@ namespace IronRuby.Tests {
                 Ractor_GlobalVariables1,
                 Ractor_ClassState1,
                 Ractor_IsolatedProcs1,
+                Ractor_IsolatedProcs2,
                 Ractor_RequireInMain1,
                 Reflection_Misc1,
                 Float_Format1,
