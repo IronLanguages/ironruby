@@ -237,10 +237,9 @@ namespace IronRuby.Builtins {
 
         /// <summary>Thread#add_trace_func: another hook, run before the ones already there.</summary>
         public static void AddTraceFunc(RubyContext/*!*/ context, Proc/*!*/ traceFunc, Thread thread) {
-            var tp = new TracePoint(context, traceFunc, thread);
-            tp.Enable();
-            // Disable forgets the thread a TracePoint is enabled for; a trace func keeps it.
-            tp._targetThread = thread;
+            // The constructor sets the thread, so the hook is published (under the lock) already
+            // limited to it; a trace func is never enabled again once disabled.
+            new TracePoint(context, traceFunc, thread).Enable();
         }
 
         #endregion
