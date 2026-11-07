@@ -943,6 +943,7 @@ namespace IronRuby.Tests {
                 Core_Ruby4Surface1,
                 DidYouMean_Lazy1,
                 DidYouMean_LazyThreads1,
+                DidYouMean_LazyRequire1,
                 NameError_LocalVariables1,
                 ErrorHighlight_Spots1,
                 ErrorHighlight_Report1,

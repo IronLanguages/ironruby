@@ -317,5 +317,30 @@ p a
 [true, true, true, true]
 ");
         }
+
+        /// <summary>
+        /// The program's own require of did_you_mean, before it is loaded on first use: its `module
+        /// DidYouMean` fires the autoload that stands for it, which then has did_you_mean already loading.
+        /// That warned (under -w, as these tests run) of a circular require and of an autoload that did not
+        /// define its constant; MRI says nothing.
+        /// </summary>
+        public void DidYouMean_LazyRequire1() {
+            TestOutput(@"
+require 'ruby4'
+require 'ironruby/error_highlight'
+require 'ironruby/did_you_mean'
+$warned = []
+$stderr = Object.new.tap { |o| def o.write(*a) = $warned.concat(a).sum(&:size); }
+require 'did_you_mean'
+$stderr = STDERR
+p $warned
+p NameError.ancestors.take_while { |m| m != NameError }.map(&:name)
+begin; [].lenght; rescue NameError => e; p e.detailed_message(highlight: false).include?('Did you mean?  length'); end
+", @"
+[]
+[""DidYouMean::Correctable"", ""ErrorHighlight::CoreExt"", ""IronRuby::ErrorExtensions::Loader""]
+true
+");
+        }
     }
 }
