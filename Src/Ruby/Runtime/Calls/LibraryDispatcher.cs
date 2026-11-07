@@ -1724,12 +1724,15 @@ namespace IronRuby.Runtime.Calls {
 
     /// <summary>
     /// What the rule RubyClass.BuildObjectConstructionNoFlow builds for Class#new of a plain Ruby class does: under the class's
-    /// version (its initializer), allocate a RubyObject and call a Ruby initializer that takes the arguments given - or, the
+    /// version (its initializer), allocate a RubyObject (or an instance of the type generated for the class) and call a Ruby initializer that takes the arguments given - or, the
     /// initializer being Object's (or BasicObject's) and there being no arguments, only allocate.
     /// </summary>
     internal sealed class ObjectConstruction {
         private readonly RubyClass/*!*/ _class;
         private readonly int _version;
+
+        // the allocator of the instances of a type generated for the class (see RubyTypeDispenser.TryGetObjectAllocator); null for RubyObject
+        private readonly Func<RubyClass, object> _allocator;
 
         // the initializer's body (Func<object, Proc, object x N, object>) of mandatory parameters only, or the call of one with optional
         // or rest parameters; both null if it is not called:
@@ -1737,15 +1740,17 @@ namespace IronRuby.Runtime.Calls {
         private readonly RubyMethodCallPlan _initializerCall;
         private readonly int _arity;
 
-        internal ObjectConstruction(RubyClass/*!*/ cls, int version, Delegate initializer, int arity) {
+        internal ObjectConstruction(RubyClass/*!*/ cls, Func<RubyClass, object> allocator, int version, Delegate initializer, int arity) {
             _class = cls;
+            _allocator = allocator;
             _version = version;
             _initializer = initializer;
             _arity = arity;
         }
 
-        internal ObjectConstruction(RubyClass/*!*/ cls, int version, RubyMethodCallPlan/*!*/ initializerCall, int arity) {
+        internal ObjectConstruction(RubyClass/*!*/ cls, Func<RubyClass, object> allocator, int version, RubyMethodCallPlan/*!*/ initializerCall, int arity) {
             _class = cls;
+            _allocator = allocator;
             _version = version;
             _initializerCall = initializerCall;
             _arity = arity;
@@ -1778,7 +1783,7 @@ namespace IronRuby.Runtime.Calls {
 
         private object/*!*/ Construct(object[]/*!*/ args, Proc block) {
             // PropagateRetrySingleton(instance = new RubyObject(class), instance.initialize(args)):
-            var instance = new RubyObject(_class);
+            object instance = (_allocator != null) ? _allocator(_class) : new RubyObject(_class);
             if (!CallsInitializer) {
                 return instance;
             }
