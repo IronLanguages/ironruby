@@ -547,7 +547,7 @@ namespace IronRuby.Builtins {
             // A Thread#raise that reached the fiber as it finished belongs to the fiber now running
             // in its thread; anything else parked here dies with the fiber.
             HandOffParkedInterrupt();
-            RubyUtils.GetPendingAsyncException(current);
+            RubyUtils.DropPendingAsyncExceptions(current);
             RubyThreadInfo info = RubyThreadInfo.FromThread(current);
             info.ClearLocals();
             _currentFiber = null;

@@ -259,5 +259,58 @@ p [(t.value rescue $!.message), rescued]
 [:finished, 5]
 ");
         }
+
+        /// <summary>
+        /// A Thread#kill that comes in while a Thread#raise is still parked for the thread is not lost.
+        /// The kill used to be dropped then, on the assumption that the raise ends the thread; when the
+        /// thread rescued the exception (A), or a Thread.handle_interrupt mask held it back (B), the
+        /// thread ran on. The same happened when a fiber waiting for control handed the exception to
+        /// the running fiber, which rescued it. MRI queues the two and kills the thread either way.
+        /// </summary>
+        public void Thread_KillBehindRaise1() {
+            TestOutput(@"
+# A: the thread rescues the raise that was parked before the kill; the kill still ends it
+ready = go = false
+t = Thread.new do
+  Thread.current.report_on_exception = false
+  begin
+    Thread.handle_interrupt(RuntimeError => :never) do
+      ready = true
+      Thread.pass until go
+    end
+  rescue RuntimeError
+  end
+  loop { sleep 0.01 }
+end
+Thread.pass until ready
+t.raise 'first'
+t.kill
+go = true
+a = t.join(5) ? :killed : :still_running
+t.kill.join(1) rescue nil
+
+# B: a kill behind a raise that a handle_interrupt mask holds back ends the thread inside the mask
+ready = false
+ensured = false
+t = Thread.new do
+  Thread.current.report_on_exception = false
+  begin
+    Thread.handle_interrupt(RuntimeError => :never) do
+      ready = true
+      loop { sleep 0.01 }
+    end
+  ensure
+    ensured = true
+  end
+end
+Thread.pass until ready
+t.raise 'held back'
+t.kill
+b = t.join(5) ? :killed : :still_running
+p [a, b, ensured]
+", @"
+[:killed, :killed, true]
+");
+        }
     }
 }

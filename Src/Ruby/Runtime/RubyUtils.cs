@@ -1780,11 +1780,17 @@ namespace IronRuby.Runtime {
             }
 
             // Do not let a following Thread#kill erase a Thread#raise that is already waiting to
-            // be delivered. MRI finishes unwinding the raised exception (and reports it) first.
+            // be delivered. MRI finishes unwinding the raised exception (and reports it) first - and
+            // kills the thread after it all the same, should it rescue the exception: the kill waits
+            // behind it (_killsBehindRaise) and is parked once the exception is taken.
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
-                if (!_pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId)) {
+                int key = thread.ManagedThreadId;
+                Exception parked;
+                if (!_pendingAsyncExceptions.TryGetValue(key, out parked)) {
                     RequestSafePoint();
-                    _pendingAsyncExceptions[thread.ManagedThreadId] = new ThreadExitSignal();
+                    _pendingAsyncExceptions[key] = new ThreadExitSignal();
+                } else if (!(parked is ThreadExitSignal)) {
+                    _killsBehindRaise.Add(key);
                 }
             }
             // Interrupting a running CLR thread queues ThreadInterruptedException for its
@@ -1850,6 +1856,57 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Removes and returns the asynchronous exception parked for the given thread, if any.
         /// </summary>
+        // CLR thread id -> a Thread#kill that came in while a Thread#raise was parked for the thread
+        // (ExitThread). Guarded by _pendingAsyncExceptions.
+        private static readonly HashSet<int>/*!*/ _killsBehindRaise = new HashSet<int>();
+
+        // Takes what is parked under <paramref name="key"/> away; a kill waiting behind it takes its
+        // place. Under the _pendingAsyncExceptions lock.
+        private static void UnparkLocked(int key) {
+            if (_killsBehindRaise.Remove(key)) {
+                // one parked entry for another: the safe point request stays
+                _pendingAsyncExceptions[key] = new ThreadExitSignal();
+            } else {
+                _pendingAsyncExceptions.Remove(key);
+                SafePointRequestDone();
+            }
+        }
+
+        /// <summary>
+        /// A Thread#kill waiting behind the exception parked for <paramref name="thread"/> takes the
+        /// exception's place: for a wait that cannot raise the exception (a fiber waiting for control),
+        /// where the kill has to end the thread all the same. Answers whether there was one.
+        /// </summary>
+        private static bool PromoteKillBehindRaise(Thread/*!*/ thread) {
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                int key = thread.ManagedThreadId;
+                if (!_killsBehindRaise.Remove(key)) {
+                    return false;
+                }
+                _pendingAsyncExceptions[key] = new ThreadExitSignal();
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Drops everything parked for <paramref name="thread"/>, a kill waiting behind an exception too:
+        /// for a thread that is ending, or a fiber thread whose fiber is done.
+        /// </summary>
+        public static void DropPendingAsyncExceptions(Thread/*!*/ thread) {
+            bool dropped;
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                int key = thread.ManagedThreadId;
+                _killsBehindRaise.Remove(key);
+                dropped = _pendingAsyncExceptions.Remove(key);
+                if (dropped) {
+                    SafePointRequestDone();
+                }
+            }
+            if (dropped && ReferenceEquals(thread, Thread.CurrentThread)) {
+                DropStaleNudge();
+            }
+        }
+
         public static Exception GetPendingAsyncException(Thread/*!*/ thread) {
             Exception e;
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
@@ -1857,8 +1914,7 @@ namespace IronRuby.Runtime {
                 if (!_pendingAsyncExceptions.TryGetValue(key, out e)) {
                     return null;
                 }
-                _pendingAsyncExceptions.Remove(key);
-                SafePointRequestDone();
+                UnparkLocked(key);
             }
             if (ReferenceEquals(thread, Thread.CurrentThread)) {
                 DropStaleNudge();
@@ -1901,11 +1957,20 @@ namespace IronRuby.Runtime {
                 if (!_pendingAsyncExceptions.TryGetValue(key, out e) || e is ThreadExitSignal) {
                     return false;
                 }
-                _pendingAsyncExceptions.Remove(key);
-                if (_pendingAsyncExceptions.ContainsKey(to.ManagedThreadId)) {
+                if (_killsBehindRaise.Contains(key)) {
+                    // the thread is being killed: the exception stays with the kill (CheckAsyncException)
+                    return false;
+                }
+                Exception there;
+                if (_pendingAsyncExceptions.TryGetValue(to.ManagedThreadId, out there)) {
+                    if (there is ThreadExitSignal) {
+                        // a raise does not overwrite a kill
+                        return false;
+                    }
                     // two parked exceptions become one; the later raise wins, as in RaiseAsyncException
                     SafePointRequestDone();
                 }
+                _pendingAsyncExceptions.Remove(key);
                 _pendingAsyncExceptions[to.ManagedThreadId] = e;
             }
             if (ReferenceEquals(from, Thread.CurrentThread)) {
@@ -1924,8 +1989,7 @@ namespace IronRuby.Runtime {
                 if (!_pendingAsyncExceptions.TryGetValue(key, out parked) || !ReferenceEquals(parked, e)) {
                     return false;
                 }
-                _pendingAsyncExceptions.Remove(key);
-                SafePointRequestDone();
+                UnparkLocked(key);
             }
             if (ReferenceEquals(thread, Thread.CurrentThread)) {
                 DropStaleNudge();
@@ -2164,19 +2228,43 @@ namespace IronRuby.Runtime {
                 return;
             }
 
-            // A fiber that is not the running one of its thread - waiting for the fiber it resumed,
-            // finishing, parked in the pool - hands the exception on instead of raising it.
             if (!(e is ThreadExitSignal)) {
-                Func<bool> redirect = AsyncExceptionRedirectHook;
-                if ((redirect != null && redirect()) || killOnly) {
-                    return;
+                if (killOnly && PromoteKillBehindRaise(Thread.CurrentThread)) {
+                    // A Thread#kill came in behind the exception, and this wait (a fiber waiting for
+                    // control) cannot raise the exception: the kill ends the thread now, and the
+                    // exception goes with it. Handed on, it could be rescued by the running fiber
+                    // and the kill never come.
+                    e = PeekPendingAsyncException(Thread.CurrentThread);
+                    if (e == null) {
+                        return;
+                    }
+                } else {
+                    // A fiber that is not the running one of its thread - waiting for the fiber it
+                    // resumed, finishing, parked in the pool - hands the exception on instead of
+                    // raising it.
+                    Func<bool> redirect = AsyncExceptionRedirectHook;
+                    if ((redirect != null && redirect()) || killOnly) {
+                        return;
+                    }
                 }
             }
 
             int timing = GetInterruptTiming(e);
             if (timing == InterruptNever || (timing == InterruptOnBlocking && !atBlockingCall)) {
-                // masked by an enclosing Thread.handle_interrupt; it stays parked
-                return;
+                // Masked by an enclosing Thread.handle_interrupt; it stays parked. A Thread#kill
+                // waiting behind it is not held back by a mask that does not cover the kill (MRI
+                // queues the two side by side): it goes first, and the exception goes with the thread.
+                if (e is ThreadExitSignal || !PromoteKillBehindRaise(Thread.CurrentThread)) {
+                    return;
+                }
+                e = PeekPendingAsyncException(Thread.CurrentThread);
+                if (e == null) {
+                    return;
+                }
+                timing = GetInterruptTiming(e);
+                if (timing == InterruptNever || (timing == InterruptOnBlocking && !atBlockingCall)) {
+                    return;
+                }
             }
 
             // Take it only now: a masked exception has to stay parked for Thread.pending_interrupt?
