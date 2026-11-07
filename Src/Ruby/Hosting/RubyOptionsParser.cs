@@ -180,9 +180,12 @@ namespace IronRuby.Hosting {
             name = value;
         }
 
+        /// <summary>
+        /// MRI's -E takes "locale" besides the names of real encodings; "external" and
+        /// "filesystem", which Encoding.find also knows, are unknown encoding names there.
+        /// </summary>
         private static bool IsRuntimeEncodingName(string/*!*/ name) {
-            return name.Equals("locale", StringComparison.OrdinalIgnoreCase) || name.Equals("external", StringComparison.OrdinalIgnoreCase) ||
-                name.Equals("filesystem", StringComparison.OrdinalIgnoreCase);
+            return name.Equals("locale", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
