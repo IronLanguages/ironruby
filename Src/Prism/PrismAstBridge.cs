@@ -55,11 +55,19 @@ namespace IronRuby.Prism {
         private readonly Dictionary<LocalVariable, LocalVariable[]>/*!*/ _deconstructCache =
             new Dictionary<LocalVariable, LocalVariable[]>();
 
+        // The Ruby-written core: its @__name__ instance variables are its own hidden state (RubyUtils.GetCoreStateInstanceVariableName).
+        private readonly bool _hidesCoreState;
+
+        private string/*!*/ IvarName(string/*!*/ name) {
+            return _hidesCoreState && RubyUtils.IsCoreStateInstanceVariableName(name) ? RubyUtils.GetCoreStateInstanceVariableName(name) : name;
+        }
+
         private PrismAstBridge(string/*!*/ source, string path, RubyEncoding/*!*/ encoding) {
             _source = source;
             // an eval with a starting line below 1 carries the difference in its file name
             _lineOffset = RubyUtils.DecodeEvalLineOffset(ref path);
             _path = path;
+            _hidesCoreState = RubyUtils.KeepsHiddenState(path);
             _encoding = encoding;
             var lineStarts = new List<int> { 0 };
             for (int i = source.IndexOf('\n'); i >= 0; i = source.IndexOf('\n', i + 1)) {
@@ -685,19 +693,19 @@ namespace IronRuby.Prism {
                         CurrentScope.ResolveOrAddVariable(andWrite.Name, span), Expr(andWrite.Value), "&&", span);
 
                 case Pm.InstanceVariableReadNode ivarRead:
-                    return new InstanceVariable(ivarRead.Name, span);
+                    return new InstanceVariable(IvarName(ivarRead.Name), span);
                 case Pm.InstanceVariableWriteNode ivarWrite:
                     return new SimpleAssignmentExpression(
-                        new InstanceVariable(ivarWrite.Name, span), Expr(ivarWrite.Value), null, span);
+                        new InstanceVariable(IvarName(ivarWrite.Name), span), Expr(ivarWrite.Value), null, span);
                 case Pm.InstanceVariableOperatorWriteNode ivarOp:
                     return new SimpleAssignmentExpression(
-                        new InstanceVariable(ivarOp.Name, span), Expr(ivarOp.Value), ivarOp.BinaryOperator, span);
+                        new InstanceVariable(IvarName(ivarOp.Name), span), Expr(ivarOp.Value), ivarOp.BinaryOperator, span);
                 case Pm.InstanceVariableOrWriteNode ivarOr:
                     return new SimpleAssignmentExpression(
-                        new InstanceVariable(ivarOr.Name, span), Expr(ivarOr.Value), "||", span);
+                        new InstanceVariable(IvarName(ivarOr.Name), span), Expr(ivarOr.Value), "||", span);
                 case Pm.InstanceVariableAndWriteNode ivarAnd:
                     return new SimpleAssignmentExpression(
-                        new InstanceVariable(ivarAnd.Name, span), Expr(ivarAnd.Value), "&&", span);
+                        new InstanceVariable(IvarName(ivarAnd.Name), span), Expr(ivarAnd.Value), "&&", span);
 
                 case Pm.GlobalVariableReadNode gvarRead:
                     return new IronRuby.Compiler.Ast.GlobalVariable(gvarRead.Name.Substring(1), span);
@@ -1718,7 +1726,7 @@ namespace IronRuby.Prism {
                 case Pm.RequiredParameterNode requiredParam:
                     return CurrentScope.ResolveOrAddVariable(requiredParam.Name, span);
                 case Pm.InstanceVariableTargetNode ivar:
-                    return new InstanceVariable(ivar.Name, span);
+                    return new InstanceVariable(IvarName(ivar.Name), span);
                 case Pm.GlobalVariableTargetNode gvar:
                     return new IronRuby.Compiler.Ast.GlobalVariable(gvar.Name.Substring(1), span);
                 case Pm.ClassVariableTargetNode cvar:

@@ -194,7 +194,7 @@ namespace IronRuby.Builtins {
 
             object generator;
             if (args.Length == 0 && block != null && self._impl != null &&
-                !(scope.RubyContext.TryGetInstanceVariable(self, "@__generator__", out generator) && generator != null)) {
+                !(scope.RubyContext.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator) && generator != null)) {
                 return self._impl.Each(scope, block);
             }
 
@@ -270,7 +270,7 @@ namespace IronRuby.Builtins {
             }
 
             object generator;
-            if (context.TryGetInstanceVariable(self, "@__generator__", out generator) && generator != null) {
+            if (context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator) && generator != null) {
                 return null;
             }
 
@@ -295,8 +295,8 @@ namespace IronRuby.Builtins {
             }
             var source = new Enumerator(self._impl);
             object generator;
-            if (context.TryGetInstanceVariable(self, "@__generator__", out generator)) {
-                context.SetInstanceVariable(source, "@__generator__", generator);
+            if (context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator)) {
+                context.SetInstanceVariable(source, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), generator);
             }
             return source;
         }

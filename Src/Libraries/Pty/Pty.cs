@@ -147,7 +147,7 @@ namespace IronRuby.StandardLibrary.Pty {
                 io = f;
             } else {
                 io = new RubyIO(context, stream, fd, mode);
-                context.SetInstanceVariable(io, "@__io_path__", MutableString.Create(path, RubyEncoding.UTF8).Freeze());
+                context.SetInstanceVariable(io, RubyUtils.GetCoreStateInstanceVariableName("@__io_path__"), MutableString.Create(path, RubyEncoding.UTF8).Freeze());
             }
             io.SetEncodings(null, null);
             io.AutoFlush = sync;

@@ -548,8 +548,8 @@ namespace IronRuby.Builtins {
                 var site = newStorage.GetCallSite("new");
                 Exception exception = site.Target(site, keyErrorClass, message) as Exception;
                 if (exception != null) {
-                    context.SetInstanceVariable(exception, "@__receiver__", receiver);
-                    context.SetInstanceVariable(exception, "@__key__", key);
+                    context.SetInstanceVariable(exception, RubyUtils.GetCoreStateInstanceVariableName("@__receiver__"), receiver);
+                    context.SetInstanceVariable(exception, RubyUtils.GetCoreStateInstanceVariableName("@__key__"), key);
                     return exception;
                 }
             }

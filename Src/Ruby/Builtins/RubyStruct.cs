@@ -346,7 +346,7 @@ namespace IronRuby.Builtins {
             get {
                 var data = ImmediateClass.GetNonSingletonClass().TryGetInstanceData();
                 object value;
-                return data != null && data.TryGetInstanceVariable("@__keyword_init__", out value) && RubyOps.IsTrue(value);
+                return data != null && data.TryGetInstanceVariable(IronRuby.Runtime.RubyUtils.GetCoreStateInstanceVariableName("@__keyword_init__"), out value) && RubyOps.IsTrue(value);
             }
         }
     }

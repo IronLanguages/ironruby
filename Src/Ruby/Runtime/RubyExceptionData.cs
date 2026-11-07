@@ -566,7 +566,7 @@ namespace IronRuby.Runtime {
             }
             for (RubyClass c = exceptionClass; c != null; c = c.SuperClass) {
                 object constant;
-                if (c.Context.TryGetInstanceVariable(c, "@__message__", out constant)) {
+                if (c.Context.TryGetInstanceVariable(c, RubyUtils.GetCoreStateInstanceVariableName("@__message__"), out constant)) {
                     var prefix = constant as MutableString;
                     if (prefix == null) {
                         return message;

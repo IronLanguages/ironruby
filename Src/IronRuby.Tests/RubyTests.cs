@@ -915,6 +915,7 @@ namespace IronRuby.Tests {
                 Prelude_AliasNames1,
                 Prelude_HiddenHelpers1,
                 Prelude_HiddenState1,
+                Prelude_HiddenState2,
                 SyntaxError_MessageLocation1,
                 SyntaxError_Formatted1,
                 Digest_Incremental1,

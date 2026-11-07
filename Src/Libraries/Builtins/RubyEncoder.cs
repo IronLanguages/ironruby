@@ -1490,7 +1490,7 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>Where a packed string keeps the strings its 'p' and 'P' pointers refer to.</summary>
-        private const string PackedPointersVariable = "@__packed_pointers__";
+        private static readonly string PackedPointersVariable = RubyUtils.GetCoreStateInstanceVariableName("@__packed_pointers__");
 
         private static void WritePointer(Stream/*!*/ stream, long pointer) {
             byte[] bytes = BitConverter.GetBytes(pointer);

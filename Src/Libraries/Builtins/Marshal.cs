@@ -975,10 +975,10 @@ namespace IronRuby.Builtins {
         private static readonly string/*!*/[]/*!*/ ExceptionInternalIVars = { "receiver", "matchee", "key", "signo", "result" };
 
         private static string/*!*/ HiddenIVarName(string/*!*/ name) {
-            return "@__" + name + "__";
+            return RubyUtils.GetCoreStateInstanceVariableName("@__" + name + "__");
         }
 
-        private const string SetTableIVar = "@__hash__";
+        private static readonly string SetTableIVar = RubyUtils.GetCoreStateInstanceVariableName("@__hash__");
 
         private static bool IsSet(RubyContext/*!*/ context, RubyClass/*!*/ theClass) {
             object set;

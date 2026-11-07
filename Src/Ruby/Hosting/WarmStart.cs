@@ -544,7 +544,7 @@ namespace IronRuby.Hosting {
             // (io/console.rb) opens the client's terminal by its name instead.
             object io;
             if (!String.IsNullOrEmpty(request.TerminalPath) && context.ObjectClass.TryGetConstant(null, "IO", out io)) {
-                context.SetInstanceVariable(io, "@__warm_console__", MutableString.Create(request.TerminalPath, RubyEncoding.UTF8));
+                context.SetInstanceVariable(io, RubyUtils.GetCoreStateInstanceVariableName("@__warm_console__"), MutableString.Create(request.TerminalPath, RubyEncoding.UTF8));
             }
 
             ResetConsole(context.DomainManager.SharedIO);

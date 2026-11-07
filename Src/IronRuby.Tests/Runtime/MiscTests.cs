@@ -3108,6 +3108,53 @@ true
         }
 
         /// <summary>
+        /// Only the core's own @__name__ state is hidden: the same spelling in a program (gems use @__memoized__,
+        /// @__Lock__) is an ordinary instance variable, as in MRI - listed, inspected, copied, marshaled, and frozen
+        /// by Ractor.make_shareable - while a Set's or a KeyError's state still is not, and a deep freeze reaches it.
+        /// </summary>
+        public void Prelude_HiddenState2() {
+            TestOutput(@"
+require 'ruby4'
+class Foo; attr_reader :__c__; def initialize; @__c__ = +'s'; @a = 2; end; end
+f = Foo.new
+p f.instance_variables, f.instance_variable_get(:@__c__), f.instance_variable_defined?(:@__c__), f.inspect.include?('@__c__')
+p f.dup.__c__, Marshal.load(Marshal.dump(f)).__c__, Marshal.dump(f).include?('@__c__')
+p Ractor.make_shareable(Foo.new).__c__.frozen?
+o = Object.new; o.instance_variable_set(:@__x__, 1); p o.instance_variables, o.remove_instance_variable(:@__x__), o.instance_variables
+s = Set[+'a']; s.each { s.dup.each {} }
+p s.instance_variables, s.dup.instance_variables, s, Marshal.dump(s) == Marshal.dump(Set['a'])
+Ractor.make_shareable(s); p s.frozen?, s.first.frozen?
+k = KeyError.new('x', receiver: 1, key: 2); p k.instance_variables, k.receiver, k.key
+p Errno.instance_variables, Process.instance_variables, Random.instance_variables, Random.new(3) == Random.new(3)
+", @"
+[:@__c__, :@a]
+""s""
+true
+true
+""s""
+""s""
+true
+true
+[:@__x__]
+1
+[]
+[]
+[]
+Set[""a""]
+true
+true
+true
+[]
+1
+2
+[]
+[]
+[]
+true
+");
+        }
+
+        /// <summary>
         /// A SyntaxError's message starts with the file and line, as MRI's does, whichever of load, require or
         /// eval parsed the code; the report of one that a method raised names that method's caller, as for any
         /// other error, and says the location once. An error found reading a file (an unknown magic-comment
