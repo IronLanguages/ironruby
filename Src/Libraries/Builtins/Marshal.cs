@@ -477,14 +477,13 @@ namespace IronRuby.Builtins {
             /// IronRuby, but MRI writes them as the "mesg" and "bt" instance variables.
             /// </summary>
             private void WriteException(Exception/*!*/ exception, string[]/*!*/ instanceNames) {
-                // Exception#set_backtrace and #backtrace_locations are written in the prelude and
-                // keep what they were given in instance variables of their own. Those are how
-                // IronRuby stores the backtrace, not something the exception was given, so they go
-                // out as "bt" below and not as instance variables in their own right.
-                instanceNames = Array.FindAll(instanceNames, name => !name.StartsWith("@__backtrace", StringComparison.Ordinal));
-
                 var data = RubyExceptionData.GetInstance(exception);
                 Exception cause = data.HasCause ? data.Cause : null;
+
+                // NameError#name, NoMethodError#args and #private_call?, which MRI keeps as internal ivars too
+                RubyClass theClass = _context.GetClassOf(exception);
+                bool isNameError = theClass.IsSubclassOf(_context.GetClass(typeof(MemberAccessException)));
+                bool isNoMethodError = isNameError && theClass.IsSubclassOf(_context.GetClass(typeof(MissingMethodException)));
 
                 // MRI's internal ones - KeyError#receiver and the like - which the prelude keeps hidden
                 var internalNames = new List<string>();
@@ -496,7 +495,7 @@ namespace IronRuby.Builtins {
                 }
 
                 WriteObject(exception);
-                WriteInt32(2 + (cause != null ? 1 : 0) + internalNames.Count + instanceNames.Length);
+                WriteInt32(2 + (isNameError ? 1 : 0) + (isNoMethodError ? 2 : 0) + (cause != null ? 1 : 0) + internalNames.Count + instanceNames.Length);
                 WriteSymbol("mesg", RubyEncoding.Binary);
                 object message = data.Message;
                 var messageString = message as MutableString;
@@ -510,6 +509,17 @@ namespace IronRuby.Builtins {
 
                 WriteSymbol("bt", RubyEncoding.Binary);
                 WriteAnObject(data.Backtrace);
+
+                if (isNameError) {
+                    WriteSymbol("name", RubyEncoding.Binary);
+                    WriteAnObject(data.Name);
+                }
+                if (isNoMethodError) {
+                    WriteSymbol("args", RubyEncoding.Binary);
+                    WriteAnObject(data.Arguments);
+                    WriteSymbol("private_call?", RubyEncoding.Binary);
+                    WriteAnObject(data.PrivateCall);
+                }
 
                 // MRI writes the cause as another pseudo instance variable, and only when the
                 // exception has one - an exception that was never raised inside a rescue has not.
@@ -1494,6 +1504,12 @@ namespace IronRuby.Builtins {
             private object/*!*/ CreateException(RubyClass/*!*/ theClass, Dictionary<string, object>/*!*/ attributes) {
                 var exception = (Exception)RubyUtils.CreateObject(theClass);
                 var data = RubyExceptionData.GetInstance(exception);
+                bool isNameError = theClass.IsSubclassOf(Context.GetClass(typeof(MemberAccessException)));
+                bool isNoMethodError = isNameError && theClass.IsSubclassOf(Context.GetClass(typeof(MissingMethodException)));
+
+                // A loaded exception was never raised here: like MRI's, it has a backtrace and no Locations
+                // (see Exception#backtrace_locations in the prelude).
+                Context.SetInstanceVariable(exception, RubyUtils.GetCoreStateInstanceVariableName("@__backtrace_from_strings__"), true);
                 foreach (var pair in attributes) {
                     switch (pair.Key) {
                         case "mesg":
@@ -1513,6 +1529,32 @@ namespace IronRuby.Builtins {
                             }
                             break;
 
+                        case "bt_locations":
+                            // MRI writes the Locations of a raised exception as the "bt" strings again, and
+                            // the one it loads answers nil for #backtrace_locations. IronRuby's say so below.
+                            break;
+
+                        case "name":
+                            if (isNameError) {
+                                data.Name = pair.Value;
+                                break;
+                            }
+                            goto default;
+
+                        case "args":
+                            if (isNoMethodError) {
+                                data.Arguments = pair.Value;
+                                break;
+                            }
+                            goto default;
+
+                        case "private_call?":
+                            if (isNoMethodError) {
+                                data.PrivateCall = RubyOps.IsTrue(pair.Value);
+                                break;
+                            }
+                            goto default;
+
                         default:
                             Context.SetInstanceVariable(exception,
                                 Array.IndexOf(ExceptionInternalIVars, pair.Key) >= 0 ? HiddenIVarName(pair.Key) : pair.Key, pair.Value);
@@ -1522,8 +1564,20 @@ namespace IronRuby.Builtins {
                 return exception;
             }
 
+            /// <summary>
+            /// The class of a 'u' record; null for MRI's NameError::message - the message of a NameError, which
+            /// MRI formats when it is first asked for - whose _load answers the string it was dumped as.
+            /// </summary>
+            private RubyClass ReadLoadableType() {
+                string name = ReadIdentifier();
+                return name == "NameError::message" ? null : (RubyClass)ReadClassOrModule('c', name);
+            }
+
             private object/*!*/ ReadUsingLoad() {
-                RubyClass theClass = ReadType();
+                RubyClass theClass = ReadLoadableType();
+                if (theClass == null) {
+                    return ReadString();
+                }
                 if (!Context.ResolveMethod(theClass, "_load", VisibilityContext.AllVisible).Found) {
                     throw RubyExceptions.CreateTypeError("class {0} needs to have method '_load'",
                         theClass.GetDisplayName(Context, false).ToString());
@@ -1674,7 +1728,7 @@ namespace IronRuby.Builtins {
                     // The instance variables written with a _dump string belong to that string,
                     // and _load is handed them along with it - that is how Time gets its zone and
                     // its offset back.
-                    RubyClass theClass = ReadType();
+                    RubyClass theClass = ReadLoadableType();
                     MutableString data = ReadString();
 
                     // The object itself is entered in the link table only once those instance
@@ -1685,7 +1739,7 @@ namespace IronRuby.Builtins {
                     }
 
                     ReadIVars(data);
-                    object loaded = _sites.Load.Target(_sites.Load, theClass, data);
+                    object loaded = theClass != null ? _sites.Load.Target(_sites.Load, theClass, data) : data;
                     _objects[_objects.Count] = loaded;
                     _selfLinked = true;
                     return loaded;

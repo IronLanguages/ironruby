@@ -2944,6 +2944,40 @@ true
         }
 
         /// <summary>
+        /// An exception MRI dumped loads as MRI loads it: "bt_locations" is not an instance variable of the result, which
+        /// has no Locations; a NoMethodError's message dumped as a NameError::message is its string, and NameError's name,
+        /// NoMethodError's args and private_call? are the error's own again - and IronRuby writes them as MRI does. The
+        /// prelude's record of an exception's Locations is not an instance variable either.
+        /// </summary>
+        public void Marshal_NameError1() {
+            TestOutput(@"
+require 'ruby4'
+x = Marshal.load(""\x04\bo:\x12NoMethodError\v:\tmesgIu:\x17NameError::message#undefined method 'foo' for nil\x06:\x06EF:\abt[\x06I\""\x15-e:1:in '<main>'\x06;\bF:\tname:\bfoo:\targs[\x00:\x12private_call?T:\x11bt_locations@\a"".b)
+p x.message, x.name, x.args, x.private_call?, x.backtrace, x.backtrace_locations, x.instance_variables
+p Marshal.dump(NameError.new('x', :foo, receiver: 1)) == ""\x04\bo:\x0ENameError\b:\tmesgI\""\x06x\x06:\x06ET:\abt0:\tname:\bfoo"".b
+p Marshal.dump(NoMethodError.new) == ""\x04\bo:\x12NoMethodError\n:\tmesg0:\abt0:\tname0:\targs0:\x12private_call?F"".b
+y = Marshal.load(Marshal.dump(NoMethodError.new('x', :bar, [1, 2], true))); p y.name, y.args, y.private_call?, y.instance_variables
+e = (raise 'q' rescue $!); e.backtrace_locations; p e.instance_variables, Marshal.load(Marshal.dump(e)).backtrace_locations
+", @"
+""undefined method 'foo' for nil""
+:foo
+[]
+true
+[""-e:1:in '<main>'""]
+nil
+[]
+true
+true
+:bar
+[1, 2]
+true
+[]
+[]
+nil
+");
+        }
+
+        /// <summary>
         /// Data.new reports a missing member before an unknown keyword, as MRI's rb_data_initialize_m does, and Data.define
         /// and Struct.new refuse only setter names (rb_is_attrset_id) as members, so `[]=` is allowed. All in the prelude.
         /// </summary>

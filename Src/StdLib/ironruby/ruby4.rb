@@ -11067,28 +11067,28 @@ class Exception
   def set_backtrace(value)
     if ::Array === value && !value.empty? &&
        value.all? { |v| ::Thread::Backtrace::Location === v }
-      @__backtrace_locations = value
+      @__backtrace_locations__ = value
       __core_set_backtrace__(value.map(&:to_s))
     else
       # The locations belong to the raise and not to these strings: an exception that
       # was raised keeps the ones it was raised with, and one that never was gets none,
       # however many strings it is given.
-      @__backtrace_locations = backtrace_locations
-      @__backtrace_from_strings = true
+      @__backtrace_locations__ = backtrace_locations
+      @__backtrace_from_strings__ = true
       __core_set_backtrace__(value)
     end
   end
 
   def backtrace_locations
-    return @__backtrace_locations if @__backtrace_locations
-    return nil if defined?(@__backtrace_from_strings)
+    return @__backtrace_locations__ if @__backtrace_locations__
+    return nil if defined?(@__backtrace_from_strings__)
     # a #set_backtrace of the exception's own that did not store the raise's backtrace leaves
     # #backtrace nil, and MRI still has the locations of the raise
     entries = backtrace || __raise_backtrace__
     return nil unless entries
     # The array is answered again as it is, rather than parsed afresh: MRI hands back
     # the one array, and a spec pushes onto it and looks again.
-    @__backtrace_locations = entries.map { |entry| ::Thread::Backtrace::Location.__parse__(entry) }
+    @__backtrace_locations__ = entries.map { |entry| ::Thread::Backtrace::Location.__parse__(entry) }
   end unless method_defined?(:backtrace_locations)
 
   # Whether an uncaught exception would be printed to a terminal. Decides the
