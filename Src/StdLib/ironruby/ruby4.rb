@@ -2711,12 +2711,19 @@ unless defined?(Fiber)
     alias to_s inspect
     def storage; __state__.storage; end
     def storage=(value); __state__.storage = value; end
-    def resume(*args); __state__.resume(*args); end
-    def transfer(*args); __state__.transfer(*args); end
+    # MRI checks for interrupts as a fiber switch returns, and again as the method returns
+    # (`leave`) - inside whatever `rescue` surrounds the call. FiberCore#switch checks before
+    # the Ruby frames of the switch have returned, and a return is no safe point here, so a
+    # Thread#raise that came in on the way back was raised at the caller's next safe point:
+    # the next iteration of `n.times do ... rescue ... end`, outside the rescue meant for it.
+    # The entry of __switched__ is a safe point in the caller's frame.
+    def resume(*args); Fiber.__switched__(__state__.resume(*args)); end
+    def transfer(*args); Fiber.__switched__(__state__.transfer(*args)); end
     def kill; __state__.kill; self; end
     ruby2_keywords def raise(*args); __state__.raise(*args); end
 
-    def self.yield(*args); State.yield(*args); end
+    def self.yield(*args); __switched__(State.yield(*args)); end
+    def self.__switched__(result); result; end
     def self.blocking?; State.blocking?; end
     def self.blocking(&block); State.blocking(&block); end
     def self.[](key); State[key]; end
@@ -3008,6 +3015,9 @@ unless defined?(Fiber)
             fiber = ::Thread.__fiber_park__
           end
         end
+        # Known before the first switch, which makes this fiber the running one for
+        # Thread#raise as it posts (FiberCore#attach).
+        @core.attach(@thread)
         self
       end
 
@@ -3055,7 +3065,9 @@ unless defined?(Fiber)
       # MRI has in C: an exception landing between the `rescue' and __finish__ would skip the
       # hand-back and reach the resumer as "unexpected return" (Mutex#lock's "does not raise
       # deadlock if a fiber's attempt to lock was interrupted" spec). One that arrives while
-      # the fiber is finishing stays parked and dies with the fiber's thread.
+      # the fiber is finishing goes, with control, to the fiber __finish__ hands back to
+      # (FiberCore#post), which raises it as its switch returns - MRI's thread interrupt
+      # reaching whichever fiber runs next.
       def __run__
         msg = __await__
         result = nil

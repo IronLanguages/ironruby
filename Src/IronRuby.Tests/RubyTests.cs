@@ -891,6 +891,9 @@ namespace IronRuby.Tests {
                 ManyLocals2,
                 Block_ReturnTraceFrameCleanup1,
                 Fiber_ReclamationClrBoundary1,
+                Fiber_ThreadRaiseReachesRunningFiber1,
+                Thread_HandleInterruptOtherRuntime1,
+                Thread_RaiseBetweenBlockCallsMeetsRescue1,
                 DeepNesting1,
 
                 Scenario_RubyThreads1,

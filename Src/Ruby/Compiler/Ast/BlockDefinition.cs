@@ -189,6 +189,15 @@ namespace IronRuby.Compiler.Ast {
                 traceCall = traceReturn = Ast.Empty();
             }
 
+            // `do ... rescue ... end`: the entry safe point goes inside the rescued statements, so that a
+            // Thread#raise that came in between two calls of the block meets the rescue (see
+            // RubyOps.CreateBlockScopeSafePointInBody).
+            Body rescuedBody = (_body.Count == 1) ? _body.First as Body : null;
+            bool safePointInBody = rescuedBody != null && rescuedBody.HasRescue;
+            if (safePointInBody) {
+                rescuedBody.SafePointFirst = true;
+            }
+
             MSA.Expression statements = gen.TransformStatements(_body, ResultOperation.Return);
             bool hasNestedReturn = gen.CurrentBlock.HasNestedReturn;
 
@@ -283,7 +292,7 @@ namespace IronRuby.Compiler.Ast {
                 // the scope to reuse is taken first, its tuple from it (see RubyOps.TakeReusableBlockScope)
                 var reusableScope = scope.DefineHiddenVariable("#reusable", typeof(RubyBlockScope));
                 enterScope = Methods.CreateReusableBlockScope.OpCall(new AstExpressions {
-                    scope.MakeReusableLocalsStorage(blockParameter, reusableScope),
+                    scope.MakeReusableLocalsStorage(blockParameter, reusableScope, safePointInBody),
                     scope.GetVariableNamesExpression(),
                     blockParameter,
                     selfParameter,
@@ -291,7 +300,8 @@ namespace IronRuby.Compiler.Ast {
                     reusableScope
                 });
             } else {
-                enterScope = (lazyScope != null ? Methods.CreateBlockScopeIfTraced : Methods.CreateBlockScope).OpCall(new AstExpressions {
+                enterScope = (lazyScope != null ? Methods.CreateBlockScopeIfTraced :
+                    safePointInBody ? Methods.CreateBlockScopeSafePointInBody : Methods.CreateBlockScope).OpCall(new AstExpressions {
                     scope.MakeLocalsStorage(),
                     scope.GetVariableNamesExpression(),
                     blockParameter, 
