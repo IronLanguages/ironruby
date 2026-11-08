@@ -758,7 +758,8 @@ IronRubyTests::InteropFixtures::IInterface[]
         /// <summary>
         /// Strings and numbers: Ruby and CLR strings and a Ruby subclass of String bind to String; to_str and
         /// to_int are the implicit conversions to String and Int32; a Float parameter parses a string as Float()
-        /// does. System::Char into Double, Single and Decimal is left out until Largo/ironruby#153 settles how it converts.
+        /// does. A System::Char is a one-character string to every numeric parameter (Largo/ironruby#153): Int32 and
+        /// Decimal reject it like a String, Double and Single take the strict Float() parse, never Char#to_f or the code point.
         /// </summary>
         public void ClrInterop_BindingNumericAndString1() {
             LoadInteropFixtures();
@@ -777,7 +778,11 @@ matrix %w[StringArg ObjectArg BooleanArg CharArg Int32Arg DoubleArg DecimalArg],
   'ToIntToI' => ToIntToI.new,
   'ToStr' => ToStr.new,
 }
-matrix %w[StringArg ObjectArg CharArg Int32Arg], 'System::Char' => System::Char.new('a')
+matrix %w[StringArg ObjectArg CharArg Int32Arg DoubleArg SingleArg DecimalArg], {
+  'System::Char' => System::Char.new('a'),
+  ""System::Char '5'"" => System::Char.new('5'),
+  'System::Char.MaxValue' => System::Char.MaxValue,
+}
 ", @"
 '': StringArg='' ObjectArg='' BooleanArg=true DoubleArg=:ArgumentError
 'a': StringArg='a' ObjectArg='a' BooleanArg=true CharArg='a' (Char) DoubleArg=:ArgumentError
@@ -787,7 +792,9 @@ MyString 'a': StringArg='a' ObjectArg='a' BooleanArg=true CharArg='a' (Char) Dou
 ToInt: ObjectArg BooleanArg=true Int32Arg=1
 ToIntToI: ObjectArg BooleanArg=true Int32Arg=2
 ToStr: StringArg='to_str' ObjectArg BooleanArg=true
-System::Char: StringArg='a' ObjectArg CharArg
+System::Char: StringArg='a' ObjectArg CharArg DoubleArg=:ArgumentError SingleArg=:ArgumentError
+System::Char '5': StringArg='5' ObjectArg CharArg DoubleArg=5.0 SingleArg=5 (Single)
+System::Char.MaxValue: StringArg='\uFFFF' ObjectArg CharArg DoubleArg=:ArgumentError SingleArg=:ArgumentError
 ");
         }
 
