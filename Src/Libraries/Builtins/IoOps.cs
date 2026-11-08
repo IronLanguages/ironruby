@@ -1762,14 +1762,28 @@ namespace IronRuby.Builtins {
 
             // MRI's syswrite is one write(2), so a pipe that only had room for part of the string
             // reports what it took rather than waiting for the rest to fit.
-            var pipe = DescriptorStream.Of(self.GetStream().BaseStream);
+            var baseStream = self.GetStream().BaseStream;
+            var pipe = (ISingleWriteStream)DescriptorStream.Of(baseStream) ?? baseStream as ISingleWriteStream;
+            // Windows has no O_NONBLOCK on the handle for the write to go by; io/nonblock's
+            // #nonblock= remembers the flag in the IO instead (see io/nonblock.rb). It is this IO's
+            // and this call's: another IO over the same pipe may be in the other mode. The pipe can
+            // also be the one behind STDOUT or STDERR, redirected; a blocking syswrite there keeps
+            // going through the standard stream as before.
+            object nonblock;
+            var windowsPipe = context.TryGetInstanceVariable(self, "@__nonblock__", out nonblock) && nonblock is bool && (bool)nonblock
+                ? WindowsPipeStream.Of(baseStream) : null;
+            bool nonBlocking = windowsPipe != null;
             int count = val.GetByteCount();
-            if (pipe != null && count > 0) {
-                // the write(2) blocks on a full pipe, so IO#timeout is waited out before it
-                self.WaitForStream(false);
+            if ((pipe != null || nonBlocking) && count > 0) {
+                if (!nonBlocking) {
+                    // the write(2) blocks on a full pipe, so IO#timeout is waited out before it
+                    self.WaitForStream(false);
+                }
                 int written;
                 try {
-                    written = pipe.WriteOnce(val.ToByteArray(), 0, count);
+                    written = nonBlocking
+                        ? windowsPipe.WriteNonBlocking(val.ToByteArray(), 0, count)
+                        : pipe.WriteOnce(val.ToByteArray(), 0, count);
                 } catch (IOException e) {
                     throw TranslateStreamError(e);
                 }
@@ -2054,7 +2068,7 @@ namespace IronRuby.Builtins {
                 return (queued == 0 && buffered == 0) ? null : buffer;
             }
 
-            var pipe = DescriptorStream.Of(stream.BaseStream);
+            var pipe = (INonBlockingReadStream)DescriptorStream.Of(stream.BaseStream) ?? stream.BaseStream as INonBlockingReadStream;
             if (pipe == null) {
                 // A Windows pipe has no descriptor, and a ReadFile on an empty one waits for the
                 // writer however long that is, but PeekNamedPipe says whether anything is there.

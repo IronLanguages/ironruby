@@ -4054,6 +4054,164 @@ fiber of another thread: 2
         }
 
         /// <summary>
+        /// IO.pipe on Windows is a CreatePipe pipe (WindowsPipeStream). A thread blocked reading it used to
+        /// be Running to the CLR, so Thread#stop? never said true and ruby/spec's `Thread.pass until
+        /// t.stop?` spun for ever; closing the read end from another thread did not reach the blocked read;
+        /// and #read_nonblock / #write_nonblock blocked on an empty / full pipe. Windows only.
+        /// </summary>
+        public void Windows_PipeBlocking1() {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+# bounded, so that a thread that never looks blocked fails the test instead of hanging it
+def wait_for(seconds = 10); deadline = Time.now + seconds; Thread.pass until yield || Time.now > deadline; end
+r, w = IO.pipe
+t = Thread.new { begin; r.read; rescue IOError => e; e.message; end }
+wait_for { t.stop? }
+puts ""blocked reader: #{t.status.inspect}""
+r.close
+puts ""closed underneath: #{(t.join(10) ? t.value : :still_blocked).inspect}""
+w.close
+r, w = IO.pipe
+puts ""empty: #{begin; r.read_nonblock(5); rescue IO::WaitReadable; :wait_readable; end.inspect}""
+puts ""empty, exception: false: #{r.read_nonblock(5, exception: false).inspect}""
+w.write ""ab""
+puts ""two bytes: #{r.read_nonblock(5).inspect}""
+n = 0
+full = begin; loop { n += w.write_nonblock('a' * 10_000) }; rescue IO::WaitWritable; :wait_writable; end
+puts ""full: #{full.inspect} after #{n > 0 ? 'some' : 'no'} bytes""
+puts ""full, exception: false: #{w.write_nonblock('a', exception: false).inspect}""
+r.close
+puts ""reader gone: #{begin; w.write_nonblock('a'); rescue SystemCallError => e; e.class; end}""
+w.close
+r, w = IO.pipe
+writer = Thread.new { w.write('a' * 100_000) }
+wait_for { writer.stop? }
+started = Time.now
+other = begin; w.write_nonblock('b'); rescue IO::WaitWritable; :wait_writable; end
+puts ""behind a blocked writer: #{other.inspect}, at once: #{Time.now - started < 2}""
+r.read(100_000)
+writer.join
+r.close; w.close
+", @"
+blocked reader: ""sleep""
+closed underneath: ""stream closed in another thread""
+empty: :wait_readable
+empty, exception: false: :wait_readable
+two bytes: ""ab""
+full: :wait_writable after some bytes
+full, exception: false: :wait_writable
+reader gone: Errno::EPIPE
+behind a blocked writer: :wait_writable, at once: true
+");
+        }
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern bool SetStdHandle(int nStdHandle, IntPtr handle);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern bool PeekNamedPipe(Microsoft.Win32.SafeHandles.SafePipeHandle handle, IntPtr buffer, int size,
+            IntPtr bytesRead, out int bytesAvailable, IntPtr bytesLeft);
+
+        /// <summary>
+        /// STDOUT redirected to a pipe on Windows. The process's standard output handle is pointed at a
+        /// pipe for the length of the test, and SharedIO opens it as it opens standard output (A, B), or
+        /// is given a stream by the host (C, D).
+        /// A: put into non-blocking mode with io/nonblock, #syswrite on a full pipe takes what fits and
+        /// then raises IO::WaitWritable, as write(2) on an O_NONBLOCK descriptor 1 does. It used to
+        /// block, because STDOUT's stream is the console stream and #syswrite did not look behind it
+        /// for the pipe.
+        /// B: when the pipe's reader has already gone, .NET opens standard output as Stream.Null; the
+        /// write still has to reach the handle and report EPIPE, where it was thrown away silently.
+        /// C: a host that gives SharedIO Stream.Null itself wants the output discarded: nothing
+        /// reaches the pipe, in blocking or non-blocking mode. D: nor does it get EPIPE when the pipe's
+        /// reader has gone - the same Stream.Null object as B's, which is why SharedIO says which it is
+        /// (IsOutputSetByHost, Build/dlr-patches/0104). Windows only.
+        /// </summary>
+        public void Windows_StdoutPipeSysWrite1() {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
+                return;
+            }
+            const int STD_OUTPUT_HANDLE = -11;
+            IntPtr saved = GetStdHandle(STD_OUTPUT_HANDLE);
+            Action<IntPtr, System.IO.Stream> redirect = (handle, output) => {
+                SetStdHandle(STD_OUTPUT_HANDLE, handle);
+                ConsoleStream.ResetStandardDescriptors();
+                if (output == null) {
+                    Runtime.IO.RedirectToConsole();
+                } else {
+                    Runtime.IO.SetOutput(output, System.IO.TextWriter.Null);
+                }
+            };
+            // Nothing may be printed in here: standard output is the pipe under test.
+            try {
+                // A: a pipe nobody reads, filled
+                using (var pipe = new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.In)) {
+                    redirect(pipe.ClientSafePipeHandle.DangerousGetHandle(), null);
+                    var result = Engine.Execute<string>(@"
+require 'io/nonblock'
+STDOUT.nonblock = true
+begin
+  first = STDOUT.syswrite('a' * 2_000_000)
+  second = begin; STDOUT.syswrite('b' * 10); rescue IO::WaitWritable; 'wait_writable'; end
+  ""#{first > 0 && first < 2_000_000 ? 'short write' : first} then #{second}""
+ensure
+  STDOUT.nonblock = false
+end
+").ToString();
+                    Assert(result == "short write then wait_writable", result);
+                }
+
+                // B: the write end of a pipe whose reader has gone
+                using (var pipe = new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.Out)) {
+                    pipe.DisposeLocalCopyOfClientHandle();
+                    redirect(pipe.SafePipeHandle.DangerousGetHandle(), null);
+                    Assert(Console.OpenStandardOutput() == System.IO.Stream.Null, "expected .NET to open a broken pipe as Stream.Null");
+                    var result = Engine.Execute<string>(@"
+begin; STDOUT.syswrite('x'); 'written'; rescue Errno::EPIPE; 'epipe'; end
+").ToString();
+                    Assert(result == "epipe", result);
+                }
+
+                // C: a pipe nobody reads, and a host that discards the output
+                using (var pipe = new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.In)) {
+                    redirect(pipe.ClientSafePipeHandle.DangerousGetHandle(), System.IO.Stream.Null);
+                    Engine.Execute(@"
+require 'io/nonblock'
+STDOUT.write('hidden'); STDOUT.flush
+STDOUT.syswrite('x')
+STDOUT.nonblock = true
+STDOUT.syswrite('y')
+STDOUT.nonblock = false
+");
+                    int available;
+                    Assert(PeekNamedPipe(pipe.SafePipeHandle, IntPtr.Zero, 0, IntPtr.Zero, out available, IntPtr.Zero));
+                    Assert(available == 0, available + " bytes reached the pipe");
+                }
+
+                // D: the write end of a pipe whose reader has gone, and a host that discards the output
+                using (var pipe = new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.Out)) {
+                    pipe.DisposeLocalCopyOfClientHandle();
+                    redirect(pipe.SafePipeHandle.DangerousGetHandle(), System.IO.Stream.Null);
+                    var result = Engine.Execute<string>(@"
+STDOUT.write('hidden'); STDOUT.flush
+begin; STDOUT.syswrite('x').to_s; rescue Errno::EPIPE, SignalException => e; e.class.name; end
+").ToString();
+                    Assert(result == "1", result);
+                }
+            } finally {
+                SetStdHandle(STD_OUTPUT_HANDLE, saved);
+                ConsoleStream.ResetStandardDescriptors();
+                Runtime.IO.RedirectToConsole();
+            }
+        }
+
+        /// <summary>
         /// What MRI does on Windows with the functions win32/Makefile.sub leaves out, and with the ones
         /// win32.c supplies. Dir.fchdir, Dir.for_fd, Dir#fileno, Dir.chroot, File.lutime, File.mkfifo and the
         /// process-group and set-id parts of Process are rb_f_notimplement stubs there: NotImplementedError,

@@ -112,7 +112,7 @@ namespace IronRuby.Builtins {
         public override void Write(byte[]/*!*/ buffer, int offset, int count) {
             bool output = _consoleType == ConsoleStreamType.Output;
             Stream stream = output ? _io.OutputStream : _io.ErrorStream;
-            (GetUnbufferedStream(stream, output) ?? stream).Write(buffer, offset, count);
+            (GetUnbufferedStream(stream, output, IsSetByHost(output)) ?? stream).Write(buffer, offset, count);
         }
 
         private static Stream _rawInput;
@@ -155,13 +155,38 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// Forgets what was found out about descriptors 0, 1 and 2: a warm-start worker
-        /// (Hosting/WarmStart.cs) has just put different ones there.
+        /// (Hosting/WarmStart.cs) has just put different ones there - or, on Windows, different
+        /// standard handles, which decide between the console writer and a pipe stream.
         /// </summary>
         internal static void ResetStandardDescriptors() {
             _rawInput = null;
             _rawInputChecked = false;
             _rawOutput = null;
             _rawError = null;
+            _consoleOutput = null;
+            _consoleError = null;
+            _consoleOutputChecked = false;
+            _consoleErrorChecked = false;
+        }
+
+        /// <summary>
+        /// The pipe standard output or standard error writes to on Windows when it is redirected
+        /// to one, or null. IO#syswrite on a non-blocking STDOUT writes to it directly, as a
+        /// write(2) on descriptor 1 would.
+        /// </summary>
+        internal WindowsPipeStream WindowsPipe {
+            get {
+                if (_consoleType == ConsoleStreamType.Input) {
+                    return null;
+                }
+                bool output = _consoleType == ConsoleStreamType.Output;
+                return GetUnbufferedStream(output ? _io.OutputStream : _io.ErrorStream, output, IsSetByHost(output)) as WindowsPipeStream;
+            }
+        }
+
+        // whether a host gave SharedIO the stream (SharedIO.SetOutput) rather than it opening the process's own
+        private bool IsSetByHost(bool output) {
+            return output ? _io.IsOutputSetByHost : _io.IsErrorOutputSetByHost;
         }
 
         /// <summary>
@@ -171,7 +196,18 @@ namespace IronRuby.Builtins {
         /// descriptor does report the error, so use one whenever the standard stream is still the one
         /// .NET opened (an embedder that redirected SharedIO keeps its own stream) and is redirected.
         /// </summary>
-        private static Stream GetUnbufferedStream(Stream/*!*/ stream, bool output) {
+        private static Stream GetUnbufferedStream(Stream/*!*/ stream, bool output, bool setByHost) {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT && stream == Stream.Null) {
+                // .NET checks the handle with a zero-byte WriteFile when it opens standard output,
+                // and hands out Stream.Null when that fails - which it does on a pipe whose reader
+                // has already gone. Everything written was then thrown away without an error, and
+                // a child that IO.popen(...).close had abandoned before it wrote its first line
+                // ran `loop { puts }` for ever. The handle itself still says EPIPE.
+                // A host can also give SharedIO Stream.Null on purpose, to throw the output away;
+                // that one stays a discard, whatever state the handle is in.
+                return setByHost ? null : GetWindowsConsole(output);
+            }
+
             var name = stream.GetType().FullName;
             if (name == null || !name.EndsWith("ConsoleStream", StringComparison.Ordinal)) {
                 return null;
@@ -212,7 +248,8 @@ namespace IronRuby.Builtins {
         /// "ÔóÇÔí"). MRI writes to a console with WriteConsoleW instead, as UTF-16, which shows
         /// the text whatever the code page; this does the same, decoding the bytes as UTF-8,
         /// Ruby's default external encoding on Windows. A stream that is redirected to a file
-        /// or a pipe is not a console and keeps getting the bytes unchanged.
+        /// or a pipe is not a console and keeps getting the bytes unchanged; a pipe through a
+        /// WindowsPipeStream, which reports a reader that has gone.
         /// </summary>
         private static Stream GetWindowsConsole(bool output) {
             ref bool isChecked = ref (output ? ref _consoleOutputChecked : ref _consoleErrorChecked);
@@ -223,6 +260,12 @@ namespace IronRuby.Builtins {
                     IntPtr handle = Win32Console.GetStdHandle(output ? Win32Console.STD_OUTPUT_HANDLE : Win32Console.STD_ERROR_HANDLE);
                     if (Win32Console.GetConsoleMode(handle, out _)) {
                         cache = new Win32ConsoleWriter(handle);
+                    } else if (WindowsPipeStream.IsPipe(handle)) {
+                        // .NET's stream ignores ERROR_NO_DATA, so a child writing to a pipe
+                        // whose reader has gone - IO.popen(cmd).close - never learnt of it and
+                        // `loop { puts }` ran for ever. This one reports EPIPE, as on Unix.
+                        // The handle stays open: it is the process's, not this stream's.
+                        cache = new WindowsPipeStream(new Microsoft.Win32.SafeHandles.SafeFileHandle(handle, false), FileAccess.Write);
                     }
                 } catch (Exception) {
                     cache = null;
