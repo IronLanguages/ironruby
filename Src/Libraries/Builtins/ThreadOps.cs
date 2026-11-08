@@ -906,6 +906,15 @@ namespace IronRuby.Builtins {
             // MRI delivers the interrupt to the thread's running fiber, and each fiber here is a
             // CLR thread of its own.
             RubyThreadInfo ownerInfo = RubyThreadInfo.FromThread(thread);
+
+            // A thread Thread#kill has been called on dies of the kill, as MRI's does: a raise that
+            // comes in behind it is dropped, whether the kill is still parked or already unwinding
+            // the thread. Parked, it replaced the kill; in flight, it replaced the ThreadExitSignal
+            // and the thread died of the raise, which #join then raised again.
+            if (ownerInfo.ExitRequested) {
+                return;
+            }
+
             RubyThreadInfo info;
             RubyThreadStatus status;
             using (new RubyUtils.UninterruptedLock(ownerInfo.FiberSwitchLock)) {
@@ -1343,6 +1352,11 @@ namespace IronRuby.Builtins {
                     }
                 }
 
+                // The thread's block is over and the thread dies of `e`. A Thread#kill that waited
+                // behind it (or anything parked since) would only cut the report below short: writing
+                // it to a Ruby $stderr is a safe point. MRI does not check for interrupts here either.
+                RubyUtils.DropPendingAsyncExceptions(Thread.CurrentThread);
+
                 if (RubyUtils.IsRubyThreadExit(e) || info.ExitRequested) {
                     // Note that "e" may not be the exit signal at this point: if an exception was raised from a
                     // finally block, we get that here instead.
@@ -1415,9 +1429,10 @@ namespace IronRuby.Builtins {
                 // MRI releases every mutex a thread still holds when it dies.
                 IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(Thread.CurrentThread);
 
-                // A Thread#raise that arrived too late to be delivered dies with the thread. Left
-                // parked it would keep every other thread's safe points on the slow path.
-                RubyUtils.GetPendingAsyncException(Thread.CurrentThread);
+                // A Thread#raise that arrived too late to be delivered dies with the thread, and so
+                // does a Thread#kill waiting behind it. Left parked they would keep every other
+                // thread's safe points on the slow path.
+                RubyUtils.DropPendingAsyncExceptions(Thread.CurrentThread);
                 info.RunsRuby = false;
             }
         }
