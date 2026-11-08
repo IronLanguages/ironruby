@@ -1,4 +1,4 @@
-# net/http over TLS: diagnosis and proposed fix
+# net/http over TLS
 
 Status: both stages below are implemented; stage 2 replaced stage 1's net/protocol
 overrides, so upstream's `net/protocol` runs unmodified. Measured on IronRuby 4.0.1,
@@ -26,8 +26,9 @@ and one request that has to end in `Net::ReadTimeout`:
 - **Plain sockets are fine.** `IO.select`, `IO#wait_readable` and
   `read_nonblock` on a socket go through `Socket.Select` on Windows
   (`Src/Libraries/Builtins/IoReadiness.cs`, `BlockWindows`), not `poll(2)`, and
-  `net/http`'s read timeout works. What *is* `poll(2)` on Windows is a pipe
-  (README, "What Windows does not have yet"); the suspicion mixes the two up.
+  `net/http`'s read timeout works. What was missing on Windows was pipe readiness
+  (pipes now get it from `PeekNamedPipe` in `WindowsPipeStream`); the suspicion mixed
+  the two up.
 - **Over TLS nothing times out.** A server that stops answering leaves the caller
   blocked for ever: no `read_timeout`, no `write_timeout`, and no `open_timeout`
   for the TLS handshake. For a service that calls an API in a loop, that is a hang.
@@ -65,7 +66,7 @@ data comes. `ssl_socket_connect` (handshake under `open_timeout`) and `write_non
 There are two stages. The first is small and covers what a client needs; the second
 gives real non-blocking I/O.
 
-### Stage 1: timeouts on the blocking calls, and the context's CAs (recommended next)
+### Stage 1: timeouts on the blocking calls, and the context's CAs
 
 1. **Read and write timeouts.** `Transport__` gets `read_timeout=` and `write_timeout=`
    (milliseconds, -1 for none), which set `SslStream.ReadTimeout`/`WriteTimeout`.
@@ -183,7 +184,9 @@ As built:
   the TCP socket stays an ordinary one for puma's reactor. `ssl://` binds take `cert`/`key`
   files or `cert_pem`/`key_pem`, `key_password_command`, `ca` with `verify_mode` none, peer or
   force_peer (`puma.peercert` in the env), and `no_tlsv1`/`no_tlsv1_1`. Ignored:
-  `ssl_cipher_filter`, `ssl_ciphersuites`, `verification_flags`, `reuse`.
+  `ssl_cipher_filter`, `ssl_ciphersuites`, `verification_flags`, `reuse`. On Windows SChannel
+  needs the key in a key store: it goes into the user's, and into the machine's when DPAPI is
+  unavailable (an SSH session logged in with a key).
 - Not done: `OpenSSL::SSL::SSLServer` and `SSLSocket#accept` (server-side TLS for Ruby code
   other than puma) still raise NotImplementedError.
 
@@ -195,8 +198,7 @@ As built:
   certificate with `CertificateRequest` + `CreateSelfSigned`, accept on a loopback
   `TcpListener`, `SslStream.AuthenticateAsServer`, and stall after the headers for the
   timeout case. The Ruby side then runs `Net::HTTP` with `ca_file:` pointing at the
-  exported certificate and `read_timeout: 1` (the test needs `[Options(Prism = true)]`
-  to load `net/http`).
+  exported certificate and `read_timeout: 1`.
 
   That is `Src/IronRuby.Tests/Runtime/NetHttpTlsTests.cs`: `NetHttp_Tls1` (trust, the three
   timeouts, the name check), `NetHttp_TlsVerifyCallback1`, `NetHttp_GemNetTls1`,

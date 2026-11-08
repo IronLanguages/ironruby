@@ -26,7 +26,8 @@ namespace IronRuby.Compiler.Ast {
             : base(null, location) {
         }
 
-        // see Docs/Ruby Language.docx, Runtime/Control Flow Implementation/Retry
+        // retry, by where it stands: in eval, in a rescue clause (runs the begin block again), in a block
+        // or in a method body; the runtime halves are in RubyOps.FlowControl.cs
         internal override MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen) {
             return TransformRetry(gen);
         }

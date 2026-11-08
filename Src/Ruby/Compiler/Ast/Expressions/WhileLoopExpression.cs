@@ -68,7 +68,7 @@ namespace IronRuby.Compiler.Ast {
             _statements = statements;
         }
 
-        // see Docs/Ruby Language.docx, Runtime/Control Flow Implementation/While-until
+        // break, next and redo in the loop's body are jumps to its labels (Break/Next/RedoStatement)
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#loop-result", typeof(object));
             MSA.Expression redoVariable = gen.CurrentScope.DefineHiddenVariable("#skip-condition", typeof(bool));
