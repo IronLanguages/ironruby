@@ -54,9 +54,11 @@ bash Util/build-markly.sh && Util/build-librbs.sh                # two more nati
 dotnet build Src/Console/Ruby.Console.csproj -p:IronRubyTargetFrameworks=net10.0
 ```
 
-- In a cloud session `.claude/hooks/session-start.sh` prepares everything but the last line
-  (the DLR, prism, the native libraries) and exports `DOTNET_ROOT` and `DLR_SOURCE_DIR`; the
-  `dotnet build` is still yours to run before `./ir.sh` has anything to start.
+- In a cloud session `.claude/hooks/session-start.sh` prepares the DLR, prism and the two
+  native libraries and exports `DOTNET_ROOT` and `DLR_SOURCE_DIR`. It runs neither
+  `ruby generate.rb` (the committed `Src/Prism/Generated` matches the pinned prism; run it after
+  moving `PRISM_REF`) nor `dotnet build`, which is still yours to run before `./ir.sh` has
+  anything to start.
 - A DLR checkout somewhere else: `-p:DlrSourceDir=/path/to/dlr/src/core/`. Several worktrees
   sharing one DLR checkout share its `obj/`, so concurrent builds can fail with bogus CS0246.
   Give each its own DLR worktree if you build in parallel.
