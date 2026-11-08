@@ -927,9 +927,11 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Stores unsucessfull look-ups of CLR type members.
         /// Reflection is not efficient at caching look-ups and we do multiple of them (due to mangling) each time a method is being resolved.
-        /// { (declaring-type, method-name, isStatic) -> (type-extension-version) }
+        /// { (declaring-type, method-name, isStatic, privateBinding) -> (type-extension-version) }
+        /// The cache is shared by all runtimes in the process, and a member that is missing without PrivateBinding
+        /// (a private field, say) exists with it, so the key includes that setting.
         /// </summary>
-        private static Dictionary<(Type, string, bool), int> _clrFailedMemberLookupCache = new Dictionary<(Type, string, bool), int>();
+        private static Dictionary<(Type, string, bool, bool), int> _clrFailedMemberLookupCache = new Dictionary<(Type, string, bool, bool), int>();
 
         /// <summary>
         /// GetRuntimeMethods includes
@@ -944,10 +946,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static readonly TypeMemberCache<MethodInfo> _clrMethodsByName = new TypeMemberCache<MethodInfo>(RuntimeReflectionExtensions.GetRuntimeMethods);
         
-        private static bool IsFailureCached(Type/*!*/ type, string/*!*/ methodName, bool isStatic, int extensionVersion) {
+        private static bool IsFailureCached(Type/*!*/ type, string/*!*/ methodName, bool isStatic, bool privateBinding, int extensionVersion) {
             // check for cached lookup failure (if the cache is available):
             bool result = false;
-            var key = (type, methodName, isStatic);
+            var key = (type, methodName, isStatic, privateBinding);
 
             var cache = Interlocked.Exchange(ref _clrFailedMemberLookupCache, null);
             if (cache != null) {
@@ -973,11 +975,11 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        private static void CacheFailure(Type/*!*/ type, string/*!*/ methodName, bool isStatic, int extensionVersion) {
+        private static void CacheFailure(Type/*!*/ type, string/*!*/ methodName, bool isStatic, bool privateBinding, int extensionVersion) {
             // store failure to the cache if the cache is not owned by another thread:
             var cache = Interlocked.Exchange(ref _clrFailedMemberLookupCache, null);
             if (cache != null) {
-                cache[(type, methodName, isStatic)] = extensionVersion;
+                cache[(type, methodName, isStatic, privateBinding)] = extensionVersion;
                 Interlocked.Exchange(ref _clrFailedMemberLookupCache, cache);
             }
         }
@@ -1023,7 +1025,8 @@ namespace IronRuby.Builtins {
         protected override bool TryGetClrMember(Type/*!*/ type, string/*!*/ name, bool mapNames, bool unmangleNames, out RubyMemberInfo method) {
             Context.RequiresClassHierarchyLock();
 
-            if (IsFailureCached(type, name, _isSingletonClass, _extensionVersion)) {
+            bool privateBinding = Context.DomainManager.Configuration.PrivateBinding;
+            if (IsFailureCached(type, name, _isSingletonClass, privateBinding, _extensionVersion)) {
                 method = null;
                 return false;
             }
@@ -1032,7 +1035,7 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            CacheFailure(type, name, _isSingletonClass, _extensionVersion);
+            CacheFailure(type, name, _isSingletonClass, privateBinding, _extensionVersion);
             method = null;
             return false;
         }
