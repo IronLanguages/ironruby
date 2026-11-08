@@ -559,7 +559,7 @@ namespace IronRuby.Runtime.Jit {
             int constantVersion = _context.ConstantAccessVersion;
 
             long start = Stopwatch.GetTimestamp();
-            var code = JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements, -1, _declaringScope, Hints());
+            var code = Named(JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements, -1, _declaringScope, Hints()));
             if (code == null) { return false; }
 
             bool needsClassGuard = code.EmittedSelfCall;
@@ -658,7 +658,7 @@ namespace IronRuby.Runtime.Jit {
             bool any = false, pinned = false;
             for (int k = 0; k <= optionalCount; k++) {
                 if ((_countsSeen & (1 << k)) == 0) { continue; }
-                var code = JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, refinements, k, _declaringScope, Hints());
+                var code = Named(JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, refinements, k, _declaringScope, Hints()));
                 if (code == null) { continue; }
                 if (code.EmittedSelfCall) {
                     if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass, refinements)) { continue; }
@@ -1230,12 +1230,24 @@ namespace IronRuby.Runtime.Jit {
         /// returns the trampoline that replaces the generic delegate. Returns the generic
         /// delegate unchanged when it is not.
         /// </summary>
+        // The name the generic body's frames carry (RubyStackTraceBuilder.EncodeMethodName: label, line, file), for the
+        // compiled bodies too: a frame of one is then "file:line:in 'Object#f'" in a backtrace, not ":0:in 'jit$f'".
+        // An exception rarely leaves one - a raise deopts first - but the stack check at its entry (#128) does.
+        private string _frameName;
+
+        private JitCode Named(JitCode code) {
+            if (code != null && _frameName != null) {
+                code.Lambda = Ast.Lambda(code.Lambda.Type, code.Lambda.Body, _frameName, code.Lambda.Parameters);
+            }
+            return code;
+        }
+
         internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule) {
             return Wrap(generic, ast, context, declaringModule, null, null);
         }
 
         internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule,
-            RubyScope declaringScope, StrongBox<RefinementActivation> definitionRefinements) {
+            RubyScope declaringScope, StrongBox<RefinementActivation> definitionRefinements, string frameName = null) {
             JitRuntime.HookStats();
 
             // Tracing and coverage need the real frame. (A TracePoint enabled at run time is the
@@ -1276,6 +1288,7 @@ namespace IronRuby.Runtime.Jit {
                 stub._genericCompiled = true;
             }
             stub._definitionRefinements = definitionRefinements;
+            stub._frameName = frameName;
             return stub.Trampoline;
         }
 

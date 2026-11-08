@@ -287,7 +287,10 @@ namespace IronRuby.Builtins {
                             selfExpression
                         )
                     ))
-                ).Filter(unwinder = Ast.Parameter(typeof(Exception), "#u"), Methods.IsLambdaUnwinderTarget.OpCall(bfcVariable, unwinder),
+                // only a LambdaUnwinder can be the one (IsLambdaUnwinderTarget): every other exception goes by without
+                // being caught - a lowered filter is a catch, and catching each exception at every lambda call it passed
+                // cost a deep recursion's SystemStackError time in proportion to the square of its depth (#128)
+                ).Filter(unwinder = Ast.Parameter(typeof(LambdaUnwinder), "#u"), Methods.IsLambdaUnwinderTarget.OpCall(bfcVariable, unwinder),
                     // a return in a block nested in the lambda:
                     Ast.Assign(resultVariable, Methods.GetLambdaUnwinderReturnValue.OpCall(unwinder))
                 ).Finally(

@@ -1,0 +1,159 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Largo <andi@idogawa.com>
+Date: Sun, 8 Nov 2026 18:00:00 +0100
+Subject: Rethrow once the catch is left, not from inside it
+
+On CoreCLR a catch handler runs on top of the frames the exception came out
+of, which are popped only when it completes. The interpreter (Run, for a frame
+with no handler for the exception but a finally to run) and the filter and
+fault lowering of TryStatementBuilder rethrew from inside the catch, so an
+exception passing n such frames needed stack for all of them at once: a deep
+recursion's stack-overflow error ended the process. Both now capture the
+exception (ExceptionDispatchInfo), leave the catch and throw it from there.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+diff --git a/src/core/Microsoft.Dynamic/Ast/TryStatementBuilder.cs b/src/core/Microsoft.Dynamic/Ast/TryStatementBuilder.cs
+index 03e3773..989284e 100644
+--- a/src/core/Microsoft.Dynamic/Ast/TryStatementBuilder.cs
++++ b/src/core/Microsoft.Dynamic/Ast/TryStatementBuilder.cs
+@@ -7,10 +7,15 @@ using System.Linq.Expressions;
+ using System;
+ using System.Collections.Generic;
+ using System.Dynamic;
++using System.Reflection;
++using System.Runtime.ExceptionServices;
+ using Microsoft.Scripting.Utils;
+ 
+ namespace Microsoft.Scripting.Ast {
+     public sealed class TryStatementBuilder {
++        private static readonly MethodInfo _captureMethod = typeof(ExceptionDispatchInfo).GetMethod(nameof(ExceptionDispatchInfo.Capture));
++        private static readonly MethodInfo _throwMethod = typeof(ExceptionDispatchInfo).GetMethod(nameof(ExceptionDispatchInfo.Throw), Type.EmptyTypes);
++
+         private readonly List<CatchBlock> _catchBlocks = new();
+         private readonly Expression _try;
+         private Expression _finally, _fault;
+@@ -164,33 +169,70 @@ namespace Microsoft.Scripting.Ast {
+             // and fault blocks.
+             //
+ 
++            // The exception a filter turns down, or a fault has run for, is rethrown once the catch has
++            // been left rather than from inside it (a `throw;' there): on CoreCLR a catch handler runs on
++            // top of the frames the exception came out of, which are popped only when it completes, so a
++            // rethrow from inside kept them all - an exception passing n such frames needed stack for all
++            // of them at once, and a deep recursion's stack-overflow error ended the process. The dispatch
++            // info keeps the exception's trace. This frame's finally then runs before an outer frame's
++            // filter sees the exception, the order a CLR filter would not have, which is the one Ruby's
++            // ensure and rescue have.
++            ParameterExpression pending = null;
+             var handlers = new List<CatchBlock>(_catchBlocks);
+             for (int i = 0, n = handlers.Count; i < n ; i++) {
+                 CatchBlock handler = handlers[i];
+                 if (handler.Filter is not null) {
+-                    handlers[i] = Expression.MakeCatchBlock(
+-                        handler.Test,
+-                        handler.Variable,
+-                        Expression.Condition(
+-                            handler.Filter,
+-                            handler.Body,
+-                            Expression.Rethrow(handler.Body.Type)
+-                        ),
+-                        null
++                    pending ??= Expression.Variable(typeof(ExceptionDispatchInfo), "#pending");
++                    var variable = handler.Variable ?? Expression.Variable(handler.Test, "#e");
++                    Expression catchBody = Expression.Condition(
++                        handler.Filter,
++                        handler.Body,
++                        Expression.Block(
++                            Expression.Assign(pending, Expression.Call(_captureMethod, variable)),
++                            Expression.Default(handler.Body.Type)
++                        )
+                     );
++                    if (handler.Variable is null) {
++                        // a catch by type alone: the exception is needed to rethrow it
++                        catchBody = Expression.Block(handler.Body.Type, catchBody);
++                    }
++                    handlers[i] = Expression.MakeCatchBlock(handler.Test, variable, catchBody, null);
+                 }
+             }
+ 
+             if (_fault is not null) {
+                 ContractUtils.Requires(handlers.Count == 0, "fault cannot be used with catch or finally clauses");
+-                handlers.Add(Expression.Catch(typeof(Exception), Expression.Block(_fault, Expression.Rethrow(_try.Type))));
++                pending ??= Expression.Variable(typeof(ExceptionDispatchInfo), "#pending");
++                var e = Expression.Variable(typeof(Exception), "#e");
++                handlers.Add(Expression.Catch(e, Expression.Block(
++                    _fault,
++                    Expression.Assign(pending, Expression.Call(_captureMethod, e)),
++                    Expression.Default(_try.Type)
++                )));
+             }
+ 
+-            var result = Expression.MakeTry(null, _try, _finally, null, handlers);
++            Expression result = Expression.MakeTry(null, _try, _finally, null, handlers);
+             if (_enableJumpsFromFinally) {
+-                return Utils.FinallyFlowControl(result);
++                result = Utils.FinallyFlowControl(result);
++            }
++            if (pending is null) {
++                return result;
++            }
++
++            var rethrow = Expression.IfThen(
++                Expression.NotEqual(pending, Expression.Constant(null, typeof(ExceptionDispatchInfo))),
++                Expression.Call(pending, _throwMethod)
++            );
++            if (result.Type == typeof(void)) {
++                return Expression.Block(new[] { pending }, Expression.Assign(pending, Expression.Constant(null, typeof(ExceptionDispatchInfo))), result, rethrow);
+             }
+-            return result;
++            var value = Expression.Variable(result.Type, "#value");
++            return Expression.Block(result.Type, new[] { pending, value },
++                Expression.Assign(pending, Expression.Constant(null, typeof(ExceptionDispatchInfo))),
++                Expression.Assign(value, result),
++                rethrow,
++                value
++            );
+         }
+     }
+ 
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
+index 9c4fb4a..be5a8a9 100644
+--- a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
+@@ -7,6 +7,7 @@ using System.Collections.Generic;
+ using System.Diagnostics;
+ using System.Linq.Expressions;
+ using System.Runtime.CompilerServices;
++using System.Runtime.ExceptionServices;
+ using System.Threading;
+ 
+ using Microsoft.Scripting.Utils;
+@@ -84,6 +85,7 @@ namespace Microsoft.Scripting.Interpreter {
+         [SpecialName, MethodImpl(MethodImplOptions.NoInlining)]
+         public void Run(InterpretedFrame frame) {
+             while (true) {
++                ExceptionDispatchInfo rethrow;
+                 try {
+                     var instructions = Instructions.Instructions;
+                     int index = frame.InstructionIndex;
+@@ -94,11 +96,18 @@ namespace Microsoft.Scripting.Interpreter {
+                     return;
+                 } catch (Exception exception) {
+                     switch (HandleException(frame, exception)) {
+-                        case ExceptionHandlingResult.Rethrow: throw;
+                         case ExceptionHandlingResult.Continue: continue;
+                         case ExceptionHandlingResult.Return: return;
+                     }
++                    // Rethrown once the catch is left, not from inside it: on CoreCLR a catch handler runs on
++                    // top of the frames the exception came out of, which are popped only when it completes, so
++                    // a `throw;' here kept them all - and every interpreted frame the exception passes catches
++                    // it (a finally to run is enough), so a deep recursion's stack-overflow error needed stack
++                    // in proportion to its depth to get out, and ended the process. Leaving the catch first
++                    // gives that stack back; the dispatch info keeps the exception's trace.
++                    rethrow = ExceptionDispatchInfo.Capture(exception);
+                 }
++                rethrow.Throw();
+             }
+         }
+ 

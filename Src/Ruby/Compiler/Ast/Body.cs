@@ -210,6 +210,43 @@ namespace IronRuby.Compiler.Ast {
                 transformedElse = AstUtils.Unless(exceptionThrownVariable, transformedElse);
             }
 
+            // The rescue clauses - matching them as well as running them - come after the handler, not in it: on
+            // CoreCLR a catch runs on top of the frames the exception came out of, which are popped only when the
+            // catch is left, so a rescue body ran with no more stack than the raise had. After a deep recursion's
+            // SystemStackError it had none, and the first call in the rescue raised another (#128). MRI's rescue
+            // runs once the frames are gone. Without rescue clauses the handler only takes note.
+            MSA.Expression guarded;
+            if (_rescueClauses != null) {
+                guarded = AstUtils.Try(
+                    AstUtils.Try(
+                        Ast.Block(transformedBody, AstUtils.Empty())
+                    ).Filter(exceptionVariable = Ast.Parameter(typeof(Exception), "#e"),
+                        Methods.CanRescue.OpCall(gen.CurrentScopeVariable, exceptionVariable),
+
+                        Ast.Assign(exceptionThrownVariable, AstUtils.Constant(true)),
+                        AstUtils.Empty()
+                    ),
+                    AstUtils.IfThen(exceptionThrownVariable, transformedRescue),
+                    AstUtils.Empty()
+                ).Finally(
+                    // restore previous exception if the current one has been handled:
+                    AstUtils.Unless(exceptionRethrowVariable,
+                        Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable)
+                    ),
+                    leaveRescue
+                );
+            } else {
+                guarded = AstUtils.Try(
+                    Ast.Block(transformedBody, AstUtils.Empty())
+                ).Filter(exceptionVariable = Ast.Parameter(typeof(Exception), "#e"),
+                    Methods.CanRescue.OpCall(gen.CurrentScopeVariable, exceptionVariable),
+
+                    Ast.Assign(exceptionThrownVariable, AstUtils.Constant(true)),
+                    transformedRescue,
+                    AstUtils.Empty()
+                );
+            }
+
             var result = Ast.Block(
                 Ast.Label(retryLabel),
                 AstUtils.Try(
@@ -221,21 +258,7 @@ namespace IronRuby.Compiler.Ast {
                     (_rescueClauses == null) ? (MSA.Expression)AstUtils.Empty() :
                         Ast.Assign(oldExceptionVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
 
-                    AstUtils.Try(
-                        Ast.Block(transformedBody, AstUtils.Empty())
-                    ).Filter(exceptionVariable = Ast.Parameter(typeof(Exception), "#e"), 
-                        Methods.CanRescue.OpCall(gen.CurrentScopeVariable, exceptionVariable),
-
-                        Ast.Assign(exceptionThrownVariable, AstUtils.Constant(true)),
-                        transformedRescue,
-                        AstUtils.Empty()
-                    ).FinallyIf((_rescueClauses != null), 
-                        // restore previous exception if the current one has been handled:
-                        AstUtils.Unless(exceptionRethrowVariable,
-                            Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable)
-                        ),
-                        leaveRescue
-                    ),
+                    guarded,
 
                     // unless (exception_thrown) do <else-statements> end
                     transformedElse,
