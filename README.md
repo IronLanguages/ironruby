@@ -594,8 +594,8 @@ which skips RubyGems); later runs of the activity take a few milliseconds.
 Linux is the primary target and the one the numbers above are measured on. **Windows works**:
 `ir.cmd` and `iirb.cmd` run, and `spec/language` (2920 examples) and `spec/security` pass with
 **0 failures**. `spec/core` and `spec/library` are rougher there — symlinks/chmod/umask in
-`core/file`, fork and signals in `core/process`, and `IO.select`/`IO#wait` on pipes (which is
-`poll(2)`, so `core/io` and the socket suites hang rather than fail). Win32OLE is not
+`core/file`, and fork and signals in `core/process`. Pipes are `WindowsPipeStream`s: there is
+no `poll(2)`, so `IO.select`/`IO#wait` get a pipe's readiness from `PeekNamedPipe`. Win32OLE is not
 implemented on Windows. `readline` is the readline gem over Reline, as on CRuby 4.0;
 `IO.console` is nil, so irb and Reline fall back to their ANSI input path. Windows Forms and WPF (`require "System.Windows.Forms"`, `"PresentationFramework"`)
 come from the Windows Desktop runtime, which `ir` references whenever it is built for Windows
@@ -770,8 +770,7 @@ and `Inflate#sync_point?` (the 3 errors).
 What Windows does not have yet: **`io/console`** (`IO.console` is
 `nil`, the termios binding being Unix-only by construction; irb and reline fall back to
 their ANSI path and start fine — `Src/Libraries/Termios` would need a Win32 console-API
-twin), **`IO#wait`/`IO.select` on a pipe** (they are `poll(2)`, which is why `io-wait`,
-`socket` and `core/io` hang rather than fail), redirection of **descriptors above 2** in
+twin), redirection of **descriptors above 2** in
 `Process.spawn`/`exec` options (Windows hands a child three handles, not a descriptor
 table, so such a redirection is refused with `EINVAL`), and the Unix-only half of
 `Src/Libraries/Builtins/PosixProcess.cs` (`setsid`, `getpriority`, `setrlimit`, …).

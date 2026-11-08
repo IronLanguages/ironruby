@@ -26,7 +26,8 @@ namespace IronRuby.Compiler.Ast {
             : base(arguments, location) {
         }
 
-        // see Docs/Ruby Language.docx, Runtime/Control Flow Implementation/Next
+        // next, by where it stands: in eval, in a while/until loop, in a block (it returns from the block)
+        // or in a method body; the runtime halves are in RubyOps.FlowControl.cs
         // a class body inside the loop has to be left first
         private static MSA.Expression/*!*/ LoopNext(AstGenerator/*!*/ gen, MSA.Expression/*!*/ value) {
             var module = gen.GetModuleBodyToEscape(true);

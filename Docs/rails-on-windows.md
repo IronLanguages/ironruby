@@ -146,16 +146,14 @@ and under CRuby 4.0.1 with the same gem versions, byte-identical stdout being th
 
 ## Open
 
-- **NameError/NoMethodError messages quote names the 3.3 way**, `` `b' ``, where Ruby 3.4+
-  writes `'b'`.
-- **The "block passed to 'y' may be ignored" warning** says `'y'` where CRuby says
-  `'Object#y'`, and is sometimes reported at line 0.
+- **`-W:performance` does not report "the block passed to 'Object#y' ... may be ignored"**
+  (`-w` does, as CRuby), and warns about the prelude's own `Integer#[]`/`String#-@`
+  redefinitions.
 - **web-console's console has no bindings to evaluate in** (fix 7): real `Exception#bindings`
   needs the runtime to capture a Binding per frame at raise time.
 - **`File.write` in text mode returns the byte count after CRLF conversion** (CRuby: before).
 - **`Pathname` methods report `pathname_builtin.rb`'s real path** as their `source_location`,
   where CRuby says `<internal:pathname_builtin>`.
-- **`IO#read_nonblock` on an empty pipe blocks** on Windows (the README's pipe-readiness gap).
 - **concurrent-ruby warns "Possibly unsupported Ruby implementation"** on every Rails command:
   it knows MRI, JRuby and TruffleRuby only; `Concurrent::Array`/`Hash` are then plain
   `Array`/`Hash` on a runtime with parallel threads.
