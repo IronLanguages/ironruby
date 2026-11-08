@@ -13,4 +13,15 @@
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>
+
+  <!-- A DLR checkout is patched once and falls behind when a new patch lands in Build/dlr-patches; the build
+       went on without a word, and the result differed from CI's only where the missing patch mattered (a
+       backtrace without the frames of a method called through reflection: issue 132). So a build against a
+       DLR without every patch fails here. Util/check-dlr-patches.sh needs sh and git, so it does not run on
+       Windows; it passes a DLR that is not a git checkout (a source tarball). -p:CheckDlrPatches=false skips
+       it, for a DLR that is behind on purpose. -->
+  <Target Name="IronRubyCheckDlrPatches" BeforeTargets="CoreCompile" Condition="'$(OS)' != 'Windows_NT' and '$(CheckDlrPatches)' != 'false'">
+    <Exec Command="sh &quot;$(MSBuildThisFileDirectory)../../Util/check-dlr-patches.sh&quot; &quot;$([MSBuild]::NormalizeDirectory('$(DlrSourceDir)'))&quot;"
+          CustomErrorRegularExpression="^check-dlr-patches:" />
+  </Target>
 </Project>
