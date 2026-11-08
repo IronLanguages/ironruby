@@ -389,24 +389,51 @@ namespace IronRuby.Builtins {
         private static extern int NtQueryInformationFile(SafeFileHandle handle, out IO_STATUS_BLOCK status,
             out FILE_PIPE_LOCAL_INFORMATION info, int length, int informationClass);
 
-        private bool TryQueryPipe(out FILE_PIPE_LOCAL_INFORMATION info) {
+        /// <summary>
+        /// The room left in the pipe <paramref name="handle"/> writes to, in bytes (WriteQuotaAvailable, as
+        /// libuv asks it): a write of no more than this completes without waiting for the reader.
+        /// Int32.MaxValue when the pipe cannot say. <paramref name="readerGone"/> says the other end has
+        /// been closed, so that a write fails at once with EPIPE. The one place these are asked, for this
+        /// stream and for IO.select (IoReadiness).
+        /// </summary>
+        public static int GetWriteRoom(SafeFileHandle/*!*/ handle, out bool readerGone) {
             IO_STATUS_BLOCK status;
-            return NtQueryInformationFile(SafeFileHandle, out status, out info,
-                Marshal.SizeOf(typeof(FILE_PIPE_LOCAL_INFORMATION)), FilePipeLocalInformation) >= 0;
+            FILE_PIPE_LOCAL_INFORMATION info;
+            readerGone = false;
+            try {
+                if (NtQueryInformationFile(handle, out status, out info,
+                    Marshal.SizeOf(typeof(FILE_PIPE_LOCAL_INFORMATION)), FilePipeLocalInformation) < 0) {
+                    return Int32.MaxValue;
+                }
+            } catch (Exception) {
+                return Int32.MaxValue;
+            }
+            readerGone = info.NamedPipeState == FILE_PIPE_CLOSING_STATE;
+            return (int)Math.Min(info.WriteQuotaAvailable, (uint)Int32.MaxValue);
+        }
+
+        /// <summary>
+        /// Whether a read from the pipe <paramref name="handle"/> reads from would return at once: bytes are
+        /// waiting, or the writer has gone (PeekNamedPipe fails, ERROR_BROKEN_PIPE) and the read is EOF.
+        /// </summary>
+        public static bool IsReadable(SafeFileHandle/*!*/ handle) {
+            int available;
+            if (!PeekNamedPipe(handle, IntPtr.Zero, 0, IntPtr.Zero, out available, IntPtr.Zero)) {
+                return true;
+            }
+            return available > 0;
         }
 
         /// <summary>The room left in the pipe, in bytes; the whole request when the pipe cannot say.</summary>
         private int WriteQuotaAvailable() {
-            FILE_PIPE_LOCAL_INFORMATION info;
-            if (!TryQueryPipe(out info)) {
-                return Int32.MaxValue;
-            }
-            return (int)Math.Min(info.WriteQuotaAvailable, (uint)Int32.MaxValue);
+            bool readerGone;
+            return GetWriteRoom(SafeFileHandle, out readerGone);
         }
 
         private bool IsReaderGone() {
-            FILE_PIPE_LOCAL_INFORMATION info;
-            return TryQueryPipe(out info) && info.NamedPipeState == FILE_PIPE_CLOSING_STATE;
+            bool readerGone;
+            GetWriteRoom(SafeFileHandle, out readerGone);
+            return readerGone;
         }
 
         private int WriteFileOnce(ReadOnlySpan<byte> buffer, bool mayBlock) {

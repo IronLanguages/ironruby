@@ -301,5 +301,39 @@ nil
 nil
 ");
         }
+
+        /// <summary>
+        /// #141: IronRuby::Clr::Name.new takes what a method name may be - a String, a Symbol, #to_str - and nil is a
+        /// TypeError like any other non-name (System::ArgumentNullException leaked). A Method passed for a delegate
+        /// whose parameters mention a type parameter leaves that type parameter to the other arguments, as a block,
+        /// a lambda and a proc do: Array.FindAll(int[], 2.method(:<)) is FindAll&lt;int&gt; ("generic arguments could not
+        /// be infered"). (Clr::Name new_spec, method/invocation/generic)
+        /// </summary>
+        public void ClrInterop_NameAndMethodInference1() {
+            TestOutput(@"
+N = IronRuby::Clr::Name
+o = Object.new; def o.to_str; 'obj'; end
+p N.new(:a_sym).to_s, N.new('str').to_s, N.new(o).to_s
+p((N.new(nil) rescue $!), (N.new(1.0) rescue $!))
+arr = System::Array[Integer].new([1, 2, 3, 4])
+p System::Array.find_all(arr, 2.method(:<)).to_a, System::Array.find_all(arr) { |x| x > 2 }.to_a
+p System::Array.find_all(arr, lambda { |x| x.odd? }).to_a, System::Array.find_all(arr, proc { |x| x.even? }).to_a
+l = System::Collections::Generic::List[Integer].new([3, 1, 2])
+def dbl(x); x * 2; end
+p System::Linq::Enumerable.where(l, 1.method(:<)).to_a, System::Linq::Enumerable.select(l, method(:dbl)).to_a
+", @"
+""a_sym""
+""str""
+""obj""
+#<TypeError: nil is not a symbol nor a string>
+#<TypeError: 1.0 is not a symbol nor a string>
+[3, 4]
+[3, 4]
+[1, 3]
+[2, 4]
+[3, 2]
+[6, 2, 4]
+");
+        }
     }
 }

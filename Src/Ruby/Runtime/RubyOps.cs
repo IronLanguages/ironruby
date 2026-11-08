@@ -3597,13 +3597,23 @@ namespace IronRuby.Runtime {
         // super call condition
         [Emitted]
         public static object GetSuperCallTarget(RubyScope/*!*/ scope, int targetId) {
+            object currentSelf = scope.SelfObject;
             while (true) {
                 switch (scope.Kind) {
                     case ScopeKind.Method:
-                        return targetId == 0 ? scope.SelfObject : NeedsUpdate;
+                        if (targetId != 0) {
+                            return NeedsUpdate;
+                        }
+                        RequireSuperSelf(scope, currentSelf, ((RubyMethodScope)scope).DeclaringModule);
+                        return scope.SelfObject;
 
                     case ScopeKind.BlockMethod:
-                        return targetId == ((RubyBlockScope)scope).BlockFlowControl.Proc.Method.Id ? scope.SelfObject : NeedsUpdate;
+                        var method = ((RubyBlockScope)scope).BlockFlowControl.Proc.Method;
+                        if (targetId != method.Id) {
+                            return NeedsUpdate;
+                        }
+                        RequireSuperSelf(scope, currentSelf, method.DeclaringModule);
+                        return scope.SelfObject;
 
                     case ScopeKind.TopLevel:
                         // This method is only called if there was method or block-method scope in lexical scope chain.
@@ -3616,6 +3626,27 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// A `super' in a block that runs with another self - module_eval, instance_eval or instance_exec on an
+        /// object that is not an instance of the method's class or module - is a TypeError, as MRI's
+        /// vm_search_super_method makes it (#136); it called the method's super with the method's self.
+        /// </summary>
+        private static void RequireSuperSelf(RubyScope/*!*/ methodScope, object currentSelf, RubyModule declaringModule) {
+            object methodSelf = methodScope.SelfObject;
+            // identity, not Equals: a Ruby object's Equals is its #eql?, which a program may define (and would
+            // then run on every super); only a boxed Integer, Float, true... compares by value
+            if (ReferenceEquals(currentSelf, methodSelf)
+                || (currentSelf != null && currentSelf.GetType().IsValueType && currentSelf.Equals(methodSelf))
+                || declaringModule == null || declaringModule.RefinedModule != null) {
+                return;
+            }
+            var context = methodScope.RubyContext;
+            if (!context.IsKindOf(currentSelf, declaringModule)) {
+                throw RubyExceptions.CreateTypeError(String.Format("self has wrong type to call super in this context: {0} (expected {1})",
+                    context.GetClassDisplayName(currentSelf), declaringModule.GetDisplayName(context, true)));
+            }
+        }
+
         // super call condition
         [Emitted]
         public static bool IsSuperOutOfMethodScope(RubyScope/*!*/ scope) {
@@ -3625,6 +3656,8 @@ namespace IronRuby.Runtime {
                     case ScopeKind.BlockMethod:
                         return false;
 
+                    // a class or module body - inside `eval' in a method, too - is no place for super (#136)
+                    case ScopeKind.Module:
                     case ScopeKind.TopLevel:
                         return true;
                 }
