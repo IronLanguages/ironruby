@@ -167,6 +167,8 @@ namespace IronRuby.Builtins {
             _consoleError = null;
             _consoleOutputChecked = false;
             _consoleErrorChecked = false;
+            _defaultOutputOpenFails = null;
+            _defaultErrorOpenFails = null;
         }
 
         /// <summary>
@@ -198,7 +200,10 @@ namespace IronRuby.Builtins {
                 // has already gone. Everything written was then thrown away without an error, and
                 // a child that IO.popen(...).close had abandoned before it wrote its first line
                 // ran `loop { puts }` for ever. The handle itself still says EPIPE.
-                return GetWindowsConsole(output);
+                // A host can also give SharedIO Stream.Null on purpose, to throw the output away;
+                // that one has to stay a discard. Only when .NET's own open of the handle gives
+                // Stream.Null too is it the failed default.
+                return DefaultOpenFails(output) ? GetWindowsConsole(output) : null;
             }
 
             var name = stream.GetType().FullName;
@@ -233,6 +238,25 @@ namespace IronRuby.Builtins {
 
         private static Stream _consoleOutput, _consoleError;
         private static bool _consoleOutputChecked, _consoleErrorChecked;
+        private static bool? _defaultOutputOpenFails, _defaultErrorOpenFails;
+
+        /// <summary>
+        /// Whether .NET opens the process's standard output (or error) as Stream.Null - which it
+        /// does when the handle is invalid or its zero-byte probe write fails, as on a pipe whose
+        /// reader has gone - so that a Stream.Null in SharedIO is that failed default rather than
+        /// a stream a host chose.
+        /// </summary>
+        private static bool DefaultOpenFails(bool output) {
+            ref bool? fails = ref (output ? ref _defaultOutputOpenFails : ref _defaultErrorOpenFails);
+            if (fails == null) {
+                try {
+                    fails = (output ? Console.OpenStandardOutput() : Console.OpenStandardError()) == Stream.Null;
+                } catch (Exception) {
+                    fails = false;
+                }
+            }
+            return fails.Value;
+        }
 
         /// <summary>
         /// On Windows .NET's standard-output stream hands the bytes to WriteFile, and a console
