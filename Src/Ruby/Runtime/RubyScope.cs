@@ -930,6 +930,30 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Where `private', `public', `protected' and `module_function' without arguments set the default for
+        /// the methods defined after them: the class or module body, top level, file or module_eval block
+        /// lexically around the caller - MRI's cref, whatever the receiver of the call. A method body, a block
+        /// and a define_method block share that of the code they are written in, so `def self.m; private; end;
+        /// m' in a class body makes what follows in the body private; a `def' inside a method body still reads
+        /// the method scope's own default (<see cref="GetMethodAttributesDefinitionScope"/>), which stays
+        /// public, as MRI's is (#133). It went into the method scope, so the leak went the other way.
+        /// </summary>
+        public RubyScope/*!*/ GetVisibilityScope() {
+            RubyScope scope = this;
+            while (true) {
+                switch (scope.Kind) {
+                    case ScopeKind.Module:
+                    case ScopeKind.BlockModule:
+                    case ScopeKind.TopLevel:
+                    case ScopeKind.FileInitializer:
+                        return scope;
+                }
+
+                scope = scope.Parent;
+            }
+        }
+
         public RubyModule/*!*/ GetMethodDefinitionOwner() {
             // - define_method doesn't influence the definition owner
             // - module_eval blocks define into the module they evaluate in

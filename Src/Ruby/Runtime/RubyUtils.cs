@@ -1413,7 +1413,7 @@ namespace IronRuby.Runtime {
             // inside the string to the string: `eval "module_function"' does not reach a `def'
             // written after it.  The state is inherited on the way in - a `def' inside the string
             // does see a modifier set outside it - so saving and restoring it is the whole rule.
-            var attributesScope = targetScope.GetMethodAttributesDefinitionScope();
+            var attributesScope = targetScope.GetVisibilityScope();
             var attributes = attributesScope.MethodAttributes;
             try {
                 return compiled(targetScope, self, module, blockParameter);

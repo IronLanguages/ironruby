@@ -391,7 +391,7 @@ namespace IronRuby.Builtins {
 
         internal static void SetMethodAttributes(RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/[]/*!*/ methodNames, RubyMethodAttributes attributes) {
             if (methodNames.Length == 0) {
-                scope.GetMethodAttributesDefinitionScope().MethodAttributes = attributes;
+                scope.GetVisibilityScope().MethodAttributes = attributes;
             } else {
                 SetMethodAttributes(module, methodNames, attributes);
             }

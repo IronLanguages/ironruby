@@ -3118,6 +3118,69 @@ true
         }
 
         /// <summary>
+        /// #133: private, public and module_function without arguments set the default for the methods defined after
+        /// them in the class or module body lexically around the call (MRI's cref), whatever the receiver, and from
+        /// a method or block written in that body too; a `def' inside a method body is public whatever the default.
+        /// IronRuby kept the default in the method scope, so it went the other way: a `def' inside the method took it
+        /// (and `M.send(:module_function)' there raised "A module function cannot be defined on a class") while the
+        /// body did not. A module function on a class gets both halves, with super, as in MRI. The expected output
+        /// is CRuby 4.0's.
+        /// </summary>
+        public void Visibility_DefaultScope1() {
+            TestOutput(@"
+def show(m); p [m.public_instance_methods(false).sort, m.private_instance_methods(false).sort]; end
+# 1: method called from module body runs `private` (no args) -> does it change the CALLER's body?
+module V1; def self.f; private; end; f; def a; end; end; show V1
+# 2: Module method (instance of Module) calling private with no args from module body
+class Module; def my_priv(*a); private(*a); end; end
+module V2; my_priv; def a; end; end; show V2
+# 3: explicit receiver from the body: N.private in M's body
+module N3; end
+module V3; N3.send(:private); def a; end; end; show V3; show N3
+# 4: inside a method body, private then def
+class V4; def self.foo; private; def b; end; end; foo; def c; end; end; show V4
+# 5: inside a block inside a method body, other receiver
+module M5; end
+class V5; def foo; 1.times { M5.send(:private); def b; end }; def c; end; end; new.foo; def d; end; end; show V5
+# 6: block in class body
+class V6; 1.times { private }; def a; end; end; show V6
+# 7: class_eval block with private then def
+class V7; end; V7.class_eval { private; def a; end }; def (V7).x; end; class V7; def b; end; end; show V7
+# 8: module_function no args via send in body of other module
+module N8; end; module V8; N8.send(:module_function); def a; end; end; show V8; p N8.singleton_methods
+# 9: private inside method whose frame is called from body: then def in the method
+module V9; def self.g; private; def h; end; end; g; def i; end; end; show V9
+# 10: the #133 shape: module_function in a block in an instance method of a CLASS, then defs
+module M10; end
+class V10; def foo; 1.times { M10.send(:module_function) }; def yyy; end; end; new.foo; def xxx; end; end; show V10; p V10.singleton_methods(false).sort
+# 11: same with private
+class V11; def foo; 1.times { M10.send(:private) }; def b; end; end; new.foo; def c; end; end; show V11
+# 12: super from both halves of a module function on a class
+class B12; def x; :b_instance; end; def self.x; :b_singleton; end; end
+class C12 < B12; M10.send(:module_function); def x; [:c, super]; end; end
+p C12.x, C12.new.send(:x), C12.private_method_defined?(:x)
+", @"
+[[], [:a]]
+[[:a], []]
+[[], [:a]]
+[[], []]
+[[:b], [:c]]
+[[:b, :c, :foo], [:d]]
+[[], [:a]]
+[[:b], [:a]]
+[[], [:a]]
+[]
+[[:h], [:i]]
+[[:foo, :yyy], [:xxx]]
+[:xxx]
+[[:b, :foo], [:c]]
+[:c, :b_singleton]
+[:c, :b_instance]
+true
+");
+        }
+
+        /// <summary>
         /// #138: main's #public, #private and #include are private, as MRI's are (`self.include M` still works, another
         /// receiver does not). Module#initialize_copy and Class#initialize_copy copy only into the module #dup or #clone
         /// made; on a module or class that already exists they leave it as it is (a module took the other's methods,
