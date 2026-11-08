@@ -61,8 +61,8 @@ namespace IronRuby.Builtins {
         internal static int ToNumber(RubyContext context, object signalId, bool forTrap) {
             if (signalId is int) {
                 int given = (int)signalId;
-                if (forTrap && (given < 0 || ToName(given) == null)) {
-                    throw RubyExceptions.CreateArgumentError("invalid signal number ({0})", given);
+                if (forTrap) {
+                    CheckTrapNumber(given);
                 }
                 return given;
             }
@@ -108,6 +108,27 @@ namespace IronRuby.Builtins {
                     name.StartsWith("SIG", StringComparison.Ordinal) ? name : "SIG" + name);
             }
             return negated ? -number : number;
+        }
+
+        /// <summary>
+        /// MRI traps any number below NSIG, named in Signal.list or not, as long as the C library
+        /// takes it: on Linux every one up to 64 except 32 and 33, which glibc keeps for its own
+        /// threads; on Windows only SIGABRT_COMPAT (6) and SIGBREAK (21) besides the listed ones.
+        /// The C library's refusal is EINVAL (MRI on Windows sometimes reports a stale errno
+        /// instead, ENOTTY for 1 and 3); a number at or past NSIG is not a signal at all.
+        /// </summary>
+        private static void CheckTrapNumber(int number) {
+            int maxSignal = RubyProcess.IsWindows ? 22 : 64;
+            if (number < 0 || number > maxSignal) {
+                throw RubyExceptions.CreateArgumentError("invalid signal number ({0})", number);
+            }
+            if (ToName(number) != null) {
+                return;
+            }
+            bool taken = RubyProcess.IsWindows ? (number == 6 || number == 21) : (number != 32 && number != 33);
+            if (!taken) {
+                throw RubyExceptions.CreateEINVAL("SIG{0}", number);
+            }
         }
 
         internal static string ToName(int number) {
@@ -349,7 +370,7 @@ namespace IronRuby.Builtins {
             if (signal == 0) {   // EXIT
                 return null;
             }
-            if (RubyProcess.IsWindows && signal == 22) {   // ABRT
+            if (IsAbort(signal)) {
                 return null;
             }
             switch (signal) {
@@ -369,6 +390,11 @@ namespace IronRuby.Builtins {
                 default:
                     return MutableString.CreateAscii("SYSTEM_DEFAULT");
             }
+        }
+
+        // ABRT is 6 on Linux; on Windows it is 22, and 6 is the C runtime's SIGABRT_COMPAT.
+        private static bool IsAbort(int signal) {
+            return signal == 6 || (RubyProcess.IsWindows && signal == 22);
         }
 
         internal static object Trap(int signal, object command, Action<int> invoke) {
@@ -392,6 +418,12 @@ namespace IronRuby.Builtins {
                     // EXIT only ever reports a handler it can call; "DEFAULT", "IGNORE" and the
                     // like left nothing behind, so MRI says nil.
                     previous = (signal == 0 && (handler.Command == null || handler.Command is MutableString)) ? null : handler.Command;
+                    // "DEFAULT" puts back whatever MRI starts with, and that is what the next #trap
+                    // reports: "DEFAULT" where MRI has a handler of its own, nil for PIPE and SYS,
+                    // "SYSTEM_DEFAULT" for the rest - ABRT included, though it starts out as nil.
+                    if (signal != 0 && IsDefault(handler.Command)) {
+                        previous = IsAbort(signal) ? MutableString.CreateAscii("SYSTEM_DEFAULT") : InitialCommand(signal);
+                    }
                     if (handler.Registration != null) {
                         handler.Registration.Dispose();
                     }

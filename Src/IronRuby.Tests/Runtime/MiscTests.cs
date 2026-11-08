@@ -1162,6 +1162,71 @@ nil
         }
 
         /// <summary>
+        /// #trap takes a number Signal.list does not name, as MRI does, when the C library takes it:
+        /// on Linux 1-64 but 32 and 33, on Windows SIGABRT_COMPAT (6) and SIGBREAK (21). It was
+        /// "invalid signal number" for all of them. The C library's refusal is EINVAL. And after
+        /// trap(sig, ""DEFAULT"") the next #trap reports what MRI starts with - ""SYSTEM_DEFAULT"" for
+        /// most signals - not ""DEFAULT"". Expected output is CRuby 4.0's, the same on Linux and Windows.
+        /// </summary>
+        public void Signal_TrapUnlisted1() {
+            TestOutput(@"
+require 'ruby4'
+windows = File::ALT_SEPARATOR == '\\'
+
+# a number Signal.list does not name is trapped if the C library takes it (SIGBREAK; a real-time signal)
+unlisted = windows ? 21 : 40
+p Signal.signame(unlisted)
+p trap(unlisted) { }
+p trap(unlisted, ""DEFAULT"").class
+p trap(unlisted, ""SYSTEM_DEFAULT"")
+
+# one it refuses is EINVAL (glibc keeps 32 for itself), and past NSIG is no signal at all
+begin
+  trap(windows ? 7 : 32) { }
+rescue Errno::EINVAL => e
+  p e.message.sub(/\d+\z/, ""N"")
+end
+begin
+  trap(windows ? 23 : 65) { }
+rescue ArgumentError => e
+  p e.message.sub(/\d+/, ""N"")
+end
+
+# ""DEFAULT"" reports back what MRI starts with
+trap(:TERM, ""DEFAULT"")
+p trap(:TERM, ""DEFAULT"")
+trap(:ABRT, ""DEFAULT"")
+p trap(:ABRT, ""DEFAULT"")
+p(windows ? nil : (trap(:PIPE, ""DEFAULT""); trap(:PIPE, ""DEFAULT"")))
+p(windows ? ""SYSTEM_DEFAULT"" : (trap(:CONT, ""DEFAULT""); trap(:CONT, ""DEFAULT"")))
+
+# and the handler for an unlisted number runs
+if windows
+  p [40]
+else
+  got = []
+  trap(40) { |n| got << n }
+  Process.kill(40, Process.pid)
+  20.times { break unless got.empty?; sleep 0.05 }
+  trap(40, ""SYSTEM_DEFAULT"")
+  p got
+end
+", @"
+nil
+""SYSTEM_DEFAULT""
+Proc
+""SYSTEM_DEFAULT""
+""Invalid argument - SIGN""
+""invalid signal number (N)""
+""DEFAULT""
+""SYSTEM_DEFAULT""
+nil
+""SYSTEM_DEFAULT""
+[40]
+");
+        }
+
+        /// <summary>
         /// A drive-relative name's dirname is "C:." on Windows, as in MRI - which is how CRuby's own
         /// pathname_builtin.rb recognises drive letters, so Pathname#absolute? depends on it.
         /// </summary>
