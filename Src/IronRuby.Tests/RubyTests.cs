@@ -955,6 +955,7 @@ namespace IronRuby.Tests {
                 Thread_HostMainThread2,
                 Windows_NotImplementedAndLinks1,
                 Windows_PipeBlocking1,
+                Windows_NamedPipeAsFile1,
                 Windows_StdoutPipeSysWrite1,
                 Windows_SymLinks1,
                 Range_IntegerFastPaths1,

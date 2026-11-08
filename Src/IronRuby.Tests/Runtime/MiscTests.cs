@@ -4209,6 +4209,45 @@ fiber of another thread: 2
         }
 
         /// <summary>
+        /// A named pipe opened as a file (File.open on \\.\pipe\name) is a plain FileStream, not a WindowsPipeStream:
+        /// #read_nonblock on it asks PeekNamedPipe before reading (IoOps.ReadOnceWithoutWaiting), so an empty pipe is
+        /// IO::EAGAINWaitReadable rather than a ReadFile that waits for the writer, and IO.select sees it (#145).
+        /// Windows only.
+        /// </summary>
+        public void Windows_NamedPipeAsFile1() {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
+                return;
+            }
+            string name = "ironruby-test-" + Guid.NewGuid().ToString("N");
+            // with buffers: the default size, 0, makes every write wait until the reader has read it
+            using (var server = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.InOut, 1,
+                System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.None, 4096, 4096)) {
+                var connected = server.WaitForConnectionAsync();
+                // the path goes in as an Array of byte values: no quoting to get wrong between C# and Ruby
+                string path = @"\\.\pipe\" + name;
+                Engine.Execute("require 'ruby4'; $named_pipe = File.open([" + String.Join(",", System.Text.Encoding.ASCII.GetBytes(path)) + "].pack('C*'), 'r+')");
+                connected.Wait(5000);
+                var result = Engine.Execute<string>(@"
+f = $named_pipe
+empty = begin; f.read_nonblock(5); rescue IO::WaitReadable => e; e.class.name; end
+before = IO.select([f], nil, nil, 0).nil?
+[empty, before].join(' ')
+").ToString();
+                Assert(result == "IO::EAGAINWaitReadable true", result);
+                // no Flush: on a pipe that is FlushFileBuffers, which waits until the reader has read it all
+                server.Write(new byte[] { 104, 105 }, 0, 2);
+                result = Engine.Execute<string>(@"
+f = $named_pipe
+IO.select([f], nil, nil, 5)
+r = f.read_nonblock(5)
+f.close
+r
+").ToString();
+                Assert(result == "hi", result);
+            }
+        }
+
+        /// <summary>
         /// IO.pipe on Windows is a CreatePipe pipe (WindowsPipeStream). A thread blocked reading it used to
         /// be Running to the CLR, so Thread#stop? never said true and ruby/spec's `Thread.pass until
         /// t.stop?` spun for ever; closing the read end from another thread did not reach the blocked read;

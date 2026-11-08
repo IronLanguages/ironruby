@@ -2072,6 +2072,9 @@ namespace IronRuby.Builtins {
             if (pipe == null) {
                 // A Windows pipe has no descriptor, and a ReadFile on an empty one waits for the
                 // writer however long that is, but PeekNamedPipe says whether anything is there.
+                // IO.pipe and popen give WindowsPipeStreams, which read without waiting themselves
+                // (the branch above); this is for a pipe opened as a file, such as File.open on
+                // \\.\pipe\name, which is a plain FileStream.
                 var windowsPipe = IoReadiness.GetWindowsPipe(io);
                 if (windowsPipe != null && !IoReadiness.IsWindowsPipeReadable(windowsPipe)) {
                     if (buffered > 0) {
