@@ -1,0 +1,14 @@
+--- a/src/core/Microsoft.Dynamic/Actions/Calls/OverloadResolver.cs
++++ b/src/core/Microsoft.Dynamic/Actions/Calls/OverloadResolver.cs
+@@ -768,8 +768,10 @@
+                 return Candidate.Equivalent;
+             }
+ 
++            // A language that says neither conversion is better (Ambiguous) means it: ordering the parameter types,
++            // below, would prefer the narrower numeric type for an argument that converts to neither.
+             Candidate candidate = SelectBestConversionFor(arg, candidateOne, candidateTwo, level);
+-            if (candidate.Chosen()) {
++            if (candidate.Chosen() || candidate == Candidate.Ambiguous) {
+                 return candidate;
+             }
+ 

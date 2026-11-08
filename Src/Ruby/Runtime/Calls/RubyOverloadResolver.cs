@@ -1018,6 +1018,13 @@ namespace IronRuby.Runtime.Calls {
                 if (oneLacks != twoLacks) {
                     return oneLacks ? Candidate.Two : Candidate.One;
                 }
+
+                // Neither is better for an argument both fail to convert: the DLR's ordering of the parameter types made
+                // System::Math.abs(nil) call Abs(SByte) and fail "into System::SByte" (#141). Equally bad overloads leave
+                // the call ambiguous (dlr-patches/0006), and MakeProtocolConversionError names all they would convert to.
+                if (oneLacks) {
+                    return Candidate.Ambiguous;
+                }
             }
 
             return base.SelectBestConversionFor(arg, candidateOne, candidateTwo, level);
@@ -1914,7 +1921,72 @@ namespace IronRuby.Runtime.Calls {
             return result.ToString();
         }
 
+        /// <summary>
+        /// A CLR method none of whose overloads can take the arguments (#141). The error used to name the conversion that
+        /// failed in whichever overload the binder happened to try first. The overloads that got furthest through the
+        /// arguments before one failed to convert are the plausible ones; the error names that argument and every type
+        /// those overloads would have converted it to, as MRI names a protocol conversion's: Take(StringBuilder) and
+        /// Take(Version) called with a String say "no implicit conversion of String into System::Text::StringBuilder or
+        /// System::Version". Null when no overload failed on a conversion, or the failure is one with its own message (a
+        /// block, a Proc). (Overloads that all accept an argument but cannot convert it, as System::Math.abs(nil), are
+        /// ambiguous instead: see SelectBestConversionFor and MakeProtocolConversionError.)
+        /// </summary>
+        private Expression MakeOverloadConversionError(BindingTarget/*!*/ target) {
+            var best = new List<ConversionResult>();
+            int bestIndex = -1;
+            foreach (CallFailure cf in target.CallFailures) {
+                if (cf.Reason != CallFailureReason.ConversionFailure) {
+                    continue;
+                }
+
+                // ConversionResults has one entry per argument, in argument order:
+                int index = -1;
+                for (int i = 0; i < cf.ConversionResults.Count; i++) {
+                    if (cf.ConversionResults[i].Failed) {
+                        index = i;
+                        break;
+                    }
+                }
+
+                if (index < 0 || index < bestIndex) {
+                    continue;
+                }
+                if (index > bestIndex) {
+                    best.Clear();
+                    bestIndex = index;
+                }
+                best.Add(cf.ConversionResults[index]);
+            }
+
+            if (best.Count == 0) {
+                return null;
+            }
+
+            var targetNames = new List<string>();
+            foreach (ConversionResult cr in best) {
+                if (typeof(Proc).IsAssignableFrom(cr.To) || cr.To == typeof(BlockParam)) {
+                    return null;
+                }
+                string name = GetProtocolConversionTargetName(cr.To);
+                if (!targetNames.Contains(name)) {
+                    targetNames.Add(name);
+                }
+            }
+
+            return Methods.CreateImplicitConversionError.OpCall(
+                AstUtils.Constant(best[0].GetArgumentTypeName(Binder)),
+                AstUtils.Constant(JoinAlternatives(targetNames))
+            );
+        }
+
         private Expression MakeCallFailureError(BindingTarget target) {
+            if (_implicitProtocolConversions) {
+                Expression error = MakeOverloadConversionError(target);
+                if (error != null) {
+                    return error;
+                }
+            }
+
             foreach (CallFailure cf in target.CallFailures) {
                 switch (cf.Reason) {
                     case CallFailureReason.ConversionFailure:
@@ -1933,6 +2005,7 @@ namespace IronRuby.Runtime.Calls {
                                 // MRI reports a bad method name with its own wording rather than the
                                 // implicit-conversion one. nil reaches here rather than the conversion
                                 // action, which accepts it and leaves [NotNull] to do the rejecting.
+                                // (A CLR method's String parameter is just a String: see MakeOverloadConversionError.)
                                 if (cr.To == typeof(string)) {
                                     string argument = cr.GetArgumentTypeName(Binder);
                                     return Methods.CreateNotSymbolNorStringErrorFor.OpCall(
