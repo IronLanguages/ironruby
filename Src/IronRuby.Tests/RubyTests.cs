@@ -874,6 +874,7 @@ namespace IronRuby.Tests {
                 Time_OlsonZone1,
                 Zlib_Streams1,
                 Process_SpawnKill1,
+                Process_KillSelfInterrupt1,
                 File_DriveLetters1,
                 Fiddle_AnsiSuffix1,
                 PackPointer_RealAddress1,
