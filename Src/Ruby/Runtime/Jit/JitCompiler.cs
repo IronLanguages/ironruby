@@ -522,6 +522,9 @@ namespace IronRuby.Runtime.Jit {
                 // already done is observable.
                 if (c._canDeopt && !c._pure) { return null; }
 
+                // the stack check a method's scope would make (#128)
+                body = Ast.Block(body.Type, Ast.Call(JitRuntime.M("CheckStack")), body);
+
                 var parameters = new List<MSA.ParameterExpression>(paramTypes.Length + 1);
                 parameters.Add(c._self);
                 var functionScope = new List<MSA.ParameterExpression>(c._declared[0]);

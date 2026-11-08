@@ -114,6 +114,14 @@ namespace IronRuby.Runtime.Jit {
             return i;
         }
 
+        /// <summary>
+        /// The first thing every JIT-compiled method does: a recursion too deep is a SystemStackError (RubyOps.
+        /// RequireSufficientStack). A JIT method makes no scope, so the check the interpreter makes there is not made.
+        /// </summary>
+        public static void CheckStack() {
+            RubyOps.RequireSufficientStack();
+        }
+
         public static int SubInt(int a, int b) {
             long r = (long)a - b;
             int i = (int)r;
