@@ -1166,7 +1166,8 @@ nil
         /// on Linux 1-64 but 32 and 33, on Windows SIGABRT_COMPAT (6) and SIGBREAK (21). It was
         /// "invalid signal number" for all of them. The C library's refusal is EINVAL. And after
         /// trap(sig, ""DEFAULT"") the next #trap reports what MRI starts with - ""SYSTEM_DEFAULT"" for
-        /// most signals - not ""DEFAULT"". Expected output is CRuby 4.0's, the same on Linux and Windows.
+        /// most signals - not ""DEFAULT"", and on Windows ABRT and SIGABRT_COMPAT report the C runtime
+        /// handler they share. Expected output is CRuby 4.0's, the same on Linux and Windows.
         /// </summary>
         public void Signal_TrapUnlisted1() {
             TestOutput(@"
@@ -1200,6 +1201,18 @@ p trap(:ABRT, ""DEFAULT"")
 p(windows ? nil : (trap(:PIPE, ""DEFAULT""); trap(:PIPE, ""DEFAULT"")))
 p(windows ? ""SYSTEM_DEFAULT"" : (trap(:CONT, ""DEFAULT""); trap(:CONT, ""DEFAULT"")))
 
+# on Windows ABRT (22) and SIGABRT_COMPAT (6) share the C runtime's handler, each with its own Ruby command
+if windows
+  trap(6, ""SYSTEM_DEFAULT"")
+  trap(22, ""SYSTEM_DEFAULT"")
+  h = proc { }
+  p trap(6, h), trap(22, ""DEFAULT""), trap(6, ""IGNORE"").equal?(h)
+  p trap(22, ""DEFAULT""), trap(6, ""DEFAULT""), trap(22, h), trap(6, ""SYSTEM_DEFAULT""), trap(22, ""DEFAULT"").equal?(h)
+else
+  p ""SYSTEM_DEFAULT"", ""DEFAULT"", true
+  p ""IGNORE"", ""SYSTEM_DEFAULT"", ""SYSTEM_DEFAULT"", ""DEFAULT"", true
+end
+
 # and the handler for an unlisted number runs
 if windows
   p [40]
@@ -1222,6 +1235,14 @@ Proc
 ""SYSTEM_DEFAULT""
 nil
 ""SYSTEM_DEFAULT""
+""SYSTEM_DEFAULT""
+""DEFAULT""
+true
+""IGNORE""
+""SYSTEM_DEFAULT""
+""SYSTEM_DEFAULT""
+""DEFAULT""
+true
 [40]
 ");
         }

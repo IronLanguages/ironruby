@@ -392,6 +392,9 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // What the last #trap of ABRT or SIGABRT_COMPAT left in the Windows C runtime; see Trap.
+        private static string _abortDisposition;
+
         // ABRT is 6 on Linux; on Windows it is 22, and 6 is the C runtime's SIGABRT_COMPAT.
         private static bool IsAbort(int signal) {
             return signal == 6 || (RubyProcess.IsWindows && signal == 22);
@@ -428,6 +431,19 @@ namespace IronRuby.Builtins {
                         handler.Registration.Dispose();
                     }
                     _handlers.Remove(signal);
+                }
+
+                // On Windows ABRT (22) and SIGABRT_COMPAT (6) are one handler in the C runtime, each with
+                // a Ruby command of its own. MRI reports a signal's own Proc, and otherwise what the
+                // last #trap of either one left in the C runtime: its own handler ("DEFAULT"), SIG_IGN
+                // ("IGNORE") or SIG_DFL ("SYSTEM_DEFAULT") - and nil before either was trapped.
+                if (RubyProcess.IsWindows && IsAbort(signal)) {
+                    if (previous == null || previous is MutableString) {
+                        previous = (_abortDisposition != null) ? MutableString.CreateAscii(_abortDisposition) : null;
+                    }
+                    _abortDisposition = (command != null && !(command is MutableString)) ? "DEFAULT"
+                        : IsIgnore(command) ? "IGNORE"
+                        : "SYSTEM_DEFAULT";
                 }
 
                 // SYSTEM_DEFAULT hands SIGPIPE back to the OS, which ends the process on a write to
