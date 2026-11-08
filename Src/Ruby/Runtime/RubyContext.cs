@@ -2869,6 +2869,8 @@ namespace IronRuby.Runtime {
                     if (singleton != null) {
                         var singletonDup = singleton.Duplicate(target);
                         singletonDup.InitializeMembersFrom(singleton);
+                        // the singleton class's own instance variables go too, as in rb_singleton_class_clone
+                        CopyInstanceData(singleton, singletonDup, false);
 
                         SetInstanceSingletonOfNoLock(target, ref targetData, singletonDup);
                     }

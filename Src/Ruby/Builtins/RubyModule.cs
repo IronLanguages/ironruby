@@ -927,6 +927,8 @@ namespace IronRuby.Builtins {
                 var singletonClass = result.GetOrCreateSingletonClass();
                 using (Context.ClassHierarchyLocker()) {
                     singletonClass.InitializeMembersFrom(immediate);
+                    // its own instance variables too (rb_singleton_class_clone)
+                    _context.CopyInstanceData(immediate, singletonClass, false);
                 }
             }
             

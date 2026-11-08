@@ -1059,6 +1059,7 @@ namespace IronRuby.Tests {
                 ClassDuplication4,
                 ClassDuplication5,
                 StructDup1,
+                SingletonIvarsClone1,
                 ClassDuplication6,
                 ClassDuplication7,
                 Clone1,
