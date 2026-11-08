@@ -12003,12 +12003,13 @@ module Kernel
   # which does not mind that an object only inherits this private #puts - and then, with
   # $stdout as the receiver, formats the lines itself and hands them to $stdout.write
   # (rb_io_puts): $stdout may be anything with a #write. The C# Kernel#puts below this
-  # one does that last part.
+  # one does that last part. The identity is BasicObject#equal?'s, not the writer's own, and
+  # keywords given to Kernel#puts reach a $stdout.puts that takes them.
   alias_method :__ir_puts_to_stdout__, :puts
   private :__ir_puts_to_stdout__
-  def puts(*args)
+  ruby2_keywords def puts(*args)
     out = $stdout
-    return __ir_puts_to_stdout__(*args) if equal?(out)
+    return __ir_puts_to_stdout__(*args) if __ir_equal__(out)
     out.__send__(:puts, *args)
   end
   module_function :puts

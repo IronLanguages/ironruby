@@ -993,6 +993,13 @@ namespace IronRuby.Runtime {
                     // too (#133).
                     instanceOwner = scope.GetMethodDefinitionOwner();
 
+                    // `1.instance_eval { M.send(:module_function); def x; end }': the dummy singleton of an
+                    // Integer takes no methods, module function or not
+                    var dummy = instanceOwner as RubyClass;
+                    if (dummy != null && dummy.IsDummySingletonClass) {
+                        throw RubyExceptions.CreateTypeError("can't define singleton");
+                    }
+
                     instanceFlags = RubyMemberFlags.Private;
                     singletonOwner = instanceOwner.GetOrCreateSingletonClass();
                     singletonFlags = RubyMemberFlags.Public;

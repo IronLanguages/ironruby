@@ -2291,7 +2291,7 @@ namespace IronRuby.Builtins {
 
         // Module#module_function:
         public void SetModuleFunctionNoEventNoLock(RubyContext/*!*/ callerContext, string/*!*/ name, RubyMemberInfo/*!*/ method) {
-            Debug.Assert(!IsClass);
+            // a class too: a module's module_function can set the default of a class body (#133)
 
             // CLR members: Detaches the member from its underlying type (by creating a copy).
             // TODO: check for CLR instance members, it should be an error to call module_function on them:

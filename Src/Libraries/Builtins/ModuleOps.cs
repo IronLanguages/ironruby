@@ -653,10 +653,10 @@ namespace IronRuby.Builtins {
             // the same module `def` in this scope would define into - GetInnerMostModuleForMethodLookup
             // is not it: inside a `Module.new { }` block it walks past the block to Object
             if (attributesScope.GetMethodDefinitionOwner() == module) {
-                // module_function cannot be toggled on in a class body - Module#module_function
-                // raises there - but a module function is still meaningless on one, so guard it.
-                isModuleFunction = !module.IsClass
-                    && (attributesScope.MethodAttributes & RubyMethodAttributes.ModuleFunction) == RubyMethodAttributes.ModuleFunction;
+                // Class has no #module_function, but a module's sets the default of the class body it is
+                // called from (RubyScope.GetVisibilityScope), and MRI's define_method then makes both
+                // halves on the class, as `def' does (#133).
+                isModuleFunction = (attributesScope.MethodAttributes & RubyMethodAttributes.ModuleFunction) == RubyMethodAttributes.ModuleFunction;
                 visibility = isModuleFunction ? RubyMethodVisibility.Private : attributesScope.Visibility;
             } else {
                 visibility = RubyMethodVisibility.Public;

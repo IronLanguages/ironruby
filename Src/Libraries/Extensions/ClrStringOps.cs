@@ -159,8 +159,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice")]
         public static string GetSubstring(string/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol]int count) {
             if (!MutableStringOps.NormalizeSubstringRange(self.Length, ref start, ref count)) {
-                // at the very end: an empty string, as "hello"[5, 1] is
-                return (start == self.Length) ? String.Empty : null;
+                // at the very end: an empty string, as "hello"[5, 1] is - but a negative length is nil there too
+                return (start == self.Length && count >= 0) ? String.Empty : null;
             }
 
             return self.Substring(start, count);

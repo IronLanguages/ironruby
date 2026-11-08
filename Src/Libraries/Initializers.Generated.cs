@@ -4623,6 +4623,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.KernelOps.CloneWithFreeze)
             );
             
+            DefineLibraryMethod(module, "__ir_equal__", 0x52, 
+                0x00000000U, 
+                new Func<System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.IsSameObject)
+            );
+            
             DefineLibraryMethod(module, "__ir_float_step__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.BlockParam, System.Object, System.Double, System.Double, System.Double, System.Double, System.Object>(IronRuby.Builtins.KernelOps.FloatStep)

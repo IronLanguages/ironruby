@@ -270,6 +270,7 @@ p h[1..3], h[3..1], h[4..10], h[5..], h[6..]
 p h[/l+/], h[/z/], h[/(e)(l)/, 2]
 p ht['lo'], ht['lo'].class, ht['bye'], ht.slice('the'), ht['lo'.to_clr_string]
 p((h[nil] rescue $!.class), (h[{}] rescue $!.class))
+p h[5, -1], h[6, -1]
 ", @"
 'h' (Char)
 'o' (Char)
@@ -296,6 +297,8 @@ nil
 'lo'
 TypeError
 TypeError
+nil
+nil
 ");
         }
     }

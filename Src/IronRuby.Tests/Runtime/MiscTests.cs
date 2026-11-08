@@ -3159,6 +3159,11 @@ class V11; def foo; 1.times { M10.send(:private) }; def b; end; end; new.foo; de
 class B12; def x; :b_instance; end; def self.x; :b_singleton; end; end
 class C12 < B12; M10.send(:module_function); def x; [:c, super]; end; end
 p C12.x, C12.new.send(:x), C12.private_method_defined?(:x)
+# 13: define_method under a module function default in a class body, and an Integer's dummy singleton
+module M13; end
+class K13; def self.setup; M13.send(:module_function); end; setup; define_method(:dm) { :dm }; end
+p [K13.private_method_defined?(:dm), K13.respond_to?(:dm)]
+p((1.instance_eval { M13.send(:module_function); def x13; end; :ok } rescue $!))
 ", @"
 [[], [:a]]
 [[:a], []]
@@ -3177,6 +3182,8 @@ p C12.x, C12.new.send(:x), C12.private_method_defined?(:x)
 [:c, :b_singleton]
 [:c, :b_instance]
 true
+[true, true]
+#<TypeError: can't define singleton>
 ");
         }
 
@@ -3248,9 +3255,20 @@ class P; def write(*x) = x.join.size; def puts(*a) = (STDOUT.write(""own puts #{
 $stdout = P.new
 puts 1, 2
 $stdout = STDOUT
+class W2; def write(*a); a.join.size; end; def equal?(o); false; end; end
+$stdout = W2.new
+r = (puts('x') rescue $!.class)
+$stdout = STDOUT
+p r
+class KW; def write(*a); a.join.size; end; def puts(*a, sep: '-'); STDOUT.write(""kw #{a.inspect} #{sep}\n""); nil; end; end
+$stdout = KW.new
+puts(1, sep: '+')
+$stdout = STDOUT
 ", @"
 ""foo\na\nb\nc\n\n\nbar\n:sym\nself\nk\n""
 own puts [1, 2]
+nil
+kw [1] +
 ");
         }
 
