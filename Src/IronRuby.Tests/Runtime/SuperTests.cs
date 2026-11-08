@@ -931,39 +931,32 @@ B::m
         }
 
         /// <summary>
-        /// super doesn't use self, declaring-module defined by module_eval/instance_eval.
+        /// An implicit super in a block that runs with another self - module_eval, instance_eval or instance_exec
+        /// on an object that is not an instance of the method's class, class_eval on the class - is a TypeError, as in
+        /// MRI's vm_search_super_method; with self still an instance it calls the method's super. super in a class
+        /// body is outside any method even inside `eval' in one. This test expected Ruby 1.9's answer, which called the
+        /// method's super anyway (#136). The expected output is CRuby 4.0's.
         /// </summary>
         public void SuperInModuleEval1() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
-class A
-  def foo
-    puts 'A::foo'
-  end
-end
-
-class B < A
-  def foo
-    puts 'B::foo'
-  end
-end
-
+            TestOutput(@"
+class A; def foo; :a; end; end
+class B < A; def foo; :b; end; end
 class C < B
   def foo
-    A.module_eval {
-      super
-    }
-    A.new.instance_eval {
-      super
-    }
+    [(A.module_eval { super } rescue $!.message), (A.new.instance_eval { super } rescue $!.message),
+     instance_eval { super }, C.new.instance_eval { super }, (C.class_eval { super } rescue $!.class)]
   end
-end 
-
-C.new.foo
-");
-            }, @"
-B::foo
-B::foo
+end
+p C.new.foo
+module M; def foo; eval 'class E; super; end'; end; end
+class D < B; include M; end
+p((D.new.foo rescue [$!.class, $!.message]))
+class G < B; define_method(:foo) { Object.new.instance_eval { super() } }; end
+p((G.new.foo rescue $!.message))
+", @"
+[""self has wrong type to call super in this context: Class (expected C)"", ""self has wrong type to call super in this context: A (expected C)"", :b, :b, TypeError]
+[NoMethodError, ""super called outside of method""]
+""self has wrong type to call super in this context: Object (expected G)""
 ");
         }
 

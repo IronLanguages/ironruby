@@ -903,6 +903,8 @@ namespace IronRuby.Runtime {
                         targetScope = scope;
                         return info.Id;
 
+                    // a class or module body - inside `eval' in a method, too - is no place for super (#136)
+                    case ScopeKind.Module:
                     case ScopeKind.TopLevel:
                         declaringModule = null;
                         methodName = null;
