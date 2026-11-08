@@ -118,8 +118,14 @@ namespace IronRuby.Runtime.Jit {
         /// The first thing every JIT-compiled method does: a recursion too deep is a SystemStackError (RubyOps.
         /// RequireSufficientStack). A JIT method makes no scope, so the check the interpreter makes there is not made.
         /// </summary>
-        public static void CheckStack() {
-            RubyOps.RequireSufficientStack();
+        public static unsafe void CheckStack() {
+            // StackLimit.IsSufficient written out: a call deeper, the JIT no longer inlines its main-thread test into
+            // the method, and fib(30) runs 1.7x slower
+            byte probe;
+            ulong sp = (ulong)&probe;
+            if (sp - StackLimit._mainLow >= StackLimit._mainSize && !StackLimit.IsSufficientOffMain(sp)) {
+                RubyOps.ThrowStackLevelTooDeep();
+            }
         }
 
         public static int SubInt(int a, int b) {

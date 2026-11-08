@@ -184,7 +184,7 @@ namespace IronRuby.Runtime {
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static void ThrowStackLevelTooDeep() {
+        internal static void ThrowStackLevelTooDeep() {
             throw new SystemStackError("stack level too deep");
         }
 

@@ -15,6 +15,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace IronRuby.Runtime {
     /// <summary>
@@ -32,27 +33,40 @@ namespace IronRuby.Runtime {
         [ThreadStatic]
         private static ulong _limit;
 
+        // The main thread's usable stack, [_mainLow, _mainLow + _mainSize), once it has been asked for. A thread-static
+        // read costs more than the rest of the check in JIT-compiled code (fib(30) ran 2.3x slower), so an address in
+        // this range, which no other thread's stack can share while the main thread lives, needs no lookup.
+        internal static ulong _mainLow, _mainSize;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsSufficient() {
             byte probe;
             ulong sp = (ulong)&probe;
+            return sp - _mainLow < _mainSize || IsSufficientOffMain(sp);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static bool IsSufficientOffMain(ulong sp) {
             ulong limit = _limit;
             if (limit > 1) {
                 return sp > limit;
             }
-            return IsSufficientSlow(sp);
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static bool IsSufficientSlow(ulong sp) {
-            if (_limit == 0) {
-                _limit = QueryLimit();
+            if (limit == 0) {
+                ulong high;
+                _limit = QueryLimit(out high);
+                // the main thread keeps its stack as long as the process runs; a thread that ends may hand its
+                // addresses to another one with a different limit
+                if (_limit > 1 && Environment.CurrentManagedThreadId == 1 && _mainSize == 0) {
+                    _mainLow = _limit;
+                    Volatile.Write(ref _mainSize, high - _limit);
+                }
             }
             return (_limit > 1) ? sp > _limit : RuntimeHelpers.TryEnsureSufficientExecutionStack();
         }
 
-        private static ulong QueryLimit() {
-            ulong low, high;
+        private static ulong QueryLimit(out ulong high) {
+            ulong low;
+            high = 0;
             try {
                 if (!TryGetStackBounds(out low, out high) || high <= low) {
                     return 1;
