@@ -2134,6 +2134,45 @@ false
 ");
         }
 
+        /// <summary>
+        /// Largo/ironruby#126: a finished thread's state is released (its Thread object is collected,
+        /// so .NET recycles its ManagedThreadId), and a new thread that gets a recycled id starts
+        /// fresh instead of inheriting the dead thread's locals, name, variables and flags.
+        /// </summary>
+        public void Thread_IdReuseStartsFresh1() {
+            TestOutput(@"
+seen = {}
+reused = 0
+inherited = 0
+400.times do |i|
+  t = Thread.new do
+    c = Thread.current
+    inherited += 1 if c[:mark] || c.name || c.thread_variable_get(:v) || !c.report_on_exception || c.abort_on_exception
+    c[:mark] = 1
+    c.name = 'old'
+    c.thread_variable_set(:v, 1)
+    c.report_on_exception = false
+    c.abort_on_exception = true
+    System::Threading::Thread.CurrentThread.ManagedThreadId
+  end
+  id = t.value
+  t = nil
+  reused += 1 if seen[id]
+  seen[id] = true
+  if i % 20 == 19
+    System::GC.Collect; System::GC.WaitForPendingFinalizers; System::GC.Collect
+  end
+end
+puts reused > 0
+puts inherited
+puts Thread.list.size
+", @"
+true
+0
+1
+");
+        }
+
         public void Hash_SelfKey1() {
             TestOutput(@"
 h = { b: 1 }; h[h] = 2

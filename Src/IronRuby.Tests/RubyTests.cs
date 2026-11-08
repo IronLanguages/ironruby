@@ -1011,6 +1011,7 @@ namespace IronRuby.Tests {
                 BigDecimal_LongDigits1,
                 Hash_SelfKey1,
                 Thread_JoinSelf1,
+                Thread_IdReuseStartsFresh1,
                 Ractor_Basics1,
                 Ractor_Isolation1,
                 Ractor_Messages1,
