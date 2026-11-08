@@ -56,9 +56,12 @@ dotnet build Src/Console/Ruby.Console.csproj -p:IronRubyTargetFrameworks=net10.0
 
 - In a cloud session `.claude/hooks/session-start.sh` prepares the DLR, prism and the two
   native libraries and exports `DOTNET_ROOT` and `DLR_SOURCE_DIR`. It runs neither
-  `ruby generate.rb` (the committed `Src/Prism/Generated` matches the pinned prism; run it after
-  moving `PRISM_REF`) nor `dotnet build`, which is still yours to run before `./ir.sh` has
-  anything to start.
+  `ruby generate.rb` (the committed `Src/Prism/Generated` matches the pinned prism) nor
+  `dotnet build`, which is still yours to run before `./ir.sh` has anything to start.
+- Moving prism: change `PRISM_REF` in **both** `ci.yml` and `release.yml`, check `../prism` out at
+  the new ref and rebuild `libprism` (the hook only does that at the next session start), then
+  run `ruby generate.rb` and commit `Src/Prism/Generated`. `release.yml` regenerates and fails on
+  any difference from the committed files. `Src/Prism/README.md` has the details.
 - A DLR checkout somewhere else: `-p:DlrSourceDir=/path/to/dlr/src/core/`. Several worktrees
   sharing one DLR checkout share its `obj/`, so concurrent builds can fail with bogus CS0246.
   Give each its own DLR worktree if you build in parallel.
