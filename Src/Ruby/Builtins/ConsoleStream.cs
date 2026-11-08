@@ -112,7 +112,7 @@ namespace IronRuby.Builtins {
         public override void Write(byte[]/*!*/ buffer, int offset, int count) {
             bool output = _consoleType == ConsoleStreamType.Output;
             Stream stream = output ? _io.OutputStream : _io.ErrorStream;
-            (GetUnbufferedStream(stream, output) ?? stream).Write(buffer, offset, count);
+            (GetUnbufferedStream(stream, output, IsSetByHost(output)) ?? stream).Write(buffer, offset, count);
         }
 
         private static Stream _rawInput;
@@ -167,8 +167,6 @@ namespace IronRuby.Builtins {
             _consoleError = null;
             _consoleOutputChecked = false;
             _consoleErrorChecked = false;
-            _defaultOutputOpenFails = null;
-            _defaultErrorOpenFails = null;
         }
 
         /// <summary>
@@ -182,8 +180,13 @@ namespace IronRuby.Builtins {
                     return null;
                 }
                 bool output = _consoleType == ConsoleStreamType.Output;
-                return GetUnbufferedStream(output ? _io.OutputStream : _io.ErrorStream, output) as WindowsPipeStream;
+                return GetUnbufferedStream(output ? _io.OutputStream : _io.ErrorStream, output, IsSetByHost(output)) as WindowsPipeStream;
             }
+        }
+
+        // whether a host gave SharedIO the stream (SharedIO.SetOutput) rather than it opening the process's own
+        private bool IsSetByHost(bool output) {
+            return output ? _io.IsOutputSetByHost : _io.IsErrorOutputSetByHost;
         }
 
         /// <summary>
@@ -193,7 +196,7 @@ namespace IronRuby.Builtins {
         /// descriptor does report the error, so use one whenever the standard stream is still the one
         /// .NET opened (an embedder that redirected SharedIO keeps its own stream) and is redirected.
         /// </summary>
-        private static Stream GetUnbufferedStream(Stream/*!*/ stream, bool output) {
+        private static Stream GetUnbufferedStream(Stream/*!*/ stream, bool output, bool setByHost) {
             if (Environment.OSVersion.Platform == PlatformID.Win32NT && stream == Stream.Null) {
                 // .NET checks the handle with a zero-byte WriteFile when it opens standard output,
                 // and hands out Stream.Null when that fails - which it does on a pipe whose reader
@@ -201,9 +204,8 @@ namespace IronRuby.Builtins {
                 // a child that IO.popen(...).close had abandoned before it wrote its first line
                 // ran `loop { puts }` for ever. The handle itself still says EPIPE.
                 // A host can also give SharedIO Stream.Null on purpose, to throw the output away;
-                // that one has to stay a discard. Only when .NET's own open of the handle gives
-                // Stream.Null too is it the failed default.
-                return DefaultOpenFails(output) ? GetWindowsConsole(output) : null;
+                // that one stays a discard, whatever state the handle is in.
+                return setByHost ? null : GetWindowsConsole(output);
             }
 
             var name = stream.GetType().FullName;
@@ -238,25 +240,6 @@ namespace IronRuby.Builtins {
 
         private static Stream _consoleOutput, _consoleError;
         private static bool _consoleOutputChecked, _consoleErrorChecked;
-        private static bool? _defaultOutputOpenFails, _defaultErrorOpenFails;
-
-        /// <summary>
-        /// Whether .NET opens the process's standard output (or error) as Stream.Null - which it
-        /// does when the handle is invalid or its zero-byte probe write fails, as on a pipe whose
-        /// reader has gone - so that a Stream.Null in SharedIO is that failed default rather than
-        /// a stream a host chose.
-        /// </summary>
-        private static bool DefaultOpenFails(bool output) {
-            ref bool? fails = ref (output ? ref _defaultOutputOpenFails : ref _defaultErrorOpenFails);
-            if (fails == null) {
-                try {
-                    fails = (output ? Console.OpenStandardOutput() : Console.OpenStandardError()) == Stream.Null;
-                } catch (Exception) {
-                    fails = false;
-                }
-            }
-            return fails.Value;
-        }
 
         /// <summary>
         /// On Windows .NET's standard-output stream hands the bytes to WriteFile, and a console

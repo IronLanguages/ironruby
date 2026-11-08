@@ -4120,7 +4120,8 @@ behind a blocked writer: :wait_writable, at once: true
 
         /// <summary>
         /// STDOUT redirected to a pipe on Windows. The process's standard output handle is pointed at a
-        /// pipe for the length of the test, and SharedIO is given the stream .NET opens for it.
+        /// pipe for the length of the test, and SharedIO opens it as it opens standard output (A, B), or
+        /// is given a stream by the host (C, D).
         /// A: put into non-blocking mode with io/nonblock, #syswrite on a full pipe takes what fits and
         /// then raises IO::WaitWritable, as write(2) on an O_NONBLOCK descriptor 1 does. It used to
         /// block, because STDOUT's stream is the console stream and #syswrite did not look behind it
@@ -4128,7 +4129,9 @@ behind a blocked writer: :wait_writable, at once: true
         /// B: when the pipe's reader has already gone, .NET opens standard output as Stream.Null; the
         /// write still has to reach the handle and report EPIPE, where it was thrown away silently.
         /// C: a host that gives SharedIO Stream.Null itself wants the output discarded: nothing
-        /// reaches the pipe, in blocking or non-blocking mode. Windows only.
+        /// reaches the pipe, in blocking or non-blocking mode. D: nor does it get EPIPE when the pipe's
+        /// reader has gone - the same Stream.Null object as B's, which is why SharedIO says which it is
+        /// (IsOutputSetByHost, Build/dlr-patches/0104). Windows only.
         /// </summary>
         public void Windows_StdoutPipeSysWrite1() {
             if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
@@ -4139,7 +4142,11 @@ behind a blocked writer: :wait_writable, at once: true
             Action<IntPtr, System.IO.Stream> redirect = (handle, output) => {
                 SetStdHandle(STD_OUTPUT_HANDLE, handle);
                 ConsoleStream.ResetStandardDescriptors();
-                Runtime.IO.SetOutput(output ?? Console.OpenStandardOutput(), System.IO.TextWriter.Null);
+                if (output == null) {
+                    Runtime.IO.RedirectToConsole();
+                } else {
+                    Runtime.IO.SetOutput(output, System.IO.TextWriter.Null);
+                }
             };
             // Nothing may be printed in here: standard output is the pipe under test.
             try {
@@ -4185,6 +4192,17 @@ STDOUT.nonblock = false
                     int available;
                     Assert(PeekNamedPipe(pipe.SafePipeHandle, IntPtr.Zero, 0, IntPtr.Zero, out available, IntPtr.Zero));
                     Assert(available == 0, available + " bytes reached the pipe");
+                }
+
+                // D: the write end of a pipe whose reader has gone, and a host that discards the output
+                using (var pipe = new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.Out)) {
+                    pipe.DisposeLocalCopyOfClientHandle();
+                    redirect(pipe.SafePipeHandle.DangerousGetHandle(), System.IO.Stream.Null);
+                    var result = Engine.Execute<string>(@"
+STDOUT.write('hidden'); STDOUT.flush
+begin; STDOUT.syswrite('x').to_s; rescue Errno::EPIPE, SignalException => e; e.class.name; end
+").ToString();
+                    Assert(result == "1", result);
                 }
             } finally {
                 SetStdHandle(STD_OUTPUT_HANDLE, saved);

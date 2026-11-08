@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Largo <andi@idogawa.com>
+Date: Sun, 8 Nov 2026 02:30:00 +0100
+Subject: SharedIO: say whether a host set the output streams
+
+Console.OpenStandardOutput returns Stream.Null when it cannot use the
+handle (a pipe whose reader has gone), and a host that wants the output
+discarded passes Stream.Null to SetOutput itself: the same object, so a
+language cannot tell the two apart. IsOutputSetByHost and
+IsErrorOutputSetByHost say which it is.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+diff --git a/src/core/Microsoft.Scripting/Runtime/SharedIO.cs b/src/core/Microsoft.Scripting/Runtime/SharedIO.cs
+index 4ab7605..d2dfa35 100644
+--- a/src/core/Microsoft.Scripting/Runtime/SharedIO.cs
++++ b/src/core/Microsoft.Scripting/Runtime/SharedIO.cs
+@@ -80,6 +80,21 @@ namespace Microsoft.Scripting.Runtime {
+ 
+         private Encoding? _inputEncoding;
+ 
++        // set by SetOutput / SetErrorOutput, cleared by RedirectToConsole
++        private bool _outputSetByHost;
++        private bool _errorSetByHost;
++
++        /// <summary>
++        /// Whether <see cref="OutputStream"/> is one a host set with <see cref="SetOutput"/>, rather
++        /// than the one opened for the process's standard output. The two can be the same object:
++        /// Console.OpenStandardOutput returns Stream.Null when it cannot use the handle, and a host
++        /// that wants the output discarded passes Stream.Null itself.
++        /// </summary>
++        public bool IsOutputSetByHost => _outputSetByHost;
++
++        /// <summary>As <see cref="IsOutputSetByHost"/>, for <see cref="ErrorStream"/>.</summary>
++        public bool IsErrorOutputSetByHost => _errorSetByHost;
++
+         public Stream InputStream { get { InitializeInput(); return _inputStream!; } }
+         public Stream OutputStream { get { InitializeOutput(); return _outputStream!; } }
+         public Stream ErrorStream { get { InitializeErrorOutput(); return _errorStream!; } }
+@@ -184,6 +199,7 @@ namespace Microsoft.Scripting.Runtime {
+             lock (_mutex) {
+                 _outputStream = stream;
+                 _outputWriter = writer;
++                _outputSetByHost = true;
+             }
+         }
+ 
+@@ -192,6 +208,7 @@ namespace Microsoft.Scripting.Runtime {
+             lock (_mutex) {
+                 _errorStream = stream;
+                 _errorWriter = writer;
++                _errorSetByHost = true;
+             }
+         }
+ 
+@@ -213,6 +230,8 @@ namespace Microsoft.Scripting.Runtime {
+                 _inputReader = null;
+                 _outputWriter = null;
+                 _errorWriter = null;
++                _outputSetByHost = false;
++                _errorSetByHost = false;
+             }
+         }
+ 
