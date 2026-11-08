@@ -3118,6 +3118,37 @@ true
         }
 
         /// <summary>
+        /// $stdout can be any object with a #write (#134). Kernel#puts forwards to $stdout.puts even when that is
+        /// only the private Kernel#puts the object inherits (rb_f_puts calls it with rb_funcallv), and with $stdout
+        /// as the receiver formats the lines itself and hands them to #write; it raised "private method 'puts'
+        /// called". An object's own #puts still wins. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Kernel_PutsToStdoutWriter1() {
+            TestOutput(@"
+require 'ruby4'
+class W; attr_reader :s; def initialize; @s = +''; end; def write(*x); @s << x.join; x.join.size; end; end
+w = W.new
+$stdout = w
+puts 'foo'
+puts 'a', ['b', ['c']], nil
+puts
+print ""bar\n""
+p :sym
+w.instance_eval { puts 'self' }
+Kernel.puts 'k'
+$stdout = STDOUT
+p w.s
+class P; def write(*x) = x.join.size; def puts(*a) = (STDOUT.write(""own puts #{a.inspect}\n""); nil); end
+$stdout = P.new
+puts 1, 2
+$stdout = STDOUT
+", @"
+""foo\na\nb\nc\n\n\nbar\n:sym\nself\nk\n""
+own puts [1, 2]
+");
+        }
+
+        /// <summary>
         /// The prelude's helpers stay out of the core's public surface (no Integer::MAX, SPAWN_*, ERRNO_TABLE, *_without_*
         /// wrappers), the definitions removed as dead are still answered by the C# core, and sleep and the Kernel conversion
         /// functions fail with MRI's messages.
