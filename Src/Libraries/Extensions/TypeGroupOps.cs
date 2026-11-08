@@ -39,7 +39,7 @@ namespace IronRuby.Builtins {
 
             Type concreteType;
             if (typeArgs.Length > 0) {
-                concreteType = tracker.Type.MakeGenericType(Protocols.ToTypes(context, typeArgs));
+                concreteType = Protocols.MakeGenericType(context, tracker.Type, self.Name, typeArgs);
             } else {
                 concreteType = tracker.Type;
             }

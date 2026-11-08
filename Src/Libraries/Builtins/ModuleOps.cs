@@ -2065,7 +2065,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("Type '{0}' requires {1} generic type arguments, {2} provided", self.Name, required, provided);
             }
 
-            Type concreteType = type.MakeGenericType(Protocols.ToTypes(self.Context, typeArgs));
+            Type concreteType = Protocols.MakeGenericType(self.Context, type, self.Name, typeArgs);
             return self.Context.GetModule(concreteType);
         }
 
