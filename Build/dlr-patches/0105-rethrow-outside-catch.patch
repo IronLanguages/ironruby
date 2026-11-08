@@ -11,6 +11,11 @@ exception passing n such frames needed stack for all of them at once: a deep
 recursion's stack-overflow error ended the process. Both now capture the
 exception (ExceptionDispatchInfo), leave the catch and throw it from there.
 
+The rethrown exception's trace then has the catching frame twice, around the
+ExceptionDispatchInfo.Throw frame; InterpretedFrame.GroupStackFrames makes it
+one again, so an interpreted frame is matched with its own InterpretedFrameInfo
+and not the one of its caller.
+
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
 diff --git a/src/core/Microsoft.Dynamic/Ast/TryStatementBuilder.cs b/src/core/Microsoft.Dynamic/Ast/TryStatementBuilder.cs
@@ -117,6 +122,49 @@ index 03e3773..989284e 100644
          }
      }
  
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+index 35697d5..2ef6f35 100644
+--- a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+@@ -7,6 +7,7 @@ using System.Collections.Generic;
+ using System.Diagnostics;
+ using System.Reflection;
+ using System.Runtime.CompilerServices;
++using System.Runtime.ExceptionServices;
+ 
+ using Microsoft.Scripting.Utils;
+ using Microsoft.Scripting.Runtime;
+@@ -133,6 +134,7 @@ namespace Microsoft.Scripting.Interpreter {
+         /// </summary>
+         public static IEnumerable<StackFrame> GroupStackFrames(IEnumerable<StackFrame> stackTrace) {
+             bool inInterpretedFrame = false;
++            MethodBase previous = null, rethrowing = null;
+             foreach (StackFrame frame in stackTrace) {
+                 MethodBase method = frame.GetMethod();
+ 
+@@ -142,6 +144,22 @@ namespace Microsoft.Scripting.Interpreter {
+                     continue;
+                 }
+ 
++                // An exception rethrown through ExceptionDispatchInfo (Interpreter.Run, the filter and fault lowering
++                // of TryStatementBuilder) has the frame that caught it twice, before and after the Throw frame: once
++                // as where it was caught, once as where it was thrown again. It is one frame.
++                if (method.DeclaringType == typeof(ExceptionDispatchInfo)) {
++                    rethrowing = previous;
++                    continue;
++                }
++                if (rethrowing is not null) {
++                    bool same = method == rethrowing;
++                    rethrowing = null;
++                    if (same) {
++                        continue;
++                    }
++                }
++                previous = method;
++
+                 if (InterpretedFrame.IsInterpretedFrame(method)) {
+                     if (inInterpretedFrame) {
+                         continue;
 diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
 index 9c4fb4a..be5a8a9 100644
 --- a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
