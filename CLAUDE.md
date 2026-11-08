@@ -54,8 +54,9 @@ bash Util/build-markly.sh && Util/build-librbs.sh                # two more nati
 dotnet build Src/Console/Ruby.Console.csproj -p:IronRubyTargetFrameworks=net10.0
 ```
 
-- In a cloud session `.claude/hooks/session-start.sh` does all of this and exports
-  `DOTNET_ROOT` and `DLR_SOURCE_DIR`.
+- In a cloud session `.claude/hooks/session-start.sh` prepares everything but the last line
+  (the DLR, prism, the native libraries) and exports `DOTNET_ROOT` and `DLR_SOURCE_DIR`; the
+  `dotnet build` is still yours to run before `./ir.sh` has anything to start.
 - A DLR checkout somewhere else: `-p:DlrSourceDir=/path/to/dlr/src/core/`. Several worktrees
   sharing one DLR checkout share its `obj/`, so concurrent builds can fail with bogus CS0246.
   Give each its own DLR worktree if you build in parallel.
@@ -73,6 +74,10 @@ dotnet build Src/Console/Ruby.Console.csproj -p:IronRubyTargetFrameworks=net10.0
 ./ir.sh script.rb
 ./iirb.sh                                 # irb
 ```
+
+On Windows use `ir.cmd` and `iirb.cmd` (from cmd.exe, or `cmd //c ir.cmd ...` from Git Bash,
+as CI does): they pass `-X:StdLib` `;`-separated, while the shell launchers' `:`-separated list
+breaks at drive letters.
 
 `ir.sh` runs `./ironruby`, which runs the in-place build under
 `Src/Console/bin/$IR_CONFIG/$IR_TFM/`. `IR_TFM` defaults to **net8.0**: after building only
@@ -115,6 +120,8 @@ Util/parallel-sweep.sh out [baseline_out]    # core, library, language, command_
 
 - CI runs only `spec/language`. For a change with a wide reach, sweep the branch and a master
   build and compare (`parallel-sweep.sh new master-out` lists new and fixed failures).
+  A job the summary reports without an mspec summary line (it crashed or hung) leaves its
+  examples out of the counts: resolve those in both sweeps before trusting the comparison.
 - Keep both trees at **short paths**: UNIX-socket specs fail when the socket path gets too long,
   and the difference then looks like a regression or a fix.
 - Timing-sensitive examples flip between runs under the sweep's parallel load (e.g.
@@ -127,7 +134,7 @@ Util/parallel-sweep.sh out [baseline_out]    # core, library, language, command_
 
 | File | Regenerate with | When |
 |---|---|---|
-| `Src/Libraries/Initializers.Generated.cs` | `./regen-initializers.sh` (or the steps in `Src/ClassInitGenerator/README.md`) | any `[RubyMethod]`, `[RubyClass]`, `[RubyModule]`, `[RubyConstructor]` change, **including parameter attributes** (`[NotNull]`, `[DefaultProtocol]`): the binder reads them from this file, so a C#-only rebuild silently keeps the old behaviour |
+| `Src/Libraries/Initializers.Generated.cs` | `./regen-initializers.sh` (or the steps in `Src/ClassInitGenerator/README.md`) | any `[RubyMethod]`, `[RubyClass]`, `[RubyModule]`, `[RubyConstructor]`, `[RubyConstant]` change, **including parameter attributes** (`[NotNull]`, `[DefaultProtocol]`): the binder reads them from this file, so a C#-only rebuild silently keeps the old behaviour, and a new constant is not there at all |
 | `Src/Libraries.Yaml/Initializer.Generated.cs` | ClassInitGenerator README | psych's `[RubyMethod]`s |
 | `Src/Ruby/Compiler/ReflectionCache.Generated.cs` | `ClassInitGenerator /refcache` (README) | a method marked `[Emitted]` (called from generated code via `Methods.X`) is added or changed |
 | `Src/Prism/Generated/*` | `cd Src/Prism && ruby generate.rb` | the pinned prism changes (CI regenerates them) |
@@ -135,6 +142,10 @@ Util/parallel-sweep.sh out [baseline_out]    # core, library, language, command_
 | `Src/Ruby/Builtins/UnicodeProperties.Generated.cs` | `Util/gen-unicode-properties.rb` | |
 | `*/AotSubclasses.Generated.cs` | `Util/aot/gen-subclasses.rb` | a library class is added |
 | `Src/Libraries/Rbs/RbsNodes.Generated.cs` | `Src/Libraries/Rbs/generate.rb` | |
+
+A new library namespace (`IronRuby.StandardLibrary.Foo`) has to be added to `LIBS` in
+`regen-initializers.sh` and to the list in `Src/ClassInitGenerator/README.md`; without it the
+generator skips the namespace and nothing in it is registered.
 
 If changing a `[RubyMethod]`'s signature breaks the build because the generated file still
 names the old one, either run `regen-initializers.sh` (it builds from a skeleton) or fix the
