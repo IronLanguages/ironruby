@@ -253,5 +253,50 @@ NameError
 0
 ");
         }
+
+        /// <summary>
+        /// System::String#[] / #slice take what Ruby's String#[] takes: an index, a start and length, a Range, a Regexp
+        /// with or without a group, a String or a System::String to look for. A Ruby String raised "no implicit
+        /// conversion of String into Integer", and the empty slice at the end ("hello"[5, 1], "hello"[3..1]) gave the
+        /// whole string (#140). An index gives a System::Char; the slices are System::Strings.
+        /// (string/element_reference_spec.rb)
+        /// </summary>
+        public void ClrInterop_StringSlice1() {
+            TestOutput(@"
+h = 'hello'.to_clr_string; ht = 'hello there'.to_clr_string
+p h[0], h[-1], h[20], h[1].class
+p h[1, 3], h[1, 3].class, h[5, 1], h[6, 1], h[-3, 2], h[0, 0]
+p h[1..3], h[3..1], h[4..10], h[5..], h[6..]
+p h[/l+/], h[/z/], h[/(e)(l)/, 2]
+p ht['lo'], ht['lo'].class, ht['bye'], ht.slice('the'), ht['lo'.to_clr_string]
+p((h[nil] rescue $!.class), (h[{}] rescue $!.class))
+", @"
+'h' (Char)
+'o' (Char)
+nil
+System::Char
+'ell'
+System::String
+''
+nil
+'ll'
+''
+'ell'
+''
+'o'
+''
+nil
+'ll'
+nil
+'l'
+'lo'
+System::String
+nil
+'the'
+'lo'
+TypeError
+TypeError
+");
+        }
     }
 }

@@ -4387,11 +4387,12 @@ namespace IronRuby.Builtins {
         
         private static void LoadIronRuby__Clr__String_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "[]", 0x51, 
-                new[] { 0x00010000U, 0x00030000U, 0x00000004U, 0x00000002U, 0x00000004U, 0x00040004U}, 
+                new[] { 0x00010000U, 0x00030000U, 0x00000004U, 0x00000002U, 0x00000002U, 0x00000004U, 0x00040004U}, 
                 new Func<System.String, System.Int32, System.Object>(IronRuby.Builtins.ClrString.GetChar), 
                 new Func<System.String, System.Int32, System.Int32, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, System.String, IronRuby.Builtins.Range, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<System.String, System.String, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
+                new Func<System.String, IronRuby.Builtins.MutableString, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.RubyScope, System.String, IronRuby.Builtins.RubyRegex, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.RubyScope, System.String, IronRuby.Builtins.RubyRegex, System.Int32, System.String>(IronRuby.Builtins.ClrString.GetSubstring)
             );
@@ -4508,11 +4509,12 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "slice", 0x51, 
-                new[] { 0x00010000U, 0x00030000U, 0x00000004U, 0x00000002U, 0x00000004U, 0x00040004U}, 
+                new[] { 0x00010000U, 0x00030000U, 0x00000004U, 0x00000002U, 0x00000002U, 0x00000004U, 0x00040004U}, 
                 new Func<System.String, System.Int32, System.Object>(IronRuby.Builtins.ClrString.GetChar), 
                 new Func<System.String, System.Int32, System.Int32, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, System.String, IronRuby.Builtins.Range, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<System.String, System.String, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
+                new Func<System.String, IronRuby.Builtins.MutableString, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.RubyScope, System.String, IronRuby.Builtins.RubyRegex, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.RubyScope, System.String, IronRuby.Builtins.RubyRegex, System.Int32, System.String>(IronRuby.Builtins.ClrString.GetSubstring)
             );
