@@ -196,14 +196,32 @@ namespace IronRuby.StandardLibrary.Puma {
                     if (OperatingSystem.IsWindows()) {
                         // the ephemeral one is disposed once the PFX copy has replaced it
                         using (X509Certificate2 ephemeral = leaf) {
-#if NET9_0_OR_GREATER
-                            leaf = X509CertificateLoader.LoadPkcs12(ephemeral.Export(X509ContentType.Pfx), null);
-#else
-                            leaf = new X509Certificate2(ephemeral.Export(X509ContentType.Pfx));
-#endif
+                            leaf = ImportForSChannel(ephemeral.Export(X509ContentType.Pfx));
                         }
                     }
                     return SslStreamCertificateContext.Create(leaf, chain, offline: true);
+                }
+
+                /// <summary>
+                /// A PFX imported so that SChannel can use its key. The default import keeps the key in the user's key
+                /// store, which needs DPAPI and so a logon that has the user's credentials: in an SSH session logged in
+                /// with a key, or in a service account without a loaded profile, it fails with "Access denied" and
+                /// puma could not bind its TLS listener (#130). The machine key store does not need them.
+                /// </summary>
+                private static X509Certificate2/*!*/ ImportForSChannel(byte[]/*!*/ pfx) {
+                    try {
+                        return LoadPkcs12(pfx, X509KeyStorageFlags.DefaultKeySet);
+                    } catch (CryptographicException) {
+                        return LoadPkcs12(pfx, X509KeyStorageFlags.MachineKeySet);
+                    }
+                }
+
+                private static X509Certificate2/*!*/ LoadPkcs12(byte[]/*!*/ pfx, X509KeyStorageFlags flags) {
+#if NET9_0_OR_GREATER
+                    return X509CertificateLoader.LoadPkcs12(pfx, null, flags);
+#else
+                    return new X509Certificate2(pfx, (string)null, flags);
+#endif
                 }
             }
 
