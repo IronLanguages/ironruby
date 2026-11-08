@@ -116,6 +116,7 @@ namespace IronRuby.Builtins {
         #region kill
 
         private const int SignalPipe = 13;
+        internal const int SignalInterrupt = 2;
 
         [DllImport("libc", EntryPoint = "signal")]
         private static extern IntPtr SysSignal(int signal, IntPtr handler);
@@ -152,7 +153,23 @@ namespace IronRuby.Builtins {
                 case 28:  // WINCH
                     return false;
                 default:
-                    return signal > 0;
+                    return signal > 0 && !IgnoredByDefault(signal);
+            }
+        }
+
+        /// <summary>
+        /// Signals that would end the process but that MRI swallows unless a program asks otherwise:
+        /// it installs a do-nothing handler for PIPE and SYS and keeps VTALRM for itself, so a
+        /// program that sends one of them to itself carries on.
+        /// </summary>
+        internal static bool IgnoredByDefault(int signal) {
+            switch (signal) {
+                case SignalPipe:
+                case 26:  // VTALRM
+                case 31:  // SYS
+                    return true;
+                default:
+                    return false;
             }
         }
 
@@ -182,6 +199,29 @@ namespace IronRuby.Builtins {
         internal static bool HasHandler(int signal) {
             lock (_handlers) {
                 return _handlers.ContainsKey(signal);
+            }
+        }
+
+        /// <summary>
+        /// Whether a #trap left something for the signal to run or to ignore it with - a handler,
+        /// "IGNORE", or SIGINT's "DEFAULT" (Interrupt). Trapping "DEFAULT" back for any other
+        /// signal, or "SYSTEM_DEFAULT", is the same as never having trapped it.
+        /// </summary>
+        internal static bool HasRubyHandler(int signal) {
+            lock (_handlers) {
+                Handler handler;
+                if (!_handlers.TryGetValue(signal, out handler)) {
+                    return false;
+                }
+                return !IsSystemDefault(handler.Command) && !(IsDefault(handler.Command) && handler.Invoke == null);
+            }
+        }
+
+        /// <summary>Whether the signal was handed back to the OS with trap(signal, "SYSTEM_DEFAULT").</summary>
+        internal static bool IsTrappedToSystemDefault(int signal) {
+            lock (_handlers) {
+                Handler handler;
+                return _handlers.TryGetValue(signal, out handler) && IsSystemDefault(handler.Command);
             }
         }
 

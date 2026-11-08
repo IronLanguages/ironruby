@@ -97,7 +97,7 @@ namespace IronRuby.Builtins {
             // the platform instead makes `Signal.trap(:INT, :SIG_DFL); Process.kill :INT; sleep`
             // hang, because .NET's own SIGINT handling swallows it.
             Action<int> defaultInvoke = (number == SignalInterrupt && mainThread != null)
-                ? new Action<int>(_ => RubyUtils.RaiseAsyncException(mainThread, new Interrupt()))
+                ? new Action<int>(_ => RubyUtils.RaiseAsyncException(mainThread, new Interrupt(String.Empty)))
                 : null;
 
             // No try/catch around the call: PosixSignals runs handlers on the main thread at a
@@ -137,7 +137,7 @@ namespace IronRuby.Builtins {
             return Trap(callStorage, stringCast, context, self, signalId, block.Proc);
         }
 
-        private const int SignalInterrupt = 2;
+        private const int SignalInterrupt = PosixSignals.SignalInterrupt;
         private const int SignalExit = 0;
 
         #endregion

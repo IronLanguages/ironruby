@@ -524,9 +524,23 @@ namespace IronRuby.Builtins {
                 // ever.
                 bool targetsUs = target == Environment.ProcessId;
 
-                if (targetsUs && PosixSignals.TerminatesByDefault(signal) && !PosixSignals.HasHandler(signal)) {
+                // trap(:TERM, "DEFAULT") after a handler is MRI's default again - a SignalException -
+                // and "SYSTEM_DEFAULT" is the OS's, which the real kill(2) below gives it.
+                bool standIn = targetsUs && !PosixSignals.HasRubyHandler(signal) && !PosixSignals.IsTrappedToSystemDefault(signal);
+
+                if (standIn && PosixSignals.TerminatesByDefault(signal)) {
+                    // SIGINT is the one MRI raises as Interrupt - what `rescue Interrupt` is
+                    // written for - and with an empty message, not "SIGINT"; #signo still says 2.
+                    if (signal == PosixSignals.SignalInterrupt) {
+                        throw new Interrupt(String.Empty);
+                    }
                     string name = PosixSignals.ToName(signal);
                     throw new SignalException((name != null) ? "SIG" + name : "SIG" + signal);
+                }
+
+                // PIPE, SYS and VTALRM: nothing happens, as in MRI, unless a #trap installed something.
+                if (standIn && PosixSignals.IgnoredByDefault(signal)) {
+                    continue;
                 }
 
                 // MRI checks for pending signals as soon as kill(2) returns, so signalling yourself
@@ -534,7 +548,7 @@ namespace IronRuby.Builtins {
                 // Process.kill still on the stack, which ruby/spec looks for in the handler's
                 // #caller. Going through the kernel would run it on .NET's signal thread some time
                 // later instead, so call it here and skip the round trip.
-                if (targetsUs && signal > 0 && PosixSignals.HasHandler(signal) && PosixSignals.IsMainThread) {
+                if (targetsUs && signal > 0 && PosixSignals.HasRubyHandler(signal) && PosixSignals.IsMainThread) {
                     PosixSignals.RunHandler(signal);
                     continue;
                 }

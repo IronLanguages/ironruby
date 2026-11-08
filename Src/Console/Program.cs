@@ -55,7 +55,7 @@ internal sealed class Host : RubyConsoleHost {
 
         Thread mainThread = Thread.CurrentThread;
         RubyContext context = (RubyContext)HostingHelpers.GetLanguageContext(engine);
-        context.InterruptSignalHandler = delegate() { RubyUtils.RaiseAsyncException(mainThread, new Interrupt()); };
+        context.InterruptSignalHandler = delegate() { RubyUtils.RaiseAsyncException(mainThread, new Interrupt(String.Empty)); };
         ((BasicConsole)console).ConsoleCancelEventHandler = delegate(object sender, ConsoleCancelEventArgs e) {
             OnCancelKey(e, context, mainThread); 
         };

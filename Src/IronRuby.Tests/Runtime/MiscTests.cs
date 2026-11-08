@@ -992,6 +992,72 @@ true
         }
 
         /// <summary>
+        /// A process that sends itself SIGINT with no handler gets Interrupt - a SignalException that
+        /// `rescue Interrupt` catches, with an empty message and #signo 2 - as in MRI; other signals
+        /// stay plain SignalExceptions. It was SignalException ("SIGINT") for every one. PIPE, SYS and
+        /// VTALRM, which MRI swallows, raised SignalException too, and a signal trapped back to
+        /// "DEFAULT" was swallowed. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Process_KillSelfInterrupt1() {
+            TestOutput(@"
+require 'ruby4'
+begin
+  Process.kill(:INT, Process.pid)
+  sleep 1
+rescue Interrupt => e
+  p e, e.message, e.signo, e.signm, e.is_a?(SignalException)
+end
+begin
+  Process.kill('SIGINT', Process.pid)
+  sleep 1
+rescue Interrupt => e
+  p e.message
+end
+begin
+  Process.kill(:TERM, Process.pid)
+  sleep 1
+rescue Interrupt
+  p :wrong
+rescue SignalException => e
+  p e, e.message, e.signo
+end
+
+# a handler trapped back to DEFAULT is MRI's default again
+old = trap(:TERM) { p :wrong }
+trap(:TERM, old)
+begin
+  Process.kill(:TERM, Process.pid)
+  sleep 1
+rescue SignalException => e
+  p old, e
+end
+
+# PIPE, SYS and VTALRM are swallowed unless trapped (none of them exist on Windows)
+%w[PIPE SYS VTALRM].each do |name|
+  p(Signal.list.key?(name) ? Process.kill(name, Process.pid) : 1)
+end
+sleep 0.1
+p :alive
+", @"
+Interrupt
+""""
+2
+""""
+true
+""""
+#<SignalException: SIGTERM>
+""SIGTERM""
+15
+""DEFAULT""
+#<SignalException: SIGTERM>
+1
+1
+1
+:alive
+");
+        }
+
+        /// <summary>
         /// A drive-relative name's dirname is "C:." on Windows, as in MRI - which is how CRuby's own
         /// pathname_builtin.rb recognises drive letters, so Pathname#absolute? depends on it.
         /// </summary>
