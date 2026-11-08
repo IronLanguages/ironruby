@@ -331,11 +331,20 @@ namespace IronRuby.Runtime.Conversions {
                 AstUtils.LightDynamic(ProtocolConversionAction.GetArgumentConversionAction(context, toType, implicitProtocolConversions), toType, expr);
         }
 
+        // System::Char is a single-character string, not a number (see NumericTypeCode): Decimal's
+        // op_Implicit(char) must not turn it into its code point when Int32 and Double do not (#153).
+        private static bool IsCharToNumber(Type/*!*/ fromType, Type/*!*/ toType) {
+            return fromType == typeof(char) && GetNumericTypeCode(toType) != NumericTypeCode.Invalid;
+        }
+
         // C# finds a user-defined conversion operator on the source type's base classes too; CompilerHelpers looks
         // only at the type itself (reflection does not inherit static methods). A Ruby subclass of String is a CLR
         // subclass of MutableString, so without the walk MutableString's operators were lost on it:
         // o.CharArg(MyString.new('a')) failed where o.CharArg('a') passed.
         private static MethodInfo GetImplicitConverter(Type/*!*/ fromType, Type/*!*/ toType) {
+            if (IsCharToNumber(fromType, toType)) {
+                return null;
+            }
             for (Type type = fromType; type != null && type != typeof(object); type = type.BaseType) {
                 MethodInfo converter = CompilerHelpers.GetImplicitConverter(type, toType);
                 if (converter != null) {
@@ -346,6 +355,9 @@ namespace IronRuby.Runtime.Conversions {
         }
 
         private static MethodInfo GetExplicitConverter(Type/*!*/ fromType, Type/*!*/ toType) {
+            if (IsCharToNumber(fromType, toType)) {
+                return null;
+            }
             for (Type type = fromType; type != null && type != typeof(object); type = type.BaseType) {
                 MethodInfo converter = CompilerHelpers.GetExplicitConverter(type, toType);
                 if (converter != null) {
