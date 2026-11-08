@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -450,6 +451,49 @@ p [r, $rescued&.message, t.status]
             Assert(parkedAfterAlone);
             Assert(behind != null && RubyUtils.IsRubyThreadExit(behind));
             Assert(!parkedAfterKill);
+        }
+
+        /// <summary>
+        /// Thread_KillBehindRaiseInFiberWait1 through the wait itself: a thread blocked in the mailbox
+        /// take of a fiber waiting for control, with a Thread#raise parked for it, is woken by a
+        /// Thread#kill behind the raise and leaves the take with the kill. Were the kill not promoted
+        /// there, the take would go on waiting for a message that never comes.
+        /// </summary>
+        public void Thread_KillBehindRaiseInFiberMailbox1() {
+            var mailbox = new ThreadOps.FiberMailbox();
+            // internal to the libraries: set for a fiber's own mailbox (FiberCore)
+            var flags = BindingFlags.NonPublic | BindingFlags.Instance;
+            typeof(ThreadOps.FiberMailbox).GetField("HandsOverControl", flags).SetValue(mailbox, true);
+            var blocked = typeof(ThreadOps.FiberMailbox).GetField("_blocked", flags);
+
+            Exception thrown = null;
+            var worker = new Thread(() => {
+                try {
+                    mailbox.Take();
+                } catch (Exception e) {
+                    thrown = e;
+                }
+            });
+            worker.IsBackground = true;
+            worker.Start();
+            try {
+                // in the Monitor wait, where Thread#kill's interrupt reaches it, not in the spin before it
+                while (!(bool)blocked.GetValue(mailbox) || (worker.ThreadState & ThreadState.WaitSleepJoin) == 0) {
+                    Thread.Yield();
+                }
+                RubyUtils.ParkAsyncException(worker, new InvalidOperationException("raise"));
+                RubyUtils.ExitThread(worker);
+
+                bool ended = worker.Join(5000);
+                if (!ended) {
+                    mailbox.Post(null);
+                    worker.Join(5000);
+                }
+                Assert(ended);
+            } finally {
+                RubyUtils.DropPendingAsyncExceptions(worker);
+            }
+            Assert(thrown != null && RubyUtils.IsRubyThreadExit(thrown));
         }
 
         /// <summary>
