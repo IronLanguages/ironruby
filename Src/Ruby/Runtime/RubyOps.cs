@@ -987,11 +987,17 @@ namespace IronRuby.Runtime {
                     // 2) trace
                     //    Method call trace reports non-singleton module.
 
-                    // The instance method owner is GetMethodDefinitionOwner.
-                    // MRI allows to define m.f. on classes but then doesn't work correctly with it.
+                    // The instance method owner is GetMethodDefinitionOwner. That can be a class: Class has no
+                    // #module_function, but the default a module's `module_function' sets reaches the class body
+                    // it is called from (RubyScope.GetVisibilityScope), and MRI then defines both halves there
+                    // too (#133).
                     instanceOwner = scope.GetMethodDefinitionOwner();
-                    if (instanceOwner.IsClass) {
-                        throw RubyExceptions.CreateTypeError("A module function cannot be defined on a class.");
+
+                    // `1.instance_eval { M.send(:module_function); def x; end }': the dummy singleton of an
+                    // Integer takes no methods, module function or not
+                    var dummy = instanceOwner as RubyClass;
+                    if (dummy != null && dummy.IsDummySingletonClass) {
+                        throw RubyExceptions.CreateTypeError("can't define singleton");
                     }
 
                     instanceFlags = RubyMemberFlags.Private;
@@ -1072,7 +1078,6 @@ namespace IronRuby.Runtime {
             method.DeclaringModule.MethodAdded(body.Name);
 
             if (moduleFunction) {
-                Debug.Assert(!method.DeclaringModule.IsClass);
                 method.DeclaringModule.GetOrCreateSingletonClass().MethodAdded(body.Name);
             }
 

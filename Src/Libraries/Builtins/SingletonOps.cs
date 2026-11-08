@@ -41,9 +41,12 @@ namespace IronRuby.Builtins {
             return MutableString.CreateAscii("main");
         }
 
+        // main's #public, #private and #include are private, as MRI's are: `self.include M` works,
+        // `TOPLEVEL_BINDING.receiver.include M` does not (#138).
+
         // thread-safe:
         // Like Module#public: a single Array argument lists the names, and the result is what was passed.
-        [RubyMethod("public", RubyMethodAttributes.PublicInstance)]
+        [RubyMethod("public", RubyMethodAttributes.PrivateInstance)]
         public static object SetPublicVisibility(ConversionStorage<string>/*!*/ stringCast, RubyScope/*!*/ scope, object/*!*/ self,
             params object[]/*!*/ methodNames) {
 
@@ -52,7 +55,7 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
-        [RubyMethod("private", RubyMethodAttributes.PublicInstance)]
+        [RubyMethod("private", RubyMethodAttributes.PrivateInstance)]
         public static object SetPrivateVisibility(ConversionStorage<string>/*!*/ stringCast, RubyScope/*!*/ scope, object/*!*/ self,
             params object[]/*!*/ methodNames) {
 
@@ -154,7 +157,7 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
-        [RubyMethod("include", RubyMethodAttributes.PublicInstance)]
+        [RubyMethod("include", RubyMethodAttributes.PrivateInstance)]
         public static RubyModule/*!*/ Include(
             CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ appendFeaturesStorage,
             CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ includedStorage,

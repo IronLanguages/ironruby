@@ -476,6 +476,46 @@ p((Regexp.new(""(?x:a)# \\xff"") rescue $!), (Regexp.new(""[#\\xff]"", Regexp::E
         }
 
         
+        /// <summary>
+        /// $~ after a String#sub or #sub! with a block is what the block left it: a match made inside it, nil after
+        /// a failed one (#137). rb_str_sub_bang does not set it again after the block; IronRuby reset it to the
+        /// sub's own match. #gsub and #gsub! do reset it to their last match, and #scan leaves the block's. The
+        /// expected output is CRuby 4.0's.
+        /// </summary>
+        public void Regex_BackrefAfterBlockSub1() {
+            TestOutput(@"
+def a; r = ""ab"".sub(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""sub blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def b; r = ""ab"".sub(/(.)/) { ""z"" }; puts ""sub blk none: #{$~&.[](0).inspect} #{r.inspect}""; end
+def c; r = ""ab"".sub(/(.)/) { ""x"".match(/q/); ""z"" }; puts ""sub blk failed: #{$~&.[](0).inspect} #{r.inspect}""; end
+def d; s = +""ab""; r = s.sub!(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""sub! blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def e; r = ""ab"".gsub(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""gsub blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def f; r = ""ab"".gsub(/(.)/) { $1.upcase }; puts ""gsub blk none: #{$~&.[](0).inspect} #{r.inspect}""; end
+def g; r = ""ab"".gsub(/(.)/) { ""x"".match(/q/); ""z"" }; puts ""gsub blk failed: #{$~&.[](0).inspect} #{r.inspect}""; end
+def h; s = +""ab""; r = s.gsub!(/(.)/) { ""y"".match(/(.)/); ""z"" }; puts ""gsub! blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def i; r = ""ab"".sub(""b"") { ""x"" =~ /x/; ""z"" }; puts ""sub str blk: #{$~&.[](0).inspect} #{r.inspect}""; end
+def j; ""12"".scan(/(.)/) { ""y"".match(/(.)/) }; puts ""scan blk: #{$~&.[](0).inspect}""; end
+def k; ""12"".scan(/(.)/) { ""y"".match(/(.)/); break }; puts ""scan blk break: #{$~&.[](0).inspect}""; end
+def l; r = []; ""ab"".gsub(/(.)/) { r << $~[0]; ""x"".match(/./); r << $~[0]; ""z"" }; puts ""gsub inside: #{r.inspect} after #{$~&.[](0).inspect}""; end
+def m; ""ab"".sub(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""sub then $1: #{$1.inspect} #{$`.inspect}""; end
+def n; ""ab"".sub(/z/) { 1 }; puts ""sub nomatch: #{$~.inspect}""; end
+%i[a b c d e f g h i j k l m n].each { |x| send(x) }
+", @"
+sub blk match: ""x"" ""zb""
+sub blk none: ""a"" ""zb""
+sub blk failed: nil ""zb""
+sub! blk match: ""x"" ""zb""
+gsub blk match: ""b"" ""zz""
+gsub blk none: ""b"" ""AB""
+gsub blk failed: ""b"" ""zz""
+gsub! blk match: ""b"" ""zz""
+sub str blk: ""x"" ""az""
+scan blk: ""2""
+scan blk break: ""y""
+gsub inside: [""a"", ""x"", ""b"", ""x""] after ""b""
+sub then $1: ""x"" """"
+sub nomatch: nil
+");
+        }
     }
 }
 

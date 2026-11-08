@@ -11998,10 +11998,19 @@ module Kernel
   end
   module_function :String
 
-  # rb_f_puts is a plain forward to $stdout.puts, so a redefined or mocked #puts on
-  # $stdout is what runs (Kernel#print and #p write to it directly instead).
-  def puts(*args)
-    $stdout.puts(*args)
+  # rb_f_puts forwards to $stdout.puts, so a redefined or mocked #puts on $stdout is what
+  # runs (Kernel#print and #p write to it directly instead). It forwards with rb_funcallv,
+  # which does not mind that an object only inherits this private #puts - and then, with
+  # $stdout as the receiver, formats the lines itself and hands them to $stdout.write
+  # (rb_io_puts): $stdout may be anything with a #write. The C# Kernel#puts below this
+  # one does that last part. The identity is BasicObject#equal?'s, not the writer's own, and
+  # keywords given to Kernel#puts reach a $stdout.puts that takes them.
+  alias_method :__ir_puts_to_stdout__, :puts
+  private :__ir_puts_to_stdout__
+  ruby2_keywords def puts(*args)
+    out = $stdout
+    return __ir_puts_to_stdout__(*args) if __ir_equal__(out)
+    out.__send__(:puts, *args)
   end
   module_function :puts
 

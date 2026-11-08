@@ -159,7 +159,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice")]
         public static string GetSubstring(string/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol]int count) {
             if (!MutableStringOps.NormalizeSubstringRange(self.Length, ref start, ref count)) {
-                return (start == self.Length) ? self : null;
+                // at the very end: an empty string, as "hello"[5, 1] is - but a negative length is nil there too
+                return (start == self.Length && count >= 0) ? String.Empty : null;
             }
 
             return self.Substring(start, count);
@@ -172,13 +173,22 @@ namespace IronRuby.Builtins {
             if (!MutableStringOps.NormalizeSubstringRange(fixnumCast, range, self.Length, out begin, out count)) {
                 return null;
             }
-            return (count < 0) ? self : GetSubstring(self, begin, count);
+            // a backwards range within the string ("hello"[3..1]) is empty
+            return (count < 0) ? String.Empty : GetSubstring(self, begin, count);
         }
 
         [RubyMethod("[]")]
         [RubyMethod("slice")]
         public static string GetSubstring(string/*!*/ self, [NotNull]string/*!*/ searchStr) {
             return (self.IndexOf(searchStr, StringComparison.Ordinal) != -1) ? searchStr : null;
+        }
+
+        // a Ruby String to look for: there was no overload, so the binder took the Integer one and
+        // "hello there".to_clr_string["lo"] raised "no implicit conversion of String into Integer" (#140)
+        [RubyMethod("[]")]
+        [RubyMethod("slice")]
+        public static string GetSubstring(string/*!*/ self, [NotNull]MutableString/*!*/ searchStr) {
+            return GetSubstring(self, searchStr.ToString());
         }
 
         [RubyMethod("[]")]

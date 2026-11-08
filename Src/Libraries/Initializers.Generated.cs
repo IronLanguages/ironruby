@@ -468,7 +468,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.String, IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.MainSingletonOps.DefineMethod)
             );
             
-            DefineLibraryMethod(module, "include", 0x51, 
+            DefineLibraryMethod(module, "include", 0x52, 
                 0x80000010U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyModule[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.MainSingletonOps.Include)
             );
@@ -478,12 +478,12 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MainSingletonOps.ToS)
             );
             
-            DefineLibraryMethod(module, "private", 0x51, 
+            DefineLibraryMethod(module, "private", 0x52, 
                 0x80000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.RubyScope, System.Object, System.Object[], System.Object>(IronRuby.Builtins.MainSingletonOps.SetPrivateVisibility)
             );
             
-            DefineLibraryMethod(module, "public", 0x51, 
+            DefineLibraryMethod(module, "public", 0x52, 
                 0x80000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.RubyScope, System.Object, System.Object[], System.Object>(IronRuby.Builtins.MainSingletonOps.SetPublicVisibility)
             );
@@ -742,8 +742,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
-                0x00000002U, 
-                new Action<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyClass>(IronRuby.Builtins.ClassOps.InitializeCopy)
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object, IronRuby.Builtins.RubyClass>(IronRuby.Builtins.ClassOps.InitializeCopy)
             );
             
             DefineRuleGenerator(module, "new", 0x51, IronRuby.Builtins.ClassOps.New());
@@ -4387,11 +4387,12 @@ namespace IronRuby.Builtins {
         
         private static void LoadIronRuby__Clr__String_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "[]", 0x51, 
-                new[] { 0x00010000U, 0x00030000U, 0x00000004U, 0x00000002U, 0x00000004U, 0x00040004U}, 
+                new[] { 0x00010000U, 0x00030000U, 0x00000004U, 0x00000002U, 0x00000002U, 0x00000004U, 0x00040004U}, 
                 new Func<System.String, System.Int32, System.Object>(IronRuby.Builtins.ClrString.GetChar), 
                 new Func<System.String, System.Int32, System.Int32, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, System.String, IronRuby.Builtins.Range, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<System.String, System.String, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
+                new Func<System.String, IronRuby.Builtins.MutableString, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.RubyScope, System.String, IronRuby.Builtins.RubyRegex, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.RubyScope, System.String, IronRuby.Builtins.RubyRegex, System.Int32, System.String>(IronRuby.Builtins.ClrString.GetSubstring)
             );
@@ -4508,11 +4509,12 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "slice", 0x51, 
-                new[] { 0x00010000U, 0x00030000U, 0x00000004U, 0x00000002U, 0x00000004U, 0x00040004U}, 
+                new[] { 0x00010000U, 0x00030000U, 0x00000004U, 0x00000002U, 0x00000002U, 0x00000004U, 0x00040004U}, 
                 new Func<System.String, System.Int32, System.Object>(IronRuby.Builtins.ClrString.GetChar), 
                 new Func<System.String, System.Int32, System.Int32, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, System.String, IronRuby.Builtins.Range, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<System.String, System.String, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
+                new Func<System.String, IronRuby.Builtins.MutableString, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.RubyScope, System.String, IronRuby.Builtins.RubyRegex, System.String>(IronRuby.Builtins.ClrString.GetSubstring), 
                 new Func<IronRuby.Runtime.RubyScope, System.String, IronRuby.Builtins.RubyRegex, System.Int32, System.String>(IronRuby.Builtins.ClrString.GetSubstring)
             );
@@ -4619,6 +4621,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__ir_clone_with_freeze__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.KernelOps.CloneWithFreeze)
+            );
+            
+            DefineLibraryMethod(module, "__ir_equal__", 0x52, 
+                0x00000000U, 
+                new Func<System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.IsSameObject)
             );
             
             DefineLibraryMethod(module, "__ir_float_step__", 0x52, 

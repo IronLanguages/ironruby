@@ -751,7 +751,8 @@ namespace IronRuby.Builtins {
 
         public void InitializeClassCopy(RubyClass/*!*/ rubyClass) {
             if (!_isUninitializedCopy) {
-                throw RubyExceptions.CreateTypeError("already initialized class");
+                // MRI 4.0: a class that already exists is left as it is, no TypeError (#138)
+                return;
             }
             _isUninitializedCopy = false;
 
@@ -793,8 +794,12 @@ namespace IronRuby.Builtins {
             );
 
             if (!IsSingletonClass) {
-                // singleton members are copied here, not in InitializeCopy:
+                // singleton members are copied here, not in InitializeCopy, and the singleton class's
+                // own instance variables with them (rb_singleton_class_clone):
                 result.ImmediateClass.InitializeMembersFrom(ImmediateClass);
+                if (ImmediateClass.IsSingletonClass && result.ImmediateClass.IsSingletonClass) {
+                    Context.CopyInstanceData(ImmediateClass, result.ImmediateClass, false);
+                }
 
                 // copy instance variables:
                 Context.CopyInstanceData(this, result, false);

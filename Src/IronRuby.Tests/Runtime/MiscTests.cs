@@ -3118,6 +3118,161 @@ true
         }
 
         /// <summary>
+        /// #133: private, public and module_function without arguments set the default for the methods defined after
+        /// them in the class or module body lexically around the call (MRI's cref), whatever the receiver, and from
+        /// a method or block written in that body too; a `def' inside a method body is public whatever the default.
+        /// IronRuby kept the default in the method scope, so it went the other way: a `def' inside the method took it
+        /// (and `M.send(:module_function)' there raised "A module function cannot be defined on a class") while the
+        /// body did not. A module function on a class gets both halves, with super, as in MRI. The expected output
+        /// is CRuby 4.0's.
+        /// </summary>
+        public void Visibility_DefaultScope1() {
+            TestOutput(@"
+def show(m); p [m.public_instance_methods(false).sort, m.private_instance_methods(false).sort]; end
+# 1: method called from module body runs `private` (no args) -> does it change the CALLER's body?
+module V1; def self.f; private; end; f; def a; end; end; show V1
+# 2: Module method (instance of Module) calling private with no args from module body
+class Module; def my_priv(*a); private(*a); end; end
+module V2; my_priv; def a; end; end; show V2
+# 3: explicit receiver from the body: N.private in M's body
+module N3; end
+module V3; N3.send(:private); def a; end; end; show V3; show N3
+# 4: inside a method body, private then def
+class V4; def self.foo; private; def b; end; end; foo; def c; end; end; show V4
+# 5: inside a block inside a method body, other receiver
+module M5; end
+class V5; def foo; 1.times { M5.send(:private); def b; end }; def c; end; end; new.foo; def d; end; end; show V5
+# 6: block in class body
+class V6; 1.times { private }; def a; end; end; show V6
+# 7: class_eval block with private then def
+class V7; end; V7.class_eval { private; def a; end }; def (V7).x; end; class V7; def b; end; end; show V7
+# 8: module_function no args via send in body of other module
+module N8; end; module V8; N8.send(:module_function); def a; end; end; show V8; p N8.singleton_methods
+# 9: private inside method whose frame is called from body: then def in the method
+module V9; def self.g; private; def h; end; end; g; def i; end; end; show V9
+# 10: the #133 shape: module_function in a block in an instance method of a CLASS, then defs
+module M10; end
+class V10; def foo; 1.times { M10.send(:module_function) }; def yyy; end; end; new.foo; def xxx; end; end; show V10; p V10.singleton_methods(false).sort
+# 11: same with private
+class V11; def foo; 1.times { M10.send(:private) }; def b; end; end; new.foo; def c; end; end; show V11
+# 12: super from both halves of a module function on a class
+class B12; def x; :b_instance; end; def self.x; :b_singleton; end; end
+class C12 < B12; M10.send(:module_function); def x; [:c, super]; end; end
+p C12.x, C12.new.send(:x), C12.private_method_defined?(:x)
+# 13: define_method under a module function default in a class body, and an Integer's dummy singleton
+module M13; end
+class K13; def self.setup; M13.send(:module_function); end; setup; define_method(:dm) { :dm }; end
+p [K13.private_method_defined?(:dm), K13.respond_to?(:dm)]
+p((1.instance_eval { M13.send(:module_function); def x13; end; :ok } rescue $!))
+", @"
+[[], [:a]]
+[[:a], []]
+[[], [:a]]
+[[], []]
+[[:b], [:c]]
+[[:b, :c, :foo], [:d]]
+[[], [:a]]
+[[:b], [:a]]
+[[], [:a]]
+[]
+[[:h], [:i]]
+[[:foo, :yyy], [:xxx]]
+[:xxx]
+[[:b, :foo], [:c]]
+[:c, :b_singleton]
+[:c, :b_instance]
+true
+[true, true]
+#<TypeError: can't define singleton>
+");
+        }
+
+        /// <summary>
+        /// #138: main's #public, #private and #include are private, as MRI's are (`self.include M` still works, another
+        /// receiver does not). Module#initialize_copy and Class#initialize_copy copy only into the module #dup or #clone
+        /// made; on a module or class that already exists they leave it as it is (a module took the other's methods,
+        /// a class raised "already initialized class"), after the frozen and same-class checks. The expected output
+        /// is CRuby 4.0's.
+        /// </summary>
+        public void Main_PrivateAndInitializeCopy1() {
+            TestOutput(@"
+module N; def bar; end; def self.nn; end; X = 1; end
+module M; def foo; end; end
+p M.send(:initialize_copy, N), M.instance_methods(false)
+m = Module.new; m.send(:initialize_copy, N); p [m.instance_methods(false), m.singleton_methods, m.constants]
+d = N.dup; p [d.instance_methods(false), d.singleton_methods, d.constants, d.send(:initialize_copy, Comparable).instance_methods(false)]
+c = Class.new; e = Class.new { def b; end }
+p((c.send(:initialize_copy, e) rescue $!).equal?(c), c.instance_methods(false), e.dup.instance_methods(false), e.clone.instance_methods(false))
+p((Integer.send(:initialize_copy, String) rescue $!).inspect, (c.send(:initialize_copy, 5) rescue $!), (m.send(:initialize_copy, 5) rescue $!))
+f = Module.new.freeze; p((f.send(:initialize_copy, Module.new) rescue $!.class), (f.send(:initialize_copy, 5) rescue $!.class))
+g = Class.new.freeze; p((g.send(:initialize_copy, Class.new) rescue $!.class))
+p singleton_class.public_instance_methods(false).sort, singleton_class.private_instance_methods(false).sort & [:include, :private, :public]
+module Q; end; self.include(Q); main = self; p Object.include?(Q), (main.include(Q) rescue $!.class)
+", @"
+M
+[:foo]
+[[], [], []]
+[[:bar], [:nn], [:X], [:bar]]
+true
+[]
+[:b]
+[:b]
+""Integer""
+#<TypeError: initialize_copy should take same class object>
+#<TypeError: initialize_copy should take same class object>
+FrozenError
+FrozenError
+FrozenError
+[:inspect, :to_s]
+[:include, :private, :public]
+true
+NoMethodError
+");
+        }
+
+        /// <summary>
+        /// $stdout can be any object with a #write (#134). Kernel#puts forwards to $stdout.puts even when that is
+        /// only the private Kernel#puts the object inherits (rb_f_puts calls it with rb_funcallv), and with $stdout
+        /// as the receiver formats the lines itself and hands them to #write; it raised "private method 'puts'
+        /// called". An object's own #puts still wins. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Kernel_PutsToStdoutWriter1() {
+            TestOutput(@"
+require 'ruby4'
+class W; attr_reader :s; def initialize; @s = +''; end; def write(*x); @s << x.join; x.join.size; end; end
+w = W.new
+$stdout = w
+puts 'foo'
+puts 'a', ['b', ['c']], nil
+puts
+print ""bar\n""
+p :sym
+w.instance_eval { puts 'self' }
+Kernel.puts 'k'
+$stdout = STDOUT
+p w.s
+class P; def write(*x) = x.join.size; def puts(*a) = (STDOUT.write(""own puts #{a.inspect}\n""); nil); end
+$stdout = P.new
+puts 1, 2
+$stdout = STDOUT
+class W2; def write(*a); a.join.size; end; def equal?(o); false; end; end
+$stdout = W2.new
+r = (puts('x') rescue $!.class)
+$stdout = STDOUT
+p r
+class KW; def write(*a); a.join.size; end; def puts(*a, sep: '-'); STDOUT.write(""kw #{a.inspect} #{sep}\n""); nil; end; end
+$stdout = KW.new
+puts(1, sep: '+')
+$stdout = STDOUT
+", @"
+""foo\na\nb\nc\n\n\nbar\n:sym\nself\nk\n""
+own puts [1, 2]
+nil
+kw [1] +
+");
+        }
+
+        /// <summary>
         /// The prelude's helpers stay out of the core's public surface (no Integer::MAX, SPAWN_*, ERRNO_TABLE, *_without_*
         /// wrappers), the definitions removed as dead are still answered by the C# core, and sleep and the Kernel conversion
         /// functions fail with MRI's messages.

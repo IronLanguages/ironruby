@@ -49,11 +49,20 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTypeError("already initialized class");
             }
             
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenError(self.Context, self);
+            }
+
             // self could be a meta-module:
             RubyClass selfClass = self.Context.GetClassOf(self);
             RubyClass otherClass = self.Context.GetClassOf(other);
             if (otherClass != selfClass) {
                 throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
+            }
+
+            // a module that already exists is left as it is; only #dup's and #clone's copy is filled in (#138)
+            if (!self.TakeUninitializedModuleCopy()) {
+                return self;
             }
 
             self.InitializeModuleCopy((RubyModule)other);
@@ -382,7 +391,7 @@ namespace IronRuby.Builtins {
 
         internal static void SetMethodAttributes(RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/[]/*!*/ methodNames, RubyMethodAttributes attributes) {
             if (methodNames.Length == 0) {
-                scope.GetMethodAttributesDefinitionScope().MethodAttributes = attributes;
+                scope.GetVisibilityScope().MethodAttributes = attributes;
             } else {
                 SetMethodAttributes(module, methodNames, attributes);
             }
@@ -644,10 +653,10 @@ namespace IronRuby.Builtins {
             // the same module `def` in this scope would define into - GetInnerMostModuleForMethodLookup
             // is not it: inside a `Module.new { }` block it walks past the block to Object
             if (attributesScope.GetMethodDefinitionOwner() == module) {
-                // module_function cannot be toggled on in a class body - Module#module_function
-                // raises there - but a module function is still meaningless on one, so guard it.
-                isModuleFunction = !module.IsClass
-                    && (attributesScope.MethodAttributes & RubyMethodAttributes.ModuleFunction) == RubyMethodAttributes.ModuleFunction;
+                // Class has no #module_function, but a module's sets the default of the class body it is
+                // called from (RubyScope.GetVisibilityScope), and MRI's define_method then makes both
+                // halves on the class, as `def' does (#133).
+                isModuleFunction = (attributesScope.MethodAttributes & RubyMethodAttributes.ModuleFunction) == RubyMethodAttributes.ModuleFunction;
                 visibility = isModuleFunction ? RubyMethodVisibility.Private : attributesScope.Visibility;
             } else {
                 visibility = RubyMethodVisibility.Public;

@@ -1328,6 +1328,16 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Object identity for the prelude, BasicObject#equal?'s, which an object's own #equal? cannot change:
+        /// Kernel#puts asks it whether it is running on $stdout itself, and a writer whose #equal? said no sent
+        /// it round for ever.
+        /// </summary>
+        [RubyMethod("__ir_equal__", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsSameObject(object self, object other) {
+            return BasicObjectOps.IsEqual(self, other);
+        }
+
+        /// <summary>
         /// MRI's rb_inspect for the prelude: #inspect, escaped when its result is in an
         /// encoding the output cannot take (see RubyContext.Inspect).
         /// </summary>

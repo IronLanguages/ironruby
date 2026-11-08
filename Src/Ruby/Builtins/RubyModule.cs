@@ -927,11 +927,29 @@ namespace IronRuby.Builtins {
                 var singletonClass = result.GetOrCreateSingletonClass();
                 using (Context.ClassHierarchyLocker()) {
                     singletonClass.InitializeMembersFrom(immediate);
+                    // its own instance variables too (rb_singleton_class_clone)
+                    _context.CopyInstanceData(immediate, singletonClass, false);
                 }
             }
             
             // copy instance variables:
             _context.CopyInstanceData(this, result, false);
+            result._isUninitializedModuleCopy = true;
+            return result;
+        }
+
+        // Set on the module #dup and #clone make, until initialize_copy has filled it in: MRI's
+        // Module#initialize_copy copies only into a module allocated for the copy, and is a no-op on
+        // any module that already exists (#138).
+        private bool _isUninitializedModuleCopy;
+
+        /// <summary>
+        /// Whether this module is a copy #dup or #clone made and initialize_copy has yet to fill in;
+        /// answering true once, as the copying then happens.
+        /// </summary>
+        public bool TakeUninitializedModuleCopy() {
+            bool result = _isUninitializedModuleCopy;
+            _isUninitializedModuleCopy = false;
             return result;
         }
 
@@ -2273,7 +2291,7 @@ namespace IronRuby.Builtins {
 
         // Module#module_function:
         public void SetModuleFunctionNoEventNoLock(RubyContext/*!*/ callerContext, string/*!*/ name, RubyMemberInfo/*!*/ method) {
-            Debug.Assert(!IsClass);
+            // a class too: a module's module_function can set the default of a class body (#133)
 
             // CLR members: Detaches the member from its underlying type (by creating a copy).
             // TODO: check for CLR instance members, it should be an error to call module_function on them:

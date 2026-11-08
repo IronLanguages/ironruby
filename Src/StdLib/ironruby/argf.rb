@@ -56,6 +56,10 @@ ARGF_CLASS = Class.new do
     @__current_name__
   end
   alias_method :path, :filename
+  # What $FILENAME reads (SpecialGlobalVariableInfo): MRI's $FILENAME takes ARGF's current file
+  # name directly, so a #filename redefined on ARGF or its class does not change it (#138).
+  alias_method :__ir_filename__, :filename
+  private :__ir_filename__
 
   def fileno
     open_first
