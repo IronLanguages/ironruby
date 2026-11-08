@@ -39,6 +39,20 @@ namespace IronRuby.Runtime {
     using EvalEntryPointDelegate = Func<RubyScope, object, RubyModule, Proc, object>;
 
     public static class RubyUtils {
+        #region Threads
+
+        /// <summary>
+        /// The stack a thread that runs Ruby code is given: a Thread.new thread, and on Windows the thread ir runs the
+        /// program on (#129). A Ruby call takes a CLR frame or several, so how deep a recursion goes before it is a
+        /// SystemStackError is how big the stack is. A Linux or macOS process's main thread has 8 MB (ulimit -s), but
+        /// Windows gives a main thread 1 MB and other threads 1.5 MB, where a recursion went a seventh as deep as in
+        /// CRuby, whose depth its own VM stack bounds. The memory is reserved, and committed only as deep as the
+        /// recursion goes.
+        /// </summary>
+        public const int ThreadStackSize = 8 * 1024 * 1024;
+
+        #endregion
+
         #region Objects
 
         public static readonly int FalseObjectId = 0;

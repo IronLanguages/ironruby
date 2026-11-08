@@ -1228,7 +1228,8 @@ namespace IronRuby.Builtins {
                 context.ThreadTerminator = CreateThreadTerminator(context);
             }
             s.Creator = Thread.CurrentThread;
-            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, s.Group ?? group, s.Creator, s.Body)));
+            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, s.Group ?? group, s.Creator, s.Body)),
+                RubyUtils.ThreadStackSize);
             if (subclass != null) {
                 context.AdoptClrObject(result, subclass);
             }

@@ -92,6 +92,34 @@ internal sealed class Host : RubyConsoleHost {
     [STAThread]
     [RubyStackTraceHidden]
     static int Main(string[] args) {
+        // Windows gives a process's main thread a 1 MB stack, Linux and macOS 8 MB: the program runs on a thread with
+        // as much as a Ruby thread has (RubyUtils.ThreadStackSize, #129). Single-threaded apartment, as Main is, for
+        // Windows Forms and WPF.
+        if (OperatingSystem.IsWindows()) {
+            var run = new ProgramRun { Args = args };
+            var thread = new Thread(RunProgram, RubyUtils.ThreadStackSize);
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start(run);
+            thread.Join();
+            return run.Status;
+        }
+        return RunProgram(args);
+    }
+
+    private sealed class ProgramRun {
+        public string[] Args;
+        public int Status;
+    }
+
+    // a method of its own, not a lambda, so that backtraces leave it out as they do Main
+    [RubyStackTraceHidden]
+    private static void RunProgram(object run) {
+        var r = (ProgramRun)run;
+        r.Status = RunProgram(r.Args);
+    }
+
+    [RubyStackTraceHidden]
+    private static int RunProgram(string[] args) {
         // A process the warm-start broker started (Util/warm): see IronRuby.Hosting.WarmStart.
         WarmStart.InitializeFromEnvironment();
 
