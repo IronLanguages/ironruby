@@ -150,8 +150,14 @@ namespace IronRuby.Runtime.Calls {
             var boundMethods = new List<OverloadInfo>();
             foreach (OverloadInfo method in MethodBases) {
                 if (method.IsGenericMethodDefinition) {
-                    if (typeArguments.Length == method.GenericArguments.Count) {
-                        boundMethods.Add(method.MakeGenericMethod(typeArguments));
+                    // an overload whose constraints the type arguments break is not one they select (#141):
+                    if (typeArguments.Length == method.GenericArguments.Count &&
+                        Protocols.FindGenericConstraintViolation(ArrayUtils.ToArray(method.GenericArguments), typeArguments, out _, out _) < 0) {
+                        try {
+                            boundMethods.Add(method.MakeGenericMethod(typeArguments));
+                        } catch (ArgumentException) {
+                            // a constraint between the parameters themselves (where S : T), which only the CLR checks
+                        }
                     }
                 } else if (typeArguments.Length == 0) {
                     boundMethods.Add(method);
@@ -163,6 +169,20 @@ namespace IronRuby.Runtime.Calls {
             }
 
             return Copy(boundMethods.ToArray());
+        }
+
+        /// <summary>
+        /// The error for type arguments of the right number that no generic overload takes because of its constraints, or null.
+        /// </summary>
+        public Exception GetGenericConstraintError(string/*!*/ name, Type/*!*/[]/*!*/ typeArguments, object/*!*/[]/*!*/ typeArgs) {
+            foreach (OverloadInfo method in MethodBases) {
+                if (method.IsGenericMethodDefinition && typeArguments.Length == method.GenericArguments.Count) {
+                    Type[] genericParameters = ArrayUtils.ToArray(method.GenericArguments);
+                    int index = Protocols.FindGenericConstraintViolation(genericParameters, typeArguments, out string constraint, out Type bound);
+                    return Protocols.CreateGenericConstraintError(Context, name, genericParameters, typeArgs, index, constraint, bound);
+                }
+            }
+            return null;
         }
 
         /// <summary>
