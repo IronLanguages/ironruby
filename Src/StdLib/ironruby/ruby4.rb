@@ -8574,10 +8574,12 @@ class SignalException
 
     case signal
     when ::Integer
-      name = ::Signal.list.key(signal)
-      unless name
+      # Any number below the platform's NSIG will do, listed or not ("SIG16"); NSIG is 65 on
+      # Linux and 23 for the Windows C runtime.
+      if signal < 0 || signal > (::File::ALT_SEPARATOR ? 23 : 65)
         ::Kernel.raise(::ArgumentError, "invalid signal number (#{signal})")
       end
+      name = ::Signal.list.key(signal) || signal
       @__signo__ = signal
       @__signm__ = no_message ? "SIG#{name}" : message.to_s
     when ::String, ::Symbol

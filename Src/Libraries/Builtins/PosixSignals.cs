@@ -319,7 +319,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <summary>
         /// MRI refuses to let a Ruby handler replace the signals its own runtime depends on,
-        /// and the kernel refuses KILL and STOP outright.
+        /// and the kernel refuses KILL and STOP outright - which MRI 4.0 passes on as the
+        /// kernel's EINVAL.
         /// </summary>
         internal static void CheckTrappable(int signal) {
             switch (signal) {
@@ -332,7 +333,7 @@ namespace IronRuby.Builtins {
 
                 case 9:   // KILL
                 case 19:  // STOP
-                    throw RubyExceptions.CreateArgumentError("Signal already used by VM or OS: SIG{0}", ToName(signal));
+                    throw RubyExceptions.CreateEINVAL("SIG{0}", ToName(signal));
             }
         }
 
@@ -345,6 +346,9 @@ namespace IronRuby.Builtins {
         /// it left SIGUSR2 "DEFAULT".
         /// </summary>
         private static object InitialCommand(int signal) {
+            if (signal == 0) {   // EXIT
+                return null;
+            }
             if (RubyProcess.IsWindows && signal == 22) {   // ABRT
                 return null;
             }
@@ -385,7 +389,9 @@ namespace IronRuby.Builtins {
                 Handler handler;
                 object previous = InitialCommand(signal);
                 if (_handlers.TryGetValue(signal, out handler)) {
-                    previous = handler.Command;
+                    // EXIT only ever reports a handler it can call; "DEFAULT", "IGNORE" and the
+                    // like left nothing behind, so MRI says nil.
+                    previous = (signal == 0 && (handler.Command == null || handler.Command is MutableString)) ? null : handler.Command;
                     if (handler.Registration != null) {
                         handler.Registration.Dispose();
                     }

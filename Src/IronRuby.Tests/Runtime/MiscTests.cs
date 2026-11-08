@@ -1113,6 +1113,55 @@ nil
         }
 
         /// <summary>
+        /// Three corners of #trap and SignalException where IronRuby differed from MRI 4.0 on every
+        /// platform: trapping KILL raised ArgumentError ("Signal already used by VM or OS") where MRI
+        /// passes on the kernel's EINVAL; the first trap(:EXIT) reported "SYSTEM_DEFAULT" and later ones
+        /// "DEFAULT" or "IGNORE", where MRI reports nil unless the old handler was callable; and
+        /// SignalException.new(16) was "invalid signal number" because Signal.list has no 16, where MRI
+        /// takes any number below NSIG. Expected output is CRuby 4.0's, the same on Linux and Windows.
+        /// </summary>
+        public void Signal_TrapEdges1() {
+            TestOutput(@"
+require 'ruby4'
+# the kernel's refusal to trap KILL is Errno::EINVAL in MRI 4.0
+[:KILL, 9].each do |signal|
+  begin
+    trap(signal) { }
+  rescue Errno::EINVAL => e
+    p e.message
+  end
+end
+
+# EXIT reports the handler it replaces only when it is one it could call
+p trap(:EXIT) { }
+p trap(:EXIT, ""DEFAULT"").class
+p trap(:EXIT, ""IGNORE"")
+p trap(0, nil)
+
+# a number below NSIG makes a SignalException whether or not Signal.list names it
+e = SignalException.new(16)
+p e.message, e.signo
+p SignalException.new(15).message
+begin
+  SignalException.new(66)
+rescue ArgumentError => e
+  p e.message
+end
+", @"
+""Invalid argument - SIGKILL""
+""Invalid argument - SIGKILL""
+nil
+Proc
+nil
+nil
+""SIG16""
+16
+""SIGTERM""
+""invalid signal number (66)""
+");
+        }
+
+        /// <summary>
         /// A drive-relative name's dirname is "C:." on Windows, as in MRI - which is how CRuby's own
         /// pathname_builtin.rb recognises drive letters, so Pathname#absolute? depends on it.
         /// </summary>
