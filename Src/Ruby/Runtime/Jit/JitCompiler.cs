@@ -100,6 +100,7 @@ namespace IronRuby.Runtime.Jit {
         // write that does, before anything observable, so the restart is safe whatever _pure says.
         private bool _ivarWrite;
         private bool _selfCall;
+        private readonly HashSet<MSA.Expression>/*!*/ _selfCalls = new HashSet<MSA.Expression>();
         private int _nodes;
 
         // Explicit `return'. The label is created on the first one met, typed by the return type
@@ -521,6 +522,11 @@ namespace IronRuby.Runtime.Jit {
                 // A body that can deopt mid-flight is only safe to restart if nothing it has
                 // already done is observable.
                 if (c._canDeopt && !c._pure) { return null; }
+
+                // the stack check a method's scope would make (#128), where the method calls itself
+                if (c._selfCall) {
+                    body = new StackCheckPlacer(c._selfCalls).Visit(body);
+                }
 
                 var parameters = new List<MSA.ParameterExpression>(paramTypes.Length + 1);
                 parameters.Add(c._self);
@@ -1365,10 +1371,12 @@ namespace IronRuby.Runtime.Jit {
                 }
                 type = _selfReturn;
                 _selfCall = true;
-                return Ast.Invoke(
+                var selfCall = Ast.Invoke(
                     Ast.Convert(Ast.Field(Ast.Constant(_selfCell), "Value"), _selfDelegateType),
                     callArgs
                 );
+                _selfCalls.Add(selfCall);
+                return selfCall;
             }
 
             // `x' or `self.x' in an outlined loop, where x is an attr_reader on the loop's self: the
@@ -1823,6 +1831,106 @@ namespace IronRuby.Runtime.Jit {
                 case "==": return Ast.Equal(order, Ast.Constant(0));
                 case "!=": return Ast.NotEqual(order, Ast.Constant(0));
                 default: throw JitBailout.Instance;
+            }
+        }
+
+        /// <summary>
+        /// Puts the stack check a method's scope would make (#128) before the self-calls of a JIT-compiled body. A JIT
+        /// body enters Ruby code that makes no scope only by calling itself - any other call goes through a scope or
+        /// another JIT body's check - and a frame needs the check once, before its first such call: one made on every
+        /// path to a self-call covers it. So fib's leaves (n < 2) make no check, and the rest one, where a check at
+        /// entry cost fib(30) a fifth of its time. Where paths join, what all of them checked counts; a loop, a label,
+        /// a try and a nested lambda start from what was checked before them.
+        /// </summary>
+        private sealed class StackCheckPlacer : MSA.ExpressionVisitor {
+            private readonly HashSet<MSA.Expression>/*!*/ _selfCalls;
+            private bool _checked;
+
+            internal StackCheckPlacer(HashSet<MSA.Expression>/*!*/ selfCalls) {
+                _selfCalls = selfCalls;
+            }
+
+            protected override MSA.Expression VisitInvocation(MSA.InvocationExpression node) {
+                var result = base.VisitInvocation(node);
+                if (_checked || !_selfCalls.Contains(node)) {
+                    return result;
+                }
+                _checked = true;
+                return Ast.Block(result.Type, Ast.Call(JitRuntime.M("CheckStack")), result);
+            }
+
+            protected override MSA.Expression VisitConditional(MSA.ConditionalExpression node) {
+                var test = Visit(node.Test);
+                bool before = _checked;
+                var ifTrue = Visit(node.IfTrue);
+                bool afterTrue = _checked;
+                _checked = before;
+                var ifFalse = Visit(node.IfFalse);
+                _checked &= afterTrue;
+                return node.Update(test, ifTrue, ifFalse);
+            }
+
+            protected override MSA.Expression VisitBinary(MSA.BinaryExpression node) {
+                if (node.NodeType != MSA.ExpressionType.AndAlso && node.NodeType != MSA.ExpressionType.OrElse &&
+                    node.NodeType != MSA.ExpressionType.Coalesce) {
+                    return base.VisitBinary(node);
+                }
+                // the right operand may not run
+                var left = Visit(node.Left);
+                bool before = _checked;
+                var result = node.Update(left, VisitAndConvert(node.Conversion, "VisitBinary"), Visit(node.Right));
+                _checked = before;
+                return result;
+            }
+
+            // a goto can reach a label, and a loop's back edge its start, from where nothing was checked
+            protected override MSA.Expression VisitLabel(MSA.LabelExpression node) {
+                var result = base.VisitLabel(node);
+                _checked = false;
+                return result;
+            }
+
+            protected override MSA.Expression VisitLoop(MSA.LoopExpression node) {
+                _checked = false;
+                var result = base.VisitLoop(node);
+                _checked = false;
+                return result;
+            }
+
+            protected override MSA.Expression VisitTry(MSA.TryExpression node) {
+                bool before = _checked;
+                var result = base.VisitTry(node);
+                _checked = before;
+                return result;
+            }
+
+            protected override MSA.Expression VisitSwitch(MSA.SwitchExpression node) {
+                bool before = _checked;
+                var result = base.VisitSwitch(node);
+                _checked = before;
+                return result;
+            }
+
+            protected override MSA.Expression VisitGoto(MSA.GotoExpression node) {
+                bool before = _checked;
+                var result = base.VisitGoto(node);
+                _checked = before;
+                return result;
+            }
+
+            protected override MSA.Expression VisitExtension(MSA.Expression node) {
+                bool before = _checked;
+                var result = base.VisitExtension(node);
+                _checked = before;
+                return result;
+            }
+
+            protected override MSA.Expression VisitLambda<T>(MSA.Expression<T> node) {
+                bool before = _checked;
+                _checked = false;
+                var result = base.VisitLambda(node);
+                _checked = before;
+                return result;
             }
         }
     }

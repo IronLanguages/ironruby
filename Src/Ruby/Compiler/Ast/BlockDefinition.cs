@@ -226,7 +226,8 @@ namespace IronRuby.Compiler.Ast {
             if (hasNestedReturn) {
                 // a return in a nested block leaves this block if it runs as a lambda, however it was invoked:
                 MSA.ParameterExpression lambdaUnwinder;
-                bodyTry = bodyTry.Filter(lambdaUnwinder = Ast.Parameter(typeof(Exception), "#lu"),
+                // a LambdaUnwinder only (IsLambdaScopeUnwinderTarget), so that nothing else is caught on its way (see Proc.BuildCall)
+                bodyTry = bodyTry.Filter(lambdaUnwinder = Ast.Parameter(typeof(LambdaUnwinder), "#lu"),
                     Methods.IsLambdaScopeUnwinderTarget.OpCall(scopeVariable, lambdaUnwinder),
                     gen.Return(Methods.GetLambdaUnwinderReturnValue.OpCall(lambdaUnwinder))
                 );

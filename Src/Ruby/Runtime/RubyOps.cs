@@ -170,6 +170,24 @@ namespace IronRuby.Runtime {
             return scope;
         }
 
+        /// <summary>
+        /// MRI's stack check at a method or block entry: a recursion too deep is a SystemStackError, which a program can
+        /// rescue, not a CLR stack overflow, which ends the process (#128). Asked where a Ruby frame starts - method
+        /// and block scopes here, JIT-compiled methods in JitRuntime.CheckStack - and cheap: it compares the stack
+        /// pointer with a limit it keeps per thread (StackLimit, which says why the runtime's own check is not enough).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void RequireSufficientStack() {
+            if (!StackLimit.IsSufficient()) {
+                ThrowStackLevelTooDeep();
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static void ThrowStackLevelTooDeep() {
+            throw new SystemStackError("stack level too deep");
+        }
+
         [Emitted]
         public static RubyMethodScope/*!*/ CreateMethodScope(MutableTuple locals, string[] variableNames, int visibleParameterCount,
             RubyScope/*!*/ parentScope, RubyModule/*!*/ declaringModule, string/*!*/ definitionName, 
@@ -178,6 +196,7 @@ namespace IronRuby.Runtime {
             // Method entry is a safe point, as in MRI: a thread that recurses or calls methods in a
             // loop is reachable by Thread#raise / Thread#kill even where no back edge is.
             RubyUtils.SafePoint();
+            RequireSufficientStack();
 
             var scope = new RubyMethodScope(
                 locals, variableNames ?? ArrayUtils.EmptyStrings, visibleParameterCount,
@@ -341,6 +360,7 @@ namespace IronRuby.Runtime {
         public static RubyBlockScope/*!*/ CreateBlockScopeSafePointInBody(MutableTuple locals, string[] variableNames,
             BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
 
+            RequireSufficientStack();
             var scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
             if ((TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0) {
                 TracePoint.OnBlockCall(scope);
@@ -358,6 +378,7 @@ namespace IronRuby.Runtime {
             BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
 
             RubyUtils.SafePoint();
+            RequireSufficientStack();
             if ((TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0) {
                 var scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
                 TracePoint.OnBlockCall(scope);
@@ -418,6 +439,7 @@ namespace IronRuby.Runtime {
         public static RubyBlockScope/*!*/ CreateReusableBlockScope(MutableTuple locals, string[] variableNames,
             BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame, RubyBlockScope reusable) {
 
+            RequireSufficientStack();
             RubyBlockScope scope;
             if (reusable != null) {
                 scope = reusable;

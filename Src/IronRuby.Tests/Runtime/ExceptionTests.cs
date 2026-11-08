@@ -1214,5 +1214,45 @@ Zlib::GzipFile::Error: encrypted gzip file is not supported
 Zlib::BufError: buffer error
 ");
         }
+
+        /// <summary>
+        /// A recursion deeper than the stack goes is a SystemStackError, which a program can rescue and go on from, as in
+        /// MRI (#128): a method, a method the JIT does not take, a define_method method, a lambda, through an ensure, and
+        /// in a thread. It ended the process with a CLR stack overflow - at the recursion where no frame checked the
+        /// stack, and on the way out where it did, because each catch that rethrew from inside itself kept every frame
+        /// below it (Build/dlr-patches/0105). The rescue runs once the frames are gone, so it can call methods. The
+        /// expected output is CRuby 4.0's.
+        /// </summary>
+        public void Exception_StackLevelTooDeep1() {
+            TestOutput(@"
+def deep(n); n == 0 ? 0 : 1 + deep(n - 1); end
+def interp(n); n == 0 ? 0 : ""#{1}"".to_i + interp(n - 1); end
+class D; define_method(:dm) { |n| n == 0 ? 0 : 1 + dm(n - 1) }; end
+l = lambda { |n| n == 0 ? 0 : 1 + l.call(n - 1) }
+$ensured = 0
+def ens(n); n == 0 ? 0 : (begin; 1 + ens(n - 1); ensure; $ensured += 1; end); end
+[lambda { deep(100_000_000) }, lambda { interp(100_000_000) }, lambda { D.new.dm(100_000_000) }, lambda { l.call(100_000_000) }, lambda { ens(100_000_000) }].each do |c|
+  begin
+    c.call
+    puts :returned
+  rescue SystemStackError => e
+    # the rescue runs with the stack unwound: it can call methods, and recurse a little
+    puts [e.class, e.message, deep(100), e.backtrace.size > 100].inspect
+  end
+end
+p $ensured > 100
+p Thread.new { begin; deep(100_000_000); rescue SystemStackError; :caught; end }.value
+p deep(1000)
+", @"
+[SystemStackError, ""stack level too deep"", 100, true]
+[SystemStackError, ""stack level too deep"", 100, true]
+[SystemStackError, ""stack level too deep"", 100, true]
+[SystemStackError, ""stack level too deep"", 100, true]
+[SystemStackError, ""stack level too deep"", 100, true]
+true
+:caught
+1000
+");
+        }
     }
 }

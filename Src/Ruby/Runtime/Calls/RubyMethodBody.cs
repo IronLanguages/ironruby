@@ -403,7 +403,7 @@ namespace IronRuby.Runtime.Calls {
             // for Coverage keeps them: a typed body has no line counters.
             var context = declaringScope.RubyContext;
             if (context.RubyOptions.Jit && _coverage == null) {
-                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, ast, context, declaringModule, declaringScope, definitionRefinements);
+                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, ast, context, declaringModule, declaringScope, definitionRefinements, lambda.Name);
             }
             return result;
         }
