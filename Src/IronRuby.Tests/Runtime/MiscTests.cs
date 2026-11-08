@@ -2048,8 +2048,8 @@ begin; e.set_backtrace(1); rescue TypeError => t; puts t.message; end
 puts UncaughtThrowError.new(:t, 1, 'tag').tag.inspect
 begin; throw :zz; rescue UncaughtThrowError => u; puts u.message, u.tag.inspect; end
 ", @"
-m
-n
+Object#m
+Object#n
 inner
 ruby
 backtrace must be an Array of String or an Array of Thread::Backtrace::Location
