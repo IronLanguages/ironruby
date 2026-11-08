@@ -303,6 +303,32 @@ nil
         }
 
         /// <summary>
+        /// System::String refuses String's in-place mutators with a TypeError, but a bang or setter name that String
+        /// does not define is an ordinary NoMethodError, as CRuby raises for a String (#159).
+        /// </summary>
+        public void ClrInterop_StringUndefinedBang1() {
+            TestOutput(@"
+s = 'a'.to_clr_string
+[:foo!, :foo=, :upcase!, :gsub!, :[]=].each do |m|
+  begin
+    s.send(m, 'x')
+  rescue => e
+    puts ""#{m}: #{e.class}""
+  end
+end
+p((s.foo! rescue $!.class), (s.upcase! rescue $!.class))
+", @"
+foo!: NoMethodError
+foo=: NoMethodError
+upcase!: TypeError
+gsub!: TypeError
+[]=: TypeError
+NoMethodError
+TypeError
+");
+        }
+
+        /// <summary>
         /// #141: IronRuby::Clr::Name.new takes what a method name may be - a String, a Symbol, #to_str - and nil is a
         /// TypeError like any other non-name (System::ArgumentNullException leaked). A Method passed for a delegate
         /// whose parameters mention a type parameter leaves that type parameter to the other arguments, as a block,

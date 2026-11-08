@@ -526,7 +526,14 @@ namespace IronRuby.Builtins {
         [RubyStackTraceHidden]
         public static object MethodMissing(RubyScope/*!*/ scope, BlockParam block, string/*!*/ self, [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
             if (name.EndsWith('=') || name.EndsWith('!')) {
-                throw RubyExceptions.CreateTypeError("Mutating method '{0}' called for an immutable string (System::String)", name);
+                // Only a mutator that Ruby's String really defines is refused as mutating; any other
+                // name is simply undefined (#159).
+                var context = scope.RubyContext;
+                string methodName = name.ToString();
+                if (context.GetClass(typeof(MutableString)).ResolveMethod(methodName, VisibilityContext.AllVisible).Found) {
+                    throw RubyExceptions.CreateTypeError("Mutating method '{0}' called for an immutable string (System::String)", name);
+                }
+                throw RubyExceptions.CreateMethodMissing(context, self, methodName);
             }
 
             // TODO: forward to MutableString until we implement the methods here:
