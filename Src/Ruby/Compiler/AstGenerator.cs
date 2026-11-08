@@ -804,7 +804,11 @@ namespace IronRuby.Compiler.Ast {
         internal string/*!*/ TopLevelFrameLabel {
             get {
                 switch (CompilerOptions.FactoryKind) {
-                    case TopScopeFactoryKind.Main: return "<main>";
+                    // Hosted code (ScriptEngine.Execute, ScriptSource.Execute) is labelled as the main script, as
+                    // RubyScope.FrameLabel already does for its scope (issue 158): it used to get "#", which put
+                    // "block in #" and an unlabelled top-level frame into its backtraces.
+                    case TopScopeFactoryKind.Main:
+                    case TopScopeFactoryKind.Hosted: return "<main>";
                     case TopScopeFactoryKind.File:
                     case TopScopeFactoryKind.WrappedFile: return "<top (required)>";
                     default:

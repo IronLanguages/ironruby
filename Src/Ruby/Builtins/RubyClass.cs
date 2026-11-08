@@ -42,6 +42,13 @@ namespace IronRuby.Builtins {
     public sealed partial class RubyClass : RubyModule, IDuplicable {
         public const string/*!*/ MainSingletonName = "__MainSingleton";
 
+        /// <summary>
+        /// The singleton class of a hosted scope's main object that its top-level `def's define their methods in
+        /// (see RubyTopLevelScope.CreateHostedTopLevelScope), so that the host can read them from the scope. Such a
+        /// method is a top-level method to the Ruby code, and its frames are labelled as CRuby labels one: "Object#foo".
+        /// </summary>
+        internal bool IsHostedTopLevelMethodOwner { get; set; }
+
         // Level in class hierarchy (0 == BasicObject)
         private readonly int _level;
         private readonly RubyClass _superClass;
