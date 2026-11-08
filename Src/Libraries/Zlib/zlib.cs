@@ -42,11 +42,13 @@ namespace IronRuby.StandardLibrary.Zlib {
         /// What "libz" is called on disk. The runtime only tries libz.so / libz.dylib, the
         /// unversioned names a zlib development package adds; a system with just the runtime
         /// library (a slim container, say) has only the versioned soname, which is also the one
-        /// CRuby's zlib links against. Windows never calls into libz.
+        /// CRuby's zlib links against. The unversioned name still comes first, so a libz shipped
+        /// beside the application wins over the system's as it did before. Windows never calls
+        /// into libz.
         /// </summary>
         private static readonly string[] FileNames =
-            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? new[] { "libz.1.dylib", "libz.dylib" } :
-            RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? new[] { "libz.so.1", "libz.so" } :
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? new[] { "libz.dylib", "libz.1.dylib" } :
+            RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? new[] { "libz.so", "libz.so.1" } :
             new string[0];
 
         // An explicit static constructor, so the resolver is installed before the first
