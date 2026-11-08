@@ -213,7 +213,9 @@ Ref(T, ref Int32)
         /// which only the call can try. An overload whose conversion the object's class does not implement is no match for
         /// one whose conversion it does; if it implements none, the call fails with MRI's TypeError rather than as an
         /// ambiguity - passed positionally, splatted or by keyword. An object that implements both is an ambiguity still,
-        /// and so is a call whose other arguments prefer another overload. A Float parameter counts only a Numeric as
+        /// and so is a call whose other arguments prefer another overload. Overloads that all lack the conversion are
+        /// equally bad (#141): o.real(nil) names them all, not Real(Int32) alone as the narrowest type; with another
+        /// argument that prefers one (Math.max(Time.at(100), 1)), that one is called. A Float parameter counts only a Numeric as
         /// convertible, as MRI does, though IronRuby calls to_f of any object passed to it alone.
         /// </summary>
         public void ClrOverloadProtocolConversions1() {
@@ -271,15 +273,15 @@ TypeError: no implicit conversion of Time into String or Integer
 TypeError: no implicit conversion of Object into String, Integer, or Float
 TypeError: no implicit conversion of FloatLike into String, Integer, or Float
 Real(Int32)
-TypeError: no implicit conversion of FloatLike into Integer
-TypeError: no implicit conversion of Time into Integer
-TypeError: no implicit conversion of nil into Integer
-TypeError: no implicit conversion of Symbol into Integer
+TypeError: no implicit conversion of FloatLike into Integer or Float
+TypeError: no implicit conversion of Time into Integer or Float
+TypeError: no implicit conversion of nil into Integer or Float
+TypeError: no implicit conversion of Symbol into Integer or Float
 System::Reflection::AmbiguousMatchException: Found multiple methods for 'pair': pair(Integer, Integer), pair(Float, Float)
 Pair(Int32, Int32)
-TypeError: no implicit conversion of Time into Integer or Float
-TypeError: no implicit conversion of String into Integer or Float
-TypeError: no implicit conversion of FloatLike into Integer or Float
+TypeError: no implicit conversion of Time into Integer
+TypeError: no implicit conversion of String into Integer
+1.0
 ");
         }
 

@@ -136,9 +136,11 @@ namespace IronRuby.Builtins {
         }
 
         internal static RubyMemberInfo/*!*/ BindGenericParameters(RubyContext/*!*/ context, RubyMemberInfo/*!*/ info, string/*!*/ name, object[]/*!*/ typeArgs) {
-            RubyMemberInfo result = info.TryBindGenericParameters(Protocols.ToTypes(context, typeArgs));
+            System.Type[] types = Protocols.ToTypes(context, typeArgs);
+            RubyMemberInfo result = info.TryBindGenericParameters(types);
             if (result == null) {
-                throw RubyExceptions.CreateArgumentError("wrong number of generic arguments for '{0}'", name);
+                throw (info as RubyMethodGroupBase)?.GetGenericConstraintError(name, types, typeArgs) ??
+                    RubyExceptions.CreateArgumentError("wrong number of generic arguments for '{0}'", name);
             }
             return result;
         }

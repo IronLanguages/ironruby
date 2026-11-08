@@ -64,6 +64,17 @@ namespace IronRuby.Runtime.Conversions {
             return factory != null ? factory(context != null ? context.MetaBinderFactory : RubyMetaBinderFactory.Shared) : null;
         }
 
+        /// <summary>
+        /// The conversion of an argument to a CLR method's parameter: GetConversionAction's, except that a String
+        /// parameter wants a String rather than a method name (<see cref="ConvertToClrStringAction"/>).
+        /// </summary>
+        internal static RubyConversionAction/*!*/ GetArgumentConversionAction(RubyContext context, Type/*!*/ parameterType, bool allowProtocolConversions) {
+            if (allowProtocolConversions && parameterType == typeof(string)) {
+                return ConvertToClrStringAction.Make(context);
+            }
+            return GetConversionAction(context, parameterType, allowProtocolConversions);
+        }
+
         public static bool HasDefaultConversion(Type/*!*/ parameterType) {
             return TryGetDefaultConversionAction(parameterType) != null;
         }
@@ -754,10 +765,11 @@ namespace IronRuby.Runtime.Conversions {
         }
 
         internal protected override bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
-            if (base.TryImplicitConversion(metaBuilder, args)) {
-                return true;
-            }
+            return TryImplicitConversionInternal(metaBuilder, args) || TryConvertStringOrSymbol(metaBuilder, args);
+        }
 
+        // A String or a Symbol is a CLR string without a to_str call (also ConvertToClrStringAction's).
+        internal static bool TryConvertStringOrSymbol(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             object target = args.Target;
             var targetExpression = args.TargetExpression;
 
@@ -779,10 +791,10 @@ namespace IronRuby.Runtime.Conversions {
         }
 
         internal override bool TryConvertImplicitly(object target, out string result) {
-            if (base.TryConvertImplicitly(target, out result)) {
-                return true;
-            }
+            return base.TryConvertImplicitly(target, out result) || TryConvertStringOrSymbol(target, out result);
+        }
 
+        internal static bool TryConvertStringOrSymbol(object target, out string result) {
             var str = target as MutableString;
             if (str != null) {
                 result = RubyOps.ConvertMutableStringToClrString(str);
@@ -795,7 +807,28 @@ namespace IronRuby.Runtime.Conversions {
                 return true;
             }
 
+            result = null;
             return false;
+        }
+    }
+
+    /// <summary>
+    /// What a CLR method's String parameter converts its argument with: a String or a Symbol, or else to_str, as
+    /// ConvertToSymbolAction does. A library method's string parameter is a method name, whose error MRI words
+    /// "1 is not a symbol nor a string"; a CLR method wanted a String: "no implicit conversion of Object into String"
+    /// (System::String.IsNullOrEmpty(Object.new), #141).
+    /// </summary>
+    public sealed class ConvertToClrStringAction : ConvertToReferenceTypeAction<ConvertToClrStringAction, string> {
+        protected override string/*!*/ ToMethodName { get { return Symbols.ToStr; } }
+        protected override string/*!*/ TargetTypeName { get { return "String"; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.ToSymbolValidator; } }
+
+        internal protected override bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
+            return TryImplicitConversionInternal(metaBuilder, args) || ConvertToSymbolAction.TryConvertStringOrSymbol(metaBuilder, args);
+        }
+
+        internal override bool TryConvertImplicitly(object target, out string result) {
+            return base.TryConvertImplicitly(target, out result) || ConvertToSymbolAction.TryConvertStringOrSymbol(target, out result);
         }
     }
 

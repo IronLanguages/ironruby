@@ -32,7 +32,8 @@ namespace IronRuby.Compiler.Ast {
             : base(args, null, location) {
         }
 
-        // see Docs/Ruby Language.docx, Runtime/Control Flow Implementation/Yield
+        // After the yield, a break in the block ends the frame that yielded, with the break's value: the
+        // Eval/Block/MethodYield helpers in RubyOps.FlowControl.cs say whether it does
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             MSA.Expression bfcVariable = gen.CurrentScope.DefineHiddenVariable("#yielded-bfc", typeof(BlockParam));
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#result", typeof(object));

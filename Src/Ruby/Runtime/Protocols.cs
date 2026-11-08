@@ -721,6 +721,120 @@ namespace IronRuby.Runtime {
             throw RubyExceptions.InvalidValueForType(context, value, "Class");
         }
 
+        /// <summary>
+        /// The first generic parameter whose constraint the type argument at the same index does not satisfy, or -1.
+        /// The constraint is "new()", "class" or "struct", or a type the argument has to be (<paramref name="bound"/>).
+        /// A constraint that refers to other generic parameters (where S : T) is left to the CLR's own check (#141).
+        /// </summary>
+        public static int FindGenericConstraintViolation(Type/*!*/[]/*!*/ genericParameters, Type/*!*/[]/*!*/ typeArguments,
+            out string constraint, out Type bound) {
+            bound = null;
+            for (int i = 0; i < genericParameters.Length; i++) {
+                Type parameter = genericParameters[i];
+                Type argument = typeArguments[i];
+                var attributes = parameter.GenericParameterAttributes;
+
+                if ((attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0) {
+                    if (!argument.IsValueType || Nullable.GetUnderlyingType(argument) != null) {
+                        constraint = "struct";
+                        return i;
+                    }
+                } else if ((attributes & GenericParameterAttributes.DefaultConstructorConstraint) != 0) {
+                    if (!argument.IsValueType && (argument.IsAbstract || argument.GetConstructor(Type.EmptyTypes) == null)) {
+                        constraint = "new()";
+                        return i;
+                    }
+                }
+
+                if ((attributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0 && argument.IsValueType) {
+                    constraint = "class";
+                    return i;
+                }
+
+                foreach (Type type in parameter.GetGenericParameterConstraints()) {
+                    if (!type.ContainsGenericParameters && !type.IsAssignableFrom(argument)) {
+                        constraint = null;
+                        bound = type;
+                        return i;
+                    }
+                }
+            }
+
+            constraint = null;
+            return -1;
+        }
+
+        /// <summary>
+        /// The generic type definition instantiated over type arguments given as classes and modules, or the error
+        /// <see cref="CreateGenericConstraintError"/> describes when they break its constraints.
+        /// </summary>
+        public static Type/*!*/ MakeGenericType(RubyContext/*!*/ context, Type/*!*/ definition, string/*!*/ name, object/*!*/[]/*!*/ typeArgs) {
+            Type[] genericParameters = definition.GetGenericArguments();
+            Type[] types = ToTypes(context, typeArgs);
+            int index = FindGenericConstraintViolation(genericParameters, types, out string constraint, out Type bound);
+            if (index < 0) {
+                try {
+                    return definition.MakeGenericType(types);
+                } catch (ArgumentException) {
+                    // a constraint between the parameters themselves (where S : T), which only the CLR checks
+                }
+            }
+            throw CreateGenericConstraintError(context, name, genericParameters, typeArgs, index, constraint, bound);
+        }
+
+        /// <summary>
+        /// The error for type arguments that the generic type or method <paramref name="name"/> cannot be instantiated with.
+        /// Before #141 the CLR's ArgumentException leaked, naming IronRuby.Builtins.RubyObject for a Ruby class:
+        /// "GenericArguments[0], 'IronRuby.Builtins.RubyObject', on 'M[T]()' violates the constraint of type 'T'".
+        /// </summary>
+        public static Exception/*!*/ CreateGenericConstraintError(RubyContext/*!*/ context, string/*!*/ name,
+            Type/*!*/[]/*!*/ genericParameters, object/*!*/[]/*!*/ typeArgs, int index, string constraint, Type bound) {
+
+            if (index < 0) {
+                return RubyExceptions.CreateArgumentError("the type arguments do not satisfy the constraints of '{0}'", name);
+            }
+
+            object value = typeArgs[index];
+            Type argument = ToType(context, value);
+            RubyModule module = value as RubyModule;
+            string argumentName = module != null ? module.GetNonNullName(context) : context.GetTypeName(argument, true);
+            bool isRubyClass = module != null && module.TypeTracker == null;
+
+            string reason;
+            switch (constraint) {
+                case "new()":
+                    reason = isRubyClass ? "a Ruby class has no public parameterless CLR constructor" :
+                        argument.IsAbstract ? "it is abstract" : "it has no public parameterless constructor";
+                    break;
+
+                case "class":
+                    reason = "it is a value type";
+                    break;
+
+                case "struct":
+                    reason = "it is not a non-nullable value type";
+                    break;
+
+                default:
+                    if (bound == null) {
+                        reason = null;
+                    } else {
+                        constraint = context.GetTypeName(bound, true);
+                        reason = "it is not a " + constraint;
+                    }
+                    break;
+            }
+
+            string parameterName = genericParameters[index].Name;
+            if (reason == null) {
+                return RubyExceptions.CreateArgumentError("{0} does not satisfy the constraints on {1} of '{2}'",
+                    argumentName, parameterName, name);
+            }
+
+            return RubyExceptions.CreateArgumentError("{0} does not satisfy the {1} constraint on {2} of '{3}': {4}",
+                argumentName, constraint, parameterName, name, reason);
+        }
+
         #endregion
     }
 }

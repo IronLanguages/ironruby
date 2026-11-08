@@ -66,7 +66,9 @@ dotnet build Src/Console/Ruby.Console.csproj -p:IronRubyTargetFrameworks=net10.0
   sharing one DLR checkout share its `obj/`, so concurrent builds can fail with bogus CS0246.
   Give each its own DLR worktree if you build in parallel.
 - `Util/check-dlr-patches.sh <dlr>/src/core` says whether a DLR checkout has every patch; a
-  new patch in `Build/dlr-patches` must be applied to existing checkouts by hand.
+  new patch in `Build/dlr-patches` must be applied to existing checkouts by hand. Off Windows the
+  build runs it and fails on a DLR that lacks one (`-p:CheckDlrPatches=false` skips it): a build
+  against a stale DLR used to succeed and differ from CI only in a test or two (issue 132).
 - `IronRubyTargetFrameworks=net10.0` (or `net8.0`) builds one framework; the default builds
   both. CI tests both.
 - Apphosts (`ir`, `IronRuby.Tests`) need `DOTNET_ROOT` when .NET is not installed system-wide.

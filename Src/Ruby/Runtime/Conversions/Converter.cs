@@ -284,7 +284,7 @@ namespace IronRuby.Runtime.Conversions {
 
         private static Expression/*!*/ MakeItemConversionSite(RubyContext/*!*/ context, Type/*!*/ itemType, bool implicitProtocolConversions) {
             var siteType = typeof(CallSite<>).MakeGenericType(typeof(Func<,,>).MakeGenericType(typeof(CallSite), typeof(object), itemType));
-            var binder = ProtocolConversionAction.GetConversionAction(context, itemType, implicitProtocolConversions);
+            var binder = ProtocolConversionAction.GetArgumentConversionAction(context, itemType, implicitProtocolConversions);
             return AstUtils.Constant(siteType.GetMethod("Create", new[] { typeof(CallSiteBinder) }).Invoke(null, new object[] { binder }), siteType);
         }
 
@@ -328,7 +328,7 @@ namespace IronRuby.Runtime.Conversions {
             return
                 ImplicitConvert(expr, expr.Type, toType) ??
                 ExplicitConvert(expr, expr.Type, toType) ??
-                AstUtils.LightDynamic(ProtocolConversionAction.GetConversionAction(context, toType, implicitProtocolConversions), toType, expr);
+                AstUtils.LightDynamic(ProtocolConversionAction.GetArgumentConversionAction(context, toType, implicitProtocolConversions), toType, expr);
         }
 
         // C# finds a user-defined conversion operator on the source type's base classes too; CompilerHelpers looks
