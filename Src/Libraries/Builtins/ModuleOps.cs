@@ -49,11 +49,20 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTypeError("already initialized class");
             }
             
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenError(self.Context, self);
+            }
+
             // self could be a meta-module:
             RubyClass selfClass = self.Context.GetClassOf(self);
             RubyClass otherClass = self.Context.GetClassOf(other);
             if (otherClass != selfClass) {
                 throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
+            }
+
+            // a module that already exists is left as it is; only #dup's and #clone's copy is filled in (#138)
+            if (!self.TakeUninitializedModuleCopy()) {
+                return self;
             }
 
             self.InitializeModuleCopy((RubyModule)other);

@@ -3118,6 +3118,49 @@ true
         }
 
         /// <summary>
+        /// #138: main's #public, #private and #include are private, as MRI's are (`self.include M` still works, another
+        /// receiver does not). Module#initialize_copy and Class#initialize_copy copy only into the module #dup or #clone
+        /// made; on a module or class that already exists they leave it as it is (a module took the other's methods,
+        /// a class raised "already initialized class"), after the frozen and same-class checks. The expected output
+        /// is CRuby 4.0's.
+        /// </summary>
+        public void Main_PrivateAndInitializeCopy1() {
+            TestOutput(@"
+module N; def bar; end; def self.nn; end; X = 1; end
+module M; def foo; end; end
+p M.send(:initialize_copy, N), M.instance_methods(false)
+m = Module.new; m.send(:initialize_copy, N); p [m.instance_methods(false), m.singleton_methods, m.constants]
+d = N.dup; p [d.instance_methods(false), d.singleton_methods, d.constants, d.send(:initialize_copy, Comparable).instance_methods(false)]
+c = Class.new; e = Class.new { def b; end }
+p((c.send(:initialize_copy, e) rescue $!).equal?(c), c.instance_methods(false), e.dup.instance_methods(false), e.clone.instance_methods(false))
+p((Integer.send(:initialize_copy, String) rescue $!).inspect, (c.send(:initialize_copy, 5) rescue $!), (m.send(:initialize_copy, 5) rescue $!))
+f = Module.new.freeze; p((f.send(:initialize_copy, Module.new) rescue $!.class), (f.send(:initialize_copy, 5) rescue $!.class))
+g = Class.new.freeze; p((g.send(:initialize_copy, Class.new) rescue $!.class))
+p singleton_class.public_instance_methods(false).sort, singleton_class.private_instance_methods(false).sort & [:include, :private, :public]
+module Q; end; self.include(Q); main = self; p Object.include?(Q), (main.include(Q) rescue $!.class)
+", @"
+M
+[:foo]
+[[], [], []]
+[[:bar], [:nn], [:X], [:bar]]
+true
+[]
+[:b]
+[:b]
+""Integer""
+#<TypeError: initialize_copy should take same class object>
+#<TypeError: initialize_copy should take same class object>
+FrozenError
+FrozenError
+FrozenError
+[:inspect, :to_s]
+[:include, :private, :public]
+true
+NoMethodError
+");
+        }
+
+        /// <summary>
         /// $stdout can be any object with a #write (#134). Kernel#puts forwards to $stdout.puts even when that is
         /// only the private Kernel#puts the object inherits (rb_f_puts calls it with rb_funcallv), and with $stdout
         /// as the receiver formats the lines itself and hands them to #write; it raised "private method 'puts'

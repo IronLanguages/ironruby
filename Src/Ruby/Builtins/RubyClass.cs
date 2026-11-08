@@ -751,7 +751,8 @@ namespace IronRuby.Builtins {
 
         public void InitializeClassCopy(RubyClass/*!*/ rubyClass) {
             if (!_isUninitializedCopy) {
-                throw RubyExceptions.CreateTypeError("already initialized class");
+                // MRI 4.0: a class that already exists is left as it is, no TypeError (#138)
+                return;
             }
             _isUninitializedCopy = false;
 

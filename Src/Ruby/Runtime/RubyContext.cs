@@ -2545,7 +2545,8 @@ namespace IronRuby.Runtime {
                 if (_argfFileName == null) {
                     Interlocked.CompareExchange(
                         ref _argfFileName,
-                        CallSite<Func<CallSite, object, object>>.Create(RubyCallAction.Make(this, "filename", RubyCallSignature.WithImplicitSelf(0))),
+                        // argf.rb's private alias, which a redefined ARGF#filename does not touch (#138)
+                        CallSite<Func<CallSite, object, object>>.Create(RubyCallAction.Make(this, "__ir_filename__", RubyCallSignature.WithImplicitSelf(0))),
                         null
                     );
                 }

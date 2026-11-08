@@ -934,6 +934,22 @@ namespace IronRuby.Builtins {
             
             // copy instance variables:
             _context.CopyInstanceData(this, result, false);
+            result._isUninitializedModuleCopy = true;
+            return result;
+        }
+
+        // Set on the module #dup and #clone make, until initialize_copy has filled it in: MRI's
+        // Module#initialize_copy copies only into a module allocated for the copy, and is a no-op on
+        // any module that already exists (#138).
+        private bool _isUninitializedModuleCopy;
+
+        /// <summary>
+        /// Whether this module is a copy #dup or #clone made and initialize_copy has yet to fill in;
+        /// answering true once, as the copying then happens.
+        /// </summary>
+        public bool TakeUninitializedModuleCopy() {
+            bool result = _isUninitializedModuleCopy;
+            _isUninitializedModuleCopy = false;
             return result;
         }
 

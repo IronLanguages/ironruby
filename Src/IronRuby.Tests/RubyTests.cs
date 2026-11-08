@@ -929,6 +929,7 @@ namespace IronRuby.Tests {
                 Integer_SqrtPowDigits1,
                 Prelude_DataStructErrors1,
                 Prelude_AliasNames1,
+                Main_PrivateAndInitializeCopy1,
                 Kernel_PutsToStdoutWriter1,
                 Prelude_HiddenHelpers1,
                 Prelude_HiddenState1,

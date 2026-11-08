@@ -468,7 +468,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.String, IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.MainSingletonOps.DefineMethod)
             );
             
-            DefineLibraryMethod(module, "include", 0x51, 
+            DefineLibraryMethod(module, "include", 0x52, 
                 0x80000010U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyModule[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.MainSingletonOps.Include)
             );
@@ -478,12 +478,12 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MainSingletonOps.ToS)
             );
             
-            DefineLibraryMethod(module, "private", 0x51, 
+            DefineLibraryMethod(module, "private", 0x52, 
                 0x80000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.RubyScope, System.Object, System.Object[], System.Object>(IronRuby.Builtins.MainSingletonOps.SetPrivateVisibility)
             );
             
-            DefineLibraryMethod(module, "public", 0x51, 
+            DefineLibraryMethod(module, "public", 0x52, 
                 0x80000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.RubyScope, System.Object, System.Object[], System.Object>(IronRuby.Builtins.MainSingletonOps.SetPublicVisibility)
             );
@@ -742,8 +742,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
-                0x00000002U, 
-                new Action<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyClass>(IronRuby.Builtins.ClassOps.InitializeCopy)
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object, IronRuby.Builtins.RubyClass>(IronRuby.Builtins.ClassOps.InitializeCopy)
             );
             
             DefineRuleGenerator(module, "new", 0x51, IronRuby.Builtins.ClassOps.New());
