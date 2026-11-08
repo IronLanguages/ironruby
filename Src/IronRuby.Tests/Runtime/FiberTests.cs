@@ -27,6 +27,23 @@ namespace IronRuby.Tests {
         }
     }
 
+    // Holds a Ruby thread in CLR code until it is released. There is no safe point in here, and the
+    // thread is never in a wait an interrupt could break off, so whatever Thread#raise / #kill park for
+    // it meanwhile is all still parked when it comes back to Ruby code.
+    public sealed class SafePointHold {
+        private volatile bool _held, _released;
+        public bool Held { get { return _held; } }
+        public void Release() { _released = true; }
+
+        public void Hold() {
+            _held = true;
+            while (!_released) {
+                // not Thread.Sleep or SpinWait, which may sleep: an interrupt would break that off
+                Thread.Yield();
+            }
+        }
+    }
+
     public partial class Tests {
         [Options(NoRuntime = true)]
         public void Block_ReturnTraceFrameCleanup1() {
@@ -331,6 +348,108 @@ p [a, b, ensured, c]
 ", @"
 [:killed, :killed, true, [:killed]]
 ");
+        }
+
+        /// <summary>
+        /// Thread#raise and then Thread#kill reach a thread that is held in CLR code, so both are parked
+        /// when it gets back to Ruby code. The raise is not masked: it is delivered and the thread
+        /// rescues it. The kill waiting behind it then has to be parked in its place and end the thread
+        /// at its next safe point (as MRI does), not be dropped with the raise it waited behind.
+        /// </summary>
+        public void Thread_KillBehindRescuedRaise1() {
+            Context.DefineGlobalVariable("hold", new SafePointHold());
+            TestOutput(@"
+t = Thread.new do
+  Thread.current.report_on_exception = false
+  begin
+    $hold.hold
+    loop { Thread.pass }
+  rescue RuntimeError => $rescued
+  end
+  loop { sleep 0.01 }
+end
+Thread.pass until $hold.held
+t.raise 'first'
+t.kill
+$hold.release
+r = t.join(5) ? :killed : (t.kill; :still_running)
+p [r, $rescued&.message, t.status]
+", @"
+[:killed, ""first"", false]
+");
+        }
+
+        /// <summary>
+        /// A Thread#raise that is withdrawn (RetractAsyncException: a fiber thread whose fiber is done
+        /// drops a raise that has nowhere to go) leaves a Thread#kill that waited behind it parked in
+        /// its place; the kill is not withdrawn with it. The thread is never started: this is about what
+        /// is parked for it.
+        /// </summary>
+        public void Thread_KillBehindRetractedRaise1() {
+            var thread = new Thread(() => { });
+            var raise = new InvalidOperationException("withdrawn");
+            try {
+                RubyUtils.ParkAsyncException(thread, raise);
+                RubyUtils.ExitThread(thread);
+                Assert(RubyUtils.PeekPendingAsyncException(thread) == raise);
+
+                Assert(RubyUtils.RetractAsyncException(thread, raise));
+                Assert(RubyUtils.IsRubyThreadExit(RubyUtils.PeekPendingAsyncException(thread)));
+
+                // what is parked now is the kill, which the raise's retraction does not take
+                Assert(!RubyUtils.RetractAsyncException(thread, raise));
+                Assert(RubyUtils.IsRubyThreadExit(RubyUtils.PeekPendingAsyncException(thread)));
+            } finally {
+                RubyUtils.DropPendingAsyncExceptions(thread);
+            }
+            Assert(!RubyUtils.HasPendingAsyncException(thread));
+        }
+
+        /// <summary>
+        /// A fiber waiting for control (TranslateFiberWaitInterrupt) does not raise a parked Thread#raise:
+        /// it leaves it parked for when control arrives. A Thread#kill that came in behind the raise
+        /// ends the thread there all the same, and the raise goes with it.
+        /// </summary>
+        public void Thread_KillBehindRaiseInFiberWait1() {
+            int step = 0;
+            Exception alone = null, behind = null;
+            bool parkedAfterAlone = false, parkedAfterKill = true;
+            var worker = new Thread(() => {
+                while (Volatile.Read(ref step) != 1) Thread.Yield();
+                try {
+                    RubyUtils.TranslateFiberWaitInterrupt();
+                } catch (Exception e) {
+                    alone = e;
+                }
+                parkedAfterAlone = RubyUtils.HasPendingAsyncException(Thread.CurrentThread);
+                Volatile.Write(ref step, 2);
+
+                while (Volatile.Read(ref step) != 3) Thread.Yield();
+                try {
+                    RubyUtils.TranslateFiberWaitInterrupt();
+                } catch (Exception e) {
+                    behind = e;
+                }
+                parkedAfterKill = RubyUtils.HasPendingAsyncException(Thread.CurrentThread);
+            });
+            worker.IsBackground = true;
+            worker.Start();
+            try {
+                RubyUtils.ParkAsyncException(worker, new InvalidOperationException("raise"));
+                Volatile.Write(ref step, 1);
+                while (Volatile.Read(ref step) != 2) Thread.Yield();
+
+                RubyUtils.ExitThread(worker);
+                Volatile.Write(ref step, 3);
+                Assert(worker.Join(5000));
+            } finally {
+                RubyUtils.DropPendingAsyncExceptions(worker);
+            }
+
+            Assert(alone == null);
+            Assert(parkedAfterAlone);
+            Assert(behind != null && RubyUtils.IsRubyThreadExit(behind));
+            Assert(!parkedAfterKill);
         }
 
         /// <summary>
