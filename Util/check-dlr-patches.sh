@@ -12,8 +12,12 @@
 # its own: the series is taken back off, newest first, from a copy of the files it touches.
 IR_ROOT="$(dirname "$(dirname "$(readlink -f "$0")")")"
 dlr_root=$(git -C "${1:?usage: Util/check-dlr-patches.sh DLR_DIR}" rev-parse --show-toplevel 2>/dev/null) || exit 0
-# a DLR copied into some other repository (Util/aot/NativeAot/make-dlr-copy.sh's) is not a DLR checkout
+# a DLR copied into some other repository (Util/aot/NativeAot/make-dlr-copy.sh's) is not a DLR checkout,
+# nor is a src/core that is not the checkout's own (such a copy made inside a DLR checkout)
 [ -d "$dlr_root/src/core/Microsoft.Dynamic" ] || exit 0
+if [ -d "$1/Microsoft.Dynamic" ] && [ "$(readlink -f "$1")" != "$(readlink -f "$dlr_root/src/core")" ]; then
+  exit 0
+fi
 check=$(mktemp -d)
 trap 'rm -rf "$check"' EXIT
 # git apply in a repository's subdirectory skips the patch's paths outside it, and then
