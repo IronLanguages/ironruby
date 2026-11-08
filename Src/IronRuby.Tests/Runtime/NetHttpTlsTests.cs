@@ -536,14 +536,30 @@ p Object.autoload?(:OpenSSL)
             // SChannel cannot serve with an ephemeral key: round-trip the certificate through PFX.
             private X509Certificate2/*!*/ Keep(X509Certificate2/*!*/ created) {
                 using (created) {
-#if NET9_0_OR_GREATER
-                    var result = X509CertificateLoader.LoadPkcs12(created.Export(X509ContentType.Pfx), null);
-#else
-                    var result = new X509Certificate2(created.Export(X509ContentType.Pfx));
-#endif
+                    var result = ImportPfx(created.Export(X509ContentType.Pfx));
                     _certificates.Add(result);
                     return result;
                 }
+            }
+
+            /// <summary>
+            /// A PFX import that works without DPAPI too: the user's key store needs it, and an SSH session logged in
+            /// with a key has none ("Access denied"); the machine key store does not (as Puma's MiniSsl, #130).
+            /// </summary>
+            internal static X509Certificate2/*!*/ ImportPfx(byte[]/*!*/ pfx) {
+                try {
+                    return LoadPkcs12(pfx, X509KeyStorageFlags.DefaultKeySet);
+                } catch (CryptographicException) {
+                    return LoadPkcs12(pfx, X509KeyStorageFlags.MachineKeySet);
+                }
+            }
+
+            private static X509Certificate2/*!*/ LoadPkcs12(byte[]/*!*/ pfx, X509KeyStorageFlags flags) {
+#if NET9_0_OR_GREATER
+                return X509CertificateLoader.LoadPkcs12(pfx, null, flags);
+#else
+                return new X509Certificate2(pfx, (string)null, flags);
+#endif
             }
 
             private void WritePem(string/*!*/ name, X509Certificate2/*!*/ certificate) {

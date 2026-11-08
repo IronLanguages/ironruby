@@ -1028,6 +1028,10 @@ namespace IronRuby.Tests {
                 Thread_HandleInterruptOtherRuntime1,
                 Thread_RaiseBetweenBlockCallsMeetsRescue1,
                 Thread_KillBehindRaise1,
+                Thread_KillBehindRescuedRaise1,
+                Thread_KillBehindRetractedRaise1,
+                Thread_KillBehindRaiseInFiberWait1,
+                Thread_KillBehindRaiseInFiberMailbox1,
                 DeepNesting1,
 
                 Scenario_RubyThreads1,

@@ -250,11 +250,7 @@ true
             public string/*!*/ Get(int port, string/*!*/ path, string certificate) {
                 var certificates = new X509CertificateCollection();
                 if (certificate != null) {
-#if NET9_0_OR_GREATER
-                    certificates.Add(X509CertificateLoader.LoadPkcs12FromFile(_pfx[certificate], null));
-#else
-                    certificates.Add(new X509Certificate2(_pfx[certificate]));
-#endif
+                    certificates.Add(TlsTestServer.ImportPfx(File.ReadAllBytes(_pfx[certificate])));
                 }
                 try {
                     using (var tcp = new TcpClient("127.0.0.1", port))
