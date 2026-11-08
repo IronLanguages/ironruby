@@ -508,6 +508,10 @@ namespace IronRuby.Builtins {
             if (toProcessGroup) {
                 signal = -signal;
             }
+            if (PosixSignals.IsUnsupportedOnWindows(signal)) {
+                // Negative means -errno; the prelude's Process.kill turns it into an Errno class.
+                return ScriptingRuntimeHelpers.Int32ToObject(-PosixSignals.EINVAL);
+            }
 
             foreach (var pid in pids) {
                 int target = Protocols.CastToFixnum(toInt, pid);
