@@ -1201,6 +1201,13 @@ namespace IronRuby.Runtime.Conversions {
         }
 
         private static Expression FromString(CallArguments/*!*/ args) {
+            // A System::Char is a single-character string (see NumericTypeCode), so it takes the strict
+            // Float() parse a String does, not the lenient Char#to_f that made 'a' 0.0 (#153):
+            if (args.Target is char) {
+                return Ast.Call(Methods.ConvertStringToFloat, args.MetaContext.Expression,
+                    Ast.Call(AstUtils.Convert(args.TargetExpression, typeof(char)), typeof(char).GetMethod("ToString", Type.EmptyTypes)));
+            }
+
             var result = ImplicitConvert(typeof(MutableString), args);
             if (result != null) {
                 return Ast.Call(Methods.ConvertMutableStringToFloat, args.MetaContext.Expression, result);

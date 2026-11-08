@@ -1763,6 +1763,9 @@ namespace IronRuby.Runtime {
                     rubyGlobalScope, null, bindGlobals ? rubyGlobalScope.MainSingleton : null, rubyGlobalScope.MainObject
                 );
 
+                if (bindGlobals) {
+                    rubyGlobalScope.MainSingleton.IsHostedTopLevelMethodOwner = true;
+                }
                 scope.SetDebugName(bindGlobals ? "top-level-bound" : "top-level");
                 rubyGlobalScope.SetTopLocalScope(scope);
             } else {

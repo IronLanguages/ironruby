@@ -159,6 +159,10 @@ namespace IronRuby.Compiler.Ast {
 
             RubyClass cls = declaringModule as RubyClass;
             if (cls != null && cls.IsSingletonClass) {
+                // a top-level `def' of hosted code, which defines the method in main's singleton class (issue 158)
+                if (cls.IsHostedTopLevelMethodOwner) {
+                    return "Object#" + name;
+                }
                 RubyModule attached = cls.SingletonClassOf as RubyModule;
                 return (attached != null && attached.Name != null) ? attached.Name + "." + name : name;
             }

@@ -46,7 +46,7 @@ goo
 Backtrace1.rb:11:in 'Object#bar'
 Backtrace1.rb:7:in 'Object#foo'
 Backtrace1.rb:3:in 'Object#goo'
-Backtrace1.rb:18
+Backtrace1.rb:18:in '<main>'
 ");
         }
 
@@ -76,11 +76,11 @@ rescue
 end
 ");
             }, @"
-Backtrace2.rb:15:in 'baz'
-Backtrace2.rb:11:in 'bar'
-Backtrace2.rb:7:in 'foo'
-Backtrace2.rb:3:in 'goo'
-Backtrace2.rb:19
+Backtrace2.rb:15:in 'Object#baz'
+Backtrace2.rb:11:in 'Object#bar'
+Backtrace2.rb:7:in 'Object#foo'
+Backtrace2.rb:3:in 'Object#goo'
+Backtrace2.rb:19:in '<main>'
 ");
         }
 
@@ -114,11 +114,11 @@ rescue
 end
 ");
             }, @"
-Backtrace3.rb:19:in 'baz'
-Backtrace3.rb:13:in 'bar'
-Backtrace3.rb:9:in 'foo'
-Backtrace3.rb:3:in 'goo'
-Backtrace3.rb:23
+Backtrace3.rb:19:in 'Object#baz'
+Backtrace3.rb:13:in 'Object#bar'
+Backtrace3.rb:9:in 'Object#foo'
+Backtrace3.rb:3:in 'Object#goo'
+Backtrace3.rb:23:in '<main>'
 ");
         }
 
@@ -150,11 +150,11 @@ end
 foo
 ");
             }, @"
-Backtrace4.rb:7:in 'baz'
-Backtrace4.rb:11:in 'block in foo'
+Backtrace4.rb:7:in 'Object#baz'
+Backtrace4.rb:11:in 'block in Object#foo'
 *:*:in 'Bar'
-Backtrace4.rb:11:in 'foo'
-Backtrace4.rb:14
+Backtrace4.rb:11:in 'Object#foo'
+Backtrace4.rb:14:in '<main>'
 ", OutputFlags.Match);
         }
 
@@ -186,12 +186,12 @@ end
 
 f1 rescue puts $@[0..5]
 ", @"
-Backtrace6.rb:23:in 'f3'
-Backtrace6.rb:13:in 'block in f2'
+Backtrace6.rb:23:in 'Object#f3'
+Backtrace6.rb:13:in 'block in Object#f2'
 Backtrace6.rb:10:in 'Integer#times'
-Backtrace6.rb:10:in 'f2'
-Backtrace6.rb:3:in 'f1'
-Backtrace6.rb:26
+Backtrace6.rb:10:in 'Object#f2'
+Backtrace6.rb:3:in 'Object#f1'
+Backtrace6.rb:26:in '<main>'
 ");
         }
         
@@ -242,10 +242,49 @@ rescue => e
 end
 ");
             }, @"
-many
-caller_of_many
-Backtrace9.rb
+Object#many
+Object#caller_of_many
+<main>
 ");
+        }
+
+        /// <summary>
+        /// Code run through the hosting API (ScriptEngine.Execute, ScriptSource.Execute, CompilerTest) gets the labels CRuby 4.0
+        /// and ir print (issue 158): a top-level method is "Object#many" although a hosted scope defines it in main's singleton
+        /// class, and the top level is "<main>" - it was "#", which read "block in #" and left the top-level frame unlabelled.
+        /// </summary>
+        public void Backtrace_HostedLabels1() {
+            const string code = @"
+def many
+  raise ArgumentError, 'x'
+end
+
+class Foo
+  def bar = many
+  def self.baz = new.bar
+end
+
+begin
+  [1].each { Foo.baz }
+rescue => e
+  puts e.backtrace.first(6).map { |f| f[/in '(.*)'/, 1] || '-' }
+end
+[1].each { puts caller(0, 1)[0][/in '(.*)'/, 1] }
+puts caller(0, 1)[0][/in '(.*)'/, 1]
+";
+            const string expected = @"
+Object#many
+Foo#bar
+Foo.baz
+block in <main>
+Array#each
+<main>
+block in <main>
+<main>
+";
+            AssertOutput(() => Engine.Execute(code), expected);
+            AssertOutput(() => Engine.CreateScriptSourceFromString(code, "hosted.rb", SourceCodeKind.File).Execute(), expected);
+            AssertOutput(() => CompilerTest(code), expected);
         }
 
         /// <summary>
@@ -412,9 +451,9 @@ end
   end
 end
 ", @"
-[""4:in 'Dir.mkdir'"", ""4:in 'mk'"", ""14:in 'block in #'""]
-[""4:in 'Dir.mkdir'"", ""4:in 'mk'"", ""7:in 'mk_again'""]
-[""12:in 'Kernel#require_relative'"", ""12:in 'req'"", ""14:in 'block in #'""]
+[""4:in 'Dir.mkdir'"", ""4:in 'Object#mk'"", ""14:in 'block in <main>'""]
+[""4:in 'Dir.mkdir'"", ""4:in 'Object#mk'"", ""7:in 'Object#mk_again'""]
+[""12:in 'Kernel#require_relative'"", ""12:in 'Object#req'"", ""14:in 'block in <main>'""]
 ");
         }
 
@@ -430,7 +469,7 @@ Object.new.instance_exec do
   p Thread.current.backtrace[0..1].map { |f| f.sub(/\A.*?\.rb:/, '') }
 end
 ", @"
-[""4:in 'Thread#backtrace'"", ""4:in 'block in #'""]
+[""4:in 'Thread#backtrace'"", ""4:in 'block in <main>'""]
 ");
         }
 
