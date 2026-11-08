@@ -179,6 +179,7 @@ namespace IronRuby.Tests {
                 RegexCondition2,
                 Regex_ByteEscapes1,
                 Regex_ByteEscapeComments1,
+                Regex_BackrefAfterBlockSub1,
                 
                 Scenario_RubyScopeParsing,
                 Scenario_RubyScopes1,

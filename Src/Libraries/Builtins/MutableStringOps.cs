@@ -2962,8 +2962,9 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            // resets the $~ scope variable to the last match (skipped if block jumped):
-            matchScope.CurrentMatch = match;
+            // $~ stays what the block left it (rb_str_sub_bang does not set it again; a match in the
+            // block shows after #sub, a failed one leaves nil) - unlike #gsub, which resets it to its
+            // own last match.
 
             MutableString replacement = Protocols.ConvertToString(tosConversion, blockResult);
 
