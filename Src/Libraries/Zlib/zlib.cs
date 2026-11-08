@@ -38,6 +38,34 @@ namespace IronRuby.StandardLibrary.Zlib {
 
         internal static readonly bool UseClrZlib = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
+        /// <summary>
+        /// What "libz" is called on disk. The runtime only tries libz.so / libz.dylib, the
+        /// unversioned names a zlib development package adds; a system with just the runtime
+        /// library (a slim container, say) has only the versioned soname, which is also the one
+        /// CRuby's zlib links against. Windows never calls into libz.
+        /// </summary>
+        private static readonly string[] FileNames =
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? new[] { "libz.1.dylib", "libz.dylib" } :
+            RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? new[] { "libz.so.1", "libz.so" } :
+            new string[0];
+
+        // An explicit static constructor, so the resolver is installed before the first
+        // P/Invoke below rather than whenever the runtime gets round to the field initializers.
+        static LibZ() {
+            if (UseClrZlib) return;
+            NativeLibrary.SetDllImportResolver(typeof(LibZ).Assembly, (name, assembly, searchPath) => {
+                if (name == Lib) {
+                    foreach (string fileName in FileNames) {
+                        if (NativeLibrary.TryLoad(fileName, assembly, searchPath, out IntPtr handle)) {
+                            return handle;
+                        }
+                    }
+                }
+                // Anything else, or a libz under another name (a BSD): the runtime's own probing.
+                return IntPtr.Zero;
+            });
+        }
+
         internal const int Z_NO_FLUSH = 0;
         internal const int Z_SYNC_FLUSH = 2;
         internal const int Z_FINISH = 4;
