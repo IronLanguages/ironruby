@@ -906,6 +906,15 @@ namespace IronRuby.Builtins {
             // MRI delivers the interrupt to the thread's running fiber, and each fiber here is a
             // CLR thread of its own.
             RubyThreadInfo ownerInfo = RubyThreadInfo.FromThread(thread);
+
+            // A thread Thread#kill has been called on dies of the kill, as MRI's does: a raise that
+            // comes in behind it is dropped, whether the kill is still parked or already unwinding
+            // the thread. Parked, it replaced the kill; in flight, it replaced the ThreadExitSignal
+            // and the thread died of the raise, which #join then raised again.
+            if (ownerInfo.ExitRequested) {
+                return;
+            }
+
             RubyThreadInfo info;
             RubyThreadStatus status;
             using (new RubyUtils.UninterruptedLock(ownerInfo.FiberSwitchLock)) {

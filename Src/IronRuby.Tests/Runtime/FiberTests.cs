@@ -262,14 +262,18 @@ p [(t.value rescue $!.message), rescued]
 
         /// <summary>
         /// A Thread#kill that comes in while a Thread#raise is still parked for the thread is not lost.
-        /// The kill used to be dropped then, on the assumption that the raise ends the thread; when the
-        /// thread rescued the exception (A), or a Thread.handle_interrupt mask held it back (B), the
-        /// thread ran on. The same happened when a fiber waiting for control handed the exception to
-        /// the running fiber, which rescued it. MRI queues the two and kills the thread either way.
+        /// The kill used to be dropped then, on the assumption that the raise ends the thread; when a
+        /// Thread.handle_interrupt mask held the raise back, or the thread rescued it, the thread ran
+        /// on. Here the mask holds the raise back, the kill is not masked and ends the thread inside
+        /// the mask: in A after the thread has gone on to other work in the mask, in B straight away.
+        /// The other order is C: a Thread#raise that comes in behind a parked Thread#kill must not
+        /// replace it either (MRI takes the kill first and drops what is queued behind it); it did,
+        /// and the masked raise then left the thread running for ever. C repeats, as a thread may take
+        /// the kill before the raise arrives.
         /// </summary>
         public void Thread_KillBehindRaise1() {
             TestOutput(@"
-# A: the thread rescues the raise that was parked before the kill; the kill still ends it
+# A: raise, then kill, while the thread is in the mask; the kill ends it there, before the rescue
 ready = go = false
 t = Thread.new do
   Thread.current.report_on_exception = false
@@ -307,9 +311,25 @@ Thread.pass until ready
 t.raise 'held back'
 t.kill
 b = t.join(5) ? :killed : :still_running
-p [a, b, ensured]
+
+# C: kill, then raise; the raise must not replace the kill
+c = 20.times.map do
+  ready = false
+  t = Thread.new do
+    Thread.current.report_on_exception = false
+    Thread.handle_interrupt(RuntimeError => :never) do
+      ready = true
+      loop { sleep 0.01 }
+    end
+  end
+  Thread.pass until ready
+  t.kill
+  t.raise 'behind the kill'
+  t.join(5) ? :killed : (t.kill; :still_running)
+end.uniq
+p [a, b, ensured, c]
 ", @"
-[:killed, :killed, true]
+[:killed, :killed, true, [:killed]]
 ");
         }
 

@@ -1686,10 +1686,18 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static void ParkAsyncException(Thread/*!*/ thread, Exception/*!*/ e) {
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
-                if (!_pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId)) {
+                int key = thread.ManagedThreadId;
+                Exception parked;
+                if (!_pendingAsyncExceptions.TryGetValue(key, out parked)) {
                     RequestSafePoint();
+                } else if (parked is ThreadExitSignal) {
+                    // A Thread#raise behind a Thread#kill does not erase it: MRI takes the kill first
+                    // and clears what is queued behind it (rb_threadptr_to_kill), so the raise is
+                    // never seen. Replacing the kill lost it whenever the thread rescued the raise or
+                    // a Thread.handle_interrupt mask held it back.
+                    return;
                 }
-                _pendingAsyncExceptions[thread.ManagedThreadId] = e;
+                _pendingAsyncExceptions[key] = e;
             }
         }
 
