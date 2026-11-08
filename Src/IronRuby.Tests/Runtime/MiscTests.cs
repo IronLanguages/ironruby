@@ -1058,6 +1058,61 @@ true
         }
 
         /// <summary>
+        /// Signal.list on Windows is MRI's there: EXIT, INT, ILL, ABRT (22), FPE, KILL, SEGV and TERM. It
+        /// listed every Linux signal, so code that checks Signal.list.key?(""HUP"") before trapping HUP
+        /// went ahead; the other names are now "unsupported signal" and other numbers EINVAL, as in
+        /// MRI. Expected output is CRuby 4.0's, the same on Linux and Windows.
+        /// </summary>
+        public void Signal_WindowsList1() {
+            TestOutput(@"
+require 'ruby4'
+windows = File::ALT_SEPARATOR == '\\'
+list = Signal.list
+p list[""EXIT""], list[""INT""], list[""TERM""], list[""KILL""]
+p list.keys.sort == (windows ? %w[ABRT EXIT FPE ILL INT KILL SEGV TERM] : list.keys.sort)
+p list[""ABRT""] == (windows ? 22 : 6), list.key?(""HUP"") == !windows
+p Signal.signame(15), Signal.signame(1) == (windows ? nil : ""HUP"")
+
+# what Windows does not list is refused the way MRI refuses it
+if windows
+  [proc { trap(:HUP) {} }, proc { trap(""SIGUSR1"", ""DEFAULT"") }, proc { Process.kill(:QUIT, Process.pid) },
+   proc { SignalException.new(:PIPE) }].each do |f|
+    begin
+      f.call
+    rescue ArgumentError => e
+      p e.message
+    end
+  end
+  begin
+    Process.kill(1, Process.pid)
+  rescue Errno::EINVAL
+    p :einval
+  end
+  p trap(:ABRT, ""DEFAULT"")
+else
+  p ""unsupported signal 'SIGHUP'"", ""unsupported signal 'SIGUSR1'"", ""unsupported signal 'SIGQUIT'"",
+    ""unsupported signal 'SIGPIPE'"", :einval, nil
+end
+", @"
+0
+2
+15
+9
+true
+true
+true
+""TERM""
+true
+""unsupported signal 'SIGHUP'""
+""unsupported signal 'SIGUSR1'""
+""unsupported signal 'SIGQUIT'""
+""unsupported signal 'SIGPIPE'""
+:einval
+nil
+");
+        }
+
+        /// <summary>
         /// A drive-relative name's dirname is "C:." on Windows, as in MRI - which is how CRuby's own
         /// pathname_builtin.rb recognises drive letters, so Pathname#absolute? depends on it.
         /// </summary>

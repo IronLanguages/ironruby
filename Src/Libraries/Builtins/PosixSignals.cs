@@ -22,7 +22,7 @@ namespace IronRuby.Builtins {
     internal static class PosixSignals {
         // Linux signal numbers. They are what Signal.list has always reported and what the
         // platform we run ruby/spec on uses.
-        private static readonly Dictionary<string, int> _numbers = new Dictionary<string, int>(StringComparer.Ordinal) {
+        private static readonly Dictionary<string, int> _posixNumbers = new Dictionary<string, int>(StringComparer.Ordinal) {
             { "HUP", 1 }, { "INT", 2 }, { "QUIT", 3 }, { "ILL", 4 }, { "TRAP", 5 },
             { "ABRT", 6 }, { "IOT", 6 }, { "BUS", 7 }, { "FPE", 8 }, { "KILL", 9 },
             { "USR1", 10 }, { "SEGV", 11 }, { "USR2", 12 }, { "PIPE", 13 }, { "ALRM", 14 },
@@ -31,6 +31,15 @@ namespace IronRuby.Builtins {
             { "XCPU", 24 }, { "XFSZ", 25 }, { "VTALRM", 26 }, { "PROF", 27 }, { "WINCH", 28 },
             { "IO", 29 }, { "POLL", 29 }, { "PWR", 30 }, { "SYS", 31 },
         };
+
+        // MRI on Windows knows only the C runtime's signals, by the C runtime's numbers - ABRT is
+        // 22 there. Listing HUP or USR1 told code that checks Signal.list.key?("HUP") before
+        // trapping it that it could, where MRI says "unsupported signal 'SIGHUP'".
+        private static readonly Dictionary<string, int> _windowsNumbers = new Dictionary<string, int>(StringComparer.Ordinal) {
+            { "INT", 2 }, { "ILL", 4 }, { "ABRT", 22 }, { "FPE", 8 }, { "KILL", 9 }, { "SEGV", 11 }, { "TERM", 15 },
+        };
+
+        private static readonly Dictionary<string, int> _numbers = RubyProcess.IsWindows ? _windowsNumbers : _posixNumbers;
 
         internal static IEnumerable<KeyValuePair<string, int>> Numbers {
             get { return _numbers; }
@@ -132,7 +141,15 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "kill")]
         private static extern int SysKill(int pid, int signal);
 
-        private const int EINVAL = 22;
+        internal const int EINVAL = 22;
+
+        /// <summary>
+        /// A signal number that is not in Signal.list on Windows, where MRI's kill refuses it with
+        /// EINVAL. Elsewhere kill(2) is the judge.
+        /// </summary>
+        internal static bool IsUnsupportedOnWindows(int signal) {
+            return RubyProcess.IsWindows && signal != 0 && ToName(signal) == null;
+        }
 
         /// <summary>
         /// Signals whose default disposition is to end the process. MRI installs a handler for each of
@@ -328,6 +345,9 @@ namespace IronRuby.Builtins {
         /// it left SIGUSR2 "DEFAULT".
         /// </summary>
         private static object InitialCommand(int signal) {
+            if (RubyProcess.IsWindows && signal == 22) {   // ABRT
+                return null;
+            }
             switch (signal) {
                 case 1:   // HUP
                 case 2:   // INT

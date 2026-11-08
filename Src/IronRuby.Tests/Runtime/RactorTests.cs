@@ -753,9 +753,9 @@ rt { Ractor._require('ir_no_such_feature_x') }
 File.delete(path)
 Object.send(:define_method, :twice, &Ractor.shareable_proc { |i| i * 2 })
 rt { twice(4) }
-rt { trap(:USR2) { :ok } && :trapped }
-rt { s = 1; trap(:USR2) { s }; :trapped }
-trap(:USR2, 'DEFAULT')
+rt { trap(:TERM) { :ok } && :trapped }
+rt { s = 1; trap(:TERM) { s }; :trapped }
+trap(:TERM, 'DEFAULT')
 Thread.report_on_exception = true
 Warning[:experimental] = true
 ", @"
