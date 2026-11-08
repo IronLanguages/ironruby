@@ -66,7 +66,20 @@ namespace IronRuby.Builtins {
         }
 
         public class RubyThreadInfo {
-            private static readonly Dictionary<int, RubyThreadInfo> _mapping = new Dictionary<int, RubyThreadInfo>();
+            // Keyed by the Thread object, not its ManagedThreadId (Largo/ironruby#126): .NET hands a
+            // dead thread's id to a new thread once the old Thread object has been collected, and the
+            // new thread must start with an info of its own, not the dead one's locals, name, group
+            // and fiber flags. The table holds an info only as long as something holds its Thread -
+            // a running thread is rooted by the runtime, a finished one by whatever Ruby object still
+            // refers to it (Thread#value, #[] on a dead thread keep working) - so nothing leaks.
+            private static readonly ConditionalWeakTable<Thread, RubyThreadInfo> _mapping = new ConditionalWeakTable<Thread, RubyThreadInfo>();
+
+            // The infos Threads enumerates (ConditionalWeakTable has no cheap enumeration). An entry
+            // whose thread has finished is pruned here; the info itself stays reachable through
+            // _mapping for as long as its Thread is. Guarded by _mappingLock.
+            private static readonly List<RubyThreadInfo> _registered = new List<RubyThreadInfo>();
+            private static readonly object _mappingLock = new object();
+            private static int _pruneAt = 64;
 
             // Lets the runtime's own native waits (DescriptorStream's poll) report the thread as
             // sleeping, the way the waits in this library do by setting Blocked themselves.
@@ -130,7 +143,7 @@ namespace IronRuby.Builtins {
             }
 
             // The calling thread's own info. Nearly every lookup is for the current thread - Thread.current,
-            // Thread#[] on it, Mutex, Monitor - and an entry is never replaced or removed from _mapping, so
+            // Thread#[] on it, Mutex, Monitor - and a thread's entry in _mapping is never replaced while the thread runs, so
             // once looked up it can be answered without the global lock.
             [ThreadStatic]
             private static RubyThreadInfo _current;
@@ -151,17 +164,30 @@ namespace IronRuby.Builtins {
             [MethodImpl(MethodImplOptions.NoInlining)]
             private static RubyThreadInfo Lookup(Thread t) {
                 RubyThreadInfo result;
-                lock (_mapping) {
-                    int key = t.ManagedThreadId;
-                    if (!_mapping.TryGetValue(key, out result)) {
+                lock (_mappingLock) {
+                    if (!_mapping.TryGetValue(t, out result)) {
                         result = new RubyThreadInfo(t);
-                        _mapping[key] = result;
+                        _mapping.Add(t, result);
+                        _registered.Add(result);
+                        if (_registered.Count >= _pruneAt) {
+                            PruneFinished();
+                            _pruneAt = Math.Max(64, _registered.Count * 2);
+                        }
                     }
                 }
                 if (ReferenceEquals(t, Thread.CurrentThread) && ReferenceEquals(result._thread, t)) {
                     _current = result;
                 }
                 return result;
+            }
+
+            /// <summary>
+            /// Drops the infos of threads that have finished from <see cref="_registered"/>, which would
+            /// otherwise keep every Thread the process ever made alive. A thread that has not been
+            /// started yet stays: it is about to run. Caller holds _mappingLock.
+            /// </summary>
+            private static void PruneFinished() {
+                _registered.RemoveAll(info => (info._thread.ThreadState & System.Threading.ThreadState.Stopped) != 0);
             }
 
             /// <summary>Registers the calling thread; cheap once it is.</summary>
@@ -263,8 +289,8 @@ namespace IronRuby.Builtins {
                 set { _context = (value != null) ? new WeakReference<RubyContext>(value) : null; }
             }
 
-            // Weak: _mapping keeps every entry for good, and a strong reference here would keep a
-            // runtime the host has let go of alive for as long as the process runs.
+            // Weak: an info lives as long as its Thread (the main thread's for good), and a strong
+            // reference here would keep a runtime the host has let go of alive that long.
             private WeakReference<RubyContext> _context;
 
             /// <summary>
@@ -392,11 +418,12 @@ namespace IronRuby.Builtins {
 
             internal static RubyThreadInfo[] Threads {
                 get {
-                    lock (_mapping) {
-                        List<RubyThreadInfo> result = new List<RubyThreadInfo>(_mapping.Count);
-                        foreach (KeyValuePair<int, RubyThreadInfo> entry in _mapping) {
-                            if (entry.Value.Thread.IsAlive && !entry.Value.IsIdleFiberWorker) {
-                                result.Add(entry.Value);
+                    lock (_mappingLock) {
+                        PruneFinished();
+                        List<RubyThreadInfo> result = new List<RubyThreadInfo>(_registered.Count);
+                        foreach (RubyThreadInfo info in _registered) {
+                            if (info.Thread.IsAlive && !info.IsIdleFiberWorker) {
+                                result.Add(info);
                             }
                         }
                         return result.ToArray();

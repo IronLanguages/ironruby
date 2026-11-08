@@ -1680,7 +1680,9 @@ namespace IronRuby.Runtime {
         // The blocking primitives that IronRuby itself uses translate ThreadInterruptedException into the parked
         // exception; every other safe point calls CheckAsyncException. A thread that is spinning in pure Ruby code
         // without ever blocking cannot be interrupted - see the comment on CheckAsyncException.
-        private static readonly Dictionary<int, Exception> _pendingAsyncExceptions = new Dictionary<int, Exception>();
+        // Keyed by the Thread object, not its ManagedThreadId: .NET hands a dead thread's id to a new
+        // thread once the old Thread object is collected, and a stale entry must not reach the new one.
+        private static readonly Dictionary<Thread, Exception> _pendingAsyncExceptions = new Dictionary<Thread, Exception>();
 
         public static void RaiseAsyncException(Thread thread, Exception e) {
             if (thread == Thread.CurrentThread) {
@@ -1700,7 +1702,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static void ParkAsyncException(Thread/*!*/ thread, Exception/*!*/ e) {
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
-                int key = thread.ManagedThreadId;
+                Thread key = thread;
                 Exception parked;
                 if (!_pendingAsyncExceptions.TryGetValue(key, out parked)) {
                     RequestSafePoint();
@@ -1719,7 +1721,7 @@ namespace IronRuby.Runtime {
         /// Wakes <paramref name="thread"/> if it is blocked, so that it picks up what is parked for it.
         /// </summary>
         public static void NudgeThread(Thread/*!*/ thread) {
-            int key = thread.ManagedThreadId;
+            Thread key = thread;
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
                 if (!_pendingAsyncExceptions.ContainsKey(key)) {
                     // taken, moved on or dropped already: an interrupt now would find nothing to deliver
@@ -1784,9 +1786,9 @@ namespace IronRuby.Runtime {
             }
         }
 
-        // CLR thread id -> NudgeThread calls between their check that something is parked for the
+        // CLR thread (by identity, not ManagedThreadId, which .NET recycles) -> NudgeThread calls between their check that something is parked for the
         // thread and the end of their Thread.Interrupt. Guarded by _pendingAsyncExceptions.
-        private static readonly Dictionary<int, int> _nudgesInFlight = new Dictionary<int, int>();
+        private static readonly Dictionary<Thread, int> _nudgesInFlight = new Dictionary<Thread, int>();
 
         /// <summary>
         /// Called by a thread that has just taken away what was parked for it - delivered it, moved it to
@@ -1801,7 +1803,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         private static void DropStaleNudge() {
             Thread current = Thread.CurrentThread;
-            int key = current.ManagedThreadId;
+            Thread key = current;
             while (true) {
                 using (new UninterruptedLock(_pendingAsyncExceptions)) {
                     if (!_nudgesInFlight.ContainsKey(key)) {
@@ -1828,7 +1830,7 @@ namespace IronRuby.Runtime {
             // kills the thread after it all the same, should it rescue the exception: the kill waits
             // behind it (_killsBehindRaise) and is parked once the exception is taken.
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
-                int key = thread.ManagedThreadId;
+                Thread key = thread;
                 Exception parked;
                 if (!_pendingAsyncExceptions.TryGetValue(key, out parked)) {
                     RequestSafePoint();
@@ -1900,13 +1902,13 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Removes and returns the asynchronous exception parked for the given thread, if any.
         /// </summary>
-        // CLR thread id -> a Thread#kill that came in while a Thread#raise was parked for the thread
+        // CLR thread (by identity) -> a Thread#kill that came in while a Thread#raise was parked for the thread
         // (ExitThread). Guarded by _pendingAsyncExceptions.
-        private static readonly HashSet<int>/*!*/ _killsBehindRaise = new HashSet<int>();
+        private static readonly HashSet<Thread>/*!*/ _killsBehindRaise = new HashSet<Thread>();
 
         // Takes what is parked under <paramref name="key"/> away; a kill waiting behind it takes its
         // place. Under the _pendingAsyncExceptions lock.
-        private static void UnparkLocked(int key) {
+        private static void UnparkLocked(Thread key) {
             if (_killsBehindRaise.Remove(key)) {
                 // one parked entry for another: the safe point request stays
                 _pendingAsyncExceptions[key] = new ThreadExitSignal();
@@ -1923,7 +1925,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         private static bool PromoteKillBehindRaise(Thread/*!*/ thread) {
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
-                int key = thread.ManagedThreadId;
+                Thread key = thread;
                 if (!_killsBehindRaise.Remove(key)) {
                     return false;
                 }
@@ -1939,7 +1941,7 @@ namespace IronRuby.Runtime {
         public static void DropPendingAsyncExceptions(Thread/*!*/ thread) {
             bool dropped;
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
-                int key = thread.ManagedThreadId;
+                Thread key = thread;
                 _killsBehindRaise.Remove(key);
                 dropped = _pendingAsyncExceptions.Remove(key);
                 if (dropped) {
@@ -1954,7 +1956,7 @@ namespace IronRuby.Runtime {
         public static Exception GetPendingAsyncException(Thread/*!*/ thread) {
             Exception e;
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
-                int key = thread.ManagedThreadId;
+                Thread key = thread;
                 if (!_pendingAsyncExceptions.TryGetValue(key, out e)) {
                     return null;
                 }
@@ -1968,7 +1970,7 @@ namespace IronRuby.Runtime {
 
         public static bool HasPendingAsyncException(Thread/*!*/ thread) {
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
-                return _pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId);
+                return _pendingAsyncExceptions.ContainsKey(thread);
             }
         }
 
@@ -1997,7 +1999,7 @@ namespace IronRuby.Runtime {
             }
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
                 Exception e;
-                int key = from.ManagedThreadId;
+                Thread key = from;
                 if (!_pendingAsyncExceptions.TryGetValue(key, out e) || e is ThreadExitSignal) {
                     return false;
                 }
@@ -2006,7 +2008,7 @@ namespace IronRuby.Runtime {
                     return false;
                 }
                 Exception there;
-                if (_pendingAsyncExceptions.TryGetValue(to.ManagedThreadId, out there)) {
+                if (_pendingAsyncExceptions.TryGetValue(to, out there)) {
                     if (there is ThreadExitSignal) {
                         // a raise does not overwrite a kill
                         return false;
@@ -2015,7 +2017,7 @@ namespace IronRuby.Runtime {
                     SafePointRequestDone();
                 }
                 _pendingAsyncExceptions.Remove(key);
-                _pendingAsyncExceptions[to.ManagedThreadId] = e;
+                _pendingAsyncExceptions[to] = e;
             }
             if (ReferenceEquals(from, Thread.CurrentThread)) {
                 DropStaleNudge();
@@ -2029,7 +2031,7 @@ namespace IronRuby.Runtime {
         public static bool RetractAsyncException(Thread/*!*/ thread, Exception/*!*/ e) {
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
                 Exception parked;
-                int key = thread.ManagedThreadId;
+                Thread key = thread;
                 if (!_pendingAsyncExceptions.TryGetValue(key, out parked) || !ReferenceEquals(parked, e)) {
                     return false;
                 }
@@ -2053,7 +2055,7 @@ namespace IronRuby.Runtime {
         public static Exception PeekPendingAsyncException(Thread/*!*/ thread) {
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
                 Exception e;
-                return _pendingAsyncExceptions.TryGetValue(thread.ManagedThreadId, out e) ? e : null;
+                return _pendingAsyncExceptions.TryGetValue(thread, out e) ? e : null;
             }
         }
 
