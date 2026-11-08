@@ -115,12 +115,14 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// The first thing every JIT-compiled method does: a recursion too deep is a SystemStackError (RubyOps.
-        /// RequireSufficientStack). A JIT method makes no scope, so the check the interpreter makes there is not made.
+        /// What a JIT-compiled method does before it calls itself (JitCompiler.StackCheckPlacer): a recursion too deep
+        /// is a SystemStackError (RubyOps.RequireSufficientStack). A JIT method makes no scope, so the check the
+        /// interpreter makes there is not made.
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static unsafe void CheckStack() {
-            // StackLimit.IsSufficient written out: a call deeper, the JIT no longer inlines its main-thread test into
-            // the method, and fib(30) runs 1.7x slower
+            // StackLimit.IsSufficient written out, so the main thread's test is inlined whole into the method: a
+            // thread-static read there cost fib(30) more than half its time again
             byte probe;
             ulong sp = (ulong)&probe;
             if (sp - StackLimit._mainLow >= StackLimit._mainSize && !StackLimit.IsSufficientOffMain(sp)) {
