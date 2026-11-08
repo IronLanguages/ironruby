@@ -3633,7 +3633,10 @@ namespace IronRuby.Runtime {
         /// </summary>
         private static void RequireSuperSelf(RubyScope/*!*/ methodScope, object currentSelf, RubyModule declaringModule) {
             object methodSelf = methodScope.SelfObject;
-            if (ReferenceEquals(currentSelf, methodSelf) || Equals(currentSelf, methodSelf)
+            // identity, not Equals: a Ruby object's Equals is its #eql?, which a program may define (and would
+            // then run on every super); only a boxed Integer, Float, true... compares by value
+            if (ReferenceEquals(currentSelf, methodSelf)
+                || (currentSelf != null && currentSelf.GetType().IsValueType && currentSelf.Equals(methodSelf))
                 || declaringModule == null || declaringModule.RefinedModule != null) {
                 return;
             }

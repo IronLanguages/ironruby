@@ -953,10 +953,17 @@ class D < B; include M; end
 p((D.new.foo rescue [$!.class, $!.message]))
 class G < B; define_method(:foo) { Object.new.instance_eval { super() } }; end
 p((G.new.foo rescue $!.message))
+class Q; def eql?(o); true; end; def ==(o); true; end; def hash; 1; end; end
+class R < B; def foo; (Q.new.instance_eval { super } rescue $!.message); end; end
+p R.new.foo
+class Integer; def sup_t; 5.instance_eval { super } rescue $!.class; end; end
+p 5.sup_t
 ", @"
 [""self has wrong type to call super in this context: Class (expected C)"", ""self has wrong type to call super in this context: A (expected C)"", :b, :b, TypeError]
 [NoMethodError, ""super called outside of method""]
 ""self has wrong type to call super in this context: Object (expected G)""
+""self has wrong type to call super in this context: Q (expected R)""
+NoMethodError
 ");
         }
 
