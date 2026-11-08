@@ -222,6 +222,7 @@ Backtrace8.rb:N:in 'f'
         /// <summary>
         /// The interpreter calls a method with this many parameters through reflection (DLR patch 0103): what the method
         /// raised kept its frames, the caller's and those below the rescuing one, and the reflection frames do not show.
+        /// Built against a DLR without that patch, the trace starts at caller_of_many (issue 132); the build now refuses one.
         /// </summary>
         public void Backtrace9() {
             AssertOutput(delegate() {
