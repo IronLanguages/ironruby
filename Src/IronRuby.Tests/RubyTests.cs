@@ -677,6 +677,7 @@ namespace IronRuby.Tests {
                 ClrInterop_TypeModification1,
                 ClrInterop_Namespaces1,
                 ClrInterop_StringSlice1,
+                ClrInterop_NameAndMethodInference1,
                 ClrExceptionRescue1,
                 ClrExceptionRescue2,
                 ClrExceptionRescue3,

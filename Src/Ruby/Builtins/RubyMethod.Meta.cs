@@ -18,6 +18,7 @@ using System.Linq.Expressions;
 using System;
 using System.Dynamic;
 using System.Reflection;
+using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
@@ -33,7 +34,7 @@ namespace IronRuby.Builtins {
             return new Meta(parameter, BindingRestrictions.Empty, this);
         }
 
-        internal sealed class Meta : RubyMetaObject<RubyMethod>, IConvertibleRubyMetaObject {
+        internal sealed class Meta : RubyMetaObject<RubyMethod>, IConvertibleRubyMetaObject, IInferableInvokable {
             public override RubyContext/*!*/ Context {
                 get { return Value.Info.Context; }
             }
@@ -83,6 +84,16 @@ namespace IronRuby.Builtins {
 
             public override DynamicMetaObject/*!*/ BindInvoke(InvokeBinder/*!*/ binder, DynamicMetaObject/*!*/[]/*!*/ args) {
                 return InteropBinder.Invoke.Bind(binder, this, args, Value.BuildInvoke);
+            }
+
+            // Generic inference, as for a Proc: a Method takes whatever the delegate passes it, so it says nothing
+            // about a type parameter the other arguments determine - Array.FindAll(int[], 2.method(:<)) is
+            // FindAll<int>, as with a block (TypeInferer, Build/dlr-patches/0005) (#141).
+            InferenceResult IInferableInvokable.GetInferredType(Type delegateType, Type parameterType) {
+                return new InferenceResult(
+                    typeof(object),
+                    BindingRestrictions.GetTypeRestriction(Expression, typeof(RubyMethod))
+                );
             }
         }
     }

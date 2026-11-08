@@ -23,6 +23,13 @@ namespace IronRuby.Builtins {
 
     [RubyClass("Name", Extends = typeof(ClrName), DefineIn = typeof(IronRubyOps.Clr))]
     public static class ClrNameOps {
+        // A name as a method name is given - String, Symbol or #to_str - and nil a TypeError like any other
+        // non-name; the CLR constructor took nil as a null string and threw ArgumentNullException (#141).
+        [RubyConstructor]
+        public static ClrName/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            return new ClrName(name);
+        }
+
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(ClrName/*!*/ self) {
             return ClrString.Inspect(self.MangledName);
