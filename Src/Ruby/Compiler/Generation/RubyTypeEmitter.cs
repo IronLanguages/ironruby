@@ -56,7 +56,11 @@ namespace IronRuby.Compiler.Generation {
 
         [Emitted]
         public static Exception/*!*/ InvokeMethodMissing(object o, string/*!*/ name) {
-            return RubyExceptions.CreateMethodMissing(RubyContext._Default, o, name);
+            // The receiver's own runtime: RubyContext._Default is the first one created in the process, and it names
+            // another runtime's class Name@<runtime id> in the message.
+            var rubyObject = o as IRubyObject;
+            var context = rubyObject != null && rubyObject.ImmediateClass != null ? rubyObject.ImmediateClass.Context : RubyContext._Default;
+            return RubyExceptions.CreateMethodMissing(context, o, name);
         }
 
         protected override MethodInfo MissingInvokeMethodException() {

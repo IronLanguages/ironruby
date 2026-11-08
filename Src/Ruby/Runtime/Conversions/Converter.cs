@@ -107,12 +107,17 @@ namespace IronRuby.Runtime.Conversions {
                 return Convertibility.AlwaysConvertible;
             }
 
-            if (CompilerHelpers.GetImplicitConverter(fromType, toType) != null) {
+            if (GetImplicitConverter(fromType, toType) != null) {
                 return Convertibility.AlwaysConvertible;
             }
 
             if (rubyMetaConvertible != null) {
-                return rubyMetaConvertible.IsConvertibleTo(toType, false);
+                // A Proc or Method decides which delegates it converts to, but to a Boolean it is truthy like any
+                // other object (narrowing level 2 below): o.M(lambda { }) for M(bool) passes true.
+                var convertibility = rubyMetaConvertible.IsConvertibleTo(toType, false);
+                if (convertibility.IsConvertible || toType != typeof(bool)) {
+                    return convertibility;
+                }
             } else if (metaConvertible != null) {
                 return new Convertibility(metaConvertible.CanConvertTo(toType, false), null);
             }
@@ -141,7 +146,7 @@ namespace IronRuby.Runtime.Conversions {
                 return Convertibility.AlwaysConvertible;
             }
 
-            if (CompilerHelpers.GetExplicitConverter(fromType, toType) != null) {
+            if (GetExplicitConverter(fromType, toType) != null) {
                 return Convertibility.AlwaysConvertible;
             }
 
@@ -326,6 +331,30 @@ namespace IronRuby.Runtime.Conversions {
                 AstUtils.LightDynamic(ProtocolConversionAction.GetConversionAction(context, toType, implicitProtocolConversions), toType, expr);
         }
 
+        // C# finds a user-defined conversion operator on the source type's base classes too; CompilerHelpers looks
+        // only at the type itself (reflection does not inherit static methods). A Ruby subclass of String is a CLR
+        // subclass of MutableString, so without the walk MutableString's operators were lost on it:
+        // o.CharArg(MyString.new('a')) failed where o.CharArg('a') passed.
+        private static MethodInfo GetImplicitConverter(Type/*!*/ fromType, Type/*!*/ toType) {
+            for (Type type = fromType; type != null && type != typeof(object); type = type.BaseType) {
+                MethodInfo converter = CompilerHelpers.GetImplicitConverter(type, toType);
+                if (converter != null) {
+                    return converter;
+                }
+            }
+            return null;
+        }
+
+        private static MethodInfo GetExplicitConverter(Type/*!*/ fromType, Type/*!*/ toType) {
+            for (Type type = fromType; type != null && type != typeof(object); type = type.BaseType) {
+                MethodInfo converter = CompilerHelpers.GetExplicitConverter(type, toType);
+                if (converter != null) {
+                    return converter;
+                }
+            }
+            return null;
+        }
+
         internal static Expression ImplicitConvert(Expression/*!*/ expr, Type/*!*/ fromType, Type/*!*/ toType) {
             expr = AstUtils.Convert(expr, fromType);
 
@@ -342,7 +371,7 @@ namespace IronRuby.Runtime.Conversions {
                 return Ast.Convert(expr, toType);
             }
 
-            MethodInfo converter = CompilerHelpers.GetImplicitConverter(fromType, toType);
+            MethodInfo converter = GetImplicitConverter(fromType, toType);
             if (converter != null) {
                 return Ast.Call(null, converter, expr);
             }
@@ -372,7 +401,7 @@ namespace IronRuby.Runtime.Conversions {
                 return Ast.ConvertChecked(expr, toType);
             }
 
-            MethodInfo converter = CompilerHelpers.GetExplicitConverter(fromType, toType);
+            MethodInfo converter = GetExplicitConverter(fromType, toType);
             if (converter != null) {
                 return Ast.Call(null, converter, expr);
             }
