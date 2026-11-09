@@ -1031,7 +1031,7 @@ namespace IronRuby.Runtime {
                 } else {
                     bool atTopLevel;
                     instanceOwner = scope.GetMethodDefinitionOwner(out atTopLevel);
-                    hostedTopLevel = atTopLevel && instanceOwner is RubyClass hostedOwner && hostedOwner.IsHostedTopLevelMethodOwner;
+                    hostedTopLevel = GetHostedTopLevelMirror(scope, instanceOwner, atTopLevel) != null;
 
                     // A `def' inside `1.5.instance_eval { }' lands on the singleton class of the
                     // number, which is as far as MRI lets it get: running the block is fine,
@@ -1065,8 +1065,10 @@ namespace IronRuby.Runtime {
                 } else {
                     body.SetDefinedWithoutRefinements();
                 }
-                SetMethod(scope.RubyContext, instanceMethod =
-                    new RubyMethodInfo(body, definitionScope, instanceOwner, instanceFlags)
+                SetMethod(scope.RubyContext, instanceMethod = hostedTopLevel
+                    // the scope's copy of Object's method, below: compiled and labelled as Object's (issue 177)
+                    ? new RubyMethodInfo(body, definitionScope, instanceOwner, instanceFlags, scope.RubyContext.ObjectClass)
+                    : new RubyMethodInfo(body, definitionScope, instanceOwner, instanceFlags)
                 );
             }
 
@@ -1113,7 +1115,7 @@ namespace IronRuby.Runtime {
             var coverage = body.Coverage;
             if (coverage != null && (coverage.State.Modes & CoverageModes.Methods) != 0) {
                 var location = body.Ast.Location;
-                coverage.AddMethod(body, method.DeclaringModule, body.Name,
+                coverage.AddMethod(body, method.BodyModule, body.Name,
                     location.Start.Line, location.Start.Column - 1, location.End.Line, location.End.Column - 1);
             }
 
@@ -1197,17 +1199,48 @@ namespace IronRuby.Runtime {
 
         [Emitted] // AliasStatement:
         public static void AliasMethod(RubyScope/*!*/ scope, string/*!*/ newName, string/*!*/ oldName) {
-            scope.GetMethodDefinitionOwner().AddMethodAlias(newName, oldName);
+            bool atTopLevel;
+            RubyModule owner = scope.GetMethodDefinitionOwner(out atTopLevel);
+
+            // Object's alias is the one CRuby makes, and so is its NameError when neither has the method. One that only
+            // main's singleton class has (`def self.x') is aliased there alone, as it was before.
+            RubyModule mirror = GetHostedTopLevelMirror(scope, owner, atTopLevel);
+            if (mirror != null && (mirror.ResolveMethod(oldName, VisibilityContext.AllVisible).Found
+                || !owner.ResolveMethod(oldName, VisibilityContext.AllVisible).Found)) {
+                mirror.AddMethodAlias(newName, oldName);
+            }
+
+            owner.AddMethodAlias(newName, oldName);
         }
 
         [Emitted] // UndefineMethod:
         public static void UndefineMethod(RubyScope/*!*/ scope, string/*!*/ name) {
-            RubyModule owner = scope.GetMethodDefinitionOwner();
+            bool atTopLevel;
+            RubyModule owner = scope.GetMethodDefinitionOwner(out atTopLevel);
+            RubyModule mirror = GetHostedTopLevelMirror(scope, owner, atTopLevel);
 
-            if (!owner.ResolveMethod(name, VisibilityContext.AllVisible).Found) {
-                throw RubyExceptions.CreateUndefinedMethodError(owner, name);
+            // as for `alias': Object's, and its NameError, as in CRuby; a singleton method of main only in main's singleton class
+            bool inMirror = mirror != null && mirror.ResolveMethod(name, VisibilityContext.AllVisible).Found;
+            if (!inMirror && !owner.ResolveMethod(name, VisibilityContext.AllVisible).Found) {
+                throw RubyExceptions.CreateUndefinedMethodError(mirror ?? owner, name);
+            }
+            if (inMirror) {
+                mirror.UndefineMethod(name);
             }
             owner.UndefineMethod(name);
+        }
+
+        /// <summary>
+        /// Code run in a host's scope (ScriptCode.Run(Scope), ScriptEngine.Execute(code, scope), ScriptSource.Execute(scope))
+        /// has main's singleton class, the scope's, for the owner of its top-level methods (RubyScope.MethodLookupModule), so
+        /// that the host reads them from the scope and the top level of another scope does not see them (RubyHosting1D). Ruby
+        /// code expects them in Object, where CRuby has them and an instance of any class calls them (issues 163, 177). So a
+        /// top-level `def', `alias', `undef', `public :x'/`private :x' and main.define_method act on Object as well: this is
+        /// Object when <paramref name="owner"/> is such a scope's owner, reached from its top level (not from a `def' in
+        /// main.instance_eval, which defines a singleton method of main), and null otherwise.
+        /// </summary>
+        internal static RubyModule GetHostedTopLevelMirror(RubyScope/*!*/ scope, RubyModule/*!*/ owner, bool atTopLevel) {
+            return atTopLevel && owner is RubyClass cls && cls.IsHostedTopLevelMethodOwner ? scope.RubyContext.ObjectClass : null;
         }
 
         #endregion
@@ -3218,7 +3251,7 @@ namespace IronRuby.Runtime {
             }
 
             if (context.Verbose is bool && ((bool)context.Verbose || strict)) {
-                string label = IronRuby.Compiler.Ast.MethodDefinition.QualifyFrameLabel(method.DefinitionName, method.DeclaringModule);
+                string label = IronRuby.Compiler.Ast.MethodDefinition.QualifyFrameLabel(method.DefinitionName, method.BodyModule);
                 context.ReportWarning(file != null
                     ? String.Format("the block passed to '{0}' defined at {1}:{2} may be ignored", label, file, method.SourceSpan.Start.Line)
                     : String.Format("the block may be ignored because '{0}' does not use a block", label)

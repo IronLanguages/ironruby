@@ -180,6 +180,92 @@ namespace IronRuby.Tests {
         /// missing_method on scope forwards to super class if the variable is not defined in scope;
         /// unmangled name is used if available and the mangled is not found in the scope.
         /// </summary>
+        /// <summary>
+        /// Code run in a host's scope defines a top-level method in main's singleton class (the scope's) and in Object (issue
+        /// 163, RubyHosting1D). Top-level `alias', `undef', `public :x'/`private :x' and main.define_method acted on main's
+        /// singleton class alone, so an instance of another class did not see what they did (issue 177). They act on Object
+        /// as well now, and this prints what CRuby 4 prints for the same file.
+        /// </summary>
+        public void RubyHosting_TopLevelOps1() {
+            var scope = Engine.CreateScope();
+            AssertOutput(() => Engine.Execute(@"
+def foo = 1
+alias bar foo
+def baz = 2
+undef baz
+def pub = 3
+public :pub
+def priv = 3
+public :priv
+private :priv
+define_method(:dm) { 4 }
+def src = 5
+define_method(:dm2, method(:src))
+define_method(:dm3, Object.instance_method(:src))
+class Hosted177
+  def calls = [bar, pub, dm, dm2, dm3, respond_to?(:baz, true)]
+end
+p Hosted177.new.calls
+p [bar, pub, priv, dm, dm2, dm3]
+p Object.private_method_defined?(:bar), Object.public_method_defined?(:pub), Object.private_method_defined?(:priv)
+p [:dm, :dm2, :dm3].map { |m| Object.public_method_defined?(m) }
+p 1.pub, 1.dm
+begin; undef nope; rescue NameError => e; p e.message; end
+begin; alias nope2 nope; rescue NameError => e; p e.message; end
+self.instance_eval { alias ie2 foo }
+p Object.private_method_defined?(:ie2), singleton_class.method_defined?(:ie2) || singleton_class.private_method_defined?(:ie2)
+", scope), @"
+[1, 3, 4, 5, 5, false]
+[1, 3, 3, 4, 5, 5]
+true
+true
+true
+[true, true, true]
+3
+4
+""undefined method 'nope' for class 'Object'""
+""undefined method 'nope' for class 'Object'""
+false
+true
+");
+            // the host still reads the methods from the scope
+            Assert(scope.GetVariable<Func<int>>("foo")() == 1);
+            Assert(scope.GetVariable<Func<int>>("pub")() == 3);
+
+            // A singleton method of main (`def self.x') is not Object's: CRuby's `alias'/`undef'/`private' of it raise
+            // NameError and its define_method TypeError, and a host's scope has them act on main's singleton class alone,
+            // as before.
+            AssertOutput(() => Engine.Execute(@"
+def self.single = 6
+alias single2 single
+define_method(:single3, method(:single))
+private :single
+p single2, single3, Object.method_defined?(:single2), Object.method_defined?(:single3), Object.private_method_defined?(:single)
+undef single2
+p respond_to?(:single2, true)
+", scope), @"
+6
+6
+false
+false
+false
+false
+");
+
+            // each scope's top level still finds its own; an instance of another class finds Object's, which the last
+            // scope to run made, as in CRuby
+            var scope1 = Engine.CreateScope();
+            var scope2 = Engine.CreateScope();
+            Engine.Execute("def op = 1; alias op2 op; class Calc177; def run = op2; end", scope1);
+            Engine.Execute("def op = 2; alias op2 op", scope2);
+            Assert(Engine.Execute<int>("op2", scope1) == 1);
+            Assert(Engine.Execute<int>("op2", scope2) == 2);
+            Assert(Engine.Execute<int>("Calc177.new.run", scope1) == 2);
+            Engine.Execute("undef op2", scope2);
+            Assert(Engine.Execute<int>("op2", scope1) == 1);
+            AssertExceptionThrown<MemberAccessException>(() => Engine.Execute("Calc177.new.run", scope1));
+        }
+
         public void RubyHosting1E() {
             var scope = Engine.CreateScope();
             scope.SetVariable("baz", 1);

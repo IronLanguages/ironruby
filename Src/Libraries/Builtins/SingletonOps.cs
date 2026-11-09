@@ -17,6 +17,7 @@ using System;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using System.Runtime.CompilerServices;
 
 namespace IronRuby.Builtins {
@@ -65,29 +66,38 @@ namespace IronRuby.Builtins {
 
         private static RubyModule/*!*/ SetVisibility(RubyScope/*!*/ scope, object/*!*/ self, string/*!*/[]/*!*/ methodNames, RubyMethodAttributes attributes) {
             Assert.NotNull(scope, self, methodNames);
-            RubyModule module;
 
             // MRI: Method is searched in the class of self (Object), not in the main singleton class.
             // IronRuby specific: If we are in a top-level scope with redirected method lookup module we use that module (hosted scopes).
-            var topScope = scope.Top.GlobalScope.TopLocalScope;
-            if (scope == topScope && topScope.MethodLookupModule != null) {
-                module = topScope.MethodLookupModule;
-            } else {
-                module = scope.RubyContext.GetClassOf(self);
-            }
+            RubyModule mirror;
+            RubyModule module = GetDefinitionModule(scope, self, out mirror);
             ModuleOps.SetMethodAttributes(scope, module, methodNames, attributes);
+
+            // ... and Object as well, where CRuby changes it, for each method Object has (issue 177); a singleton method of
+            // main (`def self.x') only main's singleton class has is changed there alone, as before
+            if (mirror != null && methodNames.Length > 0) {
+                var mirrored = Array.FindAll(methodNames,
+                    (name) => mirror.ResolveMethod(name, VisibilityContext.AllVisible).Found);
+                if (mirrored.Length > 0) {
+                    ModuleOps.SetMethodAttributes(scope, mirror, mirrored, attributes);
+                }
+            }
             return module;
         }
 
         /// <summary>
         /// The module a definition at the top level lands in: Object, or whatever a hosted scope
         /// redirects method lookup to. The same one `private' and `public' work on up there.
+        /// For the latter, <paramref name="mirror"/> is Object, which the definition goes to as
+        /// well, as a top-level `def' does there (RubyOps.GetHostedTopLevelMirror); null otherwise.
         /// </summary>
-        private static RubyModule/*!*/ GetDefinitionModule(RubyScope/*!*/ scope, object/*!*/ self) {
+        private static RubyModule/*!*/ GetDefinitionModule(RubyScope/*!*/ scope, object/*!*/ self, out RubyModule mirror) {
             var topScope = scope.Top.GlobalScope.TopLocalScope;
             if (scope == topScope && topScope.MethodLookupModule != null) {
+                mirror = scope.RubyContext.ObjectClass;
                 return topScope.MethodLookupModule;
             }
+            mirror = null;
             return scope.RubyContext.GetClassOf(self);
         }
 
@@ -101,36 +111,70 @@ namespace IronRuby.Builtins {
             return name;
         }
 
+        /// <summary>
+        /// main.define_method with a Method or UnboundMethod in a host's scope: what goes to Object besides main's singleton
+        /// class. The scope's copy of a top-level `def' there is Object's method, so Object gets the same method from its own
+        /// copy. A singleton method of main (`def self.x') is not one Object can take - CRuby raises TypeError for it - and is
+        /// defined in main's singleton class alone, as it was before.
+        /// </summary>
+        private static void DefineMirroredMethod(RubyScope/*!*/ scope, RubyModule/*!*/ module, RubyModule/*!*/ mirror,
+            string/*!*/ methodName, RubyMemberInfo/*!*/ info, string/*!*/ sourceName) {
+
+            if (info.DeclaringModule == module || info.DeclaringModule.IsSingletonClass) {
+                var objectInfo = mirror.ResolveMethod(sourceName, VisibilityContext.AllVisible).Info;
+                if (objectInfo == null || !objectInfo.IsEquivalentTo(info)) {
+                    return;
+                }
+                info = objectInfo;
+            }
+            ModuleOps.DefineMethod(scope, mirror, methodName, info, mirror, sourceName);
+            MakePublic(scope, mirror, scope.RubyContext.CreateSymbol(methodName, RubyEncoding.UTF8));
+        }
+
         [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
         public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block, object/*!*/ self,
             [DefaultProtocol, NotNull]string/*!*/ methodName) {
 
-            var module = GetDefinitionModule(scope, self);
-            return MakePublic(scope, module, ModuleOps.DefineMethod(scope, block, module, methodName));
+            return DefineMethod(scope, self, methodName, block.Proc);
         }
 
         [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
         public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, object/*!*/ self,
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]Proc/*!*/ method) {
 
-            var module = GetDefinitionModule(scope, self);
-            return MakePublic(scope, module, ModuleOps.DefineMethod(scope, module, methodName, method));
+            RubyModule mirror;
+            var module = GetDefinitionModule(scope, self, out mirror);
+            var result = MakePublic(scope, module, ModuleOps.DefineMethod(scope, module, methodName, method));
+            if (mirror != null) {
+                MakePublic(scope, mirror, ModuleOps.DefineMethod(scope, mirror, methodName, method));
+            }
+            return result;
         }
 
         [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
         public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, object/*!*/ self,
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
 
-            var module = GetDefinitionModule(scope, self);
-            return MakePublic(scope, module, ModuleOps.DefineMethod(scope, module, methodName, method));
+            RubyModule mirror;
+            var module = GetDefinitionModule(scope, self, out mirror);
+            var result = MakePublic(scope, module, ModuleOps.DefineMethod(scope, module, methodName, method));
+            if (mirror != null) {
+                DefineMirroredMethod(scope, module, mirror, methodName, method.Info, method.Name);
+            }
+            return result;
         }
 
         [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
         public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, object/*!*/ self,
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
 
-            var module = GetDefinitionModule(scope, self);
-            return MakePublic(scope, module, ModuleOps.DefineMethod(scope, module, methodName, method));
+            RubyModule mirror;
+            var module = GetDefinitionModule(scope, self, out mirror);
+            var result = MakePublic(scope, module, ModuleOps.DefineMethod(scope, module, methodName, method));
+            if (mirror != null) {
+                DefineMirroredMethod(scope, module, mirror, methodName, method.Info, method.Name);
+            }
+            return result;
         }
 
         /// <summary>
