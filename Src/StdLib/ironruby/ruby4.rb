@@ -8661,8 +8661,9 @@ class SignalException
     case signal
     when ::Integer
       # Any number below the platform's NSIG will do, listed or not ("SIG16"); NSIG is 65 on
-      # Linux and 23 for the Windows C runtime.
-      if signal < 0 || signal > (::File::ALT_SEPARATOR ? 23 : 65)
+      # Linux, 32 on macOS and 23 for the Windows C runtime.
+      nsig = ::File::ALT_SEPARATOR ? 23 : ::RUBY_PLATFORM.include?("darwin") ? 32 : 65
+      if signal < 0 || signal > nsig
         ::Kernel.raise(::ArgumentError, "invalid signal number (#{signal})")
       end
       name = ::Signal.list.key(signal) || signal

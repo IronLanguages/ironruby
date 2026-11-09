@@ -895,6 +895,7 @@ namespace IronRuby.Tests {
                 Process_KillSelfInterrupt1,
                 Signal_WindowsList1,
                 Signal_TrapEdges1,
+                Signal_TrapUnlisted1,
                 File_DriveLetters1,
                 Fiddle_AnsiSuffix1,
                 PackPointer_RealAddress1,
