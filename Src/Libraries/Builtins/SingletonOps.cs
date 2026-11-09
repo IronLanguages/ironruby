@@ -71,15 +71,26 @@ namespace IronRuby.Builtins {
             // IronRuby specific: If we are in a top-level scope with redirected method lookup module we use that module (hosted scopes).
             RubyModule mirror;
             RubyModule module = GetDefinitionModule(scope, self, out mirror);
-            ModuleOps.SetMethodAttributes(scope, module, methodNames, attributes);
+            if (mirror == null || methodNames.Length == 0) {
+                ModuleOps.SetMethodAttributes(scope, module, methodNames, attributes);
+                return module;
+            }
 
-            // ... and Object as well, where CRuby changes it, for each method Object has (issue 177); a singleton method of
-            // main (`def self.x') only main's singleton class has is changed there alone, as before
-            if (mirror != null && methodNames.Length > 0) {
-                var mirrored = Array.FindAll(methodNames,
-                    (name) => mirror.ResolveMethod(name, VisibilityContext.AllVisible).Found);
-                if (mirrored.Length > 0) {
-                    ModuleOps.SetMethodAttributes(scope, mirror, mirrored, attributes);
+            // ... and Object as well, where CRuby changes it (issue 177), name by name as CRuby does: each in the module
+            // that has it. A singleton method of main (`def self.x') only main's singleton class has is changed there
+            // alone, as before; CRuby's NameError, for Object, when neither has it.
+            foreach (var name in methodNames) {
+                var names = new[] { name };
+                bool inModule = module.ResolveMethod(name, VisibilityContext.AllVisible).Found;
+                bool inMirror = mirror.ResolveMethod(name, VisibilityContext.AllVisible).Found;
+                if (!inModule && !inMirror) {
+                    throw RubyExceptions.CreateUndefinedMethodError(mirror, name);
+                }
+                if (inMirror) {
+                    ModuleOps.SetMethodAttributes(mirror, names, attributes);
+                }
+                if (inModule) {
+                    ModuleOps.SetMethodAttributes(module, names, attributes);
                 }
             }
             return module;

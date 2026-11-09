@@ -264,6 +264,26 @@ false
             Engine.Execute("undef op2", scope2);
             Assert(Engine.Execute<int>("op2", scope1) == 1);
             AssertExceptionThrown<MemberAccessException>(() => Engine.Execute("Calc177.new.run", scope1));
+
+            // a method this scope `undef'ed that Object has again from another scope: CRuby has that one, so `alias' and
+            // `public' take it rather than raising NameError for main's singleton class
+            var scope3 = Engine.CreateScope();
+            var scope4 = Engine.CreateScope();
+            Engine.Execute("def e177 = 1; undef e177", scope3);
+            Engine.Execute("def e177 = 2", scope4);
+            AssertOutput(() => Engine.Execute(@"
+alias e177b e177
+public :e177
+p Object.public_method_defined?(:e177), Object.private_method_defined?(:e177b), 1.e177
+begin; private :pub, :nope; rescue NameError => e; p e.message; end
+p Object.private_method_defined?(:pub)
+", scope3), @"
+true
+true
+2
+""undefined method 'nope' for class 'Object'""
+true
+");
         }
 
         public void RubyHosting1E() {

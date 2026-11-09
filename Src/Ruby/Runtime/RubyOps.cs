@@ -1204,10 +1204,17 @@ namespace IronRuby.Runtime {
 
             // Object's alias is the one CRuby makes, and so is its NameError when neither has the method. One that only
             // main's singleton class has (`def self.x') is aliased there alone, as it was before.
+            // And main's singleton class leaves out a method it no longer has (`undef'ed there) that Object has from another
+            // scope: CRuby has that one and aliases it.
             RubyModule mirror = GetHostedTopLevelMirror(scope, owner, atTopLevel);
-            if (mirror != null && (mirror.ResolveMethod(oldName, VisibilityContext.AllVisible).Found
-                || !owner.ResolveMethod(oldName, VisibilityContext.AllVisible).Found)) {
-                mirror.AddMethodAlias(newName, oldName);
+            if (mirror != null) {
+                bool inOwner = owner.ResolveMethod(oldName, VisibilityContext.AllVisible).Found;
+                if (!inOwner || mirror.ResolveMethod(oldName, VisibilityContext.AllVisible).Found) {
+                    mirror.AddMethodAlias(newName, oldName);
+                }
+                if (!inOwner) {
+                    return;
+                }
             }
 
             owner.AddMethodAlias(newName, oldName);
