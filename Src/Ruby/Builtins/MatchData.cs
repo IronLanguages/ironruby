@@ -44,6 +44,9 @@ namespace IronRuby.Builtins {
         // #string answers the same frozen String every time it is called, so it is made once.
         private MutableString _frozenInput;
 
+        // Set by String#sub (see DetachString): #string answers a String copy of the subject.
+        private bool _detachedString;
+
         // GroupCount, worked out once per match: it is asked for by every group access, and
         // telling a hidden group from a Ruby one parses group names. Zero means not known yet
         // (there is always group 0).
@@ -54,7 +57,24 @@ namespace IronRuby.Builtins {
         public RubyRegex Regexp { get { return _regexp; } }
 
         public MutableString/*!*/ FrozenOriginalString {
-            get { return _frozenInput ?? (_frozenInput = _originalString.CreateFrozenSnapshot()); }
+            get {
+                return _frozenInput ?? (_frozenInput = _detachedString
+                    ? _originalString.CloneDerived().Freeze()
+                    : _originalString.CreateFrozenSnapshot());
+            }
+        }
+
+        /// <summary>
+        /// MRI's rb_str_sub matches on str_duplicate(rb_cString, str), not on the receiver, so its
+        /// $~.string is a String - for a String subclass too - and never the receiver itself, even
+        /// a frozen one. The copy is made when #string is first asked for: the subject held here
+        /// is frozen (a frozen receiver, or the frozen snapshot of a mutable one), so it cannot
+        /// differ by then.
+        /// </summary>
+        public void DetachString() {
+            Debug.Assert(_originalString.IsFrozen);
+            _detachedString = true;
+            _frozenInput = null;
         }
 
         /// <summary>
@@ -143,6 +163,7 @@ namespace IronRuby.Builtins {
             _pairedText = other._pairedText;
             _regexp = other._regexp;
             _frozenInput = other._frozenInput;
+            _detachedString = other._detachedString;
         }
 
         /// <summary>

@@ -2939,11 +2939,20 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // MRI's rb_str_sub runs sub! on str_duplicate(rb_cString, str), so the $~ that #sub leaves
+        // is for a String copy: of class String for a subclass receiver, and not the receiver itself
+        // when that is frozen. (A mutable plain String's match already holds a String snapshot.)
+        private static void DetachSubMatchString(MutableString/*!*/ input, MatchData/*!*/ match) {
+            if (input.IsFrozen || input.GetType() != typeof(MutableString)) {
+                match.DetachString();
+            }
+        }
+
         // returns true if block jumped
         // "result" will be null if there is no successful match
         private static bool BlockReplaceFirst(ConversionStorage<MutableString>/*!*/ tosConversion, 
             RubyScope/*!*/ scope, MutableString/*!*/ input, BlockParam/*!*/ block,
-            RubyRegex/*!*/ pattern, out object blockResult, out MutableString result) {
+            RubyRegex/*!*/ pattern, bool nonBang, out object blockResult, out MutableString result) {
 
             var matchScope = scope.GetInnerMostClosureScope();
             MatchData match = RegexpOps.Match(scope, pattern, input);
@@ -2952,6 +2961,9 @@ namespace IronRuby.Builtins {
                 blockResult = null;
                 matchScope.CurrentMatch = null;
                 return false;
+            }
+            if (nonBang) {
+                DetachSubMatchString(input, match);
             }
 
             // copy upfront so that no modifications to the input string are included in the result:
@@ -3196,11 +3208,15 @@ namespace IronRuby.Builtins {
         }
 
         private static MutableString ReplaceFirst(ConversionStorage<MutableString> toS, BinaryOpStorage hashDefault,
-            RubyScope/*!*/ scope, MutableString/*!*/ input, Union<IDictionary<object, object>, MutableString>/*!*/ replacement, RubyRegex/*!*/ pattern) {
+            RubyScope/*!*/ scope, MutableString/*!*/ input, Union<IDictionary<object, object>, MutableString>/*!*/ replacement, RubyRegex/*!*/ pattern,
+            bool nonBang) {
 
             MatchData match = RegexpOps.Match(scope, pattern, input);
             if (match == null) {
                 return null;
+            }
+            if (nonBang) {
+                DetachSubMatchString(input, match);
             }
 
             MutableString result = input.CreateDerived();
@@ -3249,7 +3265,7 @@ namespace IronRuby.Builtins {
 
             object blockResult;
             MutableString result;
-            return BlockReplaceFirst(tosConversion, scope, self, block, pattern, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
+            return BlockReplaceFirst(tosConversion, scope, self, block, pattern, true, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
         }
         
         [RubyMethod("gsub")]
@@ -3276,7 +3292,7 @@ namespace IronRuby.Builtins {
             // The same literal pattern the String forms without a block get from the Regexp conversion.
             var regex = RubyRegex.FromLiteralPattern(matchString);
 
-            return BlockReplaceFirst(tosConversion, scope, self, block, regex, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
+            return BlockReplaceFirst(tosConversion, scope, self, block, regex, true, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
         }
 
         [RubyMethod("gsub")]
@@ -3300,7 +3316,7 @@ namespace IronRuby.Builtins {
             ConversionStorage<MutableString>/*!*/ toStr, RubyScope/*!*/ scope, MutableString/*!*/ self,
             [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]object/*!*/ replacement) {
 
-            return ReplaceFirst(toS, hashDefault, scope, self, ToReplacement(toStr, replacement), pattern) ?? self.CloneDerived();
+            return ReplaceFirst(toS, hashDefault, scope, self, ToReplacement(toStr, replacement), pattern, true) ?? self.CloneDerived();
         }
 
         [RubyMethod("gsub")]
@@ -3329,7 +3345,7 @@ namespace IronRuby.Builtins {
             MutableString builder;
             if (replaceAll ?
                 BlockReplaceAll(tosConversion, scope, self, block, pattern, out blockResult, out builder) :
-                BlockReplaceFirst(tosConversion, scope, self, block, pattern, out blockResult, out builder)) {
+                BlockReplaceFirst(tosConversion, scope, self, block, pattern, false, out blockResult, out builder)) {
 
                 // block jumped:
                 return blockResult;
@@ -3355,7 +3371,7 @@ namespace IronRuby.Builtins {
             
             MutableString builder = replaceAll ?
                 ReplaceAll(toS, hashDefault, scope, self, replacement, pattern) :
-                ReplaceFirst(toS, hashDefault, scope, self, replacement, pattern);
+                ReplaceFirst(toS, hashDefault, scope, self, replacement, pattern, false);
             
             // unsuccessful match:
             if (builder == null) {

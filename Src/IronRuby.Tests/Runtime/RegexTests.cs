@@ -516,6 +516,50 @@ sub then $1: ""x"" """"
 sub nomatch: nil
 ");
         }
+
+        /// <summary>
+        /// $~.string keeps a String subclass's class and is a frozen receiver itself (rb_str_new_frozen),
+        /// except after String#sub: rb_str_sub matches on str_duplicate(rb_cString, str), so there it is
+        /// a String copy even for a subclass or a frozen receiver (#89). The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Regex_MatchStringClassAndIdentity1() {
+            TestOutput(@"
+class S < String; end
+def t(label, src, m) = puts([label, m.string.class, m.string.equal?(src), m.string.frozen?, m.string].inspect)
+s = S.new(""abc""); f = ""xyz"".freeze; fs = S.new(""xyz"").freeze; u = +""hello""
+s =~ /b/; t(:match_sub, s, $~)
+f =~ /y/; t(:match_frozen, f, $~)
+fs =~ /y/; t(:match_frozen_sub, fs, $~)
+u =~ /l/; t(:match_plain, u, $~)
+s.sub(/a/, ""q""); t(:sub, s, $~)
+f.sub(/x/, ""q""); t(:sub_frozen, f, $~)
+fs.sub(/x/) { ""q"" }; t(:sub_blk_frozen_sub, fs, $~)
+s.sub(/a/, ""a"" => ""q""); t(:sub_hash, s, $~)
+s.sub(""a"", ""q""); t(:sub_strpat, s, $~)
+u.sub(/l/, ""q""); t(:sub_plain, u, $~)
+s1 = S.new(""abc""); s1.sub!(/a/, ""q""); t(:sub_bang, s1, $~)
+s.gsub(/a/, ""q""); t(:gsub, s, $~)
+f.gsub(/x/, ""q""); t(:gsub_frozen, f, $~)
+f.scan(/./); t(:scan_frozen, f, $~)
+s2 = S.new(""abc""); m = s2.match(/b/); s2 << ""zz""; t(:mutated, s2, m)
+", @"
+[:match_sub, S, false, true, ""abc""]
+[:match_frozen, String, true, true, ""xyz""]
+[:match_frozen_sub, S, true, true, ""xyz""]
+[:match_plain, String, false, true, ""hello""]
+[:sub, String, false, true, ""abc""]
+[:sub_frozen, String, false, true, ""xyz""]
+[:sub_blk_frozen_sub, String, false, true, ""xyz""]
+[:sub_hash, String, false, true, ""abc""]
+[:sub_strpat, String, false, true, ""abc""]
+[:sub_plain, String, false, true, ""hello""]
+[:sub_bang, S, false, true, ""abc""]
+[:gsub, S, false, true, ""abc""]
+[:gsub_frozen, String, true, true, ""xyz""]
+[:scan_frozen, String, true, true, ""xyz""]
+[:mutated, S, false, true, ""abc""]
+");
+        }
     }
 }
 
