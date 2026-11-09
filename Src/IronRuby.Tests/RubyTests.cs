@@ -1160,6 +1160,8 @@ namespace IronRuby.Tests {
                 StringIO_IteratorNames1,
                 Backtrace9,
                 Backtrace_HostedLabels1,
+                Backtrace_HostedPathlessLines1,
+                Backtrace_HostedNoHostFrames1,
                 Backtrace_CompiledLines1,
                 Backtrace_CompiledLines2,
                 Backtrace_UnnamedLambdaFrame1,

@@ -4092,11 +4092,23 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// The document the code's line information is recorded against. A source without a path - the hosting API's
+        /// ScriptEngine.Execute(string), an interactive line - has no document of its own (SourceUnit.Document), and without one
+        /// the code got no line information at all: its frames were reported at the line of their method's `def' or at line 0
+        /// (issue 163). It is reported as "(eval)", the name its frames already carry (AstGenerator.SourcePath).
+        /// </summary>
+        private static MSA.SymbolDocumentInfo/*!*/ GetSourceDocument(SourceUnit/*!*/ sourceUnit) {
+            return sourceUnit.Document ?? MSA.Expression.SymbolDocument(
+                AstGenerator.PathlessSourceName, sourceUnit.LanguageContext.LanguageGuid, sourceUnit.LanguageContext.VendorGuid
+            );
+        }
+
         internal MSA.Expression<T>/*!*/ TransformTree<T>(SourceUnitTree/*!*/ ast, SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options) {
             var gen = new AstGenerator(
                 this,
                 options,
-                sourceUnit.Document,
+                GetSourceDocument(sourceUnit),
                 ast.Encoding,
                 sourceUnit.Kind == SourceCodeKind.InteractiveCode
             );

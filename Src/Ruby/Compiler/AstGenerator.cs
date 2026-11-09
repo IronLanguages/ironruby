@@ -127,10 +127,13 @@ namespace IronRuby.Compiler.Ast {
             }
         }
 
+        // The file name of code that has no path (see RubyContext.GetSourceDocument).
+        internal const string PathlessSourceName = "(eval)";
+
         public string SourcePath {
             get {
                 if (_document == null) {
-                    return "(eval)";
+                    return PathlessSourceName;
                 }
                 string path = _document.FileName;
                 RubyUtils.DecodeEvalLineOffset(ref path);

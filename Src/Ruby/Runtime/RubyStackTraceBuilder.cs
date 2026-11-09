@@ -46,6 +46,11 @@ namespace IronRuby.Runtime {
         // as a Ruby method.
         private bool _callSiteSinceLastLibrary;
         private readonly RubyContext/*!*/ _context;
+        // The number of frames of the trace up to and including the outermost one that is not a host's CLR frame, reported or
+        // skipped (see RubyTrace); -1 while there is none.
+        private int _rubyFrameEnd = -1;
+        // The frame TryGetStackFrameInfo has just read is a CLR method of no Ruby library (a "visible CLR frame").
+        private bool _isClrFrame;
         // TracePoint's c_call location needs the frame that really made the call, which inside a
         // core method written in Ruby is that method's own, not its caller's.
         private bool _keepInternalFrames;
@@ -408,8 +413,19 @@ namespace IronRuby.Runtime {
             return assembly.GetName().Name;
         }
 
+        /// <summary>
+        /// The trace, without the CLR frames below the outermost Ruby frame: the frames of the host that ran the Ruby code
+        /// (ScriptEngine.Execute's caller and its callers, issue 163). CRuby has nothing below the main script's frame, and
+        /// `ir' never showed any - its own frames are IronRuby's, which are never reported. A CLR method between Ruby frames,
+        /// one that called back into Ruby, is still reported, and -X:ExceptionDetail keeps every frame.
+        /// </summary>
         public RubyArray/*!*/ RubyTrace {
-            get { return _trace; }
+            get {
+                if (!_exceptionDetail && _rubyFrameEnd >= 0 && _rubyFrameEnd < _trace.Count) {
+                    _trace.RemoveRange(_rubyFrameEnd, _trace.Count - _rubyFrameEnd);
+                }
+                return _trace;
+            }
         }
 
         private const int NextFrameLine = Int32.MinValue;
@@ -430,6 +446,7 @@ namespace IronRuby.Runtime {
                 foreach (var frame in InterpretedFrame.GroupStackFrames(stackTrace)) {
                     string methodName, file;
                     int line;
+                    bool isClrFrame = false;
 
                     if (_interpretedFrames != null && _interpretedFrameIndex < _interpretedFrames.Count
                         && InterpretedFrame.IsInterpretedFrame(frame.GetMethod())) {
@@ -465,6 +482,7 @@ namespace IronRuby.Runtime {
                         skipCompiledCatchSite = false;
                         continue;
                     } else if (TryGetStackFrameInfo(frame, out methodName, out file, out line)) {
+                        isClrFrame = _isClrFrame;
                         // special case: the frame will be added with the next frame's source info:
                         if (line == NextFrameLine) {
                             // MRI gives a C function a frame when it is called as a method - by method dispatch,
@@ -508,6 +526,8 @@ namespace IronRuby.Runtime {
                             skipFrames--;
                             skippedAny = true;
                         }
+                        // a library method's frame, reported where its caller is
+                        _rubyFrameEnd = _trace.Count;
                     }
                     _deferredMethodNames.Clear();
                     _libraryRun = 0;
@@ -517,6 +537,9 @@ namespace IronRuby.Runtime {
                     } else {
                         skipFrames--;
                         skippedAny = true;
+                    }
+                    if (!isClrFrame) {
+                        _rubyFrameEnd = _trace.Count;
                     }
                 }
             }
@@ -653,6 +676,7 @@ namespace IronRuby.Runtime {
 
         private bool TryGetStackFrameInfo(StackFrame/*!*/ frame, out string/*!*/ methodName, out string/*!*/ fileName, out int line) {
             MethodBase method = frame.GetMethod();
+            _isClrFrame = false;
             methodName = method.Name;
 
             fileName = (_needsClrFileInfo) ? GetFileName(frame) : null;
@@ -693,6 +717,7 @@ namespace IronRuby.Runtime {
                     return true;
                 } else if (_exceptionDetail || IsVisibleClrFrame(method)) {
                     // Visible CLR method:
+                    _isClrFrame = true;
                     if (String.IsNullOrEmpty(fileName)) {
                         if (method.DeclaringType != null) {
                             fileName = (_needsClrFileInfo) ? GetAssemblyName(method.DeclaringType.Assembly) : null;
