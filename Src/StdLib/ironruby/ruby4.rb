@@ -883,16 +883,16 @@ module Enumerable
     private :__zip_source__
 
     # Whether obj's #each is a built-in one that runs no Ruby code of anyone else's, never
-    # raises and yields one value at a time: a Hash, a Struct, a Set, or a String or Integer
-    # Range. When it is, nothing can tell when its elements were read relative to the
-    # receiver's.
+    # raises and yields one value at a time: a Hash, a Struct, a Set, or an Integer Range
+    # (an argument one is indexed instead, see ZipIntegerRange__; this is for a receiver).
+    # When it is, nothing can tell when its elements were read relative to the receiver's.
+    # Not a String Range: MRI's walks it with a dynamically dispatched String#succ.
     def __zip_quiet_each__(obj)
       case obj
       when ::Hash then obj.method(:each).unbind == HASH_EACH__
       when ::Struct then obj.method(:each).unbind == STRUCT_EACH__
       when ::Range
-        __zip_builtin_range__(obj) && (::Integer === obj.begin ||
-          (::String === obj.begin && (obj.end.nil? || ::String === obj.end)))
+        __zip_builtin_range__(obj) && ::Integer === obj.begin && (obj.end.nil? || ::Integer === obj.end)
       else
         # Set is autoloaded, and its #each is the prelude's (which has no source location)
         # unless someone redefined it
