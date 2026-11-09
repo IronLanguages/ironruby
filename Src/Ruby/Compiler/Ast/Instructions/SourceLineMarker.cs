@@ -17,7 +17,10 @@
  * AstGenerator.AddDebugInfo puts after a sequence point) and leaves it, in a fault block when an exception
  * leaves it. RubyStackTraceBuilder matches the compiled frames of a CLR stack trace with these, by name.
  *
- * It costs about 2 ns per call of a compiled method or block (Release: 5-15% on call microbenchmarks).
+ * It costs a few ns per call of a compiled method or block (Release: up to ~10% on call microbenchmarks), as
+ * long as finding the thread's frames is not a thread-static read in the compiled code: in a DynamicMethod
+ * that is a call into the runtime, which made block and yield microbenchmarks 25-36% slower (#168). See
+ * PrecompiledFrames.Current.
  *
  * ***************************************************************************/
 

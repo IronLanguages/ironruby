@@ -459,6 +459,41 @@ end
         }
 
         /// <summary>
+        /// The main thread finds its compiled frames without a thread-static read (PrecompiledFrames.Current, #168): a
+        /// thread started from a compiled frame of the main thread keeps its own, and neither thread's lines show up in
+        /// the other's backtrace.
+        /// </summary>
+        public void Backtrace_CompiledLines3() {
+            TestOutput(@"
+def inner(x)
+  y = x
+  raise IOError, 'x' if y > 2
+end
+
+def outer
+  t = Thread.new do
+    begin
+      inner(3)
+    rescue IOError => e
+      e.backtrace.first(2).map { |f| f[/:(\d+)/, 1].to_i }
+    end
+  end
+  r = t.value
+  begin
+    inner(5)
+  rescue IOError => e
+    r + e.backtrace.first(2).map { |f| f[/:(\d+)/, 1].to_i }
+  end
+end
+
+2.times { p outer }
+", @"
+[4, 10, 4, 17]
+[4, 10, 4, 17]
+");
+        }
+
+        /// <summary>
         /// A lambda System.Linq.Expressions compiled without a name is no frame of Ruby code: a fiber's backtrace from
         /// code ir.sh had compiled (once hot) had a bogus "0:in 'lambda_methodNN'" under the fiber's block.
         /// </summary>

@@ -723,9 +723,35 @@ namespace IronRuby.Runtime.Precompiled {
             _interpreted = Microsoft.Scripting.Interpreter.InterpretedFrame.CurrentFrame.GetStorageInfo();
         }
 
-        public static PrecompiledFrames/*!*/ Current {
+        // The main thread's frames, once it has asked for them while StackLimit knew its stack. Every compiled method and
+        // block reads Current at entry (CompiledFrameExpression), and that code is a DynamicMethod, where a thread-static
+        // read is not the inline TLS access it is in an ordinary method but a call into the runtime: it made
+        // blk_call_in_method 36% and yield_0 25% slower than v4.0.3 (#168). An address in the main thread's stack, which
+        // no other thread's stack can share while the main thread lives, needs no lookup - StackLimit's trick.
+        private static PrecompiledFrames _main;
+
+        public static unsafe PrecompiledFrames/*!*/ Current {
             [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-            get { return _current ?? CreateCurrent(); }
+            get {
+                byte probe;
+                ulong sp = (ulong)&probe;
+                var main = _main;
+                if (main != null && sp - StackLimit._mainLow < StackLimit._mainSize) {
+                    return main;
+                }
+                return CurrentOffMain(sp);
+            }
+        }
+
+        // Not inlined: the thread-static read stays in this method, compiled ahead of time or by the tiered JIT, where it
+        // is cheap, and out of the DynamicMethods Current is inlined into.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static PrecompiledFrames/*!*/ CurrentOffMain(ulong sp) {
+            var result = _current ?? CreateCurrent();
+            if (_main == null && sp - StackLimit._mainLow < StackLimit._mainSize) {
+                _main = result;
+            }
+            return result;
         }
 
         private static PrecompiledFrames/*!*/ CreateCurrent() {
