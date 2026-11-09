@@ -826,10 +826,44 @@ namespace IronRuby.Runtime {
         private readonly Layout/*!*/ _layout;
         private readonly Encoding/*!*/ _table;
 
+        // Lead bytes the table reads as a character of their own rather than as the start of two
+        // bytes: .NET's EUC-KR (code page 51949) maps 0xAD-0xAF and 0xFE alone to private use
+        // characters, so 0xAD 0xAD, one unassigned character to Ruby, would decode as two (and
+        // the two would not encode back). A run holding such a byte is decoded sequence by
+        // sequence, and a sequence led by one has no character in the table.
+        private readonly bool[]/*!*/ _tableReadsAlone = new bool[256];
+        private readonly bool _anyTableReadsAlone;
+
         internal DoubleByteEncoding(int codepage, string/*!*/ name, Layout/*!*/ layout, int tableCodePage, bool throwOnError)
             : base(codepage, name, throwOnError) {
             _layout = layout;
             _table = Encoding.GetEncoding(tableCodePage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+            var single = new byte[1];
+            var chars = new char[4];
+            for (int b = 0x80; b < 0x100; b++) {
+                if (!layout.Lead[b]) {
+                    continue;
+                }
+                single[0] = (byte)b;
+                try {
+                    _tableReadsAlone[b] = _table.GetChars(single, 0, 1, chars, 0) > 0;
+                } catch (DecoderFallbackException) {
+                    // not a character by itself, as it should be
+                }
+                _anyTableReadsAlone |= _tableReadsAlone[b];
+            }
+        }
+
+        /// <summary>Whether the table can be trusted to read these well formed bytes as Ruby does.</summary>
+        private bool TableAgrees(byte[]/*!*/ bytes, int index, int count) {
+            if (_anyTableReadsAlone) {
+                for (int i = index, end = index + count; i < end; i++) {
+                    if (_tableReadsAlone[bytes[i]]) {
+                        return false;
+                    }
+                }
+            }
+            return true;
         }
 
         protected override int MaxSequenceLength {
@@ -840,7 +874,7 @@ namespace IronRuby.Runtime {
         // faster; the loop is for what it refuses (and for the lossless form's plane 15 stand-ins).
 
         public override int GetCharCount(byte[]/*!*/ bytes, int index, int count) {
-            if (FindInvalid(bytes, index, count) < 0) {
+            if (FindInvalid(bytes, index, count) < 0 && TableAgrees(bytes, index, count)) {
                 try {
                     return _table.GetCharCount(bytes, index, count);
                 } catch (DecoderFallbackException) {
@@ -851,7 +885,7 @@ namespace IronRuby.Runtime {
         }
 
         public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex) {
-            if (FindInvalid(bytes, byteIndex, byteCount) < 0) {
+            if (FindInvalid(bytes, byteIndex, byteCount) < 0 && TableAgrees(bytes, byteIndex, byteCount)) {
                 try {
                     return _table.GetChars(bytes, byteIndex, byteCount, chars, charIndex);
                 } catch (DecoderFallbackException) {
@@ -869,7 +903,7 @@ namespace IronRuby.Runtime {
             } catch (EncoderFallbackException) {
                 return null;
             }
-            return FindInvalid(result, 0, result.Length) < 0 ? result : null;
+            return FindInvalid(result, 0, result.Length) < 0 && TableAgrees(result, 0, result.Length) ? result : null;
         }
 
         public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
@@ -904,6 +938,10 @@ namespace IronRuby.Runtime {
             if (bytes[index] < 0x80) {
                 chars[charIndex] = (char)bytes[index];
                 return 1;
+            }
+            if (_tableReadsAlone[bytes[index]]) {
+                // the table would split the sequence in two
+                return -1;
             }
             try {
                 return _table.GetChars(bytes, index, length, chars, charIndex);

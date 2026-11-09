@@ -975,6 +975,7 @@ namespace IronRuby.Tests {
                 SyntaxError_Formatted1,
                 Digest_Incremental1,
                 Digest_NonStringResult1,
+                Encoding_EucKrTableGaps1,
                 Main_Initialize1,
                 Dir_NotADirectory1,
                 Dir_NotADirectorySymlinks1,

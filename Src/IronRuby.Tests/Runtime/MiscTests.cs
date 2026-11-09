@@ -4049,6 +4049,42 @@ to_str finish: [""01ff"", ""01ff"", ""01ff""]
         }
 
         /// <summary>
+        /// .NET's EUC-KR table (code page 51949) reads the lead bytes 0xAD-0xAF and 0xFE alone, as private
+        /// use characters, so 0xAD 0xAD - one unassigned character to Ruby - decoded as two that did not
+        /// encode back: #chars, #length and #inspect threw EncoderFallbackException, and transcoding dropped
+        /// the bytes. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Encoding_EucKrTableGaps1() {
+            TestOutput(@"
+require 'ruby4'
+require 'stringio'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}""; end; puts ""#{l}: #{v.inspect}""; end
+[""\xAD\xAD"", ""\xB0\xA1\xAD\xAE"", ""A\xFE\xFEB"", ""\xAF\xA1\xFF""].each do |raw|
+  s = raw.b.force_encoding(""EUC-KR"")
+  show(s.bytes.map { |b| ""%02X"" % b }.join) do
+    io = StringIO.new(s.dup)
+    getc = []
+    while (c = io.getc); getc << c.bytesize; end
+    [s.valid_encoding?, s.length, s.chars.map(&:bytesize), s.each_char.map(&:valid_encoding?), getc, s.scrub(""?"").bytes, s.reverse.bytes, s.inspect]
+  end
+end
+show(""transcode"") { ""\xAD\xAD"".force_encoding(""EUC-KR"").encode(""UTF-8"") }
+show(""transcode replace"") { ""\xB0\xA1\xAD\xAD"".force_encoding(""EUC-KR"").encode(""UTF-8"", undef: :replace) }
+show(""private use"") { """".encode(""EUC-KR"") }
+show(""hangul"") { ""가"".encode(""EUC-KR"").bytes }
+", @"
+ADAD: [true, 1, [2], [true], [2], [173, 173], [173, 173], ""\""\\x{ADAD}\""""]
+B0A1ADAE: [true, 2, [2, 2], [true, true], [2, 2], [176, 161, 173, 174], [173, 174, 176, 161], ""\""\\x{B0A1}\\x{ADAE}\""""]
+41FEFE42: [true, 3, [1, 2, 1], [true, true, true], [1, 2, 1], [65, 254, 254, 66], [66, 254, 254, 65], ""\""A\\x{FEFE}B\""""]
+AFA1FF: [false, 2, [2, 1], [true, false], [2, 1], [175, 161, 63], [255, 175, 161], ""\""\\x{AFA1}\\xFF\""""]
+transcode: ""Encoding::UndefinedConversionError""
+transcode replace: ""가�""
+private use: ""Encoding::UndefinedConversionError""
+hangul: [176, 161]
+");
+        }
+
+        /// <summary>
         /// main has no #initialize of its own - it is BasicObject's - so send(:initialize) answers nil
         /// where a stub used to throw NotImplementedException.
         /// </summary>
