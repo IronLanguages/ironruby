@@ -156,6 +156,7 @@ namespace IronRuby.Tests {
                 String_SuccSeparators1,
                 String_CountDeleteSqueeze1,
                 String_CountDeleteSqueeze2,
+                String_CountDeleteSqueeze3,
                 ToSConversion1,
                 ToSConversion2,
                 Symbols1,
@@ -170,6 +171,8 @@ namespace IronRuby.Tests {
                 File_AppendBytesToEnd1,
                 File_AppendBytesFromBuffer1,
                 Dir2,
+                Dir_GlobListing1,
+                Dir_GlobVirtualPal1,
                 
                 Regex1,
                 Regex2,
@@ -182,6 +185,8 @@ namespace IronRuby.Tests {
                 Regex_ByteEscapeComments1,
                 Regex_BackrefAfterBlockSub1,
                 Regex_MatchStringClassAndIdentity1,
+                Regex_SharedTranslation1,
+                Regex_SharedTranslation2,
                 
                 Scenario_RubyScopeParsing,
                 Scenario_RubyScopes1,

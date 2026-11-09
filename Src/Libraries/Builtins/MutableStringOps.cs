@@ -346,6 +346,14 @@ namespace IronRuby.Builtins {
             internal ulong Ascii0 { get { return _ascii0; } }
             internal ulong Ascii1 { get { return _ascii1; } }
 
+            // the largest character named, single or range end
+            private int _maxCharacter = -1;
+
+            /// <summary>No character above U+007F is selected.</summary>
+            internal bool SelectsOnlyAscii {
+                get { return !_negated && _maxCharacter < 128; }
+            }
+
             private void ComputeAsciiMask() {
                 ulong m0 = 0, m1 = 0;
                 foreach (int c in _singles) {
@@ -433,8 +441,10 @@ namespace IronRuby.Builtins {
                         }
                         result._rangeBounds.Add(first);
                         result._rangeBounds.Add(last);
+                        result._maxCharacter = Math.Max(result._maxCharacter, last);
                     } else {
                         result._singles.Add(first);
+                        result._maxCharacter = Math.Max(result._maxCharacter, first);
                     }
                 }
 
@@ -450,15 +460,32 @@ namespace IronRuby.Builtins {
             // the intersection of the selectors' ASCII masks, see CharacterSelector
             private readonly ulong _ascii0, _ascii1;
 
+            // Nothing above U+007F is selected, so a non-ASCII character needs no test.
+            private readonly bool _asciiOnly;
+
+            // The one character selected, when that is all the set is ("l"), else -1: the
+            // vectorized MemoryExtensions.Count counts it many characters at a time. (Deleting
+            // it by searching for each occurrence is slower than the plain loop when it is
+            // frequent, as "l" is in English text.)
+            private readonly int _single;
+
             private CharacterSelectorSet(CharacterSelector[]/*!*/ selectors) {
                 _selectors = selectors;
                 ulong m0 = UInt64.MaxValue, m1 = UInt64.MaxValue;
+                bool asciiOnly = false;
                 foreach (var selector in selectors) {
                     m0 &= selector.Ascii0;
                     m1 &= selector.Ascii1;
+                    asciiOnly |= selector.SelectsOnlyAscii;
                 }
                 _ascii0 = m0;
                 _ascii1 = m1;
+                _asciiOnly = asciiOnly;
+
+                _single = -1;
+                if (asciiOnly && BitOperations.PopCount(m0) + BitOperations.PopCount(m1) == 1) {
+                    _single = (m0 != 0) ? BitOperations.TrailingZeroCount(m0) : 64 + BitOperations.TrailingZeroCount(m1);
+                }
             }
 
             // Inlined into the callers' per-character loops (the loop for the rest would keep it
@@ -471,6 +498,8 @@ namespace IronRuby.Builtins {
                 return ContainsNonAscii(c);
             }
 
+            // kept out of the loops that call it, which it would otherwise crowd out of registers
+            [MethodImpl(MethodImplOptions.NoInlining)]
             private bool ContainsNonAscii(int c) {
                 for (int i = 0; i < _selectors.Length; i++) {
                     if (!_selectors[i].Contains(c)) {
@@ -480,51 +509,152 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
+            // From this many characters on, the loops look the ASCII characters up in a table of
+            // the masks' bits, built on first use: one load per character, about two thirds of the
+            // time of picking a mask and shifting it. Building it costs about as much as 200
+            // characters do, so a short string does without.
+            private const int TableThreshold = 256;
+
+            private byte[] _asciiTable;
+
+            private byte[]/*!*/ GetAsciiTable() {
+                byte[] table = _asciiTable;
+                if (table == null) {
+                    table = new byte[128];
+                    ulong m0 = _ascii0, m1 = _ascii1;
+                    for (int c = 0; c < 64; c++) {
+                        table[c] = (byte)((m0 >> c) & 1);
+                        table[c + 64] = (byte)((m1 >> c) & 1);
+                    }
+                    _asciiTable = table;
+                }
+                return table;
+            }
+
+            /// <summary>Whether the character with code <paramref name="c"/> is selected, as 0 or 1.</summary>
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal int Selected(int c) {
+                if ((uint)c < 128) {
+                    return (int)(((c < 64 ? _ascii0 : _ascii1) >> (c & 63)) & 1);
+                }
+                return (!_asciiOnly && ContainsNonAscii(c)) ? 1 : 0;
+            }
+
+            // Not inlined: inlined into its caller, a large method, the loop's index lived on the
+            // stack and each character waited for it to be stored and reloaded (about 3x slower).
+            [MethodImpl(MethodImplOptions.NoInlining)]
             public int Count(ReadOnlySpan<char> chars) {
+                if (_single >= 0) {
+                    return chars.Count((char)_single);
+                }
+                if (chars.Length >= TableThreshold) {
+                    byte[] table = GetAsciiTable();
+                    int hits = 0;
+                    foreach (char c in chars) {
+                        if (c < (uint)table.Length) {
+                            hits += table[c];
+                        } else if (!_asciiOnly && ContainsNonAscii(c)) {
+                            hits++;
+                        }
+                    }
+                    return hits;
+                }
                 ulong ascii0 = _ascii0, ascii1 = _ascii1;
                 int count = 0;
                 foreach (char c in chars) {
                     if (c < 128) {
                         count += (int)(((c < 64 ? ascii0 : ascii1) >> (c & 63)) & 1);
-                    } else if (ContainsNonAscii(c)) {
+                    } else if (!_asciiOnly && ContainsNonAscii(c)) {
                         count++;
                     }
                 }
                 return count;
             }
 
-            // The characters not selected, copied to kept; answers how many.
-            public int CopyUnselected(ReadOnlySpan<char> chars, char[]/*!*/ kept) {
-                ulong ascii0 = _ascii0, ascii1 = _ascii1;
-                int count = 0;
-                foreach (char c in chars) {
-                    bool selected = c < 128 ? (((c < 64 ? ascii0 : ascii1) >> (c & 63)) & 1) != 0 : ContainsNonAscii(c);
-                    if (!selected) {
-                        kept[count++] = c;
-                    }
-                }
-                return count;
-            }
-
-            public int CopyUnselected(ReadOnlySpan<byte> bytes, byte[]/*!*/ kept) {
-                ulong ascii0 = _ascii0, ascii1 = _ascii1;
-                int count = 0;
-                foreach (byte b in bytes) {
-                    bool selected = b < 128 ? (((b < 64 ? ascii0 : ascii1) >> (b & 63)) & 1) != 0 : ContainsNonAscii(b);
-                    if (!selected) {
-                        kept[count++] = b;
-                    }
-                }
-                return count;
-            }
-
+            [MethodImpl(MethodImplOptions.NoInlining)] // see Count(ReadOnlySpan<char>)
             public int Count(ReadOnlySpan<byte> bytes) {
+                if (_single >= 0) {
+                    return bytes.Count((byte)_single);
+                }
+                if (bytes.Length >= TableThreshold) {
+                    byte[] table = GetAsciiTable();
+                    int hits = 0;
+                    foreach (byte b in bytes) {
+                        if (b < (uint)table.Length) {
+                            hits += table[b];
+                        } else if (!_asciiOnly && ContainsNonAscii(b)) {
+                            hits++;
+                        }
+                    }
+                    return hits;
+                }
                 ulong ascii0 = _ascii0, ascii1 = _ascii1;
                 int count = 0;
                 foreach (byte b in bytes) {
                     if (b < 128) {
                         count += (int)(((b < 64 ? ascii0 : ascii1) >> (b & 63)) & 1);
-                    } else if (ContainsNonAscii(b)) {
+                    } else if (!_asciiOnly && ContainsNonAscii(b)) {
+                        count++;
+                    }
+                }
+                return count;
+            }
+
+            // The characters not selected, copied to kept (at least as long as chars); answers how many.
+            [MethodImpl(MethodImplOptions.NoInlining)] // see Count(ReadOnlySpan<char>)
+            public int CopyUnselected(ReadOnlySpan<char> chars, char[]/*!*/ kept) {
+                Debug.Assert(kept.Length >= chars.Length);
+                ref char dst = ref MemoryMarshal.GetArrayDataReference(kept);
+                int count = 0;
+                if (chars.Length >= TableThreshold) {
+                    byte[] table = GetAsciiTable();
+                    foreach (char c in chars) {
+                        Unsafe.Add(ref dst, count) = c;
+                        if (c < (uint)table.Length) {
+                            count += 1 - table[c];
+                        } else if (_asciiOnly || !ContainsNonAscii(c)) {
+                            count++;
+                        }
+                    }
+                    return count;
+                }
+                ulong ascii0 = _ascii0, ascii1 = _ascii1;
+                foreach (char c in chars) {
+                    // stored unconditionally and kept by advancing past it: no branch to mispredict
+                    // (count never passes the index of c, so the store stays inside kept)
+                    Unsafe.Add(ref dst, count) = c;
+                    if (c < 128) {
+                        count += 1 - (int)(((c < 64 ? ascii0 : ascii1) >> (c & 63)) & 1);
+                    } else if (_asciiOnly || !ContainsNonAscii(c)) {
+                        count++;
+                    }
+                }
+                return count;
+            }
+
+            [MethodImpl(MethodImplOptions.NoInlining)] // see Count(ReadOnlySpan<char>)
+            public int CopyUnselected(ReadOnlySpan<byte> bytes, byte[]/*!*/ kept) {
+                Debug.Assert(kept.Length >= bytes.Length);
+                ref byte dst = ref MemoryMarshal.GetArrayDataReference(kept);
+                int count = 0;
+                if (bytes.Length >= TableThreshold) {
+                    byte[] table = GetAsciiTable();
+                    foreach (byte b in bytes) {
+                        Unsafe.Add(ref dst, count) = b;
+                        if (b < (uint)table.Length) {
+                            count += 1 - table[b];
+                        } else if (_asciiOnly || !ContainsNonAscii(b)) {
+                            count++;
+                        }
+                    }
+                    return count;
+                }
+                ulong ascii0 = _ascii0, ascii1 = _ascii1;
+                foreach (byte b in bytes) {
+                    Unsafe.Add(ref dst, count) = b;
+                    if (b < 128) {
+                        count += 1 - (int)(((b < 64 ? ascii0 : ascii1) >> (b & 63)) & 1);
+                    } else if (_asciiOnly || !ContainsNonAscii(b)) {
                         count++;
                     }
                 }
@@ -4898,14 +5028,7 @@ namespace IronRuby.Builtins {
                         return null;
                     }
                     char[] kept = new char[chars.Length];
-                    chars.Slice(0, first).CopyTo(kept);
-                    int count = first;
-                    for (int i = first; i < chars.Length; i++) {
-                        char c = chars[i];
-                        if (c != kept[count - 1] || (map != null && !map.Contains(c))) {
-                            kept[count++] = c;
-                        }
-                    }
+                    int count = CopySqueezed(chars, first, map, kept);
                     squeezed = str.CreateDerived(kept, count);
                 } else {
                     int first = FirstSqueezed(bytes, map);
@@ -4913,14 +5036,7 @@ namespace IronRuby.Builtins {
                         return null;
                     }
                     byte[] kept = new byte[bytes.Length];
-                    bytes.Slice(0, first).CopyTo(kept);
-                    int count = first;
-                    for (int i = first; i < bytes.Length; i++) {
-                        byte b = bytes[i];
-                        if (b != kept[count - 1] || (map != null && !map.Contains(b))) {
-                            kept[count++] = b;
-                        }
-                    }
+                    int count = CopySqueezed(bytes, first, map, kept);
                     squeezed = str.CreateDerived(kept, count);
                 }
             }
@@ -4933,7 +5049,75 @@ namespace IronRuby.Builtins {
             return str;
         }
 
+        /// <summary>
+        /// Copies <paramref name="chars"/> to <paramref name="kept"/> (at least as long) less each
+        /// character that repeats the one before it and is selected (all are when
+        /// <paramref name="map"/> is null); <paramref name="first"/> is the first one dropped.
+        /// Answers how many are kept. Not inlined - see CharacterSelectorSet.Count.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static int CopySqueezed(ReadOnlySpan<char> chars, int first, CharacterSelectorSet map, char[]/*!*/ kept) {
+            Debug.Assert(first > 0 && kept.Length >= chars.Length);
+            chars.Slice(0, first).CopyTo(kept);
+            int count = first;
+            ref char dst = ref MemoryMarshal.GetArrayDataReference(kept);
+            char previous = chars[first - 1];
+            // Each character is stored, then kept by moving past it unless it is dropped: no
+            // branch to mispredict (count never passes i, so the store stays inside kept). A
+            // repeat that is kept equals the one it repeats, so the one before the next is c.
+            if (map == null) {
+                for (int i = first; i < chars.Length; i++) {
+                    char c = chars[i];
+                    Unsafe.Add(ref dst, count) = c;
+                    count += (c != previous) ? 1 : 0;
+                    previous = c;
+                }
+            } else {
+                for (int i = first; i < chars.Length; i++) {
+                    char c = chars[i];
+                    Unsafe.Add(ref dst, count) = c;
+                    if (c == previous) {
+                        count += 1 - map.Selected(c);
+                    } else {
+                        count++;
+                    }
+                    previous = c;
+                }
+            }
+            return count;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static int CopySqueezed(ReadOnlySpan<byte> bytes, int first, CharacterSelectorSet map, byte[]/*!*/ kept) {
+            Debug.Assert(first > 0 && kept.Length >= bytes.Length);
+            bytes.Slice(0, first).CopyTo(kept);
+            int count = first;
+            ref byte dst = ref MemoryMarshal.GetArrayDataReference(kept);
+            byte previous = bytes[first - 1];
+            if (map == null) {
+                for (int i = first; i < bytes.Length; i++) {
+                    byte b = bytes[i];
+                    Unsafe.Add(ref dst, count) = b;
+                    count += (b != previous) ? 1 : 0;
+                    previous = b;
+                }
+            } else {
+                for (int i = first; i < bytes.Length; i++) {
+                    byte b = bytes[i];
+                    Unsafe.Add(ref dst, count) = b;
+                    if (b == previous) {
+                        count += 1 - map.Selected(b);
+                    } else {
+                        count++;
+                    }
+                    previous = b;
+                }
+            }
+            return count;
+        }
+
         // The index of the first character squeezed out, or -1 when there is none.
+        [MethodImpl(MethodImplOptions.NoInlining)] // see CharacterSelectorSet.Count
         private static int FirstSqueezed(ReadOnlySpan<char> chars, CharacterSelectorSet map) {
             for (int i = 1; i < chars.Length; i++) {
                 if (chars[i] == chars[i - 1] && (map == null || map.Contains(chars[i]))) {
@@ -4943,6 +5127,7 @@ namespace IronRuby.Builtins {
             return -1;
         }
 
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private static int FirstSqueezed(ReadOnlySpan<byte> bytes, CharacterSelectorSet map) {
             for (int i = 1; i < bytes.Length; i++) {
                 if (bytes[i] == bytes[i - 1] && (map == null || map.Contains(bytes[i]))) {

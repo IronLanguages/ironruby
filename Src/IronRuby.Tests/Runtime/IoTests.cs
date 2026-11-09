@@ -366,5 +366,113 @@ end
 
             pal.Entries.Clear();
         }
+
+        /// <summary>
+        /// Dir.glob reads each entry's type from the directory listing rather than asking the file
+        /// system about every match again (#89). Dangling links, links to files and to directories
+        /// are reported as before; the expected output is CRuby 4.0's.
+        /// </summary>
+        public void Dir_GlobListing1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require ""ruby4""
+require ""tmpdir""
+dir = Dir.mktmpdir
+begin
+  Dir.chdir(dir) do
+    Dir.mkdir(""a""); Dir.mkdir(""a/sub""); Dir.mkdir(""b"")
+    %w[a/x.rb a/y.txt a/sub/z.rb b/w.rb .hidden].each { File.write(it, """") }
+    File.symlink(""nowhere"", ""a/dangling.rb"")
+    File.symlink(""../b"", ""a/blink"")
+    File.symlink(""x.rb"", ""a/flink.rb"")
+    p Dir[""a/*""]
+    p Dir[""a/*.rb""]
+    p Dir[""a/*/""]
+    p Dir[""a/*/*""]
+    p Dir[""*/*.rb""]
+    p Dir[""**/*.rb""].sort
+    p Dir[""**/""]
+    p Dir[""**/*""].sort
+    p Dir[""a/**/*.rb""].sort
+    p Dir[""a/dangling.rb""], Dir[""a/dangling.rb/""], Dir[""a/x.rb/""], Dir[""a/x.rb/*""]
+    p Dir[""{b,a}/*.rb""]
+    p Dir.glob(""*"", File::FNM_DOTMATCH).sort
+    p Dir.glob(""*.rb"", base: ""a""), Dir.glob(""**/*.rb"", base: ""a"").sort, Dir.glob(""*/"", base: ""a"")
+    p Dir.glob(""a/*"", sort: false).sort == Dir.glob(""a/*"")
+    p Dir[""nonexistent/*""], Dir[""a/nonexistent/*""]
+  end
+ensure
+  require 'fileutils'
+  FileUtils.rm_rf(dir)
+end
+", @"
+[""a/blink"", ""a/dangling.rb"", ""a/flink.rb"", ""a/sub"", ""a/x.rb"", ""a/y.txt""]
+[""a/dangling.rb"", ""a/flink.rb"", ""a/x.rb""]
+[""a/blink/"", ""a/sub/""]
+[""a/blink/w.rb"", ""a/sub/z.rb""]
+[""a/dangling.rb"", ""a/flink.rb"", ""a/x.rb"", ""b/w.rb""]
+[""a/dangling.rb"", ""a/flink.rb"", ""a/sub/z.rb"", ""a/x.rb"", ""b/w.rb""]
+[""a/"", ""a/sub/"", ""b/""]
+[""a"", ""a/blink"", ""a/dangling.rb"", ""a/flink.rb"", ""a/sub"", ""a/sub/z.rb"", ""a/x.rb"", ""a/y.txt"", ""b"", ""b/w.rb""]
+[""a/dangling.rb"", ""a/flink.rb"", ""a/sub/z.rb"", ""a/x.rb""]
+[""a/dangling.rb""]
+[]
+[]
+[]
+[""b/w.rb"", ""a/dangling.rb"", ""a/flink.rb"", ""a/x.rb""]
+[""."", "".hidden"", ""a"", ""b""]
+[""dangling.rb"", ""flink.rb"", ""x.rb""]
+[""dangling.rb"", ""flink.rb"", ""sub/z.rb"", ""x.rb""]
+[""blink/"", ""sub/""]
+true
+[]
+[]
+");
+        }
+
+        /// <summary>A file system of its own: a host's PAL that globbing must ask, not bypass.</summary>
+        public class GlobPal1 : PlatformAdaptationLayer {
+            public readonly Dictionary<string, bool> Entries = new Dictionary<string, bool> {
+                { "./a", true }, { "./a/x.rb", false }, { "./a/sub", true }, { "./a/sub/y.rb", false }, { "./b.rb", false },
+            };
+
+            public override string[] GetFileSystemEntries(string path, string searchPattern, bool includeFiles, bool includeDirectories) {
+                var result = new List<string>();
+                string prefix = path.EndsWith("/") ? path : path + "/";
+                foreach (var entry in Entries.Keys) {
+                    if (entry.StartsWith(prefix) && entry.IndexOf('/', prefix.Length) < 0) {
+                        result.Add(entry);
+                    }
+                }
+                // listed, but the PAL says it does not exist
+                if (path == ".") {
+                    result.Add("./ghost.rb");
+                }
+                return result.ToArray();
+            }
+
+            public override bool DirectoryExists(string path) {
+                path = path.Length > 1 ? path.TrimEnd('/') : path;
+                return path == "." || Entries.TryGetValue(path, out bool isDir) && isDir;
+            }
+
+            public override bool FileExists(string path) {
+                return Entries.TryGetValue(path, out bool isDir) && !isDir;
+            }
+        }
+
+        public void Dir_GlobVirtualPal1() {
+            var pal = new GlobPal1();
+            Func<string, string> glob = pattern => String.Join(",", Glob.GetMatches(pal, pattern, 0));
+            Assert(glob("*") == "a,b.rb");
+            Assert(glob("*.rb") == "b.rb");
+            Assert(glob("*/") == "a/");
+            Assert(glob("a/*") == "a/sub,a/x.rb");
+            Assert(glob("**/*.rb") == "b.rb,a/x.rb,a/sub/y.rb");
+            Assert(glob("a/sub/y.rb") == "a/sub/y.rb");
+            Assert(glob("a/nothing.rb") == "");
+        }
     }
 }
