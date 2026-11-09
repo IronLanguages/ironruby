@@ -469,7 +469,11 @@ namespace IronRuby.Builtins {
             Regex cached = _cachedRegex;
             if (cached != null && timeout == _cachedTimeout) {
                 if (countUse && (cached.Options & RegexOptions.Compiled) == 0 && ++_cachedRegexUses >= CompileThreshold) {
+                    Regex interpreted = cached;
                     _cachedRegex = cached = TierUp(cached);
+                    if (cached != interpreted) {
+                        SharedRegex.Promote(GetClrPatternSource(), _options, interpreted, cached);
+                    }
                 }
                 return cached;
             }
@@ -477,16 +481,96 @@ namespace IronRuby.Builtins {
             string pattern = GetClrPatternSource();
 
             Regex result;
-            try {
-                result = new Regex(RegexpTransformer.Transform(pattern, _options, out _hasGAnchor), ToClrOptions(_options), timeout);
-            } catch (Exception e) {
-                throw new RegexpError(e.Message);
+            SharedRegex shared = SharedRegex.Find(pattern, _options, timeout);
+            if (shared != null) {
+                result = shared.Regex;
+                _hasGAnchor = shared.HasGAnchor;
+            } else {
+                try {
+                    result = new Regex(RegexpTransformer.Transform(pattern, _options, out _hasGAnchor), ToClrOptions(_options), timeout);
+                } catch (Exception e) {
+                    throw new RegexpError(e.Message);
+                }
+                SharedRegex.Add(pattern, _options, timeout, result, _hasGAnchor);
             }
 
             _cachedTimeout = timeout;
             _cachedRegexUses = 0;
             _cachedRegex = result;
             return result;
+        }
+
+        /// <summary>
+        /// The CLR regexes of the patterns made last, by pattern, shared by every Regexp with the
+        /// same pattern, options and timeout. Translating a pattern and having .NET parse the
+        /// result is most of what Regexp.new costs, and an interpolated literal (/#{x}/) makes a
+        /// new Regexp - usually of a pattern it has made before - every time it runs.
+        ///
+        /// A CLR Regex is immutable and safe to share between threads. Each Regexp still counts
+        /// its own uses towards being compiled (TierUp); once one has been, the compiled regex
+        /// replaces the interpreted one here, so the Regexps made after it start out compiled.
+        /// Failures are not cached: a bad pattern is translated, and raises, every time.
+        /// </summary>
+        private sealed class SharedRegex {
+            private readonly RubyRegexOptions _options;
+            private readonly TimeSpan _timeout;
+            // Another entry for the same pattern under other options or another timeout.
+            private SharedRegex _next;
+            internal Regex Regex;
+            internal readonly bool HasGAnchor;
+
+            // Not the static Regex cache (its key is a struct type - see Glob's matcher cache - and
+            // it holds the CLR pattern, not ours).
+            private static readonly Dictionary<string, SharedRegex>/*!*/ _entries = new Dictionary<string, SharedRegex>();
+            private const int CacheSize = 256;
+
+            private SharedRegex(RubyRegexOptions options, TimeSpan timeout, Regex/*!*/ regex, bool hasGAnchor) {
+                _options = options;
+                _timeout = timeout;
+                Regex = regex;
+                HasGAnchor = hasGAnchor;
+            }
+
+            internal static SharedRegex Find(string/*!*/ pattern, RubyRegexOptions options, TimeSpan timeout) {
+                lock (_entries) {
+                    SharedRegex entry;
+                    if (_entries.TryGetValue(pattern, out entry)) {
+                        for (; entry != null; entry = entry._next) {
+                            if (entry._options == options && entry._timeout == timeout) {
+                                return entry;
+                            }
+                        }
+                    }
+                }
+                return null;
+            }
+
+            internal static void Add(string/*!*/ pattern, RubyRegexOptions options, TimeSpan timeout, Regex/*!*/ regex, bool hasGAnchor) {
+                var entry = new SharedRegex(options, timeout, regex, hasGAnchor);
+                lock (_entries) {
+                    if (_entries.Count >= CacheSize) {
+                        _entries.Clear();
+                    }
+                    SharedRegex existing;
+                    entry._next = _entries.TryGetValue(pattern, out existing) ? existing : null;
+                    _entries[pattern] = entry;
+                }
+            }
+
+            /// <summary>Puts the compiled form of <paramref name="interpreted"/> in its place.</summary>
+            internal static void Promote(string/*!*/ pattern, RubyRegexOptions options, Regex/*!*/ interpreted, Regex/*!*/ compiled) {
+                lock (_entries) {
+                    SharedRegex entry;
+                    if (_entries.TryGetValue(pattern, out entry)) {
+                        for (; entry != null; entry = entry._next) {
+                            if (entry._options == options && entry.Regex == interpreted) {
+                                entry.Regex = compiled;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         /// <summary>

@@ -560,6 +560,66 @@ s2 = S.new(""abc""); m = s2.match(/b/); s2 << ""zz""; t(:mutated, s2, m)
 [:mutated, S, false, true, ""abc""]
 ");
         }
+
+        /// <summary>
+        /// Regexps of the same pattern, options and timeout share the translated CLR regex (#89):
+        /// errors are still raised every time, \G and named groups still work, and each Regexp
+        /// still counts its own way up to being compiled. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Regex_SharedTranslation1() {
+            TestOutput(@"
+r = (1..3).map { Regexp.new(""(?<w>\\w+)@(\\w+)"") }
+p [r.map(&:names).uniq, r.map { ""joe@ex"" =~ it }, r[0] == r[2], r[0].equal?(r[1])]
+p [Regexp.new(""ab"", Regexp::IGNORECASE) =~ ""xAB"", Regexp.new(""ab"") =~ ""xAB"", Regexp.new(""a.c"", Regexp::MULTILINE) =~ ""a\nc"", Regexp.new(""a.c"") =~ ""a\nc""]
+g = Regexp.new(""\\Gab""); h = Regexp.new(""\\Gab"")
+p [""xab"".index(g, 1), ""xab"".index(h, 0), ""abab"".scan(h), ""xabab"".scan(g)]
+3.times { p((Regexp.new(""a(b"") rescue $!.class)) }
+t1 = Regexp.new(""a+"", timeout: 1.5); t2 = Regexp.new(""a+"")
+p [t1.timeout, t2.timeout, ""baa""[t1], ""baa""[t2]]
+x = ""ab""
+p (0...9000).map { |i| ""zab#{i % 3}"" =~ /#{x}#{i % 3}/ }.uniq
+p (1..5).map { |i| /(#{i})-(?<n>x)?/.names }
+src = ""(\\w+)@(\\w+)\\.com""
+12000.times { ""joe@example.com"" =~ Regexp.new(src) }
+hot = Regexp.new(src)
+12000.times { ""joe@example.com"" =~ hot }
+p [""a joe@example.com b"".match(Regexp.new(src)).captures, $~.begin(0), ""no"" =~ Regexp.new(src)]
+", @"
+[[[""w""]], [0, 0, 0], true, false]
+[1, nil, 0, nil]
+[1, nil, [""ab"", ""ab""], []]
+RegexpError
+RegexpError
+RegexpError
+[1.5, nil, ""aa"", ""aa""]
+[1]
+[[""n""], [""n""], [""n""], [""n""], [""n""]]
+[[""joe"", ""example""], 2, nil]
+");
+        }
+
+        public void Regex_SharedTranslation2() {
+            var field = typeof(RubyRegex).GetField("_cachedRegex", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var pattern = "shared(tr)+anslation2";
+            var a = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.NONE);
+            var b = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.NONE);
+            var c = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.IgnoreCase);
+            Assert(field.GetValue(a) != null && field.GetValue(a) == field.GetValue(b));
+            Assert(field.GetValue(a) != field.GetValue(c));
+
+            // a tiers up on its own uses; b, which already has its regex, is not affected, and a
+            // Regexp made afterwards starts with the compiled one
+            var input = MutableString.CreateAscii("x sharedtrtranslation2 y");
+            for (int i = 0; i < 10001; i++) {
+                Assert(a.Match(input) != null);
+            }
+            var compiled = (Regex)field.GetValue(a);
+            Assert((compiled.Options & RegexOptions.Compiled) != 0);
+            Assert(field.GetValue(b) != compiled);
+            var d = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.NONE);
+            Assert(field.GetValue(d) == compiled);
+            Assert(d.Match(input).GetGroupStart(1) == 10); // the last "tr"
+        }
     }
 }
 

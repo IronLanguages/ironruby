@@ -184,6 +184,8 @@ namespace IronRuby.Tests {
                 Regex_ByteEscapeComments1,
                 Regex_BackrefAfterBlockSub1,
                 Regex_MatchStringClassAndIdentity1,
+                Regex_SharedTranslation1,
+                Regex_SharedTranslation2,
                 
                 Scenario_RubyScopeParsing,
                 Scenario_RubyScopes1,
