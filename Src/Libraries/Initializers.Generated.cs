@@ -8149,6 +8149,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.InternFrozen)
             );
             
+            DefineLibraryMethod(module, "__ir_scrub_runs__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MutableStringOps.GetScrubRuns)
+            );
+            
             DefineLibraryMethod(module, "__locktmp__", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.LockTemporarily)

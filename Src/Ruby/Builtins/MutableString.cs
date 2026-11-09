@@ -975,6 +975,18 @@ namespace IronRuby.Builtins {
             return this;
         }
 
+        /// <summary>
+        /// The runs of bytes String#scrub replaces, as offset and length pairs, for a multibyte
+        /// encoding other than the Unicode ones; null for any other encoding.
+        /// </summary>
+        public List<int> GetScrubRuns() {
+            if (_encoding.IsDummy || _encoding == RubyEncoding.Binary) {
+                return null;
+            }
+            byte[] bytes = ToByteArray();
+            return RubyOnlyEncodings.FindScrubRuns(_encoding.StrictEncoding, bytes, bytes.Length);
+        }
+
         public bool ContainsInvalidCharacters() {
             // Nothing is invalid in a dummy encoding, which says nothing about its bytes.
             if (_encoding.IsDummy || _encoding == RubyEncoding.Binary) {

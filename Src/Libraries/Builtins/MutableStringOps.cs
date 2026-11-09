@@ -1708,6 +1708,21 @@ namespace IronRuby.Builtins {
             return RubyOps.InternFrozenString(self.IsFrozen ? self : self.Clone());
         }
 
+        // String#scrub (ruby4.rb): the runs of bytes to replace, as a flat array of offset and
+        // length pairs, or nil where ruby4.rb works them out itself (see MutableString.GetScrubRuns).
+        [RubyMethod("__ir_scrub_runs__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray GetScrubRuns(MutableString/*!*/ self) {
+            var runs = self.GetScrubRuns();
+            if (runs == null) {
+                return null;
+            }
+            var result = new RubyArray(runs.Count);
+            foreach (int value in runs) {
+                result.Add(ScriptingRuntimeHelpers.Int32ToObject(value));
+            }
+            return result;
+        }
+
         /// <summary>
         /// #casecmp folds a-z/A-Z and nothing else - it is not the Unicode comparison #casecmp?
         /// is. Confirmed against CRuby 4.0.6: "ä".casecmp("Ä") is 1, and "ss".casecmp("ß") is -1.

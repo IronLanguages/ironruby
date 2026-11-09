@@ -3519,6 +3519,20 @@ class String
     __ir_check_scrub_replacement__(replacement) if replacement
     out = +""
     out.force_encoding(encoding) if out.respond_to?(:force_encoding)
+    # The other multibyte encodings (EUC-JP, GB18030, Big5, ...) get the runs of bytes to
+    # replace from C#, which finds them in the bytes the way MRI does: in GB18030 "\xA1\x39"
+    # is one run although "\x39" alone is a valid character (see MutableString.GetScrubRuns).
+    runs = __ir_scrub_runs__
+    if runs
+      pos = 0
+      runs.each_slice(2) do |offset, length|
+        out << byteslice(pos, offset - pos) if offset > pos
+        out << (block ? __ir_check_scrub_replacement__(__ir_scrub_replacement__(block.call(byteslice(offset, length)))) : (replacement || default))
+        pos = offset + length
+      end
+      out << byteslice(pos, bytesize - pos) if pos < bytesize
+      return out
+    end
     # A run of bad bytes that is the start of a character which simply ran out of input -
     # a truncated one at the end of the string - is one replacement, not one per byte, so
     # the bad characters are collected before being handed over.
