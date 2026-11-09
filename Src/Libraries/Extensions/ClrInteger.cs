@@ -216,15 +216,127 @@ namespace IronRuby.Builtins {
         /// </example>
         /// <returns>indexth bit in the (assumed) binary representation of self, where self[0] is the least significant bit.</returns>
         /// <remarks>Since representation is supposed to be 2s complement, we return always 1 if self is negative and index is greater than most signifcant bit in BigInteger</remarks>
+        // Integer#[] (MRI's int_aref) answers here an Integer bit index, and a Fixnum index and length on a Fixnum.
+        // Every other form - a Range, a Float or #to_int index, a length that needs converting - goes to the prelude's
+        // port of int_aref1 and int_aref2 (__ir_int_aref1__, __ir_int_aref2__ in ruby4.rb). The whole method had been a
+        // Ruby `def [](index, length = nil)' in front of this, which cost ~0.3 us on every bit read.
         [RubyMethod("[]")]
-        public static int Bit(int self, [DefaultProtocol]int index) {
+        public static int Bit(int self, int index) {
             if (index < 0) {
                 return 0;
             }
-            if (index > 32) {
+            // a C# shift count is taken mod 32, so 5[32] read bit 0
+            if (index > 31) {
                 return self < 0 ? 1 : 0;
             }
             return (self & (1 << index)) != 0 ? 1 : 0;
+        }
+
+        /// <summary>
+        /// self[offset, size] for a Fixnum and Fixnums: int_aref2's (self &gt;&gt; offset) &amp; ((1 &lt;&lt; size) - 1).
+        /// A negative size masks nothing, as (1 &lt;&lt; size) - 1 is -1 there; a size of 0 masks everything.
+        /// </summary>
+        [RubyMethod("[]")]
+        public static object/*!*/ Bits(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow, int self, int offset, int size) {
+            long shifted;
+            if (offset >= 0) {
+                shifted = (offset > 62) ? (self < 0 ? -1 : 0) : (long)self >> offset;
+            } else if (offset >= -32) {
+                // |self| < 2**31, so a shift by at most 32 stays inside a long
+                shifted = (long)self << -offset;
+            } else {
+                return BitsSlow(slow, self, offset, size);
+            }
+
+            if (size < 0) {
+                return Narrow(shifted);
+            }
+            if (size < 63) {
+                return Narrow(shifted & ((1L << size) - 1));
+            }
+            // 63 or more ones: all of a non-negative value, and 2**size + shifted of a negative one
+            return (shifted >= 0) ? Narrow(shifted) : Protocols.Normalize((BigInteger.One << size) + shifted);
+        }
+
+        // the same on a Bignum: its bits are BigInteger's two's complement ones
+        [RubyMethod("[]")]
+        public static object/*!*/ Bits(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow, BigInteger/*!*/ self,
+            int offset, int size) {
+            if (offset == Int32.MinValue) {
+                return BitsSlow(slow, self, offset, size);
+            }
+            if (size == 0) {
+                return ScriptingRuntimeHelpers.Int32ToObject(0);
+            }
+            BigInteger shifted = (offset >= 0) ? self >> offset : self << -offset;
+            return Protocols.Normalize((size < 0) ? shifted : shifted & ((BigInteger.One << size) - 1));
+        }
+
+        /// <summary>
+        /// self[a..b] on a Fixnum, for a Range of Fixnums (int_aref1): the bits from a up to b, the bit at a when the two
+        /// are the same, and self &gt;&gt; a when b is the lower.
+        /// </summary>
+        [RubyMethod("[]")]
+        public static object/*!*/ Bits(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow,
+            CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow2, int self, [NotNull]Range/*!*/ range) {
+            if (range.Begin is int first && range.End is int last) {
+                if (first < last) {
+                    long size = (long)last - first + (range.ExcludeEnd ? 0 : 1);
+                    if (size <= Int32.MaxValue) {
+                        return Bits(slow2, self, first, (int)size);
+                    }
+                } else if (first == last) {
+                    return ScriptingRuntimeHelpers.Int32ToObject(range.ExcludeEnd ? 0 : Bit(self, first));
+                } else if (first >= 0) {
+                    return ScriptingRuntimeHelpers.Int32ToObject(first > 31 ? (self < 0 ? -1 : 0) : self >> first);
+                }
+            }
+            return Bit(slow, self, range);
+        }
+
+        // rb_fix_aref converts a Float index with #to_int, which truncates it
+        [RubyMethod("[]")]
+        public static int Bit(int self, double index) {
+            if (Double.IsNaN(index) || Double.IsInfinity(index)) {
+                throw new FloatDomainError(Double.IsNaN(index) ? "NaN" : index > 0 ? "Infinity" : "-Infinity");
+            }
+            return (index <= -1.0) ? 0 : (index >= 31.0) ? (self < 0 ? 1 : 0) : Bit(self, (int)index);
+        }
+
+        [RubyMethod("[]")]
+        public static object/*!*/ Bit(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, object/*!*/ self, object index) {
+            BigInteger value, position;
+            if (TryGetBitOperand(self, out value) && TryGetBitOperand(index, out position)) {
+                return ScriptingRuntimeHelpers.Int32ToObject(Bit(value, position));
+            }
+            if (!slow.Context.GetClassOf(self).ResolveMethod("__ir_int_aref1__", VisibilityContext.AllVisible).Found) {
+                throw RubyExceptions.CreateTypeConversionError(slow.Context.GetClassName(index), "Integer");
+            }
+            var site = slow.GetCallSite("__ir_int_aref1__", 1);
+            return site.Target(site, self, index);
+        }
+
+        [RubyMethod("[]")]
+        public static object/*!*/ Bits(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow, object/*!*/ self, object offset, object size) {
+            return BitsSlow(slow, self, offset, size);
+        }
+
+        private static object/*!*/ BitsSlow(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow, object/*!*/ self, object offset, object size) {
+            if (!slow.Context.GetClassOf(self).ResolveMethod("__ir_int_aref2__", VisibilityContext.AllVisible).Found) {
+                throw RubyExceptions.CreateTypeConversionError(slow.Context.GetClassName(offset is int ? size : offset), "Integer");
+            }
+            var site = slow.GetCallSite("__ir_int_aref2__", 2);
+            return site.Target(site, self, offset, size);
+        }
+
+        // an Integer of any representation (a CLR Int64 included): the prelude converts everything else to one of these
+        private static bool TryGetBitOperand(object value, out BigInteger result) {
+            switch (value) {
+                case int i: result = i; return true;
+                case long l: result = l; return true;
+                case BigInteger b: result = b; return true;
+                default: result = BigInteger.Zero; return false;
+            }
         }
 
         /// <summary>

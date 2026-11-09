@@ -6274,76 +6274,127 @@ class MatchData
   end
 end
 
-# Integer#[] grew (index, length) and Range forms in 2.7. The builtin only ever
-# took a single bit index, so both were a TypeError or an ArgumentError. All of
-# them reduce to (self >> i) & ((1 << len) - 1), with a negative index shifting
-# the other way and a non-positive length meaning "no mask".
-[Integer].each do |klass|
-  next unless klass.instance_method(:[]).arity == 1
+# Integer#[] is C# (ClrInteger.Bit, Bits): an Integer bit index, and a Fixnum index and length
+# on a Fixnum, are answered there. It hands every other form here, to ports of numeric.c's
+# int_aref1 (one argument: a bit, or a Range) and int_aref2 (an offset and a size).
+class Integer
+  alias_method :__ir_bit__, :[]
+  private :__ir_bit__
 
-  klass.class_eval do
-    alias_method :__ir_bit__, :[]
-
-    def __bit_position__(value)
-      return value if value.is_a?(::Integer)
-      if value.is_a?(::Float)
-        if value.nan? || value.infinite?
-          ::Kernel.raise(::FloatDomainError, value.to_s)
-        end
-        return value.truncate
+  # rb_to_int, as rb_fix_aref and rb_big_aref convert the index
+  def __bit_position__(value)
+    return value if value.is_a?(::Integer)
+    if value.is_a?(::Float)
+      if value.nan? || value.infinite?
+        ::Kernel.raise(::FloatDomainError, value.to_s)
       end
-      unless value.respond_to?(:to_int)
-        # nil, true and false are named by themselves in this one, as MRI names them
-        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(value)} into Integer")
-      end
-      converted = value.to_int
-      unless converted.is_a?(::Integer)
-        ::Kernel.raise(::TypeError,
-          "can't convert #{value.class} to Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})")
-      end
-      converted
+      return value.truncate
     end
-    private :__bit_position__
-
-    def __bits_from__(first, length)
-      shifted = first >= 0 ? (self >> first) : (self << -first)
-      return shifted if length.nil? || length <= 0
-      shifted & ((1 << length) - 1)
+    unless value.respond_to?(:to_int)
+      # nil, true and false are named by themselves in this one, as MRI names them
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(value)} into Integer")
     end
-    private :__bits_from__
-
-    def [](index, length = nil)
-      # the common case, an Integer bit position, needs none of the conversions below
-      return __ir_bit__(index) if length.nil? && ::Integer === index
-      unless index.is_a?(::Range)
-        # through __bit_position__ so that a Float, or an object with #to_int, reaches the
-        # built-in as the Integer it stands for
-        return __ir_bit__(__bit_position__(index)) if length.nil?
-        return __bits_from__(__bit_position__(index), __bit_position__(length))
-      end
-
-      unless length.nil?
-        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 2, expected 1)")
-      end
-
-      first = index.begin.nil? ? nil : __bit_position__(index.begin)
-      last = index.end.nil? ? nil : __bit_position__(index.end)
-
-      if first.nil?
-        # A beginless range asks for every bit below `last`; that is only a finite
-        # answer when they are all zero.
-        if last.nil? || (self & ((1 << (last + 1)) - 1)) != 0
-          ::Kernel.raise(::ArgumentError, "The beginless range for Integer#[] results in infinity")
-        end
-        return 0
-      end
-
-      return __bits_from__(first, nil) if last.nil?
-      span = last - first + 1
-      span -= 1 if index.exclude_end?
-      __bits_from__(first, span)
+    converted = value.to_int
+    unless converted.is_a?(::Integer)
+      ::Kernel.raise(::TypeError,
+        "can't convert #{value.class} to Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})")
     end
+    converted
   end
+  private :__bit_position__
+
+  # int_aref2: (self >> offset) & ((1 << size) - 1), whose shifts convert the operands as
+  # rb_to_int does. A Bignum (rb_big_aref2) gives the same bits, but first wants both, and
+  # their sum, in a C long.
+  def __ir_int_aref2__(offset, size)
+    unless between?(-0x4000000000000000, 0x3fffffffffffffff)
+      offset = __bit_position__(offset)
+      size = __bit_position__(size)
+      [offset, size, offset + size].each do |n|
+        unless n.between?(-0x8000000000000000, 0x7fffffffffffffff)
+          ::Kernel.raise(::RangeError, "bignum too big to convert into 'long long'")
+        end
+      end
+    end
+    (self >> offset) & ((1 << size) - 1)
+  end
+  private :__ir_int_aref2__
+
+  # rb_big_aref reads an index that is not an Integer with NUM2LONG: a Float out of a long's
+  # range, and nil, are errors of their own there.
+  def __ir_big_bit_position__(value)
+    if value.is_a?(::Float)
+      if value.nan? || value.infinite? || !value.between?(-9223372036854775808.0, 9223372036854775807.0)
+        text = value.nan? ? "NaN" : (value.infinite? ? (value > 0 ? "Inf" : "-Inf") : ("%-.10g" % value))
+        ::Kernel.raise(::RangeError, "float #{text} out of range of integer")
+      end
+      return value.truncate
+    end
+    ::Kernel.raise(::TypeError, "no implicit conversion from nil to integer") if value.nil?
+    n = __bit_position__(value)
+    unless n.between?(-0x8000000000000000, 0x7fffffffffffffff)
+      ::Kernel.raise(::RangeError, "bignum too big to convert into 'long'")
+    end
+    n
+  end
+  private :__ir_big_bit_position__
+
+  # one_bit: rb_fix_aref converts the index with rb_to_int, rb_big_aref with NUM2LONG
+  def __ir_one_bit__(index)
+    fixnum = between?(-0x4000000000000000, 0x3fffffffffffffff)
+    __ir_bit__(fixnum ? __bit_position__(index) : __ir_big_bit_position__(index))
+  end
+  private :__ir_one_bit__
+
+  def __ir_int_aref1__(index)
+    unless index.is_a?(::Range)
+      # rb_range_values: anything else with #begin, #end and #exclude_end? is read as a range
+      unless !index.is_a?(::Enumerator::ArithmeticSequence) &&
+             index.respond_to?(:begin) && index.respond_to?(:end) && index.respond_to?(:exclude_end?)
+        return __ir_one_bit__(index)
+      end
+    end
+    first = index.begin
+    last = index.end
+    exclusive = index.exclude_end? ? true : false
+
+    if first.nil?
+      # A beginless range asks for every bit below its end; that is only a finite answer
+      # when they are all zero. (num_negative_p: an end that is not an Integer is asked `< 0'.)
+      negative = if last.is_a?(::Integer)
+        last < 0
+      elsif last.respond_to?(:<, true)
+        last.__send__(:<, 0)
+      else
+        ::Kernel.raise(::ArgumentError, "comparison of #{last.class} with 0 failed")
+      end
+      return 0 if negative
+      last += 1 unless exclusive
+      return 0 if (self & ((1 << last) - 1)) == 0
+      ::Kernel.raise(::ArgumentError, "The beginless range for Integer#[] results in infinity")
+    end
+
+    # compare_indexes: what will not compare counts as greater
+    order = (first <=> last)
+    order = if order.nil?
+      1
+    elsif order.is_a?(::Integer)
+      order <=> 0
+    else
+      # rb_cmpint
+      order > 0 ? 1 : (order < 0 ? -1 : 0)
+    end
+    if !last.nil? && order < 0
+      size = last - first
+      size += 1 unless exclusive
+      return __ir_int_aref2__(first, size)
+    elsif order == 0
+      return 0 if exclusive
+      return __ir_one_bit__(first)
+    end
+    self >> first
+  end
+  private :__ir_int_aref1__
 end
 
 class Symbol

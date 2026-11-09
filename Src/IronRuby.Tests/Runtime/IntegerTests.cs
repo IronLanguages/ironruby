@@ -613,5 +613,302 @@ p (2**70).divmod(2.5), (-2**70).divmod(2.5), (2**70).div(2.5), (2**70) % -2.5
             Assert((int)Integer.Gcd(Int32.MinValue, -1) == 1);
             Assert((long)Integer.Lcm(Int32.MinValue, -1) == -(long)Int32.MinValue);
         }
+
+        /// <summary>
+        /// Integer#[] is C# for an Integer index and for a Fixnum index and length; every other form goes to the
+        /// prelude's ports of MRI's int_aref1 and int_aref2. Covers 5[32] (C#'s shift count is mod 32, so it read bit 0),
+        /// a nil length (a TypeError), a zero length (no bits), and an empty, equal or reversed Range.
+        /// Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Integer_ElementReference1() {
+            TestOutput(@"
+require 'ruby4'
+class ToInt; def initialize(v) = @v = v; def to_int = @v; def inspect = ""ToInt(#{@v})""; end
+def show(label)
+  r = yield
+  puts ""#{label} => #{r.inspect}""
+rescue Exception => e
+  puts ""#{label} !! #{e.class}: #{e.message}""
+end
+[5, -5, 0x7fffffff, -0x80000000, 2**40 + 5, -(2**70) + 12345].each do |v|
+  [0, 2, 31, 32, 33, 63, 64, 100, -1, 2**40, -(2**40), 1.9, -0.5, 31.5, Float::NAN, nil, ToInt.new(3), ToInt.new(2**70)].each do |i|
+    show(""#{v}[#{i.inspect}]"") { v[i] }
+  end
+  [[2, 3], [0, 0], [3, -1], [-3, 4], [-40, 50], [60, 10], [1, 63], [1, 70], [1.5, 2], [2, nil], [nil, 2], [""1"", 2], [2, ToInt.new(3)], [1..2, 3]].each do |i, l|
+    show(""#{v}[#{i.inspect}, #{l.inspect}]"") { v[i, l] }
+  end
+  [1..3, 2...2, 3..3, 5..2, -3..2, 40..30, 2.., ..3, ...0, nil..nil, 1.5..3.5].each do |r|
+    show(""#{v}[#{r.inspect}]"") { v[r] }
+  end
+end
+show(""5[]"") { 5[] }
+show(""5[1, 2, 3]"") { 5[1, 2, 3] }
+show(""arity"") { [5.method(:[]).arity, 5.method(:[]).parameters] }
+show(""send"") { [5.send(:[], 2), 5.public_send(:[], 0, 3), [0, 1, 2].map(&5.method(:[]))] }
+", @"
+5[0] => 1
+5[2] => 1
+5[31] => 0
+5[32] => 0
+5[33] => 0
+5[63] => 0
+5[64] => 0
+5[100] => 0
+5[-1] => 0
+5[1099511627776] => 0
+5[-1099511627776] => 0
+5[1.9] => 0
+5[-0.5] => 1
+5[31.5] => 0
+5[NaN] !! FloatDomainError: NaN
+5[nil] !! TypeError: no implicit conversion of nil into Integer
+5[ToInt(3)] => 0
+5[ToInt(1180591620717411303424)] => 0
+5[2, 3] => 1
+5[0, 0] => 0
+5[3, -1] => 0
+5[-3, 4] => 8
+5[-40, 50] => 5497558138880
+5[60, 10] => 0
+5[1, 63] => 2
+5[1, 70] => 2
+5[1.5, 2] => 2
+5[2, nil] !! TypeError: no implicit conversion of nil into Integer
+5[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+5[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+5[2, ToInt(3)] => 1
+5[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+5[1..3] => 2
+5[2...2] => 0
+5[3..3] => 0
+5[5..2] => 0
+5[-3..2] => 40
+5[40..30] => 0
+5[2..] => 1
+5[..3] !! ArgumentError: The beginless range for Integer#[] results in infinity
+5[...0] => 0
+5[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+5[1.5..3.5] => 2
+-5[0] => 1
+-5[2] => 0
+-5[31] => 1
+-5[32] => 1
+-5[33] => 1
+-5[63] => 1
+-5[64] => 1
+-5[100] => 1
+-5[-1] => 0
+-5[1099511627776] => 1
+-5[-1099511627776] => 0
+-5[1.9] => 1
+-5[-0.5] => 1
+-5[31.5] => 1
+-5[NaN] !! FloatDomainError: NaN
+-5[nil] !! TypeError: no implicit conversion of nil into Integer
+-5[ToInt(3)] => 1
+-5[ToInt(1180591620717411303424)] => 1
+-5[2, 3] => 6
+-5[0, 0] => 0
+-5[3, -1] => -1
+-5[-3, 4] => 8
+-5[-40, 50] => 1120402348703744
+-5[60, 10] => 1023
+-5[1, 63] => 9223372036854775805
+-5[1, 70] => 1180591620717411303421
+-5[1.5, 2] => 1
+-5[2, nil] !! TypeError: no implicit conversion of nil into Integer
+-5[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+-5[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+-5[2, ToInt(3)] => 6
+-5[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+-5[1..3] => 5
+-5[2...2] => 0
+-5[3..3] => 1
+-5[5..2] => -1
+-5[-3..2] => 24
+-5[40..30] => -1
+-5[2..] => -2
+-5[..3] !! ArgumentError: The beginless range for Integer#[] results in infinity
+-5[...0] => 0
+-5[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+-5[1.5..3.5] => 5
+2147483647[0] => 1
+2147483647[2] => 1
+2147483647[31] => 0
+2147483647[32] => 0
+2147483647[33] => 0
+2147483647[63] => 0
+2147483647[64] => 0
+2147483647[100] => 0
+2147483647[-1] => 0
+2147483647[1099511627776] => 0
+2147483647[-1099511627776] => 0
+2147483647[1.9] => 1
+2147483647[-0.5] => 1
+2147483647[31.5] => 0
+2147483647[NaN] !! FloatDomainError: NaN
+2147483647[nil] !! TypeError: no implicit conversion of nil into Integer
+2147483647[ToInt(3)] => 1
+2147483647[ToInt(1180591620717411303424)] => 0
+2147483647[2, 3] => 7
+2147483647[0, 0] => 0
+2147483647[3, -1] => 268435455
+2147483647[-3, 4] => 8
+2147483647[-40, 50] => 1124800395214848
+2147483647[60, 10] => 0
+2147483647[1, 63] => 1073741823
+2147483647[1, 70] => 1073741823
+2147483647[1.5, 2] => 3
+2147483647[2, nil] !! TypeError: no implicit conversion of nil into Integer
+2147483647[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+2147483647[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+2147483647[2, ToInt(3)] => 7
+2147483647[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+2147483647[1..3] => 7
+2147483647[2...2] => 0
+2147483647[3..3] => 1
+2147483647[5..2] => 67108863
+2147483647[-3..2] => 56
+2147483647[40..30] => 0
+2147483647[2..] => 536870911
+2147483647[..3] !! ArgumentError: The beginless range for Integer#[] results in infinity
+2147483647[...0] => 0
+2147483647[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+2147483647[1.5..3.5] => 7
+-2147483648[0] => 0
+-2147483648[2] => 0
+-2147483648[31] => 1
+-2147483648[32] => 1
+-2147483648[33] => 1
+-2147483648[63] => 1
+-2147483648[64] => 1
+-2147483648[100] => 1
+-2147483648[-1] => 0
+-2147483648[1099511627776] => 1
+-2147483648[-1099511627776] => 0
+-2147483648[1.9] => 0
+-2147483648[-0.5] => 0
+-2147483648[31.5] => 1
+-2147483648[NaN] !! FloatDomainError: NaN
+-2147483648[nil] !! TypeError: no implicit conversion of nil into Integer
+-2147483648[ToInt(3)] => 0
+-2147483648[ToInt(1180591620717411303424)] => 1
+-2147483648[2, 3] => 0
+-2147483648[0, 0] => 0
+-2147483648[3, -1] => -268435456
+-2147483648[-3, 4] => 0
+-2147483648[-40, 50] => 0
+-2147483648[60, 10] => 1023
+-2147483648[1, 63] => 9223372035781033984
+-2147483648[1, 70] => 1180591620716337561600
+-2147483648[1.5, 2] => 0
+-2147483648[2, nil] !! TypeError: no implicit conversion of nil into Integer
+-2147483648[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+-2147483648[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+-2147483648[2, ToInt(3)] => 0
+-2147483648[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+-2147483648[1..3] => 0
+-2147483648[2...2] => 0
+-2147483648[3..3] => 0
+-2147483648[5..2] => -67108864
+-2147483648[-3..2] => 0
+-2147483648[40..30] => -1
+-2147483648[2..] => -536870912
+-2147483648[..3] => 0
+-2147483648[...0] => 0
+-2147483648[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+-2147483648[1.5..3.5] => 0
+1099511627781[0] => 1
+1099511627781[2] => 1
+1099511627781[31] => 0
+1099511627781[32] => 0
+1099511627781[33] => 0
+1099511627781[63] => 0
+1099511627781[64] => 0
+1099511627781[100] => 0
+1099511627781[-1] => 0
+1099511627781[1099511627776] => 0
+1099511627781[-1099511627776] => 0
+1099511627781[1.9] => 0
+1099511627781[-0.5] => 1
+1099511627781[31.5] => 0
+1099511627781[NaN] !! FloatDomainError: NaN
+1099511627781[nil] !! TypeError: no implicit conversion of nil into Integer
+1099511627781[ToInt(3)] => 0
+1099511627781[ToInt(1180591620717411303424)] => 0
+1099511627781[2, 3] => 1
+1099511627781[0, 0] => 0
+1099511627781[3, -1] => 137438953472
+1099511627781[-3, 4] => 8
+1099511627781[-40, 50] => 5497558138880
+1099511627781[60, 10] => 0
+1099511627781[1, 63] => 549755813890
+1099511627781[1, 70] => 549755813890
+1099511627781[1.5, 2] => 2
+1099511627781[2, nil] !! TypeError: no implicit conversion of nil into Integer
+1099511627781[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+1099511627781[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+1099511627781[2, ToInt(3)] => 1
+1099511627781[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+1099511627781[1..3] => 2
+1099511627781[2...2] => 0
+1099511627781[3..3] => 0
+1099511627781[5..2] => 34359738368
+1099511627781[-3..2] => 40
+1099511627781[40..30] => 1
+1099511627781[2..] => 274877906945
+1099511627781[..3] !! ArgumentError: The beginless range for Integer#[] results in infinity
+1099511627781[...0] => 0
+1099511627781[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+1099511627781[1.5..3.5] => 2
+-1180591620717411291079[0] => 1
+-1180591620717411291079[2] => 0
+-1180591620717411291079[31] => 0
+-1180591620717411291079[32] => 0
+-1180591620717411291079[33] => 0
+-1180591620717411291079[63] => 0
+-1180591620717411291079[64] => 0
+-1180591620717411291079[100] => 1
+-1180591620717411291079[-1] => 0
+-1180591620717411291079[1099511627776] => 1
+-1180591620717411291079[-1099511627776] => 0
+-1180591620717411291079[1.9] => 0
+-1180591620717411291079[-0.5] => 1
+-1180591620717411291079[31.5] => 0
+-1180591620717411291079[NaN] !! RangeError: float NaN out of range of integer
+-1180591620717411291079[nil] !! TypeError: no implicit conversion from nil to integer
+-1180591620717411291079[ToInt(3)] => 1
+-1180591620717411291079[ToInt(1180591620717411303424)] !! RangeError: bignum too big to convert into 'long'
+-1180591620717411291079[2, 3] => 6
+-1180591620717411291079[0, 0] => 0
+-1180591620717411291079[3, -1] => -147573952589676411385
+-1180591620717411291079[-3, 4] => 8
+-1180591620717411291079[-40, 50] => 62672162783232
+-1180591620717411291079[60, 10] => 0
+-1180591620717411291079[1, 63] => 6172
+-1180591620717411291079[1, 70] => 590295810358705657884
+-1180591620717411291079[1.5, 2] => 0
+-1180591620717411291079[2, nil] !! TypeError: no implicit conversion of nil into Integer
+-1180591620717411291079[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+-1180591620717411291079[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+-1180591620717411291079[2, ToInt(3)] => 6
+-1180591620717411291079[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+-1180591620717411291079[1..3] => 4
+-1180591620717411291079[2...2] => 0
+-1180591620717411291079[3..3] => 1
+-1180591620717411291079[5..2] => -36893488147419102847
+-1180591620717411291079[-3..2] => 8
+-1180591620717411291079[40..30] => -1073741824
+-1180591620717411291079[2..] => -295147905179352822770
+-1180591620717411291079[..3] !! ArgumentError: The beginless range for Integer#[] results in infinity
+-1180591620717411291079[...0] => 0
+-1180591620717411291079[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+-1180591620717411291079[1.5..3.5] => 4
+5[] !! ArgumentError: wrong number of arguments (given 0, expected 1..2)
+5[1, 2, 3] !! ArgumentError: wrong number of arguments (given 3, expected 1..2)
+arity => [-1, [[:rest]]]
+send => [1, 5, [1, 0, 1]]
+");
+        }
     }
 }

@@ -1023,18 +1023,15 @@ namespace IronRuby.Builtins {
         /// <returns>indexth bit in the (assumed) binary representation of self, where self[0] is the least significant bit.</returns>
         /// <remarks>Since representation is supposed to be 2s complement, we return always 1 if self is negative and index is greater than most signifcant bit in BigInteger</remarks>
         [RubyMethod("[]")]
-        public static int Bit(BigInteger/*!*/ self, [DefaultProtocol]int index) {
+        public static int Bit(BigInteger/*!*/ self, int index) {
             // If we are outside the range then return 0 ...
             if (index < 0) return 0;
 
-            int bytePos = index / 8;
-            int bitOffset = index % 8;
-            byte[] data = self.ToByteArray();
+            // ... or the sign past the highest bit (BigInteger's >> is arithmetic, so a negative value's bits are its
+            // two's complement)
+            if (index >= self.GetBitLength()) return self.Sign < 0 ? 1 : 0;
 
-            // ... or 1 if the index is too high and BigInteger is negative.
-            if (bytePos >= data.Length) return (self.Sign > 0) ? 0 : 1;
-
-            return (data[bytePos] & (1 << bitOffset)) != 0 ? 1 : 0;
+            return (self >> index).IsEven ? 0 : 1;
         }
 
         /// <summary>
