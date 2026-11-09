@@ -147,7 +147,9 @@ namespace IronRuby.StandardLibrary.Threading {
                 try {
                     while (Interlocked.CompareExchange(ref _owner, me, null) != null) {
                         try {
-                            Monitor.Wait(_syncRoot);
+                            using (RubyUtils.BlockingWait.Enter()) {
+                                Monitor.Wait(_syncRoot);
+                            }
                         } catch (ThreadInterruptedException) {
                             // Thread#kill / Thread#raise nudged us; if nothing is parked the wait restarts.
                             if (interruptible) {

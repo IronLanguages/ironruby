@@ -266,7 +266,10 @@ namespace IronRuby.Builtins {
 
                 // Wait until data is available, the writer closes the pipe, or this end is closed
                 // from another thread.
-                int signaled = WaitHandle.WaitAny(_eventArray, _readTimeout);
+                int signaled;
+                using (RubyUtils.BlockingWait.Enter()) {
+                    signaled = WaitHandle.WaitAny(_eventArray, _readTimeout);
+                }
                 if (signaled == WaitHandle.WaitTimeout) {
                     throw new TimeoutException();
                 }
@@ -297,8 +300,14 @@ namespace IronRuby.Builtins {
             int remaining = count;
             while (remaining > 0) {
                 remaining -= WriteWithoutWaiting(buffer, offset + count - remaining, remaining);
-                if (remaining > 0 && WaitHandle.WaitAny(_writeEventArray, _writeTimeout) == WaitHandle.WaitTimeout) {
-                    throw new TimeoutException();
+                if (remaining > 0) {
+                    int signaled;
+                    using (RubyUtils.BlockingWait.Enter()) {
+                        signaled = WaitHandle.WaitAny(_writeEventArray, _writeTimeout);
+                    }
+                    if (signaled == WaitHandle.WaitTimeout) {
+                        throw new TimeoutException();
+                    }
                 }
             }
         }

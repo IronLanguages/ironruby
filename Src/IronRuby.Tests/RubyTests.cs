@@ -970,6 +970,7 @@ namespace IronRuby.Tests {
                 String_BrokenPattern1,
                 Thread_StopAlone1,
                 Thread_StatusAtStart1,
+                Thread_StatusOfWaits1,
                 Thread_HostMainThread1,
                 Thread_HostMainThread2,
                 Windows_NotImplementedAndLinks1,

@@ -747,7 +747,9 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 using (var cancel = timeout < 0 ? new CancellationTokenSource() : new CancellationTokenSource(timeout)) {
                     Task task = self.StartConnect(hostname, verify, cancel.Token);
                     try {
-                        task.Wait();
+                        using (RubyUtils.BlockingWait.Enter()) {
+                            task.Wait();
+                        }
                     } catch (AggregateException) {
                         // FinishConnect reports it
                     } catch (ThreadInterruptedException) {
@@ -853,7 +855,9 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             // stays in flight for whoever asks next.
             private static bool WaitFor(Task/*!*/ task, int milliseconds) {
                 try {
-                    return task.Wait(milliseconds);
+                    using (RubyUtils.BlockingWait.Enter()) {
+                        return task.Wait(milliseconds);
+                    }
                 } catch (AggregateException) {
                     // done, with an error the caller reports
                     return true;

@@ -610,7 +610,9 @@ namespace IronRuby.Builtins {
                 // MRI waits for the child when the block returns, so $? reports a finished
                 // process rather than one still running
                 try {
-                    process.WaitForExit();
+                    using (RubyUtils.BlockingWait.Enter()) {
+                        process.WaitForExit();
+                    }
                 } catch (SystemException) {
                     // process already reaped
                 }

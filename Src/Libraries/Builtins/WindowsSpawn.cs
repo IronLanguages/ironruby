@@ -896,7 +896,9 @@ namespace IronRuby.Builtins {
                 while (true) {
                     int count;
                     try {
-                        count = stream.Read(buffer, 0, buffer.Length);
+                        using (RubyUtils.BlockingWait.EnterNative()) {
+                            count = stream.Read(buffer, 0, buffer.Length);
+                        }
                     } catch (IOException) {
                         break;      // the child exited without closing its end
                     }
@@ -909,7 +911,9 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            WaitPid(context, pid, 0);
+            using (RubyUtils.BlockingWait.EnterNative()) {
+                WaitPid(context, pid, 0);
+            }
 
             // MRI reads a backquote's pipe in text mode on Windows, so what the child wrote as
             // CRLF comes back as LF - which is what every spec that compares `` output against

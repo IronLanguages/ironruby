@@ -1237,7 +1237,10 @@ namespace IronRuby.Builtins {
                     // LOCK_NB on a locked file reports "would block" rather than raising
                     return false;
                 }
-                System.Threading.Thread.Sleep(10);
+                // waiting for the lock: "sleep", as MRI's flock(2) is
+                using (RubyUtils.BlockingWait.Enter()) {
+                    System.Threading.Thread.Sleep(10);
+                }
             }
         }
 
@@ -1404,7 +1407,10 @@ namespace IronRuby.Builtins {
                 if ((operation & Posix.LOCK_NB) != 0) {
                     return false;
                 }
-                System.Threading.Thread.Sleep(10);
+                // waiting for the lock: "sleep", as MRI's flock(2) is
+                using (RubyUtils.BlockingWait.Enter()) {
+                    System.Threading.Thread.Sleep(10);
+                }
             }
         }
 

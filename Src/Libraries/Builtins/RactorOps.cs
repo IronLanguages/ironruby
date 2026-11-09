@@ -275,7 +275,9 @@ namespace IronRuby.Builtins {
                         }
                     }
                     try {
-                        Monitor.Wait(Sync);
+                        using (RubyUtils.BlockingWait.Enter()) {
+                            Monitor.Wait(Sync);
+                        }
                     } catch (ThreadInterruptedException) {
                         RubyUtils.TranslateThreadInterrupt();
                     }

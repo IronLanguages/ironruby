@@ -671,7 +671,10 @@ namespace IronRuby.Runtime {
                     Thread owner;
                     while (_unfinishedFiles.TryGetValue(file.Path, out owner) && owner != Thread.CurrentThread) {
                         try {
-                            Monitor.Wait(_unfinishedFiles);
+                            // another thread's require of the file: MRI's thread sleeps until it is done
+                            using (RubyUtils.BlockingWait.Enter()) {
+                                Monitor.Wait(_unfinishedFiles);
+                            }
                         } catch (ThreadInterruptedException) {
                             // Thread#kill and Thread#raise deliver by parking an exception and interrupting the
                             // target's wait, so an interrupt here is either that exception - in which case this

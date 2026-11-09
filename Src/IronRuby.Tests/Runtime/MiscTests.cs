@@ -4382,6 +4382,63 @@ false
         }
 
         /// <summary>
+        /// Thread#status is "sleep" for the waits a Ruby program can see and "run" otherwise. It used to be "sleep" whenever
+        /// the CLR said WaitSleepJoin, which includes every brief wait for an internal lock: under load ruby/spec's
+        /// block_caller matcher caught a thread doing Mutex#lock on a free mutex in one and called it blocked. A thread
+        /// waiting for a CLR monitor stands in for those here. A thread running a fiber is as blocked as the fiber is
+        /// (its own CLR thread waits for the fiber all along).
+        /// </summary>
+        public void Thread_StatusOfWaits1() {
+            TestOutput(@"
+require 'ruby4'
+def wait_for(seconds = 10); deadline = Time.now + seconds; Thread.pass until yield || Time.now > deadline; end
+def status_of(t); wait_for { t.status == ""sleep"" }; s = t.status; t.kill; t.join; s; end
+o = Object.new
+state = System::Threading::Thread.to_clr_type.get_property(""ThreadState"")
+System::Threading::Monitor.enter(o)
+t = Thread.new { System::Threading::Monitor.enter(o); System::Threading::Monitor.exit(o); :got_it }
+wait_for { state.get_value(t, nil).to_s.include?(""WaitSleepJoin"") }
+p [:clr_lock, t.status, t.stop?]
+System::Threading::Monitor.exit(o)
+p t.value
+m = Mutex.new; m.lock
+p [:mutex, status_of(Thread.new { m.lock })]
+q = Queue.new
+p [:queue, status_of(Thread.new { q.pop })]
+sq = SizedQueue.new(1); sq << 1
+p [:sized_queue, status_of(Thread.new { sq << 2 })]
+cv = ConditionVariable.new; m2 = Mutex.new
+p [:condvar, status_of(Thread.new { m2.synchronize { cv.wait(m2) } })]
+p [:sleep, status_of(Thread.new { sleep })]
+p [:stop, status_of(Thread.new { Thread.stop })]
+t2 = Thread.new { sleep }
+p [:join, status_of(Thread.new { t2.join })]
+p [:value, status_of(Thread.new { t2.value })]
+t2.kill
+p [:fiber_sleep, status_of(Thread.new { Fiber.new { sleep }.resume })]
+Fiber.new { p [:current_in_fiber, Thread.current.status] }.resume
+busy = Thread.new { Fiber.new { loop { Thread.pass } }.resume }
+wait_for(0.5) { busy.status == ""sleep"" }
+p [:busy_fiber, busy.status]
+busy.kill; busy.join
+", @"
+[:clr_lock, ""run"", false]
+:got_it
+[:mutex, ""sleep""]
+[:queue, ""sleep""]
+[:sized_queue, ""sleep""]
+[:condvar, ""sleep""]
+[:sleep, ""sleep""]
+[:stop, ""sleep""]
+[:join, ""sleep""]
+[:value, ""sleep""]
+[:fiber_sleep, ""sleep""]
+[:current_in_fiber, ""run""]
+[:busy_fiber, ""run""]
+");
+        }
+
+        /// <summary>
         /// Thread.stop with no other thread alive is MRI's ThreadError "stopping only thread" (rb_thread_stop),
         /// where it slept forever. A fiber runs on a CLR thread of its own here but is part of the thread that
         /// owns it, so neither it nor its thread counts as another thread - for Thread.stop, nor for Thread.list

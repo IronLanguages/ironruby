@@ -133,6 +133,7 @@ namespace IronRuby.Builtins {
         private const int FD_CLOEXEC = 1;
         private const int X_OK = 1;
         private const int EINTR = 4;
+        private const int WNOHANG = 1;
 
         #endregion
 
@@ -476,6 +477,16 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("__waitpid__", RubyMethodAttributes.PublicSingleton)]
         public static object WaitPidPrimitive(RubyContext/*!*/ context, RubyModule/*!*/ self, int pid, int flags) {
+            if ((flags & WNOHANG) != 0) {
+                return WaitPid(context, pid, flags);
+            }
+            // waiting for a child (Process.wait, system, `cmd`) is "sleep" in MRI
+            using (RubyUtils.BlockingWait.EnterNative()) {
+                return WaitPid(context, pid, flags);
+            }
+        }
+
+        private static object WaitPid(RubyContext/*!*/ context, int pid, int flags) {
             if (IsWindows) {
                 return WindowsSpawn.WaitPid(context, pid, flags);
             }
@@ -724,7 +735,10 @@ namespace IronRuby.Builtins {
             var output = new List<byte>();
             byte[] buffer = new byte[8192];
             while (true) {
-                int read = (int)SysRead(fds[0], buffer, (IntPtr)buffer.Length);
+                int read;
+                using (RubyUtils.BlockingWait.EnterNative()) {
+                    read = (int)SysRead(fds[0], buffer, (IntPtr)buffer.Length);
+                }
                 if (read < 0) {
                     if (Marshal.GetLastWin32Error() == EINTR) {
                         continue;
