@@ -1161,6 +1161,7 @@ namespace IronRuby.Tests {
                 Backtrace_HostedLabels1,
                 Backtrace_CompiledLines1,
                 Backtrace_CompiledLines2,
+                Backtrace_CompiledLines3,
                 Backtrace_UnnamedLambdaFrame1,
                 Backtrace_AsciiLocalePaths1,
                 Backtrace_LibraryErrors1,
