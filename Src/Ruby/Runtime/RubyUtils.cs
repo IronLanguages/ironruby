@@ -2196,6 +2196,56 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static Func<bool, bool> NativeWaitHook;
 
+        /// <summary>
+        /// Installed by the thread library, as <see cref="NativeWaitHook"/> is: marks the current thread
+        /// as being in a managed wait a Ruby program can see, or not, and answers what it was before.
+        /// </summary>
+        public static Func<bool, bool> ManagedWaitHook;
+
+        /// <summary>
+        /// `using (RubyUtils.BlockingWait.Enter()) { ...wait... }` marks the current thread as blocked in a
+        /// wait a Ruby program can see - a held Mutex, Queue#pop, Thread#join, a concurrent require - for
+        /// as long as it waits, and restores what it was afterwards. Thread#status reports "sleep" only
+        /// for such a wait: the CLR's WaitSleepJoin also covers every brief wait for an internal lock,
+        /// which MRI's thread is "run" through. Put it around the wait itself only, not around code that
+        /// runs Ruby (a trap handler at a safe point) or takes internal locks.
+        ///
+        /// Enter() is for a managed wait (Monitor.Wait, WaitHandle, Thread.Join), and the thread is
+        /// "sleep" only once the CLR has it in WaitSleepJoin as well: whoever sees "sleep" may go on to
+        /// Thread#kill it, and a kill interrupts only a thread that is already waiting
+        /// (<see cref="NudgeThread"/>). EnterNative() is for a syscall (waitpid, read(2)), which the CLR
+        /// cannot see: the mark alone says "sleep".
+        /// </summary>
+        public readonly struct BlockingWait : IDisposable {
+            private readonly bool _wasBlocked;
+            private readonly bool _native;
+
+            private BlockingWait(bool wasBlocked, bool native) {
+                _wasBlocked = wasBlocked;
+                _native = native;
+            }
+
+            public static BlockingWait Enter() {
+                var hook = ManagedWaitHook;
+                return new BlockingWait(hook != null && hook(true), false);
+            }
+
+            public static BlockingWait EnterNative() {
+                return new BlockingWait(EnterNativeWait(), true);
+            }
+
+            public void Dispose() {
+                if (_native) {
+                    ExitNativeWait(_wasBlocked);
+                } else {
+                    var hook = ManagedWaitHook;
+                    if (hook != null) {
+                        hook(_wasBlocked);
+                    }
+                }
+            }
+        }
+
         /// <summary>Marks the current thread blocked; pass the answer to ExitNativeWait.</summary>
         public static bool EnterNativeWait() {
             var hook = NativeWaitHook;

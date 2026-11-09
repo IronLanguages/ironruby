@@ -40,7 +40,9 @@ namespace IronRuby.Builtins {
             try {
                 Utils.Log(String.Format("Starting: '{0}' with args: '{1}'", psi.FileName, psi.Arguments), "PROCESS");
                 Process p = Process.Start(psi);
-                p.WaitForExit();
+                using (RubyUtils.BlockingWait.Enter()) {
+                    p.WaitForExit();
+                }
                 context.ChildProcessExitStatus = new RubyProcess.Status(p);
                 return p;
             } catch (Exception e) {

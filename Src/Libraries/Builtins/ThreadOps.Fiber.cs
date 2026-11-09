@@ -561,6 +561,13 @@ namespace IronRuby.Builtins {
             // in its thread; anything else parked here dies with the fiber.
             HandOffParkedInterrupt();
             RubyUtils.DropPendingAsyncExceptions(current);
+            // The thread belongs to nobody while it is parked. From here on a Thread#raise can reach
+            // it only as the thread of the next fiber - Fiber#resume names it the running fiber
+            // (FiberCore.MakeRunning) before the fiber has woken it up - and that is the next
+            // fiber's: forwarded to the finished fiber's thread instead (RubyThreadInfo.
+            // ForwardToActiveFiber) it hit a thread that never had it coming. Kept, FiberCore.Run
+            // raises it in the fiber.
+            RubyUtils.SetFiberOwnerThread(null);
             RubyThreadInfo info = RubyThreadInfo.FromThread(current);
             info.ClearLocals();
             _currentFiber = null;
@@ -582,8 +589,6 @@ namespace IronRuby.Builtins {
                 object fiber;
                 if (worker.Jobs.TryTake(FiberWorkerIdleMilliseconds, out fiber)) {
                     parked = false;
-                    // not to the next fiber, which may well be another thread's
-                    HandOffParkedInterrupt();
                     return fiber;
                 }
                 using (new RubyUtils.UninterruptedLock(_idleFiberWorkers)) {
@@ -595,9 +600,7 @@ namespace IronRuby.Builtins {
                 }
                 // ReuseFiberThread took this thread just now: its fiber is on the way
                 parked = false;
-                object next = worker.Jobs.Take();
-                HandOffParkedInterrupt();
-                return next;
+                return worker.Jobs.Take();
             } finally {
                 if (parked) {
                     // left by an exception (Thread#kill): nobody may hand this thread a fiber now

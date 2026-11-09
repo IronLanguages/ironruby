@@ -90,6 +90,12 @@ namespace IronRuby.Builtins {
                     info._blocked = blocked;
                     return was;
                 };
+                RubyUtils.ManagedWaitHook = waiting => {
+                    var info = FromThread(Thread.CurrentThread);
+                    bool was = info._inManagedWait;
+                    info._inManagedWait = waiting;
+                    return was;
+                };
                 RubyUtils.AsyncExceptionRedirectHook = ForwardToActiveFiber;
             }
 
@@ -130,7 +136,11 @@ namespace IronRuby.Builtins {
             private readonly Dictionary<RubySymbol, object> _threadLocalStorage;
             private ThreadGroup _group;
             private readonly Thread _thread;
-            private bool _blocked;
+            // In a wait a Ruby program can see (RubyUtils.BlockingWait), the only kind Thread#status
+            // reports as "sleep": a syscall (_blocked), or a managed wait (_inManagedWait), which counts
+            // once the CLR has the thread in WaitSleepJoin too. Written only by the thread itself.
+            private volatile bool _blocked;
+            private volatile bool _inManagedWait;
             private bool _abortOnException;
             private AutoResetEvent _runSignal = new AutoResetEvent(false);
             private bool _isSleeping;
@@ -397,6 +407,10 @@ namespace IronRuby.Builtins {
                 }
             }
             
+            internal bool InManagedWait {
+                get { return _inManagedWait; }
+            }
+
             internal bool Blocked {
                 get {
                     return _blocked;
@@ -485,8 +499,10 @@ namespace IronRuby.Builtins {
                 // could not interrupt us - we were not waiting yet. Deliver it instead of sleeping
                 // on, which would never end.
                 RubyUtils.CheckAsyncException();
+                bool wasWaiting = _inManagedWait;
                 try {
                     _isSleeping = true;
+                    _inManagedWait = true;
                     try {
                         _runSignal.WaitOne();
                     } catch (ThreadInterruptedException) {
@@ -496,10 +512,12 @@ namespace IronRuby.Builtins {
                         // interrupts - so drop the signal the interrupt left latched, or the next sleep
                         // would return at once.
                         _runSignal.Reset();
+                        _inManagedWait = wasWaiting;
                         RubyUtils.TranslateThreadInterrupt();
                     }
                 } finally {
                     _isSleeping = false;
+                    _inManagedWait = wasWaiting;
                 }
             }
 
@@ -508,17 +526,21 @@ namespace IronRuby.Builtins {
             /// </summary>
             internal bool Sleep(int milliseconds) {
                 RubyUtils.CheckAsyncException();
+                bool wasWaiting = _inManagedWait;
                 try {
                     _isSleeping = true;
+                    _inManagedWait = true;
                     try {
                         return _runSignal.WaitOne(milliseconds);
                     } catch (ThreadInterruptedException) {
                         _runSignal.Reset();
+                        _inManagedWait = wasWaiting;
                         RubyUtils.TranslateThreadInterrupt();
                         return false;
                     }
                 } finally {
                     _isSleeping = false;
+                    _inManagedWait = wasWaiting;
                 }
             }
 
@@ -758,7 +780,11 @@ namespace IronRuby.Builtins {
                 try {
                     long remaining = deadline - Environment.TickCount64;
                     int slice = (int)Math.Max(0, Math.Min(remaining, JoinSliceMilliseconds));
-                    if (self.Join(slice)) {
+                    bool joined;
+                    using (RubyUtils.BlockingWait.Enter()) {
+                        joined = self.Join(slice);
+                    }
+                    if (joined) {
                         return true;
                     }
                     if (remaining <= JoinSliceMilliseconds) {
@@ -1044,10 +1070,14 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if ((state & ThreadState.WaitSleepJoin) == ThreadState.WaitSleepJoin && (info.RunsRuby || !info.CreatedFromRuby)) {
-                // We will report a thread to be sleeping more often than in CRuby. This is because any "lock" statement
-                // can potentially cause ThreadState.WaitSleepJoin. Also, "Thread.pass" does System.Threading.Thread.Sleep(0)
-                // which also briefly changes the state to ThreadState.WaitSleepJoin
+            // "sleep" is a wait the program can see - Kernel#sleep, a held Mutex, Queue#pop, Thread#join,
+            // a blocking read - which marks the thread for its duration (RubyUtils.BlockingWait).
+            // WaitSleepJoin alone is no guide: it also covers every brief wait for an internal lock and
+            // the handshakes of thread start-up, through which MRI's thread is "run", and a thread that
+            // looked asleep there made `should_not block_caller` fail at random under load.
+            // A thread running a fiber does so on the fiber's CLR thread, its own waiting for control
+            // to come back: it is as blocked as that fiber is.
+            if (IsBlocked(thread, info)) {
                 return RubyThreadStatus.Sleeping;
             }
 
@@ -1062,15 +1092,23 @@ namespace IronRuby.Builtins {
                 return RubyThreadStatus.Aborting;
             }
 
-            if ((state & ThreadState.Running) == ThreadState.Running) {
-                if (info.Blocked) {
-                    return RubyThreadStatus.Sleeping;
-                } else {
-                    return RubyThreadStatus.Running;
-                }
-            }
+            // Running, or WaitSleepJoin in a wait that is not the program's
+            return RubyThreadStatus.Running;
+        }
 
-            throw new ArgumentException("unknown thread status: " + state);
+        private static bool IsBlocked(Thread/*!*/ thread, RubyThreadInfo/*!*/ info) {
+            Thread fiber = info.ActiveFiberThread;
+            if (fiber != null && !ReferenceEquals(fiber, thread) && fiber.IsAlive) {
+                thread = fiber;
+                info = RubyThreadInfo.FromThread(fiber);
+            }
+            if (info.Blocked) {
+                return true;
+            }
+            // The mark first, then the CLR state: a thread that has marked itself but not reached its
+            // wait yet is not "sleep", for Thread#kill interrupts only a thread that is waiting
+            // (RubyUtils.NudgeThread), and the spec that sees "sleep" goes on to kill it.
+            return info.InManagedWait && (thread.ThreadState & ThreadState.WaitSleepJoin) != 0;
         }
 
         [RubyMethod("status")]

@@ -56,11 +56,13 @@ namespace IronRuby.StandardLibrary.Threading {
                     while (_queue.Count >= _limit) {
                         bool signalled;
                         try {
-                            if (timeoutMilliseconds < 0) {
-                                signalled = Monitor.Wait(_queue);
-                            } else {
-                                int remaining = (int)(deadline - Environment.TickCount64);
-                                signalled = remaining > 0 && Monitor.Wait(_queue, remaining);
+                            using (RubyUtils.BlockingWait.Enter()) {
+                                if (timeoutMilliseconds < 0) {
+                                    signalled = Monitor.Wait(_queue);
+                                } else {
+                                    int remaining = (int)(deadline - Environment.TickCount64);
+                                    signalled = remaining > 0 && Monitor.Wait(_queue, remaining);
+                                }
                             }
                         } catch (ThreadInterruptedException) {
                             RubyUtils.TranslateThreadInterrupt();

@@ -1442,7 +1442,9 @@ namespace IronRuby.Builtins {
             public void WaitForLoad() {
                 lock (this) {
                     while (_loadingThread != null && _loadingThread != Thread.CurrentThread) {
-                        Monitor.Wait(this);
+                        using (RubyUtils.BlockingWait.Enter()) {
+                            Monitor.Wait(this);
+                        }
                     }
                 }
             }

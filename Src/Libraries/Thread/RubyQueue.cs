@@ -107,7 +107,9 @@ namespace IronRuby.StandardLibrary.Threading {
 
         private bool WaitOnQueue(int milliseconds) {
             try {
-                return milliseconds == Timeout.Infinite ? Monitor.Wait(_queue) : Monitor.Wait(_queue, milliseconds);
+                using (RubyUtils.BlockingWait.Enter()) {
+                    return milliseconds == Timeout.Infinite ? Monitor.Wait(_queue) : Monitor.Wait(_queue, milliseconds);
+                }
             } catch (ThreadInterruptedException) {
                 RubyUtils.TranslateThreadInterrupt();
                 return true;

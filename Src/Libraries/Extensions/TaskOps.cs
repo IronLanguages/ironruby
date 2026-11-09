@@ -63,7 +63,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("value")]
         public static object GetValue(Task/*!*/ self) {
             try {
-                self.Wait();
+                using (RubyUtils.BlockingWait.Enter()) {
+                    self.Wait();
+                }
             } catch (AggregateException e) {
                 if (e.InnerExceptions.Count == 1) {
                     ExceptionDispatchInfo.Capture(e.InnerExceptions[0]).Throw();
@@ -108,12 +110,19 @@ namespace IronRuby.Builtins {
 
         // GetResult on an incomplete ValueTask is not allowed; AsTask waits, and GetResult unwraps the exception
         private static bool Wait(ValueTask<bool> task) {
-            return task.IsCompletedSuccessfully ? task.Result : task.AsTask().GetAwaiter().GetResult();
+            if (task.IsCompletedSuccessfully) {
+                return task.Result;
+            }
+            using (RubyUtils.BlockingWait.Enter()) {
+                return task.AsTask().GetAwaiter().GetResult();
+            }
         }
 
         private static void Wait(ValueTask task) {
             if (!task.IsCompletedSuccessfully) {
-                task.AsTask().GetAwaiter().GetResult();
+                using (RubyUtils.BlockingWait.Enter()) {
+                    task.AsTask().GetAwaiter().GetResult();
+                }
             }
         }
 
