@@ -173,6 +173,9 @@ namespace IronRuby.Tests {
                 Dir2,
                 Dir_GlobListing1,
                 Dir_GlobVirtualPal1,
+                Dir_GlobOrder1,
+                Dir_GlobDotDot1,
+                Dir_GlobSymlinkLoop1,
                 
                 Regex1,
                 Regex2,
