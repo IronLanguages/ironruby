@@ -987,6 +987,8 @@ namespace IronRuby.Runtime {
             RubyModule instanceOwner, singletonOwner;
             RubyMemberFlags instanceFlags, singletonFlags;
             bool moduleFunction = false;
+            // a top-level `def' of code run in a host's scope: see below
+            bool hostedTopLevel = false;
 
             if (body.HasTarget) {
                 if (!RubyUtils.CanDefineSingletonMethod(target)) {
@@ -1027,7 +1029,9 @@ namespace IronRuby.Runtime {
                     singletonFlags = RubyMemberFlags.Public;
                     moduleFunction = true;
                 } else {
-                    instanceOwner = scope.GetMethodDefinitionOwner();
+                    bool atTopLevel;
+                    instanceOwner = scope.GetMethodDefinitionOwner(out atTopLevel);
+                    hostedTopLevel = atTopLevel && instanceOwner is RubyClass hostedOwner && hostedOwner.IsHostedTopLevelMethodOwner;
 
                     // A `def' inside `1.5.instance_eval { }' lands on the singleton class of the
                     // number, which is as far as MRI lets it get: running the block is fine,
@@ -1066,6 +1070,26 @@ namespace IronRuby.Runtime {
                 );
             }
 
+            // Code run in a host's scope (ScriptCode.Run(Scope), ScriptEngine.Execute(code, scope)) defines a top-level
+            // method in main's singleton class, so that the host reads it from the scope and the top level of another
+            // scope does not see it (RubyHosting1D). Ruby code expects it to be a private method of Object, which an
+            // instance of any class calls (issue 163): `class Foo; def bar = many; end' raised NameError. So it is
+            // defined there too. Object's is the one CRuby has, and so last-one-wins across scopes, as in CRuby; the
+            // top level of each scope still finds its own first.
+            RubyMethodInfo objectMethod = null;
+            if (hostedTopLevel) {
+                var objectClass = scope.RubyContext.ObjectClass;
+                var definitionScope = DefinitionScope(scope, objectClass);
+                if (scope.RubyContext.HasRefinements) {
+                    body.SetDefinitionRefinements(objectClass, definitionScope.GetActiveRefinements());
+                } else {
+                    body.SetDefinedWithoutRefinements();
+                }
+                SetMethod(scope.RubyContext, objectMethod =
+                    new RubyMethodInfo(body, definitionScope, objectClass, instanceFlags)
+                );
+            }
+
             if (singletonOwner != null) {
                 if (scope.RubyContext.HasRefinements) {
                     body.SetDefinitionRefinements(singletonOwner, scope.GetActiveRefinements());
@@ -1097,6 +1121,9 @@ namespace IronRuby.Runtime {
             // method_added, which interns the name as well: the hook then finds it in the identifier cache.
             object result = scope.RubyContext.StringifyIdentifier(body.Name);
 
+            if (objectMethod != null) {
+                objectMethod.DeclaringModule.MethodAdded(body.Name);
+            }
             method.DeclaringModule.MethodAdded(body.Name);
 
             if (moduleFunction) {

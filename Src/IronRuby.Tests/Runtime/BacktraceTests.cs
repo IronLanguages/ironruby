@@ -318,11 +318,11 @@ end
 (eval):12:in 'Array#each'
 (eval):12:in '<main>'
 ");
-            // Run in a scope of the host's (ScriptCode.Run(Scope), as CompilerTest does), a top-level `def' defines a
-            // method of that scope: main's singleton class. So Foo#bar, reopened here, calls the Object#many that
-            // Engine.Execute defined above - and reports it where that one raises, not at its `def'.
+            // Run in a scope of the host's (ScriptCode.Run(Scope), as CompilerTest does), the `def' redefines Object#many
+            // too, so Foo#bar calls this one (Backtrace_HostedTopLevelMethods1): the file is no longer the "(eval)" of the
+            // Object#many Engine.Execute defined above.
             AssertOutput(() => CompilerTest(HostedBacktraceCode), @"
-(eval):3:in 'Object#many'
+Backtrace_HostedPathlessLines1.rb:3:in 'Object#many'
 Backtrace_HostedPathlessLines1.rb:7:in 'Foo#bar'
 Backtrace_HostedPathlessLines1.rb:8:in 'Foo.baz'
 Backtrace_HostedPathlessLines1.rb:12:in 'block in <main>'
@@ -337,6 +337,80 @@ p caller(0)
 [""(eval)"", 2]
 [""(eval):4:in '<main>'""]
 ");
+        }
+
+        /// <summary>
+        /// A top-level `def' of code run in a host's scope (ScriptCode.Run(Scope) - CompilerTest -, ScriptEngine.Execute(code,
+        /// scope), ScriptSource.Execute(scope)) defined the method only in main's singleton class, the scope's. An instance
+        /// of another class could not call it (issue 163): Foo#bar raised NameError, so the backtrace had no 'Object#many'
+        /// frame at all when the code first ran in such a scope, and later it found an Object#many that some earlier
+        /// scope-less run had defined, with that run's file. It is now a private method of Object as well, as in CRuby.
+        /// The scope keeps its own: the host reads it from there, and the top level of another scope does not call it.
+        /// </summary>
+        public void Backtrace_HostedTopLevelMethods1() {
+            // first in a fresh runtime: nothing else defines Object#many
+            AssertOutput(() => CompilerTest(HostedBacktraceCode), @"
+Backtrace_HostedTopLevelMethods1.rb:3:in 'Object#many'
+Backtrace_HostedTopLevelMethods1.rb:7:in 'Foo#bar'
+Backtrace_HostedTopLevelMethods1.rb:8:in 'Foo.baz'
+Backtrace_HostedTopLevelMethods1.rb:12:in 'block in <main>'
+Backtrace_HostedTopLevelMethods1.rb:12:in 'Array#each'
+Backtrace_HostedTopLevelMethods1.rb:12:in '<main>'
+");
+            // a later run in another scope, with another path, reports its own definition
+            AssertOutput(() => Engine.Execute(HostedBacktraceCode), @"
+(eval):3:in 'Object#many'
+(eval):7:in 'Foo#bar'
+(eval):8:in 'Foo.baz'
+(eval):12:in 'block in <main>'
+(eval):12:in 'Array#each'
+(eval):12:in '<main>'
+");
+            var scope = Engine.CreateScope();
+            AssertOutput(() => Engine.CreateScriptSourceFromString(HostedBacktraceCode, "hosted.rb", SourceCodeKind.File).Execute(scope), @"
+hosted.rb:3:in 'Object#many'
+hosted.rb:7:in 'Foo#bar'
+hosted.rb:8:in 'Foo.baz'
+hosted.rb:12:in 'block in <main>'
+hosted.rb:12:in 'Array#each'
+hosted.rb:12:in '<main>'
+");
+            // still the scope's method as well
+            Assert(scope.GetVariable("many") != null);
+
+            // private on Object, as CRuby's; a nested `def' defines a public one there, as it does in CRuby; a singleton method
+            // of main stays one
+            AssertOutput(() => CompilerTest(@"
+def outer
+  def inner = 1
+end
+def self.single = 2
+outer
+p Object.private_method_defined?(:many), Object.public_method_defined?(:many)
+p Object.private_method_defined?(:inner), Object.method_defined?(:single), Object.private_method_defined?(:single)
+p 1.send(:inner)
+self.instance_eval { def evald = 3 }
+p Object.private_method_defined?(:evald)
+"), @"
+true
+false
+false
+false
+false
+1
+false
+");
+
+            // each scope's top level calls its own; an instance of another class calls the last one defined, as in CRuby
+            var scope1 = Engine.CreateScope();
+            var scope2 = Engine.CreateScope();
+            Engine.Execute("def op(a, b) = a + b; class Calc; def run = op(1, 2); end", scope1);
+            Engine.Execute("def op(a, b) = a - b", scope2);
+            Assert(Engine.Execute<int>("op(1, 2)", scope1) == 3);
+            Assert(Engine.Execute<int>("op(1, 2)", scope2) == -1);
+            Assert(Engine.Execute<int>("Calc.new.run", scope1) == -1);
+            Assert(scope1.GetVariable<Func<int, int, int>>("op")(1, 2) == 3);
+            Assert(scope2.GetVariable<Func<int, int, int>>("op")(1, 2) == -1);
         }
 
         /// <summary>
