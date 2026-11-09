@@ -4748,7 +4748,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "clone", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Clone)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Clone)
             );
             
             DefineLibraryMethod(module, "clr_member", 0x51, 
@@ -5042,8 +5042,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "public_send", 0x51, 
-                0x00000000U, 0x80000000U, 
+                0x00000000U, 0x00000000U, 0x80000000U, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.PublicSendMessage), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.SendSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.PublicSendMessage), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.SendSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.PublicSendMessage)
             );
             

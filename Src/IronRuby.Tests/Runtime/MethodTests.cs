@@ -703,6 +703,124 @@ end
 ");
         }
 
+        /// <summary>
+        /// instance_variable_get/set/defined? take a Symbol or String name without the conversion site, public_send(:name)
+        /// has an overload with no argument list, and Kernel#clone(freeze:) is C# (it was a prelude method with the keyword in
+        /// front of the C# one). Names, visibility, keywords and the freeze: errors stay MRI's. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Kernel_ReflectionFastPaths1() {
+            TestOutput(@"
+require 'ruby4'
+def show(label)
+  r = yield
+  puts ""#{label} => #{r.inspect}""
+rescue Exception => e
+  puts ""#{label} !! #{e.class}: #{e.message}""
+end
+class Foo
+  def initialize; @a = 1; end
+  def pub = :pub
+  def kw(a: 1) = a
+  def args(*a, **k, &b) = [a, k, b&.call]
+  def protected_m = :prot
+  protected :protected_m
+  def priv = :priv
+  private :priv
+  def call_prot(o) = o.public_send(:protected_m)
+  def method_missing(n, *a) = n == :ghost ? [:ghost, a] : super
+  def respond_to_missing?(n, p = false) = n == :ghost || super
+end
+o = Foo.new
+show(""ivar_get sym"") { o.instance_variable_get(:@a) }
+show(""ivar_get str"") { o.instance_variable_get(""@a"") }
+show(""ivar_get missing"") { o.instance_variable_get(:@zz) }
+show(""ivar_get bad"") { o.instance_variable_get(:a) }
+show(""ivar_get bad str"") { o.instance_variable_get(""@1"") }
+show(""ivar_get int"") { o.instance_variable_get(1) }
+show(""ivar_get nil"") { o.instance_variable_get(nil) }
+class S2 < String; def to_str = ""@b""; end
+show(""ivar_get str subclass"") { o.instance_variable_get(S2.new(""@a"")) }
+class ToS; def to_str = ""@a""; end
+show(""ivar_get to_str"") { o.instance_variable_get(ToS.new) }
+show(""ivar_set sym"") { o.instance_variable_set(:@b, 2); o.instance_variables }
+show(""ivar_set bad"") { o.instance_variable_set(:b, 2) }
+show(""ivar_defined"") { [o.instance_variable_defined?(:@a), o.instance_variable_defined?(""@q"")] }
+show(""ivar name err"") { begin; o.instance_variable_get(:bad); rescue NameError => e; [e.name, e.receiver.equal?(o)]; end }
+show(""ivar utf8 name"") { o.instance_variable_set(:@ü, 3); o.instance_variable_get(""@ü"") }
+show(""public_send pub"") { o.public_send(:pub) }
+show(""public_send str"") { o.public_send(""pub"") }
+show(""public_send ghost"") { o.public_send(:ghost) }
+show(""public_send none"") { o.public_send(:nope) }
+show(""public_send blk"") { o.public_send(:args) { 7 } }
+show(""public_send kw"") { o.public_send(:kw, a: 5) }
+show(""public_send args"") { o.public_send(:args, 1, 2, k: 3) { 4 } }
+show(""public_send noname"") { o.public_send }
+show(""public_send int"") { o.public_send(1) }
+show(""public_send to_str"") { o.public_send(ToS.new) }
+show(""public_send **{}"") { o.public_send(:pub, **{}) }
+show(""clone"") { c = o.clone; [c.class, c.instance_variable_get(:@a), c.frozen?] }
+show(""clone frozen"") { o2 = Foo.new.freeze; [o2.clone.frozen?, o2.clone(freeze: false).frozen?, o2.clone(freeze: nil).frozen?, Foo.new.clone(freeze: true).frozen?] }
+show(""clone singleton"") { o3 = Foo.new; def o3.sing = 1; [o3.clone.sing, (o3.dup.sing rescue :nodup)] }
+show(""clone bad freeze"") { o.clone(freeze: 1) }
+show(""clone bad freeze str"") { o.clone(freeze: ""x"") }
+show(""clone unknown"") { o.clone(foo: 1) }
+show(""clone unknowns"") { o.clone(foo: 1, bar: 2) }
+show(""clone freeze+unknown"") { o.clone(freeze: true, foo: 1) }
+show(""clone positional"") { o.clone(1) }
+show(""clone hash positional"") { o.clone({freeze: true}) }
+show(""clone **{}"") { o.clone(**{}).class }
+show(""clone special"") { [1.clone, nil.clone, :a.clone, 1.clone(freeze: true), (1.clone(freeze: false) rescue $!.class)] }
+class IC; attr_reader :got; def initialize_clone(o, **kw) = (@got = kw; super); end
+show(""initialize_clone kw"") { [IC.new.clone.got, IC.new.clone(freeze: false).got, IC.new.clone(freeze: true).got, IC.new.clone(freeze: nil).got] }
+class IC2; def initialize_clone(o) = super; end
+show(""initialize_clone no kw"") { [IC2.new.clone.class, (IC2.new.clone(freeze: true) rescue $!.class)] }
+show(""clone params"") { [Kernel.instance_method(:clone).parameters, Kernel.instance_method(:clone).arity] }
+show(""string clone"") { s = ""x"".freeze; [s.clone.frozen?, s.clone(freeze: false).frozen?] }
+", @"
+ivar_get sym => 1
+ivar_get str => 1
+ivar_get missing => nil
+ivar_get bad !! NameError: 'a' is not allowed as an instance variable name
+ivar_get bad str !! NameError: '@1' is not allowed as an instance variable name
+ivar_get int !! TypeError: 1 is not a symbol nor a string
+ivar_get nil !! TypeError: nil is not a symbol nor a string
+ivar_get str subclass => 1
+ivar_get to_str => 1
+ivar_set sym => [:@a, :@b]
+ivar_set bad !! NameError: 'b' is not allowed as an instance variable name
+ivar_defined => [true, false]
+ivar name err => [:bad, true]
+ivar utf8 name => 3
+public_send pub => :pub
+public_send str => :pub
+public_send ghost => [:ghost, []]
+public_send none !! NoMethodError: undefined method 'nope' for an instance of Foo
+public_send blk => [[], {}, 7]
+public_send kw => 5
+public_send args => [[1, 2], {k: 3}, 4]
+public_send noname !! ArgumentError: no method name given
+public_send int !! TypeError: 1 is not a symbol nor a string
+public_send to_str !! NoMethodError: undefined method '@a' for an instance of Foo
+public_send **{} => :pub
+clone => [Foo, 1, false]
+clone frozen => [true, false, true, true]
+clone singleton => [1, :nodup]
+clone bad freeze !! ArgumentError: unexpected value for freeze: Integer
+clone bad freeze str !! ArgumentError: unexpected value for freeze: String
+clone unknown !! ArgumentError: unknown keyword: :foo
+clone unknowns !! ArgumentError: unknown keywords: :foo, :bar
+clone freeze+unknown !! ArgumentError: unknown keyword: :foo
+clone positional !! ArgumentError: wrong number of arguments (given 1, expected 0)
+clone hash positional !! ArgumentError: wrong number of arguments (given 1, expected 0)
+clone **{} => Foo
+clone special => [1, nil, :a, 1, ArgumentError]
+initialize_clone kw => [{}, {freeze: false}, {freeze: true}, {}]
+initialize_clone no kw => [IC2, ArgumentError]
+clone params => [[[:key, :freeze]], -1]
+string clone => [true, false]
+");
+        }
+
         public void AttributeAccessors1() {
             AssertOutput(delegate {
                 CompilerTest(@"

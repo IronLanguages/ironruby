@@ -2259,38 +2259,6 @@ if defined?($LOAD_PATH) && $LOAD_PATH.is_a?(Array) &&
 end
 
 # --------------------------------------------------------------------------
-# Object#clone(freeze:) (2.4)
-# --------------------------------------------------------------------------
-
-# Kernel, not Object: MRI keeps #clone there, and delegate.rb builds its forwarder
-# out of `Kernel.dup` - a copy that would otherwise carry only the runtime's
-# argument-less #clone and refuse clone(freeze: false).
-module Kernel
-  unless (begin; Object.new.clone(:freeze => nil); true; rescue ArgumentError; false; end)
-    alias :__clone_without_options__ :clone
-
-    # `clone(freeze: nil)` is the default (copy the frozen state), `freeze: true`
-    # always freezes, `freeze: false` never does. The runtime's #clone always
-    # copies the frozen flag and there is no way to thaw an object from Ruby, so
-    # `freeze: false` on an already-frozen receiver falls back to #dup, which
-    # differs from #clone only in that it does not carry over the singleton
-    # class.
-    def clone(freeze: nil)
-      unless freeze.nil? || freeze == true || freeze == false
-        # Fixnum/Bignum are still distinct classes here; MRI says Integer.
-        name = freeze.class.to_s
-        name = "Integer" if name == "Fixnum" || name == "Bignum"
-        raise ArgumentError, "unexpected value for freeze: #{name}"
-      end
-
-      # A freeze: value that was actually given is handed on to #initialize_clone, and
-      # decides whether the copy is frozen; without one the copy follows the original.
-      freeze.nil? ? __clone_without_options__ : __ir_clone_with_freeze__(freeze)
-    end
-  end
-end
-
-# --------------------------------------------------------------------------
 # Fiber
 #
 # .NET has no coroutines, so every Fiber is backed by a dedicated thread plus a

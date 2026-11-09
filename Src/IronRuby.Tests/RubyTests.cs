@@ -200,6 +200,7 @@ namespace IronRuby.Tests {
 
                 Send1,
                 Send2,
+                Kernel_ReflectionFastPaths1,
                 MethodCallCaching7,
                 MethodCallCaching8,
                 
