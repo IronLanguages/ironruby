@@ -287,6 +287,98 @@ block in <main>
             AssertOutput(() => CompilerTest(code), expected);
         }
 
+        private const string HostedBacktraceCode = @"
+def many
+  raise ArgumentError, 'x'
+end
+
+class Foo
+  def bar = many
+  def self.baz = new.bar
+end
+
+begin
+  [1].each { Foo.baz }
+rescue => e
+  puts e.backtrace
+end
+";
+
+        /// <summary>
+        /// Code without a path (ScriptEngine.Execute(string)) had no line information at all (issue 163): a method's frame was
+        /// reported at the line of its `def' and a frame of the top level - Array#each's too - at line 0. It now has the lines
+        /// a file has, under the name "(eval)" its frames already had. Nothing of the host is reported below "<main>".
+        /// </summary>
+        public void Backtrace_HostedPathlessLines1() {
+            AssertOutput(() => Engine.Execute(HostedBacktraceCode), @"
+(eval):3:in 'Object#many'
+(eval):7:in 'Foo#bar'
+(eval):8:in 'Foo.baz'
+(eval):12:in 'block in <main>'
+(eval):12:in 'Array#each'
+(eval):12:in '<main>'
+");
+            // Run in a scope of the host's (ScriptCode.Run(Scope), as CompilerTest does), a top-level `def' defines a
+            // method of that scope: main's singleton class. So Foo#bar, reopened here, calls the Object#many that
+            // Engine.Execute defined above - and reports it where that one raises, not at its `def'.
+            AssertOutput(() => CompilerTest(HostedBacktraceCode), @"
+(eval):3:in 'Object#many'
+Backtrace_HostedPathlessLines1.rb:7:in 'Foo#bar'
+Backtrace_HostedPathlessLines1.rb:8:in 'Foo.baz'
+Backtrace_HostedPathlessLines1.rb:12:in 'block in <main>'
+Backtrace_HostedPathlessLines1.rb:12:in 'Array#each'
+Backtrace_HostedPathlessLines1.rb:12:in '<main>'
+");
+            AssertOutput(() => Engine.Execute(@"
+def m = __method__
+p method(:m).source_location
+p caller(0)
+"), @"
+[""(eval)"", 2]
+[""(eval):4:in '<main>'""]
+");
+        }
+
+        /// <summary>
+        /// The CLR frames of the host that runs Ruby code (ScriptSource.Execute's caller and its callers: CompilerTest,
+        /// RunTestCase, Main) were reported below "<main>" (issue 163). CRuby has nothing below the main script's frame.
+        /// A CLR method that Ruby code calls and that calls back into Ruby is still reported (Backtrace4).
+        /// </summary>
+        public void Backtrace_HostedNoHostFrames1() {
+            AssertOutput(() => Engine.CreateScriptSourceFromString(HostedBacktraceCode, "hosted.rb", SourceCodeKind.File).Execute(), @"
+hosted.rb:3:in 'Object#many'
+hosted.rb:7:in 'Foo#bar'
+hosted.rb:8:in 'Foo.baz'
+hosted.rb:12:in 'block in <main>'
+hosted.rb:12:in 'Array#each'
+hosted.rb:12:in '<main>'
+");
+            AssertOutput(() => CompilerTest(@"
+p caller
+p caller(0)
+[1].each { p caller(0) }
+begin
+  raise 'x'
+rescue => e
+  p e.backtrace
+end
+"), @"
+[]
+[""Backtrace_HostedNoHostFrames1.rb:3:in '<main>'""]
+[""Backtrace_HostedNoHostFrames1.rb:4:in 'block in <main>'"", ""Backtrace_HostedNoHostFrames1.rb:4:in 'Array#each'"", ""Backtrace_HostedNoHostFrames1.rb:4:in '<main>'""]
+[""Backtrace_HostedNoHostFrames1.rb:6:in '<main>'""]
+");
+
+            // a method the host calls has no frame below its own
+            var scope = Engine.CreateScope();
+            Engine.Execute("def frames(start) = caller(start)", scope);
+            var frames = scope.GetVariable<Func<int, object>>("frames");
+            var all = (IronRuby.Builtins.RubyArray)frames(0);
+            Assert(all.Count == 1);
+            Assert(all[0].ToString() == "(eval):1:in 'Object#frames'");
+            Assert(((IronRuby.Builtins.RubyArray)frames(1)).Count == 0);
+        }
+
         /// <summary>
         /// A compiled method or block (the tests compile every method before its first run; ir.sh, once it has run ~300
         /// times) has no line information of its own: every frame of one was reported at the line its method or block
