@@ -526,6 +526,7 @@ namespace IronRuby.Runtime.Jit {
                 // the stack check a method's scope would make (#128), where the method calls itself
                 if (c._selfCall) {
                     body = new StackCheckPlacer(c._selfCalls).Visit(body);
+                    body = KeepOutOfTailPosition(body, c._self);
                 }
 
                 var parameters = new List<MSA.ParameterExpression>(paramTypes.Length + 1);
@@ -1832,6 +1833,22 @@ namespace IronRuby.Runtime.Jit {
                 case "!=": return Ast.NotEqual(order, Ast.Constant(0));
                 default: throw JitBailout.Instance;
             }
+        }
+
+        /// <summary>
+        /// Makes the body end with something after its value, so no self-call is the last thing the method does
+        /// (#165). RyuJIT turns a call followed by `ret' into a jump when it can (an implicit tail call), and a
+        /// self-call made so reuses the frame: `def d(n) = d(n + 1)' became a loop that never ran out of stack and
+        /// never raised SystemStackError. The decision is made when the call's IL is read, by looking at the next
+        /// instruction, so a GC.KeepAlive in between rules it out on every runtime; the JIT emits no code for it.
+        /// </summary>
+        private static MSA.Expression/*!*/ KeepOutOfTailPosition(MSA.Expression/*!*/ body, MSA.ParameterExpression/*!*/ self) {
+            var keepAlive = Ast.Call(typeof(GC).GetMethod("KeepAlive"), self);
+            if (body.Type == typeof(void)) {
+                return Ast.Block(body, keepAlive);
+            }
+            var result = Ast.Variable(body.Type, "#result");
+            return Ast.Block(body.Type, new[] { result }, Ast.Assign(result, body), keepAlive, result);
         }
 
         /// <summary>

@@ -766,6 +766,7 @@ namespace IronRuby.Tests {
                 Marshal_Undumpable1,
                 Zlib_GunzipErrors1,
                 Exception_StackLevelTooDeep1,
+                Exception_StackLevelTooDeepJitTailCall1,
 
                 ClassVariables1,
                 UnqualifiedConstants2,
