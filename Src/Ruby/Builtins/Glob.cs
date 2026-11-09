@@ -21,6 +21,7 @@ using IronRuby.Runtime;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using System.IO;
+using System.IO.Enumeration;
 
 namespace IronRuby.Builtins {
     public static class Glob {
@@ -646,9 +647,16 @@ namespace IronRuby.Builtins {
                 return _pattern.Length;
             }
 
-            private void TestPath(string path, int patternEnd, bool isLastPathSegment, bool atBase) {
+            /// <param name="kind">
+            /// What a directory listing already said about <paramref name="path"/>. A listed entry
+            /// exists, so a last segment needs no existence check, and one that is known to be a
+            /// directory (or not one) needs no check before it is walked into.
+            /// </param>
+            private void TestPath(string path, int patternEnd, bool isLastPathSegment, bool atBase, EntryKind kind = EntryKind.Unknown) {
                 if (!isLastPathSegment) {
-                    DoGlob(path, patternEnd, false, atBase);
+                    if (kind != EntryKind.NotDirectory) {
+                        DoGlob(path, patternEnd, false, atBase, kind == EntryKind.Directory);
+                    }
                     return;
                 }
 
@@ -672,10 +680,140 @@ namespace IronRuby.Builtins {
                     match = "/";
                 }
 
-                if (_pal.DirectoryExists(full)) {
+                if (kind != EntryKind.Unknown) {
+                    // Listed: it exists. A last segment that a listing matched is never the empty
+                    // one a directory-only pattern ends with, so _dirOnly does not apply here.
+                    // A dangling symbolic link is listed and reported, as FileExists did (it
+                    // answers true for one) and as MRI does.
+                    _result.Add(match);
+                } else if (_pal.DirectoryExists(full)) {
                     _result.Add(match);
                 } else if (!_dirOnly && _pal.FileExists(full)) {
                     _result.Add(match);
+                }
+            }
+
+            internal enum EntryKind : byte {
+                Unknown,
+                Directory,
+                NotDirectory
+            }
+
+            /// <summary>One entry of a directory listing.</summary>
+            private struct Entry {
+                // The entry's path as PlatformAdaptationLayer.GetFileSystemEntries spells it.
+                internal string Path;
+                internal string Name;
+                // Directory when the entry is one or is a symbolic link to one, as
+                // DirectoryExists would answer; Unknown when the listing could not tell.
+                internal EntryKind Kind;
+            }
+
+            // The last directory listed, and its entries. "**/x" lists every directory twice in a
+            // row - once to match x in it, once to walk on - so one slot halves the listings.
+            private string _listedDirectory;
+            private Entry[] _listedEntries;
+
+            private static readonly EnumerationOptions _listOptions = new EnumerationOptions {
+                // Directory.GetFileSystemEntries' (EnumerationOptions.Compatible): every entry,
+                // and an unreadable directory throws as it does.
+                AttributesToSkip = 0,
+                IgnoreInaccessible = false,
+                RecurseSubdirectories = false,
+                ReturnSpecialDirectories = false,
+            };
+
+            private Entry[]/*!*/ ListDirectory(string/*!*/ directory) {
+                if (_listedEntries != null && directory.Equals(_listedDirectory)) {
+                    return _listedEntries;
+                }
+
+                Entry[] entries;
+                if (UsesFileSystem(_pal)) {
+                    // The same listing GetFileSystemEntries makes, but keeping what readdir says
+                    // about each entry's type. Asking the file system again for every entry -
+                    // FileExists, DirectoryExists, a symlink check - is most of what globbing
+                    // a large tree used to cost.
+                    var list = new List<Entry>();
+                    var enumerable = new FileSystemEnumerable<Entry>(
+                        // the PAL's .NET Framework workaround, so that the paths come out the same
+                        directory == "." ? directory + System.IO.Path.DirectorySeparatorChar : directory,
+                        (ref FileSystemEntry entry) => new Entry {
+                            Path = entry.ToSpecifiedFullPath(),
+                            Name = entry.FileName.ToString(),
+                            Kind = GetKind(ref entry),
+                        },
+                        _listOptions);
+                    list.AddRange(enumerable);
+                    entries = list.ToArray();
+                } else {
+                    string[] paths = _pal.GetFileSystemEntries(directory, "*");
+                    entries = new Entry[paths.Length];
+                    for (int i = 0; i < paths.Length; i++) {
+                        entries[i] = new Entry { Path = paths[i], Name = System.IO.Path.GetFileName(paths[i]), Kind = EntryKind.Unknown };
+                    }
+                }
+
+                if (_sort) {
+                    // MRI sorts the entries of each directory as it walks into it rather than
+                    // sorting the final list, so "{zz,aa}/*" keeps the brace alternatives in
+                    // pattern order while sorting within each of them.
+                    Array.Sort(entries, (x, y) => String.CompareOrdinal(x.Path, y.Path));
+                }
+
+                _listedDirectory = directory;
+                _listedEntries = entries;
+                return entries;
+            }
+
+            private static EntryKind GetKind(ref FileSystemEntry entry) {
+                if (RubyUtils.FileSystemUsesDriveLetters) {
+                    // Windows: the attributes come with the listing. A symbolic link or junction
+                    // carries its own Directory attribute whether or not its target exists, so
+                    // that one is left to DirectoryExists and FileExists, as before.
+                    return (entry.Attributes & FileAttributes.ReparsePoint) != 0 ? EntryKind.Unknown :
+                        entry.IsDirectory ? EntryKind.Directory : EntryKind.NotDirectory;
+                }
+                // Unix: IsDirectory follows a symbolic link (one stat, for links only), as
+                // DirectoryExists does; a dangling link is not a directory. (Attributes would
+                // stat every entry, for ReadOnly.)
+                return entry.IsDirectory ? EntryKind.Directory : EntryKind.NotDirectory;
+            }
+
+            // Whether the PAL's file system is the real one, so that a listing may be made
+            // directly: a host's PAL that overrides how files are found or listed (a virtual
+            // file system) is asked through its own methods.
+            private static readonly Dictionary<Type, bool>/*!*/ _palUsesFileSystem = new Dictionary<Type, bool>();
+
+            private static bool UsesFileSystem(PlatformAdaptationLayer/*!*/ pal) {
+                Type type = pal.GetType();
+                if (type == typeof(PlatformAdaptationLayer)) {
+                    return true;
+                }
+
+                bool result;
+                lock (_palUsesFileSystem) {
+                    if (_palUsesFileSystem.TryGetValue(type, out result)) {
+                        return result;
+                    }
+                }
+
+                result = IsInherited(type, "FileExists", typeof(string)) &&
+                    IsInherited(type, "DirectoryExists", typeof(string)) &&
+                    IsInherited(type, "GetFileSystemEntries", typeof(string), typeof(string), typeof(bool), typeof(bool));
+
+                lock (_palUsesFileSystem) {
+                    _palUsesFileSystem[type] = result;
+                }
+                return result;
+            }
+
+            private static bool IsInherited(Type/*!*/ type, string/*!*/ name, params Type[]/*!*/ parameterTypes) {
+                try {
+                    var method = type.GetMethod(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance, null, parameterTypes, null);
+                    return method != null && method.DeclaringType == typeof(PlatformAdaptationLayer);
+                } catch (Exception) {
+                    return false;
                 }
             }
 
@@ -764,8 +902,9 @@ namespace IronRuby.Builtins {
             /// count as an entry: Dir["a/**/*", File::FNM_DOTMATCH] yields "a/." but not
             /// "a/b/.".
             /// </param>
-            internal void DoGlob(string/*!*/ baseDirectory, int position, bool isPreviousDoubleStar, bool atBase) {
-                if (!_pal.DirectoryExists(baseDirectory)) {
+            /// <param name="knownDirectory">A listing has already shown baseDirectory to be a directory.</param>
+            internal void DoGlob(string/*!*/ baseDirectory, int position, bool isPreviousDoubleStar, bool atBase, bool knownDirectory = false) {
+                if (!knownDirectory && !_pal.DirectoryExists(baseDirectory)) {
                     return;
                 }
 
@@ -795,33 +934,22 @@ namespace IronRuby.Builtins {
                 // subtree. This used to be special-cased for the pattern "**" on its own.
                 bool doubleStar = dirSegment.Equals("**") && !isLastPathSegment;
                 if (doubleStar && !isPreviousDoubleStar) {
-                    DoGlob(baseDirectory, patternEnd, true, atBase);
-                }
-
-                IEnumerable<string> entries = _pal.GetFileSystemEntries(baseDirectory, "*");
-                if (_sort) {
-                    // MRI sorts the entries of each directory as it walks into it rather than
-                    // sorting the final list, so "{zz,aa}/*" keeps the brace alternatives in
-                    // pattern order while sorting within each of them.
-                    var sorted = new List<string>(entries);
-                    sorted.Sort(StringComparer.Ordinal);
-                    entries = sorted;
+                    DoGlob(baseDirectory, patternEnd, true, atBase, true);
                 }
 
                 FnMatcher segmentMatcher = GetFnMatcher(dirSegment, _flags);
-                foreach (string file in entries) {
-                    string objectName = Path.GetFileName(file);
-                    if (segmentMatcher.IsMatch(objectName)) {
-                        var canon = RubyUtils.CanonicalizePath(file);
-                        if (doubleStar && IsSymbolicLinkToDirectory(canon)) {
+                foreach (Entry entry in ListDirectory(baseDirectory)) {
+                    if (segmentMatcher.IsMatch(entry.Name)) {
+                        var canon = RubyUtils.CanonicalizePath(entry.Path);
+                        if (doubleStar && entry.Kind != EntryKind.NotDirectory && IsSymbolicLinkToDirectory(canon)) {
                             // A recursive "**" neither reports a symlinked directory nor walks
                             // into it - otherwise Dir["**/"] both lists "special/ln/" and
                             // reports everything below it a second time.
                             continue;
                         }
-                        TestPath(canon, patternEnd, isLastPathSegment, false);
-                        if (doubleStar) {
-                            DoGlob(canon, position, true, false);
+                        TestPath(canon, patternEnd, isLastPathSegment, false, entry.Kind);
+                        if (doubleStar && entry.Kind != EntryKind.NotDirectory) {
+                            DoGlob(canon, position, true, false, entry.Kind == EntryKind.Directory);
                         }
                     }
                 }

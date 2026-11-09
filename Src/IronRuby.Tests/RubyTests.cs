@@ -170,6 +170,8 @@ namespace IronRuby.Tests {
                 File_AppendBytesToEnd1,
                 File_AppendBytesFromBuffer1,
                 Dir2,
+                Dir_GlobListing1,
+                Dir_GlobVirtualPal1,
                 
                 Regex1,
                 Regex2,
