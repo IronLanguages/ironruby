@@ -1213,6 +1213,7 @@ namespace IronRuby.Tests {
                 BigInteger1,
                 GcdLcm1,
                 Integer_ElementReference1,
+                Integer_SqrtLarge1,
                 Integer_Normalization1,
                 Integer_ToStringRadix1,
                 Pack_BerTruncated1,

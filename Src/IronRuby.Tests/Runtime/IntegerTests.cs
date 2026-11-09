@@ -910,5 +910,47 @@ arity => [-1, [[:rest]]]
 send => [1, 5, [1, 0, 1]]
 ");
         }
+
+        /// <summary>
+        /// Integer.sqrt of a large Integer starts Newton's method from the double's root of its leading bits, raised above
+        /// the true root. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Integer_SqrtLarge1() {
+            TestOutput(@"
+require 'ruby4'
+[2**62, 2**62 + 1, 2**64 - 1, 2**70, 2**70 - 1, 10**40 + 7, (10**20)**2 - 1, (10**20)**2, (2**500 + 3)**2 - 1, (2**500 + 3)**2,
+ 2**999, 2**1000 + 1, 2**2000, (2**1023 - 1)**2, (2**1023)**2 - 1, (2**1100 + 12345)**2 - 1, (2**1100 + 12345)**2].each do |n|
+  r = Integer.sqrt(n)
+  puts ""#{n.bit_length}: #{r.bit_length} #{r % 1_000_000_007} #{r * r <= n && (r + 1) * (r + 1) > n}""
+end
+srand(7)
+ok = (1..300).all? do |i|
+  k = rand(2**(i * 7)) + 1
+  Integer.sqrt(k * k) == k && Integer.sqrt(k * k - 1) == k - 1 && Integer.sqrt(k * k + 2 * k) == k
+end
+p ok
+p((Integer.sqrt(-(2**70)) rescue $!.class))
+", @"
+63: 32 147483634 true
+63: 32 147483634 true
+64: 32 294967267 true
+71: 36 359738130 true
+70: 35 359738129 true
+133: 67 4900 true
+133: 67 4899 true
+133: 67 4900 true
+1001: 501 390483009 true
+1001: 501 390483010 true
+1000: 500 563322577 true
+1001: 501 390483007 true
+2001: 1001 688423210 true
+2046: 1023 406367295 true
+2046: 1023 406367295 true
+2201: 1101 466440651 true
+2201: 1101 466440652 true
+true
+Math::DomainError
+");
+        }
     }
 }
