@@ -4924,7 +4924,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "Integer", 0x52, 
-                0x00000000U, 
+                0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 
+                new Func<System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<System.Object, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<System.Object, System.Double, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger)
             );
             

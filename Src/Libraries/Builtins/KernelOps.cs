@@ -144,6 +144,23 @@ namespace IronRuby.Builtins {
             return null;
         }
 
+        // Integer(string), Integer(fixnum) and Integer(float), the common calls, without the storages and the keyword parameter of the
+        // general overload below: the binder's dispatch to that one cost more than the conversion (~100 ns for a Fixnum).
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        public static object ToInteger(object self, [NotNull]MutableString/*!*/ value) {
+            return ParseInteger(value, 0, true);
+        }
+
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        public static object ToInteger(object self, int value) {
+            return ScriptingRuntimeHelpers.Int32ToObject(value);
+        }
+
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        public static object ToInteger(object self, double value) {
+            return ClrFloat.ToInt(value);
+        }
+
         /// <summary>
         /// Kernel#Integer(arg, base = 0, exception: true), MRI's rb_convert_to_integer. A non-zero base
         /// goes with a String, so anything else must have #to_str. A String is parsed, an Integer is
