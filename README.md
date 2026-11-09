@@ -47,7 +47,8 @@ not kept.
   is 3.25×; calls, strings and arrays are where the work is.
 - **irb 1.18 + reline**, **RubyGems 4.0.20 and Bundler** over real TLS, and Ruby 4.0's
   standard library and bundled gems.
-- **[Rails 8.1 boots](#rails)** and serves requests through Rack (with nokogiri stubbed).
+- **[Rails 8.1 runs](#rails)**: `rails new`, a scaffold on SQLite, served by Puma, with
+  IronRuby's own sqlite3, nokogiri and puma in place of the C extensions.
 - **.NET is right there**: `require "System.Windows.Forms"`, and Windows Forms and WPF load
   from the Windows download. [`irubyc`](#packaging-an-application-irubyc) turns a Ruby
   program into one executable, or into a plugin DLL for a .NET host.
@@ -287,9 +288,9 @@ holds what CRuby implements as C extensions, written in C# (`Src/Libraries`) or 
 the only other library directory on the load path. A compatibility prelude
 ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb)) supplies what MRI provides
 natively and is simplest written in Ruby — `Fiber` (over C# mailboxes), `Random` (over a C#
-MT19937), `ruby2_keywords` and core methods from Ruby 2.x-4.x; `Rational` and `Complex`
-are Ruby ports of CRuby 4.0's `rational.c` and `complex.c`, and `Pathname` is CRuby 4.0's own
-`pathname_builtin.rb`. `Ripper` is implemented
+MT19937), `ruby2_keywords` and core methods from Ruby 2.x-4.x; `Pathname` is CRuby 4.0's own
+`pathname_builtin.rb`. `Rational` and `Complex` are C# (`RubyRational`, `RubyComplex`),
+following CRuby 4.0's `rational.c` and `complex.c`. `Ripper` is implemented
 on prism, the way CRuby 4.0 implements it, and `io/console` over termios, so the current
 **irb** and **reline** run unmodified.
 
@@ -327,7 +328,11 @@ or Bundler.
 
 A C extension is never built: there is no `ruby.h` to compile against.  Such a gem is left alone -
 its `.rb` files load, a real `require` of the `.so` raises `LoadError`, and the pure-Ruby
-fallback most of them carry is used instead.
+fallback most of them carry is used instead.  For the popular gems that have no fallback,
+IronRuby ships the C half itself, in C# or over a .NET library, as JRuby ships `-java` gems:
+`sqlite3`, `nokogiri` (over AngleSharp), `puma`, `nio4r`, `bcrypt`, `msgpack`, `oj`, `ffi`,
+`websocket-driver` and `markly`.  All but `markly` are default gems, so Bundler resolves a
+lockfile that names them without compiling anything.
 
 **rbs** (Ruby's type signatures, which ruby-lsp, steep and rdoc 8 load) has no such fallback,
 so IronRuby provides its extension, `rbs_extension`: the installed gem's own Ruby loads on top
@@ -395,22 +400,24 @@ of a `Rational` with a `Numeric` subclass numerator.
 
 ### Rails
 
-A Rails 8.1 application boots and serves HTTP requests through Rack:
+A Rails 8.1 application runs the way it does on CRuby, from an untouched default Gemfile:
 
 ```
-RAILS GET /hello       -> 200 "Hello world from Rails 8.1.3.1 on ironruby 4.0.0"
-RAILS GET /hello/Iron  -> 200 "Hello IronRuby from Rails 8.1.3.1 on ironruby 4.0.0"
+igem install rails
+rails new blog && cd blog && bundle install
+bin/rails generate scaffold Post title:string body:text published:boolean
+bin/rails db:migrate
+bin/rails server
 ```
 
-ActiveSupport, ActiveModel, ActionDispatch, ActionController, ActionView (ERB templates
-through the real resolver), ActiveJob, ActiveRecord and railties all install and load.
-Two things stop a *complete* Rails app, and neither is a Ruby-level bug:
+The scaffold is served by Puma against SQLite, with Turbo and Stimulus through importmap:
+index, new, create (with its CSRF token), show, JSON, edit, update, destroy and the
+development error pages answer as on CRuby. `sqlite3`, `nokogiri` and `puma` are IronRuby's
+own (see [bundled gems](#bundled-gems)). [`Docs/rails-on-windows.md`](Docs/rails-on-windows.md)
+has the walkthrough and what had to be fixed for it.
 
-- **nokogiri** is a C extension (libxml2 + gumbo) and a hard dependency of
-  `rails-html-sanitizer` -> `loofah` -> `actionview`, and of `rails-dom-testing` ->
-  `actionpack`.  Everything above was measured with a load-only stub in its place; the
-  sanitize helpers, the dom assertions and the HTML error page need a real implementation.
-- **ActiveRecord has no adapter**: `sqlite3`, `pg`, `mysql2` and `trilogy` are all native.
+Not there yet: ActiveRecord adapters for PostgreSQL and MySQL (`pg`, `mysql2` and `trilogy`
+are native), and Puma's cluster mode (no `fork`).
 
 ## Performance
 
