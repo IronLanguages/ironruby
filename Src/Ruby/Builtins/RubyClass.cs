@@ -425,7 +425,7 @@ namespace IronRuby.Builtins {
                 // cannot happen before anyone looks a method up, but Class#subclasses reads
                 // the same list and has to see a class nobody has touched yet.
                 using (context.ClassHierarchyLocker()) {
-                    InitializeDependencies();
+                    InitializeDependencies(true);
                 }
             } else {
                 _level = 0;
@@ -435,25 +435,26 @@ namespace IronRuby.Builtins {
         #region Versioning
 
         internal override void InitializeDependencies() {
+            InitializeDependencies(false);
+        }
+
+        // isNew: called from the constructor, so no module can have this class in its list yet
+        // and the duplicate check - a walk over every live subclass of Object - is skipped.
+        private void InitializeDependencies(bool isNew) {
             Context.RequiresClassHierarchyLock();
             if (!_dependenciesInitialized) {
                 _dependenciesInitialized = true;
 
                 // super -> class dependency:
                 if (_superClass != null) {
-                    _superClass.AddDependentClass(this);
+                    _superClass.AddDependentClass(this, isNew);
                 }
 
                 // mixin -> class dependency:
-                AddAsDependencyOf(Mixins);
-            }
-        }
-
-        internal void AddAsDependencyOf(IList<RubyModule/*!*/>/*!*/ modules) {
-            Context.RequiresClassHierarchyLock();
-
-            for (int i = 0; i < modules.Count; i++) {
-                modules[i].AddDependentClass(this);
+                var mixins = Mixins;
+                for (int i = 0; i < mixins.Length; i++) {
+                    mixins[i].AddDependentClass(this, isNew);
+                }
             }
         }
 

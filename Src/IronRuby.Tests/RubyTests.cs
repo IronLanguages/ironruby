@@ -1140,6 +1140,7 @@ namespace IronRuby.Tests {
                 ModuleClassNew1,
                 ModuleClassNew2,
                 ModuleClassNew3,
+                ModuleClassNew4,
                 ModuleEvalString1,
                 InstanceEvalString1,
                 ModuleEvalString2,

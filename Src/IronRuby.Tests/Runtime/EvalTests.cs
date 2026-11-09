@@ -554,6 +554,43 @@ Module
 ");
         }
 
+        /// <summary>
+        /// Classes made at run time, past the 4096 versions a shared call-site rule's version set holds before it starts over
+        /// (RuleVersionSet): calls on them still dispatch, see later redefinitions, and Class#subclasses lists each class once
+        /// (a new class registers with its superclass and modules without a duplicate scan).
+        /// </summary>
+        public void ModuleClassNew4() {
+            TestOutput(@"
+require 'ruby4'
+base = Class.new { def hi = :base }
+m = Module.new { def mod = :mod }
+cs = (1..5000).map { |i| Class.new(base) { include m; define_method(:i) { i } } }
+p [base.subclasses.size, base.subclasses.uniq.size, cs.sum { |c| c.new.i }]
+p cs.map { |c| [c.new.hi, c.new.mod] }.uniq
+base.class_eval { def hi = :changed }
+m.module_eval { def mod = :changed_mod }
+p cs.map { |c| [c.new.hi, c.new.mod] }.uniq
+s = (1..3000).map { |i| Struct.new(:a, :b, keyword_init: i.odd? ? true : nil) { def sum = a + b } }
+p s.map { |k| k.keyword_init? }.tally, s[0].new(a: 1, b: 2).sum, s[1].new(3, 4).sum
+p s[0].inspect.end_with?(""(keyword_init: true)""), s[1].inspect.include?(""keyword_init"")
+d = (1..3000).map { |i| Data.define(:x) { define_method(:k) { i } } }
+p d.sum { |k| k.new(x: 1).k }, d[5].members, d[5].new(9).x, Data.respond_to?(:members)
+", @"
+[5000, 5000, 12502500]
+[[:base, :mod]]
+[[:changed, :changed_mod]]
+{true => 1500, nil => 1500}
+3
+7
+true
+false
+4501500
+[:x]
+9
+false
+");
+        }
+
         public void ModuleEvalString1() {
             AssertOutput(delegate() {
                 CompilerTest(@"

@@ -6801,8 +6801,9 @@ class Data
           undef_method :define
         end
       end
-      klass.__send__(:__ir_set_hidden_ivar__, :data_members, names)
-      klass.class_eval(&block) if block
+      # klass is a new receiver: see Struct.new
+      ::Kernel.instance_method(:__ir_set_hidden_ivar__).bind_call(klass, :data_members, names)
+      ::Module.instance_method(:class_eval).bind_call(klass, &block) if block
       klass
     end
 
@@ -11087,14 +11088,18 @@ class << Struct
     end
 
     klass = args.empty? ? __struct_new__(nil) : __struct_new__(*args)
-    klass.__send__(:__ir_set_hidden_ivar__, :@__keyword_init__, keyword_init)
+    # klass is a new receiver: a call like klass.define_singleton_method would bind a rule
+    # of its own, every time (hundreds of microseconds). The methods called through
+    # bind_call share one rule - and are the built-ins, as in MRI's struct.c.
+    ::Kernel.instance_method(:__ir_set_hidden_ivar__).bind_call(klass, :@__keyword_init__, keyword_init)
+    define_singleton = ::Kernel.instance_method(:define_singleton_method)
     # only classes created by Struct.new answer #keyword_init?, not every Struct subclass
-    klass.define_singleton_method(:keyword_init?) { @__keyword_init__ }
+    define_singleton.bind_call(klass, :keyword_init?) { @__keyword_init__ }
     if keyword_init
       # MRI: #<Class:0x...>(keyword_init: true)
-      klass.define_singleton_method(:inspect) { "#{super()}(keyword_init: true)" }
+      define_singleton.bind_call(klass, :inspect) { "#{super()}(keyword_init: true)" }
     end
-    klass.module_eval(&block) if block
+    ::Module.instance_method(:module_eval).bind_call(klass, &block) if block
     klass
   end
 end
