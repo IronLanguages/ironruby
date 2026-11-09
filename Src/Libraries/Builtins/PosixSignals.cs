@@ -115,10 +115,11 @@ namespace IronRuby.Builtins {
         /// takes it: on Linux every one up to 64 except 32 and 33, which glibc keeps for its own
         /// threads; on Windows only SIGABRT_COMPAT (6) and SIGBREAK (21) besides the listed ones.
         /// The C library's refusal is EINVAL (MRI on Windows sometimes reports a stale errno
-        /// instead, ENOTTY for 1 and 3); a number at or past NSIG is not a signal at all.
+        /// instead, ENOTTY for 1 and 3); a number at or past NSIG is not a signal at all. NSIG is 23
+        /// for the Windows C runtime, 32 on macOS and 65 on Linux.
         /// </summary>
         private static void CheckTrapNumber(int number) {
-            int maxSignal = RubyProcess.IsWindows ? 22 : 64;
+            int maxSignal = RubyProcess.IsWindows ? 22 : RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 31 : 64;
             if (number < 0 || number > maxSignal) {
                 throw RubyExceptions.CreateArgumentError("invalid signal number ({0})", number);
             }
@@ -147,6 +148,7 @@ namespace IronRuby.Builtins {
 
         private const int SignalPipe = 13;
         internal const int SignalInterrupt = 2;
+        private const int SignalBreak = 21;
 
         [DllImport("libc", EntryPoint = "signal")]
         private static extern IntPtr SysSignal(int signal, IntPtr handler);
@@ -583,8 +585,11 @@ namespace IronRuby.Builtins {
         }
 
         private static PosixSignalRegistration TryRegister(int signal) {
+            // .NET on Windows takes only its own PosixSignal values, and calls Ctrl-Break SIGQUIT;
+            // the C runtime calls it SIGBREAK (21), which is the number MRI traps it by.
+            PosixSignal posixSignal = (RubyProcess.IsWindows && signal == SignalBreak) ? PosixSignal.SIGQUIT : (PosixSignal)signal;
             try {
-                return PosixSignalRegistration.Create((PosixSignal)signal, context => {
+                return PosixSignalRegistration.Create(posixSignal, context => {
                     // Whatever the signal would normally do to the process, a Ruby handler replaces it.
                     context.Cancel = true;
                     Enqueue(signal);
