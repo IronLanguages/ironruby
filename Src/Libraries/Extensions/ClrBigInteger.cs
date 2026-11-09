@@ -858,7 +858,7 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod("<<")]
         public static object/*!*/ LeftShift(BigInteger/*!*/ self, int other) {
-            BigInteger result = self << other;
+            BigInteger result = ClrInteger.ShiftLeftOrFail(self, other);
             result = ShiftOverflowCheck(self, result);
             return Protocols.Normalize(result);
         }
@@ -869,7 +869,7 @@ namespace IronRuby.Builtins {
             if (other.AsInt32(out small)) {
                 return LeftShift(self, small);
             }
-            return ClrInteger.ShiftedOutOfRange(self.Sign, other.Sign > 0);
+            return ClrInteger.ShiftBeyondInt32(self, other);
         }
 
         /// <summary>
@@ -907,7 +907,7 @@ namespace IronRuby.Builtins {
             if (other.AsInt32(out small)) {
                 return RightShift(self, small);
             }
-            return ClrInteger.ShiftedOutOfRange(self.Sign, other.Sign < 0);
+            return ClrInteger.ShiftBeyondInt32(self, -other);
         }
 
         /// <summary>
@@ -1049,9 +1049,18 @@ namespace IronRuby.Builtins {
         /// we asssume we can always return 1 if self is negative and 0 otherwise</remarks>
         [RubyMethod("[]")]
         public static int Bit(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ index) {
-            // BigIntegers as indexes are always going to be outside the range.
-            if (index.IsNegative() || self.IsPositive()) return 0;
-            return 1;
+            if (index.IsNegative()) return 0;
+
+            // Past the highest bit: the sign extends for ever.
+            if (index >= self.GetBitLength()) return self.Sign < 0 ? 1 : 0;
+
+            // An Integer of more than 2**31 bits (1 << 2**31) has bits an Int32 index cannot reach.
+            BigInteger shifted = self;
+            while (index > Int32.MaxValue) {
+                shifted >>= Int32.MaxValue;
+                index -= Int32.MaxValue;
+            }
+            return (shifted >> (int)index).IsEven ? 0 : 1;
         }
 
         #endregion

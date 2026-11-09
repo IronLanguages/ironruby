@@ -44,6 +44,10 @@ namespace IronRuby.Builtins {
                 _count = count;
             }
 
+            internal ReadOnlySpan<byte> GetDataSpan() {
+                return new ReadOnlySpan<byte>(_data, 0, _count);
+            }
+
             protected virtual BinaryContent/*!*/ Create(byte[]/*!*/ data, MutableString owner) {
                 return new BinaryContent(data, owner);
             }

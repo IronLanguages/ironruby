@@ -315,6 +315,24 @@ namespace IronRuby.Builtins {
             return new MutableString(_encoding);
         }
 
+        /// <summary>
+        /// A String (see above) of the first <paramref name="count"/> of <paramref name="chars"/>, which
+        /// it takes over: the caller must not touch the array again.
+        /// </summary>
+        public MutableString/*!*/ CreateDerived(char[]/*!*/ chars, int count) {
+            ContractUtils.RequiresArrayRange(chars, 0, count, "offset", "count");
+            return new MutableString(chars, count, _encoding);
+        }
+
+        /// <summary>
+        /// A String (see above) of the first <paramref name="count"/> of <paramref name="bytes"/>, which
+        /// it takes over: the caller must not touch the array again.
+        /// </summary>
+        public MutableString/*!*/ CreateDerived(byte[]/*!*/ bytes, int count) {
+            ContractUtils.RequiresArrayRange(bytes, 0, count, "offset", "count");
+            return new MutableString(bytes, count, _encoding);
+        }
+
         internal MutableString/*!*/ CreateDerived(Content/*!*/ content, RubyEncoding/*!*/ encoding) {
             return new MutableString(content, encoding);
         }
@@ -1167,6 +1185,26 @@ namespace IronRuby.Builtins {
             }
 
             return this;
+        }
+
+        /// <summary>
+        /// The characters in place, without copying them, for a string that
+        /// <see cref="PrepareForCharacterRead"/> has prepared: it is held either as characters - then
+        /// <paramref name="chars"/> is set and the result is true - or as bytes that are its characters
+        /// one for one (<see cref="DetectByteCharacters"/>), and then <paramref name="bytes"/> is.
+        /// Either span is only good until the string next changes.
+        /// </summary>
+        public bool GetCharacterData(out ReadOnlySpan<char> chars, out ReadOnlySpan<byte> bytes) {
+            var content = _content;
+            if (content is BinaryContent binary) {
+                Debug.Assert(DetectByteCharacters());
+                chars = default(ReadOnlySpan<char>);
+                bytes = binary.GetDataSpan();
+                return false;
+            }
+            bytes = default(ReadOnlySpan<byte>);
+            chars = (content is StringContent str) ? str.Data.AsSpan() : ((CharArrayContent)content).GetDataSpan();
+            return true;
         }
 
         /// <summary>

@@ -72,7 +72,7 @@ namespace IronRuby.Builtins {
                 if (shift == Int32.MinValue) {
                     // Negating this one overflows, and the shift is further than any value
                     // reaches anyway.
-                    return ShiftedOutOfRange(Math.Sign(self), false);
+                    return self < 0 ? MinusOne : Zero;
                 } else {
                     return RightShift(self, -shift);
                 }
@@ -100,7 +100,7 @@ namespace IronRuby.Builtins {
         public static object/*!*/ RightShift(int self, int shift) {
             if (shift < 0) {
                 if (shift == Int32.MinValue) {
-                    return ShiftedOutOfRange(Math.Sign(self), true);
+                    return ShiftBeyondInt32(self, -(BigInteger)shift);
                 } else {
                     return LeftShift(self, -shift);
                 }
@@ -114,21 +114,68 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// A shift wider than any machine word still has an answer. Shifting towards the least
-        /// significant end for ever leaves 0, or -1 for a negative value, since the sign bit keeps
-        /// arriving; zero stays zero whichever way it goes. Only a non-zero value shifted that far
-        /// the *other* way has nowhere to go, and MRI calls that a RangeError rather than trying
-        /// to allocate the result.
+        /// self shifted left by <paramref name="leftShift"/> bits (right when it is negative), for a
+        /// width an Int32 does not hold. Shifting towards the least significant end past every bit
+        /// leaves 0, or -1 for a negative value, since the sign bit keeps arriving; zero stays zero
+        /// whichever way it goes.
+        /// <para>
+        /// The other way, MRI (big_shift2/big_shift3) allocates the result - 1 &lt;&lt; 2**31 is a
+        /// 256 MB Integer - up to a width of about 2**66, where it says "shift width too big"
+        /// (RangeError), and raises NoMemoryError when the allocation fails, as 1 &lt;&lt; 2**40 does
+        /// on most machines. ruby/spec (left_shift_spec, right_shift_spec) lets an implementation
+        /// other than MRI put that RangeError at 2**32 instead, and IronRuby does: a .NET
+        /// BigInteger cannot hold much more than 2**36 bits anyway (2**31 on .NET 9 and later,
+        /// see ShiftLeftOrFail), so between 2**32 and 2**66 the choice is only between two errors.
+        /// </para>
         /// </summary>
-        internal static object/*!*/ ShiftedOutOfRange(int sign, bool towardsMoreSignificantBits) {
-            if (sign == 0) {
+        internal static object/*!*/ ShiftBeyondInt32(BigInteger self, BigInteger leftShift) {
+            if (self.IsZero) {
                 return Zero;
             }
-            if (towardsMoreSignificantBits) {
+
+            // BigInteger only shifts by an Int32, so a wider shift goes in Int32.MaxValue steps
+            // (arithmetic right shifts compose: each rounds towards -Infinity).
+            if (leftShift.Sign < 0) {
+                BigInteger rightShift = -leftShift;
+                if (rightShift >= self.GetBitLength()) {
+                    return self.Sign < 0 ? MinusOne : Zero;
+                }
+                BigInteger shifted = self;
+                while (rightShift > Int32.MaxValue) {
+                    shifted >>= Int32.MaxValue;
+                    rightShift -= Int32.MaxValue;
+                }
+                return Protocols.Normalize(shifted >> (int)rightShift);
+            }
+
+            if (leftShift >= MaxLeftShift) {
                 throw RubyExceptions.CreateRangeError("shift width too big");
             }
-            return sign < 0 ? MinusOne : Zero;
+
+            // At most two Int32.MaxValue steps below that bound.
+            BigInteger result = self;
+            while (leftShift > Int32.MaxValue) {
+                result = ShiftLeftOrFail(result, Int32.MaxValue);
+                leftShift -= Int32.MaxValue;
+            }
+            return Protocols.Normalize(ShiftLeftOrFail(result, (int)leftShift));
         }
+
+        /// <summary>
+        /// value &lt;&lt; shift, where a result too big for a BigInteger is the failed allocation MRI
+        /// reports (NoMemoryError). .NET 9 and later cap a BigInteger at about 2**31 bits and throw
+        /// OverflowException past it, so on net10.0 1 &lt;&lt; 2**31 is a NoMemoryError; .NET 8 holds
+        /// it.
+        /// </summary>
+        internal static BigInteger ShiftLeftOrFail(BigInteger value, int shift) {
+            try {
+                return value << shift;
+            } catch (OverflowException) {
+                throw new OutOfMemoryException("failed to allocate memory");
+            }
+        }
+
+        private static readonly BigInteger MaxLeftShift = BigInteger.One << 32;
 
         [RubyMethod("<<")]
         public static object/*!*/ LeftShift(int self, [NotNull]BigInteger/*!*/ shift) {
@@ -136,7 +183,7 @@ namespace IronRuby.Builtins {
             if (shift.AsInt32(out small)) {
                 return LeftShift(self, small);
             }
-            return ShiftedOutOfRange(Math.Sign(self), shift.Sign > 0);
+            return ShiftBeyondInt32(self, shift);
         }
 
         [RubyMethod(">>")]
@@ -145,7 +192,7 @@ namespace IronRuby.Builtins {
             if (shift.AsInt32(out small)) {
                 return RightShift(self, small);
             }
-            return ShiftedOutOfRange(Math.Sign(self), shift.Sign < 0);
+            return ShiftBeyondInt32(self, -shift);
         }
 
         #endregion

@@ -155,6 +155,7 @@ namespace IronRuby.Tests {
                 String_NonCharacter1,
                 String_SuccSeparators1,
                 String_CountDeleteSqueeze1,
+                String_CountDeleteSqueeze2,
                 ToSConversion1,
                 ToSConversion2,
                 Symbols1,
@@ -180,6 +181,7 @@ namespace IronRuby.Tests {
                 Regex_ByteEscapes1,
                 Regex_ByteEscapeComments1,
                 Regex_BackrefAfterBlockSub1,
+                Regex_MatchStringClassAndIdentity1,
                 
                 Scenario_RubyScopeParsing,
                 Scenario_RubyScopes1,
@@ -391,6 +393,7 @@ namespace IronRuby.Tests {
                 Array_SplatBlockYield1,
                 Array_NumericSumMinShift1,
                 Enumerable_TallyGroupBy1,
+                Enumerable_ZipEnumerated1,
                 IListOps_EnumerateRecursively1,
 
                 Scenario_RubyHashes1A,
@@ -1195,6 +1198,7 @@ namespace IronRuby.Tests {
                 Integer_ToStringRadix1,
                 Pack_BerTruncated1,
                 Integer_Int64Shifts1,
+                Integer_HugeShifts1,
                 Integer_OutOfFloatRange1,
                 BasicObject_EqualIdentity1,
             };

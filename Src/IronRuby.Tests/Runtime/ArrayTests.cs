@@ -373,5 +373,65 @@ p [5, 3, 9, 1].sort_by { |x| -x }, (1..12).to_a.sort_by { |x| x % 3 }, [2**70, 1
 [1.5, 2, 3]
 ");
         }
+
+        /// <summary>
+        /// Enumerable#zip without a block reads a non-Array argument with #each, after the receiver, when at most
+        /// one of them has an #each that runs anyone else's code (Hash, Struct, Set and String/Integer Range ones
+        /// do not) - #89: Enumerator#next cost a fiber switch per element. The elements read, the order any
+        /// side effects happen in, laziness on endless arguments and errors are MRI's zip_i ones; everything
+        /// else still goes through #next. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Enumerable_ZipEnumerated1() {
+            TestOutput(@"
+require 'ruby4'
+$log = []
+class Loud
+  include Enumerable
+  def initialize(name, n) = (@name, @n = name, n)
+  def each
+    @n.times { |i| $log << ""#{@name}#{i}""; yield i }
+    $log << ""#{@name}-end""
+  end
+end
+class Multi
+  include Enumerable
+  def each; yield; yield 1; yield 1, 2; end
+end
+def show(label)
+  $log = []
+  res = yield
+  puts ""#{label}: #{res.inspect} #{$log.inspect}""
+rescue => e
+  puts ""#{label}: #{e.class}: #{e.message} #{$log.inspect}""
+end
+r = Set[1, 2, 3]
+h = {a: 1, b: 2}
+show(:quiet) { r.zip(h, Struct.new(:x, :y).new(7, 8), 'y'.., Set[5]) }
+show(:loud_arg) { r.zip(Loud.new(:x, 5)) }
+show(:loud_recv) { Loud.new(:r, 3).zip(h, 'a'..) }
+show(:loud_both) { Loud.new(:r, 2).zip(Loud.new(:x, 5)) }
+show(:loud_two) { r.zip(Loud.new(:x, 5), Loud.new(:y, 2)) }
+show(:empty) { Set[].zip(Loud.new(:x, 5), 1.0..2.0) }
+show(:float) { r.zip(1.0..2.0) }
+show(:multi) { r.zip(Multi.new) }
+show(:endless) { r.zip(Enumerator.new { |y| i = 0; loop { $log << i; y << i; i += 1 } }) }
+show(:overridden) { hx = Class.new(Hash) { def each; $log << :hx; super; end }.new; hx[1] = 2; Loud.new(:r, 2).zip(hx) }
+show(:block) { out = []; r.zip(h) { |row| out << row }; out }
+show(:lazy) { (1..Float::INFINITY).lazy.map { _1 * 2 }.zip(h).first(2) }
+", @"
+quiet: [[1, [:a, 1], 7, ""y"", 5], [2, [:b, 2], 8, ""z"", nil], [3, nil, nil, ""aa"", nil]] []
+loud_arg: [[1, 0], [2, 1], [3, 2]] [""x0"", ""x1"", ""x2""]
+loud_recv: [[0, [:a, 1], ""a""], [1, [:b, 2], ""b""], [2, nil, ""c""]] [""r0"", ""r1"", ""r2"", ""r-end""]
+loud_both: [[0, 0], [1, 1]] [""r0"", ""x0"", ""r1"", ""x1"", ""r-end""]
+loud_two: [[1, 0, 0], [2, 1, 1], [3, 2, nil]] [""x0"", ""y0"", ""x1"", ""y1"", ""x2"", ""y-end""]
+empty: [] []
+float: TypeError: can't iterate from Float []
+multi: [[1, nil], [2, 1], [3, [1, 2]]] []
+endless: [[1, 0], [2, 1], [3, 2]] [0, 1, 2]
+overridden: [[0, [1, 2]], [1, nil]] [""r0"", :hx, ""r1"", ""r-end""]
+block: [[1, [:a, 1]], [2, [:b, 2]], [3, nil]] []
+lazy: [[2, [:a, 1]], [4, [:b, 2]]] []
+");
+        }
     }
 }

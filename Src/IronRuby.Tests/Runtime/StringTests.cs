@@ -397,5 +397,40 @@ p((""abc"".count(""c-a"") rescue $!.message))
 ""invalid range \""c-a\"" in string transliteration""
 ");
         }
+
+        /// <summary>
+        /// #count, #delete and #squeeze read the characters in place, from a string held as bytes as well as one
+        /// held as characters (#89). #squeeze! and #delete! check in MRI's order: #delete! answers nil for an empty
+        /// receiver before anything else, both set up the character sets before refusing a frozen receiver, and
+        /// #squeeze! refuses a frozen one even with nothing to squeeze. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void String_CountDeleteSqueeze2() {
+            TestOutput(@"
+require 'ruby4'
+class S < String; end
+bin = [0x61, 0x61, 0x20, 0x20, 0x62, 0xff, 0xff].pack(""C*"")
+asc = [0x61, 0x61, 0x6c, 0x6c, 0x20, 0x20, 0x62].pack(""C*"").force_encoding(""UTF-8"")
+lat = ""caf\xE9\xE9  x"".force_encoding(""ISO-8859-1"")
+p [bin.count(""a\xff"".b), bin.delete(""a"").bytes, bin.squeeze.bytes, bin.squeeze(""\xff"".b).bytes, bin.delete(""^a"").bytes]
+p [asc.count(""l ""), asc.delete(""l""), asc.squeeze, asc.squeeze(""l""), asc.delete(""a-z""), asc.count(""^a-z"")]
+p [lat.count(""\xE9"".force_encoding(""ISO-8859-1"")), lat.squeeze.bytes, lat.delete("" "").bytes, lat.squeeze.encoding]
+p [S.new(""aab"").squeeze.class, S.new(""aab"").delete(""z"").class, S.new(""ab"").squeeze.class]
+x = +""aabbcc""; p [x.squeeze!, x, x.squeeze!, x.delete!(""z""), x.delete!(""b""), x]
+p [("""".delete rescue $!), """".delete!, """".freeze.delete!(""a""), ("""".freeze.squeeze! rescue $!.class)]
+p [(""a"".freeze.delete!(""z"") rescue $!.class), (""a"".freeze.squeeze!(""z"") rescue $!.class), (""a"".freeze.delete!(""z-a"") rescue $!.class), (""a"".freeze.squeeze!(""z-a"") rescue $!.class)]
+s = ""ab"" * 3000; p [s.count(""a""), s.delete(""a"").size, (s + s.reverse).squeeze.size, (""x"" * 5000).squeeze]
+y = +""aab""; z = y.squeeze; y << ""b""; p [z, y]
+", @"
+[4, [32, 32, 98, 255, 255], [97, 32, 98, 255], [97, 97, 32, 32, 98, 255], [97, 97]]
+[4, ""aa  b"", ""al b"", ""aal  b"", ""  "", 2]
+[2, [99, 97, 102, 233, 32, 120], [99, 97, 102, 233, 233, 120], #<Encoding:ISO-8859-1>]
+[String, String, String]
+[""ac"", ""ac"", nil, nil, ""ac"", ""ac""]
+["""", nil, nil, FrozenError]
+[FrozenError, FrozenError, ArgumentError, ArgumentError]
+[3000, 3000, 11999, ""x""]
+[""ab"", ""aabb""]
+");
+        }
     }
 }
