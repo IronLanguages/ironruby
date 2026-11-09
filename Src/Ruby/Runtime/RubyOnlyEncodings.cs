@@ -169,12 +169,6 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// Whether the bytes are well formed in the encoding, for the encodings that can say so
-        /// without decoding them; null for everything else. Ruby decides validity by the shape of
-        /// a byte sequence alone, and several of these encodings have well formed sequences that
-        /// name no character - those are valid, they just cannot be transcoded.
-        /// </summary>
-        /// <summary>
         /// The runs of bytes String#scrub replaces, as offset and length pairs, the way MRI's
         /// enc_str_scrub finds them; null for an encoding this does not cover (the Unicode ones,
         /// which ruby4.rb's scrub handles itself, and the single byte ones). A byte that begins no
@@ -262,6 +256,12 @@ namespace IronRuby.Runtime {
             return (b >= 0x30 && b <= 0x39) ? 4 : -1;
         }
 
+        /// <summary>
+        /// Whether the bytes are well formed in the encoding, for the encodings that can say so
+        /// without decoding them; null for everything else. Ruby decides validity by the shape of
+        /// a byte sequence alone, and several of these encodings have well formed sequences that
+        /// name no character - those are valid, they just cannot be transcoded.
+        /// </summary>
         internal static bool? IsValid(Encoding/*!*/ encoding, byte[]/*!*/ bytes, int index, int count) {
             var structured = encoding as IStructuredEncoding;
             if (structured != null) {
@@ -665,7 +665,7 @@ namespace IronRuby.Runtime {
         // Three and four byte sequences (EUC-JP's JIS X 0212 0x8F b1 b2, EUC-TW's CNS planes
         // 0x8E p b1 b2) do not fit a plane the way two bytes do, so they are numbered densely
         // over the 94 x 94 cells of their table: the three byte ones from LosslessBase, the four
-        // byte ones from there too, on into plane 16 and, for the last five of EUC-TW's sixteen
+        // byte ones from there too, on into plane 16 and, for the rest of EUC-TW's sixteen
         // CNS planes, on in plane 14. (EUC-TW decodes nothing beyond ASCII, so no character of
         // its own can be mistaken for one of these; EUC-JP has no four byte sequences.)
         private const int CellCount = 94 * 94;
