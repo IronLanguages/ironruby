@@ -432,6 +432,48 @@ true
 ");
         }
 
+        /// <summary>
+        /// File.expand_path and File.absolute_path ask for the current directory only when the path is relative and no
+        /// base is given; with a base, or for an absolute path, there is no getcwd. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void File_ExpandPathLazyCwd1() {
+            // drive letters
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+Dir.mktmpdir(""ep"") { |tmp| Dir.chdir(tmp) do
+  cwd = Dir.pwd
+  home = File.expand_path(ENV[""HOME""])
+  parent = File.dirname(cwd)
+  clean = lambda { |s| s == parent ? ""PARENT"" : s.sub(cwd, ""CWD"").sub(home, ""HOME"") }
+  ["""", ""."", "".."", ""a/b"", ""./a/../b"", ""/x/../y"", ""/a/./b//c/"", ""/.."", ""~/x""].each do |pa|
+    row = [nil, ""/z"", ""rel"", ""rel/../q"", ""~/base"", "".""].map do |b|
+      clean[b ? File.expand_path(pa, b) : File.expand_path(pa)]
+    end
+    p [pa, *row]
+  end
+  p [File.absolute_path(""a""), File.absolute_path(""~""), File.absolute_path(""x"", ""b"")].map(&clean)
+  Dir.mkdir(""sub"")
+  Dir.chdir(""sub"") { p clean[File.expand_path(""q"")] }
+end }
+", @"
+["""", ""CWD"", ""/z"", ""CWD/rel"", ""CWD/q"", ""HOME/base"", ""CWD""]
+[""."", ""CWD"", ""/z"", ""CWD/rel"", ""CWD/q"", ""HOME/base"", ""CWD""]
+["".."", ""PARENT"", ""/"", ""CWD"", ""CWD"", ""HOME"", ""PARENT""]
+[""a/b"", ""CWD/a/b"", ""/z/a/b"", ""CWD/rel/a/b"", ""CWD/q/a/b"", ""HOME/base/a/b"", ""CWD/a/b""]
+[""./a/../b"", ""CWD/b"", ""/z/b"", ""CWD/rel/b"", ""CWD/q/b"", ""HOME/base/b"", ""CWD/b""]
+[""/x/../y"", ""/y"", ""/y"", ""/y"", ""/y"", ""/y"", ""/y""]
+[""/a/./b//c/"", ""/a/b/c"", ""/a/b/c"", ""/a/b/c"", ""/a/b/c"", ""/a/b/c"", ""/a/b/c""]
+[""/.."", ""/"", ""/"", ""/"", ""/"", ""/"", ""/""]
+[""~/x"", ""HOME/x"", ""HOME/x"", ""HOME/x"", ""HOME/x"", ""HOME/x"", ""HOME/x""]
+[""CWD/a"", ""CWD/~"", ""CWD/b/x""]
+""CWD/sub/q""
+");
+        }
+
         /// <summary>A file system of its own: a host's PAL that globbing must ask, not bypass.</summary>
         public class GlobPal1 : PlatformAdaptationLayer {
             public readonly Dictionary<string, bool> Entries = new Dictionary<string, bool> {

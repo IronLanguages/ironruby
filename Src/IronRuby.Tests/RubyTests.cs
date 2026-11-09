@@ -172,6 +172,7 @@ namespace IronRuby.Tests {
                 File_AppendBytesFromBuffer1,
                 Dir2,
                 Dir_GlobListing1,
+                File_ExpandPathLazyCwd1,
                 Dir_GlobVirtualPal1,
                 
                 Regex1,
