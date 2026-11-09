@@ -156,6 +156,7 @@ namespace IronRuby.Tests {
                 String_SuccSeparators1,
                 String_CountDeleteSqueeze1,
                 String_CountDeleteSqueeze2,
+                String_CountDeleteSqueeze3,
                 ToSConversion1,
                 ToSConversion2,
                 Symbols1,

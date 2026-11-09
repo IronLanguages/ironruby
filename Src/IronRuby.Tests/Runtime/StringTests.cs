@@ -432,5 +432,36 @@ y = +""aab""; z = y.squeeze; y << ""b""; p [z, y]
 [""ab"", ""aabb""]
 ");
         }
+
+        /// <summary>
+        /// #count, #delete and #squeeze read ASCII characters through a table, count a single
+        /// character with a vectorized search and skip the non-ASCII test when no non-ASCII
+        /// character can be selected (#89). The expected output is CRuby 4.0's.
+        /// </summary>
+        public void String_CountDeleteSqueeze3() {
+            TestOutput(@"
+require 'ruby4'
+s = ""hello world, all well "" * 60
+u = ""héllo wörld ああ "" * 40
+b = (""hello\xff\xffworld  "".b) * 50
+p [s.count(""l""), s.count(""lo""), s.count(""a-y""), s.count(""^l""), s.count(""a-z"", ""^l""), s.count(""^a-k"", ""lo""), s.count(""l"", ""^あ"")]
+p [s.delete(""l"").size, s.delete(""lo"").size, s.delete(""^l"").size, s.delete(""a-z"", ""^l"").size, s.delete("" "")[0, 20]]
+p [s.squeeze.size, s.squeeze(""l"").size, s.squeeze(""a-z"").size, s.squeeze(""^l"").size, s.squeeze[0, 20]]
+p [u.count(""l""), u.count(""é""), u.count(""^l""), u.count(""lあ""), u.count(""あ"", ""^a""), u.count(""a-z"", ""\u0000-ÿ"")]
+p [u.delete(""l"")[0, 12], u.delete(""あ"").size, u.delete(""^あ"").size, u.squeeze(""あ"")[0, 12], u.squeeze[0, 12]]
+p [b.count(""l""), b.count(""\xff"".b), b.count(""^l""), b.count(""\x80-\xff"".b), b.delete(""\xff"".b).size, b.squeeze.size, b.squeeze(""\xff"".b).size, b.squeeze("" "").bytes.first(14)]
+t = +""aaaああbbb""; p [t.squeeze!(""あ""), t, t.delete!(""b""), t, t.squeeze!(""^a""), t]
+p [""xyz"".count(""x""), """".count(""x""), ""x"".squeeze, ""xx"".squeeze, ""ああ"".squeeze, ""aab"".count(""a"", ""a""), ""aあ"".count(""a-あ"")]
+", @"
+[420, 540, 1020, 900, 600, 540, 420]
+[900, 780, 420, 720, ""helloworld,allwellhe""]
+[1140, 1140, 1140, 1320, ""helo world, al wel h""]
+[120, 40, 480, 200, 80, 320]
+[""héo wörd ああ "", 520, 80, ""héllo wörld "", ""hélo wörld あ""]
+[150, 100, 550, 100, 600, 550, 650, [104, 101, 108, 108, 111, 255, 255, 119, 111, 114, 108, 100, 32, 104]]
+[""aaaあ"", ""aaaあ"", ""aaaあ"", ""aaaあ"", nil, ""aaaあ""]
+[1, 0, ""x"", ""x"", ""あ"", 2, 2]
+");
+        }
     }
 }
