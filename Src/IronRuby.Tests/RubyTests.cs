@@ -392,6 +392,7 @@ namespace IronRuby.Tests {
                 Array_SplatBlockYield1,
                 Array_NumericSumMinShift1,
                 Enumerable_TallyGroupBy1,
+                Enumerable_ZipEnumerated1,
                 IListOps_EnumerateRecursively1,
 
                 Scenario_RubyHashes1A,

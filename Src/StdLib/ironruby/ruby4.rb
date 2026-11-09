@@ -852,16 +852,24 @@ module Enumerable
     # the readers the indexed path asks; Range#each itself uses the stored endpoints, so a
     # Range that overrides one of them - (1..3).dup can - has to be enumerated instead
     RANGE_READERS__ = [:begin, :end, :exclude_end?].map { |name| [name, ::Range.instance_method(name)] }.freeze
-    __hide_constant__ :ZipIntegerRange__, :RANGE_EACH__, :RANGE_READERS__
+    HASH_EACH__ = ::Hash.instance_method(:each)
+    STRUCT_EACH__ = ::Struct.instance_method(:each)
+    __hide_constant__ :ZipIntegerRange__, :RANGE_EACH__, :RANGE_READERS__, :HASH_EACH__, :STRUCT_EACH__
 
+    def __zip_builtin_range__(other)
+      other.instance_of?(::Range) && other.method(:each).unbind == RANGE_EACH__ &&
+        RANGE_READERS__.all? { |name, method| other.method(name).unbind == method }
+    end
+    private :__zip_builtin_range__
+
+    # An Array, a ZipIntegerRange__, or the argument itself, to be enumerated.
     def __zip_source__(other)
       return other if other.is_a?(Array)
       if other.respond_to?(:to_ary)
         converted = other.to_ary
         return converted if converted.is_a?(Array)
       end
-      if other.instance_of?(::Range) && other.method(:each).unbind == RANGE_EACH__ &&
-          RANGE_READERS__.all? { |name, method| other.method(name).unbind == method } &&
+      if __zip_builtin_range__(other) &&
           ::Integer === other.begin && (other.end.nil? || ::Integer === other.end)
         last = other.end
         last -= 1 if last && other.exclude_end?
@@ -870,12 +878,90 @@ module Enumerable
       unless other.respond_to?(:each)
         raise TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)"
       end
-      other.to_enum(:each)
+      other
     end
     private :__zip_source__
 
+    # Whether obj's #each is a built-in one that runs no Ruby code of anyone else's, never
+    # raises and yields one value at a time: a Hash, a Struct, a Set, or a String or Integer
+    # Range. When it is, nothing can tell when its elements were read relative to the
+    # receiver's.
+    def __zip_quiet_each__(obj)
+      case obj
+      when ::Hash then obj.method(:each).unbind == HASH_EACH__
+      when ::Struct then obj.method(:each).unbind == STRUCT_EACH__
+      when ::Range
+        __zip_builtin_range__(obj) && (::Integer === obj.begin ||
+          (::String === obj.begin && (obj.end.nil? || ::String === obj.end)))
+      else
+        # Set is autoloaded, and its #each is the prelude's (which has no source location)
+        # unless someone redefined it
+        !::Object.autoload?(:Set) && ::Set === obj &&
+          (each = obj.method(:each)).owner.equal?(::Set) && each.source_location.nil?
+      end
+    end
+    private :__zip_quiet_each__
+
+    # MRI's zip_i reads a non-Array argument with Enumerator#next, interleaved with the
+    # receiver's #each - and lazily, so an endless argument works. #next costs a fiber
+    # switch per element here (~90 us). Without a block, when at most one of the receiver
+    # and the arguments has an #each that is not quiet (see __zip_quiet_each__), the order
+    # the elements are read in cannot show: the receiver is read first, then each argument
+    # with #each, stopping at the receiver's length - exactly the elements #next would have
+    # asked for, and never starting an argument for an empty receiver.
+    def __zip_in_turn__(sources)
+      rows = []
+      each { |*values| rows << [values.size <= 1 ? values[0] : values] }
+      count = rows.size
+      sources.each do |source|
+        index = 0
+        if source.is_a?(Array)
+          while index < count
+            rows[index] << source[index]
+            index += 1
+          end
+        elsif ZipIntegerRange__ === source
+          while index < count
+            rows[index] << source.at(index)
+            index += 1
+          end
+        elsif count == 0
+          # MRI asks an argument for nothing when the receiver yields nothing
+        elsif __zip_quiet_each__(source)
+          source.each do |value|
+            rows[index] << value
+            index += 1
+            break if index == count
+          end
+        else
+          source.each do |*values|
+            # several yielded values make one element, as Enumerator#next packs them
+            rows[index] << (values.size <= 1 ? values[0] : values)
+            index += 1
+            break if index == count
+          end
+        end
+        while index < count
+          rows[index] << nil
+          index += 1
+        end
+      end
+      rows
+    end
+    private :__zip_in_turn__
+
     def zip(*others, &block)
       sources = others.map { |other| __zip_source__(other) }
+      enumerated = sources.reject { |source| source.is_a?(Array) || ZipIntegerRange__ === source }
+      unless block || enumerated.empty?
+        loud = enumerated.count { |source| !__zip_quiet_each__(source) }
+        return __zip_in_turn__(sources) if loud == 0 || (loud == 1 && __zip_quiet_each__(self))
+      end
+      unless enumerated.empty?
+        sources = sources.map do |source|
+          source.is_a?(Array) || ZipIntegerRange__ === source ? source : source.to_enum(:each)
+        end
+      end
       result = block ? nil : []
       index = 0
       each do |*values|
