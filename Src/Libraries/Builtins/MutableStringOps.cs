@@ -461,16 +461,74 @@ namespace IronRuby.Builtins {
                 _ascii1 = m1;
             }
 
+            // Inlined into the callers' per-character loops (the loop for the rest would keep it
+            // from being inlined, and the call cost more than the test).
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool Contains(int c) {
                 if ((uint)c < 128) {
-                    return ((c < 64 ? _ascii0 >> c : _ascii1 >> (c - 64)) & 1) != 0;
+                    return (((c < 64 ? _ascii0 : _ascii1) >> (c & 63)) & 1) != 0;
                 }
+                return ContainsNonAscii(c);
+            }
+
+            private bool ContainsNonAscii(int c) {
                 for (int i = 0; i < _selectors.Length; i++) {
                     if (!_selectors[i].Contains(c)) {
                         return false;
                     }
                 }
                 return true;
+            }
+
+            public int Count(ReadOnlySpan<char> chars) {
+                ulong ascii0 = _ascii0, ascii1 = _ascii1;
+                int count = 0;
+                foreach (char c in chars) {
+                    if (c < 128) {
+                        count += (int)(((c < 64 ? ascii0 : ascii1) >> (c & 63)) & 1);
+                    } else if (ContainsNonAscii(c)) {
+                        count++;
+                    }
+                }
+                return count;
+            }
+
+            // The characters not selected, copied to kept; answers how many.
+            public int CopyUnselected(ReadOnlySpan<char> chars, char[]/*!*/ kept) {
+                ulong ascii0 = _ascii0, ascii1 = _ascii1;
+                int count = 0;
+                foreach (char c in chars) {
+                    bool selected = c < 128 ? (((c < 64 ? ascii0 : ascii1) >> (c & 63)) & 1) != 0 : ContainsNonAscii(c);
+                    if (!selected) {
+                        kept[count++] = c;
+                    }
+                }
+                return count;
+            }
+
+            public int CopyUnselected(ReadOnlySpan<byte> bytes, byte[]/*!*/ kept) {
+                ulong ascii0 = _ascii0, ascii1 = _ascii1;
+                int count = 0;
+                foreach (byte b in bytes) {
+                    bool selected = b < 128 ? (((b < 64 ? ascii0 : ascii1) >> (b & 63)) & 1) != 0 : ContainsNonAscii(b);
+                    if (!selected) {
+                        kept[count++] = b;
+                    }
+                }
+                return count;
+            }
+
+            public int Count(ReadOnlySpan<byte> bytes) {
+                ulong ascii0 = _ascii0, ascii1 = _ascii1;
+                int count = 0;
+                foreach (byte b in bytes) {
+                    if (b < 128) {
+                        count += (int)(((b < 64 ? ascii0 : ascii1) >> (b & 63)) & 1);
+                    } else if (ContainsNonAscii(b)) {
+                        count++;
+                    }
+                }
+                return count;
             }
 
             public static CharacterSelectorSet/*!*/ Parse(MutableString/*!*/ self, MutableString[]/*!*/ selectors) {
@@ -3833,47 +3891,43 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// Like #count, #squeeze and #tr, #delete reads characters, so MRI refuses a receiver or a
-        /// character set with bytes that are not valid in its encoding - the sets first. An empty
-        /// receiver has nothing to read and is not even looked at.
+        /// character set with bytes that are not valid in its encoding - the sets first, and for
+        /// #delete! a frozen receiver after the sets (rb_str_delete_bang). An empty receiver has
+        /// nothing to read and is not even looked at (the callers answer for it). The characters
+        /// left, or null when none is deleted.
         /// </summary>
-        private static MutableString/*!*/ InternalDelete(MutableString/*!*/ self, MutableString[]/*!*/ ranges) {
-            if (self.IsEmpty) {
-                return self.CreateDerived();
-            }
+        private static MutableString InternalDelete(MutableString/*!*/ self, MutableString[]/*!*/ ranges, bool inPlace) {
             var map = CharacterSelectorSet.Parse(self, ranges);
+            if (inPlace) {
+                self.RequireNotFrozen();
+            }
             RequireValidEncoding(self);
             self.PrepareForCharacterRead();
-            MutableString result = self.CreateDerived();
             if (self.HasSurrogatePairs()) {
+                MutableString result = self.CreateDerived();
+                bool deleted = false;
                 for (int i = 0; i < self.Length; ) {
                     int start = i;
                     if (!map.Contains(CodePointAt(self, ref i))) {
                         result.Append(self, start, i - start);
+                    } else {
+                        deleted = true;
                     }
                 }
-                return result;
+                return deleted ? result : null;
             }
-            // the characters read once, and kept in runs rather than appended one at a time
-            string chars = self.ToString();
-            var kept = new System.Text.StringBuilder(chars.Length);
-            for (int i = 0; i < chars.Length; i++) {
-                if (!map.Contains(chars[i])) {
-                    kept.Append(chars[i]);
-                }
+            // the characters read in place, the kept ones copied once, into the result's own array
+            ReadOnlySpan<char> chars;
+            ReadOnlySpan<byte> bytes;
+            if (self.GetCharacterData(out chars, out bytes)) {
+                char[] kept = new char[chars.Length];
+                int count = map.CopyUnselected(chars, kept);
+                return count < chars.Length ? self.CreateDerived(kept, count) : null;
+            } else {
+                byte[] kept = new byte[bytes.Length];
+                int count = map.CopyUnselected(bytes, kept);
+                return count < bytes.Length ? self.CreateDerived(kept, count) : null;
             }
-            result.Append(kept.ToString());
-            return result;
-        }
-
-        private static MutableString/*!*/ InternalDeleteInPlace(MutableString/*!*/ self, MutableString[]/*!*/ ranges) {
-            MutableString result = InternalDelete(self, ranges);
-            if (self.Equals(result)) {
-                return null;
-            }
-
-            self.Clear();
-            self.Append(result);
-            return self;
         }
 
         /// <summary>
@@ -3887,24 +3941,36 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // MRI's rb_str_delete_bang answers nil for an empty receiver before it checks anything -
+        // the argument count, the sets, frozenness - and rb_str_delete is #delete! on a copy.
         [RubyMethod("delete")]
-        public static MutableString/*!*/ Delete(MutableString/*!*/ self, 
+        public static MutableString/*!*/ Delete(MutableString/*!*/ self,
             [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ strs) {
+            if (self.IsEmpty) {
+                return self.CreateDerived();
+            }
             if (strs.Length == 0) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
             }
-            return InternalDelete(self, strs);
+            return InternalDelete(self, strs, false) ?? self.CloneDerived();
         }
 
         [RubyMethod("delete!")]
-        public static MutableString/*!*/ DeleteInPlace(MutableString/*!*/ self,
+        public static MutableString DeleteInPlace(MutableString/*!*/ self,
             [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ strs) {
-            self.RequireNotFrozen();
-
+            if (self.IsEmpty) {
+                return null;
+            }
             if (strs.Length == 0) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
             }
-            return InternalDeleteInPlace(self, strs);
+            MutableString result = InternalDelete(self, strs, true);
+            if (result == null) {
+                return null;
+            }
+            self.Clear();
+            self.Append(result);
+            return self;
         }
 
         [RubyMethod("clear")]
@@ -3930,13 +3996,10 @@ namespace IronRuby.Builtins {
                 }
                 return ScriptingRuntimeHelpers.Int32ToObject(count);
             }
-            // the characters read once, rather than one GetChar call each
-            string chars = self.ToString();
-            for (int i = 0; i < chars.Length; i++) {
-                if (map.Contains(chars[i])) {
-                    count++;
-                }
-            }
+            // the characters read in place, rather than copied out or one GetChar call each
+            ReadOnlySpan<char> chars;
+            ReadOnlySpan<byte> bytes;
+            count = self.GetCharacterData(out chars, out bytes) ? map.Count(chars) : map.Count(bytes);
             return ScriptingRuntimeHelpers.Int32ToObject(count);
         }
 
@@ -4776,38 +4839,45 @@ namespace IronRuby.Builtins {
         [RubyMethod("squeeze")]
         public static MutableString/*!*/ Squeeze(RubyContext/*!*/ context, MutableString/*!*/ self, 
             [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ args) {
-            MutableString result = self.CloneDerived();
-            SqueezeMutableString(result, args);
-            return result;
+            return SqueezeCore(self, args, false) ?? self.CloneDerived();
         }
 
         [RubyMethod("squeeze!")]
         public static MutableString/*!*/ SqueezeInPlace(RubyContext/*!*/ context, MutableString/*!*/ self,
             [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ args) {
-            return SqueezeMutableString(self, args);
+            return SqueezeCore(self, args, true);
         }
 
-        private static MutableString SqueezeMutableString(MutableString/*!*/ str, MutableString[]/*!*/ ranges) {
-            // if squeezeAll is true then there should be no ranges, and vice versa
+        /// <summary>
+        /// The squeezed string - a new one, or <paramref name="str"/> itself when
+        /// <paramref name="inPlace"/> - or null when no character is squeezed out. MRI's
+        /// rb_str_squeeze_bang sets up the character sets, then refuses a frozen receiver (even
+        /// one with nothing to squeeze), then reads the characters.
+        /// </summary>
+        private static MutableString SqueezeCore(MutableString/*!*/ str, MutableString[]/*!*/ ranges, bool inPlace) {
             Assert.NotNull(str, ranges);
 
-            // convert the args into a map of characters to be squeezed (same algorithm as count)
+            // the characters to be squeezed (the same sets as #count's), or all of them
             CharacterSelectorSet map = null;
             if (ranges.Length > 0) {
                 map = CharacterSelectorSet.Parse(str, ranges);
             }
+            if (inPlace) {
+                str.RequireNotFrozen();
+            }
             RequireValidEncoding(str);
             str.PrepareForCharacterRead();
 
+            MutableString squeezed;
             if (str.HasSurrogatePairs()) {
-                // by code point, into a copy: a pair is one character
-                var squeezed = str.CreateDerived();
+                // by code point: a pair is one character
+                squeezed = str.CreateDerived();
                 int previous = -1;
                 bool changed = false;
                 for (int i = 0; i < str.Length; ) {
                     int start = i;
                     int c = CodePointAt(str, ref i);
-                    if (c == previous && (ranges.Length == 0 || map.Contains(c))) {
+                    if (c == previous && (map == null || map.Contains(c))) {
                         changed = true;
                         continue;
                     }
@@ -4815,30 +4885,71 @@ namespace IronRuby.Builtins {
                     previous = c;
                 }
                 if (!changed) {
-                    str.RequireNotFrozen();
                     return null;
                 }
-                str.Clear();
-                str.Append(squeezed);
-                return str;
-            }
-
-            // Do the squeeze in place
-            int j = 1, k = 1;
-            while (j < str.Length) {
-                if (str.GetChar(j) == str.GetChar(j-1) && (ranges.Length == 0 || map.Contains(str.GetChar(j)))) {
-                    j++;
+            } else {
+                // the characters read in place: one is dropped when it repeats the one before it
+                // (and is in the sets)
+                ReadOnlySpan<char> chars;
+                ReadOnlySpan<byte> bytes;
+                if (str.GetCharacterData(out chars, out bytes)) {
+                    int first = FirstSqueezed(chars, map);
+                    if (first < 0) {
+                        return null;
+                    }
+                    char[] kept = new char[chars.Length];
+                    chars.Slice(0, first).CopyTo(kept);
+                    int count = first;
+                    for (int i = first; i < chars.Length; i++) {
+                        char c = chars[i];
+                        if (c != kept[count - 1] || (map != null && !map.Contains(c))) {
+                            kept[count++] = c;
+                        }
+                    }
+                    squeezed = str.CreateDerived(kept, count);
                 } else {
-                    str.SetChar(k, str.GetChar(j));
-                    j++; k++;
+                    int first = FirstSqueezed(bytes, map);
+                    if (first < 0) {
+                        return null;
+                    }
+                    byte[] kept = new byte[bytes.Length];
+                    bytes.Slice(0, first).CopyTo(kept);
+                    int count = first;
+                    for (int i = first; i < bytes.Length; i++) {
+                        byte b = bytes[i];
+                        if (b != kept[count - 1] || (map != null && !map.Contains(b))) {
+                            kept[count++] = b;
+                        }
+                    }
+                    squeezed = str.CreateDerived(kept, count);
                 }
             }
-            if (j > k) {
-                str.Remove(k, j - k);
-            }
 
-            // if not modified return null
-            return j == k ? null : str;
+            if (!inPlace) {
+                return squeezed;
+            }
+            str.Clear();
+            str.Append(squeezed);
+            return str;
+        }
+
+        // The index of the first character squeezed out, or -1 when there is none.
+        private static int FirstSqueezed(ReadOnlySpan<char> chars, CharacterSelectorSet map) {
+            for (int i = 1; i < chars.Length; i++) {
+                if (chars[i] == chars[i - 1] && (map == null || map.Contains(chars[i]))) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        private static int FirstSqueezed(ReadOnlySpan<byte> bytes, CharacterSelectorSet map) {
+            for (int i = 1; i < bytes.Length; i++) {
+                if (bytes[i] == bytes[i - 1] && (map == null || map.Contains(bytes[i]))) {
+                    return i;
+                }
+            }
+            return -1;
         }
 
         #endregion
