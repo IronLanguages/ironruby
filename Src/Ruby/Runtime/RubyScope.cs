@@ -957,10 +957,20 @@ namespace IronRuby.Runtime {
         }
 
         public RubyModule/*!*/ GetMethodDefinitionOwner() {
+            bool atTopLevel;
+            return GetMethodDefinitionOwner(out atTopLevel);
+        }
+
+        /// <summary>
+        /// <paramref name="atTopLevel"/> tells whether the owner is the top level's, which is not the same as the owner being
+        /// main's singleton class: `main.instance_eval { def m; end }' defines there too, as a singleton method of main.
+        /// </summary>
+        internal RubyModule/*!*/ GetMethodDefinitionOwner(out bool atTopLevel) {
             // - define_method doesn't influence the definition owner
             // - module_eval blocks define into the module they evaluate in
             // - Fallback to the top-level singleton class when hosted.
 
+            atTopLevel = false;
             RubyScope scope = this;
             while (true) {
                 Debug.Assert(scope != null);
@@ -968,6 +978,7 @@ namespace IronRuby.Runtime {
                 switch (scope.Kind) {
                     case ScopeKind.TopLevel:
                         Debug.Assert(scope == Top);
+                        atTopLevel = true;
                         return Top.MethodLookupModule ?? Top.TopModuleOrObject;
 
                     case ScopeKind.Module:

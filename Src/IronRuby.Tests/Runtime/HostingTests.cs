@@ -150,16 +150,18 @@ namespace IronRuby.Tests {
             AssertExceptionThrown<MissingMethodException>(() => Engine.Operations.InvokeMember(new object(), "foo"));
 
             // When executed against a scope top-level methods are defined on main singleton and also stored in the scope.
-            // This is equivalent to instance_evaling the code against the main singleton.
+            // They are private methods of Object as well, so that instances of other classes can call them, as in MRI
+            // (issue 163).
             var scope = Engine.CreateScope();
             Engine.Execute("def bar; 1; end", scope);
-            Assert(Context.ObjectClass.GetMethod("bar") == null);
+            Assert(Context.ObjectClass.GetMethod("bar") != null);
+            Assert(Context.ObjectClass.GetMethod("bar").IsPrivate);
             Assert(scope.GetVariable<object>("bar") != null);
             
             // we can invoke the method on a scope:
             Assert((int)Engine.Operations.InvokeMember(scope, "bar") == 1);
             
-            // Since we don't define top-level methods on Object when executing against a scope, 
+            // Since the top-level of a scope finds the method in main singleton first,
             // executions against different scopes don’t step on each other:
             var scope1 = Engine.CreateScope();
             var scope2 = Engine.CreateScope();
