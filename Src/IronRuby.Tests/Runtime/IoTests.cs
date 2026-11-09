@@ -470,9 +470,165 @@ true
             Assert(glob("*.rb") == "b.rb");
             Assert(glob("*/") == "a/");
             Assert(glob("a/*") == "a/sub,a/x.rb");
-            Assert(glob("**/*.rb") == "b.rb,a/x.rb,a/sub/y.rb");
+            // MRI's order: depth first, each directory sorted
+            Assert(glob("**/*.rb") == "a/sub/y.rb,a/x.rb,b.rb");
             Assert(glob("a/sub/y.rb") == "a/sub/y.rb");
             Assert(glob("a/nothing.rb") == "");
+        }
+
+        /// <summary>
+        /// Dir.glob walks the tree in MRI's order (#178): depth first, each directory's entries
+        /// sorted, every entry matched against all the pattern parts active there - so "**/*" gives
+        /// "a", "a/a", "a/a/c", "a/b", "b", ... - and with FNM_DOTMATCH "." sorts with the other
+        /// names instead of coming last. Braces are expanded when the walk reaches them, or, after
+        /// "**", matched in the listing. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Dir_GlobOrder1() {
+            TestOutput(@"
+require ""ruby4""
+require ""tmpdir""
+dir = Dir.mktmpdir
+begin
+  Dir.chdir(dir) do
+    %w[a a/a b b/sub c .dot sub].each { |d| Dir.mkdir(d) }
+    %w[a/a/c a/b b/sub/y b/x c/x c/y .dot/z -dash e.rb sub/f.rb sub/g.txt].each { |f| File.write(f, """") }
+    p Dir[""**/*""]
+    p Dir[""**/c""], Dir[""**/a/*""], Dir[""**/""]
+    p Dir.glob(""**/*"", File::FNM_DOTMATCH)
+    p Dir.glob(""*"", File::FNM_DOTMATCH), Dir.glob(""a/**/*"", File::FNM_DOTMATCH), Dir.glob(""*/*"", File::FNM_DOTMATCH)
+    p Dir["".*""], Dir[""**/.""], Dir[""**/a/**/c""], Dir[""a/**//c""], Dir[""**//c""]
+    p Dir[""**/{x,y}""], Dir[""*/{y,x}""], Dir[""**/*.{txt,rb}""], Dir[""{c,b}/*""]
+    p Dir.glob(""**/*"", base: ""a""), Dir.glob(""**/"", base: ""b"")
+    p Dir.glob(""**/*"", sort: false).sort == Dir.glob(""**/*"")
+  end
+ensure
+  require 'fileutils'
+  FileUtils.rm_rf(dir)
+end
+", @"
+[""-dash"", ""a"", ""a/a"", ""a/a/c"", ""a/b"", ""b"", ""b/sub"", ""b/sub/y"", ""b/x"", ""c"", ""c/x"", ""c/y"", ""e.rb"", ""sub"", ""sub/f.rb"", ""sub/g.txt""]
+[""a/a/c"", ""c""]
+[""a/a"", ""a/a/c"", ""a/b""]
+[""a/"", ""a/a/"", ""b/"", ""b/sub/"", ""c/"", ""sub/""]
+[""-dash"", ""."", "".dot"", "".dot/z"", ""a"", ""a/a"", ""a/a/c"", ""a/b"", ""b"", ""b/sub"", ""b/sub/y"", ""b/x"", ""c"", ""c/x"", ""c/y"", ""e.rb"", ""sub"", ""sub/f.rb"", ""sub/g.txt""]
+[""-dash"", ""."", "".dot"", ""a"", ""b"", ""c"", ""e.rb"", ""sub""]
+[""a/."", ""a/a"", ""a/a/c"", ""a/b""]
+[""./-dash"", ""./.dot"", ""./a"", ""./b"", ""./c"", ""./e.rb"", ""./sub"", "".dot/z"", ""a/a"", ""a/b"", ""b/sub"", ""b/x"", ""c/x"", ""c/y"", ""sub/f.rb"", ""sub/g.txt""]
+[""."", "".dot""]
+[]
+[""a/a/c""]
+[""a/a/c""]
+[""a/a/c"", ""c""]
+[""b/sub/y"", ""b/x"", ""c/x"", ""c/y""]
+[""b/x"", ""c/y"", ""c/x""]
+[""e.rb"", ""sub/f.rb"", ""sub/g.txt""]
+[""c/x"", ""c/y"", ""b/sub"", ""b/x""]
+[""a"", ""a/c"", ""b""]
+[""/"", ""sub/""]
+true
+");
+        }
+
+        /// <summary>
+        /// ".." and "." in a glob pattern are resolved by the kernel, not by .NET's path
+        /// normalisation (#178): "d1/ln/.." is the parent of the directory the link points to,
+        /// and "file/.." and "file/." do not exist. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Dir_GlobDotDot1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require ""ruby4""
+require ""tmpdir""
+dir = Dir.mktmpdir
+begin
+  Dir.chdir(dir) do
+    Dir.mkdir(""d1""); Dir.mkdir(""d1/sub""); Dir.mkdir(""real"")
+    %w[d1/only_d1 top_only real/r].each { |f| File.write(f, """") }
+    File.symlink(""../real"", ""d1/ln"")
+    p Dir[""d1/*/../only_d1""], Dir[""d1/*/../top_only""], Dir[""d1/ln/../top_only""]
+    p Dir[""top_only/../d1""], Dir[""top_only/..""], Dir[""top_only/.""], Dir[""*/.""], Dir[""d1/*/.""]
+    p Dir[""d1/ln/../*""], Dir[""d1/ln/../**/r""], Dir[""d1/sub/../*""]
+    p Dir.glob(""*"", base: ""d1/ln/..""), Dir.glob(""t*"", base: ""d1/ln/../"")
+    p Dir[""#{dir}/d1/ln/../t*""].map { |x| x.sub(dir, ""DIR"") }, Dir[""#{dir}/d1/ln/../only_d1""]
+  end
+ensure
+  require 'fileutils'
+  FileUtils.rm_rf(dir)
+end
+", @"
+[""d1/sub/../only_d1""]
+[""d1/ln/../top_only""]
+[""d1/ln/../top_only""]
+[]
+[]
+[]
+[""d1/."", ""real/.""]
+[""d1/ln/."", ""d1/sub/.""]
+[""d1/ln/../d1"", ""d1/ln/../real"", ""d1/ln/../top_only""]
+[""d1/ln/../real/r""]
+[""d1/sub/../ln"", ""d1/sub/../only_d1"", ""d1/sub/../sub""]
+[""d1"", ""real"", ""top_only""]
+[""top_only""]
+[""DIR/d1/ln/../top_only""]
+[]
+");
+        }
+
+        /// <summary>
+        /// Dir.glob raises Errno::ELOOP where MRI's opendir meets a symbolic link loop - when it
+        /// has to list the loop - and stays silent where MRI only stats one (#178). The expected
+        /// output is CRuby 4.0's.
+        /// </summary>
+        public void Dir_GlobSymlinkLoop1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require ""ruby4""
+require ""tmpdir""
+dir = Dir.mktmpdir
+begin
+  Dir.chdir(dir) do
+    Dir.mkdir(""sub""); File.write(""sub/f"", """")
+    File.symlink(""l2"", ""l1""); File.symlink(""l1"", ""l2""); File.symlink(""self"", ""self"")
+    File.symlink(""../l1"", ""sub/lp"")
+    [""l1/*"", ""self/**/x"", ""*/*/"", ""**/l1/*"", ""sub/*/*"", ""l1/../*"", ""*"", ""**/*"", ""*/"", ""l1/x"", ""*/x"", ""l1/"", ""l1/../x""].each do |pattern|
+      begin
+        p [pattern, Dir[pattern]]
+      rescue SystemCallError => e
+        p [pattern, e.class, e.message]
+      end
+    end
+    p Dir.glob(""*/**/"", File::FNM_DOTMATCH)
+    begin
+      Dir.glob(""*"", base: ""l1"")
+    rescue SystemCallError => e
+      p [e.class, e.message]
+    end
+  end
+ensure
+  require 'fileutils'
+  FileUtils.rm_rf(dir)
+end
+", @"
+[""l1/*"", Errno::ELOOP, ""Too many levels of symbolic links - l1""]
+[""self/**/x"", Errno::ELOOP, ""Too many levels of symbolic links - self""]
+[""*/*/"", Errno::ELOOP, ""Too many levels of symbolic links - l1""]
+[""**/l1/*"", Errno::ELOOP, ""Too many levels of symbolic links - l1""]
+[""sub/*/*"", Errno::ELOOP, ""Too many levels of symbolic links - sub/lp""]
+[""l1/../*"", Errno::ELOOP, ""Too many levels of symbolic links - l1/..""]
+[""*"", [""l1"", ""l2"", ""self"", ""sub""]]
+[""**/*"", [""l1"", ""l2"", ""self"", ""sub"", ""sub/f"", ""sub/lp""]]
+[""*/"", [""sub/""]]
+[""l1/x"", []]
+[""*/x"", []]
+[""l1/"", []]
+[""l1/../x"", []]
+[""./"", ""./sub/"", ""sub/""]
+[Errno::ELOOP, ""Too many levels of symbolic links - l1""]
+");
         }
     }
 }

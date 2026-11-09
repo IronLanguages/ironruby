@@ -584,14 +584,30 @@ namespace IronRuby.Builtins {
             return ungrouper.Flatten();
         }
 
+        /// <summary>
+        /// Walks the file system for one pattern the way MRI's glob_helper (dir.c) does: each
+        /// directory is listed once, in sorted order, and every entry is matched against all the
+        /// pattern components that are active at that point - more than one under "**" - before
+        /// the walk goes on below it. That gives MRI's result order: "**/*" is
+        /// ["a", "a/b", "a/b/c", "d"], depth first, not one level after another.
+        /// </summary>
         private sealed class GlobMatcher {
             private readonly PlatformAdaptationLayer/*!*/ _pal;
+            private readonly RubyContext _context;
             private readonly string/*!*/ _pattern;
             private readonly int _flags;
             private readonly bool _dirOnly;
             private readonly bool _sort;
             private readonly string _base;
             private readonly List<string>/*!*/ _result;
+
+            // The PAL is the real file system, so it may be listed directly and asked about links.
+            private readonly bool _realFileSystem;
+
+            // ".." in a path is resolved as the kernel does - against the directory a symbolic
+            // link points to - rather than cancelled out against the name before it, as .NET's
+            // path normalisation does. Windows resolves ".." by name, as .NET does.
+            private readonly bool _physicalDotDot;
 
             /// <summary>
             /// Number of leading characters to cut off every result. Matching always runs from
@@ -604,8 +620,13 @@ namespace IronRuby.Builtins {
                 get { return ((_flags & Constants.FNM_NOESCAPE) != 0); }
             }
 
-            internal GlobMatcher(PlatformAdaptationLayer/*!*/ pal, string/*!*/ pattern, int flags, string baseDirectory, bool sort) {
+            private bool DotMatch {
+                get { return ((_flags & Constants.FNM_DOTMATCH) != 0); }
+            }
+
+            internal GlobMatcher(PlatformAdaptationLayer/*!*/ pal, RubyContext context, string/*!*/ pattern, int flags, string baseDirectory, bool sort) {
                 _pal = pal;
+                _context = context;
                 _pattern = pattern;
                 // Dir.glob ignores FNM_CASEFOLD - MRI honours it in File.fnmatch? only - and
                 // uses FNM_SYSCASE, which is 0 on a case sensitive file system.
@@ -615,142 +636,318 @@ namespace IronRuby.Builtins {
                 _result = new List<string>();
                 _dirOnly = _pattern.LastCharacter() == '/';
                 _stripPrefix = 0;
+                _realFileSystem = UsesFileSystem(pal);
+                _physicalDotDot = _realFileSystem && !RubyUtils.FileSystemUsesDriveLetters;
             }
 
-            internal int FindNextSeparator(int position, bool allowWildcard, out bool containsWildcard) {
+            /// <summary>
+            /// The end of the pattern's literal prefix: the position after the last separator
+            /// before the first wildcard or brace, or the pattern's length when it has neither.
+            /// </summary>
+            private int FindLiteralPrefixEnd() {
                 int lastSlash = -1;
                 bool inEscape = false;
-                containsWildcard = false;
-                for (int i = position; i < _pattern.Length; i++) {
+                for (int i = 0; i < _pattern.Length; i++) {
                     if (inEscape) {
                         inEscape = false;
                         continue;
                     }
                     char c = _pattern[i];
-                    if (c == '\\') {
+                    if (c == '\\' && !NoEscapes) {
                         inEscape = true;
-                        continue;
-                    } else if (c == '*' || c == '?' || c == '[') {
-                        if (!allowWildcard) {
-                            return lastSlash + 1;
-                        } else if (lastSlash >= 0) {
-                            return lastSlash;
-                        }
-                        containsWildcard = true;
+                    } else if (c == '*' || c == '?' || c == '[' || c == '{') {
+                        return lastSlash + 1;
                     } else if (c == '/' || c == ':') {
-                        if (containsWildcard) {
-                            return i;
-                        }
                         lastSlash = i;
                     }
                 }
                 return _pattern.Length;
             }
 
-            /// <param name="kind">
-            /// What a directory listing already said about <paramref name="path"/>. A listed entry
-            /// exists, so a last segment needs no existence check, and one that is known to be a
-            /// directory (or not one) needs no check before it is walked into.
-            /// </param>
-            private void TestPath(string path, int patternEnd, bool isLastPathSegment, bool atBase, EntryKind kind = EntryKind.Unknown) {
-                if (!isLastPathSegment) {
-                    if (kind != EntryKind.NotDirectory) {
-                        DoGlob(path, patternEnd, false, atBase, kind == EntryKind.Directory);
+            #region Pattern
+
+            private enum NodeKind : byte {
+                Plain,
+                Magical,
+                Brace,
+                Recursive,
+                MatchAll,
+                MatchDir,
+            }
+
+            /// <summary>
+            /// One component of the pattern, as glob_make_pattern splits it: a name to join on
+            /// (Plain), a name to match against a listing (Magical, or Brace after "**"), "**/"
+            /// (Recursive), or the end of the pattern - with or without a trailing '/'.
+            /// </summary>
+            private sealed class Node {
+                internal NodeKind Kind;
+                // The component as written, escapes and all; null for Recursive and the ends.
+                internal string Text;
+                // Plain: the name it stands for.
+                internal string Literal;
+                internal Node Next;
+
+                private FnMatcher _matcher;
+                private Node[] _single;
+                internal Node[] Expansions;
+
+                internal FnMatcher/*!*/ GetMatcher(int flags) {
+                    if (_matcher == null) {
+                        _matcher = GetFnMatcher(Text, Kind == NodeKind.Brace ? flags | Constants.FNM_EXTGLOB : flags);
                     }
-                    return;
+                    return _matcher;
                 }
 
-                // The existence check has to use the full path; only the *result* has the base
-                // prefix removed. Stripping first happened to work while the prefix was always
-                // "./", but with `base: "sub"` it asked the file system about "x" instead of
-                // "sub/x" and every match was discarded.
-                // path is a real file name by now: escapes were taken out of the literal parts of
-                // the pattern as they were joined on, and wildcard matches are names as listed.
-                string full = path;
-                string match = (_stripPrefix > 0 && full.Length >= _stripPrefix) ? full.Substring(_stripPrefix) : full;
-                if (match.Length == 0) {
-                    // The base directory itself is not a match, so Dir["**/"] does not lead
-                    // with an empty string. The one exception is a directory-only pattern
-                    // under an explicit base:, where MRI does report it - as "/", the part of
-                    // the path left after the base is taken off:
-                    //   Dir.glob('**/', base: "deeply/nested") == ["/", "directory/", ...]
-                    if (_base == null || !_dirOnly) {
-                        return;
-                    }
-                    match = "/";
+                // A set holding just this node; most sets are one node, and this saves an array
+                // for every entry that is walked on.
+                internal Node[]/*!*/ Single {
+                    get { return _single ?? (_single = new[] { this }); }
                 }
 
-                if (kind != EntryKind.Unknown) {
-                    // Listed: it exists. A last segment that a listing matched is never the empty
-                    // one a directory-only pattern ends with, so _dirOnly does not apply here.
-                    // A dangling symbolic link is listed and reported, as FileExists did (it
-                    // answers true for one) and as MRI does.
-                    _result.Add(match);
-                } else if (_pal.DirectoryExists(full)) {
-                    _result.Add(match);
-                } else if (!_dirOnly && _pal.FileExists(full)) {
-                    _result.Add(match);
+                internal bool IsEnd {
+                    get { return Kind == NodeKind.MatchAll || Kind == NodeKind.MatchDir; }
                 }
             }
 
+            // find_dirsep: the next '/' that is not inside [...] or {...} and not escaped.
+            private int FindDirSeparator(string/*!*/ pattern, int start) {
+                bool open = false;
+                for (int i = start; i < pattern.Length; i++) {
+                    char c = pattern[i];
+                    switch (c) {
+                        case '[':
+                        case '{':
+                            open = true;
+                            break;
+                        case ']':
+                        case '}':
+                            open = false;
+                            break;
+                        case '/':
+                            if (!open) {
+                                return i;
+                            }
+                            break;
+                        case '\\':
+                            if (!NoEscapes) {
+                                i++;
+                            }
+                            break;
+                    }
+                }
+                return pattern.Length;
+            }
+
+            // has_magic, for one component.
+            private NodeKind GetComponentKind(string/*!*/ pattern, int start, int end) {
+                bool magical = false;
+                for (int i = start; i < end; i++) {
+                    switch (pattern[i]) {
+                        case '{':
+                            return NodeKind.Brace;
+                        case '*':
+                        case '?':
+                        case '[':
+                            magical = true;
+                            break;
+                        case '\\':
+                            if (!NoEscapes) {
+                                i++;
+                            }
+                            break;
+                    }
+                }
+                return magical ? NodeKind.Magical : NodeKind.Plain;
+            }
+
+            // glob_make_pattern
+            private Node/*!*/ ParsePattern(string/*!*/ pattern, int start) {
+                Node head = null, tail = null;
+                bool dirsep = false;
+                bool recursive = false;
+                int p = start;
+                while (p < pattern.Length) {
+                    var node = new Node();
+                    if (p + 2 < pattern.Length && pattern[p] == '*' && pattern[p + 1] == '*' && pattern[p + 2] == '/') {
+                        // Consecutive "**/"s, and the separators after them, are one: "**/**/x"
+                        // walks the tree once, and "**//x" is "**/x".
+                        do {
+                            p += 3;
+                            while (p < pattern.Length && pattern[p] == '/') {
+                                p++;
+                            }
+                        } while (p + 2 < pattern.Length && pattern[p] == '*' && pattern[p + 1] == '*' && pattern[p + 2] == '/');
+                        node.Kind = NodeKind.Recursive;
+                        dirsep = true;
+                        recursive = true;
+                    } else {
+                        int m = FindDirSeparator(pattern, p);
+                        NodeKind kind = GetComponentKind(pattern, p, m);
+                        if (kind == NodeKind.Plain && !recursive && m < pattern.Length) {
+                            // Literal components that are not the last are joined on together,
+                            // "a/b/" for "a/b/*". After a "**" each one is matched in a listing.
+                            int m2;
+                            while ((m2 = FindDirSeparator(pattern, m + 1)) < pattern.Length &&
+                                GetComponentKind(pattern, m + 1, m2) == NodeKind.Plain) {
+                                m = m2;
+                            }
+                        }
+                        node.Kind = kind;
+                        node.Text = pattern.Substring(p, m - p);
+                        if (kind == NodeKind.Plain) {
+                            node.Literal = NoEscapes ? node.Text : Unescape(node.Text, 0);
+                        }
+                        if (m < pattern.Length) {
+                            dirsep = true;
+                            p = m + 1;
+                        } else {
+                            dirsep = false;
+                            p = m;
+                        }
+                    }
+
+                    if (head == null) {
+                        head = node;
+                    } else {
+                        tail.Next = node;
+                    }
+                    tail = node;
+                }
+
+                var end = new Node { Kind = dirsep ? NodeKind.MatchDir : NodeKind.MatchAll };
+                if (head == null) {
+                    head = end;
+                } else {
+                    tail.Next = end;
+                }
+                return head;
+            }
+
+            // join_path_from_pattern: the rest of the pattern from a node on.
+            private static string/*!*/ PatternFrom(Node/*!*/ node) {
+                var result = new StringBuilder();
+                bool first = true;
+                for (Node p = node; p != null; p = p.Next) {
+                    string str;
+                    switch (p.Kind) {
+                        case NodeKind.Recursive: str = "**"; break;
+                        case NodeKind.MatchDir: str = ""; break;
+                        case NodeKind.MatchAll: continue;
+                        default: str = p.Text; break;
+                    }
+                    if (!first) {
+                        result.Append('/');
+                    }
+                    result.Append(str);
+                    first = false;
+                }
+                return result.ToString();
+            }
+
+            // The brace alternatives of the rest of the pattern from a node on, each parsed.
+            private Node[]/*!*/ GetExpansions(Node/*!*/ node) {
+                if (node.Expansions == null) {
+                    string[] patterns = UngroupGlobs(PatternFrom(node), NoEscapes);
+                    var expansions = new Node[patterns.Length];
+                    for (int i = 0; i < patterns.Length; i++) {
+                        expansions[i] = ParsePattern(patterns[i], 0);
+                    }
+                    node.Expansions = expansions;
+                }
+                return node.Expansions;
+            }
+
+            #endregion
+
+            #region File system
+
             internal enum EntryKind : byte {
                 Unknown,
+                // A directory, or a symbolic link to one.
                 Directory,
-                NotDirectory
+                // Exists (a dangling symbolic link does), but is not a directory.
+                NotDirectory,
+                NoEntry,
+                // Resolving the path ran into a symbolic link loop.
+                Loop,
             }
 
             /// <summary>One entry of a directory listing.</summary>
             private struct Entry {
-                // The entry's path as PlatformAdaptationLayer.GetFileSystemEntries spells it.
-                internal string Path;
                 internal string Name;
                 // Directory when the entry is one or is a symbolic link to one, as
                 // DirectoryExists would answer; Unknown when the listing could not tell.
                 internal EntryKind Kind;
             }
 
-            // The last directory listed, and its entries. "**/x" lists every directory twice in a
-            // row - once to match x in it, once to walk on - so one slot halves the listings.
-            private string _listedDirectory;
-            private Entry[] _listedEntries;
-
             private static readonly EnumerationOptions _listOptions = new EnumerationOptions {
-                // Directory.GetFileSystemEntries' (EnumerationOptions.Compatible): every entry,
-                // and an unreadable directory throws as it does.
+                // Directory.GetFileSystemEntries' (EnumerationOptions.Compatible): every entry.
                 AttributesToSkip = 0,
                 IgnoreInaccessible = false,
                 RecurseSubdirectories = false,
                 ReturnSpecialDirectories = false,
             };
 
-            private Entry[]/*!*/ ListDirectory(string/*!*/ directory) {
-                if (_listedEntries != null && directory.Equals(_listedDirectory)) {
-                    return _listedEntries;
+            private static readonly int _eloop = RubyErrno.GetNumber("ELOOP");
+
+            /// <summary>
+            /// Lists a directory, or returns null when there is no directory to list. Like MRI's
+            /// opendir, it is silent about a missing directory, a file and an unreadable directory,
+            /// but raises Errno::ELOOP for a symbolic link loop.
+            /// </summary>
+            /// <param name="path">The path as it is reported.</param>
+            /// <param name="fsPath">The path to ask the file system about.</param>
+            private Entry[] ListDirectory(string/*!*/ path, string/*!*/ fsPath, EntryKind kind) {
+                if (kind == EntryKind.Loop) {
+                    throw MakeLoopError(path, null);
                 }
 
                 Entry[] entries;
-                if (UsesFileSystem(_pal)) {
-                    // The same listing GetFileSystemEntries makes, but keeping what readdir says
-                    // about each entry's type. Asking the file system again for every entry -
-                    // FileExists, DirectoryExists, a symlink check - is most of what globbing
-                    // a large tree used to cost.
+                if (_realFileSystem) {
+                    if (kind == EntryKind.NotDirectory || kind == EntryKind.Unknown && !_pal.DirectoryExists(fsPath)) {
+                        // Only a symbolic link that leads nowhere can be a loop; opendir on
+                        // anything else that is not a directory just fails.
+                        if (!_physicalDotDot || !IsSymbolicLink(fsPath)) {
+                            return null;
+                        }
+                    }
+
+                    // The listing keeps what readdir says about each entry's type. Asking the
+                    // file system again for every entry - FileExists, DirectoryExists, a symlink
+                    // check - is most of what globbing a large tree used to cost.
                     var list = new List<Entry>();
-                    var enumerable = new FileSystemEnumerable<Entry>(
-                        // the PAL's .NET Framework workaround, so that the paths come out the same
-                        directory == "." ? directory + System.IO.Path.DirectorySeparatorChar : directory,
-                        (ref FileSystemEntry entry) => new Entry {
-                            Path = entry.ToSpecifiedFullPath(),
-                            Name = entry.FileName.ToString(),
-                            Kind = GetKind(ref entry),
-                        },
-                        _listOptions);
-                    list.AddRange(enumerable);
+                    try {
+                        var enumerable = new FileSystemEnumerable<Entry>(
+                            fsPath,
+                            (ref FileSystemEntry entry) => new Entry {
+                                Name = entry.FileName.ToString(),
+                                Kind = GetKind(ref entry),
+                            },
+                            _listOptions);
+                        list.AddRange(enumerable);
+                    } catch (DirectoryNotFoundException) {
+                        return null;
+                    } catch (FileNotFoundException) {
+                        return null;
+                    } catch (UnauthorizedAccessException) {
+                        // MRI only warns about an unreadable directory, and only when $VERBOSE
+                        return null;
+                    } catch (IOException e) {
+                        if (_physicalDotDot && e.HResult == _eloop) {
+                            throw MakeLoopError(path, e);
+                        }
+                        throw;
+                    }
                     entries = list.ToArray();
                 } else {
-                    string[] paths = _pal.GetFileSystemEntries(directory, "*");
+                    if (kind != EntryKind.Directory && !_pal.DirectoryExists(fsPath)) {
+                        return null;
+                    }
+                    string[] paths = _pal.GetFileSystemEntries(fsPath, "*");
                     entries = new Entry[paths.Length];
                     for (int i = 0; i < paths.Length; i++) {
-                        entries[i] = new Entry { Path = paths[i], Name = System.IO.Path.GetFileName(paths[i]), Kind = EntryKind.Unknown };
+                        entries[i] = new Entry { Name = System.IO.Path.GetFileName(paths[i]), Kind = EntryKind.Unknown };
                     }
                 }
 
@@ -758,19 +955,45 @@ namespace IronRuby.Builtins {
                     // MRI sorts the entries of each directory as it walks into it rather than
                     // sorting the final list, so "{zz,aa}/*" keeps the brace alternatives in
                     // pattern order while sorting within each of them.
-                    Array.Sort(entries, (x, y) => String.CompareOrdinal(x.Path, y.Path));
+                    Array.Sort(entries, (x, y) => CompareNames(x.Name, y.Name));
                 }
-
-                _listedDirectory = directory;
-                _listedEntries = entries;
                 return entries;
+            }
+
+            /// <summary>
+            /// strcmp on the UTF-8 names, which is code point order. Ordinal UTF-16 order differs
+            /// from it only where a surrogate pair meets a character from U+E000 up.
+            /// </summary>
+            private static int CompareNames(string/*!*/ x, string/*!*/ y) {
+                int i = x.AsSpan().CommonPrefixLength(y.AsSpan());
+                if (i == x.Length || i == y.Length) {
+                    return x.Length - y.Length;
+                }
+                return CodePointOrder(x[i]) - CodePointOrder(y[i]);
+            }
+
+            private static int CodePointOrder(char c) {
+                return c < 0xD800 ? c : c >= 0xE000 ? c - 0x800 : c + 0x2000;
+            }
+
+            private Exception/*!*/ MakeLoopError(string/*!*/ path, IOException inner) {
+                string reported = ErrorPath(path);
+                if (_context != null) {
+                    return RubyExceptions.CreateErrno(_context, _eloop, reported);
+                }
+                return inner ?? new IOException("Too many levels of symbolic links - " + reported, _eloop);
+            }
+
+            // The path MRI names in an error: without the "./" of the implicit base.
+            private string/*!*/ ErrorPath(string/*!*/ path) {
+                return (_base == null && _stripPrefix > 0 && path.Length > _stripPrefix) ? path.Substring(_stripPrefix) : path;
             }
 
             private static EntryKind GetKind(ref FileSystemEntry entry) {
                 if (RubyUtils.FileSystemUsesDriveLetters) {
                     // Windows: the attributes come with the listing. A symbolic link or junction
                     // carries its own Directory attribute whether or not its target exists, so
-                    // that one is left to DirectoryExists and FileExists, as before.
+                    // that one is left to DirectoryExists and FileExists.
                     return (entry.Attributes & FileAttributes.ReparsePoint) != 0 ? EntryKind.Unknown :
                         entry.IsDirectory ? EntryKind.Directory : EntryKind.NotDirectory;
                 }
@@ -819,24 +1042,201 @@ namespace IronRuby.Builtins {
 
             /// <summary>
             /// PlatformAdaptationLayer has no notion of links, so this goes straight to
-            /// System.IO. A PAL over a virtual file system simply reports no symlinks, which
-            /// is the pre-existing behaviour.
+            /// System.IO, and only for the real file system: a virtual one has no links.
             /// </summary>
-            private static bool IsSymbolicLinkToDirectory(string/*!*/ path) {
+            private static bool IsSymbolicLink(string/*!*/ path) {
                 try {
-                    var info = new DirectoryInfo(path);
-                    return info.Exists && info.LinkTarget != null;
+                    // a trailing '/' would follow the link
+                    return new FileInfo(path.Length > 1 ? path.TrimEnd('/') : path).LinkTarget != null;
                 } catch (Exception) {
                     return false;
                 }
             }
 
-            /// <summary>Joins a directory and a name without doubling the separator at the root.</summary>
-            private static string/*!*/ Combine(string/*!*/ directory, string/*!*/ name) {
-                return directory.EndsWith("/", StringComparison.Ordinal) ? directory + name : directory + "/" + name;
+            /// <summary>
+            /// Whether a directory "**" may walk into: a real directory, not a symbolic link to one.
+            /// </summary>
+            private bool IsRealDirectory(string/*!*/ fsPath, EntryKind kind) {
+                if (kind == EntryKind.Unknown) {
+                    // a host PAL's entry, or a Windows reparse point
+                    if (!_pal.DirectoryExists(fsPath)) {
+                        return false;
+                    }
+                } else if (kind != EntryKind.Directory) {
+                    return false;
+                }
+                return !_realFileSystem || !IsSymbolicLink(fsPath);
             }
 
-            private static string/*!*/ Unescape(string/*!*/ path, int start) {
+            private EntryKind GetPathKind(string/*!*/ fsPath) {
+                if (_pal.DirectoryExists(fsPath)) {
+                    return EntryKind.Directory;
+                }
+                // FileExists answers true for a dangling symbolic link, which MRI reports too
+                return _pal.FileExists(fsPath) ? EntryKind.NotDirectory : EntryKind.NoEntry;
+            }
+
+            // Whether a path has a "." or ".." component, which .NET would resolve by name.
+            private static bool HasDotSegment(string/*!*/ path) {
+                int start = 0;
+                while (start <= path.Length) {
+                    int end = path.IndexOf('/', start);
+                    if (end < 0) {
+                        end = path.Length;
+                    }
+                    int length = end - start;
+                    if (length > 0 && length <= 2 && path[start] == '.' && (length == 1 || path[start + 1] == '.')) {
+                        return true;
+                    }
+                    start = end + 1;
+                }
+                return false;
+            }
+
+            private const int MaxSymbolicLinks = 40;
+
+            /// <summary>
+            /// Spells <paramref name="path"/> without "." and "..", so that .NET's normalisation of
+            /// the path - which drops "x/.." and "x/." by name - cannot change what it refers to.
+            /// Each ".." is taken against the directory its prefix really is: "a/link/.." is the
+            /// parent of the link's target, and "file/.." and "file/." do not exist. Returns null when the path does not
+            /// exist (<paramref name="loop"/> tells whether a link loop was why).
+            /// </summary>
+            private static string ResolveDotDot(string/*!*/ path, out bool loop) {
+                loop = false;
+                var rest = new Stack<string>();
+                int dotDots = PushComponents(rest, path);
+                string resolved = path.StartsWith("/", StringComparison.Ordinal) ? "/" : "";
+                int links = 0;
+
+                while (rest.Count > 0) {
+                    string c = rest.Pop();
+                    if (c.Length == 0) {
+                        continue;
+                    }
+                    if (c == ".") {
+                        // what it follows was made sure to be a directory
+                        dotDots--;
+                        continue;
+                    }
+                    if (c == "..") {
+                        dotDots--;
+                        resolved = ParentOf(resolved);
+                        continue;
+                    }
+
+                    string candidate = resolved.Length == 0 ? c : resolved.EndsWith("/", StringComparison.Ordinal) ? resolved + c : resolved + "/" + c;
+                    if (dotDots == 0) {
+                        // nothing left to go up from it: the name means what .NET takes it to mean
+                        resolved = candidate;
+                        continue;
+                    }
+
+                    string target;
+                    try {
+                        target = new FileInfo(candidate).LinkTarget;
+                    } catch (Exception) {
+                        return null;
+                    }
+
+                    if (target != null) {
+                        if (++links > MaxSymbolicLinks) {
+                            loop = true;
+                            return null;
+                        }
+                        // the target is relative to the directory holding the link: resolved
+                        dotDots += PushComponents(rest, target);
+                        if (target.StartsWith("/", StringComparison.Ordinal)) {
+                            resolved = "/";
+                        }
+                        continue;
+                    }
+
+                    // a "." or ".." follows, and only a directory has those
+                    if (!Directory.Exists(candidate)) {
+                        return null;
+                    }
+                    resolved = candidate;
+                }
+
+                if (resolved.Length == 0) {
+                    resolved = ".";
+                }
+                if (path.EndsWith("/", StringComparison.Ordinal) && !resolved.EndsWith("/", StringComparison.Ordinal)) {
+                    resolved += "/";
+                }
+                return resolved;
+            }
+
+            private static int PushComponents(Stack<string>/*!*/ stack, string/*!*/ path) {
+                string[] components = path.Split('/');
+                int dotDots = 0;
+                for (int i = components.Length - 1; i >= 0; i--) {
+                    stack.Push(components[i]);
+                    if (components[i] == ".." || components[i] == ".") {
+                        dotDots++;
+                    }
+                }
+                return dotDots;
+            }
+
+            // The parent of a path that has no symbolic links and no ".." in it - other than
+            // leading ones, which go up from the current directory, which has none.
+            private static string/*!*/ ParentOf(string/*!*/ resolved) {
+                if (resolved == "/") {
+                    return resolved;
+                }
+                if (resolved.Length == 0) {
+                    return "..";
+                }
+                if (resolved == ".." || resolved.EndsWith("/..", StringComparison.Ordinal)) {
+                    return resolved + "/..";
+                }
+                int slash = resolved.LastIndexOf('/');
+                return slash < 0 ? "" : slash == 0 ? "/" : resolved.Substring(0, slash);
+            }
+
+            /// <summary>
+            /// The path to ask the file system about for <paramref name="path"/>: itself, unless
+            /// it has a "." or ".." that .NET would resolve differently from the kernel.
+            /// </summary>
+            private string ToFileSystemPath(string/*!*/ path, ref EntryKind kind) {
+                if (!_physicalDotDot || !HasDotSegment(path)) {
+                    return null;
+                }
+                bool loop;
+                string resolved = ResolveDotDot(path, out loop);
+                if (resolved == null) {
+                    kind = loop ? EntryKind.Loop : EntryKind.NoEntry;
+                }
+                // "." for the implicit base, say: the path itself will do
+                return resolved == path ? null : resolved;
+            }
+
+            #endregion
+
+            private void Report(string/*!*/ full) {
+                full = RubyUtils.CanonicalizePath(full);
+                string match = (_stripPrefix > 0 && full.Length >= _stripPrefix) ? full.Substring(_stripPrefix) : full;
+                if (match.Length == 0) {
+                    // The base directory itself is not a match, so Dir["**/"] does not lead
+                    // with an empty string. The one exception is a directory-only pattern
+                    // under an explicit base:, where MRI does report it - as "/", the part of
+                    // the path left after the base is taken off:
+                    //   Dir.glob('**/', base: "deeply/nested") == ["/", "directory/", ...]
+                    if (_base == null || !_dirOnly) {
+                        return;
+                    }
+                    match = "/";
+                }
+                _result.Add(match);
+            }
+
+            private static string/*!*/ Join(string/*!*/ path, bool dirsep, string/*!*/ name) {
+                return dirsep ? path + "/" + name : path + name;
+            }
+
+            private static string Unescape(string/*!*/ path, int start) {
                 StringBuilder unescaped = new StringBuilder();
                 bool inEscape = false;
                 for (int i = start; i < path.Length; i++) {
@@ -865,26 +1265,44 @@ namespace IronRuby.Builtins {
                 int pos = 0;
                 string baseDirectory = null;
                 if (_pattern[0] == '/' || _pattern.IndexOf(':') >= 0) {
-                    bool containsWildcard;
-                    pos = FindNextSeparator(0, false, out containsWildcard);
+                    pos = FindLiteralPrefixEnd();
                     if (pos == _pattern.Length) {
-                        TestPath(NoEscapes ? _pattern : Unescape(_pattern, 0), pos, true, true);
+                        // nothing to match: the pattern names one file
+                        string path = NoEscapes ? _pattern : Unescape(_pattern, 0);
+                        EntryKind kind = EntryKind.Unknown;
+                        string fsPath = ToFileSystemPath(path, ref kind) ?? path;
+                        if (kind == EntryKind.Unknown) {
+                            kind = GetPathKind(fsPath);
+                        }
+                        if (kind == EntryKind.Directory || kind == EntryKind.NotDirectory && !_dirOnly) {
+                            Report(path);
+                        }
                         return _result;
                     }
-                    if (pos > 0 || _pattern[0] == '/') {
+                    if (pos > 0) {
                         baseDirectory = _pattern.Substring(0, pos);
                         if (!NoEscapes) {
                             baseDirectory = Unescape(baseDirectory, 0);
                         }
+                        // "/a/b/" is the path "/a/b" with names joined on after a '/' - as MRI
+                        // has it, and as an error names it - but "/", "c:/" and "/a//" keep theirs.
+                        if (baseDirectory.Length > 2 && baseDirectory[baseDirectory.Length - 1] == '/') {
+                            char last = baseDirectory[baseDirectory.Length - 2];
+                            if (last != '/' && last != ':') {
+                                baseDirectory = baseDirectory.Substring(0, baseDirectory.Length - 1);
+                            }
+                        }
                     }
                 }
 
+                bool reportable = true;
                 if (baseDirectory == null) {
                     // A relative pattern is matched against `base:` when one was given, and the
                     // base is not part of the result - "*" with base "a/b" yields "c", not
                     // "a/b/c". MRI ignores base: for an absolute pattern, which is why this
                     // only runs when the pattern gave us no base of its own.
-                    baseDirectory = String.IsNullOrEmpty(_base) ? "." : _base;
+                    reportable = !String.IsNullOrEmpty(_base);
+                    baseDirectory = reportable ? _base : ".";
                     // The entry name is appended to the base with a separator between,
                     // unless the base already ends in one - "a/" and "a" both produce
                     // "a/b", so a trailing separator leaves nothing extra to strip.
@@ -892,107 +1310,205 @@ namespace IronRuby.Builtins {
                         (baseDirectory[baseDirectory.Length - 1] == '/' ? 0 : 1);
                 }
 
-                DoGlob(baseDirectory, pos, false, true);
+                EntryKind baseKind = EntryKind.Unknown;
+                string baseFsPath = ToFileSystemPath(baseDirectory, ref baseKind);
+                Node head = ParsePattern(_pattern, pos);
+                Walk(baseDirectory, baseFsPath, !baseDirectory.EndsWith("/", StringComparison.Ordinal), baseKind,
+                    head.Single, 1, false, reportable);
                 return _result;
             }
 
-            /// <param name="atBase">
-            /// True while baseDirectory is still the directory named by the pattern's literal
-            /// prefix, i.e. no wildcard has been stepped through yet. Only there does "."
-            /// count as an entry: Dir["a/**/*", File::FNM_DOTMATCH] yields "a/." but not
-            /// "a/b/.".
+            /// <summary>glob_helper: what the pattern nodes in <paramref name="set"/> make of <paramref name="path"/>.</summary>
+            /// <param name="path">The path as reported.</param>
+            /// <param name="fsPath">The path to ask the file system about, when it is not <paramref name="path"/>.</param>
+            /// <param name="dirsep">Whether a '/' goes between the path and a name joined on.</param>
+            /// <param name="kind">What is known about the path already.</param>
+            /// <param name="skipDot">
+            /// "." is listed in the first directory the walk lists, and only there, so that
+            /// Dir["a/**/*", File::FNM_DOTMATCH] yields "a/." but not "a/b/.".
             /// </param>
-            /// <param name="knownDirectory">A listing has already shown baseDirectory to be a directory.</param>
-            internal void DoGlob(string/*!*/ baseDirectory, int position, bool isPreviousDoubleStar, bool atBase, bool knownDirectory = false) {
-                if (!knownDirectory && !_pal.DirectoryExists(baseDirectory)) {
-                    return;
-                }
+            /// <param name="reportable">False for the implicit "." of a relative pattern, which is never a match.</param>
+            private void Walk(string/*!*/ path, string fsPath, bool dirsep, EntryKind kind, Node[]/*!*/ set, int count,
+                bool skipDot, bool reportable) {
 
-                bool containsWildcard;
-                int patternEnd = FindNextSeparator(position, true, out containsWildcard);
-                bool isLastPathSegment = (patternEnd == _pattern.Length);
-                string dirSegment = _pattern.Substring(position, patternEnd - position);
-
-                if (!isLastPathSegment) {
-                    patternEnd++;
-                }
-
-                if (!containsWildcard) {
-                    string literal = NoEscapes ? dirSegment : Unescape(dirSegment, 0);
-                    string path = Combine(baseDirectory, literal);
-                    // MRI keeps repeated separators: "a//*" gives "a//b", and the literal part
-                    // ends in one of them ("a/") when the next part has a wildcard.
-                    if (!isLastPathSegment && literal.EndsWith("/", StringComparison.Ordinal)) {
-                        path += "/";
+                bool plain = false, magical = false, recursive = false, brace = false, matchAll = false, matchDir = false;
+                for (int i = 0; i < count; i++) {
+                    Node p = set[i];
+                    if (p.Kind == NodeKind.Recursive) {
+                        recursive = true;
+                        p = p.Next;
                     }
-                    TestPath(path, patternEnd, isLastPathSegment, atBase);
+                    switch (p.Kind) {
+                        case NodeKind.Plain: plain = true; break;
+                        case NodeKind.Magical: magical = true; break;
+                        // After "**" a brace that stays within one name is matched in the listing
+                        // (FNM_EXTGLOB) rather than expanded: "**/*.{rb,py}" walks the tree once.
+                        case NodeKind.Brace: if (!recursive || p.Text.IndexOf('/') >= 0) brace = true; break;
+                        case NodeKind.MatchAll: matchAll = true; break;
+                        case NodeKind.MatchDir: matchDir = true; break;
+                    }
+                }
+
+                if (brace) {
+                    // MRI expands braces when the walk gets to them, so "*/{x,y}" gives a/x, a/y,
+                    // b/x, b/y rather than every x before any y. (A pattern that starts with a brace
+                    // was expanded before the walk began.)
+                    foreach (Node expansion in GetExpansions(set[0])) {
+                        Walk(path, fsPath, dirsep, kind, expansion.Single, 1, skipDot, reportable);
+                    }
                     return;
                 }
 
-                // "**" only recurses when another path segment follows it. A trailing "**" is
-                // just "*": Dir["dir/**"] is ["dir/f1", "dir/f2", "dir/sub"], not the whole
-                // subtree. This used to be special-cased for the pattern "**" on its own.
-                bool doubleStar = dirSegment.Equals("**") && !isLastPathSegment;
-                if (doubleStar && !isPreviousDoubleStar) {
-                    DoGlob(baseDirectory, patternEnd, true, atBase, true);
+                string fs = fsPath ?? path;
+                if (reportable) {
+                    if ((matchAll || matchDir) && kind == EntryKind.Unknown) {
+                        kind = GetPathKind(fs);
+                    }
+                    if (matchAll && (kind == EntryKind.Directory || kind == EntryKind.NotDirectory)) {
+                        Report(path);
+                    }
+                    if (matchDir) {
+                        if (kind != EntryKind.Directory) {
+                            // MRI's stat said no (or ELOOP, which it only warns about): there is
+                            // nothing to list either.
+                            return;
+                        }
+                        Report(dirsep ? path + "/" : path);
+                    }
                 }
 
-                FnMatcher segmentMatcher = GetFnMatcher(dirSegment, _flags);
-                foreach (Entry entry in ListDirectory(baseDirectory)) {
-                    if (segmentMatcher.IsMatch(entry.Name)) {
-                        var canon = RubyUtils.CanonicalizePath(entry.Path);
-                        if (doubleStar && entry.Kind != EntryKind.NotDirectory && IsSymbolicLinkToDirectory(canon)) {
-                            // A recursive "**" neither reports a symlinked directory nor walks
-                            // into it - otherwise Dir["**/"] both lists "special/ln/" and
-                            // reports everything below it a second time.
+                if (kind == EntryKind.NoEntry) {
+                    return;
+                }
+
+                if (magical || recursive) {
+                    Entry[] entries = ListDirectory(path, fs, kind);
+                    if (entries == null) {
+                        return;
+                    }
+
+                    // "." comes from readdir in MRI, so it sorts with the other names; ".." never matches.
+                    bool listDot = !skipDot && !(recursive && !DotMatch);
+                    int dotIndex = -1;
+                    if (listDot) {
+                        dotIndex = 0;
+                        if (_sort) {
+                            while (dotIndex < entries.Length && CompareNames(entries[dotIndex].Name, ".") < 0) {
+                                dotIndex++;
+                            }
+                        }
+                    }
+
+                    var newSet = new Node[count * 2];
+                    for (int e = 0; e <= entries.Length; e++) {
+                        if (e == dotIndex) {
+                            WalkEntry(path, fsPath, dirsep, ".", EntryKind.Directory, set, count, newSet);
+                        }
+                        if (e < entries.Length) {
+                            WalkEntry(path, fsPath, dirsep, entries[e].Name, entries[e].Kind, set, count, newSet);
+                        }
+                    }
+                } else if (plain) {
+                    for (int i = 0; i < count; i++) {
+                        Node p = set[i];
+                        if (p.Kind != NodeKind.Plain) {
                             continue;
                         }
-                        TestPath(canon, patternEnd, isLastPathSegment, false, entry.Kind);
-                        if (doubleStar && entry.Kind != EntryKind.NotDirectory) {
-                            DoGlob(canon, position, true, false, entry.Kind == EntryKind.Directory);
+                        // Nodes that name the same file are walked on together.
+                        bool seen = false;
+                        for (int j = 0; j < i; j++) {
+                            if (set[j].Kind == NodeKind.Plain && set[j].Literal == p.Literal) {
+                                seen = true;
+                                break;
+                            }
                         }
+                        if (seen) {
+                            continue;
+                        }
+
+                        Node[] next = p.Next.Single;
+                        int nextCount = 1;
+                        for (int j = i + 1; j < count; j++) {
+                            if (set[j].Kind == NodeKind.Plain && set[j].Literal == p.Literal) {
+                                if (nextCount == 1) {
+                                    next = new Node[count];
+                                    next[0] = p.Next;
+                                }
+                                next[nextCount++] = set[j].Next;
+                            }
+                        }
+
+                        string childPath = Join(path, dirsep, p.Literal);
+                        string childFsPath = null;
+                        // what cannot be resolved has nothing below it that can
+                        EntryKind childKind = kind == EntryKind.Loop ? EntryKind.Loop : EntryKind.Unknown;
+                        if (fsPath != null || _physicalDotDot && HasDotSegment(p.Literal)) {
+                            string joined = Join(fs, dirsep, p.Literal);
+                            childFsPath = ToFileSystemPath(joined, ref childKind) ??
+                                (childKind == EntryKind.Unknown && fsPath != null ? joined : null);
+                        }
+                        Walk(childPath, childFsPath, true, childKind, next, nextCount, skipDot, true);
                     }
                 }
-                // "**" never matches "." as a component - that would re-glob the same
-                // directory one level down and report every match twice.
-                if (atBase && !doubleStar &&
-                    ((_flags & Constants.FNM_DOTMATCH) != 0 || (dirSegment[0] == '.' && !isPreviousDoubleStar))) {
-                    // "." is a legitimate glob result but ".." is not: Dir[".*"] is
-                    // [".", ".dotfile", ...] with no "..".
-                    if (segmentMatcher.IsMatch(".")) {
-                        string directory = Combine(baseDirectory, ".");
-                        if (isLastPathSegment && _dirOnly) {
-                            directory += '/';
+            }
+
+            private void WalkEntry(string/*!*/ path, string fsPath, bool dirsep, string/*!*/ name, EntryKind kind,
+                Node[]/*!*/ set, int count, Node[]/*!*/ newSet) {
+
+                int dotFile = name[0] != '.' ? 0 : name.Length == 1 ? 2 : 1;
+                int newCount = 0;
+                string childFsPath = null;
+                bool? realDirectory = null;
+
+                for (int i = 0; i < count; i++) {
+                    Node p = set[i];
+                    if (p.Kind == NodeKind.Recursive) {
+                        // "**" goes into directories, but not through a symbolic link, and into
+                        // dot directories only with FNM_DOTMATCH - never into "." itself.
+                        if (dotFile < (DotMatch ? 2 : 1) && kind != EntryKind.NotDirectory) {
+                            if (realDirectory == null) {
+                                childFsPath = Join(fsPath ?? path, dirsep, name);
+                                realDirectory = IsRealDirectory(childFsPath, kind);
+                                if (realDirectory.Value && kind == EntryKind.Unknown) {
+                                    kind = EntryKind.Directory;
+                                }
+                            }
+                            if (realDirectory.Value) {
+                                AddToSet(newSet, ref newCount, p);
+                            }
                         }
-                        TestPath(directory, patternEnd, isLastPathSegment, false);
+                        p = p.Next;
+                    }
+                    switch (p.Kind) {
+                        case NodeKind.Plain:
+                        case NodeKind.Magical:
+                        case NodeKind.Brace:
+                            if (p.GetMatcher(_flags).IsMatch(name)) {
+                                AddToSet(newSet, ref newCount, p.Next);
+                            }
+                            break;
                     }
                 }
-            }
-        }
 
-        /// <summary>
-        /// Collapses runs of "**" path segments. "**" followed by another "**" walks the same
-        /// tree twice, which reported every match of "**/**/*.txt" four times over; MRI treats
-        /// consecutive "**" segments as one.
-        /// </summary>
-        private static string/*!*/ CollapseDoubleStars(string/*!*/ pattern) {
-            if (pattern.IndexOf("**", StringComparison.Ordinal) < 0) {
-                return pattern;
-            }
-
-            var segments = pattern.Split('/');
-            var kept = new List<string>(segments.Length);
-            for (int i = 0; i < segments.Length; i++) {
-                // A trailing "**" is a plain "*", not a recursive descent, so it never
-                // collapses into the "**" before it: Dir["**/**"] is the whole tree while
-                // Dir["**"] is one level.
-                bool recursive = segments[i] == "**" && i < segments.Length - 1;
-                if (recursive && kept.Count > 0 && kept[kept.Count - 1] == "**") {
-                    continue;
+                if (newCount == 0) {
+                    return;
                 }
-                kept.Add(segments[i]);
+
+                Node[] next = newCount == 1 ? newSet[0].Single : (Node[])newSet.Clone();
+                Walk(Join(path, dirsep, name), fsPath != null ? (childFsPath ?? Join(fsPath, dirsep, name)) : null,
+                    true, kind, next, newCount, true, true);
             }
-            return (kept.Count == segments.Length) ? pattern : String.Join("/", kept.ToArray());
+
+            private static void AddToSet(Node[]/*!*/ set, ref int count, Node/*!*/ node) {
+                // MRI's set can hold a node twice ("**/a/**/b" reaches "b" both ways), which
+                // changes nothing but the work done.
+                for (int i = 0; i < count; i++) {
+                    if (set[i] == node) {
+                        return;
+                    }
+                }
+                set[count++] = node;
+            }
         }
 
         public static IEnumerable<string>/*!*/ GetMatches(PlatformAdaptationLayer/*!*/ pal, string/*!*/ pattern, int flags) {
@@ -1001,18 +1517,28 @@ namespace IronRuby.Builtins {
 
         public static IEnumerable<string>/*!*/ GetMatches(PlatformAdaptationLayer/*!*/ pal, string/*!*/ pattern, int flags,
             string baseDirectory, bool sort) {
+            return GetMatches(pal, null, pattern, flags, baseDirectory, sort);
+        }
+
+        private static IEnumerable<string>/*!*/ GetMatches(PlatformAdaptationLayer/*!*/ pal, RubyContext context, string/*!*/ pattern, int flags,
+            string baseDirectory, bool sort) {
 
             if (pattern.Length == 0) {
                 yield break;
             }
-            bool noEscape = ((flags & Constants.FNM_NOESCAPE) != 0);
-            string[] groups = UngroupGlobs(pattern, noEscape);
-            if (groups.Length == 0) {
-                yield break;
+
+            // A pattern that starts with a brace is expanded before anything is matched, as
+            // ruby_glob0 does - "{/a,b}/*" has an absolute alternative. Any other brace is
+            // expanded when the walk reaches it.
+            string[] groups;
+            if (pattern[0] == '{') {
+                groups = UngroupGlobs(pattern, (flags & Constants.FNM_NOESCAPE) != 0);
+            } else {
+                groups = new[] { pattern };
             }
 
             foreach (string group in groups) {
-                GlobMatcher matcher = new GlobMatcher(pal, CollapseDoubleStars(group), flags, baseDirectory, sort);
+                GlobMatcher matcher = new GlobMatcher(pal, context, group, flags, baseDirectory, sort);
                 foreach (string filename in matcher.DoGlob()) {
                     yield return filename;
                 }
@@ -1028,7 +1554,7 @@ namespace IronRuby.Builtins {
 
             string strPattern = context.DecodePath(pattern);
             string strBase = (baseDirectory != null) ? context.DecodePath(baseDirectory) : null;
-            foreach (string strFileName in GetMatches(context.Platform, strPattern, flags, strBase, sort)) {
+            foreach (string strFileName in GetMatches(context.Platform, context, strPattern, flags, strBase, sort)) {
                 // The results carry the pattern's encoding, not the path encoding:
                 // Dir.glob("file".encode("EUC-JP")).first.encoding is EUC-JP. A name that
                 // cannot be represented in it falls back to the path encoding rather than
