@@ -146,6 +146,51 @@ true
         }
 
         /// <summary>
+        /// A shift width an Int32 does not hold (#89). MRI allocates 1 &lt;&lt; 2**31 (a 256 MB Integer); IronRuby
+        /// raised RangeError. Shifts back by such widths, and bit references at such indexes, reach the real bits.
+        /// From 2**32 on, a non-MRI implementation may say "shift width too big" (ruby/spec's left_shift_spec).
+        /// The expected output is CRuby 4.0's, except for the 2**32 line (CRuby would try to allocate 512 MB).
+        /// </summary>
+        public void Integer_HugeShifts1() {
+            TestOutput(@"
+def big(x) = [x.bit_length, x & 0xffff, x >> (x.bit_length - 8)]
+b = 1 << 2**31
+p big(b), big(-3 << 2**31), big(3 >> -(2**31)), big((2**64 + 3) << (2**31 + 1))
+p b >> 2**31, (-b - 1) >> 2**31, (-b) >> 2**31, b >> (2**31 + 1), (b + 5) << -(2**31), (-b + 5) << -(2**31)
+p b[2**31], b[2**31 - 1], (-b)[2**31 + 5], (-b - 1)[2**31], (b + 1)[2**64], (-b)[2**64]
+p 7 << -(2**31), -7 << -(2**31), 2**40 << -(2**31), -(2**40) >> 2**31, 1 >> 2**64, -1 >> 2**64, 0 << 2**64
+p((1 << 2**32 rescue $!), (-1 >> -(2**64) rescue $!), (b << 2**70 rescue $!))
+", @"
+[2147483649, 0, 128]
+[2147483650, 0, -192]
+[2147483650, 0, 192]
+[2147483714, 0, 128]
+1
+-2
+-1
+0
+1
+-1
+1
+0
+1
+0
+0
+1
+0
+-1
+0
+-1
+0
+-1
+0
+#<RangeError: shift width too big>
+#<RangeError: shift width too big>
+#<RangeError: shift width too big>
+");
+        }
+
+        /// <summary>
         /// An Integer too large for a Float meets a Float: MRI converts it (to Infinity), with an
         /// "Integer out of Float range" warning under -w, in every operator that coerces - and
         /// divmod, div and % then answer as Float#divmod etc. would for Infinity, not with a CLR
