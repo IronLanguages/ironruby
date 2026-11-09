@@ -1253,6 +1253,84 @@ true
         }
 
         /// <summary>
+        /// A trap of TERM, ABRT (22) or SIGABRT_COMPAT (6) runs when native code in the process calls the C
+        /// runtime's raise(), as in MRI, whose trap calls signal(); IronRuby only recorded the handler on
+        /// Windows, and the C runtime's default ended the process. The handler is put back after each
+        /// delivery, runs on the main thread when another thread raised the signal, and ABRT and
+        /// SIGABRT_COMPAT keep one C runtime handler with a Ruby command each. Expected output is CRuby
+        /// 4.0.5's on Windows; elsewhere the test only prints it.
+        /// </summary>
+        public void Signal_NativeRaise1() {
+            TestOutput(@"
+require 'ruby4'
+require 'fiddle'
+if File::ALT_SEPARATOR == '\\'
+  crt = Fiddle::Handle.new('ucrtbase')
+  sig = Fiddle::Function.new(crt['raise'], [Fiddle::TYPE_INT], Fiddle::TYPE_INT)
+  got = []
+  wait = proc { |n| 100.times { break if got.size >= n; sleep 0.02 } }
+
+  # the handler runs, and is back in place for the next raise
+  trap(:TERM) { |s| got << [:term, s] }
+  r = [sig.call(15), sig.call(15)]
+  wait[2]
+  p r, got
+  got.clear
+
+  # raised on another thread, run on the main one
+  Thread.new { sig.call(15) }.join
+  wait[1]
+  p got, got.size == 1
+  got.clear
+
+  trap(:TERM, 'IGNORE')
+  p sig.call(15)
+  trap(:TERM, 'SYSTEM_DEFAULT')
+
+  # ABRT (22) and SIGABRT_COMPAT (6) are one handler in the C runtime, each with its own Ruby command
+  trap(:ABRT) { |s| got << [:abrt, s] }
+  r = [sig.call(22), sig.call(6)]
+  wait[1]
+  sleep 0.1
+  p r, got
+  got.clear
+  trap(6) { |s| got << [:compat, s] }
+  r = [sig.call(6), sig.call(22)]
+  wait[2]
+  p r, got
+  got.clear
+  trap(6, 'IGNORE')
+  p sig.call(22), sig.call(6)
+  sleep 0.1
+  p got
+  trap(6, 'SYSTEM_DEFAULT')
+  trap(22, 'SYSTEM_DEFAULT')
+else
+  p [0, 0], [[:term, 15], [:term, 15]]
+  p [[:term, 15]], true
+  p 0
+  p [0, 0], [[:abrt, 22]]
+  p [0, 0], [[:compat, 6], [:abrt, 22]]
+  p 0, 0
+  p []
+end
+", @"
+[0, 0]
+[[:term, 15], [:term, 15]]
+[[:term, 15]]
+true
+0
+[0, 0]
+[[:abrt, 22]]
+[0, 0]
+[[:compat, 6], [:abrt, 22]]
+0
+0
+[]
+");
+        }
+
+        /// <summary>
         /// A drive-relative name's dirname is "C:." on Windows, as in MRI - which is how CRuby's own
         /// pathname_builtin.rb recognises drive letters, so Pathname#absolute? depends on it.
         /// </summary>
