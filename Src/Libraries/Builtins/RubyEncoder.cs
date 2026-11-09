@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -937,7 +938,8 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
                 }
 
-                IntegerValue integer = Protocols.CastToInteger(integerConversion, value);
+                // a Fixnum, by far the most common, without the conversion site
+                IntegerValue integer = (value is int fixnum) ? new IntegerValue(fixnum) : Protocols.CastToInteger(integerConversion, value);
                 if (integer.IsFixnum) {
                     long n = integer.Fixnum;
                     for (int b = 0; b < width; b++) {
@@ -956,13 +958,11 @@ namespace IronRuby.Builtins {
                     }
                 }
 
+                // one write of the value: each WriteByte is a write into the string of its own
                 if (swap) {
-                    for (int b = width - 1; b >= 0; b--) {
-                        stream.WriteByte(buffer[b]);
-                    }
-                } else {
-                    stream.Write(buffer, 0, width);
+                    Array.Reverse(buffer, 0, width);
                 }
+                stream.Write(buffer, 0, width);
             }
         }
         private static void FromHex(Stream/*!*/ stream, MutableString/*!*/ str, int nibbleCount, bool swap) {
@@ -1127,6 +1127,42 @@ namespace IronRuby.Builtins {
                 return Enumerate(format, false);
             }
 
+            // Formats are almost always literals, parsed again on every call: a few hundred nanoseconds of a
+            // pack or unpack of a few values. The directives of the last ones seen are kept, per direction
+            // (a bare '@' means different things in the two).
+            private const int MaxCachedFormats = 256;
+            private const int MaxCachedFormatLength = 128;
+            private static readonly ConcurrentDictionary<string, ParsedFormat>/*!*/ _packFormats = new ConcurrentDictionary<string, ParsedFormat>();
+            private static readonly ConcurrentDictionary<string, ParsedFormat>/*!*/ _unpackFormats = new ConcurrentDictionary<string, ParsedFormat>();
+
+            internal static ParsedFormat/*!*/ Parse(string/*!*/ format, bool packing) {
+                var cache = packing ? _packFormats : _unpackFormats;
+                ParsedFormat parsed;
+                if (cache.TryGetValue(format, out parsed)) {
+                    return parsed;
+                }
+
+                var directives = new List<FormatDirective>();
+                bool invalid = false;
+                try {
+                    foreach (var directive in Enumerate(format, packing)) {
+                        directives.Add(directive);
+                    }
+                } catch (Exception e) when (e is ArgumentException || e is InvalidOperationException) {
+                    // ArgumentError, RangeError: raised again, afresh, where Enumerate raised it (see ThrowIfInvalid)
+                    invalid = true;
+                }
+
+                parsed = new ParsedFormat(directives.ToArray(), invalid);
+                if (format.Length <= MaxCachedFormatLength) {
+                    if (cache.Count >= MaxCachedFormats) {
+                        cache.Clear();
+                    }
+                    cache[format] = parsed;
+                }
+                return parsed;
+            }
+
             internal static IEnumerable<FormatDirective>/*!*/ Enumerate(string/*!*/ format, bool packing) {
                 for (int i = 0; i < format.Length; i++) {
                     char c = format[i];
@@ -1218,6 +1254,29 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        /// <summary>
+        /// The directives of a format, up to the first error in it if there is one. Packing and unpacking go
+        /// through the directives and then call <see cref="ThrowIfInvalid"/>: the error is raised after what
+        /// comes before it has been done, as it was when the format was read as the work went along (MRI
+        /// reads it so too: ["x"].pack("Cy") is a TypeError for the "x", not the unknown 'y').
+        /// </summary>
+        private sealed class ParsedFormat {
+            internal readonly FormatDirective[]/*!*/ Directives;
+            private readonly bool _invalid;
+
+            internal ParsedFormat(FormatDirective[]/*!*/ directives, bool invalid) {
+                Directives = directives;
+                _invalid = invalid;
+            }
+
+            internal void ThrowIfInvalid(string/*!*/ format, bool packing) {
+                if (_invalid) {
+                    foreach (var _ in FormatDirective.Enumerate(format, packing)) {
+                    }
+                }
+            }
+        }
+
         #region Pack
 
         public static MutableString/*!*/ Pack(
@@ -1240,7 +1299,9 @@ namespace IronRuby.Builtins {
                 // 1 = still ASCII, 2 = UTF-8, 0 = binary.
                 int encodingInfo = 1;
 
-                foreach (FormatDirective directive in FormatDirective.Enumerate(format.ConvertToString(), true)) {
+                string formatString = format.ConvertToString();
+                ParsedFormat parsed = FormatDirective.Parse(formatString, true);
+                foreach (FormatDirective directive in parsed.Directives) {
                     int count = directive.Count ?? self.Count - i;
 
                     switch (directive.Directive) {
@@ -1473,6 +1534,7 @@ namespace IronRuby.Builtins {
 
                     i += count;
                 }
+                parsed.ThrowIfInvalid(formatString, true);
                 stream.SetLength(stream.Position);
                 MutableString result = stream.String;
                 if (pointers != null) {
@@ -1608,7 +1670,9 @@ namespace IronRuby.Builtins {
             // TODO: encodings
             int position = offset;
             int length = self.GetByteCount();
-            foreach (FormatDirective directive in FormatDirective.Enumerate(format.ToString())) {
+            string formatString = format.ToString();
+            ParsedFormat parsed = FormatDirective.Parse(formatString, false);
+            foreach (FormatDirective directive in parsed.Directives) {
                 int count, maxCount;
                 int nilCount = 0;
                 switch (directive.Directive) {
@@ -1844,9 +1908,10 @@ namespace IronRuby.Builtins {
                     result.Add(null);
                 }
                 if (firstOnly && result.Count > 0) {
-                    break;
+                    return result;
                 }
             }
+            parsed.ThrowIfInvalid(formatString, false);
             return result;
         }
 

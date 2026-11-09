@@ -1208,6 +1208,7 @@ namespace IronRuby.Tests {
                 Integer_Normalization1,
                 Integer_ToStringRadix1,
                 Pack_BerTruncated1,
+                Pack_CachedFormats1,
                 Integer_Int64Shifts1,
                 Integer_HugeShifts1,
                 Integer_OutOfFloatRange1,

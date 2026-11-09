@@ -113,6 +113,68 @@ p ""\x05\x80\x80\x81\x01"".force_encoding(""BINARY"").unpack(""w*""), [1, 2**64,
         }
 
         /// <summary>
+        /// pack and unpack read a format once and reuse its directives. A format with an error in it still raises it,
+        /// afresh each time, after the directives before it have run (a TypeError there comes first), and unpack1 stops
+        /// before it as MRI's does. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Pack_CachedFormats1() {
+            TestOutput(@"
+require 'ruby4'
+def show(label)
+  r = yield
+  puts ""#{label}: #{r.inspect}""
+rescue => e
+  puts ""#{label}: #{e.class}: #{e.message}""
+end
+class ToI; def to_int = 258; end
+%w[C n N v V s> L< q> Q< J].each do |f|
+  show(f) { [0, -1, 258, 2**31, -2**40, 3.7, ToI.new].map { |v| [v].pack(f).bytes } }
+end
+2.times do
+  show(""NnC"") { [[1, 2, 3].pack(""NnC"").bytes, ""\x00\x00\x00\x01\x00\x02\x03"".b.unpack(""NnC"")] }
+  show(""Cy"") { [1, 2].pack(""Cy"") }
+  show(""TypeError first"") { [""x""].pack(""Cy"") }
+  show(""unpack Cy"") { ""ab"".unpack(""Cy"") }
+  show(""unpack1 Cy"") { ""ab"".unpack1(""Cy"") }
+  show(""unpack1 yC"") { ""ab"".unpack1(""yC"") }
+  show(""<>"") { [1].pack(""s<>"") }
+  show(""@"") { [[1, 2].pack(""C@C"").bytes, ""abc"".unpack(""C@C""), [1].pack(""@"").bytes, ""abc"".unpack(""@C"")] }
+end
+e1 = ([1].pack(""Cy"") rescue $!)
+e2 = ([1].pack(""Cy"") rescue $!)
+p e1.equal?(e2)
+", @"
+C: [[0], [255], [2], [0], [0], [3], [2]]
+n: [[0, 0], [255, 255], [1, 2], [0, 0], [0, 0], [0, 3], [1, 2]]
+N: [[0, 0, 0, 0], [255, 255, 255, 255], [0, 0, 1, 2], [128, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 3], [0, 0, 1, 2]]
+v: [[0, 0], [255, 255], [2, 1], [0, 0], [0, 0], [3, 0], [2, 1]]
+V: [[0, 0, 0, 0], [255, 255, 255, 255], [2, 1, 0, 0], [0, 0, 0, 128], [0, 0, 0, 0], [3, 0, 0, 0], [2, 1, 0, 0]]
+s>: [[0, 0], [255, 255], [1, 2], [0, 0], [0, 0], [0, 3], [1, 2]]
+L<: [[0, 0, 0, 0], [255, 255, 255, 255], [2, 1, 0, 0], [0, 0, 0, 128], [0, 0, 0, 0], [3, 0, 0, 0], [2, 1, 0, 0]]
+q>: [[0, 0, 0, 0, 0, 0, 0, 0], [255, 255, 255, 255, 255, 255, 255, 255], [0, 0, 0, 0, 0, 0, 1, 2], [0, 0, 0, 0, 128, 0, 0, 0], [255, 255, 255, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 3], [0, 0, 0, 0, 0, 0, 1, 2]]
+Q<: [[0, 0, 0, 0, 0, 0, 0, 0], [255, 255, 255, 255, 255, 255, 255, 255], [2, 1, 0, 0, 0, 0, 0, 0], [0, 0, 0, 128, 0, 0, 0, 0], [0, 0, 0, 0, 0, 255, 255, 255], [3, 0, 0, 0, 0, 0, 0, 0], [2, 1, 0, 0, 0, 0, 0, 0]]
+J: [[0, 0, 0, 0, 0, 0, 0, 0], [255, 255, 255, 255, 255, 255, 255, 255], [2, 1, 0, 0, 0, 0, 0, 0], [0, 0, 0, 128, 0, 0, 0, 0], [0, 0, 0, 0, 0, 255, 255, 255], [3, 0, 0, 0, 0, 0, 0, 0], [2, 1, 0, 0, 0, 0, 0, 0]]
+NnC: [[0, 0, 0, 1, 0, 2, 3], [1, 2, 3]]
+Cy: ArgumentError: unknown pack directive 'y' in 'Cy'
+TypeError first: TypeError: no implicit conversion of String into Integer
+unpack Cy: ArgumentError: unknown unpack directive 'y' in 'Cy'
+unpack1 Cy: 97
+unpack1 yC: ArgumentError: unknown unpack directive 'y' in 'yC'
+<>: RangeError: Can't use both '<' and '>'
+@: [[1, 2], [97, 97], [0], [97]]
+NnC: [[0, 0, 0, 1, 0, 2, 3], [1, 2, 3]]
+Cy: ArgumentError: unknown pack directive 'y' in 'Cy'
+TypeError first: TypeError: no implicit conversion of String into Integer
+unpack Cy: ArgumentError: unknown unpack directive 'y' in 'Cy'
+unpack1 Cy: 97
+unpack1 yC: ArgumentError: unknown unpack directive 'y' in 'yC'
+<>: RangeError: Can't use both '<' and '>'
+@: [[1, 2], [97, 97], [0], [97]]
+false
+");
+        }
+
+        /// <summary>
         /// <<, >> and ~ on an Int64 receiver, and Int32 shifts that overflow into the Int64 range.
         /// </summary>
         public void Integer_Int64Shifts1() {
