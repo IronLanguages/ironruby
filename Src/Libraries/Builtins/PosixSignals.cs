@@ -468,6 +468,7 @@ namespace IronRuby.Builtins {
                     installed.Registration = TryRegister(signal);
                 }
                 _handlers[signal] = installed;
+                SetCrtDisposition(signal);
                 return previous;
             }
         }
@@ -598,6 +599,111 @@ namespace IronRuby.Builtins {
                 // Unsupported signal number, or a platform without POSIX signals: the handler is
                 // still recorded so that #trap reports it back, it just never fires.
                 return null;
+            }
+        }
+
+        #endregion
+
+        #region Windows C runtime signals
+
+        // The Windows C runtime's signal(), from the universal CRT that .NET itself and MinGW-UCRT
+        // code load. A library linked against msvcrt.dll or a static CRT has a table of its own.
+        [DllImport("ucrtbase.dll", EntryPoint = "signal", CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr CrtSignal(int signal, IntPtr handler);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void CrtSignalHandler(int signal);
+
+        // Kept in a static field for the life of the process: the C runtime holds only the
+        // function pointer, and a collected delegate would leave it pointing at freed thunk code.
+        private static readonly CrtSignalHandler _crtHandler = OnCrtSignal;
+        private static IntPtr _crtHandlerPointer;
+
+        private static readonly IntPtr CrtDefault = IntPtr.Zero;      // SIG_DFL
+        private static readonly IntPtr CrtIgnore = new IntPtr(1);     // SIG_IGN
+
+        /// <summary>
+        /// The C runtime signals that only native code can raise in-process and that #trap takes:
+        /// TERM (15), ABRT (22) and SIGABRT_COMPAT (6). .NET has no notion of them on Windows - its
+        /// PosixSignalRegistration knows only the console events - so a trap of one used to be
+        /// recorded and never run when a P/Invoked library called raise(SIGTERM). MRI's trap calls
+        /// signal() for them, and so do we.
+        ///
+        /// ILL, FPE and SEGV are not here: #trap refuses them ("reserved signal"), and the faults
+        /// managed code takes stay .NET's own exceptions. INT and BREAK (21) are left to .NET's
+        /// console registration: the C runtime's signal() for them hooks the console control
+        /// handler too, and two handlers would compete for Ctrl-C.
+        /// </summary>
+        private static bool IsCrtSignal(int signal) {
+            return RubyProcess.IsWindows && (signal == 15 || IsAbort(signal));
+        }
+
+        /// <summary>
+        /// Hands the C runtime what the Ruby side now says about the signal: our handler where a
+        /// trap installed something to run, SIG_IGN for "IGNORE", and SIG_DFL otherwise, as MRI's
+        /// trap does. ABRT and SIGABRT_COMPAT are one slot in the C runtime; what #trap left there
+        /// is the shared disposition #trap reports for them. Called with _handlers held.
+        /// </summary>
+        private static void SetCrtDisposition(int signal) {
+            if (!IsCrtSignal(signal)) {
+                return;
+            }
+
+            IntPtr disposition;
+            if (IsAbort(signal)) {
+                disposition = _abortDisposition == "DEFAULT" ? CrtHandlerPointer
+                    : _abortDisposition == "IGNORE" ? CrtIgnore
+                    : CrtDefault;
+            } else {
+                Handler handler;
+                if (!_handlers.TryGetValue(signal, out handler)) {
+                    disposition = CrtDefault;
+                } else if (handler.Invoke != null) {
+                    disposition = CrtHandlerPointer;
+                } else {
+                    disposition = IsIgnore(handler.Command) ? CrtIgnore : CrtDefault;
+                }
+            }
+
+            try {
+                CrtSignal(signal, disposition);
+            } catch (DllNotFoundException) {
+            } catch (EntryPointNotFoundException) {
+            }
+        }
+
+        private static IntPtr CrtHandlerPointer {
+            get {
+                if (_crtHandlerPointer == IntPtr.Zero) {
+                    _crtHandlerPointer = Marshal.GetFunctionPointerForDelegate(_crtHandler);
+                }
+                return _crtHandlerPointer;
+            }
+        }
+
+        /// <summary>
+        /// The C runtime calls this on the thread that called raise(), from inside its signal
+        /// dispatch, having reset the signal to SIG_DFL first. All it does is put our handler back
+        /// and park the signal for the main thread, as a signal .NET delivers is parked (Enqueue);
+        /// the Ruby block runs at the main thread's next safe point. Nothing may escape into the C
+        /// runtime's frames.
+        /// </summary>
+        private static void OnCrtSignal(int signal) {
+            try {
+                bool run;
+                lock (_handlers) {
+                    // Whatever #trap has said since is what goes back, so a handler replaced in the
+                    // meantime is not resurrected.
+                    SetCrtDisposition(signal);
+                    Handler handler;
+                    run = _handlers.TryGetValue(signal, out handler) && handler.Invoke != null;
+                }
+                // On the shared ABRT slot the signal can be the one of the pair whose command is
+                // nil or "DEFAULT"; MRI's handler does nothing for it, and neither do we.
+                if (run) {
+                    Enqueue(signal);
+                }
+            } catch (Exception) {
             }
         }
 

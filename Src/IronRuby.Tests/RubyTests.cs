@@ -901,6 +901,7 @@ namespace IronRuby.Tests {
                 Signal_WindowsList1,
                 Signal_TrapEdges1,
                 Signal_TrapUnlisted1,
+                Signal_NativeRaise1,
                 File_DriveLetters1,
                 Fiddle_AnsiSuffix1,
                 PackPointer_RealAddress1,
