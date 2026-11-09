@@ -1100,6 +1100,41 @@ namespace IronRuby.Builtins {
             return site.Target(site, self, other);
         }
 
+        // Fixnums all: the square-and-multiply in a long, as |modulus| <= 2**31 keeps every product below 2**62. Through
+        // BigInteger.ModPow, 12345.pow(5, 1000) cost ~150 ns, most of it making and reducing BigIntegers.
+        [RubyMethod("pow")]
+        public static object Pow(int self, int exponent, int modulus) {
+            if (exponent < 0) {
+                throw RubyExceptions.CreateRangeError("Integer#pow() 1st argument cannot be negative when 2nd argument specified");
+            }
+            // MRI's shortcut: 0 ** x is 0 for any modulus, 0 included, unless x is 0
+            if (self == 0 && exponent != 0) {
+                return ClrInteger.Zero;
+            }
+            long m = Math.Abs((long)modulus);
+            if (m == 0) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            if (m == 1) {
+                return ClrInteger.Zero;
+            }
+            long a = self % m, z = 1;
+            if (a < 0) {
+                a += m;
+            }
+            for (int e = exponent; e != 0; e >>= 1) {
+                if ((e & 1) != 0) {
+                    z = z * a % m;
+                }
+                a = a * a % m;
+            }
+            // the result takes the sign of the modulus, as in the BigInteger case below
+            if (modulus < 0 && z > 0) {
+                z -= m;
+            }
+            return Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers.Int32ToObject((int)z);
+        }
+
         /// <summary>
         /// Integer#pow(b, m): modular exponentiation, by BigInteger.ModPow, with MRI's checks in
         /// MRI's order (rb_int_powm) and its sign rule - the result takes the sign of m.
@@ -1116,6 +1151,12 @@ namespace IronRuby.Builtins {
             if (!TryGetInteger(modulus, out m)) {
                 throw RubyExceptions.CreateTypeError("Integer#pow() 2nd argument not allowed unless all arguments are integers");
             }
+            BigInteger a;
+            TryGetInteger(self, out a);
+            // MRI's shortcut: 0 ** x is 0 for any modulus, 0 included, unless x is 0
+            if (a.IsZero && !b.IsZero) {
+                return ClrInteger.Zero;
+            }
             bool negative = m.Sign < 0;
             if (negative) {
                 m = -m;
@@ -1127,8 +1168,6 @@ namespace IronRuby.Builtins {
                 return ClrInteger.Zero;
             }
 
-            BigInteger a;
-            TryGetInteger(self, out a);
             a %= m;
             if (a.Sign < 0) {
                 a += m;

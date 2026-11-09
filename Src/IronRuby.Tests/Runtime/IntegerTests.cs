@@ -952,5 +952,50 @@ true
 Math::DomainError
 ");
         }
+
+        /// <summary>
+        /// Integer#pow(b, m) of three Fixnums squares and multiplies in a long; 0.pow(x, m) is 0 for any modulus (0
+        /// included) unless x is 0, as MRI's rb_int_powm shortcuts it. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Integer_PowModulo1() {
+            TestOutput(@"
+def show(label)
+  r = yield
+  puts ""#{label} => #{r.inspect}""
+rescue Exception => e
+  puts ""#{label} !! #{e.class}: #{e.message}""
+end
+[[12345, 5, 1000], [12345, 5, -1000], [-12345, 5, 1000], [-12345, 3, -7], [2, 10**9, 1_000_000_007], [3, 2**31 - 1, 2**31 - 1],
+ [-(2**31), 2**31 - 1, -(2**31)], [2**31 - 1, 2**31 - 1, 2**31 - 1], [7, 0, 1], [7, 0, -1], [7, 0, 13], [0, 0, 13], [0, 0, 0],
+ [0, 5, 0], [0, 5, -3], [0, 2**70, 0], [5, 3, 0], [5, -1, 7], [5, 1.5, 7], [5, 2, 7.0], [5, 2, nil], [2**70, 5, 1000], [5, 2**70, 1009], [5, 3, 2**70]].each do |a, b, m|
+  show(""#{a}.pow(#{b.inspect}, #{m.inspect})"") { a.pow(b, m) }
+end
+", @"
+12345.pow(5, 1000) => 625
+12345.pow(5, -1000) => -375
+-12345.pow(5, 1000) => 375
+-12345.pow(3, -7) => -1
+2.pow(1000000000, 1000000007) => 140625001
+3.pow(2147483647, 2147483647) => 3
+-2147483648.pow(2147483647, -2147483648) => 0
+2147483647.pow(2147483647, 2147483647) => 0
+7.pow(0, 1) => 0
+7.pow(0, -1) => 0
+7.pow(0, 13) => 1
+0.pow(0, 13) => 1
+0.pow(0, 0) !! ZeroDivisionError: divided by 0
+0.pow(5, 0) => 0
+0.pow(5, -3) => 0
+0.pow(1180591620717411303424, 0) => 0
+5.pow(3, 0) !! ZeroDivisionError: divided by 0
+5.pow(-1, 7) !! RangeError: Integer#pow() 1st argument cannot be negative when 2nd argument specified
+5.pow(1.5, 7) !! TypeError: Integer#pow() 2nd argument not allowed unless a 1st argument is integer
+5.pow(2, 7.0) !! TypeError: Integer#pow() 2nd argument not allowed unless all arguments are integers
+5.pow(2, nil) !! TypeError: Integer#pow() 2nd argument not allowed unless all arguments are integers
+1180591620717411303424.pow(5, 1000) => 624
+5.pow(1180591620717411303424, 1009) => 993
+5.pow(3, 1180591620717411303424) => 125
+");
+        }
     }
 }

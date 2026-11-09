@@ -3111,9 +3111,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "pow", 0x51, 
-                0x00000000U, 0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Integer.Pow), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Pow), 
+                new Func<System.Int32, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Integer.Pow), 
                 new Func<System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Pow)
             );
             
