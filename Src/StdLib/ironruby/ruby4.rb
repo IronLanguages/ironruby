@@ -1112,9 +1112,10 @@ class Range
       e = self.end
       # MRI's rb_int_range_last: the last n of an Integer range, without building all of it
       # first (to_a.last(n) made (1..10**6).last(3) a million-element Array). MRI takes this
-      # path for a subclass too, whatever its #each.
+      # path unless #each has been redefined (rb_method_basic_definition_p): a subclass with
+      # an #each of its own gets to_a.last(n).
       # (..5).last(2) too: a beginless Integer range counts down from its end.
-      if (b.nil? || ::Integer === b) && ::Integer === e
+      if (b.nil? || ::Integer === b) && ::Integer === e && (instance_of?(::Range) || method(:each).owner.equal?(::Range))
         top = exclude_end? ? e - 1 : e
         first_value = top - n + 1
         first_value = b if !b.nil? && first_value < b
@@ -11593,7 +11594,10 @@ class Range
   # The old version just handed every stepping job to the 1.9 built-in, which
   # knows only #succ, so a Float step, a negative step, a String step and a
   # step given as an object answering #coerce were all wrong or raised.
-  def step(*args, &block)
+  #
+  # Range#step itself is C# (RangeOps.Step): it loops over a Fixnum range with a positive
+  # Fixnum step and hands every other call here, its arguments in an Array.
+  def __ir_range_step__(args, &block)
     if args.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
     end
@@ -11665,6 +11669,7 @@ class Range
     end
     self
   end
+  private :__ir_range_step__
 
   def %(n)
     seq = step(n)

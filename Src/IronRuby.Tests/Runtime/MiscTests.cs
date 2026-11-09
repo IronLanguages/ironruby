@@ -5934,7 +5934,7 @@ last 1..3.5 2: [2, 3]
 first ..5 2: ""RangeError: cannot get the first element of beginless range""
 last ..5 2: [4, 5]
 sub first: [:x]
-sub last: [9, 10]
+sub last: [:x]
 big last: [999999998, 999999999, 1000000000]
 include 1..10 5: [true, true, true]
 include 1..10 10: [true, true, true]
@@ -5964,6 +5964,78 @@ rstep excl: [1, 4, 7]
 rstep endless: [1, 6, 11]
 rstep ret: true
 rstep float: [1.0, 1.5, 2.0]
+");
+        }
+
+        /// <summary>
+        /// Integer#step's by:/to: keywords and Range#step over Fixnums loop in C#, and Range#first(n)/#last(n) of a plain
+        /// Integer range count in C#; the edges stay the prelude's. #last(n) of a Range subclass with an #each of its own
+        /// is to_a.last(n), as in MRI (rb_method_basic_definition_p). Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Range_IntegerFastPaths2() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+M = 2**31 - 1
+[{by: 3, to: 10}, {to: 3}, {by: -3, to: 1}, {by: 0, to: 3}, {by: 2, to: 1.5}, {to: M, by: 2}, {to: 3, foo: 1}].each do |kw|
+  show(""step #{kw}"") { a = []; (kw[:to] == M ? M - 3 : 1).step(**kw) { |x| a << x }; a }
+end
+show(""step endless kw"") { a = []; 1.step(by: 2) { |x| a << x; break if a.size == 3 }; a }
+show(""step to+by"") { a = []; 1.step(10, by: 3) { |x| a << x }; a }
+show(""step to twice"") { 1.step(10, to: 3) { } }
+show(""step kw ret"") { 1.step(by: 3, to: 10) { } }
+show(""step kw break"") { 1.step(by: 3, to: 10) { |x| break x * 100 if x > 3 } }
+show(""step kw big"") { a = []; 1.step(to: 2**40, by: 2**39) { |x| a << x }; a }
+show(""rstep top"") { a = []; ((M - 5)..M).step(2) { |x| a << x }; a }
+show(""rstep 0"") { (1..10).step(0) { } }
+show(""rstep neg"") { (1..10).step(-1) { } }
+show(""rstep 2 args"") { (1..10).step(1, 2) { } }
+show(""rstep big step"") { a = []; (1..10).step(2**40) { |x| a << x }; a }
+show(""rstep down"") { a = []; (10..1).step(2) { |x| a << x }; a }
+show(""rstep string"") { a = []; (""a""..""e"").step(2) { |x| a << x }; a }
+show(""rstep enum"") { (1..10).step(3).to_a }
+show(""rstep %"") { ((1..10) % 3).inspect }
+show(""first top"") { ((M - 2)..M).first(5) }
+show(""first endless top"") { ((M - 1)..).first(4) }
+show(""last bottom"") { ((-M - 1)..(-M + 1)).last(5) }
+show(""first excl"") { (1...4).first(10) }
+show(""last empty"") { (1...1).last(1) }
+show(""first fresh"") { a = (1..5).first(3); a << 9; [a, (1..5).first(3), a.frozen?] }
+plain = Class.new(Range)
+own = Class.new(Range) { def each; yield :own; end }
+show(""plain sub"") { [plain.new(1, 10).first(2), plain.new(1, 10).last(2), plain.new(nil, 5).last(2)] }
+show(""own each"") { [own.new(1, 10).first(2), own.new(1, 10).last(2), own.new(nil, 5).last(2)] }
+", @"
+step {by: 3, to: 10}: [1, 4, 7, 10]
+step {to: 3}: [1, 2, 3]
+step {by: -3, to: 1}: [1]
+step {by: 0, to: 3}: ""ArgumentError: step can't be 0""
+step {by: 2, to: 1.5}: [1.0]
+step {to: 2147483647, by: 2}: [2147483644, 2147483646]
+step {to: 3, foo: 1}: ""ArgumentError: unknown keyword: :foo""
+step endless kw: [1, 3, 5]
+step to+by: [1, 4, 7, 10]
+step to twice: ""ArgumentError: to is given twice""
+step kw ret: 1
+step kw break: 400
+step kw big: [1, 549755813889]
+rstep top: [2147483642, 2147483644, 2147483646]
+rstep 0: ""ArgumentError: step can't be 0""
+rstep neg: 1..10
+rstep 2 args: ""ArgumentError: wrong number of arguments (given 2, expected 0..1)""
+rstep big step: [1]
+rstep down: []
+rstep string: [""a"", ""c"", ""e""]
+rstep enum: [1, 4, 7, 10]
+rstep %: ""((1..10).%(3))""
+first top: [2147483645, 2147483646, 2147483647]
+first endless top: [2147483646, 2147483647, 2147483648, 2147483649]
+last bottom: [-2147483648, -2147483647, -2147483646]
+first excl: [1, 2, 3]
+last empty: []
+first fresh: [[1, 2, 3, 9], [1, 2, 3], false]
+plain sub: [[1, 2], [9, 10], [4, 5]]
+own each: [[:own], [:own], [:own]]
 ");
         }
 

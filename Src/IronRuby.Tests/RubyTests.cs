@@ -988,6 +988,7 @@ namespace IronRuby.Tests {
                 Windows_StdoutPipeSysWrite1,
                 Windows_SymLinks1,
                 Range_IntegerFastPaths1,
+                Range_IntegerFastPaths2,
                 Io_BuiltinReaders1,
                 Io_LineReaders2,
                 Io_LineReaders3,
