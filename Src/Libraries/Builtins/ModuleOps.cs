@@ -541,7 +541,7 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        private static void DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
+        internal static void DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
             RubyModule/*!*/ targetConstraint, string sourceName = null) {
 
             bool isModuleFunction;

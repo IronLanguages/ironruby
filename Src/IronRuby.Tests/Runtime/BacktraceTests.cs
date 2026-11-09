@@ -414,6 +414,45 @@ false
         }
 
         /// <summary>
+        /// In code run in a host's scope every method main's singleton class held was labelled "Object#x", so a singleton
+        /// method of main (`def self.x', a `def' in main.instance_eval) was too, where CRuby prints "x" (issue 177). The
+        /// scope's copy of a top-level `def' now runs as Object's method, and the rest of main's singleton class is labelled
+        /// as any other object's. Running as Object's method, its `super' also goes on from Object, as in CRuby, rather
+        /// than to Object's own copy first.
+        /// </summary>
+        public void Backtrace_HostedSingletonLabels1() {
+            const string code = @"
+def self.x = raise('x')
+self.instance_eval { def y = raise('y') }
+def z = raise('z')
+alias z2 z
+def w = caller(0, 1)[0][/'(.*)'/, 1]
+class Hosted177L
+  def go = [w, (z rescue $!.backtrace[0][/'(.*)'/, 1])]
+end
+[:x, :y, :z, :z2].each { |m| begin; send(m); rescue => e; puts e.backtrace[0][/'(.*)'/, 1]; end }
+p w
+p Hosted177L.new.go
+module Kernel; def k177 = caller(0).map { |l| l[/'(.*)'/, 1] }.take_while { |l| l != '<main>' }; end
+def k177 = super
+p k177
+";
+            const string expected = @"
+x
+y
+Object#z
+Object#z
+""Object#w""
+[""Object#w"", ""Object#z""]
+[""Kernel#k177"", ""Object#k177""]
+";
+            AssertOutput(() => CompilerTest(code), expected);
+            AssertOutput(() => Engine.Execute(code, Engine.CreateScope()), expected);
+            // not bound to a scope, as `ir' runs it: it was right before
+            AssertOutput(() => Engine.Execute(code), expected);
+        }
+
+        /// <summary>
         /// The CLR frames of the host that runs Ruby code (ScriptSource.Execute's caller and its callers: CompilerTest,
         /// RunTestCase, Main) were reported below "<main>" (issue 163). CRuby has nothing below the main script's frame.
         /// A CLR method that Ruby code calls and that calls back into Ruby is still reported (Backtrace4).

@@ -204,7 +204,7 @@ namespace IronRuby.Runtime.Calls {
             int line = 0;
             string label;
             if (method is RubyMethodInfo rubyMethod) {
-                label = IronRuby.Compiler.Ast.MethodDefinition.QualifyFrameLabel(rubyMethod.DefinitionName, rubyMethod.DeclaringModule);
+                label = IronRuby.Compiler.Ast.MethodDefinition.QualifyFrameLabel(rubyMethod.DefinitionName, rubyMethod.BodyModule);
                 if (rubyMethod.Document != null && !RubyStackTraceBuilder.IsInternalFile(rubyMethod.Document.FileName)) {
                     file = rubyMethod.Document.FileName;
                     line = rubyMethod.SourceSpan.Start.Line;

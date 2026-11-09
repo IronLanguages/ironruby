@@ -41,6 +41,11 @@ namespace IronRuby.Runtime.Calls {
         // the instance method's are "M#foo", so it runs a compilation of its own.
         private bool _isModuleFunctionCopy;
 
+        // The module the body runs as a method of, where that is not the module that holds it: the copy a top-level `def'
+        // of code run in a host's scope leaves in main's singleton class is Object's method (RubyOps.DefineMethod), so it
+        // is labelled "Object#foo" and `super' looks up from Object, as in CRuby. Null otherwise.
+        private RubyModule _bodyModule;
+
         public string/*!*/ DefinitionName { get { return _body.Name; } }
         public Parameters/*!*/ Parameters { get { return _body.Ast.Parameters; } }
         public MSA.SymbolDocumentInfo Document { get { return _body.Document; } }
@@ -48,6 +53,12 @@ namespace IronRuby.Runtime.Calls {
         public RubyScope/*!*/ DeclaringScope { get { return _declaringScope; } }
         internal RubyMethodBody/*!*/ Body { get { return _body; } }
         internal bool UsesBlock { get { return _body.Ast.UsesBlock; } }
+
+        /// <summary>
+        /// The module the body is compiled for and its frames are labelled after: <see cref="RubyMemberInfo.DeclaringModule"/>,
+        /// except for the scope's copy of a hosted top-level `def', which is Object's method (see <see cref="_bodyModule"/>).
+        /// </summary>
+        internal RubyModule/*!*/ BodyModule { get { return _bodyModule ?? DeclaringModule; } }
 
         // method:
         internal RubyMethodInfo(RubyMethodBody/*!*/ body, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule, RubyMemberFlags flags)
@@ -60,7 +71,21 @@ namespace IronRuby.Runtime.Calls {
         }
 
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
-            return new RubyMethodInfo(_body, _declaringScope, module, flags) { _isModuleFunctionCopy = _isModuleFunctionCopy };
+            return new RubyMethodInfo(_body, _declaringScope, module, flags) {
+                _isModuleFunctionCopy = _isModuleFunctionCopy,
+                // `alias' and visibility changes in the same module keep it Object's method
+                _bodyModule = (module == DeclaringModule) ? _bodyModule : null
+            };
+        }
+
+        /// <summary>
+        /// The scope's copy of a top-level `def' of code run in a host's scope: held by main's singleton class
+        /// (<paramref name="holder"/>), a method of <paramref name="bodyModule"/> (Object) in every other respect.
+        /// </summary>
+        internal RubyMethodInfo(RubyMethodBody/*!*/ body, RubyScope/*!*/ declaringScope, RubyModule/*!*/ holder, RubyMemberFlags flags,
+            RubyModule/*!*/ bodyModule)
+            : this(body, declaringScope, holder, flags) {
+            _bodyModule = bodyModule;
         }
 
         internal RubyMethodInfo/*!*/ CopyAsModuleFunction(RubyMemberFlags flags, RubyModule/*!*/ singletonClass) {
@@ -210,7 +235,7 @@ namespace IronRuby.Runtime.Calls {
         internal Delegate/*!*/ GetDelegate() {
             return _isModuleFunctionCopy
                 ? _body.GetModuleFunctionDelegate(_declaringScope, DeclaringModule)
-                : _body.GetDelegate(_declaringScope, DeclaringModule);
+                : _body.GetDelegate(_declaringScope, BodyModule);
         }
 
         #region Dynamic Sites

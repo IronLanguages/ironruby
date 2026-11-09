@@ -159,10 +159,9 @@ namespace IronRuby.Compiler.Ast {
 
             RubyClass cls = declaringModule as RubyClass;
             if (cls != null && cls.IsSingletonClass) {
-                // a top-level `def' of hosted code, which defines the method in main's singleton class (issue 158)
-                if (cls.IsHostedTopLevelMethodOwner) {
-                    return "Object#" + name;
-                }
+                // A top-level `def' of hosted code leaves a copy in main's singleton class, but that copy runs as Object's
+                // method (RubyMethodInfo.BodyModule) and gets here with Object. What does get here with main's singleton
+                // class is a singleton method of main - `def self.x', a `def' in main.instance_eval -, labelled "x".
                 RubyModule attached = cls.SingletonClassOf as RubyModule;
                 return (attached != null && attached.Name != null) ? attached.Name + "." + name : name;
             }
