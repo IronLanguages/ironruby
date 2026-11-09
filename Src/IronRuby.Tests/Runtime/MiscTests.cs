@@ -4085,6 +4085,117 @@ hangul: [176, 161]
         }
 
         /// <summary>
+        /// StringIO#getc measures a character the way CRuby does (rb_enc_mbclen): an invalid byte is one
+        /// character, a truncated sequence is cut at its first bad byte, a UTF-16 lone surrogate is one code
+        /// unit. The old Ruby wrapper swallowed up to four bad bytes into one "character" and then dropped
+        /// the fifth (#92). Expected output is CRuby 4.0's.
+        /// </summary>
+        public void StringIO_GetcInvalidBytes1() {
+            TestOutput(@"
+require 'ruby4'
+require 'stringio'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+def all_getc(io); r = []; while (c = io.getc); r << c; end; r; end
+show(""invalid utf-8"") { s = StringIO.new(""\xFFabcdef""); [s.getc, s.getc, s.pos] }
+show(""truncated utf-8"") { s = StringIO.new(""\xE3\x81abc""); [s.getc, s.getc, s.getc, s.pos] }
+show(""utf-8 mix"") { all_getc(StringIO.new(""aé\xC3あ\xF0\x9F\x98\x80\xF0\x9Fz"")) }
+show(""bad lead bytes"") { all_getc(StringIO.new(""\x80\xBF\xC0\xC1\xF5\xFF"")) }
+show(""utf-16le lone surrogate"") { all_getc(StringIO.new(""\x00\xD8a\x00\x3D\xD8\x00\xDEb"".force_encoding(""UTF-16LE""))).map(&:bytes) }
+show(""utf-16le odd byte"") { all_getc(StringIO.new(""a\x00b"".force_encoding(""UTF-16LE""))).map(&:bytes) }
+show(""shift_jis"") { all_getc(StringIO.new(""\x82\xA0\x82\x7F\xA1\x81"".force_encoding(""Shift_JIS""))).map(&:bytes) }
+show(""euc-jp"") { all_getc(StringIO.new(""\xA4\xA2\x8F\xA1\xA1\x8F\xA1A\xFF"".force_encoding(""EUC-JP""))).map(&:bytes) }
+show(""big5"") { all_getc(StringIO.new(""\xA4\x40\xA4\x30\x81\x40\xFE"".force_encoding(""Big5""))).map(&:bytes) }
+show(""binary"") { all_getc(StringIO.new(""\xFF\xE3\x81"".b)).map(&:bytes) }
+show(""each_char"") { StringIO.new(""\xE3\x81\x82\xE3x"").each_char.to_a }
+show(""readchar"") { s = StringIO.new(""\xFFa""); [s.readchar, s.readchar, (s.readchar rescue $!.class)] }
+show(""getbyte/readbyte"") { s = StringIO.new(""\xFFa""); [s.getbyte, s.readbyte, s.getbyte, (s.readbyte rescue $!.class)] }
+show(""ungetc"") { s = StringIO.new(""\xFFa""); c = s.getc; s.ungetc(c); [s.getc, s.getc, s.pos] }
+show(""set_encoding"") { s = StringIO.new(""\xA4\xA2\xFF"".b); s.set_encoding(""EUC-JP""); all_getc(s).map(&:bytes) }
+show(""frozen"") { s = StringIO.new(""\xFFé"".freeze); [s.getc, s.getc, s.getc] }
+show(""closed"") { s = StringIO.new(""a""); s.close_read; s.getc }
+", @"
+invalid utf-8: [""\xFF"", ""a"", 2]
+truncated utf-8: [""\xE3"", ""\x81"", ""a"", 3]
+utf-8 mix: [""a"", ""é"", ""\xC3"", ""あ"", ""😀"", ""\xF0"", ""\x9F"", ""z""]
+bad lead bytes: [""\x80"", ""\xBF"", ""\xC0"", ""\xC1"", ""\xF5"", ""\xFF""]
+utf-16le lone surrogate: [[0, 216], [97, 0], [61, 216, 0, 222], [98]]
+utf-16le odd byte: [[97, 0], [98]]
+shift_jis: [[130, 160], [130], [127], [161], [129]]
+euc-jp: [[164, 162], [143, 161, 161], [143], [161], [65], [255]]
+big5: [[164, 64], [164], [48], [129], [64], [254]]
+binary: [[255], [227], [129]]
+each_char: [""あ"", ""\xE3"", ""x""]
+readchar: [""\xFF"", ""a"", EOFError]
+getbyte/readbyte: [255, 97, nil, EOFError]
+ungetc: [""\xFF"", ""a"", 2]
+set_encoding: [[164, 162], [255]]
+frozen: [""\xFF"", ""é"", nil]
+closed: ""IOError: not opened for reading""
+");
+        }
+
+        /// <summary>
+        /// The built-in Digest algorithms hash in one shot with HashData (#92) rather than through a
+        /// HashAlgorithm instance: class and instance digests, lengths, base64, the bang forms, reset, dup,
+        /// ==, file, hexencode and a Ruby subclass. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Digest_OneShot1() {
+            TestOutput(@"
+require 'ruby4'
+require 'digest'
+require 'tmpdir'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+algs = [Digest::MD5, Digest::SHA1, Digest::SHA256, Digest::SHA384, Digest::SHA512]
+algs.each do |a|
+  n = a.name.split(""::"").last
+  show(""#{n} hex"") { [a.hexdigest(""""), a.hexdigest(""abc"")[0, 24]] }
+  show(""#{n} sizes"") { d = a.new; [d.digest_length, d.block_length, d.length, d.size, a.digest(""abc"").bytesize, a.digest(""abc"").encoding.to_s] }
+  show(""#{n} base64"") { a.base64digest(""abc"")[0, 20] }
+  show(""#{n} instance"") { d = a.new; d << ""a""; d.update(""bc""); [d.hexdigest == a.hexdigest(""abc""), d.to_s == d.hexdigest, d.hexdigest!.size, d.hexdigest == a.hexdigest(""""), d.digest!.bytesize] }
+end
+show(""== string"") { d = Digest::SHA256.new << ""abc""; [d == Digest::SHA256.hexdigest(""abc""), d == Digest::SHA256.new.update(""abc""), d == ""x"", d == Digest::SHA1.new.update(""abc"")] }
+show(""dup"") { d = Digest::MD5.new << ""ab""; e = d.dup; e << ""c""; [d.hexdigest, e.hexdigest] }
+show(""reset"") { d = Digest::SHA1.new << ""zzz""; d.reset; d.hexdigest }
+show(""file"") { path = File.join(Dir.tmpdir, ""ir-digest-#{$$}.txt"");File.binwrite(path, ""abc""); begin; [Digest::SHA256.file(path).hexdigest[0, 16], Digest::MD5.new.file(path).hexdigest]; ensure; File.delete(path); end }
+show(""hexencode"") { Digest.hexencode(""\x00\x7f\xff"".b) }
+show(""binary input"") { Digest::MD5.hexdigest(""\xFF\xFE"".b) }
+show(""utf-8 input"") { Digest::SHA1.hexdigest(""é"") }
+show(""subclass"") { c = Class.new(Digest::SHA256); [c.hexdigest(""abc"")[0, 8], c.new.update(""abc"").hexdigest[0, 8], c.new.class.superclass == Digest::SHA256] }
+show(""inspect"") { (Digest::MD5.new << ""a"").inspect }
+", @"
+MD5 hex: [""d41d8cd98f00b204e9800998ecf8427e"", ""900150983cd24fb0d6963f7d""]
+MD5 sizes: [16, 64, 16, 16, 16, ""ASCII-8BIT""]
+MD5 base64: ""kAFQmDzST7DWlj99KOF/""
+MD5 instance: [true, true, 32, true, 16]
+SHA1 hex: [""da39a3ee5e6b4b0d3255bfef95601890afd80709"", ""a9993e364706816aba3e2571""]
+SHA1 sizes: [20, 64, 20, 20, 20, ""ASCII-8BIT""]
+SHA1 base64: ""qZk+NkcGgWq6PiVxeFDC""
+SHA1 instance: [true, true, 40, true, 20]
+SHA256 hex: [""e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"", ""ba7816bf8f01cfea414140de""]
+SHA256 sizes: [32, 64, 32, 32, 32, ""ASCII-8BIT""]
+SHA256 base64: ""ungWv48Bz+pBQUDeXa4i""
+SHA256 instance: [true, true, 64, true, 32]
+SHA384 hex: [""38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b"", ""cb00753f45a35e8bb5a03d69""]
+SHA384 sizes: [48, 128, 48, 48, 48, ""ASCII-8BIT""]
+SHA384 base64: ""ywB1P0WjXou1oD1pmsZQ""
+SHA384 instance: [true, true, 96, true, 48]
+SHA512 hex: [""cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"", ""ddaf35a193617abacc417349""]
+SHA512 sizes: [64, 128, 64, 64, 64, ""ASCII-8BIT""]
+SHA512 base64: ""3a81oZNherrMQXNJriBB""
+SHA512 instance: [true, true, 128, true, 64]
+== string: [true, true, false, false]
+dup: [""187ef4436122d1cc2f40dc2b92f0eba0"", ""900150983cd24fb0d6963f7d28e17f72""]
+reset: ""da39a3ee5e6b4b0d3255bfef95601890afd80709""
+file: [""ba7816bf8f01cfea"", ""900150983cd24fb0d6963f7d28e17f72""]
+hexencode: ""007fff""
+binary input: ""f3b25701fe362ec84616a93a45ce9998""
+utf-8 input: ""bf15be717ac1b080b4f1c456692825891ff5073d""
+subclass: [""ba7816bf"", ""ba7816bf"", true]
+inspect: ""#<Digest::MD5: 0cc175b9c0f1b6a831c399e269772661>""
+");
+        }
+
+        /// <summary>
         /// main has no #initialize of its own - it is BasicObject's - so send(:initialize) answers nil
         /// where a stub used to throw NotImplementedException.
         /// </summary>

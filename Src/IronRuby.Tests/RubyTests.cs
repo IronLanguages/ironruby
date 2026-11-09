@@ -976,6 +976,8 @@ namespace IronRuby.Tests {
                 Digest_Incremental1,
                 Digest_NonStringResult1,
                 Encoding_EucKrTableGaps1,
+                StringIO_GetcInvalidBytes1,
+                Digest_OneShot1,
                 Main_Initialize1,
                 Dir_NotADirectory1,
                 Dir_NotADirectorySymlinks1,
