@@ -124,8 +124,8 @@ namespace IronRuby.Builtins {
         /// (RangeError), and raises NoMemoryError when the allocation fails, as 1 &lt;&lt; 2**40 does
         /// on most machines. ruby/spec (left_shift_spec, right_shift_spec) lets an implementation
         /// other than MRI put that RangeError at 2**32 instead, and IronRuby does: a .NET
-        /// BigInteger cannot hold much more than 2**36 bits anyway, so between 2**32 and 2**66
-        /// the choice is only between two errors.
+        /// BigInteger cannot hold much more than 2**36 bits anyway (2**31 on .NET 9 and later,
+        /// see ShiftLeftOrFail), so between 2**32 and 2**66 the choice is only between two errors.
         /// </para>
         /// </summary>
         internal static object/*!*/ ShiftBeyondInt32(BigInteger self, BigInteger leftShift) {
@@ -152,15 +152,24 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateRangeError("shift width too big");
             }
 
-            // At most two Int32.MaxValue steps below that bound. A result too big for BigInteger
-            // (from a receiver of billions of bits already) is the failed allocation MRI reports.
+            // At most two Int32.MaxValue steps below that bound.
+            BigInteger result = self;
+            while (leftShift > Int32.MaxValue) {
+                result = ShiftLeftOrFail(result, Int32.MaxValue);
+                leftShift -= Int32.MaxValue;
+            }
+            return Protocols.Normalize(ShiftLeftOrFail(result, (int)leftShift));
+        }
+
+        /// <summary>
+        /// value &lt;&lt; shift, where a result too big for a BigInteger is the failed allocation MRI
+        /// reports (NoMemoryError). .NET 9 and later cap a BigInteger at about 2**31 bits and throw
+        /// OverflowException past it, so on net10.0 1 &lt;&lt; 2**31 is a NoMemoryError; .NET 8 holds
+        /// it.
+        /// </summary>
+        internal static BigInteger ShiftLeftOrFail(BigInteger value, int shift) {
             try {
-                BigInteger result = self;
-                while (leftShift > Int32.MaxValue) {
-                    result <<= Int32.MaxValue;
-                    leftShift -= Int32.MaxValue;
-                }
-                return Protocols.Normalize(result << (int)leftShift);
+                return value << shift;
             } catch (OverflowException) {
                 throw new OutOfMemoryException("failed to allocate memory");
             }

@@ -150,8 +150,33 @@ true
         /// raised RangeError. Shifts back by such widths, and bit references at such indexes, reach the real bits.
         /// From 2**32 on, a non-MRI implementation may say "shift width too big" (ruby/spec's left_shift_spec).
         /// The expected output is CRuby 4.0's, except for the 2**32 line (CRuby would try to allocate 512 MB).
+        /// .NET 9 and later cap a BigInteger at about 2**31 bits, so there such results are the NoMemoryError MRI
+        /// raises for an allocation that fails, not a raw OverflowException.
         /// </summary>
         public void Integer_HugeShifts1() {
+            if (Environment.Version.Major >= 9) {
+                TestOutput(@"
+def e; yield; rescue NoMemoryError => x; x.class; end
+p e { 1 << 2**31 }, e { 1 << (2**31 - 33) }, e { (2**64) << (2**31 + 1) }, e { 3 >> -(2**31) }
+p 7 << -(2**31), -7 << -(2**31), 2**40 << -(2**31), -(2**40) >> 2**31, 1 >> 2**64, -1 >> 2**64, 0 << 2**64
+p((1 << 2**32 rescue $!), (-1 >> -(2**64) rescue $!))
+", @"
+NoMemoryError
+NoMemoryError
+NoMemoryError
+NoMemoryError
+0
+-1
+0
+-1
+0
+-1
+0
+#<RangeError: shift width too big>
+#<RangeError: shift width too big>
+");
+                return;
+            }
             TestOutput(@"
 def big(x) = [x.bit_length, x & 0xffff, x >> (x.bit_length - 8)]
 b = 1 << 2**31

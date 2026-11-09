@@ -858,7 +858,7 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod("<<")]
         public static object/*!*/ LeftShift(BigInteger/*!*/ self, int other) {
-            BigInteger result = self << other;
+            BigInteger result = ClrInteger.ShiftLeftOrFail(self, other);
             result = ShiftOverflowCheck(self, result);
             return Protocols.Normalize(result);
         }

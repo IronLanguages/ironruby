@@ -93,7 +93,7 @@ namespace IronRuby.Builtins {
                     return Narrow(r);
                 }
             }
-            return Protocols.Normalize(((BigInteger)self) << shift);
+            return Protocols.Normalize(ShiftLeftOrFail(self, shift));
         }
 
         #endregion
