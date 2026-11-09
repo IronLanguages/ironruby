@@ -1254,5 +1254,50 @@ true
 1000
 ");
         }
+
+        /// <summary>
+        /// A JIT-compiled method whose last act is to call itself still makes a frame per call, so a recursion with no
+        /// end raises SystemStackError as in MRI (#165). RyuJIT made such a self-call a jump (an implicit tail call):
+        /// `def d(n) = d(n + 1)' ran forever at 100% CPU. Each recursion here does end, after 10M calls, so a frame
+        /// that is reused shows as a return value and not as a hang. It runs on a thread with a 1 MB stack, so the
+        /// SystemStackError comes after some thousands of frames: .NET 8 takes seconds to throw through 100k+ dynamic
+        /// method frames, .NET 10 a fraction of one.
+        /// </summary>
+        public void Exception_StackLevelTooDeepJitTailCall1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            Engine.Execute(@"
+def jit_tail1(n) = n == 10_000_000 ? :returned : jit_tail1(n + 1)
+def jit_tail2(n, step) = n >= 10_000_000 ? :returned : jit_tail2(n + step, step)
+def jit_tail3(n)
+  return :returned if n == 10_000_000
+  jit_tail3(n + 1)
+end
+def jit_tail4(x) = x > 1.0e7 ? :returned : jit_tail4(x + 1.0)
+");
+            object result = null;
+            Exception error = null;
+            var worker = new System.Threading.Thread(() => {
+                try {
+                    result = Engine.Execute(@"
+[lambda { jit_tail1(0) }, lambda { jit_tail2(0, 1) }, lambda { jit_tail3(0) }, lambda { jit_tail4(0.0) }].map do |c|
+  begin
+    c.call
+  rescue SystemStackError => e
+    e.class.name
+  end
+end.join(' ')
+").ToString();
+                } catch (Exception e) {
+                    error = e;
+                }
+            }, 1024 * 1024);
+            worker.IsBackground = true;
+            worker.Start();
+            Assert(worker.Join(TimeSpan.FromMinutes(2)), "the recursion did not end");
+            Assert(error == null, error?.ToString());
+            AreEqual(result, "SystemStackError SystemStackError SystemStackError SystemStackError");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 4, String.Format("methods specialized: {0} (expected 4)", specializedHere));
+        }
     }
 }
