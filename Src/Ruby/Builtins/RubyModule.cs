@@ -1021,13 +1021,15 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        internal void AddDependentClass(RubyClass/*!*/ dependentClass) {
+        internal void AddDependentClass(RubyClass/*!*/ dependentClass, bool isNew = false) {
             Context.RequiresClassHierarchyLock();
             Assert.NotNull(dependentClass);
 
-            foreach (var cls in DependentClasses) {
-                if (ReferenceEquals(dependentClass, cls)) {
-                    return;
+            if (!isNew) {
+                foreach (var cls in DependentClasses) {
+                    if (ReferenceEquals(dependentClass, cls)) {
+                        return;
+                    }
                 }
             }
 

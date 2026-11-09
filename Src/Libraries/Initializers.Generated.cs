@@ -4748,7 +4748,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "clone", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Clone)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Clone)
             );
             
             DefineLibraryMethod(module, "clr_member", 0x51, 
@@ -4924,7 +4924,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "Integer", 0x52, 
-                0x00000000U, 
+                0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 
+                new Func<System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<System.Object, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
+                new Func<System.Object, System.Double, System.Object>(IronRuby.Builtins.KernelOps.ToInteger), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToInteger)
             );
             
@@ -5042,8 +5045,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "public_send", 0x51, 
-                0x00000000U, 0x80000000U, 
+                0x00000000U, 0x00000000U, 0x80000000U, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.PublicSendMessage), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.SendSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.PublicSendMessage), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.SendSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.PublicSendMessage)
             );
             
@@ -7814,9 +7818,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "step", 0x51, 
-                0x00000000U, 0x00000002U, 
-                new Func<IronRuby.Builtins.RangeOps.StepStorage, IronRuby.Builtins.Range, System.Object, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.RangeOps.GetStepEnumerator), 
-                new Func<IronRuby.Builtins.RangeOps.StepStorage, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Range, System.Object, System.Object>(IronRuby.Builtins.RangeOps.Step)
+                0x00000004U, 0x00000004U, 0x80000004U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object, System.Object>>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.RangeOps.Step), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object, System.Object>>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Range, System.Object, System.Object>(IronRuby.Builtins.RangeOps.Step), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object, System.Object>>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Range, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.RangeOps.Step)
             );
             
             DefineLibraryMethod(module, "to_s", 0x51, 

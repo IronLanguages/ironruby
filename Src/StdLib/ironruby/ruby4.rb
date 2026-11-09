@@ -1112,9 +1112,10 @@ class Range
       e = self.end
       # MRI's rb_int_range_last: the last n of an Integer range, without building all of it
       # first (to_a.last(n) made (1..10**6).last(3) a million-element Array). MRI takes this
-      # path for a subclass too, whatever its #each.
+      # path unless #each has been redefined (rb_method_basic_definition_p): a subclass with
+      # an #each of its own gets to_a.last(n).
       # (..5).last(2) too: a beginless Integer range counts down from its end.
-      if (b.nil? || ::Integer === b) && ::Integer === e
+      if (b.nil? || ::Integer === b) && ::Integer === e && (instance_of?(::Range) || method(:each).owner.equal?(::Range))
         top = exclude_end? ? e - 1 : e
         first_value = top - n + 1
         first_value = b if !b.nil? && first_value < b
@@ -2254,38 +2255,6 @@ if defined?($LOAD_PATH) && $LOAD_PATH.is_a?(Array) &&
       return found if found
     end
     nil
-  end
-end
-
-# --------------------------------------------------------------------------
-# Object#clone(freeze:) (2.4)
-# --------------------------------------------------------------------------
-
-# Kernel, not Object: MRI keeps #clone there, and delegate.rb builds its forwarder
-# out of `Kernel.dup` - a copy that would otherwise carry only the runtime's
-# argument-less #clone and refuse clone(freeze: false).
-module Kernel
-  unless (begin; Object.new.clone(:freeze => nil); true; rescue ArgumentError; false; end)
-    alias :__clone_without_options__ :clone
-
-    # `clone(freeze: nil)` is the default (copy the frozen state), `freeze: true`
-    # always freezes, `freeze: false` never does. The runtime's #clone always
-    # copies the frozen flag and there is no way to thaw an object from Ruby, so
-    # `freeze: false` on an already-frozen receiver falls back to #dup, which
-    # differs from #clone only in that it does not carry over the singleton
-    # class.
-    def clone(freeze: nil)
-      unless freeze.nil? || freeze == true || freeze == false
-        # Fixnum/Bignum are still distinct classes here; MRI says Integer.
-        name = freeze.class.to_s
-        name = "Integer" if name == "Fixnum" || name == "Bignum"
-        raise ArgumentError, "unexpected value for freeze: #{name}"
-      end
-
-      # A freeze: value that was actually given is handed on to #initialize_clone, and
-      # decides whether the copy is frozen; without one the copy follows the original.
-      freeze.nil? ? __clone_without_options__ : __ir_clone_with_freeze__(freeze)
-    end
   end
 end
 
@@ -6801,8 +6770,9 @@ class Data
           undef_method :define
         end
       end
-      klass.__send__(:__ir_set_hidden_ivar__, :data_members, names)
-      klass.class_eval(&block) if block
+      # klass is a new receiver: see Struct.new
+      ::Kernel.instance_method(:__ir_set_hidden_ivar__).bind_call(klass, :data_members, names)
+      ::Module.instance_method(:class_eval).bind_call(klass, &block) if block
       klass
     end
 
@@ -11087,14 +11057,18 @@ class << Struct
     end
 
     klass = args.empty? ? __struct_new__(nil) : __struct_new__(*args)
-    klass.__send__(:__ir_set_hidden_ivar__, :@__keyword_init__, keyword_init)
+    # klass is a new receiver: a call like klass.define_singleton_method would bind a rule
+    # of its own, every time (hundreds of microseconds). The methods called through
+    # bind_call share one rule - and are the built-ins, as in MRI's struct.c.
+    ::Kernel.instance_method(:__ir_set_hidden_ivar__).bind_call(klass, :@__keyword_init__, keyword_init)
+    define_singleton = ::Kernel.instance_method(:define_singleton_method)
     # only classes created by Struct.new answer #keyword_init?, not every Struct subclass
-    klass.define_singleton_method(:keyword_init?) { @__keyword_init__ }
+    define_singleton.bind_call(klass, :keyword_init?) { @__keyword_init__ }
     if keyword_init
       # MRI: #<Class:0x...>(keyword_init: true)
-      klass.define_singleton_method(:inspect) { "#{super()}(keyword_init: true)" }
+      define_singleton.bind_call(klass, :inspect) { "#{super()}(keyword_init: true)" }
     end
-    klass.module_eval(&block) if block
+    ::Module.instance_method(:module_eval).bind_call(klass, &block) if block
     klass
   end
 end
@@ -11588,7 +11562,10 @@ class Range
   # The old version just handed every stepping job to the 1.9 built-in, which
   # knows only #succ, so a Float step, a negative step, a String step and a
   # step given as an object answering #coerce were all wrong or raised.
-  def step(*args, &block)
+  #
+  # Range#step itself is C# (RangeOps.Step): it loops over a Fixnum range with a positive
+  # Fixnum step and hands every other call here, its arguments in an Array.
+  def __ir_range_step__(args, &block)
     if args.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
     end
@@ -11660,6 +11637,7 @@ class Range
     end
     self
   end
+  private :__ir_range_step__
 
   def %(n)
     seq = step(n)

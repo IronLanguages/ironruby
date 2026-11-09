@@ -113,6 +113,332 @@ p ""\x05\x80\x80\x81\x01"".force_encoding(""BINARY"").unpack(""w*""), [1, 2**64,
         }
 
         /// <summary>
+        /// pack and unpack read a format once and reuse its directives. A format with an error in it still raises it,
+        /// afresh each time, after the directives before it have run (a TypeError there comes first), and unpack1 stops
+        /// before it as MRI's does. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Pack_CachedFormats1() {
+            TestOutput(@"
+require 'ruby4'
+def show(label)
+  r = yield
+  puts ""#{label}: #{r.inspect}""
+rescue => e
+  puts ""#{label}: #{e.class}: #{e.message}""
+end
+class ToI; def to_int = 258; end
+%w[C n N v V s> L< q> Q< J].each do |f|
+  show(f) { [0, -1, 258, 2**31, -2**40, 3.7, ToI.new].map { |v| [v].pack(f).bytes } }
+end
+2.times do
+  show(""NnC"") { [[1, 2, 3].pack(""NnC"").bytes, ""\x00\x00\x00\x01\x00\x02\x03"".b.unpack(""NnC"")] }
+  show(""Cy"") { [1, 2].pack(""Cy"") }
+  show(""TypeError first"") { [""x""].pack(""Cy"") }
+  show(""unpack Cy"") { ""ab"".unpack(""Cy"") }
+  show(""unpack1 Cy"") { ""ab"".unpack1(""Cy"") }
+  show(""unpack1 yC"") { ""ab"".unpack1(""yC"") }
+  show(""<>"") { [1].pack(""s<>"") }
+  show(""@"") { [[1, 2].pack(""C@C"").bytes, ""abc"".unpack(""C@C""), [1].pack(""@"").bytes, ""abc"".unpack(""@C"")] }
+end
+e1 = ([1].pack(""Cy"") rescue $!)
+e2 = ([1].pack(""Cy"") rescue $!)
+p e1.equal?(e2)
+", @"
+C: [[0], [255], [2], [0], [0], [3], [2]]
+n: [[0, 0], [255, 255], [1, 2], [0, 0], [0, 0], [0, 3], [1, 2]]
+N: [[0, 0, 0, 0], [255, 255, 255, 255], [0, 0, 1, 2], [128, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 3], [0, 0, 1, 2]]
+v: [[0, 0], [255, 255], [2, 1], [0, 0], [0, 0], [3, 0], [2, 1]]
+V: [[0, 0, 0, 0], [255, 255, 255, 255], [2, 1, 0, 0], [0, 0, 0, 128], [0, 0, 0, 0], [3, 0, 0, 0], [2, 1, 0, 0]]
+s>: [[0, 0], [255, 255], [1, 2], [0, 0], [0, 0], [0, 3], [1, 2]]
+L<: [[0, 0, 0, 0], [255, 255, 255, 255], [2, 1, 0, 0], [0, 0, 0, 128], [0, 0, 0, 0], [3, 0, 0, 0], [2, 1, 0, 0]]
+q>: [[0, 0, 0, 0, 0, 0, 0, 0], [255, 255, 255, 255, 255, 255, 255, 255], [0, 0, 0, 0, 0, 0, 1, 2], [0, 0, 0, 0, 128, 0, 0, 0], [255, 255, 255, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 3], [0, 0, 0, 0, 0, 0, 1, 2]]
+Q<: [[0, 0, 0, 0, 0, 0, 0, 0], [255, 255, 255, 255, 255, 255, 255, 255], [2, 1, 0, 0, 0, 0, 0, 0], [0, 0, 0, 128, 0, 0, 0, 0], [0, 0, 0, 0, 0, 255, 255, 255], [3, 0, 0, 0, 0, 0, 0, 0], [2, 1, 0, 0, 0, 0, 0, 0]]
+J: [[0, 0, 0, 0, 0, 0, 0, 0], [255, 255, 255, 255, 255, 255, 255, 255], [2, 1, 0, 0, 0, 0, 0, 0], [0, 0, 0, 128, 0, 0, 0, 0], [0, 0, 0, 0, 0, 255, 255, 255], [3, 0, 0, 0, 0, 0, 0, 0], [2, 1, 0, 0, 0, 0, 0, 0]]
+NnC: [[0, 0, 0, 1, 0, 2, 3], [1, 2, 3]]
+Cy: ArgumentError: unknown pack directive 'y' in 'Cy'
+TypeError first: TypeError: no implicit conversion of String into Integer
+unpack Cy: ArgumentError: unknown unpack directive 'y' in 'Cy'
+unpack1 Cy: 97
+unpack1 yC: ArgumentError: unknown unpack directive 'y' in 'yC'
+<>: RangeError: Can't use both '<' and '>'
+@: [[1, 2], [97, 97], [0], [97]]
+NnC: [[0, 0, 0, 1, 0, 2, 3], [1, 2, 3]]
+Cy: ArgumentError: unknown pack directive 'y' in 'Cy'
+TypeError first: TypeError: no implicit conversion of String into Integer
+unpack Cy: ArgumentError: unknown unpack directive 'y' in 'Cy'
+unpack1 Cy: 97
+unpack1 yC: ArgumentError: unknown unpack directive 'y' in 'yC'
+<>: RangeError: Can't use both '<' and '>'
+@: [[1, 2], [97, 97], [0], [97]]
+false
+");
+        }
+
+        /// <summary>
+        /// Kernel#Integer has overloads for a String, a Fixnum and a Float alone, beside the general one with the base and
+        /// exception: keyword; Integer() and Float() still answer and raise as MRI's do for every kind of argument.
+        /// Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Kernel_IntegerOverloads1() {
+            TestOutput(@"
+require 'ruby4'
+def show(label)
+  r = yield
+  puts ""#{label} => #{r.inspect}""
+rescue Exception => e
+  puts ""#{label} !! #{e.class}: #{e.message}""
+end
+class SubS < String; def to_str = ""99""; def to_i = 98; end
+class ToInt; def to_int = 7; end
+class ToF; def to_f = 2.5; end
+inputs = [""12"", "" 12 "", ""0x1A"", ""0b11"", ""0o17"", ""017"", ""1_000"", ""1__0"", ""12abc"", """", "" "", ""-0"", ""+5"", ""1e3"", ""1.5"", ""\u0000"", ""1\u00002"",
+          ""12\n"", SubS.new(""33""), 12, -7, 2**40, 12.5, -12.5, 1e20, Float::NAN, Float::INFINITY, -Float::INFINITY, nil, true, ToInt.new, ToF.new, :sym, [1], ""0x"".encode(""UTF-16LE"")]
+inputs.each do |v|
+  label = v.is_a?(SubS) ? ""SubS"" : v.is_a?(ToInt) ? ""ToInt"" : v.is_a?(ToF) ? ""ToF"" : v.inspect
+  show(""Integer(#{label})"") { Integer(v) }
+  show(""Integer(#{label}, exception: false)"") { Integer(v, exception: false) }
+  show(""Integer(#{label}, 8)"") { Integer(v, 8) }
+  show(""Float(#{label})"") { Float(v) }
+  show(""Float(#{label}, exception: false)"") { Float(v, exception: false) }
+  show(""Kernel.Integer(#{label})"") { Kernel.Integer(v) }
+end
+show(""Integer()"") { Integer() }
+show(""Float()"") { Float() }
+show(""Integer(1, 2, 3)"") { Integer(""1"", 2, 3) }
+show(""Integer({})"") { Integer({}) }
+show(""Integer(s, **{})"") { Integer(""5"", **{}) }
+show(""Integer('5', foo: 1)"") { Integer(""5"", foo: 1) }
+show(""Float('5', foo: 1)"") { Float(""5"", foo: 1) }
+show(""Float(1.0, foo: 1)"") { Float(1.0, foo: 1) }
+show(""method arity"") { [method(:Integer).arity, method(:Float).arity, method(:Integer).parameters, method(:Float).parameters] }
+show(""frozen literal"") { Integer(""42"".freeze) }
+show(""binary"") { [Integer(""12"".b), Float(""1.5"".b)] }
+", @"
+Integer(""12"") => 12
+Integer(""12"", exception: false) => 12
+Integer(""12"", 8) => 10
+Float(""12"") => 12.0
+Float(""12"", exception: false) => 12.0
+Kernel.Integer(""12"") => 12
+Integer("" 12 "") => 12
+Integer("" 12 "", exception: false) => 12
+Integer("" 12 "", 8) => 10
+Float("" 12 "") => 12.0
+Float("" 12 "", exception: false) => 12.0
+Kernel.Integer("" 12 "") => 12
+Integer(""0x1A"") => 26
+Integer(""0x1A"", exception: false) => 26
+Integer(""0x1A"", 8) !! ArgumentError: invalid value for Integer(): ""0x1A""
+Float(""0x1A"") => 26.0
+Float(""0x1A"", exception: false) => 26.0
+Kernel.Integer(""0x1A"") => 26
+Integer(""0b11"") => 3
+Integer(""0b11"", exception: false) => 3
+Integer(""0b11"", 8) !! ArgumentError: invalid value for Integer(): ""0b11""
+Float(""0b11"") !! ArgumentError: invalid value for Float(): ""0b11""
+Float(""0b11"", exception: false) => nil
+Kernel.Integer(""0b11"") => 3
+Integer(""0o17"") => 15
+Integer(""0o17"", exception: false) => 15
+Integer(""0o17"", 8) => 15
+Float(""0o17"") !! ArgumentError: invalid value for Float(): ""0o17""
+Float(""0o17"", exception: false) => nil
+Kernel.Integer(""0o17"") => 15
+Integer(""017"") => 15
+Integer(""017"", exception: false) => 15
+Integer(""017"", 8) => 15
+Float(""017"") => 17.0
+Float(""017"", exception: false) => 17.0
+Kernel.Integer(""017"") => 15
+Integer(""1_000"") => 1000
+Integer(""1_000"", exception: false) => 1000
+Integer(""1_000"", 8) => 512
+Float(""1_000"") => 1000.0
+Float(""1_000"", exception: false) => 1000.0
+Kernel.Integer(""1_000"") => 1000
+Integer(""1__0"") !! ArgumentError: invalid value for Integer(): ""1__0""
+Integer(""1__0"", exception: false) => nil
+Integer(""1__0"", 8) !! ArgumentError: invalid value for Integer(): ""1__0""
+Float(""1__0"") !! ArgumentError: invalid value for Float(): ""1__0""
+Float(""1__0"", exception: false) => nil
+Kernel.Integer(""1__0"") !! ArgumentError: invalid value for Integer(): ""1__0""
+Integer(""12abc"") !! ArgumentError: invalid value for Integer(): ""12abc""
+Integer(""12abc"", exception: false) => nil
+Integer(""12abc"", 8) !! ArgumentError: invalid value for Integer(): ""12abc""
+Float(""12abc"") !! ArgumentError: invalid value for Float(): ""12abc""
+Float(""12abc"", exception: false) => nil
+Kernel.Integer(""12abc"") !! ArgumentError: invalid value for Integer(): ""12abc""
+Integer("""") !! ArgumentError: invalid value for Integer(): """"
+Integer("""", exception: false) => nil
+Integer("""", 8) !! ArgumentError: invalid value for Integer(): """"
+Float("""") !! ArgumentError: invalid value for Float(): """"
+Float("""", exception: false) => nil
+Kernel.Integer("""") !! ArgumentError: invalid value for Integer(): """"
+Integer("" "") !! ArgumentError: invalid value for Integer(): "" ""
+Integer("" "", exception: false) => nil
+Integer("" "", 8) !! ArgumentError: invalid value for Integer(): "" ""
+Float("" "") !! ArgumentError: invalid value for Float(): "" ""
+Float("" "", exception: false) => nil
+Kernel.Integer("" "") !! ArgumentError: invalid value for Integer(): "" ""
+Integer(""-0"") => 0
+Integer(""-0"", exception: false) => 0
+Integer(""-0"", 8) => 0
+Float(""-0"") => -0.0
+Float(""-0"", exception: false) => -0.0
+Kernel.Integer(""-0"") => 0
+Integer(""+5"") => 5
+Integer(""+5"", exception: false) => 5
+Integer(""+5"", 8) => 5
+Float(""+5"") => 5.0
+Float(""+5"", exception: false) => 5.0
+Kernel.Integer(""+5"") => 5
+Integer(""1e3"") !! ArgumentError: invalid value for Integer(): ""1e3""
+Integer(""1e3"", exception: false) => nil
+Integer(""1e3"", 8) !! ArgumentError: invalid value for Integer(): ""1e3""
+Float(""1e3"") => 1000.0
+Float(""1e3"", exception: false) => 1000.0
+Kernel.Integer(""1e3"") !! ArgumentError: invalid value for Integer(): ""1e3""
+Integer(""1.5"") !! ArgumentError: invalid value for Integer(): ""1.5""
+Integer(""1.5"", exception: false) => nil
+Integer(""1.5"", 8) !! ArgumentError: invalid value for Integer(): ""1.5""
+Float(""1.5"") => 1.5
+Float(""1.5"", exception: false) => 1.5
+Kernel.Integer(""1.5"") !! ArgumentError: invalid value for Integer(): ""1.5""
+Integer(""\u0000"") !! ArgumentError: invalid value for Integer(): ""\u0000""
+Integer(""\u0000"", exception: false) => nil
+Integer(""\u0000"", 8) !! ArgumentError: invalid value for Integer(): ""\u0000""
+Float(""\u0000"") !! ArgumentError: string for Float contains null byte
+Float(""\u0000"", exception: false) => nil
+Kernel.Integer(""\u0000"") !! ArgumentError: invalid value for Integer(): ""\u0000""
+Integer(""1\u00002"") !! ArgumentError: invalid value for Integer(): ""1\u00002""
+Integer(""1\u00002"", exception: false) => nil
+Integer(""1\u00002"", 8) !! ArgumentError: invalid value for Integer(): ""1\u00002""
+Float(""1\u00002"") !! ArgumentError: string for Float contains null byte
+Float(""1\u00002"", exception: false) => nil
+Kernel.Integer(""1\u00002"") !! ArgumentError: invalid value for Integer(): ""1\u00002""
+Integer(""12\n"") => 12
+Integer(""12\n"", exception: false) => 12
+Integer(""12\n"", 8) => 10
+Float(""12\n"") => 12.0
+Float(""12\n"", exception: false) => 12.0
+Kernel.Integer(""12\n"") => 12
+Integer(SubS) => 33
+Integer(SubS, exception: false) => 33
+Integer(SubS, 8) => 27
+Float(SubS) => 33.0
+Float(SubS, exception: false) => 33.0
+Kernel.Integer(SubS) => 33
+Integer(12) => 12
+Integer(12, exception: false) => 12
+Integer(12, 8) !! ArgumentError: base specified for non string value
+Float(12) => 12.0
+Float(12, exception: false) => 12.0
+Kernel.Integer(12) => 12
+Integer(-7) => -7
+Integer(-7, exception: false) => -7
+Integer(-7, 8) !! ArgumentError: base specified for non string value
+Float(-7) => -7.0
+Float(-7, exception: false) => -7.0
+Kernel.Integer(-7) => -7
+Integer(1099511627776) => 1099511627776
+Integer(1099511627776, exception: false) => 1099511627776
+Integer(1099511627776, 8) !! ArgumentError: base specified for non string value
+Float(1099511627776) => 1099511627776.0
+Float(1099511627776, exception: false) => 1099511627776.0
+Kernel.Integer(1099511627776) => 1099511627776
+Integer(12.5) => 12
+Integer(12.5, exception: false) => 12
+Integer(12.5, 8) !! ArgumentError: base specified for non string value
+Float(12.5) => 12.5
+Float(12.5, exception: false) => 12.5
+Kernel.Integer(12.5) => 12
+Integer(-12.5) => -12
+Integer(-12.5, exception: false) => -12
+Integer(-12.5, 8) !! ArgumentError: base specified for non string value
+Float(-12.5) => -12.5
+Float(-12.5, exception: false) => -12.5
+Kernel.Integer(-12.5) => -12
+Integer(1.0e+20) => 100000000000000000000
+Integer(1.0e+20, exception: false) => 100000000000000000000
+Integer(1.0e+20, 8) !! ArgumentError: base specified for non string value
+Float(1.0e+20) => 1.0e+20
+Float(1.0e+20, exception: false) => 1.0e+20
+Kernel.Integer(1.0e+20) => 100000000000000000000
+Integer(NaN) !! FloatDomainError: NaN
+Integer(NaN, exception: false) => nil
+Integer(NaN, 8) !! ArgumentError: base specified for non string value
+Float(NaN) => NaN
+Float(NaN, exception: false) => NaN
+Kernel.Integer(NaN) !! FloatDomainError: NaN
+Integer(Infinity) !! FloatDomainError: Infinity
+Integer(Infinity, exception: false) => nil
+Integer(Infinity, 8) !! ArgumentError: base specified for non string value
+Float(Infinity) => Infinity
+Float(Infinity, exception: false) => Infinity
+Kernel.Integer(Infinity) !! FloatDomainError: Infinity
+Integer(-Infinity) !! FloatDomainError: -Infinity
+Integer(-Infinity, exception: false) => nil
+Integer(-Infinity, 8) !! ArgumentError: base specified for non string value
+Float(-Infinity) => -Infinity
+Float(-Infinity, exception: false) => -Infinity
+Kernel.Integer(-Infinity) !! FloatDomainError: -Infinity
+Integer(nil) !! TypeError: can't convert nil into Integer
+Integer(nil, exception: false) => nil
+Integer(nil, 8) !! ArgumentError: base specified for non string value
+Float(nil) !! TypeError: can't convert nil into Float
+Float(nil, exception: false) => nil
+Kernel.Integer(nil) !! TypeError: can't convert nil into Integer
+Integer(true) !! TypeError: can't convert true into Integer
+Integer(true, exception: false) => nil
+Integer(true, 8) !! ArgumentError: base specified for non string value
+Float(true) !! TypeError: can't convert true into Float
+Float(true, exception: false) => nil
+Kernel.Integer(true) !! TypeError: can't convert true into Integer
+Integer(ToInt) => 7
+Integer(ToInt, exception: false) => 7
+Integer(ToInt, 8) !! ArgumentError: base specified for non string value
+Float(ToInt) !! TypeError: can't convert ToInt into Float
+Float(ToInt, exception: false) => nil
+Kernel.Integer(ToInt) => 7
+Integer(ToF) !! TypeError: can't convert ToF into Integer
+Integer(ToF, exception: false) => nil
+Integer(ToF, 8) !! ArgumentError: base specified for non string value
+Float(ToF) => 2.5
+Float(ToF, exception: false) => 2.5
+Kernel.Integer(ToF) !! TypeError: can't convert ToF into Integer
+Integer(:sym) !! TypeError: can't convert Symbol into Integer
+Integer(:sym, exception: false) => nil
+Integer(:sym, 8) !! ArgumentError: base specified for non string value
+Float(:sym) !! TypeError: can't convert Symbol into Float
+Float(:sym, exception: false) => nil
+Kernel.Integer(:sym) !! TypeError: can't convert Symbol into Integer
+Integer([1]) !! TypeError: can't convert Array into Integer
+Integer([1], exception: false) => nil
+Integer([1], 8) !! ArgumentError: base specified for non string value
+Float([1]) !! TypeError: can't convert Array into Float
+Float([1], exception: false) => nil
+Kernel.Integer([1]) !! TypeError: can't convert Array into Integer
+Integer(""0x"") !! Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE
+Integer(""0x"", exception: false) !! Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE
+Integer(""0x"", 8) !! Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE
+Float(""0x"") !! Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE
+Float(""0x"", exception: false) !! Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE
+Kernel.Integer(""0x"") !! Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE
+Integer() !! ArgumentError: wrong number of arguments (given 0, expected 1..2)
+Float() !! ArgumentError: wrong number of arguments (given 0, expected 1)
+Integer(1, 2, 3) !! ArgumentError: wrong number of arguments (given 3, expected 1..2)
+Integer({}) !! TypeError: can't convert Hash into Integer
+Integer(s, **{}) => 5
+Integer('5', foo: 1) !! ArgumentError: unknown keyword: :foo
+Float('5', foo: 1) !! ArgumentError: unknown keyword: :foo
+Float(1.0, foo: 1) !! ArgumentError: unknown keyword: :foo
+method arity => [-2, -2, [[:req, :arg], [:opt, :base], [:key, :exception]], [[:req, :arg], [:key, :exception]]]
+frozen literal => 42
+binary => [12, 1.5]
+");
+        }
+
+        /// <summary>
         /// <<, >> and ~ on an Int64 receiver, and Int32 shifts that overflow into the Int64 range.
         /// </summary>
         public void Integer_Int64Shifts1() {

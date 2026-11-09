@@ -2653,15 +2653,17 @@ namespace IronRuby.Runtime {
         // Returned path is always canonicalized to forward slashes
 
         public static string/*!*/ ExpandPath(PlatformAdaptationLayer/*!*/ platform, string/*!*/ path) {
-            return ExpandPath(platform, path, platform.CurrentDirectory, true);
+            return ExpandPath(platform, path, null, true);
         }
 
-        public static string/*!*/ ExpandPath(PlatformAdaptationLayer/*!*/ platform, string/*!*/ path, string/*!*/ basePath, bool expandHome) {
+        /// <param name="basePath">The directory a relative path is relative to; null for the current directory, which
+        /// is then only asked for (a getcwd) when the path is relative.</param>
+        public static string/*!*/ ExpandPath(PlatformAdaptationLayer/*!*/ platform, string/*!*/ path, string basePath, bool expandHome) {
             return ExpandPath(platform, path, basePath, expandHome, true);
         }
 
-        private static string/*!*/ ExpandPath(PlatformAdaptationLayer/*!*/ platform, string/*!*/ path, string/*!*/ basePath, bool expandHome, bool expandBase) {
-            Assert.NotNull(platform, path, basePath);
+        private static string/*!*/ ExpandPath(PlatformAdaptationLayer/*!*/ platform, string/*!*/ path, string basePath, bool expandHome, bool expandBase) {
+            Assert.NotNull(platform, path);
 
             if (expandHome) {
                 int length = path.Length;
@@ -2688,15 +2690,20 @@ namespace IronRuby.Runtime {
             }
 
             path = RubyUtils.CanonicalizePath(path);
-            basePath = RubyUtils.CanonicalizePath(basePath);
 
             if (RubyUtils.IsAbsolutePath(path)) {
                 // "basePath" can be ignored if "path" is an absolute path
                 return new PathExpander(platform, path).GetResult();
             }
 
-            // expand base path:
-            string expandedBasePath = expandBase ? ExpandPath(platform, basePath, platform.CurrentDirectory, expandHome, false) : basePath;
+            // expand base path (the current directory is absolute already):
+            string expandedBasePath;
+            if (basePath == null) {
+                expandedBasePath = RubyUtils.CanonicalizePath(platform.CurrentDirectory);
+            } else {
+                basePath = RubyUtils.CanonicalizePath(basePath);
+                expandedBasePath = expandBase ? ExpandPath(platform, basePath, null, expandHome, false) : basePath;
+            }
 
             char drive;
             string relativePath;

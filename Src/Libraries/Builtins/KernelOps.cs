@@ -144,6 +144,23 @@ namespace IronRuby.Builtins {
             return null;
         }
 
+        // Integer(string), Integer(fixnum) and Integer(float), the common calls, without the storages and the keyword parameter of the
+        // general overload below: the binder's dispatch to that one cost more than the conversion (~100 ns for a Fixnum).
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        public static object ToInteger(object self, [NotNull]MutableString/*!*/ value) {
+            return ParseInteger(value, 0, true);
+        }
+
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        public static object ToInteger(object self, int value) {
+            return ScriptingRuntimeHelpers.Int32ToObject(value);
+        }
+
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        public static object ToInteger(object self, double value) {
+            return ClrFloat.ToInt(value);
+        }
+
         /// <summary>
         /// Kernel#Integer(arg, base = 0, exception: true), MRI's rb_convert_to_integer. A non-zero base
         /// goes with a String, so anything else must have #to_str. A String is parsed, an Integer is
@@ -1318,12 +1335,45 @@ namespace IronRuby.Builtins {
 
         #region clone, dup
 
+        /// <summary>
+        /// Kernel#clone(freeze: nil) (kernel.rb in MRI). It was a prelude method with the keyword, in front of
+        /// this one: a Ruby keyword-parameter entry on every #clone, ~2x the cost of #dup. A freeze: of nil is
+        /// a clone without the option; true or false is handed on to #initialize_clone (__ir_clone_with_freeze__).
+        /// </summary>
         [RubyMethod("clone")]
         public static object/*!*/ Clone(
             CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage,
+            CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ initializeCloneStorage,
             CallSiteStorage<Func<CallSite, RubyClass, object>>/*!*/ allocateStorage,
-            object self) {
+            object self, [Keywords, Optional]object options) {
 
+            if (options != Missing.Value) {
+                var keywords = options as Hash;
+                if (keywords == null || !keywords.IsKeywordArguments) {
+                    throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 1, expected 0)");
+                }
+                var context = allocateStorage.Context;
+                object freeze = null;
+                List<string> unknown = null;
+                foreach (var entry in keywords) {
+                    var key = entry.Key as RubySymbol;
+                    if (key == null || key.ToString() != "freeze") {
+                        (unknown ??= new List<string>()).Add(context.Inspect(entry.Key).ToString());
+                    } else {
+                        freeze = entry.Value;
+                    }
+                }
+                if (unknown != null) {
+                    throw RubyExceptions.CreateArgumentError("unknown keyword{0}: {1}", unknown.Count > 1 ? "s" : "", String.Join(", ", unknown));
+                }
+                if (freeze != null) {
+                    if (!(freeze is bool)) {
+                        throw RubyExceptions.CreateArgumentError("unexpected value for freeze: {0}",
+                            RubyExceptions.MessageTypeName(context.GetClassName(freeze)));
+                    }
+                    return CloneWithFreeze(initializeCloneStorage, allocateStorage, self, (bool)freeze);
+                }
+            }
             return Clone(initializeCopyStorage, allocateStorage, true, self);
         }
 
@@ -1644,6 +1694,13 @@ namespace IronRuby.Builtins {
         /// "Fixnum as Symbol" path and produce a NameError about an unrelated name.
         /// </summary>
         private static string/*!*/ ToVariableName(ConversionStorage<string>/*!*/ stringCast, object name) {
+            // what the conversion site does for these two (ConvertToSymbolAction.TryConvertStringOrSymbol), without the site
+            if (name is RubySymbol symbol) {
+                return symbol.ToString();
+            }
+            if (name is MutableString str) {
+                return str.ConvertToString();
+            }
             return Protocols.CastToSymbol(stringCast, name);
         }
 
@@ -1988,13 +2045,26 @@ namespace IronRuby.Builtins {
         //
         // The name is converted here rather than by the binder, so that a bad one is reported
         // from inside public_send, as MRI's backtrace has it.
+        // obj.public_send(:name): no argument list to make and splat again
+        [RubyMethod("public_send")]
+        public static object PublicSendMessage(ConversionStorage<string>/*!*/ stringCast,
+            SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ sendStorage,
+            RubyScope/*!*/ scope, BlockParam block, object self, object name) {
+
+            string methodName = ToVariableName(stringCast, name);
+            var site = GetSendSite(sendStorage, scope, methodName, new RubyCallSignature(0,
+                RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.IsInteropCall)
+            );
+            return site.Target(site, scope, self, block != null ? block.Proc : null);
+        }
+
         [RubyMethod("public_send")]
         [ReceivesKeywords]
         public static object PublicSendMessage(ConversionStorage<string>/*!*/ stringCast,
             SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ sendStorage,
             RubyScope/*!*/ scope, BlockParam block, object self, object name, params object[]/*!*/ args) {
 
-            string methodName = Protocols.CastToSymbol(stringCast, name);
+            string methodName = ToVariableName(stringCast, name);
             var site = GetSendSite(sendStorage, scope, methodName, new RubyCallSignature(1,
                 RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock | RubyCallFlags.IsInteropCall)
             );

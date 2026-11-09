@@ -549,7 +549,49 @@ namespace IronRuby.Builtins {
         [ReceivesKeywords]
         public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
             BlockParam block, object/*!*/ self, params object[]/*!*/ args) {
+            int limit, step;
+            if (block != null && self is int start && TryGetFixnumStepKeywords(args, out limit, out step)) {
+                return StepImpl(block, start, limit, step);
+            }
             return StepSlow(slow, block, self, args);
+        }
+
+        // 1.step(by: 3, to: 10) and 1.step(10, by: 3) with Fixnums: the limit and a non-zero step. Anything
+        // the prelude would treat otherwise - another keyword, a limit given both ways, no limit (an endless
+        // step), a step of 0 (an error) - is false and goes there.
+        private static bool TryGetFixnumStepKeywords(object[]/*!*/ args, out int limit, out int step) {
+            limit = 0;
+            step = 1;
+            if (args.Length == 0 || args.Length > 2) {
+                return false;
+            }
+            var keywords = args[args.Length - 1] as Hash;
+            if (keywords == null || !keywords.IsKeywordArguments || keywords.Count > 2) {
+                return false;
+            }
+            bool hasLimit = false;
+            if (args.Length == 2) {
+                if (!(args[0] is int to)) {
+                    return false;
+                }
+                limit = to;
+                hasLimit = true;
+            }
+            foreach (var entry in keywords) {
+                if (!(entry.Key is RubySymbol key) || !(entry.Value is int value)) {
+                    return false;
+                }
+                string name = key.ToString();
+                if (name == "to" && !hasLimit) {
+                    limit = value;
+                    hasLimit = true;
+                } else if (name == "by" && value != 0) {
+                    step = value;
+                } else {
+                    return false;
+                }
+            }
+            return hasLimit;
         }
 
         private static object StepImpl(BlockParam/*!*/ block, int self, int limit, int step) {

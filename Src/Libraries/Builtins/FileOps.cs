@@ -908,7 +908,7 @@ namespace IronRuby.Builtins {
                 context.Platform,
                 ExpandTilde(context, DecodePathLike(context, pathStr)),
                 (basePath == null)
-                    ? context.Platform.CurrentDirectory
+                    ? null
                     : ExpandTilde(context, DecodeBasePath(context, Protocols.CastToPath(toPath, basePath), pathStr)),
                 false
             );
@@ -1070,7 +1070,7 @@ namespace IronRuby.Builtins {
             string result = RubyUtils.ExpandPath(
                 context.Platform,
                 context.DecodePath(pathStr),
-                (basePath == null) ? context.Platform.CurrentDirectory : context.DecodePath(Protocols.CastToPath(toPath, basePath)),
+                (basePath == null) ? null : context.DecodePath(Protocols.CastToPath(toPath, basePath)),
                 false
             );
 
@@ -1514,7 +1514,7 @@ namespace IronRuby.Builtins {
         // The symlink budget is shared across the whole resolution, not reset per component:
         // a link that points at itself ("a" -> "a") otherwise recurses until the stack dies.
         private static string/*!*/ ResolvePath(RubyContext/*!*/ context, string/*!*/ path, string basedir, bool strict, ref int links) {
-            string absolute = RubyUtils.ExpandPath(context.Platform, path, basedir ?? context.Platform.CurrentDirectory, false);
+            string absolute = RubyUtils.ExpandPath(context.Platform, path, basedir, false);
 
             var components = new List<string>();
             foreach (var part in absolute.Split('/')) {
