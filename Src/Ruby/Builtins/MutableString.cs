@@ -1857,7 +1857,13 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ GetSlice(int start, int count) {
             ContractUtils.Requires(start >= 0, "start");
             ContractUtils.Requires(count >= 0, "count");
-            var result = CreateDerived(_content.GetSlice(start, count), _encoding);
+            return GetSlice(_content, start, count);
+        }
+
+        // The content is read once by the caller: a read on another thread can switch the string
+        // between bytes and characters, and the indices are meant for the one the caller looked at.
+        private MutableString/*!*/ GetSlice(Content/*!*/ content, int start, int count) {
+            var result = CreateDerived(content.GetSlice(start, count), _encoding);
             // a part of an ASCII string is ASCII, and saying so spares the next operation a scan of it
             if ((_flags & (IsAsciiFlag | AsciiUnknownFlag)) == IsAsciiFlag) {
                 result._flags = (result._flags & ~(AsciiUnknownFlag | SurrogatesUnknownFlag)) | IsAsciiFlag | NoSurrogatesFlag;
@@ -1873,8 +1879,9 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ GetByteSlice(int start, int count) {
             ContractUtils.Requires(start >= 0, "start");
             ContractUtils.Requires(count >= 0, "count");
-            if (_content is BinaryContent) {
-                return GetSlice(start, count);
+            var content = _content;
+            if (content is BinaryContent) {
+                return GetSlice(content, start, count);
             }
             return CreateDerived().Append(GetBinarySlice(start, count));
         }
