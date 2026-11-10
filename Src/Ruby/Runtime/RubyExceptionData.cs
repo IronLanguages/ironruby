@@ -460,7 +460,20 @@ namespace IronRuby.Runtime {
         /// #backtrace_locations does on demand all the same.
         /// </summary>
         private bool HasBuiltinSetBacktrace(RubyContext/*!*/ context) {
-            var method = context.GetImmediateClassOf(_exception).ResolveMethod("set_backtrace", VisibilityContext.AllVisible).Info;
+            return HasBuiltinSetBacktrace(context, _exception);
+        }
+
+        /// <summary>
+        /// Whether CanRescue's capture of the exception's backtrace runs no Ruby code: it has one already, or the #set_backtrace the
+        /// capture would call is IronRuby's own (see RubyOps.RescuePassMayTest).
+        /// </summary>
+        internal static bool CaptureRunsNoRubyCode(RubyContext/*!*/ context, Exception/*!*/ exception) {
+            var data = TryGetInstance(exception);
+            return data != null && (data.HasBacktrace || data._raiseBacktrace != null) || HasBuiltinSetBacktrace(context, exception);
+        }
+
+        private static bool HasBuiltinSetBacktrace(RubyContext/*!*/ context, Exception/*!*/ exception) {
+            var method = context.GetImmediateClassOf(exception).ResolveMethod("set_backtrace", VisibilityContext.AllVisible).Info;
             if (method is RubyLibraryMethodInfo) {
                 return true;
             }

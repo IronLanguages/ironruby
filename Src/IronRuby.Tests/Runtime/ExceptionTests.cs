@@ -1439,7 +1439,8 @@ r.join(""|"")
         /// catch. Non-matching lists of constants (the backtrace and $! after), a class expression with a side effect or one that
         /// raises, a later clause with a splat, `===' redefined and a constant reassigned after the site has run, an ensure
         /// clause that redefines `===' before an outer clause is matched, an ensure clause raising another exception, retry, else,
-        /// a module the exception was extended with, a bare rescue of a non-StandardError, a throw through the frames. The expected
+        /// a module the exception was extended with, a bare rescue of a non-StandardError, a throw through the frames, a
+        /// #set_backtrace of the exception's own that redefines `===' (it runs before the clauses are matched). The expected
         /// output is CRuby 4.0's; run interpreted and compiled.
         /// </summary>
         public void Exception_RescueFilterPassThrough1() {
@@ -1484,9 +1485,18 @@ Object.send(:remove_const, :KK); KK = ArgumentError
 $log << k_const
 class << Later; remove_method :===; end
 $log << outer_redefine
+class Sneaky < StandardError
+  def set_backtrace(bt)
+    def TypeError.===(e) = true
+    super
+  end
+end
+def sneaky; begin; yield; rescue TypeError; :caught_by_set_backtrace; end; end
+5.times { begin; sneaky { boom }; rescue ArgumentError; end }
+$log << (sneaky { raise Sneaky } rescue :passed)
 $log.join(""|"")
 ";
-            const string expected = "[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|later|kk|caught_after_ensure";
+            const string expected = "[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|later|kk|caught_after_ensure|caught_by_set_backtrace";
 
             var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
             AreEqual(interpreting.CreateScriptSourceFromString(script, "rf1.rb", SourceCodeKind.File).Execute().ToString(), expected);

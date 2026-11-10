@@ -3464,7 +3464,8 @@ namespace IronRuby.Runtime {
         /// - each `===' is Module#===, which only tests the class of the exception (and so is the default StandardError's);
         /// - no Ruby code runs before the clauses would be matched: no compiled ensure clause has let the exception through
         ///   (PendingPassedEnsures); an interpreted one, or one with a jump, catches it, so this frame is not reached in this pass;
-        /// - CanRescue would match the exception itself, not a new one made by its class's Ruby #new (IsHandledInPlace);
+        /// - CanRescue would match the exception itself, not a new one made by its class's Ruby #new (IsHandledInPlace), and would
+        ///   not call a #set_backtrace of the exception's own when it captures the backtrace (CaptureRunsNoRubyCode);
         /// - no TracePoint is on.
         /// An exception CanRescue turns down (an unwinder: throw, break, return from a block, Thread#kill) goes through as well: the
         /// clauses are not matched against it at all. A SystemStackError, an InsufficientExecutionStackException or a stack more
@@ -3491,7 +3492,8 @@ namespace IronRuby.Runtime {
                     return false;
                 }
                 var data = RubyExceptionData.TryGetInstance(exception);
-                return (data == null || data.PendingPassedEnsures == 0) && RubyExceptionData.IsHandledInPlace(scope.RubyContext, exception);
+                return (data == null || data.PendingPassedEnsures == 0) && RubyExceptionData.IsHandledInPlace(scope.RubyContext, exception) &&
+                    RubyExceptionData.CaptureRunsNoRubyCode(scope.RubyContext, exception);
             } catch (Exception) {
                 return false;
             }
