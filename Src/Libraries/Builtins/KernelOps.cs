@@ -150,15 +150,15 @@ namespace IronRuby.Builtins {
             return false;
         }
 
+        // C's DBL_EPSILON (Double.Epsilon is the smallest subnormal instead)
+        private const double DblEpsilon = 2.220446049250313e-16;
+
         /// <summary>
         /// MRI's ruby_float_step_size: how many values beg, beg + unit, ... reach end (excluded when
         /// <paramref name="excl"/>), allowing for the error the division accumulates. A Float, so that
         /// an infinite count and a NaN survive. ArithmeticSequence.__float_step_size__ in ruby4.rb is
         /// the same computation.
         /// </summary>
-        // C's DBL_EPSILON (Double.Epsilon is the smallest subnormal instead)
-        private const double DblEpsilon = 2.220446049250313e-16;
-
         internal static double FloatStepSize(double beg, double end, double unit, bool excl) {
             if (unit == 0) {
                 return Double.PositiveInfinity;
