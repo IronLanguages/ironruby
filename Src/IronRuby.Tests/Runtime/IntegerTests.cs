@@ -472,6 +472,208 @@ true
         }
 
         /// <summary>
+        /// Integer#** past 2**31 result bits (#89). MRI computes 2 ** (2**31), and refuses ("exponent is too large")
+        /// only when the base's bit length times the exponent passes 2**34 - for a Fixnum base, the base and
+        /// exponent int_pow has reached when it gives up squaring in a long, which is why 2 ** (2**34 - 1) is
+        /// refused. IronRuby refused anything past 2**31 bits. The expected output is CRuby 4.0.9's; on .NET 9
+        /// and later a result past the BigInteger cap (about 2**31 bits) is NoMemoryError, as for a shift.
+        /// </summary>
+        public void Integer_HugePower1() {
+            TestOutput(@"
+def e; yield; rescue ArgumentError, NoMemoryError => x; [x.class, x.message]; end
+p e { 2 ** (2**34) }, e { 2 ** (2**34 - 1) }, e { (2**64) ** (2**28 + 1) }, e { 3 ** (2**34) }, e { 2.pow(2**34) }
+p 3 ** 40, (-3) ** 41, 2 ** 63, (-2) ** 63, 7 ** 2**10 == (7 ** 2**9) ** 2, (-(2**64)) ** 3 == -(2**192)
+", @"
+[ArgumentError, ""exponent is too large""]
+[ArgumentError, ""exponent is too large""]
+[ArgumentError, ""exponent is too large""]
+[ArgumentError, ""exponent is too large""]
+[ArgumentError, ""exponent is too large""]
+12157665459056928801
+-36472996377170786403
+9223372036854775808
+-9223372036854775808
+true
+true
+");
+            if (Environment.Version.Major >= 9) {
+                TestOutput(@"
+def e; yield; rescue NoMemoryError => x; x.class; end
+p e { 2 ** (2**31) }, e { 4 ** (2**30) }
+", @"
+NoMemoryError
+NoMemoryError
+");
+                return;
+            }
+            TestOutput(@"
+b = 2 ** (2**31)
+p b.bit_length, b == 1 << 2**31, 4 ** (2**30) == b, ((-2) ** (2**31 + 1)) == -(b << 1)
+", @"
+2147483649
+true
+true
+true
+");
+        }
+
+        /// <summary>
+        /// Numeric#step with a Float among self, the limit and the step loops in C# (#89), with MRI's
+        /// ruby_float_step_size and ruby_float_step: n = floor((end - beg) / unit + err) and beg + i * unit, the last
+        /// value held to end. Everything else still goes to the prelude (which these tests run without). The
+        /// expected output is CRuby 4.0.9's.
+        /// </summary>
+        public void Numeric_FloatStep1() {
+            TestOutput(@"
+def s; a = []; r = yield(a); [r, a]; end
+p s { |a| 1.0.step(2.0, 0.25) { |x| a << x } }
+p s { |a| 1.step(2.0, 0.5) { |x| a << x } }
+p s { |a| 1.0.step(by: 0.5, to: 2) { |x| a << x } }
+p s { |a| 2.0.step(1.0, -0.3) { |x| a << x } }
+p s { |a| 1.1.step(1.5, 0.1) { |x| a << x } }
+p s { |a| 0.0.step(1.0, 1.0 / 3) { |x| a << x } }
+p s { |a| 1e16.step(1e16 + 4, 1.0) { |x| a << x } }
+p s { |a| 1.0.step(2.0, 1.0 / 0) { |x| a << x } }
+p s { |a| 1.0.step(0.0 / 0, 1) { |x| a << x } }
+p s { |a| 1.0.step(2.0, 0.5) { |x| a << x; break nil } }
+p s { |a| 1.0.step(2.0, 0.5) { |x| a << x; break 7 if x > 1 } }
+p s { |a| 0.1.step(1.0, 0.1) { |x| a << x } }[1].size, 1.0.method(:step).owner
+", @"
+[1.0, [1.0, 1.25, 1.5, 1.75, 2.0]]
+[1, [1.0, 1.5, 2.0]]
+[1.0, [1.0, 1.5, 2.0]]
+[2.0, [2.0, 1.7, 1.4, 1.1]]
+[1.1, [1.1, 1.2000000000000002, 1.3, 1.4000000000000001, 1.5]]
+[0.0, [0.0, 0.3333333333333333, 0.6666666666666666, 1.0]]
+[1.0e+16, [1.0e+16, 1.0e+16, 1.0000000000000002e+16, 1.0000000000000004e+16, 1.0000000000000004e+16, 1.0000000000000004e+16]]
+[1.0, [1.0]]
+[1.0, []]
+[nil, [1.0]]
+[7, [1.0, 1.5]]
+10
+Numeric
+");
+        }
+
+        /// <summary>
+        /// Range#step over Fixnum and Float ends with a Float among them loops in C# (#89), as the prelude's
+        /// ArithmeticSequence.__step_each__ did. The expected output is CRuby 4.0.9's.
+        /// </summary>
+        public void Range_FloatStep1() {
+            TestOutput(@"
+def s; a = []; r = yield(a); [r.class, a]; end
+p s { |a| (1.0..2.0).step(0.25) { |x| a << x } }
+p s { |a| (1.0...2.0).step(0.25) { |x| a << x } }
+p s { |a| (1..2.0).step { |x| a << x } }
+p s { |a| (1.0..3).step(1) { |x| a << x } }
+p s { |a| (2.0..1.0).step(-0.5) { |x| a << x } }
+p s { |a| (1.0..1.5).step(0.1) { |x| a << x } }
+p s { |a| (1.0...1.5).step(0.1) { |x| a << x } }
+p s { |a| (1.0..2.0).step(0.5) { |x| a << x; break 9 } }
+", @"
+[Range, [1.0, 1.25, 1.5, 1.75, 2.0]]
+[Range, [1.0, 1.25, 1.5, 1.75]]
+[Range, [1.0, 2.0]]
+[Range, [1.0, 2.0, 3.0]]
+[Range, [2.0, 1.5, 1.0]]
+[Range, [1.0, 1.1, 1.2, 1.3, 1.4, 1.5]]
+[Range, [1.0, 1.1, 1.2, 1.3, 1.4]]
+[Integer, [1.0]]
+");
+        }
+
+        /// <summary>
+        /// complex.c's string scanner (String#to_c, Kernel#Complex) is C# now (#89): the texts it reads, its
+        /// backing up over a trailing or doubled underscore, polar and rational forms, and the strict caller's
+        /// trailing-garbage check. String#to_c of plain Integer parts is answered in C#; the parts as CRuby 4.0.9
+        /// reads them. The texts left for str2num (complex.rb, which these tests run without) are the scanner's.
+        /// </summary>
+        public void Complex_StringScan1() {
+            TestOutput(@"
+def c(s) = (z = s.to_c; [z.real, z.imaginary])
+p c(""1+2i""), c(""-i""), c("" 2j ""), c(""""), c(""7__9""), c(""1_i""), c(""1+x""), c(""-12_345-6i""), c(""1\0+2i"")
+p c(""\xff1+2i""), c(""1+2i\xff""), c(""1+2i\xff"".dup.force_encoding(""BINARY"")), c(""１+2i""), c(""1+2iü"".dup.force_encoding(""BINARY"").force_encoding(""UTF-8""))
+p Complex.__ir_scan__(""1.5e3-2/3i"", false), Complex.__ir_scan__(""1@2"", false), Complex.__ir_scan__(""1e+i"", false), Complex.__ir_scan__(""1+2/0x"", false)
+p Complex.__ir_scan__(""7__9"", true)[0], Complex.__ir_scan__(""1+2i x"", true)[0], Complex.__ir_scan__(""1+2i "", true)[0]
+", @"
+[1, 2]
+[0, -1]
+[0, 2]
+[0, 0]
+[7, 0]
+[1, 0]
+[1, 0]
+[-12345, -6]
+[1, 0]
+[0, 0]
+[1, 2]
+[1, 2]
+[0, 0]
+[1, 2]
+[true, 2, ""1.5e3"", ""-2/3""]
+[true, 3, 1, 2]
+[false, 0, ""1e"", nil]
+[false, 0, 1, ""+2/0""]
+false
+false
+true
+");
+        }
+
+        /// <summary>
+        /// Kernel#Float's decimal parse takes the exact fast path (at most 15 significant digits and a power of
+        /// ten up to 22) and otherwise Double.TryParse over a stack buffer (#89); both round as strtod does.
+        /// The expected output is CRuby 4.0.9's.
+        /// </summary>
+        public void Kernel_FloatParse1() {
+            TestOutput(@"
+p Float(""1.5""), Float("" 1_000.25 ""), Float(""0.30000000000000004""), Float(""9007199254740993""), Float(""1e22""), Float(""1e23""), Float(""3e-23"")
+p Float(""1."" + ""0"" * 30), Float(""0."" + ""0"" * 30 + ""1""), Float(""-0.0""), Float(""4.9e-324""), Float(""1e400""), Float(""0x1.8p1""), (Float(""1__0"") rescue $!)
+", @"
+1.5
+1000.25
+0.30000000000000004
+9.007199254740992e+15
+1.0e+22
+1.0e+23
+3.0e-23
+1.0
+1.0e-31
+-0.0
+5.0e-324
+Infinity
+3.0
+#<ArgumentError: invalid value for Float(): ""1__0"">
+");
+        }
+
+        /// <summary>
+        /// String#split with a Regexp leaves $~ where MRI's rb_reg_search leaves it (#89): nil after the search
+        /// that finds no more, the last match when a limit stops it, and untouched when it does not search -
+        /// a limit of 1, // (characters) and / / (split at a space). The expected output is CRuby 4.0.9's.
+        /// </summary>
+        public void String_SplitMatchData1() {
+            TestOutput(@"
+""zz"" =~ /z/; ""a,b"".split(/,/); p $~
+""zz"" =~ /z/; ""a,b,c"".split(/,/, 2); p $~, $`
+""zz"" =~ /z/; ""abc"".split(//); p $~
+""zz"" =~ /z/; ""a b"".split(/ /); p $~
+""zz"" =~ /z/; """".split(/,/); p $~
+""zz"" =~ /z/; ""a,b"".split(/,/, 1); p $~
+""zz"" =~ /z/; ""a,b"".split(/,/) { }; p $~
+", @"
+nil
+#<MatchData "","">
+""a""
+#<MatchData ""z"">
+#<MatchData ""z"">
+nil
+#<MatchData ""z"">
+nil
+");
+        }
+
+        /// <summary>
         /// A shift width an Int32 does not hold (#89). MRI allocates 1 &lt;&lt; 2**31 (a 256 MB Integer); IronRuby
         /// raised RangeError. Shifts back by such widths, and bit references at such indexes, reach the real bits.
         /// From 2**32 on, a non-MRI implementation may say "shift width too big" (ruby/spec's left_shift_spec).

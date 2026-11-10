@@ -748,194 +748,39 @@ class Complex < Numeric
 
   # --- conversion: nucomp_convert and the string scanner ------------------------
 
-  # complex.c's read_digits/read_num/read_rat_nos/read_comp. `@b` is MRI's scratch
-  # buffer: the characters read so far with the underscores taken out, which is what
-  # str2num is finally handed. They are prefix parsers that back up over a trailing
-  # or doubled underscore, and where they back up to decides whether the strict
-  # caller (Kernel#Complex) sees trailing garbage: "7__9".to_c is (7+0i) and
-  # Complex("7__9") is an ArgumentError precisely because of that rewind.
-  class Scanner__ # :nodoc:
-    def initialize(str, strict)
-      @s = str
-      # complex.c works on a C string, so an embedded NUL ends the input.
-      nul = str.index("\0")
-      @n = nul || str.length
-      @i = 0
-      @strict = strict
-      @b = +""
-    end
-
-    def cur
-      @i < @n ? @s[@i] : nil
-    end
-
-    def digit?(c)
-      !c.nil? && c >= "0" && c <= "9"
-    end
-
-    def sign?(c)
-      c == "-" || c == "+"
-    end
-
-    def imagunit?(c)
-      c == "i" || c == "I" || c == "j" || c == "J"
-    end
-
-    def read_sign
-      c = cur
-      if sign?(c)
-        @b << c
-        @i += 1
-        return c
-      end
-      "?"
-    end
-
-    def read_digits
-      return false unless digit?(cur)
-      us = true
-      while digit?(cur) || cur == "_"
-        if cur == "_"
-          if us
-            return false if @strict
-            break
-          end
-          us = true
-        else
-          @b << cur
-          us = false
-        end
-        @i += 1
-      end
-      if us
-        loop do
-          @i -= 1
-          break unless @i >= 0 && @s[@i] == "_"
-        end
-      end
-      true
-    end
-
-    def read_num
-      if cur != "."
-        return false unless read_digits
-      end
-      if cur == "."
-        @b << "."
-        @i += 1
-        unless read_digits
-          @b.slice!(-1)
-          return false
-        end
-      end
-      if cur == "e" || cur == "E"
-        @b << cur
-        @i += 1
-        read_sign
-        unless read_digits
-          @b.slice!(-1)
-          return false
-        end
-      end
-      true
-    end
-
-    def read_rat_nos
-      return false unless read_num
-      if cur == "/"
-        @b << "/"
-        @i += 1
-        unless read_digits
-          @b.slice!(-1)
-          return false
-        end
-      end
-      true
-    end
-
-    def read_rat
-      read_sign
-      read_rat_nos
-    end
-
-    # str2num: a "/" makes it a Rational, a "." or an exponent a Float, otherwise a
-    # decimal Integer. An empty buffer is 0, as strtol would give.
-    def str2num(text)
-      return ::Rational.__parse_string__(text, false) if text.include?("/")
-      return text.to_f if text =~ /[.eE]/
-      text.to_i
-    end
-
-    def buffered(from)
-      @b[from..-1] || ""
-    end
-
-    # read_comp. Answers [complete?, value]; `complete?` false means the scan stopped
-    # early, which only the strict caller cares about.
-    def read_comp
-      c = ::Complex
-      bb = @b.length
-      sign = read_sign
-
-      if imagunit?(cur)
-        @i += 1
-        return [true, c.__canonicalize__(0, sign == "-" ? -1 : 1)]
-      end
-
-      unless read_rat_nos
-        return [false, c.__canonicalize__(str2num(buffered(bb)), 0)]
-      end
-      num = str2num(buffered(bb))
-
-      if imagunit?(cur)
-        @i += 1
-        return [true, c.__canonicalize__(0, num)]
-      end
-
-      if cur == "@"
-        @i += 1
-        bb = @b.length
-        st = read_rat
-        text = buffered(bb)
-        if text.empty? || !digit?(text[-1])
-          return [false, c.__canonicalize__(num, 0)]
-        end
-        [st, c.__polar__(num, str2num(text))]
-      elsif sign?(cur)
-        bb = @b.length
-        sign = read_sign
-        if imagunit?(cur)
-          num2 = sign == "-" ? -1 : 1
-        else
-          return [false, c.__canonicalize__(num, 0)] unless read_rat_nos
-          num2 = str2num(buffered(bb))
-        end
-        return [false, c.__canonicalize__(num, 0)] unless imagunit?(cur)
-        @i += 1
-        [true, c.__canonicalize__(num, num2)]
-      else
-        [true, c.__canonicalize__(num, 0)]
-      end
-    end
-
-    WS = " \t\n\v\f\r"
-
-    def skip_ws
-      @i += 1 while @i < @n && WS.include?(@s[@i])
-    end
-
-    # parse_comp
-    def parse
-      skip_ws
-      ok, value = read_comp
-      if ok
-        skip_ws
-        ok = false if @strict && @i < @n
-      end
-      [ok, value]
-    end
+  # complex.c's str2num: a "/" makes it a Rational, a "." or an exponent a Float,
+  # otherwise a decimal Integer. An empty text is 0, as strtol would give.
+  def self.__str2num__(text)
+    return text unless ::String === text
+    return ::Rational.__parse_string__(text, false) if text.include?("/")
+    return text.to_f if text.include?(".") || text.include?("e") || text.include?("E")
+    text.to_i
   end
-  __hide_constant__ :Scanner__
+
+  # complex.c's parse_comp: [complete?, value]. The scan is C# (Complex.__ir_scan__): it
+  # answers the texts str2num reads - the characters read with the underscores taken out
+  # - and what they make. Its read_digits backs up over a trailing or doubled underscore,
+  # and where it backs up to decides whether the strict caller (Kernel#Complex) sees
+  # trailing garbage: "7__9".to_c is (7+0i) and Complex("7__9") an ArgumentError.
+  # The parts are real (an Integer, a Float or a Rational), so f_complex_new2 is __raw__.
+  # A scan whose parts were plain Integers answers [complete?, value] itself.
+  def self.__scan__(str, strict)
+    result = __ir_scan__(str, strict)
+    return result if result.size == 2
+    kind = result[1]
+    x = __str2num__(result[2])
+    result[1] = case kind
+                when 0
+                  # an imaginary part read_comp made and then dropped: made all the same, since
+                  # str2num raises for a zero denominator ("1+2/0x")
+                  __str2num__(result[3])
+                  __raw__(x, 0)
+                when 1 then __raw__(0, x)
+                when 2 then __raw__(x, __str2num__(result[3]))
+                else __polar__(x, __str2num__(result[3]))
+                end
+    result
+  end
 
   # string_to_c_strict / string_to_c
   def self.__parse_string__(str, strict, raise_error = true)
@@ -945,14 +790,14 @@ class Complex < Numeric
         return nil unless raise_error
         ::Kernel.raise(::ArgumentError, "string contains null byte")
       end
-      ok, value = Scanner__.new(str, true).parse
+      ok, value = __scan__(str, true)
       unless ok
         return nil unless raise_error
         ::Kernel.raise(::ArgumentError, "invalid value for convert(): #{str.inspect}")
       end
       value
     else
-      Scanner__.new(str, false).parse[1]
+      __scan__(str, false)[1]
     end
   end
 
@@ -1086,12 +931,8 @@ class Float
   alias phase arg
 end
 
-class String
-  # string_to_c: the leading part that reads as a complex number, (0+0i) when none does.
-  def to_c
-    ::Complex.__parse_string__(self, false)
-  end
-end
+# String#to_c is C# (MutableStringOps.ToComplex), which comes to Complex.__parse_string__
+# for a number with a Float, Rational or polar part.
 
 class Complex
   private :__ir_add_slow__, :__ir_sub_slow__, :__ir_mul_slow__, :__ir_div_slow__,

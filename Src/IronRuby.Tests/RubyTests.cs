@@ -1223,6 +1223,12 @@ namespace IronRuby.Tests {
                 Kernel_IntegerOverloads1,
                 Integer_Int64Shifts1,
                 Integer_HugeShifts1,
+                Integer_HugePower1,
+                Numeric_FloatStep1,
+                Range_FloatStep1,
+                Complex_StringScan1,
+                Kernel_FloatParse1,
+                String_SplitMatchData1,
                 Integer_OutOfFloatRange1,
                 BasicObject_EqualIdentity1,
             };
