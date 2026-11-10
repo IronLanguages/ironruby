@@ -2137,10 +2137,32 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Gets a class of the specified object (skips any singletons).
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public RubyClass/*!*/ GetClassOf(object obj) {
             ContractUtils.Ensures(!ContractUtils.Result<RubyClass>().IsSingletonClass);
-            return TryGetValueClass(obj) ?? TryGetClassOfRubyObject(obj) ?? TryGetClrFixedClass(obj)
+            // inlined into the rules of is_a? and the like, as the whole of it was before the type tests below came
+            if (!IsImmediateValue(obj)) {
+                IRubyObject rubyObj = obj as IRubyObject;
+                if (rubyObj != null) {
+                    var result = rubyObj.ImmediateClass.GetNonSingletonClass();
+                    Debug.Assert(result != null, "Invalid IRubyObject implementation: Class should not be null");
+                    return result;
+                }
+            }
+            return GetClassOfNonRubyObject(obj);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private RubyClass/*!*/ GetClassOfNonRubyObject(object obj) {
+            return TryGetValueClass(obj) ?? TryGetClrFixedClass(obj) ?? TryGetClassOfRubyObject(obj)
                 ?? (_hasAdoptedClrObjects ? TryGetClassOfAdoptedClrObject(obj) : null) ?? GetOrCreateClass(obj.GetType());
+        }
+
+        // nil, true, false, a Fixnum or a Float, by exact type tests: these come before the IRubyObject test, an
+        // interface cast that is the slowest kind for a boxed Int32 or Double - generic math gave them dozens of
+        // interfaces to scan.
+        private static bool IsImmediateValue(object obj) {
+            return obj == null || obj is int || obj is double || obj is bool;
         }
 
         // The kinds of object of which one has been given a class of its own in its instance data
@@ -2176,9 +2198,7 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// The class of nil, true, false, a Fixnum (Int32) or a Float - values that never have a class of their own
         /// (singleton or adopted, see _kindsWithOwnClass), so that their immediate class is their class - or null.
-        /// These come before the IRubyObject test because they are exact type tests, one compare each, while that
-        /// interface cast is the slowest kind for a boxed Int32 or Double: generic math gave them dozens of interfaces
-        /// to scan. Every is_a?, kind_of?, instance_of?, Module#=== and #class of such a value comes here.
+        /// Every is_a?, kind_of?, instance_of?, Module#=== and #class of such a value comes here (IsImmediateValue).
         /// </summary>
         private RubyClass TryGetValueClass(object obj) {
             if (obj == null) {
@@ -2295,16 +2315,21 @@ namespace IronRuby.Runtime {
         /// Gets a singleton or class for <c>obj</c>.
         /// Might return a class object from a foreign runtime (if obj is a runtime bound object).
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public RubyClass/*!*/ GetImmediateClassOf(object obj) {
-            RubyClass result = TryGetValueClass(obj);
-            if (result != null) {
-                return result;
+            // inlined into the rules of is_a? and the like, as the whole of it was before the type tests below came
+            if (!IsImmediateValue(obj)) {
+                IRubyObject rubyObj = obj as IRubyObject;
+                if (rubyObj != null) {
+                    return rubyObj.ImmediateClass;
+                }
             }
-            IRubyObject rubyObj = obj as IRubyObject;
-            if (rubyObj != null) {
-                return rubyObj.ImmediateClass;
-            }
-            result = TryGetClrFixedClass(obj);
+            return GetImmediateClassOfNonRubyObject(obj);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private RubyClass/*!*/ GetImmediateClassOfNonRubyObject(object obj) {
+            RubyClass result = TryGetValueClass(obj) ?? TryGetClrFixedClass(obj);
             if (result != null) {
                 return result;
             }
