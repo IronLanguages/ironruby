@@ -375,11 +375,13 @@ p [5, 3, 9, 1].sort_by { |x| -x }, (1..12).to_a.sort_by { |x| x % 3 }, [2**70, 1
         }
 
         /// <summary>
-        /// Enumerable#zip without a block reads a non-Array argument with #each, after the receiver, when at most
-        /// one of them has an #each that runs anyone else's code (Hash, Struct, Set and String/Integer Range ones
-        /// do not) - #89: Enumerator#next cost a fiber switch per element. The elements read, the order any
-        /// side effects happen in, laziness on endless arguments and errors are MRI's zip_i ones; everything
-        /// else still goes through #next. The expected output is CRuby 4.0's.
+        /// Enumerable#zip without a block reads a non-Array argument with #each, after the receiver, when neither
+        /// the receiver nor any argument has an #each that runs anyone else's code (Hash, Struct, Set and Integer
+        /// Range ones do not) - #89: Enumerator#next cost a fiber switch per element. The elements read, the order
+        /// any side effects happen in, laziness on endless arguments and errors are MRI's zip_i ones; everything
+        /// else still goes through #next. A receiver's own #each can change an argument between yields, and an
+        /// argument's own #each must stay suspended (its ensure not run, its StopIteration ending it quietly) as
+        /// under #next. The expected output is CRuby 4.0's.
         /// </summary>
         public void Enumerable_ZipEnumerated1() {
             TestOutput(@"
@@ -418,6 +420,21 @@ show(:endless) { r.zip(Enumerator.new { |y| i = 0; loop { $log << i; y << i; i +
 show(:overridden) { hx = Class.new(Hash) { def each; $log << :hx; super; end }.new; hx[1] = 2; Loud.new(:r, 2).zip(hx) }
 show(:block) { out = []; r.zip(h) { |row| out << row }; out }
 show(:lazy) { (1..Float::INFINITY).lazy.map { _1 * 2 }.zip(h).first(2) }
+class Mutating
+  include Enumerable
+  def initialize(h) = @h = h
+  def each; yield 0; @h[:a] = 9; yield 1; end
+end
+show(:mutated) { Mutating.new($hh = {a: 1, b: 2}).zip($hh) }
+raising = Object.new
+def raising.each; yield 1; yield 2; ensure; raise 'cleanup'; end
+show(:ensure_raises) { (1..1).zip(raising) }
+stopping = Object.new
+def stopping.each; yield 1; raise StopIteration; end
+show(:stop_iteration) { (1..2).zip(stopping) }
+suspended = Object.new
+def suspended.each; yield 1; yield 2; ensure; $log << :ensure; end
+show(:suspended) { (1..1).zip(suspended) }
 ", @"
 quiet: [[1, [:a, 1], 7, ""y"", 5], [2, [:b, 2], 8, ""z"", nil], [3, nil, nil, ""aa"", nil]] []
 loud_arg: [[1, 0], [2, 1], [3, 2]] [""x0"", ""x1"", ""x2""]
@@ -431,6 +448,10 @@ endless: [[1, 0], [2, 1], [3, 2]] [0, 1, 2]
 overridden: [[0, [1, 2]], [1, nil]] [""r0"", :hx, ""r1"", ""r-end""]
 block: [[1, [:a, 1]], [2, [:b, 2]], [3, nil]] []
 lazy: [[2, [:a, 1]], [4, [:b, 2]]] []
+mutated: [[0, [:a, 1]], [1, [:b, 2]]] []
+ensure_raises: [[1, 1]] []
+stop_iteration: [[1, 1], [2, nil]] []
+suspended: [[1, 1]] []
 ");
         }
     }

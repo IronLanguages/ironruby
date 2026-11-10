@@ -904,11 +904,14 @@ module Enumerable
 
     # MRI's zip_i reads a non-Array argument with Enumerator#next, interleaved with the
     # receiver's #each - and lazily, so an endless argument works. #next costs a fiber
-    # switch per element here (~90 us). Without a block, when at most one of the receiver
-    # and the arguments has an #each that is not quiet (see __zip_quiet_each__), the order
-    # the elements are read in cannot show: the receiver is read first, then each argument
-    # with #each, stopping at the receiver's length - exactly the elements #next would have
-    # asked for, and never starting an argument for an empty receiver.
+    # switch per element here (~90 us). Without a block, when the receiver and every
+    # argument have a quiet #each (see __zip_quiet_each__), the order the elements are read
+    # in cannot show: the receiver is read first, then each argument with #each, stopping at
+    # the receiver's length - exactly the elements #next would have asked for, and never
+    # starting an argument for an empty receiver. One custom #each is already too many: a
+    # receiver's can change an argument between its yields, and an argument's, cut short
+    # with break, runs its ensure clauses (and raises from them, or lets a StopIteration it
+    # raises escape) where #next would have left it suspended.
     def __zip_in_turn__(sources)
       rows = []
       each { |*values| rows << [values.size <= 1 ? values[0] : values] }
@@ -927,16 +930,9 @@ module Enumerable
           end
         elsif count == 0
           # MRI asks an argument for nothing when the receiver yields nothing
-        elsif __zip_quiet_each__(source)
+        else
           source.each do |value|
             rows[index] << value
-            index += 1
-            break if index == count
-          end
-        else
-          source.each do |*values|
-            # several yielded values make one element, as Enumerator#next packs them
-            rows[index] << (values.size <= 1 ? values[0] : values)
             index += 1
             break if index == count
           end
@@ -953,9 +949,9 @@ module Enumerable
     def zip(*others, &block)
       sources = others.map { |other| __zip_source__(other) }
       enumerated = sources.reject { |source| source.is_a?(Array) || ZipIntegerRange__ === source }
-      unless block || enumerated.empty?
-        loud = enumerated.count { |source| !__zip_quiet_each__(source) }
-        return __zip_in_turn__(sources) if loud == 0 || (loud == 1 && __zip_quiet_each__(self))
+      if !block && !enumerated.empty? && __zip_quiet_each__(self) &&
+         enumerated.all? { |source| __zip_quiet_each__(source) }
+        return __zip_in_turn__(sources)
       end
       unless enumerated.empty?
         sources = sources.map do |source|
