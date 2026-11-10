@@ -1041,6 +1041,35 @@ nil
         }
 
         /// <summary>
+        /// A Bignum's bit read converts a Float index as NUM2LONG does: 2.0**63 is past a long's range (a RangeError), -2.0**63
+        /// is not. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Integer_ElementReferenceFloatBound1() {
+            TestOutput(@"
+require 'ruby4'
+[9223372036854775808.0, -9223372036854775808.0, 9223372036854774784.0, -9223372036854777856.0, 1e19, -1e19].each do |f|
+  [2**70 + 5, -(2**70) + 5].each do |v|
+    r = begin; v[f]; rescue => e; ""#{e.class}: #{e.message}""; end
+    puts ""#{v}[#{f}] => #{r}""
+  end
+end
+", @"
+1180591620717411303429[9.223372036854776e+18] => RangeError: float 9.223372037e+18 out of range of integer
+-1180591620717411303419[9.223372036854776e+18] => RangeError: float 9.223372037e+18 out of range of integer
+1180591620717411303429[-9.223372036854776e+18] => 0
+-1180591620717411303419[-9.223372036854776e+18] => 0
+1180591620717411303429[9.223372036854775e+18] => 0
+-1180591620717411303419[9.223372036854775e+18] => 1
+1180591620717411303429[-9.223372036854778e+18] => RangeError: float -9.223372037e+18 out of range of integer
+-1180591620717411303419[-9.223372036854778e+18] => RangeError: float -9.223372037e+18 out of range of integer
+1180591620717411303429[1.0e+19] => RangeError: float 1e+19 out of range of integer
+-1180591620717411303419[1.0e+19] => RangeError: float 1e+19 out of range of integer
+1180591620717411303429[-1.0e+19] => RangeError: float -1e+19 out of range of integer
+-1180591620717411303419[-1.0e+19] => RangeError: float -1e+19 out of range of integer
+");
+        }
+
+        /// <summary>
         /// Integer.sqrt's starting point for a value of more than 2**31 + 1000 bits, which only .NET 8's BigInteger can
         /// hold: its shifts counted 2 * halfShift in an int, which wrapped negative, so the right shift became a left one
         /// and the seed was huge or infinite. The seed must be at or above the root and within a bit of it.

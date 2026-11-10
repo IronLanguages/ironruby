@@ -6324,7 +6324,8 @@ class Integer
   # range, and nil, are errors of their own there.
   def __ir_big_bit_position__(value)
     if value.is_a?(::Float)
-      if value.nan? || value.infinite? || !value.between?(-9223372036854775808.0, 9223372036854775807.0)
+      # a long's range, the upper end exclusive: 9223372036854775807.0 is 2.0**63 itself
+      if value.nan? || value.infinite? || value < -9223372036854775808.0 || value >= 9223372036854775808.0
         text = value.nan? ? "NaN" : (value.infinite? ? (value > 0 ? "Inf" : "-Inf") : ("%-.10g" % value))
         ::Kernel.raise(::RangeError, "float #{text} out of range of integer")
       end

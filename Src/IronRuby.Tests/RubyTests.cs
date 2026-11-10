@@ -1216,6 +1216,7 @@ namespace IronRuby.Tests {
                 Integer_SqrtLarge1,
                 Integer_PowModulo1,
                 Kernel_IntegerParse1,
+                Integer_ElementReferenceFloatBound1,
                 Integer_SqrtSeedHuge1,
                 Integer_Normalization1,
                 Integer_ToStringRadix1,
