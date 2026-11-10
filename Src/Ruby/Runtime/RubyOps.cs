@@ -3052,6 +3052,19 @@ namespace IronRuby.Runtime {
             return MutableString.CreateBinary(bytes, encoding).Chill();
         }
 
+        /// <summary>
+        /// A literal the compiler found to be all ASCII, in an ASCII-compatible encoding.
+        /// </summary>
+        [Emitted]
+        public static MutableString/*!*/ CreateChilledMutableStringA(string/*!*/ str1, RubyEncoding/*!*/ encoding) {
+            return MutableString.CreateChilledAsciiLiteral(str1, encoding);
+        }
+
+        [Emitted]
+        public static MutableString/*!*/ CreateMutableStringA(string/*!*/ str1, RubyEncoding/*!*/ encoding) {
+            return MutableString.CreateAsciiLiteral(str1, encoding);
+        }
+
         [Emitted]
         public static MutableString/*!*/ CreateChilledMutableStringL(string/*!*/ str1, RubyEncoding/*!*/ encoding, string/*!*/ site) {
             return MutableString.RecordLiteralSite(MutableString.Create(str1, encoding).Chill(), site);

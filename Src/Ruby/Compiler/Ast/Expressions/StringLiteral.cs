@@ -17,6 +17,7 @@ using MSA = System.Linq.Expressions;
 using System.Diagnostics;
 using Microsoft.Scripting;
 using IronRuby.Builtins;
+using IronRuby.Runtime;
 using System.Runtime.CompilerServices;
 using System.Globalization;
 
@@ -128,6 +129,9 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static MSA.Expression/*!*/ TransformChilled(object/*!*/ value, RubyEncoding/*!*/ encoding, string site) {
             if (site == null) {
+                if (IsAsciiLiteral(value, encoding)) {
+                    return Methods.CreateChilledMutableStringA.OpCall(AstUtils.Constant(value), encoding.Expression);
+                }
                 return (value is string)
                     ? Methods.CreateChilledMutableStringL.OpCall(AstUtils.Constant(value), encoding.Expression)
                     : Methods.CreateChilledMutableStringB.OpCall(AstUtils.Constant(value), encoding.Expression);
@@ -138,7 +142,15 @@ namespace IronRuby.Compiler.Ast {
                 : Methods.CreateChilledMutableStringBDebug.OpCall(AstUtils.Constant(value), encoding.Expression, AstUtils.Constant(site));
         }
 
+        // Checked once here rather than on every evaluation (MutableString.CreateAsciiLiteral).
+        private static bool IsAsciiLiteral(object/*!*/ value, RubyEncoding/*!*/ encoding) {
+            return encoding.IsAsciiIdentity && value is string str && str.IsAscii();
+        }
+
         internal static MSA.Expression/*!*/ Transform(object/*!*/ value, RubyEncoding/*!*/ encoding) {
+            if (IsAsciiLiteral(value, encoding)) {
+                return Methods.CreateMutableStringA.OpCall(AstUtils.Constant(value), encoding.Expression);
+            }
             if (value is string) {
                 return Methods.CreateMutableStringL.OpCall(AstUtils.Constant(value), encoding.Expression);
             } else {

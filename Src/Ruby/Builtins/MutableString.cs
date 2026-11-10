@@ -183,6 +183,17 @@ namespace IronRuby.Builtins {
             : this(new StringContent(str, null), encoding) {
         }
 
+        // A string literal the compiler has found to be all ASCII, in an encoding where ASCII is
+        // itself (see CreateAsciiLiteral): everything the general constructor works out is known.
+        private MutableString(string/*!*/ str, RubyEncoding/*!*/ encoding, uint flags) {
+            _encoding = encoding;
+            _content = new StringContent(str, this);
+            _flags = flags;
+            if (ObjectTracking.Enabled) {
+                ObjectTracking.Track(this);
+            }
+        }
+
         // mutable (visible for subclasses):
         protected MutableString(RubyEncoding/*!*/ encoding)
             : this(new CharArrayContent(Utils.EmptyChars, 0, null), encoding) {
@@ -226,6 +237,28 @@ namespace IronRuby.Builtins {
             var result = Create(str, RubyEncoding.Ascii);
             result._flags = IsAsciiFlag | NoSurrogatesFlag;
             return result;
+        }
+
+        private const uint AsciiLiteralFlags = IsAsciiFlag | NoSurrogatesFlag | HasChangedFlag | CharIndexChangedFlags;
+
+        /// <summary>
+        /// A string literal that the compiler has checked is all ASCII, in an ASCII-compatible
+        /// encoding. Evaluating a literal is common enough that the general constructor's working out
+        /// of the encoding's flags was a measurable part of it, and knowing the string is ASCII from
+        /// the start spares the first #bytesize, #hash or comparison a scan of it.
+        /// </summary>
+        internal static MutableString/*!*/ CreateAsciiLiteral(string/*!*/ str, RubyEncoding/*!*/ encoding) {
+            Debug.Assert(encoding.IsAsciiIdentity && str.IsAscii());
+            return new MutableString(str, encoding, AsciiLiteralFlags);
+        }
+
+        /// <summary>
+        /// <see cref="CreateAsciiLiteral"/> for a literal in a file that said nothing about
+        /// frozen_string_literal (see <see cref="Chill"/>).
+        /// </summary>
+        internal static MutableString/*!*/ CreateChilledAsciiLiteral(string/*!*/ str, RubyEncoding/*!*/ encoding) {
+            Debug.Assert(encoding.IsAsciiIdentity && str.IsAscii());
+            return new MutableString(str, encoding, AsciiLiteralFlags | IsChilledFlag);
         }
 
         public static MutableString/*!*/ Create(string/*!*/ str) {
