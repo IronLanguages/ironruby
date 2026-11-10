@@ -153,11 +153,135 @@ namespace IronRuby.Runtime {
         /// Called from compiled code.
         /// </summary>
         internal void CaptureExceptionTrace(RubyScope/*!*/ scope) {
+            CaptureExceptionTrace(scope, false);
+        }
+
+        /// <param name="rescuing">
+        /// Called where a compiled frame has caught the exception to match it with its rescue clauses (RubyOps.CanRescue): the walk
+        /// of the stack below that frame may be left until it is known to be needed (see <see cref="TryDeferCatchSite"/>).
+        /// </param>
+        internal void CaptureExceptionTrace(RubyScope/*!*/ scope, bool rescuing) {
+            if (rescuing && !HasBacktrace && _raiseBacktrace == null && TryDeferCatchSite(scope)) {
+                return;
+            }
             if (CaptureTrace(scope)) {
                 // MRI (setup_exception) only calls #set_backtrace when it has been redefined:
                 if (!HasBuiltinSetBacktrace(scope.RubyContext)) {
                     CallRedefinedSetBacktrace(scope.RubyContext);
                 }
+            }
+        }
+
+        /// <summary>
+        /// The catch-site walk - the whole CLR stack, every frame's method resolved - is most of what a raise costs, and it grows
+        /// with the depth of the stack, while a rescued exception's backtrace is rarely looked at. What it adds to the backtrace
+        /// are the frames below the catching frame, and those stay as they are for as long as that frame lives. So a compiled frame
+        /// that catches an exception takes everything else now - the exception's own trace, the interpreted frames, the compiled
+        /// frames' lines - and leaves the walk until the exception is exposed: its backtrace read, or the exception itself handed to
+        /// Ruby code - $!, `rescue => e', a bare raise, the cause of another exception (RubyContext.CurrentException), a `===' of
+        /// a rescue clause that is not Module#=== (RubyOps.CompareException) - or thrown on out of the frame (the rethrow in
+        /// Body.TransformExceptionHandling). Each of those happens while the frame lives, on its thread, so the walk then taken
+        /// from wherever that is has the same frames below it; the frames above it are cut off (<see cref="ResolveCatchSite"/>).
+        /// An exception rescued and dropped without any of that is never walked for.
+        /// 
+        /// Not when the exception might be seen otherwise: a TracePoint, a #set_backtrace of the exception's own (called with the
+        /// backtrace right away), or the modes that report CLR frames. And only for a frame whose record in PrecompiledFrames is
+        /// the innermost one - the record that identifies it in the walk later.
+        /// </summary>
+        private bool TryDeferCatchSite(RubyScope/*!*/ scope) {
+            var context = scope.RubyContext;
+            if (scope.InterpretedFrame != null || TracePoint.ActiveEvents != 0 || context.DomainManager.Configuration.DebugMode ||
+                context.Options.ExceptionDetail) {
+                return false;
+            }
+
+            Precompiled.PrecompiledFrames frames;
+            int index;
+            string name;
+            if (!Precompiled.PrecompiledFrames.TryGetInnermost(out frames, out index, out name)) {
+                return false;
+            }
+
+            // the catching frame is the last of the exception's own trace
+            var throwSiteTrace = RubyStackTraceBuilder.GetClrStackTrace(_exception, RubyStackTraceBuilder.NeedsClrFileInfo(context));
+            int count = throwSiteTrace.FrameCount;
+            var catching = (count > 0) ? throwSiteTrace.GetFrame(count - 1)?.GetMethod() : null;
+            if (catching == null || !String.Equals(catching.Name, name, StringComparison.Ordinal) || !HasBuiltinSetBacktrace(context)) {
+                return false;
+            }
+
+            _capturedTrace = new RubyStackTraceBuilder.CapturedTrace(context, _exception, throwSiteTrace, null, false);
+            _pendingCatchSite = new PendingCatchSite(frames, index, name, Thread.CurrentThread);
+            return true;
+        }
+
+        private sealed class PendingCatchSite {
+            internal readonly Precompiled.PrecompiledFrames/*!*/ Frames;
+            internal readonly int Index;
+            internal readonly string/*!*/ Name;
+            internal readonly Thread/*!*/ Thread;
+
+            internal PendingCatchSite(Precompiled.PrecompiledFrames/*!*/ frames, int index, string/*!*/ name, Thread/*!*/ thread) {
+                Frames = frames;
+                Index = index;
+                Name = name;
+                Thread = thread;
+            }
+        }
+
+        // The catching frame of a captured trace whose catch-site walk is still to be taken (see TryDeferCatchSite).
+        private PendingCatchSite _pendingCatchSite;
+
+        /// <summary>
+        /// Takes the catch-site walk that <see cref="TryDeferCatchSite"/> left, if any: the exception is about to be exposed to
+        /// code that may keep it, or to leave the frame that caught it. Cheap when there is none.
+        /// </summary>
+        internal static void ResolveCatchSite(Exception exception) {
+            if (exception != null) {
+                var data = TryGetInstance(exception);
+                if (data != null && data._pendingCatchSite != null) {
+                    data.ResolveCatchSite();
+                }
+            }
+        }
+
+        internal static bool IsCatchSitePending(Exception/*!*/ exception) {
+            var data = TryGetInstance(exception);
+            return data != null && data._pendingCatchSite != null;
+        }
+
+        private void ResolveCatchSite() {
+            var captured = _capturedTrace;
+            if (captured == null) {
+                _pendingCatchSite = null;
+                return;
+            }
+            lock (captured) {
+                var pending = _pendingCatchSite;
+                if (pending == null) {
+                    return;
+                }
+                _pendingCatchSite = null;
+
+                // The catching frame, in a walk from here: the frames of its name the records have above it are those the walk
+                // has above it, compiled Ruby frames all having a record (CompiledFrameExpression), so it is the one after them.
+                StackFrame[] catchSite = null;
+                int above;
+                if (pending.Thread == Thread.CurrentThread && pending.Frames.TryCountLiveAbove(pending.Index, pending.Name, out above)) {
+                    var frames = RubyStackTraceBuilder.GetClrStackTrace(null, false).GetFrames();
+                    for (int i = 0; i < frames.Length; i++) {
+                        var method = frames[i].GetMethod();
+                        if (method != null && String.Equals(method.Name, pending.Name, StringComparison.Ordinal) && above-- == 0) {
+                            catchSite = new StackFrame[frames.Length - i];
+                            Array.Copy(frames, i, catchSite, 0, catchSite.Length);
+                            break;
+                        }
+                    }
+                }
+
+                // Not reached: the exception is exposed before the frame is left. Without the walk the backtrace ends at that frame.
+                Debug.Assert(catchSite != null, "catch site of a deferred backtrace not found");
+                captured.CatchSiteFrames = catchSite ?? Array.Empty<StackFrame>();
             }
         }
 
@@ -349,12 +473,16 @@ namespace IronRuby.Runtime {
         public RubyArray Backtrace {
             get {
                 if (_capturedTrace != null) {
+                    if (_pendingCatchSite != null) {
+                        ResolveCatchSite();
+                    }
                     FormatCapturedTrace();
                 }
                 return _backtrace;
             }
             set {
                 _capturedTrace = null;
+                _pendingCatchSite = null;
                 _backtrace = value;
             }
         }
@@ -566,6 +694,7 @@ namespace IronRuby.Runtime {
             newInstanceData.Handled = true;
             newInstanceData._backtrace = instanceData._backtrace;
             newInstanceData._capturedTrace = instanceData._capturedTrace;
+            newInstanceData._pendingCatchSite = instanceData._pendingCatchSite;
             if (captured && !newInstanceData.HasBuiltinSetBacktrace(context)) {
                 newInstanceData.CallRedefinedSetBacktrace(context);
             }

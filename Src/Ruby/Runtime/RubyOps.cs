@@ -3331,6 +3331,20 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static bool CanRescue(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            return CanRescueCore(scope, exception, false);
+        }
+
+        /// <summary>
+        /// CanRescue of a body with rescue clauses, for the exceptions its statements throw: the walk of the stack below the frame
+        /// may wait until the exception is exposed (RubyExceptionData.TryDeferCatchSite). The frame either rescues the exception,
+        /// restoring $! once the rescue clause is done, or throws it on (Body.TransformExceptionHandling), both before it is left.
+        /// Not so an ensure clause, which may end the exception with a jump and leave it in $!.
+        /// </summary>
+        public static bool CanRescueDeferTrace(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            return CanRescueCore(scope, exception, true);
+        }
+
+        private static bool CanRescueCore(RubyScope/*!*/ scope, Exception/*!*/ exception, bool deferTrace) {
             // A CLR finally may replace the reclaim signal with an ordinary exception.
             // That still belongs to a discarded stack and must not enter a Ruby rescue.
             if (RubyUtils.IsReclaimingFiber) {
@@ -3357,7 +3371,7 @@ namespace IronRuby.Runtime {
             data.TrySetCause(scope.RubyContext.CurrentException);
 
             scope.RubyContext.CurrentException = exception;
-            data.CaptureExceptionTrace(scope);
+            data.CaptureExceptionTrace(scope, deferTrace);
             return true;
         }
 
@@ -3423,9 +3437,26 @@ namespace IronRuby.Runtime {
             return exception;
         }
 
+        // $! saved by a body with exception handling, to be restored later (see Body.TransformExceptionHandling)
         [Emitted]
         public static Exception GetCurrentException(RubyScope/*!*/ scope) {
+            return scope.RubyContext.CurrentExceptionNoExpose;
+        }
+
+        /// <summary>
+        /// $! handed to Ruby code: `rescue => e'. Its backtrace is completed first (RubyExceptionData.TryDeferCatchSite).
+        /// </summary>
+        public static Exception GetCurrentExceptionForRescueTarget(RubyScope/*!*/ scope) {
             return scope.RubyContext.CurrentException;
+        }
+
+        /// <summary>
+        /// The exception a body throws again on its way out (Body.TransformExceptionHandling): its backtrace is completed before
+        /// the frame that caught it is left (RubyExceptionData.TryDeferCatchSite).
+        /// </summary>
+        public static Exception/*!*/ ExposeException(Exception/*!*/ exception) {
+            RubyExceptionData.ResolveCatchSite(exception);
+            return exception;
         }
 
         /// <summary>
@@ -3443,14 +3474,25 @@ namespace IronRuby.Runtime {
                 throw RubyExceptions.CreateTypeError("class or module required for rescue clause");
             }
 
+            // Module#=== only tests the class of the exception; any other #=== is handed the exception, and may keep it
+            var exception = context.CurrentExceptionNoExpose;
+            if (exception != null && RubyExceptionData.IsCatchSitePending(exception) && !IsBuiltinCaseEquality(context, (RubyModule)classObject)) {
+                RubyExceptionData.ResolveCatchSite(exception);
+            }
+
             var site = comparisonStorage.GetCallSite("===");
-            bool result = IsTrue(site.Target(site, classObject, context.CurrentException));
+            bool result = IsTrue(site.Target(site, classObject, exception));
             if (result) {
                 // the frames the exception unwound to get here are no part of what is raised from here on
                 Precompiled.PrecompiledFrames.ForgetLeft();
-                TraceRescue(scope, context.CurrentException);
+                TraceRescue(scope, exception);
             }
             return result;
+        }
+
+        private static bool IsBuiltinCaseEquality(RubyContext/*!*/ context, RubyModule/*!*/ module) {
+            var method = context.GetImmediateClassOf(module).ResolveMethod("===", VisibilityContext.AllVisible).Info;
+            return method is RubyLibraryMethodInfo && method.DeclaringModule == context.ModuleClass;
         }
 
         [Emitted] //RescueClause:

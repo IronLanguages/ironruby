@@ -35,6 +35,9 @@ namespace IronRuby.Compiler.Ast {
     //   statements
     // end
     public partial class Body : Expression {
+        private static readonly System.Reflection.MethodInfo/*!*/ _ExposeException = typeof(RubyOps).GetMethod(nameof(RubyOps.ExposeException));
+        private static readonly System.Reflection.MethodInfo/*!*/ _CanRescueDeferTrace = typeof(RubyOps).GetMethod(nameof(RubyOps.CanRescueDeferTrace));
+
         private readonly Statements/*!*/ _statements;
         private readonly List<RescueClause> _rescueClauses;	// optional
         private readonly Statements _elseStatements;	// optional
@@ -124,8 +127,10 @@ namespace IronRuby.Compiler.Ast {
 
             if (_ensureStatements != null) {
                 transformedEnsure = Ast.Block(
-                    // ensure:
+                    // ensure (an exception to be thrown on gets its backtrace completed first: a jump out of the clause ends it,
+                    // and leaves it in $!):
                     Ast.Assign(oldExceptionVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
+                    AstUtils.IfThen(exceptionRethrowVariable, Ast.Call(_ExposeException, oldExceptionVariable)),
                     gen.TransformStatements(_ensureStatements, ResultOperation.Ignore),
                     Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable),
 
@@ -135,7 +140,7 @@ namespace IronRuby.Compiler.Ast {
                             exceptionRethrowVariable,
                             Ast.NotEqual(oldExceptionVariable, AstUtils.Constant(null))
                         ),
-                        Ast.Throw(oldExceptionVariable)
+                        Ast.Throw(Ast.Call(_ExposeException, oldExceptionVariable))
                     )
                 );
             } else {
@@ -147,7 +152,7 @@ namespace IronRuby.Compiler.Ast {
                             Ast.Assign(oldExceptionVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
                             AstUtils.Constant(null, typeof(Exception)))
                         ),
-                    Ast.Throw(oldExceptionVariable)
+                    Ast.Throw(Ast.Call(_ExposeException, oldExceptionVariable))
                 );
             }
 
@@ -221,7 +226,7 @@ namespace IronRuby.Compiler.Ast {
                     AstUtils.Try(
                         Ast.Block(transformedBody, AstUtils.Empty())
                     ).Filter(exceptionVariable = Ast.Parameter(typeof(Exception), "#e"),
-                        Methods.CanRescue.OpCall(gen.CurrentScopeVariable, exceptionVariable),
+                        Ast.Call(_CanRescueDeferTrace, gen.CurrentScopeVariable, exceptionVariable),
 
                         Ast.Assign(exceptionThrownVariable, AstUtils.Constant(true)),
                         AstUtils.Empty()

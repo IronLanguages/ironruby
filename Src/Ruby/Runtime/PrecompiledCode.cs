@@ -817,6 +817,36 @@ namespace IronRuby.Runtime.Precompiled {
             }
         }
 
+        /// <summary>
+        /// The current thread's innermost frame: where a compiled frame that has just caught an exception finds its own record,
+        /// the frames the exception came out of having been left (RubyExceptionData.TryDeferCatchSite).
+        /// </summary>
+        internal static bool TryGetInnermost(out PrecompiledFrames frames, out int index, out string name) {
+            frames = _current;
+            index = (frames != null) ? frames._depth - 1 : -1;
+            name = (index >= 0) ? frames._entries[index].Name : null;
+            return name != null;
+        }
+
+        /// <summary>
+        /// Whether the frame at <paramref name="index"/> is still the one of that name, and how many frames of the same name have
+        /// been entered above it since and are still there.
+        /// </summary>
+        internal bool TryCountLiveAbove(int index, string/*!*/ name, out int count) {
+            count = 0;
+            int depth = _depth;
+            var entries = _entries;
+            if (index >= depth || !String.Equals(entries[index].Name, name, StringComparison.Ordinal)) {
+                return false;
+            }
+            for (int i = index + 1; i < depth; i++) {
+                if (String.Equals(entries[i].Name, name, StringComparison.Ordinal)) {
+                    count++;
+                }
+            }
+            return true;
+        }
+
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private Entry[]/*!*/ Grow() {
             // filled before it is published: a reader sees the old array or the complete new one

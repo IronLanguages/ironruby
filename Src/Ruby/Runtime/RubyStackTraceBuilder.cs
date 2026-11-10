@@ -85,6 +85,9 @@ namespace IronRuby.Runtime {
             SetCompiledFrames(captured.CompiledFrames);
             if (captured.IsCatchSiteClr) {
                 AddClrCaughtBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace);
+            } else if (captured.CatchSiteFrames != null) {
+                AddBacktrace(captured.ThrowSiteTrace.GetFrames(), 0, false);
+                AddBacktrace(captured.CatchSiteFrames, 0, false, true);
             } else {
                 AddExceptionBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace, captured.IsCatchSiteInterpreted);
             }
@@ -137,11 +140,20 @@ namespace IronRuby.Runtime {
             internal readonly bool IsCatchSiteInterpreted;
             internal readonly bool IsCatchSiteClr;
 
-            internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) {
+            // The catch-site walk from the catching frame down, when it was taken after the catch (RubyExceptionData.TryDeferCatchSite):
+            // the catching frame first, which is skipped as CatchSiteTrace's is. Set, under a lock of this object, before Build.
+            internal StackFrame[] CatchSiteFrames;
+
+            internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted)
+                : this(context, exception, null, catchSiteTrace, isCatchSiteInterpreted) {
+            }
+
+            internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace throwSiteTrace, StackTrace catchSiteTrace,
+                bool isCatchSiteInterpreted) {
                 Context = context;
                 Encoding = context.GetPathEncoding();
                 // the exception's own trace grows as it is rethrown, and a raise of it starts it over:
-                ThrowSiteTrace = GetClrStackTrace(exception, NeedsClrFileInfo(context));
+                ThrowSiteTrace = throwSiteTrace ?? GetClrStackTrace(exception, NeedsClrFileInfo(context));
                 // the interpreter's frames are saved on the exception once, and raise clears them:
                 InterpretedFrames = GetInterpretedFrames(exception);
                 // the compiled frames' lines change as they run on, and the frames it has left are reused by the next call:
@@ -371,7 +383,7 @@ namespace IronRuby.Runtime {
         /// millisecond per stack walk - i.e. per raise - since the CLR then loads and reads the PDB of
         /// every assembly on the stack.
         /// </summary>
-        private static bool NeedsClrFileInfo(RubyContext/*!*/ context) {
+        internal static bool NeedsClrFileInfo(RubyContext/*!*/ context) {
             // only the modes that report CLR frames pay for symbol resolution
             return context.Options.ExceptionDetail || context.DomainManager.Configuration.DebugMode;
         }

@@ -3225,9 +3225,25 @@ namespace IronRuby.Runtime {
         [ThreadStatic]
         private static Exception _currentException;
 
+        /// <summary>
+        /// $!. Reading it hands the exception to whoever asks, which may keep it: an exception whose backtrace is not complete yet
+        /// gets it first (RubyExceptionData.TryDeferCatchSite). The runtime's own save and restore reads <see cref="CurrentExceptionNoExpose"/>.
+        /// </summary>
         public Exception CurrentException {
-            get { return _currentException; }
+            get {
+                var e = _currentException;
+                RubyExceptionData.ResolveCatchSite(e);
+                return e;
+            }
             internal set { _currentException = RubyUtils.GetVisibleException(value); }
+        }
+
+        /// <summary>
+        /// $! for code that only keeps it to restore it later, or to throw it on out of the frame that caught it, which completes
+        /// its backtrace itself.
+        /// </summary>
+        internal Exception CurrentExceptionNoExpose {
+            get { return _currentException; }
         }
 
         internal Exception SetCurrentException(object value) {
