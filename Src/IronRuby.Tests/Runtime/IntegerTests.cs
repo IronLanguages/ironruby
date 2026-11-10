@@ -472,6 +472,33 @@ true
         }
 
         /// <summary>
+        /// Kernel#Float's decimal parse takes the exact fast path (at most 15 significant digits and a power of
+        /// ten up to 22) and otherwise Double.TryParse over a stack buffer (#89); both round as strtod does.
+        /// The expected output is CRuby 4.0.9's.
+        /// </summary>
+        public void Kernel_FloatParse1() {
+            TestOutput(@"
+p Float(""1.5""), Float("" 1_000.25 ""), Float(""0.30000000000000004""), Float(""9007199254740993""), Float(""1e22""), Float(""1e23""), Float(""3e-23"")
+p Float(""1."" + ""0"" * 30), Float(""0."" + ""0"" * 30 + ""1""), Float(""-0.0""), Float(""4.9e-324""), Float(""1e400""), Float(""0x1.8p1""), (Float(""1__0"") rescue $!)
+", @"
+1.5
+1000.25
+0.30000000000000004
+9.007199254740992e+15
+1.0e+22
+1.0e+23
+3.0e-23
+1.0
+1.0e-31
+-0.0
+5.0e-324
+Infinity
+3.0
+#<ArgumentError: invalid value for Float(): ""1__0"">
+");
+        }
+
+        /// <summary>
         /// A shift width an Int32 does not hold (#89). MRI allocates 1 &lt;&lt; 2**31 (a 256 MB Integer); IronRuby
         /// raised RangeError. Shifts back by such widths, and bit references at such indexes, reach the real bits.
         /// From 2**32 on, a non-MRI implementation may say "shift width too big" (ruby/spec's left_shift_spec).
