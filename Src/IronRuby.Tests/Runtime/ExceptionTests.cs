@@ -15,6 +15,7 @@
 
 using System;
 using IronRuby.Builtins;
+using Microsoft.Scripting;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -1298,6 +1299,44 @@ end.join(' ')
             AreEqual(result, "SystemStackError SystemStackError SystemStackError SystemStackError");
             int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
             Assert(specializedHere >= 4, String.Format("methods specialized: {0} (expected 4)", specializedHere));
+        }
+
+        /// <summary>
+        /// An exception passing interpreted frames that have only finally blocks to run (a method's own epilogue, an
+        /// `ensure') goes on through them instead of being caught and thrown again in each (Build/dlr-patches/0106). The
+        /// ensure clauses still run innermost first and before an outer `rescue' tests the exception, a jump out of an
+        /// `ensure' still ends it, and the backtrace is the same. Run in an engine that only interprets, and in the test
+        /// engine, which compiles. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Exception_InterpretedFramesPassThrough1() {
+            const string script = @"
+$log = []
+def a; begin; b; ensure; $log << ""a-ens #{$!.message}""; end; end
+def b; c; ensure; $log << ""b-ens""; end
+def c; d; end
+def d; raise ""x""; end
+def m; yield; ensure; $log << ""m-ens""; end
+begin
+  a
+rescue ($log << ""match""; RuntimeError) => e
+  $log << e.backtrace.map { |f| f[/:\d+:in '[^']*'/] }.join("","")
+end
+def swallow; d; ensure; return :swallowed; end
+$log << swallow
+$log << catch(:t) { m { throw :t, 5 } }
+$log << [1, 2].each { |x| m { break x * 10 } }
+def ret_from_block; m { return :from_block }; :no; end
+$log << ret_from_block
+def lp; i = 0; while i < 3; begin; i += 1; next if i == 1; raise ""y"" if i == 2; ensure; $log << ""lp-ens #{i}""; end; end; rescue => e; $log << ""lp-rescued #{e.message}""; end
+lp
+$log << (m { m { Integer(""zz"") } } rescue $!.class)
+$log.join(""|"")
+";
+            const string expected = "b-ens|a-ens x|match|:6:in 'Object#d',:5:in 'Object#c',:4:in 'Object#b',:3:in 'Object#a',:9:in '<main>'|swallowed|m-ens|5|m-ens|m-ens|1|2|m-ens|from_block|lp-ens 1|lp-ens 2|lp-rescued y|m-ens|m-ens|ArgumentError";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "pass1.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            AreEqual(Engine.CreateScriptSourceFromString(script, "pass2.rb", SourceCodeKind.File).Execute().ToString(), expected);
         }
     }
 }
