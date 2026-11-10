@@ -1039,5 +1039,30 @@ nil
 1
 ");
         }
+
+        /// <summary>
+        /// Integer.sqrt's starting point for a value of more than 2**31 + 1000 bits, which only .NET 8's BigInteger can
+        /// hold: its shifts counted 2 * halfShift in an int, which wrapped negative, so the right shift became a left one
+        /// and the seed was huge or infinite. The seed must be at or above the root and within a bit of it.
+        /// </summary>
+        public void Integer_SqrtSeedHuge1() {
+            if (Environment.Version.Major >= 9) {
+                return;
+            }
+            long exponent = (1L << 31) + 1024;
+            BigInteger n = BigInteger.One << (int)(exponent / 2);
+            n <<= (int)(exponent / 2);
+            Assert(n.GetBitLength() == exponent + 1);
+            BigInteger root = BigInteger.One << (int)(exponent / 2);
+            BigInteger seed = IronRuby.Builtins.Integer.SqrtSeed(n);
+            Assert(seed >= root);
+            Assert(seed.GetBitLength() <= root.GetBitLength() + 1);
+
+            for (int bits = 63; bits < 5000; bits += 97) {
+                BigInteger m = (BigInteger.One << bits) + 12345;
+                BigInteger s = IronRuby.Builtins.Integer.SqrtSeed(m);
+                Assert(s * s >= m);
+            }
+        }
     }
 }

@@ -1049,13 +1049,8 @@ namespace IronRuby.Builtins {
                 return Protocols.Normalize(LongSqrt((long)number));
             }
 
-            // Newton's method from above: x stays at or above the root until it settles on it. It starts from the
-            // double's root of the leading ~1000 bits, raised by more than that root's rounding error, so it is above the
-            // true root and already right to ~50 bits: 2**70 settles in one division instead of seven.
-            long bits = number.GetBitLength();
-            int halfShift = (bits > 1000) ? (int)((bits - 1000) / 2) : 0;
-            double leading = Math.Sqrt((double)(number >> (2 * halfShift)));
-            BigInteger x = (new BigInteger(leading * (1.0 + 1e-15)) + BigInteger.One) << halfShift;
+            // Newton's method from above: x stays at or above the root until it settles on it.
+            BigInteger x = SqrtSeed(number);
             while (true) {
                 BigInteger next = (x + number / x) >> 1;
                 if (next >= x) {
@@ -1063,6 +1058,30 @@ namespace IronRuby.Builtins {
                 }
                 x = next;
             }
+        }
+
+        /// <summary>
+        /// Where Integer.sqrt's Newton iteration starts for n &gt;= 2**62: the double's root of the leading ~1000 bits,
+        /// raised by more than that root's rounding error so that it is above the true root, and shifted back. It is
+        /// already right to ~50 bits, so 2**70 settles in one division instead of seven. The shifts are counted in a
+        /// long and made in Int32-sized steps: a .NET 8 BigInteger can have more than 2**32 bits.
+        /// </summary>
+        public static BigInteger SqrtSeed(BigInteger n) {
+            long bits = n.GetBitLength();
+            long halfShift = (bits > 1000) ? (bits - 1000) / 2 : 0;
+            double leading = Math.Sqrt((double)ShiftRight(ShiftRight(n, halfShift), halfShift));
+            BigInteger seed = new BigInteger(leading * (1.0 + 1e-15)) + BigInteger.One;
+            for (long shift = halfShift; shift > 0; shift -= Int32.MaxValue) {
+                seed <<= (int)Math.Min(shift, Int32.MaxValue);
+            }
+            return seed;
+        }
+
+        private static BigInteger ShiftRight(BigInteger value, long shift) {
+            for (; shift > 0; shift -= Int32.MaxValue) {
+                value >>= (int)Math.Min(shift, Int32.MaxValue);
+            }
+            return value;
         }
 
         // floor(sqrt(n)) for 0 <= n < 2**62: the double's root, corrected by one either way where
