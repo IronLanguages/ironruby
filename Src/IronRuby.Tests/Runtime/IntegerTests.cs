@@ -472,6 +472,52 @@ true
         }
 
         /// <summary>
+        /// Integer#** past 2**31 result bits (#89). MRI computes 2 ** (2**31), and refuses ("exponent is too large")
+        /// only when the base's bit length times the exponent passes 2**34 - for a Fixnum base, the base and
+        /// exponent int_pow has reached when it gives up squaring in a long, which is why 2 ** (2**34 - 1) is
+        /// refused. IronRuby refused anything past 2**31 bits. The expected output is CRuby 4.0.9's; on .NET 9
+        /// and later a result past the BigInteger cap (about 2**31 bits) is NoMemoryError, as for a shift.
+        /// </summary>
+        public void Integer_HugePower1() {
+            TestOutput(@"
+def e; yield; rescue ArgumentError, NoMemoryError => x; [x.class, x.message]; end
+p e { 2 ** (2**34) }, e { 2 ** (2**34 - 1) }, e { (2**64) ** (2**28 + 1) }, e { 3 ** (2**34) }, e { 2.pow(2**34) }
+p 3 ** 40, (-3) ** 41, 2 ** 63, (-2) ** 63, 7 ** 2**10 == (7 ** 2**9) ** 2, (-(2**64)) ** 3 == -(2**192)
+", @"
+[ArgumentError, ""exponent is too large""]
+[ArgumentError, ""exponent is too large""]
+[ArgumentError, ""exponent is too large""]
+[ArgumentError, ""exponent is too large""]
+[ArgumentError, ""exponent is too large""]
+12157665459056928801
+-36472996377170786403
+9223372036854775808
+-9223372036854775808
+true
+true
+");
+            if (Environment.Version.Major >= 9) {
+                TestOutput(@"
+def e; yield; rescue NoMemoryError => x; x.class; end
+p e { 2 ** (2**31) }, e { 4 ** (2**30) }
+", @"
+NoMemoryError
+NoMemoryError
+");
+                return;
+            }
+            TestOutput(@"
+b = 2 ** (2**31)
+p b.bit_length, b == 1 << 2**31, 4 ** (2**30) == b, ((-2) ** (2**31 + 1)) == -(b << 1)
+", @"
+2147483649
+true
+true
+true
+");
+        }
+
+        /// <summary>
         /// Kernel#Float's decimal parse takes the exact fast path (at most 15 significant digits and a power of
         /// ten up to 22) and otherwise Double.TryParse over a stack buffer (#89); both round as strtod does.
         /// The expected output is CRuby 4.0.9's.

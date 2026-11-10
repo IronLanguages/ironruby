@@ -1219,6 +1219,7 @@ namespace IronRuby.Tests {
                 Kernel_IntegerOverloads1,
                 Integer_Int64Shifts1,
                 Integer_HugeShifts1,
+                Integer_HugePower1,
                 Kernel_FloatParse1,
                 Integer_OutOfFloatRange1,
                 BasicObject_EqualIdentity1,
