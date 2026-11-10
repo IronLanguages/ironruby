@@ -1329,9 +1329,9 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static string GetCallerLocation(RubyContext/*!*/ context) {
             try {
-                RubyArray trace = RubyExceptionData.CreateBacktrace(context, 1);
-                if (trace != null && trace.Count > 0) {
-                    string frame = trace[0].ToString();
+                MutableString caller = RubyExceptionData.GetCallerFrame(context);
+                if (caller != null) {
+                    string frame = caller.ToString();
                     int inIndex = frame.LastIndexOf(":in ", StringComparison.Ordinal);
                     return inIndex > 0 ? frame.Substring(0, inIndex) : frame;
                 }

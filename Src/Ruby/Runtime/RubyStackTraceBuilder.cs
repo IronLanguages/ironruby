@@ -215,11 +215,12 @@ namespace IronRuby.Runtime {
         /// old parent and the walk terminates; the depth cap is there for the case where it somehow
         /// does not.
         /// </summary>
-        internal RubyStackTraceBuilder(RubyContext/*!*/ context, InterpretedFrame frame, Precompiled.PrecompiledFrames.Frame[]/*!*/ precompiled)
+        internal RubyStackTraceBuilder(RubyContext/*!*/ context, InterpretedFrame frame, Precompiled.PrecompiledFrames.Frame[]/*!*/ precompiled,
+            int maxFrames = Int32.MaxValue)
             : this(context) {
 
             int next = 0;
-            for (int depth = 0; (frame != null || next < precompiled.Length) && depth < MaxThreadBacktraceDepth; depth++) {
+            for (int depth = 0; (frame != null || next < precompiled.Length) && depth < MaxThreadBacktraceDepth && _trace.Count < maxFrames; depth++) {
                 string methodName;
                 string file;
                 int line;
