@@ -1724,10 +1724,16 @@ namespace IronRuby.Builtins {
         }
 
         // String#scrub (ruby4.rb) with a block: MRI's str_mod_check raises "string modified" when
-        // the block changed the receiver, as #gsub with a block does here.
-        [RubyMethod("__ir_track_changes__", RubyMethodAttributes.PrivateInstance)]
-        public static void TrackChanges(MutableString/*!*/ self) {
-            self.TrackChanges();
+        // the block changed the receiver, as #gsub with a block does here. The begin answers what
+        // the end puts back (MutableString.BeginTrackChanges), so the watch nests.
+        [RubyMethod("__ir_begin_track_changes__", RubyMethodAttributes.PrivateInstance)]
+        public static bool BeginTrackChanges(MutableString/*!*/ self) {
+            return self.BeginTrackChanges();
+        }
+
+        [RubyMethod("__ir_end_track_changes__", RubyMethodAttributes.PrivateInstance)]
+        public static void EndTrackChanges(MutableString/*!*/ self, bool changedBefore) {
+            self.EndTrackChanges(changedBefore);
         }
 
         [RubyMethod("__ir_require_unchanged__", RubyMethodAttributes.PrivateInstance)]
@@ -2374,7 +2380,15 @@ namespace IronRuby.Builtins {
         }
 
         public static object EachLine(BlockParam/*!*/ block, MutableString/*!*/ self, [DefaultProtocol]MutableString separator, int start) {
-            self.TrackChanges();
+            bool changedBefore = self.BeginTrackChanges();
+            try {
+                return EachLineTracked(block, self, separator, start);
+            } finally {
+                self.EndTrackChanges(changedBefore);
+            }
+        }
+
+        private static object EachLineTracked(BlockParam/*!*/ block, MutableString/*!*/ self, MutableString separator, int start) {
 
             MutableString paragraphSeparator;
             if (separator == null || separator.IsEmpty) {
@@ -3490,11 +3504,15 @@ namespace IronRuby.Builtins {
 
             object blockResult;
             MutableString result;
-            self.TrackChanges();
-            object r = BlockReplaceAll(tosConversion, scope, self, block, pattern, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
+            bool changedBefore = self.BeginTrackChanges();
+            try {
+                object r = BlockReplaceAll(tosConversion, scope, self, block, pattern, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
 
-            RequireNoVersionChange(self);
-            return r;
+                RequireNoVersionChange(self);
+                return r;
+            } finally {
+                self.EndTrackChanges(changedBefore);
+            }
         }
 
         [RubyMethod("sub")]
@@ -3520,10 +3538,14 @@ namespace IronRuby.Builtins {
             // The same literal pattern the String forms without a block get from the Regexp conversion.
             var regex = RubyRegex.FromLiteralPattern(matchString);
 
-            self.TrackChanges();
-            object r = BlockReplaceAll(tosConversion, scope, self, block, regex, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
-            RequireNoVersionChange(self);
-            return r;
+            bool changedBefore = self.BeginTrackChanges();
+            try {
+                object r = BlockReplaceAll(tosConversion, scope, self, block, regex, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
+                RequireNoVersionChange(self);
+                return r;
+            } finally {
+                self.EndTrackChanges(changedBefore);
+            }
         }
 
         [RubyMethod("sub")]
@@ -3554,28 +3576,31 @@ namespace IronRuby.Builtins {
             object blockResult;
 
             self.RequireNotFrozen();
-            self.TrackChanges();
+            bool changedBefore = self.BeginTrackChanges();
+            try {
+                // prepare replacement in a builder:
+                MutableString builder;
+                if (replaceAll ?
+                    BlockReplaceAll(tosConversion, scope, self, block, pattern, out blockResult, out builder) :
+                    BlockReplaceFirst(tosConversion, scope, self, block, pattern, false, out blockResult, out builder)) {
 
-            // prepare replacement in a builder:
-            MutableString builder;
-            if (replaceAll ?
-                BlockReplaceAll(tosConversion, scope, self, block, pattern, out blockResult, out builder) :
-                BlockReplaceFirst(tosConversion, scope, self, block, pattern, false, out blockResult, out builder)) {
+                    // block jumped:
+                    return blockResult;
+                }
 
-                // block jumped:
-                return blockResult;
+                // unsuccessful match:
+                if (builder == null) {
+                    return null;
+                }
+
+                RequireNoVersionChange(self);
+
+                // replace content of self with content of the builder - and its encoding, which a
+                // replacement may have changed (MRI's rb_str_shared_replace):
+                return Replace(self, builder);
+            } finally {
+                self.EndTrackChanges(changedBefore);
             }
-
-            // unsuccessful match:
-            if (builder == null) {
-                return null;
-            }
-
-            RequireNoVersionChange(self);
-
-            // replace content of self with content of the builder - and its encoding, which a
-            // replacement may have changed (MRI's rb_str_shared_replace):
-            return Replace(self, builder);
         }
 
         private static MutableString ReplaceInPlace(ConversionStorage<MutableString> toS, BinaryOpStorage hashDefault, 

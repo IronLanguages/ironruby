@@ -3523,7 +3523,7 @@ class String
     # after each yield. The bytes are read from a copy taken first, so a change can never be
     # copied into the result (or leave a slice past the end) before the check sees it.
     if block
-      __ir_track_changes__
+      changed_before = __ir_begin_track_changes__
       source = __ir_plain_copy__
       call = lambda do |bad|
         result = block.call(bad)
@@ -3570,6 +3570,9 @@ class String
     end
     flush.call
     out
+  ensure
+    # puts back a change an outer #gsub/#scrub/#each_line on this string is still to see
+    __ir_end_track_changes__(changed_before) unless changed_before.nil?
   end unless method_defined?(:scrub)
 
   # The replacement character of the encoding: U+FFFD where there is one, "?" elsewhere.

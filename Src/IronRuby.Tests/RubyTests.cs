@@ -981,6 +981,7 @@ namespace IronRuby.Tests {
                 Digest_OneShot1,
                 Encoding_MultiByteShapes1,
                 String_ScrubBlockModifies1,
+                String_NestedChangeTracking1,
                 Main_Initialize1,
                 Dir_NotADirectory1,
                 Dir_NotADirectorySymlinks1,

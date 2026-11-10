@@ -8141,9 +8141,19 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadString_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_begin_track_changes__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.Builtins.MutableStringOps.BeginTrackChanges)
+            );
+            
             DefineLibraryMethod(module, "__ir_bytesplice__", 0x52, 
                 0x00000018U, 
                 new Func<IronRuby.Builtins.MutableString, System.Int32, System.Int32, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ByteSpliceInPlace)
+            );
+            
+            DefineLibraryMethod(module, "__ir_end_track_changes__", 0x52, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.Builtins.MutableStringOps.EndTrackChanges)
             );
             
             DefineLibraryMethod(module, "__ir_fstring__", 0x52, 
@@ -8159,11 +8169,6 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__ir_scrub_runs__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MutableStringOps.GetScrubRuns)
-            );
-            
-            DefineLibraryMethod(module, "__ir_track_changes__", 0x52, 
-                0x00000000U, 
-                new Action<IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.TrackChanges)
             );
             
             DefineLibraryMethod(module, "__locktmp__", 0x51, 

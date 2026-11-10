@@ -4292,6 +4292,43 @@ UTF-8 other: [""a255b1619"", ""xyy""]
 UTF-8 frozen: ""a?b""
 ");
         }
+        /// <summary>
+        /// The "string modified" check of #gsub, #gsub!, #each_line and #scrub with a block nests: a call on the
+        /// same string from inside another's block - one that finishes, raises or is broken out of - no longer
+        /// clears the change the outer call is still to see (Greptile on #185; gsub inside gsub lost it too).
+        /// Expected output is CRuby 4.0's.
+        /// </summary>
+        public void String_NestedChangeTracking1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); puts ""#{l}: #{yield.inspect}""; rescue => e; puts ""#{l}: #{e.class}: #{e.message}""; end
+t(:outer_gsub) { s = +'abc'; s.gsub(/a/) { s.replace(""x\xFF""); s.scrub { '?' }; 'z' } }
+t(:outer_gsub_valid) { s = +'abc'; s.gsub(/a/) { s.replace(""xyzw""); s.scrub { '?' }; 'z' } }
+t(:inner_gsub) { s = ""a\xFFb"".dup; s.scrub { s << 'Q'; s.gsub(/a/) { 'b' }; '?' } }
+t(:outer_scrub_inner_scrub) { s = ""a\xFFb"".dup; s.scrub { s << 'Q'; s.scrub { '!' }; '?' } }
+t(:outer_gsub_inner_gsub) { s = +'abc'; s.gsub(/a/) { s << 'Q'; s.gsub(/x/) { 'y' }; 'z' } }
+t(:outer_each_line) { s = +""a\nb\n""; r = []; s.each_line { |l| s << ""c\n"" if r.empty?; s.scrub { '?' }; r << l }; r }
+t(:inner_raises) { s = +'abc'; s.gsub(/a/) { s << 'Q'; (s.gsub(/b/) { raise 'x' } rescue nil); 'z' } }
+t(:inner_breaks) { s = +'abc'; s.gsub(/a/) { s << 'Q'; s.gsub(/b/) { break 1 }; 'z' } }
+t(:inner_scrub_raises) { s = +'abc'; s.gsub(/a/) { s.replace(""x\xFF""); (s.scrub { raise 'y' } rescue nil); 'z' } }
+t(:each_line_inner_gsub) { s = +""a\nb\n""; s.each_line { s << ""c\n""; s.gsub(/q/) { 'r' } } }
+t(:gsub_bang_inner_scrub) { s = +'abc'; s.gsub!(/a/) { s.replace(""x\xFF""); s.scrub { '?' }; 'z' } }
+t(:after_nested_ok) { s = ""a\xFFb"".dup; s.gsub(/a/) { s.scrub { '?' }; 'z' } }
+", @"
+outer_gsub: RuntimeError: string modified
+outer_gsub_valid: RuntimeError: string modified
+inner_gsub: ArgumentError: invalid byte sequence in UTF-8
+outer_scrub_inner_scrub: RuntimeError: string modified
+outer_gsub_inner_gsub: RuntimeError: string modified
+outer_each_line: [""a\n"", ""b\n""]
+inner_raises: RuntimeError: string modified
+inner_breaks: RuntimeError: string modified
+inner_scrub_raises: RuntimeError: string modified
+each_line_inner_gsub: ""a\nb\nc\nc\n""
+gsub_bang_inner_scrub: RuntimeError: string modified
+after_nested_ok: ArgumentError: invalid byte sequence in UTF-8
+");
+        }
 
         /// <summary>
         /// main has no #initialize of its own - it is BasicObject's - so send(:initialize) answers nil

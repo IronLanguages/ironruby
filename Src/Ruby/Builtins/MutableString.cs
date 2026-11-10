@@ -1033,6 +1033,23 @@ namespace IronRuby.Builtins {
             _flags &= ~HasChangedFlag;
         }
 
+        /// <summary>
+        /// Starts watching for a change, as <see cref="TrackChanges"/> does, but nests: answers whether a change
+        /// had already been seen, which <see cref="EndTrackChanges"/> puts back. Without it, a #gsub or #scrub run
+        /// from inside another's block cleared the one flag and hid an earlier change from the outer method.
+        /// </summary>
+        public bool BeginTrackChanges() {
+            bool changed = HasChanged;
+            _flags &= ~HasChangedFlag;
+            return changed;
+        }
+
+        public void EndTrackChanges(bool changedBefore) {
+            if (changedBefore) {
+                _flags |= HasChangedFlag;
+            }
+        }
+
         void IRubyObjectState.Freeze() {
             Freeze();
         }
