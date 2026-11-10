@@ -177,28 +177,43 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            [SkipLocalsInit]
             public override int CalculateHashCode() {
                 // The same string can be held as bytes or as characters and the hash has to come
-                // out the same either way (see Content.HashCharacters): ASCII hashes its bytes,
+                // out the same either way (see Content.HashCharacters): long ASCII hashes its bytes,
                 // anything else the characters the escaping decoder makes of them - those
                 // CharArrayContent would hash. They go to a scratch buffer rather than a new string:
                 // a long string was copied to the large object heap on every #hash.
                 var bytes = GetDataSpan();
                 RubyEncoding encoding = _owner._encoding;
-                if (encoding.AsciiRoundTrips &&
-                    ((_owner._flags & (MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag)) == MutableString.IsAsciiFlag || System.Text.Ascii.IsValid(bytes))) {
-                    return HashAsciiBytes(bytes);
+                bool ascii;
+                if (_count >= AsciiByteHashMinLength) {
+                    ascii = encoding.AsciiRoundTrips &&
+                        ((_owner._flags & (MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag)) == MutableString.IsAsciiFlag || System.Text.Ascii.IsValid(bytes));
+                    if (ascii) {
+                        return HashAsciiBytes(bytes);
+                    }
+                } else {
+                    ascii = (encoding == RubyEncoding.UTF8 || encoding == RubyEncoding.Binary || encoding == RubyEncoding.Ascii) &&
+                        System.Text.Ascii.IsValid(bytes);
                 }
+                int charCount = ascii ? _count : encoding.EscapingEncoding.GetCharCount(_data, _start, _count);
 
                 // EscapingEncoding implements only the array overloads: the span ones would go
                 // through temporary arrays of their own.
-                int charCount = encoding.EscapingEncoding.GetCharCount(_data, _start, _count);
-                char[] rented = ArrayPool<char>.Shared.Rent(charCount);
+                char[] rented = null;
+                Span<char> chars = (ascii && charCount <= AsciiByteHashMinLength) ? stackalloc char[AsciiByteHashMinLength] : (rented = ArrayPool<char>.Shared.Rent(charCount));
                 try {
-                    encoding.EscapingEncoding.GetChars(_data, _start, _count, rented, 0);
-                    return String.GetHashCode(new ReadOnlySpan<char>(rented, 0, charCount));
+                    if (ascii) {
+                        System.Text.Ascii.ToUtf16(bytes, chars, out _);
+                    } else {
+                        encoding.EscapingEncoding.GetChars(_data, _start, _count, rented, 0);
+                    }
+                    return String.GetHashCode(chars.Slice(0, charCount));
                 } finally {
-                    ArrayPool<char>.Shared.Return(rented);
+                    if (rented != null) {
+                        ArrayPool<char>.Shared.Return(rented);
+                    }
                 }
             }
 

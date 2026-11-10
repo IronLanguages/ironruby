@@ -949,7 +949,7 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Returns hash code of the string. The hash code is the same regardless of the internal string representation,
         /// and the same for strings that are #eql? in different encodings (ASCII in US-ASCII, UTF-8 or BINARY, say).
-        /// A string of ASCII characters hashes its bytes (Content.HashAsciiBytes); any other string is hashed as
+        /// A long string of ASCII characters hashes its bytes (Content.HashAsciiBytes); any other string is hashed as
         /// <see cref="System.String.GetHashCode"/> hashes its characters, and so is equal to it. Both hashes are
         /// seeded per process. The hash code is not cached.
         /// </summary>

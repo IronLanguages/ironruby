@@ -98,37 +98,49 @@ namespace IronRuby.Builtins {
             }
 
             /// <summary>
-            /// The hash of a string whose characters are all ASCII, in an encoding that
+            /// The length from which a string whose characters are all ASCII, in an encoding that
+            /// <see cref="RubyEncoding.AsciiRoundTrips"/>, hashes its bytes (<see cref="HashAsciiBytes"/>)
+            /// rather than its UTF-16 characters. A shorter one costs about the same either way, and
+            /// keeps the hash it had - String.GetHashCode of its characters - with no narrowing first.
+            /// ASCII characters and bytes are as many, so the choice does not depend on how the
+            /// string is held.
+            /// </summary>
+            internal const int AsciiByteHashMinLength = 128;
+
+            /// <summary>
+            /// The hash of a long string whose characters are all ASCII, in an encoding that
             /// <see cref="RubyEncoding.AsciiRoundTrips"/>, from its bytes: Marvin - the seeded hash of
             /// String.GetHashCode, with its random per-process key - over the bytes, two to a
-            /// UTF-16 unit, and the odd byte at the end mixed in with HashCode's (also seeded) mixer,
-            /// which also sets these apart from the hashes of other strings' characters. That reads
-            /// half the bytes the hash of the UTF-16 characters did. Every equal string - bytes or
+            /// UTF-16 unit, and an odd byte at the end mixed in with HashCode's (also seeded) mixer.
+            /// That reads half the bytes the hash of the UTF-16 characters did. (An ASCII string of
+            /// even length hashes as the one string of UTF-16 units its bytes spell, which is not
+            /// ASCII: a pair that collides whatever the seed, but only ever a pair.) Every equal string - bytes or
             /// characters, US-ASCII, UTF-8 or BINARY, each #eql? the others - hashes the same.
             /// </summary>
             internal static int HashAsciiBytes(ReadOnlySpan<byte> ascii) {
-                if (ascii.IsEmpty) {
-                    // an empty string is #eql? to every other empty string, whatever the encodings
-                    return String.Empty.GetHashCode();
-                }
+                Debug.Assert(ascii.Length >= AsciiByteHashMinLength);
                 int hash = String.GetHashCode(MemoryMarshal.Cast<byte, char>(ascii));
-                return HashCode.Combine(hash, (ascii.Length & 1) != 0 ? ascii[ascii.Length - 1] : 0x100);
+                return (ascii.Length & 1) == 0 ? hash : HashCode.Combine(hash, ascii[ascii.Length - 1]);
             }
 
             /// <summary>
             /// The hash of a string held as characters (see <see cref="HashAsciiBytes"/>). The
-            /// characters of a string that is not all ASCII are hashed as they are, which is what the
-            /// bytes of one decode to (BinaryContent.CalculateHashCode).
+            /// characters of a short string, or of one that is not all ASCII, are hashed as they are,
+            /// which is what the bytes of one decode to (BinaryContent.CalculateHashCode).
             /// </summary>
             internal int HashCharacters(ReadOnlySpan<char> chars) {
+                if (chars.Length < AsciiByteHashMinLength) {
+                    return String.GetHashCode(chars);
+                }
                 // A string known not to be ASCII skips the attempt.
                 return HashCharacters(chars, _owner._encoding.AsciiRoundTrips && (_owner._flags & (MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag)) != 0);
             }
 
+            [SkipLocalsInit]
             internal static int HashCharacters(ReadOnlySpan<char> chars, bool asciiAsBytes) {
-                if (asciiAsBytes) {
+                if (asciiAsBytes && chars.Length >= AsciiByteHashMinLength) {
                     byte[] rented = null;
-                    Span<byte> bytes = (chars.Length <= 256) ? stackalloc byte[256] : (rented = ArrayPool<byte>.Shared.Rent(chars.Length));
+                    Span<byte> bytes = (chars.Length <= 512) ? stackalloc byte[512] : (rented = ArrayPool<byte>.Shared.Rent(chars.Length));
                     try {
                         if (System.Text.Ascii.FromUtf16(chars, bytes, out int written) == OperationStatus.Done) {
                             return HashAsciiBytes(bytes.Slice(0, written));

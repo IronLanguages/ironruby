@@ -1499,11 +1499,11 @@ namespace IronRuby.Tests {
         /// <summary>
         /// The hash of a string does not depend on how it is held, and does not copy it (#89): bytes,
         /// characters, a CLR string and a copy and a slice of each agree - short (on the stack) and
-        /// long (in a pooled buffer). ASCII hashes its bytes, the same in every encoding in which it
-        /// is #eql?; anything else hashes as String.GetHashCode of its characters.
+        /// long (in a pooled buffer). Long ASCII hashes its bytes, the same in every encoding in which
+        /// it is #eql?; anything else hashes as String.GetHashCode of its characters.
         /// </summary>
         public void MutableString_GetHashCode2() {
-            foreach (int length in new[] { 0, 1, 2, 3, 200, 256, 257, 600, 5000 }) {
+            foreach (int length in new[] { 0, 1, 2, 3, 127, 128, 129, 200, 256, 257, 600, 5000 }) {
                 foreach (string unit in new[] { "a", "ab", "é", "あ", "aé" }) {
                     var sb = new StringBuilder();
                     while (sb.Length < length) {
@@ -1512,7 +1512,7 @@ namespace IronRuby.Tests {
                     string text = sb.ToString();
                     bool ascii = System.Text.Ascii.IsValid(text);
                     int h = MutableString.GetHashCode(text);
-                    Assert(ascii || h == text.GetHashCode());
+                    Assert(ascii && text.Length >= 128 ? h != text.GetHashCode() : h == text.GetHashCode());
 
                     var binary = MutableString.CreateBinary(Encoding.UTF8.GetBytes(text), RubyEncoding.UTF8);
                     var chars = MutableString.CreateMutable(RubyEncoding.UTF8).Append(text);

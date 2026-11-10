@@ -130,7 +130,7 @@ namespace IronRuby.Builtins {
             return MutableStringOps.Equals(respondToStorage, equalsStorage, self, other);
         }
 
-        // A CLR string is #eql? to a String of the same characters, so it has to hash as one (an
+        // A CLR string is #eql? to a String of the same characters, so it has to hash as one (a long
         // ASCII String hashes its bytes, not its characters: see MutableString.GetHashCode).
         [RubyMethod("hash")]
         public static int GetHashCode(string/*!*/ self) {
