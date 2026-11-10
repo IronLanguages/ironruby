@@ -1329,7 +1329,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static string GetCallerLocation(RubyContext/*!*/ context) {
             try {
-                RubyArray trace = RubyExceptionData.CreateBacktrace(context, 1);
+                // one frame: building the whole backtrace was most of what Thread.new cost
+                RubyArray trace = RubyExceptionData.CreateBacktrace(context, 1, 1);
                 if (trace != null && trace.Count > 0) {
                     string frame = trace[0].ToString();
                     int inIndex = frame.LastIndexOf(":in ", StringComparison.Ordinal);
