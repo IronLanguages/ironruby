@@ -40,6 +40,13 @@ namespace IronRuby.Builtins {
         
         private uint _flags = AsciiUnknownFlag | SurrogatesUnknownFlag | CharIndexChangedFlags;
 
+        // Counts changes, for a method that yields to a block and must notice that the block changed the
+        // string ("string modified"): it saves ChangeCount and compares. Unlike HasChangedFlag, which every
+        // watcher clears, a watcher only reads it, so watches nest (#gsub inside another's block) and
+        // read-only watches on other threads don't disturb each other. On 64-bit it fits in the padding
+        // after _flags. An increment lost to a racing writer still moves the count.
+        private int _changeCount;
+
         // true if frozen:
         private const uint IsFrozenFlag = 1;
 
@@ -578,6 +585,7 @@ namespace IronRuby.Builtins {
                 flags = FrozenOrCopyOnWrite(flags);
             }
             _flags = flags | setFlags;
+            _changeCount++;
         }
 
         /// <summary>
@@ -603,6 +611,7 @@ namespace IronRuby.Builtins {
                 }
             }
             _flags = flags | HasChangedFlags;
+            _changeCount++;
         }
 
         /// <summary>
@@ -619,6 +628,7 @@ namespace IronRuby.Builtins {
                 flags |= AsciiUnknownFlag;
             }
             _flags = flags | SurrogatesUnknownFlag | HasChangedFlags;
+            _changeCount++;
         }
 
         /// <summary>
@@ -1034,20 +1044,11 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Starts watching for a change, as <see cref="TrackChanges"/> does, but nests: answers whether a change
-        /// had already been seen, which <see cref="EndTrackChanges"/> puts back. Without it, a #gsub or #scrub run
-        /// from inside another's block cleared the one flag and hid an earlier change from the outer method.
+        /// Moves on every change of the content (see _changeCount): equal before and after a block means the block
+        /// did not change the string.
         /// </summary>
-        public bool BeginTrackChanges() {
-            bool changed = HasChanged;
-            _flags &= ~HasChangedFlag;
-            return changed;
-        }
-
-        public void EndTrackChanges(bool changedBefore) {
-            if (changedBefore) {
-                _flags |= HasChangedFlag;
-            }
+        public int ChangeCount {
+            get { return _changeCount; }
         }
 
         void IRubyObjectState.Freeze() {

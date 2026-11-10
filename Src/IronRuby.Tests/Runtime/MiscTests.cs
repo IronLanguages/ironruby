@@ -4295,8 +4295,8 @@ UTF-8 frozen: ""a?b""
         /// <summary>
         /// The "string modified" check of #gsub, #gsub!, #each_line and #scrub with a block nests: a call on the
         /// same string from inside another's block - one that finishes, raises or is broken out of - no longer
-        /// clears the change the outer call is still to see (Greptile on #185; gsub inside gsub lost it too).
-        /// Expected output is CRuby 4.0's.
+        /// clears the change the outer call is still to see (Greptile on #185; gsub inside gsub lost it too), and
+        /// read-only calls on other threads never see a change no one made. Expected output is CRuby 4.0's.
         /// </summary>
         public void String_NestedChangeTracking1() {
             TestOutput(@"
@@ -4314,7 +4314,11 @@ t(:inner_scrub_raises) { s = +'abc'; s.gsub(/a/) { s.replace(""x\xFF""); (s.scru
 t(:each_line_inner_gsub) { s = +""a\nb\n""; s.each_line { s << ""c\n""; s.gsub(/q/) { 'r' } } }
 t(:gsub_bang_inner_scrub) { s = +'abc'; s.gsub!(/a/) { s.replace(""x\xFF""); s.scrub { '?' }; 'z' } }
 t(:after_nested_ok) { s = ""a\xFFb"".dup; s.gsub(/a/) { s.scrub { '?' }; 'z' } }
-", @"
+
+shared = 'abc' * 20
+errors = Queue.new
+8.times.map { Thread.new { 300.times { begin; shared.gsub(/b/) { 'x' }; shared.each_line { }; rescue => e; errors << e.class; end } } }.each(&:join)
+p errors.size", @"
 outer_gsub: RuntimeError: string modified
 outer_gsub_valid: RuntimeError: string modified
 inner_gsub: ArgumentError: invalid byte sequence in UTF-8
@@ -4327,6 +4331,7 @@ inner_scrub_raises: RuntimeError: string modified
 each_line_inner_gsub: ""a\nb\nc\nc\n""
 gsub_bang_inner_scrub: RuntimeError: string modified
 after_nested_ok: ArgumentError: invalid byte sequence in UTF-8
+0
 ");
         }
 
