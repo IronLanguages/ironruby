@@ -1723,6 +1723,18 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        // String#scrub (ruby4.rb) with a block: MRI's str_mod_check raises "string modified" when
+        // the block changed the receiver, as #gsub with a block does here.
+        [RubyMethod("__ir_track_changes__", RubyMethodAttributes.PrivateInstance)]
+        public static void TrackChanges(MutableString/*!*/ self) {
+            self.TrackChanges();
+        }
+
+        [RubyMethod("__ir_require_unchanged__", RubyMethodAttributes.PrivateInstance)]
+        public static void RequireUnchanged(MutableString/*!*/ self) {
+            RequireNoVersionChange(self);
+        }
+
         /// <summary>
         /// #casecmp folds a-z/A-Z and nothing else - it is not the Unicode comparison #casecmp?
         /// is. Confirmed against CRuby 4.0.6: "ä".casecmp("Ä") is 1, and "ss".casecmp("ß") is -1.

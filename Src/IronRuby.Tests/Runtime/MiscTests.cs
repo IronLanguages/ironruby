@@ -4254,6 +4254,46 @@ Shift_JIS 81208140ff: false 4 81,20,8140,ff getc=81,20,8140,ff scrub=3f2081403f 
         }
 
         /// <summary>
+        /// String#scrub with a block raises "string modified" when the block changes the receiver, as MRI's
+        /// str_mod_check does after each yield, in the multibyte encodings whose runs come from C# and in
+        /// UTF-8. The scrub that read byte offsets found before the block from the changed receiver raised
+        /// TypeError after s.clear and copied the new bytes after s.replace. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void String_ScrubBlockModifies1() {
+            TestOutput(@"
+require 'ruby4'
+def t(label)
+  puts ""#{label}: #{yield.inspect}""
+rescue => e
+  puts ""#{label}: #{e.class}: #{e.message}""
+end
+%w[EUC-JP GB18030 UTF-8].each do |enc|
+  t(""#{enc} clear"") { s = ""a\xFFb\xFFc"".dup.force_encoding(enc); s.scrub { s.clear; '?' } }
+  t(""#{enc} replace"") { s = ""a\xFFb\xFFc"".dup.force_encoding(enc); s.scrub { s.replace('zzzzzzzzzz'); '?' } }
+  t(""#{enc} append"") { s = ""a\xFFbc"".dup.force_encoding(enc); s.scrub { s << 'XYZ'; '?' } }
+  t(""#{enc} other"") { o = +'x'; s = ""a\xFFb\xA1\x39"".dup.force_encoding(enc); [s.scrub { |x| o << 'y'; x.bytes.join(',') }, o] }
+  t(""#{enc} frozen"") { ""a\xFFb"".dup.force_encoding(enc).freeze.scrub { '?' } }
+end
+", @"
+EUC-JP clear: RuntimeError: string modified
+EUC-JP replace: RuntimeError: string modified
+EUC-JP append: RuntimeError: string modified
+EUC-JP other: [""a255b1619"", ""xyy""]
+EUC-JP frozen: ""a?b""
+GB18030 clear: RuntimeError: string modified
+GB18030 replace: RuntimeError: string modified
+GB18030 append: RuntimeError: string modified
+GB18030 other: [""a255b161,57"", ""xyy""]
+GB18030 frozen: ""a?b""
+UTF-8 clear: RuntimeError: string modified
+UTF-8 replace: RuntimeError: string modified
+UTF-8 append: RuntimeError: string modified
+UTF-8 other: [""a255b1619"", ""xyy""]
+UTF-8 frozen: ""a?b""
+");
+        }
+
+        /// <summary>
         /// main has no #initialize of its own - it is BasicObject's - so send(:initialize) answers nil
         /// where a stub used to throw NotImplementedException.
         /// </summary>
