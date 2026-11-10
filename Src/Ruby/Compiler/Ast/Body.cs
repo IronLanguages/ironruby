@@ -235,6 +235,11 @@ namespace IronRuby.Compiler.Ast {
                     ),
                     leaveRescue
                 );
+            } else if (_elseStatements == null) {
+                // ensure only: compiled, an exception that the handler would only take note of and throw again goes through
+                guarded = new EnsureGuardExpression(
+                    Ast.Block(transformedBody, AstUtils.Empty()), gen.CurrentScopeVariable, exceptionThrownVariable, exceptionRethrowVariable
+                );
             } else {
                 guarded = AstUtils.Try(
                     Ast.Block(transformedBody, AstUtils.Empty())

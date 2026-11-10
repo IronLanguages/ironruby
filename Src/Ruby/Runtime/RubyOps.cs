@@ -3361,6 +3361,62 @@ namespace IronRuby.Runtime {
             return true;
         }
 
+        /// <summary>
+        /// What <see cref="PassEnsure"/> returns for an exception that goes through an ensure-only body the way it goes through the
+        /// handler CanRescue turns down: without $! being set for the ensure clause.
+        /// </summary>
+        internal static readonly Exception/*!*/ PassEnsureWithoutCurrentException = new Exception("#pass-ensure");
+
+        // 512 KB of stack beyond what StackLimit keeps: what an ensure clause gets at least when it runs on top of the raise
+        private const ulong PassEnsureStackRoom = 512 * 1024;
+
+        /// <summary>
+        /// The exception filter of a compiled body that has an ensure clause and nothing else (Body.TransformExceptionHandling,
+        /// EnsureGuardExpression), run in the CLR's first pass, while the stack is searched for a handler. Null: catch the exception,
+        /// which then takes CanRescue's path - $! set, the backtrace captured, and the exception thrown again after the ensure clause.
+        /// Anything else: let it go through, the ensure clause running from a CLR finally block as it passes, and set $! to the
+        /// result first unless it is <see cref="PassEnsureWithoutCurrentException"/>. A catch and a throw again is a full exception
+        /// dispatch of its own for every ensure an exception passes; going through costs next to nothing.
+        ///
+        /// It goes through only where the catch would have nothing left to do that the ensure clause could tell: the exception is
+        /// one CanRescue turns down, or one whose Ruby #new has run (Handled) and whose backtrace a frame it passed has already
+        /// captured - its throw-site trace is not needed again, and a throw again would only start it over. The cause is decided
+        /// here rather than in CanRescue, from the same $!: the ensure clauses that ran in between restore it. And there is room
+        /// on the stack: a finally block runs on top of the frames the exception came out of, a catch below them (#128).
+        /// </summary>
+        public static Exception PassEnsure(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            if (!StackLimit.HasRoom(PassEnsureStackRoom)) {
+                return null;
+            }
+
+            if (RubyUtils.IsReclaimingFiber || exception is StackUnwinder) {
+                return PassEnsureWithoutCurrentException;
+            }
+
+            LocalJumpError lje = exception as LocalJumpError;
+            if (lje != null && lje.SkipFrame == scope.FlowControlScope) {
+                return PassEnsureWithoutCurrentException;
+            }
+
+            var data = RubyExceptionData.TryGetInstance(exception);
+            if (data == null || !data.Handled || !(data.HasBacktrace || data.RaiseBacktrace != null)) {
+                return null;
+            }
+
+            data.TrySetCause(scope.RubyContext.CurrentException);
+            return exception;
+        }
+
+        /// <summary>
+        /// The fault block of EnsureGuardExpression: the exception <see cref="PassEnsure"/> let through is leaving the body, and the
+        /// ensure clause sees it in $!, as it would had CanRescue caught it.
+        /// </summary>
+        public static void EnterPassedEnsure(RubyScope/*!*/ scope, Exception passing) {
+            if (passing != null && passing != PassEnsureWithoutCurrentException) {
+                scope.RubyContext.CurrentException = passing;
+            }
+        }
+
         [Emitted]
         public static Exception/*!*/ MarkException(Exception/*!*/ exception) {
             RubyExceptionData.GetInstance(exception).Handled = true;
