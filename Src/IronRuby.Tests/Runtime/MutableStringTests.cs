@@ -1344,5 +1344,243 @@ namespace IronRuby.Tests {
             str = MutableString.CreateMutable("ﾎｱ", RubyEncoding.SJIS);
             Assert(!str.ContainsInvalidCharacters());
         }
+
+        private static MutableString/*!*/ CowSource(int kind) {
+            string text = new string('a', 150) + "bcd efg" + new string('h', 150) + "  \n";
+            switch (kind) {
+                case 0: return MutableString.CreateBinary(Encoding.ASCII.GetBytes(text), RubyEncoding.Binary);
+                case 1: return MutableString.CreateBinary(Encoding.UTF8.GetBytes(text + "é"), RubyEncoding.UTF8);
+                case 2: return MutableString.CreateMutable(RubyEncoding.UTF8).Append(text + "éあ");
+                default: return MutableString.CreateMutable(RubyEncoding.UTF8).Append(text);
+            }
+        }
+
+        // An independent string with the same content and representation.
+        private static MutableString/*!*/ CowFresh(MutableString/*!*/ str) {
+            return str.IsBinary
+                ? MutableString.CreateBinary(str.ToByteArray(), str.Encoding)
+                : MutableString.CreateMutable(str.Encoding).Append(str.ToString());
+        }
+
+        private static string/*!*/ CowRun(Action<MutableString>/*!*/ mutation, MutableString/*!*/ str) {
+            try {
+                mutation(str);
+                return BitConverter.ToString(str.ToByteArray()) + "/" + str.Encoding;
+            } catch (Exception e) {
+                return e.GetType().Name;
+            }
+        }
+
+        /// <summary>
+        /// Copies share their array until one of them is written to (copy-on-write, #89): every way
+        /// of copying, both representations, every kind of write through the MutableString API, on
+        /// the copy and on the original. The other string must not see the write, and the written one
+        /// must end up as an unshared string given the same write would.
+        /// </summary>
+        public void MutableString_CopyOnWrite1() {
+            var copies = new Func<MutableString, MutableString>[] {
+                s => s.Clone(),
+                s => MutableString.Create(s),
+                s => s.CloneDerived(),
+                s => MutableString.CreateMutable(RubyEncoding.Binary).Replace(s),
+                s => s.GetSlice(0, s.GetLength() - 1),
+                s => s.GetSlice(0, s.GetLength()),
+                s => s.CreateFrozenSnapshot().Clone(),
+            };
+
+            var mutations = new Action<MutableString>[] {
+                s => s.Append('Z'),
+                s => s.Append('い'),
+                s => s.Append((byte)'Y'),
+                s => s.Append((byte)0xFE, 3),
+                s => s.Append("str"),
+                s => s.Append(new char[] { 'c', 'd' }),
+                s => s.Append(new byte[] { 1, 2 }),
+                s => s.Append(s),
+                s => s.Append(MutableString.CreateAscii("tail")),
+                s => s.AppendFormat("{0}", 42),
+                s => s.Insert(3, 'I'),
+                s => s.Insert(3, (byte)'J'),
+                s => s.Insert(3, "ins"),
+                s => s.Insert(3, new byte[] { 9, 8 }),
+                s => s.Insert(0, s),
+                s => s.Remove(2, 5),
+                s => s.Remove(0, 1),
+                s => s.Remove(10),
+                s => s.Remove(5, 0),
+                s => s.SetByte(0, 0x41),
+                s => s.SetChar(1, 'Q'),
+                s => s.SetChar(1, 'ü'),
+                s => s.Write(5, new byte[] { 1, 2, 3 }, 0, 3),
+                s => s.Write(s.GetByteCount() + 4, (byte)7, 2),
+                s => s.WriteBytes(2, MutableString.CreateAscii("wb"), 0, 2),
+                s => s.SetLength(s.GetLength() + 20),
+                s => s.SetLength(5),
+                s => s.SetByteCount(s.GetByteCount() + 3),
+                s => s.Reverse(),
+                s => s.Trim(3, 10),
+                s => s.Clear(),
+                s => s.Replace(1, 3, MutableString.CreateAscii("rep")),
+                s => s.Replace(MutableString.CreateAscii("whole")),
+                s => s.TrimExcess().Append('t'),
+                s => s.SwitchToCharacters().Append('u'),
+                s => s.SwitchToBytes().Append((byte)'v'),
+                s => s.PrepareForCharacterWrite().SetChar(0, 'w'),
+                s => { s.ForceEncoding(RubyEncoding.Binary); s.SetByte(2, 0x42); },
+                s => s.Transcode(s.Encoding, RubyEncoding.UTF8),
+                s => {
+                    // what RubyBufferedStream does: make room, then write into the array in place
+                    s.SwitchToBytes();
+                    int n = s.GetByteCount();
+                    s.EnsureCapacity(n + 3);
+                    int count;
+                    var bytes = s.GetByteArray(out count);
+                    bytes[0] = 0x58;
+                    bytes[n] = 0x0D;
+                },
+                s => {
+                    int count;
+                    var bytes = s.GetWritableByteArray(out count);
+                    bytes[1] = 0x59;
+                },
+                s => {
+                    // an enumeration in progress keeps reading what it started with
+                    var e = s.GetCharacters();
+                    e.MoveNext();
+                    s.SetChar(0, 'E');
+                    e.MoveNext();
+                    s.Append(e.Current.Value);
+                },
+            };
+
+            int checks = 0;
+            for (int kind = 0; kind < 4; kind++) {
+                for (int c = 0; c < copies.Length; c++) {
+                    for (int m = 0; m < mutations.Length; m++) {
+                        for (int which = 0; which < 2; which++) {
+                            var original = CowSource(kind);
+                            var copy = copies[c](original);
+                            var target = (which == 0) ? copy : original;
+                            var other = (which == 0) ? original : copy;
+                            byte[] otherBefore = other.ToByteArray();
+                            string expected = CowRun(mutations[m], CowFresh(target));
+                            string actual = CowRun(mutations[m], target);
+
+                            string where = String.Format("kind {0}, copy {1}, mutation {2}, {3}", kind, c, m, which == 0 ? "copy" : "original");
+                            Assert(expected == actual, where + ": written string");
+                            Assert(BitConverter.ToString(other.ToByteArray()) == BitConverter.ToString(otherBefore), where + ": other string");
+
+                            // and the other one still writes on its own
+                            other.Append('!');
+                            Assert(BitConverter.ToString(target.ToByteArray()) == actual.Split('/')[0] || actual.IndexOf('/') < 0, where + ": written string after");
+                            checks++;
+                        }
+                    }
+                }
+            }
+            Assert(checks == 4 * copies.Length * mutations.Length * 2);
+        }
+
+        /// <summary>
+        /// The hash of a string does not depend on how it is held, and does not copy it (#89): bytes,
+        /// characters, a CLR string and a copy of each agree - short (decoded on the stack) and long
+        /// (decoded into a pooled buffer).
+        /// </summary>
+        public void MutableString_GetHashCode2() {
+            foreach (int length in new[] { 1, 200, 256, 257, 5000 }) {
+                foreach (string unit in new[] { "a", "é", "あ", "aé" }) {
+                    var sb = new StringBuilder();
+                    while (sb.Length < length) {
+                        sb.Append(unit);
+                    }
+                    string text = sb.ToString();
+                    int h = text.GetHashCode();
+
+                    var binary = MutableString.CreateBinary(Encoding.UTF8.GetBytes(text), RubyEncoding.UTF8);
+                    var chars = MutableString.CreateMutable(RubyEncoding.UTF8).Append(text);
+                    var clr = MutableString.Create(text, RubyEncoding.UTF8);
+                    Assert(binary.GetHashCode() == h);
+                    Assert(chars.GetHashCode() == h);
+                    Assert(clr.GetHashCode() == h);
+                    Assert(binary.Clone().GetHashCode() == h);
+                    Assert(chars.Clone().GetHashCode() == h);
+                    Assert(binary.IsBinary && !chars.IsBinary);
+                }
+            }
+
+            // invalid bytes hash as the escaping decoder's characters, whichever way they are held
+            var invalid = MutableString.CreateBinary(new byte[] { 0x61, 0xFF, 0x62 }, RubyEncoding.UTF8);
+            int h1 = invalid.GetHashCode();
+            invalid.SwitchToCharacters();
+            Assert(invalid.GetHashCode() == h1);
+        }
+
+        /// <summary>
+        /// The Ruby side of copy-on-write (#89): #dup, #clone, String.new, +@, #replace,
+        /// #initialize, StringIO#read of the whole buffer, a long prefix slice, #chomp and an
+        /// interpolation share the content; each is changed through many String and StringIO
+        /// methods, on the copy and on the original. Checked against an independent string given
+        /// the same change. The output is CRuby 4.0's.
+        /// </summary>
+        public void MutableString_CopyOnWrite2() {
+            TestOutput(@"
+require 'stringio'
+fresh = ->(bytes, enc) { bytes.pack('C*').force_encoding(enc) }
+makers = [
+  -> { ('abc def ' * 40) + ""xyz  \n"" },
+  -> { (('abc def ' * 40) + ""\xFFxyz  \n"").b },
+  -> { (""abc déf "" * 40) + ""あyz  \n"" },
+  -> { (('abc def ' * 40) + ""xyz  \n"").encode('UTF-16LE') },
+]
+copies = [
+  ->(s) { s.dup }, ->(s) { s.clone }, ->(s) { String.new(s) }, ->(s) { +(s.dup.freeze) },
+  ->(s) { String.new.replace(s) }, ->(s) { String.new.tap { |x| x.send(:initialize, s) } },
+  ->(s) { StringIO.new(s).read }, ->(s) { StringIO.new(s).read(nil, String.new) },
+  ->(s) { StringIO.new(s).read(s.bytesize) }, ->(s) { s.byteslice(0, s.bytesize - 2) },
+  ->(s) { s.chomp }, ->(s) { s[0, s.length] }, ->(s) { Class.new(String).new(s).to_s }, ->(s) { ""#{s}"" },
+]
+e = ->(x, t) { t.encode(x.encoding) }
+mutators = [
+  ->(x) { x << e.(x, 'Z') }, ->(x) { x.concat(e.(x, 'Q'), e.(x, 'R')) }, ->(x) { x.prepend(e.(x, 'P')) },
+  ->(x) { x.insert(5, e.(x, 'II')) }, ->(x) { x[3] = e.(x, 'W') }, ->(x) { x[2, 4] = e.(x, '') },
+  ->(x) { x.setbyte(0, 0x41) }, ->(x) { x.setbyte(-1, 0x21) }, ->(x) { x.slice!(1, 7) }, ->(x) { x.slice!(-3..) },
+  ->(x) { x.sub!(e.(x, 'a'), e.(x, 'A')) }, ->(x) { x.gsub!(e.(x, 'b'), e.(x, 'BB')) },
+  ->(x) { x.tr!(e.(x, 'a-c'), e.(x, 'x-z')) }, ->(x) { x.squeeze! }, ->(x) { x.delete!(e.(x, 'd')) },
+  ->(x) { x.upcase! }, ->(x) { x.capitalize! }, ->(x) { x.swapcase! }, ->(x) { x.reverse! },
+  ->(x) { x.strip! }, ->(x) { x.chomp! }, ->(x) { x.chop! }, ->(x) { x.succ! },
+  ->(x) { x.replace(e.(x, 'other')) }, ->(x) { x.clear }, ->(x) { x << x },
+  ->(x) { x.force_encoding(Encoding::BINARY); x << 0xFE }, ->(x) { x.bytesplice(0, 2, e.(x, 'zz')) },
+  ->(x) { io = StringIO.new(x); io.seek(4); io.write(e.(x, 'SIO')) }, ->(x) { StringIO.new(x).truncate(10) },
+  ->(x) { io = StringIO.new(x); io.seek(x.bytesize + 3); io.write('E') }, ->(x) { x.scrub!(e.(x, '?')) },
+  ->(x) { n = 0; x.each_char { |c| x << c if (n += 1) < 3 } },
+  ->(x) { x.encode!('UTF-8', invalid: :replace, undef: :replace) },
+]
+failures = []
+checks = 0
+makers.each_with_index do |make, mi|
+  copies.each_with_index do |copy, ci|
+    mutators.each_with_index do |mut, ui|
+      [true, false].each do |on_copy|
+        orig = make.()
+        c = copy.(orig)
+        target, other = on_copy ? [c, orig] : [orig, c]
+        before = [other.bytes, other.encoding]
+        expected = fresh.(target.bytes, target.encoding)
+        r1 = begin; mut.(expected); :ok; rescue => ex; ex.class; end
+        r2 = begin; mut.(target); :ok; rescue => ex; ex.class; end
+        checks += 1
+        failures << [mi, ci, ui, on_copy, :other] if [other.bytes, other.encoding] != before
+        failures << [mi, ci, ui, on_copy, :target, r1, r2] if r1 != r2 || (r1 == :ok && [target.bytes, target.encoding] != [expected.bytes, expected.encoding])
+      end
+    end
+  end
+end
+failures.each { |f| p f }
+puts checks, failures.size
+", @"
+3808
+0
+");
+        }
     }
 }

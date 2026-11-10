@@ -114,7 +114,25 @@ namespace IronRuby.Builtins {
             public abstract void TrimExcess();
             public abstract int GetCapacity();
             public abstract void SetCapacity(int capacity);
+            /// <summary>
+            /// A copy of the content, owned by the same string until it is given to another one.
+            /// BinaryContent and CharArrayContent share their array with the copy instead of copying
+            /// it (copy-on-write): both are marked shared, and each copies the array the first time it
+            /// writes to it. That is what makes #dup, #clone, String.new(str) and a whole-buffer
+            /// StringIO#read of a long string cost the same as of a short one, as they do in MRI.
+            /// Every method that writes into the array of either class must call its Unshare first;
+            /// anything outside them that writes into an array it got from GetByteArray must call
+            /// <see cref="PrepareForWrite"/> before taking it. StringContent wraps an immutable CLR
+            /// string, so its copy shares that string with nothing to mark.
+            /// </summary>
             public abstract Content/*!*/ Clone();
+
+            /// <summary>
+            /// Makes sure the array this content holds is its own (see <see cref="Clone"/>), with room
+            /// for at least <paramref name="minCapacity"/> items if it has to be copied.
+            /// </summary>
+            internal virtual void PrepareForWrite(int minCapacity) {
+            }
 
             /// <summary>
             /// Gets index'th character of the string.

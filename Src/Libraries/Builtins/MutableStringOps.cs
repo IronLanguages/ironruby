@@ -694,11 +694,9 @@ namespace IronRuby.Builtins {
                 return self;
             }
 
-            self.Clear();
-            self.Append(other);
-            // The encoding comes across too: "".send(:initialize, utf16) is a UTF-16 string.
-            self.ForceEncoding(other.Encoding);
-            return self;
+            // The encoding comes across too: "".send(:initialize, utf16) is a UTF-16 string. The
+            // content is shared, copy-on-write, so #dup of a long string does not copy it.
+            return self.Replace(other);
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
@@ -5230,10 +5228,7 @@ namespace IronRuby.Builtins {
                 return self;
             }
 
-            self.Clear();
-            self.Append(other);
-            self.ForceEncoding(other.Encoding);
-            return self;
+            return self.Replace(other);
         }
 
         [RubyMethod("reverse")]

@@ -14,12 +14,14 @@
  * ***************************************************************************/
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using Microsoft.Scripting.Utils;
 using System.Text;
 using IronRuby.Runtime;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.CompilerServices;
 
 namespace IronRuby.Builtins {
     public partial class MutableString {
@@ -32,6 +34,13 @@ namespace IronRuby.Builtins {
             protected byte[] _data;
             protected int _count;
 
+            // True while _data may be referenced by another content as well - a copy made by Clone
+            // shares the array instead of copying it (copy-on-write; see MutableString.Content.cs).
+            // Every method that writes to _data calls Unshare first, which gives this content an
+            // array of its own. Only ever set to true by Clone, on both contents, and cleared by
+            // Unshare, so a reader racing with a dup can at worst cause a copy that was not needed.
+            private bool _shared;
+
             internal BinaryContent(byte[]/*!*/ data, MutableString owner) 
                 : this(data, data.Length, owner) {
             }
@@ -42,6 +51,37 @@ namespace IronRuby.Builtins {
                 Debug.Assert(count >= 0 && count <= data.Length);
                 _data = data;
                 _count = count;
+            }
+
+            // A content that shares data with another: see _shared.
+            private BinaryContent(byte[]/*!*/ data, int count, MutableString owner, bool shared)
+                : this(data, count, owner) {
+                _shared = shared;
+            }
+
+            /// <summary>
+            /// Gives this content an array of its own if it shares one, before a write, with room for at
+            /// least <paramref name="minCapacity"/> bytes so that an append does not copy a second time.
+            /// </summary>
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private void Unshare(int minCapacity) {
+                if (_shared) {
+                    UnshareSlow(minCapacity);
+                }
+            }
+
+            [MethodImpl(MethodImplOptions.NoInlining)]
+            private void UnshareSlow(int minCapacity) {
+                // Room past the end is zeroed, as a fresh array's would be; the rest is copied over.
+                var data = Utils.NewArrayToFill<byte>(Math.Max(_count, minCapacity));
+                Buffer.BlockCopy(_data, 0, data, 0, _count);
+                Array.Clear(data, _count, data.Length - _count);
+                _data = data;
+                _shared = false;
+            }
+
+            internal override void PrepareForWrite(int minCapacity) {
+                Unshare(minCapacity);
             }
 
             internal ReadOnlySpan<byte> GetDataSpan() {
@@ -86,10 +126,12 @@ namespace IronRuby.Builtins {
             }
 
             internal void AppendBytes(string/*!*/ str, int start, int count) {
+                Unshare(_count + count);
                 _count = Utils.Append(ref _data, _count, str, start, count, _owner._encoding.EscapingEncoding);
             }
 
             internal void AppendBytes(char[]/*!*/ chars, int start, int count) {
+                Unshare(_count + count);
                 _count = Utils.Append(ref _data, _count, chars, start, count, _owner._encoding.EscapingEncoding);
             }
 
@@ -111,13 +153,35 @@ namespace IronRuby.Builtins {
 
                 // The same string can be held as bytes or as characters and the hash has to come
                 // out the same either way, so this has to be the character representation the
-                // escaping decoder produces - the same one CharArrayContent would hash.
-                return DataToString().GetHashCode();
+                // escaping decoder produces - the same one CharArrayContent would hash. The characters
+                // go to a scratch buffer rather than a new string: a long string was copied to the
+                // large object heap on every #hash.
+                var bytes = new ReadOnlySpan<byte>(_data, 0, _count);
+                RubyEncoding encoding = _owner._encoding;
+                bool ascii = (encoding == RubyEncoding.UTF8 || encoding == RubyEncoding.Binary || encoding == RubyEncoding.Ascii) &&
+                    System.Text.Ascii.IsValid(bytes);
+                int charCount = ascii ? _count : encoding.EscapingEncoding.GetCharCount(_data, 0, _count);
+
+                char[] rented = null;
+                Span<char> chars = (charCount <= 256) ? stackalloc char[256] : (rented = ArrayPool<char>.Shared.Rent(charCount));
+                try {
+                    if (ascii) {
+                        System.Text.Ascii.ToUtf16(bytes, chars, out _);
+                    } else {
+                        encoding.EscapingEncoding.GetChars(bytes, chars);
+                    }
+                    return String.GetHashCode(chars.Slice(0, charCount));
+                } finally {
+                    if (rented != null) {
+                        ArrayPool<char>.Shared.Return(rented);
+                    }
+                }
             }
 
             public override int Count {
                 get { return _count; }
                 set {
+                    Unshare(value);
                     if (_data.Length < value) {
                         Array.Resize(ref _data, Utils.GetExpandedSize(_data, value));
                     } else {
@@ -215,8 +279,10 @@ namespace IronRuby.Builtins {
                 return _count;
             }
 
+            // Shares the array: see _shared.
             public override Content/*!*/ Clone() {
-                return Create(ToByteArray(), _owner);
+                _shared = true;
+                return new BinaryContent(_data, _count, _owner, true);
             }
 
             public override void TrimExcess() {
@@ -368,6 +434,11 @@ namespace IronRuby.Builtins {
             }
 
             public override Content/*!*/ GetSlice(int start, int count) {
+                if (start == 0 && Utils.IsSharedPrefix(_count, count = Math.Min(count, _count))) {
+                    // see Utils.IsSharedPrefix
+                    _shared = true;
+                    return new BinaryContent(_data, count, _owner, true);
+                }
                 return Create(_data.GetSlice(_count, start, count), _owner);
             }
 
@@ -552,11 +623,13 @@ namespace IronRuby.Builtins {
                 if (_owner.HasByteCharacters || c < 0x80 && _owner._encoding.IsAsciiIdentity) {
                     Append((byte)c, repeatCount);
                 } else {
+                    Unshare(_count + repeatCount);
                     _count = Utils.Append(ref _data, _count, c, repeatCount, _owner._encoding.EscapingEncoding);
                 }
             }
 
             public override void Append(byte b, int repeatCount) {
+                Unshare(_count + repeatCount);
                 _count = Utils.Append(ref _data, _count, b, repeatCount);
             }
 
@@ -569,10 +642,12 @@ namespace IronRuby.Builtins {
             }
 
             public override void Append(byte[]/*!*/ bytes, int start, int count) {
+                Unshare(_count + count);
                 _count = Utils.Append(ref _data, _count, bytes, start, count);
             }
 
             public override void Append(Stream/*!*/ stream, int count) {
+                Unshare(_count + count);
                 Utils.Resize(ref _data, _count + count);
                 _count += stream.Read(_data, _count, count);
             }
@@ -620,6 +695,7 @@ namespace IronRuby.Builtins {
 
             public override void Insert(int index, char c) {
                 if (_owner.HasByteCharacters || c < 0x80 && _owner._encoding.IsAsciiIdentity) {
+                    Unshare(_count + 1);
                     _count = Utils.InsertAt(ref _data, _count, index, (byte)c, 1);
                 } else {
                     SwitchToChars(1).Insert(index, c);
@@ -627,6 +703,7 @@ namespace IronRuby.Builtins {
             }
 
             public override void Insert(int index, byte b) {
+                Unshare(_count + 1);
                 _count = Utils.InsertAt(ref _data, _count, index, b, 1);
             }
 
@@ -639,6 +716,7 @@ namespace IronRuby.Builtins {
             }
 
             public override void Insert(int index, byte[]/*!*/ bytes, int start, int count) {
+                Unshare(_count + count);
                 _count = Utils.InsertAt(ref _data, _count, index, bytes, start, count);
             }
 
@@ -650,6 +728,7 @@ namespace IronRuby.Builtins {
                 if (index >= _count) {
                     throw new IndexOutOfRangeException();
                 }
+                Unshare(0);
                 _data[index] = b;
             }
 
@@ -666,10 +745,17 @@ namespace IronRuby.Builtins {
             #region Remove, Write
 
             public override void Remove(int start, int count) {
+                if (_shared) {
+                    // Cutting off the end leaves the shared bytes as they are; anything else copies
+                    // what is left in one go rather than copying everything and then moving the tail.
+                    _count = Utils.RemoveShared(ref _data, _count, start, count, ref _shared);
+                    return;
+                }
                 _count = Utils.Remove(ref _data, _count, start, count);
             }
 
             public override void Write(int offset, byte[]/*!*/ value, int start, int count) {
+                Unshare(offset + count);
                 Utils.Resize(ref _data, offset + count);
                 _count = Math.Max(_count, offset + count);
                 Buffer.BlockCopy(value, start, _data, offset, count);
@@ -677,6 +763,7 @@ namespace IronRuby.Builtins {
 
             public override void Write(int offset, byte value, int repeatCount) {
                 int end = offset + repeatCount;
+                Unshare(end);
                 Utils.Resize(ref _data, end);
                 if (end > _count) {
                     _count = end;

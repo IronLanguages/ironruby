@@ -3181,8 +3181,10 @@ namespace IronRuby.Runtime {
         [Emitted, Obsolete("Internal only")]
         public static byte[]/*!*/ GetMutableStringBytes(MutableString/*!*/ str) {
 
+            // The callee (a Win32API function) may write into the buffer: it must not be shared with
+            // another string (copy-on-write, see MutableString.Content.Clone).
             int byteCount;
-            var result = str.GetByteArray(out byteCount);
+            var result = str.GetWritableByteArray(out byteCount);
             return result;
         }
 

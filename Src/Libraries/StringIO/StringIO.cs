@@ -640,6 +640,15 @@ namespace IronRuby.StandardLibrary.StringIO {
             int start = self._position;
             int length = content.GetByteCount();
 
+            if (start == 0 && length > 0 && !ReferenceEquals(buffer, content)) {
+                // All of the string: a copy that shares its content until one of the two changes
+                // (copy-on-write, see MutableString.Replace), as MRI's does - reading a long buffer
+                // used to copy it every time.
+                buffer = (buffer != null) ? buffer.Replace(content) : MutableString.Create(content);
+                self._position = length;
+                return buffer;
+            }
+
             if (buffer != null) {
                 buffer.Clear();
             } else {
@@ -698,11 +707,19 @@ namespace IronRuby.StandardLibrary.StringIO {
                 return null;
             }
 
+            int bytesRead = Math.Min(count, length - self._position);
+            if (buffer == null && self._position == 0 && bytesRead == length) {
+                // All of the string, shared as by read() above, and tagged as bytes.
+                buffer = MutableString.Create(content);
+                buffer.ForceEncoding(encoding);
+                self._position = length;
+                return buffer;
+            }
+
             if (buffer == null) {
                 buffer = MutableString.CreateBinary();
             }
 
-            int bytesRead = Math.Min(count, length - self._position);
             buffer.Append(content, self._position, bytesRead);
             buffer.ForceEncoding(encoding);
             self._position += bytesRead;

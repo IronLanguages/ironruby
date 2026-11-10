@@ -351,6 +351,28 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// String#replace and #initialize_copy (#dup, #clone): makes this string a copy of
+        /// <paramref name="other"/> - its content, encoding and what is known about its characters.
+        /// The content is shared until one of the two is changed (see Content.Clone), so this does not
+        /// depend on the length of the string. A frozen, chilled or locked receiver is handled as by
+        /// any other mutation.
+        /// </summary>
+        public MutableString/*!*/ Replace(MutableString/*!*/ other) {
+            ContractUtils.RequiresNotNull(other, "other");
+            Mutate();
+            if (ReferenceEquals(this, other)) {
+                return this;
+            }
+
+            var content = other._content.Clone();
+            SetEncoding(other._encoding);
+            SetContent(content);
+            const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
+            _flags = (_flags & ~CharacterFlags) | (other._flags & CharacterFlags);
+            return this;
+        }
+
+        /// <summary>
         /// Creates a copy of this instance, including content.
         /// Doesn't copy frozen state and instance variables. 
         /// Preserves the class of the String.
@@ -1393,7 +1415,14 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Makes room for <paramref name="minCapacity"/> bytes or characters. Also makes sure the
+        /// array is not shared with another string (copy-on-write, see Content.Clone), as a caller that
+        /// asks for capacity is about to write into it - RubyBufferedStream writes into the array
+        /// <see cref="GetByteArray"/> answers.
+        /// </summary>
         public void EnsureCapacity(int minCapacity) {
+            _content.PrepareForWrite(minCapacity);
             if (_content.GetCapacity() < minCapacity) {
                 _content.SetCapacity(minCapacity);
             }
@@ -1748,7 +1777,12 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ GetSlice(int start, int count) {
             ContractUtils.Requires(start >= 0, "start");
             ContractUtils.Requires(count >= 0, "count");
-            return CreateDerived(_content.GetSlice(start, count), _encoding);
+            var result = CreateDerived(_content.GetSlice(start, count), _encoding);
+            // a part of an ASCII string is ASCII, and saying so spares the next operation a scan of it
+            if ((_flags & (IsAsciiFlag | AsciiUnknownFlag)) == IsAsciiFlag) {
+                result._flags = (result._flags & ~(AsciiUnknownFlag | SurrogatesUnknownFlag)) | IsAsciiFlag | NoSurrogatesFlag;
+            }
+            return result;
         }
 
         public string/*!*/ GetStringSlice(int start) {
@@ -3045,7 +3079,22 @@ namespace IronRuby.Builtins {
 
         #region Internal Helpers
 
+        /// <summary>
+        /// The bytes of the string in place: the first <paramref name="count"/> items of the array.
+        /// Only for reading - the array may be shared with another string (see Content.Clone). A
+        /// caller that writes into it gets it from <see cref="GetWritableByteArray"/> instead.
+        /// </summary>
         internal byte[]/*!*/ GetByteArray(out int count) {
+            return _content.GetByteArray(out count);
+        }
+
+        /// <summary>
+        /// <see cref="GetByteArray"/> for a caller that writes into the array (native code filling a
+        /// buffer, say): switches to bytes and gives the string an array of its own first.
+        /// </summary>
+        internal byte[]/*!*/ GetWritableByteArray(out int count) {
+            SwitchToBytes();
+            _content.PrepareForWrite(0);
             return _content.GetByteArray(out count);
         }
 
