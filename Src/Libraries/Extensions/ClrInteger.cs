@@ -255,7 +255,7 @@ namespace IronRuby.Builtins {
                 return Narrow(shifted & ((1L << size) - 1));
             }
             // 63 or more ones: all of a non-negative value, and 2**size + shifted of a negative one
-            return (shifted >= 0) ? Narrow(shifted) : Protocols.Normalize((BigInteger.One << size) + shifted);
+            return (shifted >= 0) ? Narrow(shifted) : Protocols.Normalize(ShiftLeftOrFail(BigInteger.One, size) + shifted);
         }
 
         // the same on a Bignum: its bits are BigInteger's two's complement ones
@@ -268,8 +268,8 @@ namespace IronRuby.Builtins {
             if (size == 0) {
                 return ScriptingRuntimeHelpers.Int32ToObject(0);
             }
-            BigInteger shifted = (offset >= 0) ? self >> offset : self << -offset;
-            return Protocols.Normalize((size < 0) ? shifted : shifted & ((BigInteger.One << size) - 1));
+            BigInteger shifted = (offset >= 0) ? self >> offset : ShiftLeftOrFail(self, -offset);
+            return Protocols.Normalize((size < 0) ? shifted : shifted & (ShiftLeftOrFail(BigInteger.One, size) - 1));
         }
 
         /// <summary>
