@@ -794,6 +794,7 @@ namespace IronRuby.Tests {
                 Exception_EnsurePassThroughDeferredTrace1,
                 Exception_DeferredTraceKeptByClr1,
                 Exception_RescueFilterPassThrough1,
+                Exception_RescueFilterCause1,
 
                 ClassVariables1,
                 UnqualifiedConstants2,

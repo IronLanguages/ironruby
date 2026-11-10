@@ -41,8 +41,9 @@ namespace IronRuby.Compiler.Ast {
         private static readonly System.Reflection.MethodInfo/*!*/ _RescuePassMayTest = typeof(RubyOps).GetMethod(nameof(RubyOps.RescuePassMayTest));
         private static readonly System.Reflection.MethodInfo/*!*/ _RescueSiteCannotMatch = typeof(RubyOps).GetMethod(nameof(RubyOps.RescueSiteCannotMatch));
         private static readonly System.Reflection.MethodInfo/*!*/ _RescueDefaultCannotMatch = typeof(RubyOps).GetMethod(nameof(RubyOps.RescueDefaultCannotMatch));
+        private static readonly System.Reflection.MethodInfo/*!*/ _RescuePassCommit = typeof(RubyOps).GetMethod(nameof(RubyOps.RescuePassCommit));
 
-        // RescuePassUnwinder(scope, e) || RescuePassMayTest(scope, e) && <each class of each clause cannot match> (see RubyOps)
+        // RescuePassUnwinder(scope, e) || RescuePassMayTest(scope, e) && <each class of each clause cannot match> && RescuePassCommit(scope, e)
         private static MSA.Expression/*!*/ MakeRescuePass(MSA.Expression/*!*/ scope, MSA.Expression/*!*/ exception, ConstantSiteCache[][]/*!*/ clauses) {
             MSA.Expression test = Ast.Call(_RescuePassMayTest, scope, exception);
             foreach (var clause in clauses) {
@@ -53,7 +54,7 @@ namespace IronRuby.Compiler.Ast {
                     test = Ast.AndAlso(test, Ast.Call(_RescueSiteCannotMatch, scope, exception, AstUtils.Constant(site)));
                 }
             }
-            return Ast.OrElse(Ast.Call(_RescuePassUnwinder, scope, exception), test);
+            return Ast.OrElse(Ast.Call(_RescuePassUnwinder, scope, exception), Ast.AndAlso(test, Ast.Call(_RescuePassCommit, scope, exception)));
         }
 
         private readonly Statements/*!*/ _statements;

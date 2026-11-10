@@ -3520,6 +3520,21 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// The last test of the rescue filter, once every clause has been found not to match: the exception goes through, and gets the
+        /// cause CanRescue would have given it here - this frame's $!, which the frame restores to its own on the way out (an
+        /// exception C# threw from an ensure clause in the frame has the exception that clause ran for as its cause). An exception
+        /// Kernel#raise made has one already. Always true.
+        /// </summary>
+        public static bool RescuePassCommit(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            try {
+                RubyExceptionData.GetInstance(exception).TrySetCause(scope.RubyContext.CurrentException);
+            } catch (Exception) {
+                // goes through all the same: the cause is what an outer frame then decides
+            }
+            return true;
+        }
+
         /// <summary>A bare `rescue' (StandardError) cannot match.</summary>
         public static bool RescueDefaultCannotMatch(RubyScope/*!*/ scope, Exception/*!*/ exception) {
             try {

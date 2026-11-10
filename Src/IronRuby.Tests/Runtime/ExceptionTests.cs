@@ -1502,5 +1502,32 @@ $log.join(""|"")
             AreEqual(interpreting.CreateScriptSourceFromString(script, "rf1.rb", SourceCodeKind.File).Execute().ToString(), expected);
             AreEqual(Engine.CreateScriptSourceFromString(script, "rf2.rb", SourceCodeKind.File).Execute().ToString(), expected);
         }
+
+        /// <summary>
+        /// An exception that goes through a rescue frame unmatched (RubyOps.RescuePassMayTest) gets the cause CanRescue would have
+        /// given it there: the exception an ensure clause in that frame ran for, when C# threw the new one from the clause (Kernel#raise
+        /// sets a cause itself). Through a Thread#join too. The expected output is CRuby 4.0's; run interpreted and compiled.
+        /// </summary>
+        public void Exception_RescueFilterCause1() {
+            const string script = @"def f1
+  begin
+    begin; raise ""first""; ensure; 1/0; end
+  rescue TypeError
+  end
+end
+def f2; begin; begin; raise ""second""; ensure; nil.zork; end; rescue TypeError; end; end
+def f3; begin; begin; raise ""third""; ensure; [].fetch(5); end; rescue TypeError; end; end
+def g(m) = (begin; send(m); rescue => e; [e.class, e.cause&.message]; end)
+r = 50.times.map { [g(:f1), g(:f2), g(:f3)] }
+t = Thread.new { f1 }
+t.report_on_exception = false
+x = begin; t.join; rescue => e; [e.class, e.cause&.message]; end
+[r.first, r.last, x].inspect";
+            const string expected = "[[[ZeroDivisionError, \"first\"], [NoMethodError, \"second\"], [IndexError, \"third\"]], [[ZeroDivisionError, \"first\"], [NoMethodError, \"second\"], [IndexError, \"third\"]], [ZeroDivisionError, \"first\"]]";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "cause1.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            AreEqual(Engine.CreateScriptSourceFromString(script, "cause2.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
     }
 }
