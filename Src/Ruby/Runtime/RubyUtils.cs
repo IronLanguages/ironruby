@@ -2764,10 +2764,13 @@ namespace IronRuby.Runtime {
         /// Writes binary content of <see cref="MutableString"/> into the given buffer.
         /// </summary>
         public static void Write(this Stream/*!*/ stream, MutableString/*!*/ str, int start, int count) {
-            int byteCount;
-            byte[] bytes = str.GetByteArray(out byteCount);
+            int offset, byteCount;
+            byte[] bytes = str.GetByteArray(out offset, out byteCount);
+            if (start < 0 || count < 0) {
+                throw new ArgumentOutOfRangeException(start < 0 ? "start" : "count");
+            }
             if (start < byteCount) {
-                stream.Write(bytes, start, Math.Min(byteCount - start, count));
+                stream.Write(bytes, offset + start, Math.Min(byteCount - start, count));
             }
         }
 

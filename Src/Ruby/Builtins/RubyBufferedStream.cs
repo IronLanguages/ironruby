@@ -237,7 +237,8 @@ namespace IronRuby.Builtins {
 
         public int WriteBytes(MutableString/*!*/ buffer, int offset, int count, bool preserveEndOfLines) {
             // TODO: this is not safe, we are passing an internal pointer to the byte[] content of MutableString to the Stream:
-            return WriteBytes(buffer.SwitchToBytes().GetByteArrayChecked(offset, count), offset, count, preserveEndOfLines);
+            byte[] bytes = buffer.SwitchToBytes().GetByteArrayChecked(ref offset, count);
+            return WriteBytes(bytes, offset, count, preserveEndOfLines);
         }
 
         public int WriteBytes(byte[]/*!*/ buffer, int offset, int count, bool preserveEndOfLines) {
@@ -363,7 +364,7 @@ namespace IronRuby.Builtins {
 
                     buffer.EnsureCapacity(end + 3);
                     int byteCount;
-                    bytes = buffer.GetByteArray(out byteCount);
+                    bytes = buffer.GetWritableByteArray(out byteCount);
 
                     if (bytes[end - 1] == CR && PeekByte(0) == LF) {
                         ReadByte();
@@ -777,9 +778,9 @@ namespace IronRuby.Builtins {
         }
 
         private static bool EndsWith(MutableString/*!*/ str, byte[]/*!*/ suffix) {
-            int count;
-            byte[] bytes = str.GetByteArray(out count);
-            return count >= suffix.Length && new ReadOnlySpan<byte>(bytes, count - suffix.Length, suffix.Length).SequenceEqual(suffix);
+            int start, count;
+            byte[] bytes = str.GetByteArray(out start, out count);
+            return new ReadOnlySpan<byte>(bytes, start, count).EndsWith(suffix);
         }
 
         public override bool CanRead {

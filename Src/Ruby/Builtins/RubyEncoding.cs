@@ -506,6 +506,26 @@ namespace IronRuby.Builtins {
             get { return _isAsciiIdentity; }
         }
 
+        // 0 not known yet, 1 yes, 2 no
+        private int _asciiRoundTrips;
+
+        /// <summary>
+        /// Whether a string in this encoding whose characters are all ASCII hashes its bytes rather
+        /// than its UTF-16 characters (see MutableString.GetHashCode): ASCII characters are the same
+        /// bytes in it, both ways. Not a dummy encoding, where bytes that are all ASCII (ISO-2022-JP's
+        /// escape sequences) can stand for other characters.
+        /// </summary>
+        internal bool AsciiRoundTrips {
+            get {
+                int state = _asciiRoundTrips;
+                if (state == 0) {
+                    state = (_isAsciiIdentity && !IsDummy) ? 1 : 2;
+                    _asciiRoundTrips = state;
+                }
+                return state == 1;
+            }
+        }
+
         private static Encoding/*!*/ CreateEncoding(int codepage, bool throwOnError) {
             var rubyOnly = RubyOnlyEncodings.TryCreate(codepage, throwOnError);
             if (rubyOnly != null) {

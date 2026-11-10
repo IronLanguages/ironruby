@@ -986,7 +986,7 @@ namespace IronRuby.Builtins {
 
         /// <summary>Removes and answers the CLR range [start, start + length).</summary>
         private static MutableString/*!*/ RemoveClrRange(MutableString/*!*/ self, int start, int length) {
-            MutableString result = self.CreateDerived().Append(self, start, length);
+            MutableString result = self.GetSlice(start, length);
             self.Remove(start, length);
             return result;
         }
@@ -1073,8 +1073,8 @@ namespace IronRuby.Builtins {
                 return (start == charCount && count >= 0) ? self.CreateDerived() : null;
             }
 
-            self.ToClrRange(ref start, ref count);
-            return self.CreateDerived().Append(self, start, count);
+            // a long substring shares the receiver's array (MutableString.GetSlice)
+            return GetCharacterSlice(self, start, count);
         }
 
         #region byteslice
@@ -1126,7 +1126,7 @@ namespace IronRuby.Builtins {
         }
 
         private static MutableString/*!*/ GetByteSubstring(MutableString/*!*/ self, int start, int count) {
-            return self.CreateDerived().Append(self.GetBinarySlice(start, count));
+            return self.GetByteSlice(start, count);
         }
 
         #endregion

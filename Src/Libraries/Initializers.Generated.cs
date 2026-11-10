@@ -4477,6 +4477,11 @@ namespace IronRuby.Builtins {
                 new Func<System.String, System.Object, System.Boolean>(IronRuby.Builtins.ClrString.Eql)
             );
             
+            DefineLibraryMethod(module, "hash", 0x51, 
+                0x00000000U, 
+                new Func<System.String, System.Int32>(IronRuby.Builtins.ClrString.GetHashCode)
+            );
+            
             DefineLibraryMethod(module, "hex", 0x51, 
                 0x00000000U, 
                 new Func<System.String, System.Object>(IronRuby.Builtins.ClrString.ToIntegerHex)

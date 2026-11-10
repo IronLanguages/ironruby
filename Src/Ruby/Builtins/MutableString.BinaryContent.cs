@@ -31,7 +31,12 @@ namespace IronRuby.Builtins {
         /// </summary>
         [Serializable]
         internal class BinaryContent : Content {
+            // The bytes are _data[_start, _start + _count). _start is 0 unless this content shares
+            // _data (a slice that does not begin at the start of the string, see GetSlice), so every
+            // write - which gives the content an array of its own first, at offset 0 (EnterWrite) -
+            // can index _data directly; everything else adds _start.
             protected byte[] _data;
+            protected int _start;
             protected int _count;
 
             // Whether _data may be referenced by another content as well - a copy made by Clone
@@ -54,9 +59,18 @@ namespace IronRuby.Builtins {
             }
 
             // A content that shares data with another: see _state.
-            private BinaryContent(byte[]/*!*/ data, int count, MutableString owner, bool shared)
-                : this(data, count, owner) {
-                _state = shared ? ContentState.Shared : 0;
+            private BinaryContent(byte[]/*!*/ data, int start, int count, MutableString owner)
+                : base(owner) {
+                Debug.Assert(start >= 0 && count >= 0 && count <= data.Length - start);
+                _data = data;
+                _start = start;
+                _count = count;
+                _state = ContentState.Shared;
+                IsOffsetSlice = start != 0;
+            }
+
+            internal override Content/*!*/ Unslice() {
+                return IsOffsetSlice ? new BinaryContent(ToByteArray(), _owner) : this;
             }
 
             /// <summary>
@@ -73,13 +87,17 @@ namespace IronRuby.Builtins {
 
             [MethodImpl(MethodImplOptions.NoInlining)]
             private void EnterWriteSlow(int minCapacity) {
+                // An offset slice is replaced before it is written (see IsOffsetSlice); copying it
+                // to offset 0 here as well keeps a missed path correct, if not safe for readers.
+                Debug.Assert(!IsOffsetSlice, "an offset slice is written in place");
                 if (ContentState.Enter(ref _state)) {
                     try {
                         // Room past the end is zeroed, as a fresh array's would be; the rest is copied over.
                         var data = Utils.NewArrayToFill<byte>(Math.Max(_count, minCapacity));
-                        Buffer.BlockCopy(_data, 0, data, 0, _count);
+                        Buffer.BlockCopy(_data, _start, data, 0, _count);
                         Array.Clear(data, _count, data.Length - _count);
                         _data = data;
+                        _start = 0;
                     } catch {
                         ContentState.Exit(ref _state, true);
                         throw;
@@ -98,7 +116,12 @@ namespace IronRuby.Builtins {
             }
 
             internal ReadOnlySpan<byte> GetDataSpan() {
-                return new ReadOnlySpan<byte>(_data, 0, _count);
+                // A write on another thread can replace the array between these reads (copy-on-write,
+                // growing): the span never reaches past the array actually read. (An offset slice's
+                // array and offset do not change at all, see IsOffsetSlice.)
+                byte[] data = _data;
+                int start = _start;
+                return new ReadOnlySpan<byte>(data, start, Math.Min(_count, data.Length - start));
             }
 
             protected virtual BinaryContent/*!*/ Create(byte[]/*!*/ data, MutableString owner) {
@@ -122,10 +145,10 @@ namespace IronRuby.Builtins {
                 if (_count == 0) {
                     return (additionalCapacity == 0) ? Utils.EmptyChars : new char[additionalCapacity];
                 } else if (additionalCapacity == 0) {
-                    return encoding.GetChars(_data, 0, _count);
+                    return encoding.GetChars(_data, _start, _count);
                 } else {
-                    var result = new char[encoding.GetCharCount(_data, 0, _count) + additionalCapacity];
-                    encoding.GetChars(_data, 0, _count, result, 0);
+                    var result = new char[encoding.GetCharCount(_data, _start, _count) + additionalCapacity];
+                    encoding.GetChars(_data, _start, _count, result, 0);
                     return result;
                 }
             }
@@ -134,7 +157,7 @@ namespace IronRuby.Builtins {
                 if (_count == 0) {
                     return String.Empty;
                 } else {
-                    return _owner._encoding.EscapingEncoding.GetString(_data, 0, _count);
+                    return _owner._encoding.EscapingEncoding.GetString(_data, _start, _count);
                 } 
             }
 
@@ -160,40 +183,49 @@ namespace IronRuby.Builtins {
 
             public override uint UpdateCharacterFlags(uint flags) {
                 // can't determine surrogates for binary repr (w/o conversion):
-                if (_data.IsAscii(_count)) {
+                if (System.Text.Ascii.IsValid(GetDataSpan())) {
                     return (flags & ~MutableString.AsciiUnknownFlag) | MutableString.IsAsciiFlag;
                 } else {
                     return flags & ~(MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag);
                 }
             }
 
+            [SkipLocalsInit]
             public override int CalculateHashCode() {
-                if (_count == 0) {
-                    return String.Empty.GetHashCode();
-                }
-
                 // The same string can be held as bytes or as characters and the hash has to come
-                // out the same either way, so this has to be the character representation the
-                // escaping decoder produces - the same one CharArrayContent would hash. The characters
-                // go to a scratch buffer rather than a new string: a long string was copied to the
-                // large object heap on every #hash.
-                var bytes = new ReadOnlySpan<byte>(_data, 0, _count);
+                // out the same either way (see Content.HashCharacters): long ASCII hashes its bytes,
+                // anything else the characters the escaping decoder makes of them - those
+                // CharArrayContent would hash. They go to a scratch buffer rather than a new string:
+                // a long string was copied to the large object heap on every #hash.
+                var bytes = GetDataSpan();
                 RubyEncoding encoding = _owner._encoding;
-                bool ascii = (encoding == RubyEncoding.UTF8 || encoding == RubyEncoding.Binary || encoding == RubyEncoding.Ascii) &&
-                    System.Text.Ascii.IsValid(bytes);
-                int charCount = ascii ? _count : encoding.EscapingEncoding.GetCharCount(_data, 0, _count);
+                bool ascii;
+                if (_count >= AsciiByteHashMinLength) {
+                    // the bytes themselves, not the cached flags, which a write in place can leave behind
+                    ascii = encoding.AsciiRoundTrips && System.Text.Ascii.IsValid(bytes);
+                    if (ascii) {
+                        return HashAsciiBytes(bytes);
+                    }
+                } else {
+                    ascii = (encoding == RubyEncoding.UTF8 || encoding == RubyEncoding.Binary || encoding == RubyEncoding.Ascii) &&
+                        System.Text.Ascii.IsValid(bytes);
+                }
+                int charCount = ascii ? _count : encoding.EscapingEncoding.GetCharCount(_data, _start, _count);
 
                 // EscapingEncoding implements only the array overloads: the span ones would go
                 // through temporary arrays of their own.
                 char[] rented = null;
-                Span<char> chars = (ascii && charCount <= 256) ? stackalloc char[256] : (rented = ArrayPool<char>.Shared.Rent(charCount));
+                Span<char> chars = (ascii && charCount <= AsciiByteHashMinLength) ? stackalloc char[AsciiByteHashMinLength] : (rented = ArrayPool<char>.Shared.Rent(charCount));
                 try {
                     if (ascii) {
                         System.Text.Ascii.ToUtf16(bytes, chars, out _);
                     } else {
-                        encoding.EscapingEncoding.GetChars(_data, 0, _count, rented, 0);
+                        encoding.EscapingEncoding.GetChars(_data, _start, _count, rented, 0);
                     }
-                    return String.GetHashCode(chars.Slice(0, charCount));
+                    // Characters decoded in an encoding whose ASCII bytes are not its ASCII characters
+                    // (UTF-16, a dummy encoding) can still be long ASCII, which is hashed narrowed -
+                    // as the characters of the same string held as characters, or of a CLR string, are.
+                    return HashCharacters(chars.Slice(0, charCount), !encoding.AsciiRoundTrips);
                 } finally {
                     if (rented != null) {
                         ArrayPool<char>.Shared.Return(rented);
@@ -243,7 +275,7 @@ namespace IronRuby.Builtins {
                 // caller alternating #length and #bytesize would switch back and forth every time.
                 // Every character is one UTF-16 unit except those of four bytes, which are two.
                 if (_owner._encoding == RubyEncoding.UTF8) {
-                    var span = new ReadOnlySpan<byte>(_data, 0, _count);
+                    var span = GetDataSpan();
                     if (System.Text.Unicode.Utf8.IsValid(span)) {
                         int result = System.Text.Encoding.UTF8.GetCharCount(span);
                         int i = 0;
@@ -291,6 +323,7 @@ namespace IronRuby.Builtins {
             }
 
             private int ReadUnit16(int i, bool bigEndian) {
+                i += _start;
                 return bigEndian ? (_data[i] << 8) | _data[i + 1] : (_data[i + 1] << 8) | _data[i];
             }
 
@@ -310,25 +343,35 @@ namespace IronRuby.Builtins {
             public override Content/*!*/ Clone() {
                 ContentState.Enter(ref _state);
                 try {
-                    return new BinaryContent(_data, _count, _owner, true);
+                    return new BinaryContent(_data, _start, _count, _owner);
                 } finally {
                     ContentState.Exit(ref _state, true);
                 }
             }
 
             public override void TrimExcess() {
-                Utils.TrimExcess(ref _data, _count);
+                EnterWrite(0);
+                try {
+                    Utils.TrimExcess(ref _data, _count);
+                } finally {
+                    ExitWrite();
+                }
             }
 
             public override int GetCapacity() {
-                return _data.Length;
+                return _data.Length - _start;
             }
 
             public override void SetCapacity(int capacity) {
                 if (capacity < _count) {
                     throw new InvalidOperationException();
                 }
-                Array.Resize(ref _data, capacity);
+                EnterWrite(capacity);
+                try {
+                    Array.Resize(ref _data, capacity);
+                } finally {
+                    ExitWrite();
+                }
             }
 
             #endregion
@@ -340,7 +383,7 @@ namespace IronRuby.Builtins {
             }
 
             public override byte[]/*!*/ ConvertToBytes() {
-                return _data.GetSlice(0, _count);
+                return ToByteArray();
             }
 
             public override string/*!*/ ToString() {
@@ -348,10 +391,11 @@ namespace IronRuby.Builtins {
             }
 
             public override byte[]/*!*/ ToByteArray() {
-                return _data.GetSlice(0, _count);
+                return _data.GetSlice(_start, _count);
             }
 
-            internal override byte[]/*!*/ GetByteArray(out int count) {
+            internal override byte[]/*!*/ GetByteArray(out int start, out int count) {
+                start = _start;
                 count = _count;
                 return _data;
             }
@@ -373,7 +417,7 @@ namespace IronRuby.Builtins {
                     // UTF-16 and UTF-32: a byte is not a character there, and escaping the bytes
                     // one by one put a lone '\' byte in the middle of the code units ("." became
                     // the three bytes "\\.\0", which no longer matched a ".").
-                    StringBuilder sb = RubyRegex.EscapeToStringBuilder(_owner._encoding.StrictEncoding.GetString(_data, 0, _count));
+                    StringBuilder sb = RubyRegex.EscapeToStringBuilder(_owner._encoding.StrictEncoding.GetString(_data, _start, _count));
                     return (sb != null) ? new StringContent(sb.ToString(), _owner) : Clone();
                 }
                 // TODO:
@@ -385,11 +429,11 @@ namespace IronRuby.Builtins {
             }
 
             public override void CheckEncoding() {
-                _owner._encoding.StrictEncoding.GetCharCount(_data, 0, _count);
+                _owner._encoding.StrictEncoding.GetCharCount(_data, _start, _count);
             }
 
             public override bool ContainsInvalidCharacters() {
-                return Utils.ContainsInvalidCharacters(_data, 0, _count, _owner._encoding.StrictEncoding);
+                return Utils.ContainsInvalidCharacters(_data, _start, _count, _owner._encoding.StrictEncoding);
             }
 
             #endregion
@@ -398,14 +442,14 @@ namespace IronRuby.Builtins {
 
             public override int OrdinalCompareTo(string/*!*/ str) {
                 if (_owner.HasByteCharacters) {
-                    return Utils.ValueCompareTo(_data, _count, str);
+                    return Utils.ValueCompareTo(GetDataSpan(), str);
                 } else {
                     return SwitchToChars().OrdinalCompareTo(str);
                 }
             }
 
-            internal int OrdinalCompareTo(byte[]/*!*/ bytes, int count) {
-                return _data.ValueCompareTo(_count, bytes, count);
+            internal int OrdinalCompareTo(ReadOnlySpan<byte> bytes) {
+                return Utils.ValueCompareTo(GetDataSpan(), bytes);
             }
 
             // this <=> content
@@ -415,17 +459,17 @@ namespace IronRuby.Builtins {
 
             // content.bytes <=> this.bytes
             public override int ReverseOrdinalCompareTo(BinaryContent/*!*/ content) {
-                return content.OrdinalCompareTo(_data, _count);
+                return content.OrdinalCompareTo(GetDataSpan());
             }
 
             // content.chars <=> this.bytes
             public override int ReverseOrdinalCompareTo(CharArrayContent/*!*/ content) {
-                return content.SwitchToBinary().OrdinalCompareTo(_data, _count);
+                return content.SwitchToBinary().OrdinalCompareTo(GetDataSpan());
             }
 
             // content.chars <=> this.bytes
             public override int ReverseOrdinalCompareTo(StringContent/*!*/ content) {
-                return content.SwitchToBinary().OrdinalCompareTo(_data, _count);
+                return content.SwitchToBinary().OrdinalCompareTo(GetDataSpan());
             }
 
             #endregion
@@ -434,11 +478,11 @@ namespace IronRuby.Builtins {
 
             public override char GetChar(int index) {
                 if (_owner.HasSingleByteCharacters || index == 0) {
-                    // character index == byte index
-                    if (index >= _count) {
+                    // character index == byte index (and the bytes may be a slice of a larger array)
+                    if ((uint)index >= (uint)_count) {
                         throw new IndexOutOfRangeException();
                     }
-                    var result = _data[index];
+                    var result = _data[_start + index];
                     if (result < 0x80 || _owner.HasByteCharacters) {
                         // no decoding needed:
                         return (char)result;
@@ -450,10 +494,10 @@ namespace IronRuby.Builtins {
             }
 
             public override byte GetByte(int index) {
-                if (index >= _count) {
+                if ((uint)index >= (uint)_count) {
                     throw new IndexOutOfRangeException();
                 }
-                return _data[index];
+                return _data[_start + index];
             }
 
             public override string/*!*/ GetStringSlice(int start, int count) {
@@ -461,29 +505,29 @@ namespace IronRuby.Builtins {
             }
 
             public override byte[]/*!*/ GetBinarySlice(int start, int count) {
-                return _data.GetSlice(_count, start, count);
+                return Utils.GetSlice(GetDataSpan(), start, count);
             }
 
             public override Content/*!*/ GetSlice(int start, int count) {
-                if (start == 0 && Utils.IsSharedPrefix(_data.Length, Math.Min(count, _count))) {
-                    // see Utils.IsSharedPrefix; checked again while holding the content
+                if (Utils.IsSharedSlice(_data.Length, Utils.NormalizeCount(_count, start, count))) {
+                    // see Utils.IsSharedSlice; checked again while holding the content
                     bool shared = ContentState.Enter(ref _state);
                     try {
-                        int prefix = Math.Min(count, _count);
-                        if (Utils.IsSharedPrefix(_data.Length, prefix)) {
+                        int sliceCount = Utils.NormalizeCount(_count, start, count);
+                        if (Utils.IsSharedSlice(_data.Length, sliceCount)) {
                             shared = true;
-                            return new BinaryContent(_data, prefix, _owner, true);
+                            return new BinaryContent(_data, _start + start, sliceCount, _owner);
                         }
                     } finally {
                         ContentState.Exit(ref _state, shared);
                     }
                 }
-                return Create(_data.GetSlice(_count, start, count), _owner);
+                return Create(Utils.GetSlice(GetDataSpan(), start, count), _owner);
             }
 
             public override CharacterEnumerator/*!*/ GetCharacters() {
                 if (_owner.HasByteCharacters) {
-                    return new MutableString.BinaryCharacterEnumerator(_owner.Encoding, _data, _count);
+                    return new MutableString.BinaryCharacterEnumerator(_owner.Encoding, _data, _start, _count);
                 }
 
                 // EnumerateAsCharacters used to be needed here because the bytes might not decode;
@@ -495,7 +539,7 @@ namespace IronRuby.Builtins {
             }
 
             public override IEnumerable<byte>/*!*/ GetBytes() {
-                return Utils.Enumerate(_data, _count);
+                return Utils.Enumerate(_data, _start, _count);
             }
 
             #endregion
@@ -508,7 +552,7 @@ namespace IronRuby.Builtins {
                 }
 
                 if (_owner.HasByteCharacters || c < 0x80 && _owner._encoding.IsAsciiIdentity) {
-                    return _data[0] == c;    
+                    return _data[_start] == c;
                 }
 
                 byte[] bytes = new byte[_owner.Encoding.MaxBytesPerChar];
@@ -517,7 +561,7 @@ namespace IronRuby.Builtins {
                     return false;
                 }
 
-                return Utils.ValueCompareTo(_data, byteCount, bytes, byteCount) == 0;
+                return GetDataSpan().StartsWith(new ReadOnlySpan<byte>(bytes, 0, byteCount));
             }
 
             #endregion
@@ -526,7 +570,7 @@ namespace IronRuby.Builtins {
 
             public override int IndexOf(char c, int start, int count) {
                 if (_owner.HasByteCharacters) {
-                    return Utils.IndexOf(_data, _count, c, start, count);
+                    return Utils.IndexOf(GetDataSpan(), c, start, count);
                 }
                 try {
                     return SwitchToChars().IndexOf(c, start, count);
@@ -536,30 +580,34 @@ namespace IronRuby.Builtins {
                     // what makes String#each_line work on such a string - and each_line is
                     // what pp walks a string with, so without this a failure message about a
                     // string with a stray byte in it is a decoder error instead of the string.
-                    return Utils.IndexOf(_data, _count, c, start, count);
+                    return Utils.IndexOf(GetDataSpan(), c, start, count);
                 }
             }
 
             public override int IndexOf(byte b, int start, int count) {
                 count = Utils.NormalizeCount(_count, start, count);
-                return count > 0 ? Array.IndexOf(_data, b, start, count) : -1;
+                if (count <= 0) {
+                    return -1;
+                }
+                int i = GetDataSpan().Slice(start, count).IndexOf(b);
+                return i < 0 ? -1 : start + i;
             }
 
             public override int IndexOf(string/*!*/ str, int start, int count) {
                 if (_owner.HasByteCharacters) {
-                    return Utils.IndexOf(_data, _count, str, start, count);
+                    return Utils.IndexOf(GetDataSpan(), str, start, count);
                 }
                 try {
                     return SwitchToChars().IndexOf(str, start, count);
                 } catch (DecoderFallbackException) when (str.IsAscii()) {
                     // See IndexOf(char): the bytes are all that is left to search. Only an
                     // ASCII needle can be matched against them byte for byte.
-                    return Utils.IndexOf(_data, _count, str, start, count);
+                    return Utils.IndexOf(GetDataSpan(), str, start, count);
                 }
             }
 
             public override int IndexOf(byte[]/*!*/ bytes, int start, int count) {
-                return Utils.IndexOf(_data, _count, bytes, start, count);
+                return Utils.IndexOf(GetDataSpan(), bytes, start, count);
             }
 
             public override int IndexIn(Content/*!*/ str, int start, int count) {
@@ -574,7 +622,7 @@ namespace IronRuby.Builtins {
             /// the buffer happens to be exactly full.
             /// </summary>
             private byte[]/*!*/ ExactData() {
-                return _count == _data.Length ? _data : ToByteArray();
+                return (_start == 0 && _count == _data.Length) ? _data : ToByteArray();
             }
 
             #endregion
@@ -587,12 +635,17 @@ namespace IronRuby.Builtins {
 
             public override int LastIndexOf(byte b, int start, int count) {
                 Utils.NormalizeLastIndexOfIndices(_count, ref start, ref count);
-                return Array.LastIndexOf(_data, b, start, count);
+                if (count <= 0) {
+                    return -1;
+                }
+                int finish = start - count + 1;
+                int i = GetDataSpan().Slice(finish, count).LastIndexOf(b);
+                return i < 0 ? -1 : finish + i;
             }
 
             public override int LastIndexOf(string/*!*/ str, int start, int count) {
                 if (_owner.HasByteCharacters) {
-                    return Utils.LastIndexOf(_data, _count, str, start, count);
+                    return Utils.LastIndexOf(GetDataSpan(), str, start, count);
                 } else {
                     return SwitchToChars().LastIndexOf(str, start, count);
                 }
@@ -600,7 +653,7 @@ namespace IronRuby.Builtins {
 
             public override int LastIndexOf(byte[]/*!*/ bytes, int start, int count) {
                 // Array.LastIndexOf has different semantics for indices than String.LastIndexOf:
-                return Utils.LastIndexOf(_data, _count, bytes, start, count);
+                return Utils.LastIndexOf(GetDataSpan(), bytes, start, count);
             }
 
             public override int LastIndexIn(Content/*!*/ str, int start, int count) {
@@ -615,42 +668,46 @@ namespace IronRuby.Builtins {
                 return content.ConcatTo(this);
             }
 
+            // Every byte of the result is written, so the array is not zeroed first (see Utils.NewArrayToFill).
             internal BinaryContent/*!*/ Concatenate(CharArrayContent/*!*/ content) {
                 int count = content.GetDataByteCount();
-                var result = new byte[_count + count];
-                Array.Copy(_data, 0, result, 0, _count);
+                var result = Utils.NewArrayToFill<byte>(_count + count);
+                GetDataSpan().CopyTo(result);
                 content.GetDataBytes(result, _count);
                 return Create(result, null);
             }
 
             internal BinaryContent/*!*/ Concatenate(StringContent/*!*/ content) {
                 int count = content.GetDataByteCount();
-                var result = new byte[_count + count];
-                Array.Copy(_data, 0, result, 0, _count);
+                var result = Utils.NewArrayToFill<byte>(_count + count);
+                GetDataSpan().CopyTo(result);
                 content.GetDataBytes(result, _count);
                 return Create(result, null);
             }
 
             // binary + binary(self) -> binary
             public override Content/*!*/ ConcatTo(BinaryContent/*!*/ content) {
-                return Create(Utils.Concatenate(content._data, content._count, _data, _count), null);
+                var result = Utils.NewArrayToFill<byte>(content._count + _count);
+                content.GetDataSpan().CopyTo(result);
+                GetDataSpan().CopyTo(result.AsSpan(content._count));
+                return Create(result, null);
             }
 
             // chars + binary(self) -> binary
             public override Content/*!*/ ConcatTo(CharArrayContent/*!*/ content) {
                 int count = content.GetDataByteCount();
-                var result = new byte[count + _count];
+                var result = Utils.NewArrayToFill<byte>(count + _count);
                 content.GetDataBytes(result, 0);
-                Array.Copy(_data, 0, result, count, _count);
+                GetDataSpan().CopyTo(result.AsSpan(count));
                 return Create(result, null);
             }
 
             // string + binary(self) -> binary
             public override Content/*!*/ ConcatTo(StringContent/*!*/ content) {
                 int count = content.GetDataByteCount();
-                var result = new byte[count + _count];
+                var result = Utils.NewArrayToFill<byte>(count + _count);
                 content.GetDataBytes(result, 0);
-                Array.Copy(_data, 0, result, count, _count);
+                GetDataSpan().CopyTo(result.AsSpan(count));
                 return Create(result, null);
             }
 
@@ -722,29 +779,29 @@ namespace IronRuby.Builtins {
 
             // content.bytes + this.bytes[start, count]
             public override void AppendTo(BinaryContent/*!*/ content, int start, int count) {
-                if (start > _count - count) {
+                if (start < 0 || start > _count - count) {
                     throw new ArgumentOutOfRangeException("start");
                 }
                 
-                content.Append(_data, start, count);
+                content.Append(_data, _start + start, count);
             }
 
             // content.chars + this.bytes[start, count]
             public override void AppendTo(CharArrayContent/*!*/ content, int start, int count) {
-                if (start > _count - count) {
+                if (start < 0 || start > _count - count) {
                     throw new ArgumentOutOfRangeException("start");
                 }
 
-                content.SwitchToBinary().Append(_data, start, count);
+                content.SwitchToBinary().Append(_data, _start + start, count);
             }
 
             // content.chars + this.bytes[start, count]
             public override void AppendTo(StringContent/*!*/ content, int start, int count) {
-                if (start > _count - count) {
+                if (start < 0 || start > _count - count) {
                     throw new ArgumentOutOfRangeException("start");
                 }
 
-                content.SwitchToBinary().Append(_data, start, count);
+                content.SwitchToBinary().Append(_data, _start + start, count);
             }
 
             #endregion
@@ -786,7 +843,10 @@ namespace IronRuby.Builtins {
             }
 
             public override void InsertTo(Content/*!*/ str, int index, int start, int count) {
-                str.Insert(index, _data, start, count);
+                if (start < 0 || count < 0 || start > _count - count) {
+                    throw new ArgumentOutOfRangeException("start");
+                }
+                str.Insert(index, _data, _start + start, count);
             }
 
             public override void SetByte(int index, byte b) {
@@ -819,7 +879,7 @@ namespace IronRuby.Builtins {
                     if (shared) {
                         // Cutting off the end leaves the shared bytes as they are; anything else copies
                         // what is left in one go rather than copying everything and then moving the tail.
-                        _count = Utils.RemoveShared(ref _data, _count, start, count, ref shared);
+                        _count = Utils.RemoveShared(ref _data, ref _start, _count, start, count, ref shared);
                     } else {
                         _count = Utils.Remove(ref _data, _count, start, count);
                     }
