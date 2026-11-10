@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Reflection;
@@ -154,6 +155,49 @@ namespace IronRuby.Builtins {
             }
             var site = lastN.GetCallSite("__last_n__", 1);
             return site.Target(site, self, count);
+        }
+
+        /// <summary>
+        /// Range#size, MRI's range_size: the number of Integers an Integer range covers, Infinity for an endless one, and
+        /// "can't iterate" for a beginning that cannot be walked. Like MRI it reads the endpoints themselves, not #begin
+        /// and #end. The forms with an Integer beginning and an Integer or no end, and a nil or Float beginning, are
+        /// answered here; the rest (a Numeric end that is not an Integer, a beginning with or without #succ) go to the
+        /// prelude's __size__. That whole method had been Ruby, which cost ~0.3 us on (1..10).size.
+        /// </summary>
+        [RubyMethod("size")]
+        public static object Size(CallSiteStorage<Func<CallSite, object, object>>/*!*/ slow, [NotNull]Range/*!*/ self) {
+            object begin = self.Begin, end = self.End;
+            if (begin is int first && end is int last) {
+                long count = (long)last - first + (self.ExcludeEnd ? 0 : 1);
+                return (count <= 0) ? ScriptingRuntimeHelpers.Int32ToObject(0) : Protocols.Normalize(count);
+            }
+            if (IsInteger(begin)) {
+                if (end == null) {
+                    return Double.PositiveInfinity;
+                }
+                if (IsInteger(end)) {
+                    BigInteger count = ToBigInteger(end) - ToBigInteger(begin) + (self.ExcludeEnd ? 0 : 1);
+                    return (count.Sign <= 0) ? ScriptingRuntimeHelpers.Int32ToObject(0) : Protocols.Normalize(count);
+                }
+            } else if (begin == null) {
+                throw RubyExceptions.CreateTypeError("can't iterate from NilClass");
+            } else if (begin is double) {
+                throw RubyExceptions.CreateTypeError("can't iterate from Float");
+            }
+            var site = slow.GetCallSite("__size__", 0);
+            return site.Target(site, self);
+        }
+
+        private static bool IsInteger(object value) {
+            return value is int || value is long || value is BigInteger;
+        }
+
+        private static BigInteger ToBigInteger(object integer) {
+            switch (integer) {
+                case int i: return i;
+                case long l: return l;
+                default: return (BigInteger)integer;
+            }
         }
 
         // longer runs are left to the prelude, whatever it makes of them

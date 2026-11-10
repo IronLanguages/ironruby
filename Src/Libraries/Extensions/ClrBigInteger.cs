@@ -1163,7 +1163,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_s")]
         [RubyMethod("inspect")]
         public static MutableString/*!*/ ToString(BigInteger/*!*/ self) {
-            return MutableString.CreateAscii(self.ToString());
+            return MutableString.CreateAscii(ToRadixString(self, 10));
         }
 
         // A Fixnum: without these, an Int32 self bound to the BigInteger overloads above and was
@@ -1201,83 +1201,67 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// The digits of <paramref name="value"/> in base <paramref name="radix"/> (2 through 36), lower case,
-        /// with a leading '-' when it is negative.
+        /// with a leading '-' when it is negative. Integer#to_s and #inspect, and format's %d, %x, %o and %b,
+        /// all come here.
         /// </summary>
         /// <remarks>
-        /// MathUtils.ToString(BigInteger, int) divides the whole number by the radix once per digit, so a
-        /// Fixnum costs a BigInteger division for each digit and a Bignum of n words O(n) of them per digit.
-        /// Here a value in the Int64 range is converted with machine arithmetic, a power-of-two radix reads
-        /// the bits directly, and any other radix divides by the largest power of the radix that fits in
-        /// a long, which yields that many digits per division.
+        /// A value in the Int64 range is converted with machine arithmetic and a power-of-two radix reads the
+        /// bits directly. Any other radix goes to the DLR's MathUtils.ToString (Build/dlr-patches/0106), which
+        /// splits the number by powers of the radix and so is subquadratic; dividing by the radix a digit (or a
+        /// long's worth of digits) at a time, as this did before, took ~6 s for a million bits. In radix 10
+        /// the runtime's own BigInteger.ToString is quicker up to a size that depends on the runtime (see
+        /// <see cref="DecimalSplitBits"/>).
         /// </remarks>
-        internal static string/*!*/ ToRadixString(BigInteger value, int radix) {
+        public static string/*!*/ ToRadixString(BigInteger value, int radix) {
             Debug.Assert(radix >= 2 && radix <= 36);
 
-            if (radix == 10) {
+            if (value >= Int64.MinValue && value <= Int64.MaxValue) {
+                long fixnum = (long)value;
+                return (radix == 10) ? fixnum.ToString(CultureInfo.InvariantCulture) : ToRadixString(fixnum, radix);
+            }
+
+            if ((radix & (radix - 1)) == 0) {
+                return ToPowerOfTwoRadixString(value, radix);
+            }
+
+            if (radix == 10 && value.GetBitLength() < DecimalSplitBits) {
                 return value.ToString(CultureInfo.InvariantCulture);
             }
 
-            if (value >= Int64.MinValue && value <= Int64.MaxValue) {
-                return ToRadixString((long)value, radix);
-            }
+            // MathUtils writes upper-case letters, and only a radix above 10 has any
+            string digits = MathUtils.ToString(value, radix);
+            return (radix > 10) ? digits.ToLowerInvariant() : digits;
+        }
 
+        // From this many bits on, MathUtils.ToString beats BigInteger.ToString in radix 10. Measured (Release,
+        // one core) on random values: on .NET 8 the two are level at ~64-96k bits, where BigInteger.ToString
+        // takes ~6-13 ms, and MathUtils (Barrett division) is twice as fast at 256k bits; .NET 9 and later
+        // divide in subquadratic time and format more slowly, and are level at ~4-32k bits.
+        private static readonly long DecimalSplitBits = (Environment.Version.Major >= 9) ? 32 * 1024 : 96 * 1024;
+
+        private static string/*!*/ ToPowerOfTwoRadixString(BigInteger value, int radix) {
             bool negative = value.Sign < 0;
             BigInteger magnitude = BigInteger.Abs(value);
-
-            if ((radix & (radix - 1)) == 0) {
-                int bitsPerDigit = System.Numerics.BitOperations.TrailingZeroCount(radix);
-                byte[] bytes = magnitude.ToByteArray(isUnsigned: true, isBigEndian: false);
-                long bitLength = (long)magnitude.GetBitLength();
-                int digitCount = (int)((bitLength + bitsPerDigit - 1) / bitsPerDigit);
-                char[] chars = new char[digitCount + (negative ? 1 : 0)];
-                int mask = radix - 1;
-                int pos = chars.Length;
-                for (int d = 0; d < digitCount; d++) {
-                    long bit = (long)d * bitsPerDigit;
-                    int byteIndex = (int)(bit >> 3);
-                    int window = bytes[byteIndex];
-                    if (byteIndex + 1 < bytes.Length) {
-                        window |= bytes[byteIndex + 1] << 8;
-                    }
-                    chars[--pos] = RadixDigits[(window >> (int)(bit & 7)) & mask];
+            int bitsPerDigit = System.Numerics.BitOperations.TrailingZeroCount(radix);
+            byte[] bytes = magnitude.ToByteArray(isUnsigned: true, isBigEndian: false);
+            long bitLength = (long)magnitude.GetBitLength();
+            int digitCount = (int)((bitLength + bitsPerDigit - 1) / bitsPerDigit);
+            char[] chars = new char[digitCount + (negative ? 1 : 0)];
+            int mask = radix - 1;
+            int pos = chars.Length;
+            for (int d = 0; d < digitCount; d++) {
+                long bit = (long)d * bitsPerDigit;
+                int byteIndex = (int)(bit >> 3);
+                int window = bytes[byteIndex];
+                if (byteIndex + 1 < bytes.Length) {
+                    window |= bytes[byteIndex + 1] << 8;
                 }
-                if (negative) {
-                    chars[0] = '-';
-                }
-                return new string(chars);
+                chars[--pos] = RadixDigits[(window >> (int)(bit & 7)) & mask];
             }
-
-            // the largest power of the radix that fits in a long, and its number of digits:
-            long chunk = radix;
-            int chunkDigits = 1;
-            while (chunk <= Int64.MaxValue / radix) {
-                chunk *= radix;
-                chunkDigits++;
-            }
-
-            BigInteger divisor = chunk;
-            var chunks = new System.Collections.Generic.List<long>();
-            while (magnitude > Int64.MaxValue) {
-                magnitude = BigInteger.DivRem(magnitude, divisor, out BigInteger remainder);
-                chunks.Add((long)remainder);
-            }
-
-            // the most significant part without leading zeros, then the chunks with them:
-            var result = new System.Text.StringBuilder(chunkDigits * (chunks.Count + 1) + 1);
             if (negative) {
-                result.Append('-');
+                chars[0] = '-';
             }
-            result.Append(ToRadixString((long)magnitude, radix));
-            Span<char> buffer = stackalloc char[64];
-            for (int c = chunks.Count - 1; c >= 0; c--) {
-                long part = chunks[c];
-                for (int d = chunkDigits - 1; d >= 0; d--) {
-                    buffer[d] = RadixDigits[(int)(part % radix)];
-                    part /= radix;
-                }
-                result.Append(buffer.Slice(0, chunkDigits));
-            }
-            return result.ToString();
+            return new string(chars);
         }
 
         private static string/*!*/ ToRadixString(long value, int radix) {

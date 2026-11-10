@@ -668,7 +668,7 @@ namespace IronRuby.Builtins {
         [RubyConstant] public const int CLOCK_BOOTTIME_ALARM = 9;
         [RubyConstant] public const int CLOCK_TAI = 11;
 
-        private enum ClockKind { Realtime, Monotonic, ProcessTime }
+        private enum ClockKind { Realtime, Monotonic, ProcessTime, ThreadTime }
 
         private static readonly Dictionary<string, ClockKind> _emulatedClocks = new Dictionary<string, ClockKind> {
             // MRI's emulated clocks, named by Symbols
@@ -683,9 +683,10 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Process.clock_gettime(clock_id, unit = :float_second). ActiveSupport::Notifications reads
         /// the monotonic clock twice for every event it instruments, so this is C#. .NET's Stopwatch
-        /// is the monotonic (and boot-time) source; the CPU-time clocks are the process's processor
-        /// time - .NET has no per-thread figure, so CLOCK_THREAD_CPUTIME_ID is that too. A clock
-        /// that is not one of these is Errno::EINVAL, as clock_gettime(2) has it.
+        /// is the monotonic (and boot-time) source; CLOCK_PROCESS_CPUTIME_ID is the process's processor
+        /// time, and CLOCK_THREAD_CPUTIME_ID the calling thread's, which .NET does not expose: it is read
+        /// from the OS (<see cref="TryGetThreadCpuTime"/>). A clock that is not one of these is
+        /// Errno::EINVAL, as clock_gettime(2) has it.
         /// </summary>
         [RubyMethod("clock_gettime", RubyMethodAttributes.PublicSingleton)]
         public static object ClockGetTime(ConversionStorage<int>/*!*/ fixnumCast, ConversionStorage<MutableString>/*!*/ tosConversion,
@@ -709,8 +710,11 @@ namespace IronRuby.Builtins {
                     case CLOCK_MONOTONIC: case CLOCK_MONOTONIC_RAW: case CLOCK_MONOTONIC_COARSE: case CLOCK_BOOTTIME: case CLOCK_BOOTTIME_ALARM:
                         kind = ClockKind.Monotonic;
                         break;
-                    case CLOCK_PROCESS_CPUTIME_ID: case CLOCK_THREAD_CPUTIME_ID:
+                    case CLOCK_PROCESS_CPUTIME_ID:
                         kind = ClockKind.ProcessTime;
+                        break;
+                    case CLOCK_THREAD_CPUTIME_ID:
+                        kind = ClockKind.ThreadTime;
                         break;
                     default:
                         throw RubyExceptions.CreateEINVAL("clock_gettime({0})", context.Inspect(clockId));
@@ -718,6 +722,13 @@ namespace IronRuby.Builtins {
             }
 
             double seconds;
+            if (kind == ClockKind.ThreadTime) {
+                if (TryGetThreadCpuTime(out long nanoseconds)) {
+                    return ConvertClockTime(tosConversion, nanoseconds, unit);
+                }
+                // no per-thread figure on this platform: the process's, as before
+                kind = ClockKind.ProcessTime;
+            }
             switch (kind) {
                 case ClockKind.Realtime:
                     seconds = (double)(DateTime.UtcNow.Ticks - RubyTime.Epoch.Ticks) / TimeSpan.TicksPerSecond;
@@ -742,6 +753,75 @@ namespace IronRuby.Builtins {
                 default:
                     throw RubyExceptions.CreateArgumentError("unexpected unit: " + Protocols.ConvertToString(tosConversion, unit).ToString());
             }
+        }
+
+        // a clock read exactly, in nanoseconds: the Integer units are exact, as clock_gettime's timespec makes them in MRI
+        private static object ConvertClockTime(ConversionStorage<MutableString>/*!*/ tosConversion, long nanoseconds, object unit) {
+            string unitName = (unit == Missing.Value || unit == null) ? "float_second" : (unit as RubySymbol)?.ToString();
+            switch (unitName) {
+                case "float_second": return nanoseconds / 1e9;
+                case "float_millisecond": return nanoseconds / 1e6;
+                case "float_microsecond": return nanoseconds / 1e3;
+                case "second": return Protocols.Normalize(nanoseconds / 1000000000);
+                case "millisecond": return Protocols.Normalize(nanoseconds / 1000000);
+                case "microsecond": return Protocols.Normalize(nanoseconds / 1000);
+                case "nanosecond": return Protocols.Normalize(nanoseconds);
+                default:
+                    throw RubyExceptions.CreateArgumentError("unexpected unit: " + Protocols.ConvertToString(tosConversion, unit).ToString());
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Timespec {
+            public IntPtr Seconds;      // time_t
+            public IntPtr Nanoseconds;  // long
+        }
+
+        [DllImport("libc", EntryPoint = "clock_gettime")]
+        private static extern int clock_gettime(int clockId, out Timespec time);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentThread();
+
+        [DllImport("kernel32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetThreadTimes(IntPtr thread, out long creationTime, out long exitTime, out long kernelTime, out long userTime);
+
+        // set once a platform call has failed, so that the next read does not try it again
+        private static bool _threadCpuTimeUnavailable;
+
+        /// <summary>
+        /// The CPU time the calling thread has used, in nanoseconds: clock_gettime(CLOCK_THREAD_CPUTIME_ID) on Unix, whose
+        /// id is 3 on Linux, 16 on macOS and 14 on FreeBSD, and GetThreadTimes' kernel and user time (in 100 ns units) on
+        /// Windows. A Ruby Thread is a CLR thread, which is an OS thread, so this is the Ruby Thread's CPU time as in MRI.
+        /// One difference remains: a Fiber runs on a worker thread of its own here (ThreadOps.Fiber.cs), while MRI runs it on
+        /// the thread that resumes it, so the CPU time a Fiber (or Enumerator#next) spends counts toward neither that thread's
+        /// clock nor, read inside the Fiber, the resuming thread's. Charging it back would cost two clock reads per switch.
+        /// </summary>
+        private static bool TryGetThreadCpuTime(out long nanoseconds) {
+            nanoseconds = 0;
+            if (_threadCpuTimeUnavailable) {
+                return false;
+            }
+            try {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) {
+                    if (GetThreadTimes(GetCurrentThread(), out _, out _, out long kernel, out long user)) {
+                        nanoseconds = (kernel + user) * 100;
+                        return true;
+                    }
+                } else {
+                    int clockId = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 16 :
+                        RuntimeInformation.IsOSPlatform(OSPlatform.FreeBSD) ? 14 : CLOCK_THREAD_CPUTIME_ID;
+                    if (clock_gettime(clockId, out Timespec time) == 0) {
+                        nanoseconds = (long)time.Seconds * 1000000000 + (long)time.Nanoseconds;
+                        return true;
+                    }
+                }
+            } catch (DllNotFoundException) {
+            } catch (EntryPointNotFoundException) {
+            }
+            _threadCpuTimeUnavailable = true;
+            return false;
         }
 
         #endregion

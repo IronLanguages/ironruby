@@ -997,11 +997,14 @@ class Range
     super
   end
 
-  # The number of elements the range iterates. MRI 3.4 only counts a range that
-  # begins at an Integer; a Float beginning cannot be walked at all (1.0..2.0
-  # has no elements to count), and a beginning that has #succ can be walked but
-  # not counted in advance, so it answers nil rather than guessing.
-  def size
+  # The number of elements the range iterates (MRI's range_size). MRI 3.4 only
+  # counts a range that begins at an Integer; a Float beginning cannot be walked
+  # at all (1.0..2.0 has no elements to count), and a beginning that has #succ can
+  # be walked but not counted in advance, so it answers nil rather than guessing.
+  # Range#size is C# (RangeOps.Size), which answers an Integer..Integer, an
+  # endless Integer range and a nil or Float beginning itself, and hands the rest
+  # here.
+  def __size__
     from = self.begin
     to = self.end
     if from.is_a?(::Integer)
@@ -1021,6 +1024,7 @@ class Range
     end
     nil
   end
+  private :__size__
 
   # Walking a range backwards needs a finite end to start from. An Integer end
   # can be counted down from forever, which is how a beginless range works;

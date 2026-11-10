@@ -1471,7 +1471,9 @@ namespace IronRuby.Builtins {
                                 long scalar;
                                 if (codePoint.IsFixnum) {
                                     scalar = codePoint.Fixnum;
-                                } else if (!Int64.TryParse(codePoint.Bignum.ToString(), out scalar)) {
+                                } else if (codePoint.Bignum >= Int64.MinValue && codePoint.Bignum <= Int64.MaxValue) {
+                                    scalar = (long)codePoint.Bignum;
+                                } else {
                                     // MRI converts to long first, so a value that does not even fit
                                     // there is reported as a conversion failure, not a bad code point.
                                     throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
@@ -1479,7 +1481,7 @@ namespace IronRuby.Builtins {
                                 if (scalar < 0 || scalar > 0x7fffffff) {
                                     throw RubyExceptions.CreateRangeError("pack(U): value out of range");
                                 }
-                                RubyEncoder.WriteUtf8CodePoint(stream, codePoint.Fixnum);
+                                RubyEncoder.WriteUtf8CodePoint(stream, (int)scalar);
                             }
                             break;
 

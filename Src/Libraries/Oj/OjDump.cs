@@ -1171,7 +1171,7 @@ namespace IronRuby.StandardLibrary.Oj {
         private static void DumpCompatBignum(Out/*!*/ output, object obj) {
             MutableString rs;
             if (output.State.UseBignumAlt) {
-                rs = MutableString.CreateAscii(ToBignum(obj).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                rs = MutableString.CreateAscii(IronRuby.Builtins.ClrInteger.ToRadixString(ToBignum(obj), 10));
             } else {
                 rs = Sites.Call(output.Context, obj, "to_s") as MutableString;
                 if (rs == null) {

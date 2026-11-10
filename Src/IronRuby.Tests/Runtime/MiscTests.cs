@@ -2030,6 +2030,35 @@ Integer
         }
 
         /// <summary>
+        /// CLOCK_THREAD_CPUTIME_ID is the calling thread's CPU time, as in MRI, not the process's: a second thread that is
+        /// busy for 0.3 s of its own CPU time adds it to the process clock but not to the main thread's, which waits.
+        /// </summary>
+        public void Process_ThreadCpuTime1() {
+            TestOutput(@"
+main0 = Process.clock_gettime(Process::CLOCK_THREAD_CPUTIME_ID)
+process0 = Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID)
+busy = Thread.new do
+  t = Process.clock_gettime(Process::CLOCK_THREAD_CPUTIME_ID)
+  x = 0
+  x += 1 while Process.clock_gettime(Process::CLOCK_THREAD_CPUTIME_ID) - t < 0.3
+  Process.clock_gettime(Process::CLOCK_THREAD_CPUTIME_ID) - t
+end.value
+main = Process.clock_gettime(Process::CLOCK_THREAD_CPUTIME_ID) - main0
+process = Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID) - process0
+p busy >= 0.3, main < 0.15, process >= 0.3
+ns = Process.clock_gettime(Process::CLOCK_THREAD_CPUTIME_ID, :nanosecond)
+p ns.class, ns > 0, Process.clock_gettime(Process::CLOCK_THREAD_CPUTIME_ID, :second).class
+", @"
+true
+true
+true
+Integer
+true
+Integer
+");
+        }
+
+        /// <summary>
         /// Process.maxgroups= is read back by Process.maxgroups (it set an ivar the getter did not read), takes a positive
         /// Integer by implicit conversion and caps it at 65536, as MRI's does. Not on Windows, which has
         /// no supplementary groups: there both are NotImplementedError, as in CRuby.

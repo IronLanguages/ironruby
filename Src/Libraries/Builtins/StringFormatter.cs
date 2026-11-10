@@ -623,7 +623,7 @@ namespace IronRuby.Builtins {
         private void AppendInt() {
             BigInteger value = ToIntegerArgument();
             bool isNegative = value.Sign < 0;
-            string digits = BigInteger.Abs(value).ToString(CultureInfo.InvariantCulture);
+            string digits = ClrInteger.ToRadixString(BigInteger.Abs(value), 10);
 
             if (_opts.Precision != UnspecifiedPrecision) {
                 if (value.IsZero && _opts.Precision == 0) {
@@ -639,24 +639,12 @@ namespace IronRuby.Builtins {
         private static readonly char[] _LowerDigits = new char[] { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
         private static readonly char[] _UpperDigits = new char[] { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F' };
 
+        // Integer#to_s's digits (which divided by the radix once per digit here: quadratic, ~3 s for "%d %x %o %b" of
+        // 100k bits), upper-cased for %X and %B
         private static string/*!*/ ToRadixString(BigInteger value, int radix, bool upperCase) {
             Debug.Assert(value.Sign >= 0);
-            if (value.IsZero) {
-                return "0";
-            }
-            char[] table = upperCase ? _UpperDigits : _LowerDigits;
-            StringBuilder result = new StringBuilder();
-            BigInteger r = new BigInteger(radix);
-            while (!value.IsZero) {
-                BigInteger rem;
-                value = BigInteger.DivRem(value, r, out rem);
-                result.Append(table[(int)rem]);
-            }
-            char[] chars = new char[result.Length];
-            for (int i = 0; i < result.Length; i++) {
-                chars[i] = result[result.Length - 1 - i];
-            }
-            return new string(chars);
+            string digits = ClrInteger.ToRadixString(value, radix);
+            return upperCase ? digits.ToUpperInvariant() : digits;
         }
 
         /// <summary>
@@ -1349,7 +1337,7 @@ namespace IronRuby.Builtins {
                 precision = 1000;
             }
 
-            string body = BigInteger.Abs(value).ToString(CultureInfo.InvariantCulture);
+            string body = ClrInteger.ToRadixString(BigInteger.Abs(value), 10);
             if (precision > 0) {
                 body += "." + new string('0', precision);
             }
