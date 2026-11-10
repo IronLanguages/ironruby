@@ -37,6 +37,24 @@ namespace IronRuby.Compiler.Ast {
     public partial class Body : Expression {
         private static readonly System.Reflection.MethodInfo/*!*/ _ExposeException = typeof(RubyOps).GetMethod(nameof(RubyOps.ExposeException));
         private static readonly System.Reflection.MethodInfo/*!*/ _CanRescueDeferTrace = typeof(RubyOps).GetMethod(nameof(RubyOps.CanRescueDeferTrace));
+        private static readonly System.Reflection.MethodInfo/*!*/ _RescuePassUnwinder = typeof(RubyOps).GetMethod(nameof(RubyOps.RescuePassUnwinder));
+        private static readonly System.Reflection.MethodInfo/*!*/ _RescuePassMayTest = typeof(RubyOps).GetMethod(nameof(RubyOps.RescuePassMayTest));
+        private static readonly System.Reflection.MethodInfo/*!*/ _RescueSiteCannotMatch = typeof(RubyOps).GetMethod(nameof(RubyOps.RescueSiteCannotMatch));
+        private static readonly System.Reflection.MethodInfo/*!*/ _RescueDefaultCannotMatch = typeof(RubyOps).GetMethod(nameof(RubyOps.RescueDefaultCannotMatch));
+
+        // RescuePassUnwinder(scope, e) || RescuePassMayTest(scope, e) && <each class of each clause cannot match> (see RubyOps)
+        private static MSA.Expression/*!*/ MakeRescuePass(MSA.Expression/*!*/ scope, MSA.Expression/*!*/ exception, ConstantSiteCache[][]/*!*/ clauses) {
+            MSA.Expression test = Ast.Call(_RescuePassMayTest, scope, exception);
+            foreach (var clause in clauses) {
+                if (clause.Length == 0) {
+                    test = Ast.AndAlso(test, Ast.Call(_RescueDefaultCannotMatch, scope, exception));
+                }
+                foreach (var site in clause) {
+                    test = Ast.AndAlso(test, Ast.Call(_RescueSiteCannotMatch, scope, exception, AstUtils.Constant(site)));
+                }
+            }
+            return Ast.OrElse(Ast.Call(_RescuePassUnwinder, scope, exception), test);
+        }
 
         private readonly Statements/*!*/ _statements;
         private readonly List<RescueClause> _rescueClauses;	// optional
@@ -171,6 +189,7 @@ namespace IronRuby.Compiler.Ast {
 
             MSA.Expression enterRescue = null, leaveRescue = null;
             var retryLabel = Ast.Label("retry");
+            ConstantSiteCache[][] rescueSites = null;
 
             // make rescue clause:
             MSA.Expression transformedRescue;
@@ -186,8 +205,21 @@ namespace IronRuby.Compiler.Ast {
                 gen.EnterRescueClause(retryingVariable, retryLabel);
 
                 var handlers = new IfStatementTest[_rescueClauses.Count];
+                var clauseSites = new ConstantSiteCache[_rescueClauses.Count][];
                 for (int i = 0; i < handlers.Length; i++) {
-                    handlers[i] = _rescueClauses[i].Transform(gen, resultOperation);
+                    ConstantSiteCache[] sites;
+                    handlers[i] = _rescueClauses[i].Transform(gen, resultOperation, out sites);
+                    if (sites == null) {
+                        clauseSites = null;
+                    } else if (clauseSites != null) {
+                        clauseSites[i] = sites;
+                    }
+                }
+
+                // Compiled, an exception none of the rescue clauses can match goes through (RubyOps.RescuePassMayTest); not with an
+                // ensure clause, which would need $! set and runs Ruby code before an outer frame's rescue clauses are matched.
+                if (clauseSites != null && _ensureStatements == null) {
+                    rescueSites = clauseSites;
                 }
 
                 transformedRescue =
@@ -221,7 +253,38 @@ namespace IronRuby.Compiler.Ast {
             // SystemStackError it had none, and the first call in the rescue raised another (#128). MRI's rescue
             // runs once the frames are gone. Without rescue clauses the handler only takes note.
             MSA.Expression guarded;
-            if (_rescueClauses != null) {
+            MSA.ParameterExpression passingVariable = null;
+            if (rescueSites != null) {
+                // The exception the filter lets through, which the filter around the else clause lets through as well. Reset once
+                // the statements are left any other way: an exception thrown later in the frame is not the one that went through.
+                passingVariable = gen.CurrentScope.DefineHiddenVariable("#passing", typeof(Exception));
+                exceptionVariable = Ast.Parameter(typeof(Exception), "#e");
+                guarded = AstUtils.Try(
+                    new RubyFilterExpression(
+                        Ast.Block(transformedBody, AstUtils.Empty()),
+                        exceptionVariable,
+                        Ast.Call(_CanRescueDeferTrace, gen.CurrentScopeVariable, exceptionVariable),
+                        Ast.Block(Ast.Assign(exceptionThrownVariable, AstUtils.Constant(true)), AstUtils.Empty()),
+                        Ast.Block(
+                            Ast.Assign(passingVariable, Ast.Condition(
+                                MakeRescuePass(gen.CurrentScopeVariable, exceptionVariable, rescueSites),
+                                exceptionVariable,
+                                AstUtils.Constant(null, typeof(Exception))
+                            )),
+                            Ast.NotEqual(passingVariable, AstUtils.Constant(null, typeof(Exception)))
+                        )
+                    ),
+                    Ast.Assign(passingVariable, AstUtils.Constant(null, typeof(Exception))),
+                    AstUtils.IfThen(exceptionThrownVariable, transformedRescue),
+                    AstUtils.Empty()
+                ).Finally(
+                    // restore previous exception if the current one has been handled:
+                    AstUtils.Unless(exceptionRethrowVariable,
+                        Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable)
+                    ),
+                    leaveRescue
+                );
+            } else if (_rescueClauses != null) {
                 guarded = AstUtils.Try(
                     AstUtils.Try(
                         Ast.Block(transformedBody, AstUtils.Empty())
@@ -257,22 +320,48 @@ namespace IronRuby.Compiler.Ast {
                 );
             }
 
+            var protectedBody = Ast.Block(
+                Ast.Assign(exceptionThrownVariable, AstUtils.Constant(false)),
+                Ast.Assign(exceptionRethrowVariable, AstUtils.Constant(false)),
+                Ast.Assign(retryingVariable, AstUtils.Constant(false)),
+
+                // save exception (old_$! is not used unless there is a rescue clause):
+                (_rescueClauses == null) ? (MSA.Expression)AstUtils.Empty() :
+                    Ast.Assign(oldExceptionVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
+
+                guarded,
+
+                // unless (exception_thrown) do <else-statements> end
+                transformedElse,
+                AstUtils.Empty()
+            );
+
+            if (passingVariable != null) {
+                // the exception the rescue clauses let through is not caught here either (see above)
+                exceptionVariable = Ast.Parameter(typeof(Exception), "#e");
+                return Ast.Block(
+                    Ast.Label(retryLabel),
+                    AstUtils.Try(
+                        Ast.Assign(passingVariable, AstUtils.Constant(null, typeof(Exception))),
+                        new RubyFilterExpression(
+                            protectedBody,
+                            exceptionVariable,
+                            Methods.CanRescue.OpCall(gen.CurrentScopeVariable, exceptionVariable),
+                            Ast.Block(Ast.Assign(exceptionRethrowVariable, AstUtils.Constant(true)), AstUtils.Empty()),
+                            Ast.ReferenceEqual(passingVariable, exceptionVariable)
+                        )
+                    ).FinallyWithJumps(
+                        AstUtils.Unless(retryingVariable,
+                            AstUtils.Unless(Ast.Property(null, typeof(RubyUtils), "IsReclaimingFiber"), transformedEnsure)
+                        )
+                    )
+                );
+            }
+
             var result = Ast.Block(
                 Ast.Label(retryLabel),
                 AstUtils.Try(
-                    Ast.Assign(exceptionThrownVariable, AstUtils.Constant(false)),
-                    Ast.Assign(exceptionRethrowVariable, AstUtils.Constant(false)),
-                    Ast.Assign(retryingVariable, AstUtils.Constant(false)),
-
-                    // save exception (old_$! is not used unless there is a rescue clause):
-                    (_rescueClauses == null) ? (MSA.Expression)AstUtils.Empty() :
-                        Ast.Assign(oldExceptionVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
-
-                    guarded,
-
-                    // unless (exception_thrown) do <else-statements> end
-                    transformedElse,
-                    AstUtils.Empty()
+                    protectedBody
                 ).FilterIf((_rescueClauses != null || _elseStatements != null),
                     exceptionVariable = Ast.Parameter(typeof(Exception), "#e"), 
                     Methods.CanRescue.OpCall(gen.CurrentScopeVariable, exceptionVariable),

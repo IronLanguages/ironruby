@@ -58,17 +58,34 @@ namespace IronRuby.Compiler.Ast {
         // rescue <types> stmts             ... if (type1 === $! || type2 === $! ...) { stmts; }
         // rescue <types> => <lvalue> stmts ... if (type1 === $! || type2 === $! ...) { <lvalue> = $!; stmts; }
         // 
-        internal IfStatementTest/*!*/ Transform(AstGenerator/*!*/ gen, ResultOperation resultOperation) {
+        /// <param name="sites">
+        /// The constant sites of the class list (none: `rescue' alone, StandardError), or null if it has anything but constants
+        /// read through a cached site - an expression, a splat, {expr}::A (see RubyOps.RescuePassMayTest).
+        /// </param>
+        internal IfStatementTest/*!*/ Transform(AstGenerator/*!*/ gen, ResultOperation resultOperation, out ConstantSiteCache[] sites) {
             Assert.NotNull(gen);
             
             var comparisonSiteStorage = Ast.Constant(new BinaryOpStorage(gen.Context));
             MSA.Expression condition;
+            sites = new ConstantSiteCache[_types.Length];
             if (_types.Length != 0) {
                 // CompareException(type[0]) || ... || CompareException(type[n]): as in MRI, each type is evaluated
                 // and compared before the next one is evaluated, and the ones after a match are not evaluated at all.
-                condition = MakeCompareException(gen, comparisonSiteStorage, _types[0].TransformRead(gen), _types[0] is SplattedArgument);
-                for (int i = 1; i < _types.Length; i++) {
-                    condition = Ast.OrElse(condition, MakeCompareException(gen, comparisonSiteStorage, _types[i].TransformRead(gen), _types[i] is SplattedArgument));
+                condition = null;
+                for (int i = 0; i < _types.Length; i++) {
+                    MSA.Expression type;
+                    var constant = _types[i] as ConstantVariable;
+                    if (constant != null && sites != null) {
+                        type = constant.TransformRescueRead(gen, out sites[i]);
+                        if (sites[i] == null) {
+                            sites = null;
+                        }
+                    } else {
+                        type = _types[i].TransformRead(gen);
+                        sites = null;
+                    }
+                    var compare = MakeCompareException(gen, comparisonSiteStorage, type, _types[i] is SplattedArgument);
+                    condition = (condition == null) ? compare : Ast.OrElse(condition, compare);
                 }
             } else {
                 condition = Methods.CompareDefaultException.OpCall(comparisonSiteStorage, gen.CurrentScopeVariable);

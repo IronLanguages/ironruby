@@ -154,6 +154,23 @@ namespace IronRuby.Compiler.Ast {
         private const int OpIsDefined = 1;
 
         private MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen, int opKind) {
+            object siteCache;
+            return TransformRead(gen, opKind, out siteCache);
+        }
+
+        /// <summary>
+        /// The read of a constant in a rescue clause's class list, and the cache of its site when it has one (A, ::A, A::B; not
+        /// {expr}::A), which Body.TransformExceptionHandling's exception filter reads without running the lookup (RubyOps.RescuePassMayTest).
+        /// </summary>
+        internal MSA.Expression/*!*/ TransformRescueRead(AstGenerator/*!*/ gen, out ConstantSiteCache site) {
+            object siteCache;
+            var result = TransformRead(gen, OpGet, out siteCache);
+            site = siteCache as ConstantSiteCache;
+            return result;
+        }
+
+        private MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen, int opKind, out object siteCache) {
+            siteCache = null;
             ConstantVariable constantQualifier = _qualifier as ConstantVariable;
             if (constantQualifier != null) {
                 ConstantVariable constant;
@@ -170,7 +187,7 @@ namespace IronRuby.Compiler.Ast {
                     return constant.MakeExpressionQualifiedRead(gen, opKind, names.ToReverseArray());
                 } else {
                     // A::B
-                    return MakeCachedRead(gen, opKind, constant.IsGlobal, true, Ast.Constant(names.ToReverseArray()));
+                    return MakeCachedRead(gen, opKind, constant.IsGlobal, true, Ast.Constant(names.ToReverseArray()), out siteCache);
                 }
             } else if (_qualifier != null) {
                 // {expr}::A
@@ -178,7 +195,7 @@ namespace IronRuby.Compiler.Ast {
             } else {
                 // A
                 // ::A
-                return MakeCachedRead(gen, opKind, IsGlobal, false, Ast.Constant(Name));
+                return MakeCachedRead(gen, opKind, IsGlobal, false, Ast.Constant(Name), out siteCache);
             }
         }
 
@@ -223,9 +240,8 @@ namespace IronRuby.Compiler.Ast {
         //   <result> = GetConstant(...);
         // }
         private static MSA.Expression/*!*/ MakeCachedRead(AstGenerator/*!*/ gen, int opKind, bool isGlobal, bool isQualified,
-            MSA.Expression/*!*/ name) {
+            MSA.Expression/*!*/ name, out object siteCache) {
 
-            object siteCache;
             MSA.ParameterExpression siteVar, valueVar;
             FieldInfo versionField, valueField;
             MSA.Expression readValue;

@@ -38,6 +38,30 @@ namespace IronRuby.Runtime {
         // True if the exception has already been handled by Ruby EH clause or if it was constructed "dynamically" via Class#new.
         internal bool Handled { get; set; }
 
+        // Compiled ensure clauses the exception has been let through (RubyOps.PassEnsure) and that have not run yet: Ruby code
+        // that runs before the rescue clauses of an outer frame would be matched (see RubyOps.RescuePassMayTest).
+        internal int PendingPassedEnsures;
+
+        /// <summary>
+        /// Whether RubyOps.CanRescue would match the rescue clauses against <paramref name="exception"/> itself: it has been
+        /// handled, or HandleException would only mark it so (its class's #new and #initialize are IronRuby's own) rather than
+        /// make a new one. Runs no Ruby code.
+        /// </summary>
+        internal static bool IsHandledInPlace(RubyContext/*!*/ context, Exception/*!*/ exception) {
+            var data = TryGetInstance(exception);
+            if (data != null && data.Handled) {
+                return true;
+            }
+            RubyClass exceptionClass = context.GetClass(exception.GetType());
+            var newMethod = exceptionClass.ImmediateClass.ResolveMethod("new", VisibilityContext.AllVisible);
+            if (newMethod.Found && ((newMethod.Info.DeclaringModule == context.ClassClass && newMethod.Info is RubyCustomMethodInfo)
+                || newMethod.Info is RubyLibraryMethodInfo)) {
+                var initializeMethod = exceptionClass.ResolveMethod("initialize", VisibilityContext.AllVisible);
+                return initializeMethod.Found && initializeMethod.Info is RubyLibraryMethodInfo;
+            }
+            return false;
+        }
+
         /// <summary>
         /// Set by Kernel#raise for an exception that no Ruby code can have kept before it was raised: made by the raise itself
         /// from a String, or from a class whose #exception, #new and #initialize are all IronRuby's own. Only the backtrace of such
