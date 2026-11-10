@@ -118,14 +118,20 @@ namespace IronRuby.Builtins {
         [RubyMethod("__ir_float_step__", RubyMethodAttributes.PublicSingleton)]
         public static object FloatStep(BlockParam/*!*/ block, object self, double beg, double stop, double step, double n) {
             object result;
+            return FloatStepLoop(block, beg, stop, step, n, out result) ? result : null;
+        }
+
+        /// <summary>The loop of <see cref="FloatStep"/>: true when the block broke out, with what it broke with.</summary>
+        internal static bool FloatStepLoop(BlockParam/*!*/ block, double beg, double stop, double step, double n, out object result) {
+            result = null;
             if (Double.IsInfinity(step)) {
                 if (n > 0 && block.Yield(beg, out result)) {
-                    return result;
+                    return true;
                 }
             } else if (step == 0) {
                 while (true) {
                     if (block.Yield(beg, out result)) {
-                        return result;
+                        return true;
                     }
                 }
             } else {
@@ -137,11 +143,67 @@ namespace IronRuby.Builtins {
                         d = stop;
                     }
                     if (block.Yield(d, out result)) {
-                        return result;
+                        return true;
                     }
                 }
             }
-            return null;
+            return false;
+        }
+
+        /// <summary>
+        /// MRI's ruby_float_step_size: how many values beg, beg + unit, ... reach end (excluded when
+        /// <paramref name="excl"/>), allowing for the error the division accumulates. A Float, so that
+        /// an infinite count and a NaN survive. ArithmeticSequence.__float_step_size__ in ruby4.rb is
+        /// the same computation.
+        /// </summary>
+        // C's DBL_EPSILON (Double.Epsilon is the smallest subnormal instead)
+        private const double DblEpsilon = 2.220446049250313e-16;
+
+        internal static double FloatStepSize(double beg, double end, double unit, bool excl) {
+            if (unit == 0) {
+                return Double.PositiveInfinity;
+            }
+            if (Double.IsInfinity(unit)) {
+                return (unit > 0 ? beg <= end : beg >= end) ? 1 : 0;
+            }
+            double n = (end - beg) / unit;
+            double err = (Math.Abs(beg) + Math.Abs(end) + Math.Abs(end - beg)) / Math.Abs(unit) * DblEpsilon;
+            if (err > 0.5) {
+                err = 0.5;
+            }
+            double d;
+            if (excl) {
+                if (n <= 0) {
+                    return 0;
+                }
+                n = (n < 1) ? 0 : Math.Floor(n - err);
+                d = +((n + 1) * unit) + beg;
+                if (beg < end) {
+                    if (d < end) {
+                        n++;
+                    }
+                } else if (beg > end) {
+                    if (d > end) {
+                        n++;
+                    }
+                }
+            } else {
+                if (n < 0) {
+                    return 0;
+                }
+                n = Math.Floor(n + err);
+                d = +((n + 1) * unit) + beg;
+                if (beg < end) {
+                    if (d <= end) {
+                        n++;
+                    }
+                } else if (beg > end) {
+                    if (d >= end) {
+                        n++;
+                    }
+                }
+            }
+            return n + 1;
         }
 
         // Integer(string), Integer(fixnum) and Integer(float), the common calls, without the storages and the keyword parameter of the

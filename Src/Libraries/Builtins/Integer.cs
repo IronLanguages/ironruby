@@ -553,7 +553,83 @@ namespace IronRuby.Builtins {
             if (block != null && self is int start && TryGetFixnumStepKeywords(args, out limit, out step)) {
                 return StepImpl(block, start, limit, step);
             }
+            object result;
+            if (block != null && TryFloatStep(block, self, args, out result)) {
+                return result;
+            }
             return StepSlow(slow, block, self, args);
+        }
+
+        /// <summary>
+        /// Numeric#step with a block where MRI's num_step takes ruby_float_step: self, the limit and
+        /// the step are each a Fixnum or a Float, at least one of them a Float, and the step is not 0;
+        /// given positionally or as to: and by:. Anything else - no limit, another kind of number, a
+        /// step of 0, a keyword the prelude has to complain about - is false and goes to the prelude
+        /// (__ir_step_slow__), which took ~6 us to get to the same loop for a short Float step.
+        /// </summary>
+        internal static bool TryFloatStep(BlockParam/*!*/ block, object self, object[]/*!*/ args, out object result) {
+            result = null;
+            object limit, step;
+            double beg, end, unit;
+            if (!TryGetStepArguments(args, out limit, out step) ||
+                !(self is double || limit is double || step is double) ||
+                !TryGetStepDouble(self, out beg) || !TryGetStepDouble(limit, out end) || !TryGetStepDouble(step, out unit) || unit == 0) {
+                return false;
+            }
+            double n = KernelOps.FloatStepSize(beg, end, unit, false);
+            result = KernelOps.FloatStepLoop(block, beg, end, unit, n, out object blockResult) ? blockResult : self;
+            return true;
+        }
+
+        private static bool TryGetStepDouble(object value, out double result) {
+            switch (value) {
+                case double d: result = d; return true;
+                case int i: result = i; return true;
+                default: result = 0; return false;
+            }
+        }
+
+        // The limit and the step of step(limit, step), step(limit, by: step), step(by: step, to: limit) and
+        // the like (MRI's num_step_extract_args), the step 1 when it is not given; false for no limit, an
+        // unknown keyword, or one given both ways.
+        private static bool TryGetStepArguments(object[]/*!*/ args, out object limit, out object step) {
+            limit = null;
+            step = ScriptingRuntimeHelpers.Int32ToObject(1);
+            int count = args.Length;
+            var keywords = (count > 0) ? args[count - 1] as Hash : null;
+            if (keywords != null && keywords.IsKeywordArguments) {
+                count--;
+            } else {
+                keywords = null;
+            }
+            if (count > 2) {
+                return false;
+            }
+            bool hasLimit = count >= 1;
+            if (hasLimit) {
+                limit = args[0];
+            }
+            if (count == 2) {
+                step = args[1];
+            }
+            if (keywords != null) {
+                if (keywords.Count > 2) {
+                    return false;
+                }
+                foreach (var entry in keywords) {
+                    string name = (entry.Key as RubySymbol)?.ToString();
+                    if (name == "to" && !hasLimit) {
+                        limit = entry.Value;
+                        hasLimit = true;
+                    } else if (name == "by" && count < 2) {
+                        step = entry.Value;
+                        count = 2;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+            return hasLimit;
         }
 
         // 1.step(by: 3, to: 10) and 1.step(10, by: 3) with Fixnums: the limit and a non-zero step. Anything
@@ -619,7 +695,7 @@ namespace IronRuby.Builtins {
 
         // The prelude takes the positional arguments as an Array and the keywords as a Hash: a
         // trailing keyword hash is split off here, where it can still be told from a positional one.
-        private static object StepSlow(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
+        internal static object StepSlow(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
             BlockParam block, object self, object[]/*!*/ args) {
             Hash keywords = (args.Length > 0) ? args[args.Length - 1] as Hash : null;
             int count = args.Length;

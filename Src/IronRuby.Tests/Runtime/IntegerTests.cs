@@ -518,6 +518,71 @@ true
         }
 
         /// <summary>
+        /// Numeric#step with a Float among self, the limit and the step loops in C# (#89), with MRI's
+        /// ruby_float_step_size and ruby_float_step: n = floor((end - beg) / unit + err) and beg + i * unit, the last
+        /// value held to end. Everything else still goes to the prelude (which these tests run without). The
+        /// expected output is CRuby 4.0.9's.
+        /// </summary>
+        public void Numeric_FloatStep1() {
+            TestOutput(@"
+def s; a = []; r = yield(a); [r, a]; end
+p s { |a| 1.0.step(2.0, 0.25) { |x| a << x } }
+p s { |a| 1.step(2.0, 0.5) { |x| a << x } }
+p s { |a| 1.0.step(by: 0.5, to: 2) { |x| a << x } }
+p s { |a| 2.0.step(1.0, -0.3) { |x| a << x } }
+p s { |a| 1.1.step(1.5, 0.1) { |x| a << x } }
+p s { |a| 0.0.step(1.0, 1.0 / 3) { |x| a << x } }
+p s { |a| 1e16.step(1e16 + 4, 1.0) { |x| a << x } }
+p s { |a| 1.0.step(2.0, 1.0 / 0) { |x| a << x } }
+p s { |a| 1.0.step(0.0 / 0, 1) { |x| a << x } }
+p s { |a| 1.0.step(2.0, 0.5) { |x| a << x; break nil } }
+p s { |a| 1.0.step(2.0, 0.5) { |x| a << x; break 7 if x > 1 } }
+p s { |a| 0.1.step(1.0, 0.1) { |x| a << x } }[1].size, 1.0.method(:step).owner
+", @"
+[1.0, [1.0, 1.25, 1.5, 1.75, 2.0]]
+[1, [1.0, 1.5, 2.0]]
+[1.0, [1.0, 1.5, 2.0]]
+[2.0, [2.0, 1.7, 1.4, 1.1]]
+[1.1, [1.1, 1.2000000000000002, 1.3, 1.4000000000000001, 1.5]]
+[0.0, [0.0, 0.3333333333333333, 0.6666666666666666, 1.0]]
+[1.0e+16, [1.0e+16, 1.0e+16, 1.0000000000000002e+16, 1.0000000000000004e+16, 1.0000000000000004e+16, 1.0000000000000004e+16]]
+[1.0, [1.0]]
+[1.0, []]
+[nil, [1.0]]
+[7, [1.0, 1.5]]
+10
+Numeric
+");
+        }
+
+        /// <summary>
+        /// Range#step over Fixnum and Float ends with a Float among them loops in C# (#89), as the prelude's
+        /// ArithmeticSequence.__step_each__ did. The expected output is CRuby 4.0.9's.
+        /// </summary>
+        public void Range_FloatStep1() {
+            TestOutput(@"
+def s; a = []; r = yield(a); [r.class, a]; end
+p s { |a| (1.0..2.0).step(0.25) { |x| a << x } }
+p s { |a| (1.0...2.0).step(0.25) { |x| a << x } }
+p s { |a| (1..2.0).step { |x| a << x } }
+p s { |a| (1.0..3).step(1) { |x| a << x } }
+p s { |a| (2.0..1.0).step(-0.5) { |x| a << x } }
+p s { |a| (1.0..1.5).step(0.1) { |x| a << x } }
+p s { |a| (1.0...1.5).step(0.1) { |x| a << x } }
+p s { |a| (1.0..2.0).step(0.5) { |x| a << x; break 9 } }
+", @"
+[Range, [1.0, 1.25, 1.5, 1.75, 2.0]]
+[Range, [1.0, 1.25, 1.5, 1.75]]
+[Range, [1.0, 2.0]]
+[Range, [1.0, 2.0, 3.0]]
+[Range, [2.0, 1.5, 1.0]]
+[Range, [1.0, 1.1, 1.2, 1.3, 1.4, 1.5]]
+[Range, [1.0, 1.1, 1.2, 1.3, 1.4]]
+[Integer, [1.0]]
+");
+        }
+
+        /// <summary>
         /// Kernel#Float's decimal parse takes the exact fast path (at most 15 significant digits and a power of
         /// ten up to 22) and otherwise Double.TryParse over a stack buffer (#89); both round as strtod does.
         /// The expected output is CRuby 4.0.9's.
