@@ -66,6 +66,11 @@ namespace IronRuby.Builtins {
                 _start = start;
                 _count = count;
                 _state = ContentState.Shared;
+                IsOffsetSlice = start != 0;
+            }
+
+            internal override Content/*!*/ Unslice() {
+                return IsOffsetSlice ? new BinaryContent(ToByteArray(), _owner) : this;
             }
 
             /// <summary>
@@ -82,6 +87,9 @@ namespace IronRuby.Builtins {
 
             [MethodImpl(MethodImplOptions.NoInlining)]
             private void EnterWriteSlow(int minCapacity) {
+                // An offset slice is replaced before it is written (see IsOffsetSlice); copying it
+                // to offset 0 here as well keeps a missed path correct, if not safe for readers.
+                Debug.Assert(!IsOffsetSlice, "an offset slice is written in place");
                 if (ContentState.Enter(ref _state)) {
                     try {
                         // Room past the end is zeroed, as a fresh array's would be; the rest is copied over.
@@ -108,7 +116,12 @@ namespace IronRuby.Builtins {
             }
 
             internal ReadOnlySpan<byte> GetDataSpan() {
-                return new ReadOnlySpan<byte>(_data, _start, _count);
+                // A write on another thread can replace the array between these reads (copy-on-write,
+                // growing): the span never reaches past the array actually read. (An offset slice's
+                // array and offset do not change at all, see IsOffsetSlice.)
+                byte[] data = _data;
+                int start = _start;
+                return new ReadOnlySpan<byte>(data, start, Math.Min(_count, data.Length - start));
             }
 
             protected virtual BinaryContent/*!*/ Create(byte[]/*!*/ data, MutableString owner) {
@@ -864,9 +877,8 @@ namespace IronRuby.Builtins {
                 bool shared = ContentState.Enter(ref _state);
                 try {
                     if (shared) {
-                        // Cutting off the end, or the beginning, leaves the shared bytes as they are;
-                        // anything else copies what is left in one go rather than copying everything and
-                        // then moving the tail.
+                        // Cutting off the end leaves the shared bytes as they are; anything else copies
+                        // what is left in one go rather than copying everything and then moving the tail.
                         _count = Utils.RemoveShared(ref _data, ref _start, _count, start, count, ref shared);
                     } else {
                         _count = Utils.Remove(ref _data, _count, start, count);

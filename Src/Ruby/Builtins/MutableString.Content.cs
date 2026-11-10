@@ -85,6 +85,22 @@ namespace IronRuby.Builtins {
                 _owner = owner;
             }
 
+            /// <summary>
+            /// Whether this content is a slice from an offset into a shared array (GetSlice). Such a
+            /// content never changes: readers take no lock, so its array and offset, two fields, must
+            /// not change under them. The string replaces it with <see cref="Unslice"/> before its first
+            /// write (MutableString.FrozenOrCopyOnWrite and the raw-array accessors).
+            /// </summary>
+            internal bool IsOffsetSlice;
+
+            /// <summary>
+            /// A content of this one's items in an array of their own, from index 0. Only for an
+            /// <see cref="IsOffsetSlice"/> content; any other is returned as it is.
+            /// </summary>
+            internal virtual Content/*!*/ Unslice() {
+                return this;
+            }
+
             protected BinaryContent/*!*/ WrapContent(byte[]/*!*/ bytes, int count) {
                 BinaryContent result = new BinaryContent(bytes, count, _owner);
                 _owner.SetContent(result);

@@ -520,7 +520,12 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTemporarilyLockedError();
             }
 
-            if ((flags & CopyOnWriteFlag) != 0) {
+            if (_content.IsOffsetSlice) {
+                // A slice from an offset is not written in place (see Content.IsOffsetSlice); its copy
+                // is a content of its own, so this also covers CopyOnWriteFlag.
+                _content = _content.Unslice();
+                flags &= ~CopyOnWriteFlag;
+            } else if ((flags & CopyOnWriteFlag) != 0) {
                 // TODO: we can do better if the representation is being changed: we don't need to copy the data twice
                 _content = _content.Clone();
                 flags &= ~CopyOnWriteFlag;
@@ -636,7 +641,7 @@ namespace IronRuby.Builtins {
 
         private void MutateContent(uint setFlags) {
             uint flags = _flags;
-            if ((flags & MutationGuardFlags) != 0) {
+            if ((flags & MutationGuardFlags) != 0 || _content.IsOffsetSlice) {
                 flags = FrozenOrCopyOnWrite(flags);
             }
             _flags = flags | setFlags;
@@ -655,7 +660,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         private void MutateOne(char c) {
             uint flags = _flags;
-            if ((flags & MutationGuardFlags) != 0) {
+            if ((flags & MutationGuardFlags) != 0 || _content.IsOffsetSlice) {
                 flags = FrozenOrCopyOnWrite(flags);
             }
             if (c >= 0x80) {
@@ -664,6 +669,9 @@ namespace IronRuby.Builtins {
                 } else {
                     flags &= ~(AsciiUnknownFlag | IsAsciiFlag);
                 }
+            } else if ((flags & (AsciiUnknownFlag | IsAsciiFlag)) == 0) {
+                // a set char may have replaced the last non-ASCII one
+                flags |= AsciiUnknownFlag;
             }
             _flags = flags | HasChangedFlags;
             _changeCount++;
@@ -674,7 +682,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         private void MutateOne(byte b) {
             uint flags = _flags;
-            if ((flags & MutationGuardFlags) != 0) {
+            if ((flags & MutationGuardFlags) != 0 || _content.IsOffsetSlice) {
                 flags = FrozenOrCopyOnWrite(flags);
             }
             if (b >= 0x80) {
@@ -1477,6 +1485,7 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ TrimExcess() {
+            _content = _content.Unslice();
             _content.TrimExcess();
             return this;
         }
@@ -1485,6 +1494,7 @@ namespace IronRuby.Builtins {
             get {
                 return _content.GetCapacity();
             } set {
+                _content = _content.Unslice();
                 _content.SetCapacity(value);
             }
         }
@@ -1496,6 +1506,7 @@ namespace IronRuby.Builtins {
         /// <see cref="GetByteArray"/> answers.
         /// </summary>
         public void EnsureCapacity(int minCapacity) {
+            _content = _content.Unslice();
             _content.PrepareForWrite(minCapacity);
             if (_content.GetCapacity() < minCapacity) {
                 _content.SetCapacity(minCapacity);
@@ -3197,6 +3208,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal byte[]/*!*/ GetWritableByteArray(out int count) {
             SwitchToBytes();
+            _content = _content.Unslice();
             _content.PrepareForWrite(0);
             int start;
             var result = _content.GetByteArray(out start, out count);

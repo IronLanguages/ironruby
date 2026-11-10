@@ -1641,6 +1641,64 @@ true
         }
 
         /// <summary>
+        /// A reader of a slice takes no lock while the slice's first write gives it an array of its
+        /// own. A slice from an offset is replaced rather than written in place (Content.IsOffsetSlice):
+        /// before that, a reader could pair the new array with the old offset and read bytes from
+        /// outside the string, or form a span past the array it read. Bytes and characters, a slice
+        /// from an offset and a prefix.
+        /// </summary>
+        public void MutableString_CopyOnWrite5() {
+            string text = "";
+            for (int i = 0; i < 100; i++) {
+                text += "0123456789";
+            }
+
+            foreach (bool binary in new[] { true, false }) {
+                foreach (bool suffix in new[] { true, false }) {
+                    var source = binary
+                        ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(text), RubyEncoding.Binary)
+                        : MutableString.CreateMutable(RubyEncoding.UTF8).Append(text);
+                    string expected = suffix ? "1234" : "0123";
+
+                    MutableString current = null;
+                    bool stop = false;
+                    int wrong = 0, errors = 0;
+                    var reader = new Thread(() => {
+                        while (!Volatile.Read(ref stop)) {
+                            var str = Volatile.Read(ref current);
+                            if (str == null) {
+                                continue;
+                            }
+                            try {
+                                var read = binary
+                                    ? Encoding.ASCII.GetString(str.GetBinarySlice(0, 4))
+                                    : str.GetStringSlice(0, 4);
+                                if (read != expected) {
+                                    wrong++;
+                                }
+                            } catch (Exception) {
+                                errors++;
+                            }
+                        }
+                    });
+                    reader.Start();
+                    try {
+                        for (int i = 0; i < 100000; i++) {
+                            var slice = suffix ? source.GetSlice(1, 999) : source.GetSlice(0, 999);
+                            Volatile.Write(ref current, slice);
+                            slice.Append('x');
+                            slice.Append('y');
+                        }
+                    } finally {
+                        Volatile.Write(ref stop, true);
+                        reader.Join();
+                    }
+                    Assert(wrong == 0 && errors == 0, String.Format("binary: {0}, suffix: {1}: {2} wrong reads, {3} errors", binary, suffix, wrong, errors));
+                }
+            }
+        }
+
+        /// <summary>
         /// Append(Stream) reads before it holds the string's content, which is not reentrant: a stream
         /// whose Read copies the string it is read into must not wait for itself, and a Read that
         /// blocks must not block a copy made on another thread meanwhile.

@@ -289,10 +289,9 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// <see cref="Remove{T}"/> for an array that is shared with another string (copy-on-write) and
         /// so must not be written to; the string's items are array[offset, offset + itemCount).
-        /// Removing from the end keeps the array, which stays shared, and so does removing from the
-        /// beginning (which moves the offset) as long as what is left may keep the array alive
-        /// (<see cref="IsSharedSlice"/>). Any other removal copies the items that remain into an
-        /// array of their own, at offset 0, which is no longer shared.
+        /// Removing from the end keeps the array, which stays shared. Any other removal copies the
+        /// items that remain into an array of their own, at offset 0, which is no longer shared.
+        /// (Moving the offset instead would change two fields under a reader that takes no lock.)
         /// </summary>
         internal static int RemoveShared<T>(ref T[]/*!*/ array, ref int offset, int itemCount, int start, int count, ref bool shared) {
             int remaining = itemCount - count;
@@ -302,11 +301,6 @@ namespace IronRuby.Runtime {
             if (start == remaining) {
                 return remaining;
             }
-            if (start == 0 && IsSharedSlice(array.Length, remaining)) {
-                offset += count;
-                return remaining;
-            }
-
             // the same capacity Remove would leave (zeroed: a write past the end relies on that)
             var a = new T[remaining > MinBufferSize && remaining < itemCount / 2 ? remaining : itemCount];
             Array.Copy(array, offset, a, 0, start);

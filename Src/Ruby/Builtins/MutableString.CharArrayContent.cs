@@ -66,6 +66,7 @@ namespace IronRuby.Builtins {
                 _start = start;
                 _count = count;
                 _state = ContentState.Shared;
+                IsOffsetSlice = start != 0;
                 _immutableSnapshot = immutableSnapshot;
             }
 
@@ -81,8 +82,14 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            internal override Content/*!*/ Unslice() {
+                return IsOffsetSlice ? new CharArrayContent(Utils.GetSlice(GetDataSpan(), 0, _count), _owner) : this;
+            }
+
             [MethodImpl(MethodImplOptions.NoInlining)]
             private void EnterWriteSlow(int minCapacity) {
+                // see BinaryContent.EnterWriteSlow
+                Debug.Assert(!IsOffsetSlice, "an offset slice is written in place");
                 if (ContentState.Enter(ref _state)) {
                     try {
                         // Room past the end is zeroed, as a fresh array's would be; the rest is copied over.
@@ -109,7 +116,10 @@ namespace IronRuby.Builtins {
             }
 
             internal ReadOnlySpan<char> GetDataSpan() {
-                return new ReadOnlySpan<char>(_data, _start, _count);
+                // see BinaryContent.GetDataSpan
+                char[] data = _data;
+                int start = _start;
+                return new ReadOnlySpan<char>(data, start, Math.Min(_count, data.Length - start));
             }
 
             internal BinaryContent/*!*/ SwitchToBinary() {
