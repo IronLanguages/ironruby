@@ -14,12 +14,14 @@
  * ***************************************************************************/
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using Microsoft.Scripting.Utils;
 using System.Text;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace IronRuby.Builtins {
@@ -95,12 +97,57 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
+            /// <summary>
+            /// The hash of a string whose characters are all ASCII, in an encoding that
+            /// <see cref="RubyEncoding.AsciiRoundTrips"/>, from its bytes: Marvin - the seeded hash of
+            /// String.GetHashCode, with its random per-process key - over the bytes, two to a
+            /// UTF-16 unit, and the odd byte at the end mixed in with HashCode's (also seeded) mixer,
+            /// which also sets these apart from the hashes of other strings' characters. That reads
+            /// half the bytes the hash of the UTF-16 characters did. Every equal string - bytes or
+            /// characters, US-ASCII, UTF-8 or BINARY, each #eql? the others - hashes the same.
+            /// </summary>
+            internal static int HashAsciiBytes(ReadOnlySpan<byte> ascii) {
+                if (ascii.IsEmpty) {
+                    // an empty string is #eql? to every other empty string, whatever the encodings
+                    return String.Empty.GetHashCode();
+                }
+                int hash = String.GetHashCode(MemoryMarshal.Cast<byte, char>(ascii));
+                return HashCode.Combine(hash, (ascii.Length & 1) != 0 ? ascii[ascii.Length - 1] : 0x100);
+            }
+
+            /// <summary>
+            /// The hash of a string held as characters (see <see cref="HashAsciiBytes"/>). The
+            /// characters of a string that is not all ASCII are hashed as they are, which is what the
+            /// bytes of one decode to (BinaryContent.CalculateHashCode).
+            /// </summary>
+            internal int HashCharacters(ReadOnlySpan<char> chars) {
+                // A string known not to be ASCII skips the attempt.
+                return HashCharacters(chars, _owner._encoding.AsciiRoundTrips && (_owner._flags & (MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag)) != 0);
+            }
+
+            internal static int HashCharacters(ReadOnlySpan<char> chars, bool asciiAsBytes) {
+                if (asciiAsBytes) {
+                    byte[] rented = null;
+                    Span<byte> bytes = (chars.Length <= 256) ? stackalloc byte[256] : (rented = ArrayPool<byte>.Shared.Rent(chars.Length));
+                    try {
+                        if (System.Text.Ascii.FromUtf16(chars, bytes, out int written) == OperationStatus.Done) {
+                            return HashAsciiBytes(bytes.Slice(0, written));
+                        }
+                    } finally {
+                        if (rented != null) {
+                            ArrayPool<byte>.Shared.Return(rented);
+                        }
+                    }
+                }
+                return String.GetHashCode(chars);
+            }
+
             internal static uint UpdateAsciiAndSurrogatesFlags(string/*!*/ str, uint flags) {
                 return UpdateAsciiAndSurrogatesFlags(str.AsSpan(), flags);
             }
 
-            internal static uint UpdateAsciiAndSurrogatesFlags(char[]/*!*/ str, int itemCount, uint flags) {
-                return UpdateAsciiAndSurrogatesFlags(new ReadOnlySpan<char>(str, 0, itemCount), flags);
+            internal static uint UpdateAsciiAndSurrogatesFlags(char[]/*!*/ str, int start, int itemCount, uint flags) {
+                return UpdateAsciiAndSurrogatesFlags(new ReadOnlySpan<char>(str, start, itemCount), flags);
             }
 
             // Vectorized: these scans run whenever the cached flags are out of date (after most mutations).
@@ -125,7 +172,12 @@ namespace IronRuby.Builtins {
             public abstract bool ContainsInvalidCharacters();
 
             public abstract byte[]/*!*/ ToByteArray();
-            internal abstract byte[]/*!*/ GetByteArray(out int count);
+            /// <summary>
+            /// The bytes in place: <paramref name="count"/> items of the array from <paramref name="start"/>,
+            /// which is 0 unless the array is shared with another string (a slice, see GetSlice).
+            /// Only for reading; see <see cref="Clone"/>.
+            /// </summary>
+            internal abstract byte[]/*!*/ GetByteArray(out int start, out int count);
 
             // returns self if there are no characters to be escaped:
             public abstract Content/*!*/ EscapeRegularExpression();
@@ -166,14 +218,17 @@ namespace IronRuby.Builtins {
             /// Every method that writes into the array of either class must hold the content with its
             /// EnterWrite/ExitWrite (see <see cref="ContentState"/>); anything outside them that writes
             /// into an array it got from GetByteArray must call <see cref="PrepareForWrite"/> before
-            /// taking it. StringContent wraps an immutable CLR string, so its copy shares that string
+            /// taking it. A slice (GetSlice) can share the array too, from an offset: a content's
+            /// items need not start at index 0 of its array until it is written to, as EnterWrite
+            /// copies them to an array of their own at index 0. StringContent wraps an immutable CLR string, so its copy shares that string
             /// with nothing to mark.
             /// </summary>
             public abstract Content/*!*/ Clone();
 
             /// <summary>
             /// Makes sure the array this content holds is its own (see <see cref="Clone"/>), with room
-            /// for at least <paramref name="minCapacity"/> items if it has to be copied.
+            /// for at least <paramref name="minCapacity"/> items if it has to be copied, and that the
+            /// items start at index 0 of it.
             /// </summary>
             internal virtual void PrepareForWrite(int minCapacity) {
             }

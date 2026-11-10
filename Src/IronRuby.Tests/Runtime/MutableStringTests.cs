@@ -1387,6 +1387,12 @@ namespace IronRuby.Tests {
                 s => s.GetSlice(0, s.GetLength() - 1),
                 s => s.GetSlice(0, s.GetLength()),
                 s => s.CreateFrozenSnapshot().Clone(),
+                // slices from an offset share the array too
+                s => s.GetSlice(1, s.GetLength() - 1),
+                s => s.GetSlice(2, s.GetLength() - 4),
+                s => s.GetSlice(1).GetSlice(2),
+                s => s.GetByteSlice(3, s.GetByteCount() - 3),
+                s => s.Clone().Trim(1, s.GetLength() - 2),
             };
 
             var mutations = new Action<MutableString>[] {
@@ -1434,8 +1440,9 @@ namespace IronRuby.Tests {
                     s.SwitchToBytes();
                     int n = s.GetByteCount();
                     s.EnsureCapacity(n + 3);
-                    int count;
-                    var bytes = s.GetByteArray(out count);
+                    int start, count;
+                    var bytes = s.GetByteArray(out start, out count);
+                    Assert(start == 0 && count == n);
                     bytes[0] = 0x58;
                     bytes[n] = 0x0D;
                 },
@@ -1444,6 +1451,13 @@ namespace IronRuby.Tests {
                     var bytes = s.GetWritableByteArray(out count);
                     bytes[1] = 0x59;
                 },
+                s => {
+                    // reading the array in place (IO#write): the slice's bytes, wherever they are in it
+                    int start, count;
+                    var bytes = s.GetByteArray(out start, out count);
+                    s.Append(new byte[] { bytes[start], bytes[start + count - 1] });
+                },
+                s => { s.Capacity = s.Capacity + 10; s.SetByte(0, 0x43); },
                 s => {
                     // an enumeration in progress keeps reading what it started with
                     var e = s.GetCharacters();
@@ -1484,18 +1498,21 @@ namespace IronRuby.Tests {
 
         /// <summary>
         /// The hash of a string does not depend on how it is held, and does not copy it (#89): bytes,
-        /// characters, a CLR string and a copy of each agree - short (decoded on the stack) and long
-        /// (decoded into a pooled buffer).
+        /// characters, a CLR string and a copy and a slice of each agree - short (on the stack) and
+        /// long (in a pooled buffer). ASCII hashes its bytes, the same in every encoding in which it
+        /// is #eql?; anything else hashes as String.GetHashCode of its characters.
         /// </summary>
         public void MutableString_GetHashCode2() {
-            foreach (int length in new[] { 1, 200, 256, 257, 5000 }) {
-                foreach (string unit in new[] { "a", "é", "あ", "aé" }) {
+            foreach (int length in new[] { 0, 1, 2, 3, 200, 256, 257, 600, 5000 }) {
+                foreach (string unit in new[] { "a", "ab", "é", "あ", "aé" }) {
                     var sb = new StringBuilder();
                     while (sb.Length < length) {
                         sb.Append(unit);
                     }
                     string text = sb.ToString();
-                    int h = text.GetHashCode();
+                    bool ascii = System.Text.Ascii.IsValid(text);
+                    int h = MutableString.GetHashCode(text);
+                    Assert(ascii || h == text.GetHashCode());
 
                     var binary = MutableString.CreateBinary(Encoding.UTF8.GetBytes(text), RubyEncoding.UTF8);
                     var chars = MutableString.CreateMutable(RubyEncoding.UTF8).Append(text);
@@ -1506,6 +1523,19 @@ namespace IronRuby.Tests {
                     Assert(binary.Clone().GetHashCode() == h);
                     Assert(chars.Clone().GetHashCode() == h);
                     Assert(binary.IsBinary && !chars.IsBinary);
+
+                    // from an offset into a shared array
+                    var prefixed = MutableString.CreateMutable(RubyEncoding.UTF8).Append("xyz" + text);
+                    Assert(prefixed.GetSlice(3).GetHashCode() == h);
+                    var prefixedBytes = MutableString.CreateBinary(Encoding.UTF8.GetBytes("xyz" + text), RubyEncoding.UTF8);
+                    Assert(prefixedBytes.GetSlice(3).GetHashCode() == h);
+
+                    if (ascii) {
+                        // #eql? in US-ASCII and BINARY as well
+                        Assert(MutableString.CreateBinary(Encoding.ASCII.GetBytes(text), RubyEncoding.Binary).GetHashCode() == h);
+                        Assert(MutableString.CreateMutable(RubyEncoding.Ascii).Append(text).GetHashCode() == h);
+                        Assert(MutableString.CreateBinary(Encoding.ASCII.GetBytes(text), RubyEncoding.Ascii).GetHashCode() == h);
+                    }
                 }
             }
 
@@ -1517,12 +1547,44 @@ namespace IronRuby.Tests {
         }
 
         /// <summary>
+        /// Ruby's side of the hash (#89): #eql? strings hash the same - ASCII in UTF-8, BINARY and
+        /// US-ASCII, empty strings in any encoding, a slice from an offset and an equal fresh string,
+        /// and a CLR string and the String of the same characters, which are #eql? as well.
+        /// </summary>
+        public void MutableString_GetHashCode3() {
+            TestOutput(@"
+require 'ruby4'
+h = { System::String.new('abc') => 1, 'déf' => 2 }
+p h['abc'], h[System::String.new('déf')], System::String.new('abc').hash == 'abc'.hash
+p 'abc'.hash == 'abc'.b.hash, 'abc'.hash == 'abc'.dup.force_encoding('US-ASCII').hash
+p ''.hash == ''.encode('UTF-16LE').hash, ''.hash == ''.b.hash
+s = 'x' * 1000
+p s[1..].hash == ('x' * 999).hash, s.b[1..].hash == ('x' * 999).hash, s[1..].eql?('x' * 999)
+u = 'é' * 600
+p u[1..].hash == ('é' * 599).hash, u.b.force_encoding('UTF-8').byteslice(2..).hash == ('é' * 599).hash
+", @"
+1
+2
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+");
+        }
+
+        /// <summary>
         /// Copy-on-write while another thread writes the string. There is no GVL, so a copy can be made
         /// in the middle of a write, and it must not change after Clone returns (a frozen copy may be
         /// a Hash key): the write must neither land in the array Clone just handed out nor make the
         /// original forget that it shares a new one. Bytes and characters, a write in place and a
         /// write that moves the rest of the string. Before the content state word, the writes landed in
-        /// a few hundred copies out of 200,000.
+        /// a few hundred copies out of 200,000. A slice that shares the array (GetSlice) likewise.
         /// </summary>
         public void MutableString_CopyOnWrite3() {
             string text = "abcdefghijklmnop";
@@ -1555,7 +1617,8 @@ namespace IronRuby.Tests {
                     int changed = 0;
                     try {
                         for (int i = 0; i < 50000; i++) {
-                            var copy = s.Clone();
+                            // a copy, a slice from an offset (sharing the array from there) and a prefix
+                            var copy = (i % 3 == 0) ? s.Clone() : (i % 3 == 1) ? s.GetSlice(1, 4000) : s.GetSlice(0, 4000);
                             int a = binary ? copy.GetByte(100) : copy.GetChar(100);
                             int b = binary ? copy.GetByte(60) : copy.GetChar(60);
                             Thread.SpinWait(20);
@@ -1627,8 +1690,8 @@ namespace IronRuby.Tests {
 
         /// <summary>
         /// The Ruby side of copy-on-write (#89): #dup, #clone, String.new, +@, #replace,
-        /// #initialize, StringIO#read of the whole buffer, a long prefix slice, #chomp and an
-        /// interpolation share the content; each is changed through many String and StringIO
+        /// #initialize, StringIO#read of the whole buffer, a long slice from anywhere (s[n..],
+        /// #byteslice, #delete_prefix), #chomp and an interpolation share the content; each is changed through many String and StringIO
         /// methods, on the copy and on the original. Checked against an independent string given
         /// the same change. The output is CRuby 4.0's.
         /// </summary>
@@ -1649,6 +1712,8 @@ copies = [
   ->(s) { StringIO.new(s).read }, ->(s) { StringIO.new(s).read(nil, String.new) },
   ->(s) { StringIO.new(s).read(s.bytesize) }, ->(s) { s.byteslice(0, s.bytesize - 2) },
   ->(s) { s.chomp }, ->(s) { s[0, s.length] }, ->(s) { Class.new(String).new(s).to_s }, ->(s) { ""#{s}"" },
+  ->(s) { s[1..] }, ->(s) { s[2, s.length - 4] }, ->(s) { s[1..][1..] }, ->(s) { s.byteslice(2..) },
+  ->(s) { s.byteslice(2, s.bytesize - 4) }, ->(s) { s.delete_prefix(s[0, 2]) }, ->(s) { io = StringIO.new(s); io.read(2); io.read },
 ]
 e = ->(x, t) { t.encode(x.encoding) }
 mutators = [
@@ -1665,6 +1730,11 @@ mutators = [
   ->(x) { io = StringIO.new(x); io.seek(x.bytesize + 3); io.write('E') }, ->(x) { x.scrub!(e.(x, '?')) },
   ->(x) { n = 0; x.each_char { |c| x << c if (n += 1) < 3 } },
   ->(x) { x.encode!('UTF-8', invalid: :replace, undef: :replace) },
+  ->(x) { StringIO.new('from-stringio').read(6, x) }, ->(x) { StringIO.new('partial').readpartial(4, x) },
+  ->(x) { r, w = IO.pipe; w.write('pipe-bytes'); w.close; r.read(4, x); r.close },
+  ->(x) { r, w = IO.pipe; w.write('pipe-bytes'); w.close; r.readpartial(5, x); r.close },
+  ->(x) { r, w = IO.pipe; w.write('pipe-bytes'); w.close; r.sysread(3, x); r.close },
+  ->(x) { x.slice!(0, 2) }, ->(x) { x.lstrip! }, ->(x) { x[0, 3] = e.(x, '') },
 ]
 failures = []
 checks = 0
@@ -1689,7 +1759,7 @@ end
 failures.each { |f| p f }
 puts checks, failures.size
 ", @"
-3808
+7056
 0
 ");
         }

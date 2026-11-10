@@ -89,9 +89,9 @@ namespace IronRuby.Runtime {
             return str.Length == 0 ? -1 : str[str.Length - 1];
         }
 
-        internal static IEnumerable<byte>/*!*/ EnumerateAsBytes(char[]/*!*/ data, int count) {
+        internal static IEnumerable<byte>/*!*/ EnumerateAsBytes(char[]/*!*/ data, int start, int count) {
             for (int i = 0; i < count; i++) {
-                yield return (byte)data[i];
+                yield return (byte)data[start + i];
             }
         }
 
@@ -101,9 +101,9 @@ namespace IronRuby.Runtime {
             }
         }
 
-        internal static IEnumerable<T>/*!*/ Enumerate<T>(T[]/*!*/ data, int count) {
+        internal static IEnumerable<T>/*!*/ Enumerate<T>(T[]/*!*/ data, int start, int count) {
             for (int i = 0; i < count; i++) {
-                yield return data[i];
+                yield return data[start + i];
             }
         }
 
@@ -288,11 +288,13 @@ namespace IronRuby.Runtime {
 
         /// <summary>
         /// <see cref="Remove{T}"/> for an array that is shared with another string (copy-on-write) and
-        /// so must not be written to. Removing from the end keeps the array, which stays shared; any
-        /// other removal copies the items that remain into an array of their own, which is no
-        /// longer shared.
+        /// so must not be written to; the string's items are array[offset, offset + itemCount).
+        /// Removing from the end keeps the array, which stays shared, and so does removing from the
+        /// beginning (which moves the offset) as long as what is left may keep the array alive
+        /// (<see cref="IsSharedSlice"/>). Any other removal copies the items that remain into an
+        /// array of their own, at offset 0, which is no longer shared.
         /// </summary>
-        internal static int RemoveShared<T>(ref T[]/*!*/ array, int itemCount, int start, int count, ref bool shared) {
+        internal static int RemoveShared<T>(ref T[]/*!*/ array, ref int offset, int itemCount, int start, int count, ref bool shared) {
             int remaining = itemCount - count;
             if (count == 0) {
                 return itemCount;
@@ -300,12 +302,17 @@ namespace IronRuby.Runtime {
             if (start == remaining) {
                 return remaining;
             }
+            if (start == 0 && IsSharedSlice(array.Length, remaining)) {
+                offset += count;
+                return remaining;
+            }
 
             // the same capacity Remove would leave (zeroed: a write past the end relies on that)
             var a = new T[remaining > MinBufferSize && remaining < itemCount / 2 ? remaining : itemCount];
-            Array.Copy(array, 0, a, 0, start);
-            Array.Copy(array, start + count, a, start, remaining - start);
+            Array.Copy(array, offset, a, 0, start);
+            Array.Copy(array, offset + start + count, a, start, remaining - start);
             array = a;
+            offset = 0;
             shared = false;
             return remaining;
         }
@@ -330,20 +337,33 @@ namespace IronRuby.Runtime {
             return count > 0 ? str.Substring(start, count) : String.Empty;
         }
 
-        internal static string/*!*/ GetStringSlice(this char[]/*!*/ chars, int arrayLength, int start, int count) {
-            count = NormalizeCount(arrayLength, start, count);
-            return count > 0 ? new String(chars, start, count) : String.Empty;
+        internal static string/*!*/ GetStringSlice(ReadOnlySpan<char> chars, int start, int count) {
+            count = NormalizeCount(chars.Length, start, count);
+            return count > 0 ? new String(chars.Slice(start, count)) : String.Empty;
         }
 
         /// <summary>
-        /// Whether a slice of the first <paramref name="count"/> items of a string's array, of length
-        /// <paramref name="arrayLength"/>, shares the array (copy-on-write, see MutableString.Content.Clone)
-        /// rather than copying them - s[0, n], a #chomp or #rstrip. Only a long slice that keeps at
-        /// least half of the array does: a short one is cheap to copy, and a small slice must not keep
-        /// a large array alive - also not by slicing a slice, which is why this is the array's length
-        /// and not the string's.
+        /// A copy of data[start, start + count), or of what there is of it (see NormalizeCount).
         /// </summary>
-        internal static bool IsSharedPrefix(int arrayLength, int count) {
+        internal static T[]/*!*/ GetSlice<T>(ReadOnlySpan<T> data, int start, int count) {
+            count = NormalizeCount(data.Length, start, count);
+            if (count <= 0) {
+                return Array.Empty<T>();
+            }
+            var copy = NewArrayToFill<T>(count);
+            data.Slice(start, count).CopyTo(copy);
+            return copy;
+        }
+
+        /// <summary>
+        /// Whether a slice of <paramref name="count"/> items of a string's array, of length
+        /// <paramref name="arrayLength"/>, shares the array (copy-on-write, see MutableString.Content.Clone)
+        /// rather than copying them - s[0, n], s[n..], a #strip, #chomp or #byteslice. Only a long
+        /// slice that keeps at least half of the array does: a short one is cheap to copy, and a small
+        /// slice must not keep a large array alive - also not by slicing a slice, which is why this is
+        /// the array's length and not the string's.
+        /// </summary>
+        internal static bool IsSharedSlice(int arrayLength, int count) {
             return count >= SharedSliceMinLength && count >= arrayLength - (arrayLength >> 1);
         }
 
@@ -421,17 +441,17 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        internal static int IndexOf(byte[]/*!*/ array, int arrayLength, char value, int start, int count) {
+        internal static int IndexOf(ReadOnlySpan<byte> data, char value, int start, int count) {
             if (value > 0xff) {
                 return -1;
             }
             byte b = (byte)value;
-            return IndexOf(new ReadOnlySpan<byte>(array, 0, arrayLength), new ReadOnlySpan<byte>(ref b), start, count);
+            return IndexOf(data, new ReadOnlySpan<byte>(ref b), start, count);
         }
 
-        internal static int IndexOf(char[]/*!*/ array, int arrayLength, byte value, int start, int count) {
+        internal static int IndexOf(ReadOnlySpan<char> data, byte value, int start, int count) {
             char c = (char)value;
-            return IndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), new ReadOnlySpan<char>(ref c), start, count);
+            return IndexOf(data, new ReadOnlySpan<char>(ref c), start, count);
         }
 
         internal static int IndexOf(string/*!*/ str, byte value, int start, int count) {
@@ -442,33 +462,33 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
-        internal static int IndexOf(byte[]/*!*/ array, int arrayLength, string/*!*/ str, int start, int count) {
+        internal static int IndexOf(ReadOnlySpan<byte> data, string/*!*/ str, int start, int count) {
             byte[] bytes = Narrow(str);
             if (bytes == null) {
                 return -1;
             }
-            return IndexOf(new ReadOnlySpan<byte>(array, 0, arrayLength), bytes, start, count);
+            return IndexOf(data, bytes, start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
-        internal static int IndexOf(char[]/*!*/ array, int arrayLength, string/*!*/ str, int start, int count) {
-            return IndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), str.AsSpan(), start, count);
+        internal static int IndexOf(ReadOnlySpan<char> data, string/*!*/ str, int start, int count) {
+            return IndexOf(data, str.AsSpan(), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
-        internal static int IndexOf(byte[]/*!*/ array, int arrayLength, byte[]/*!*/ bytes, int start, int count) {
-            return IndexOf(new ReadOnlySpan<byte>(array, 0, arrayLength), bytes, start, count);
+        internal static int IndexOf(ReadOnlySpan<byte> data, byte[]/*!*/ bytes, int start, int count) {
+            return IndexOf(data, new ReadOnlySpan<byte>(bytes), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
-        internal static int IndexOf(char[]/*!*/ array, int arrayLength, byte[]/*!*/ bytes, int start, int count) {
-            return IndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), Widen(bytes), start, count);
+        internal static int IndexOf(ReadOnlySpan<char> data, byte[]/*!*/ bytes, int start, int count) {
+            return IndexOf(data, new ReadOnlySpan<char>(Widen(bytes)), start, count);
         }
 
         /// <summary>
@@ -478,9 +498,9 @@ namespace IronRuby.Runtime {
             return IndexOf(str.AsSpan(), Widen(bytes), start, count);
         }
 
-        internal static int LastIndexOf(char[]/*!*/ array, int arrayLength, byte value, int start, int count) {
+        internal static int LastIndexOf(ReadOnlySpan<char> data, byte value, int start, int count) {
             char c = (char)value;
-            return LastIndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), new ReadOnlySpan<char>(ref c), start, count);
+            return LastIndexOf(data, new ReadOnlySpan<char>(ref c), start, count);
         }
 
         internal static int LastIndexOf(string/*!*/ str, byte value, int start, int count) {
@@ -491,31 +511,31 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Implements the same behavior as String.LastIndexOf on ASCII strings.
         /// </summary>
-        internal static int LastIndexOf(byte[]/*!*/ array, int arrayLength, string/*!*/ value, int start, int count) {
+        internal static int LastIndexOf(ReadOnlySpan<byte> data, string/*!*/ value, int start, int count) {
             byte[] bytes = Narrow(value);
             if (bytes == null) {
                 // (an empty value is always narrowed, so this can't skip its answer, start)
                 return -1;
             }
-            return LastIndexOf(new ReadOnlySpan<byte>(array, 0, arrayLength), bytes, start, count);
+            return LastIndexOf(data, new ReadOnlySpan<byte>(bytes), start, count);
         }
 
-        internal static int LastIndexOf(char[]/*!*/ array, int arrayLength, string/*!*/ value, int start, int count) {
-            return LastIndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), value.AsSpan(), start, count);
-        }
-
-        /// <summary>
-        /// Implements the same behavior as String.LastIndexOf on ASCII strings.
-        /// </summary>
-        internal static int LastIndexOf(byte[]/*!*/ array, int arrayLength, byte[]/*!*/ value, int start, int count) {
-            return LastIndexOf(new ReadOnlySpan<byte>(array, 0, arrayLength), value, start, count);
+        internal static int LastIndexOf(ReadOnlySpan<char> data, string/*!*/ value, int start, int count) {
+            return LastIndexOf(data, value.AsSpan(), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.LastIndexOf on ASCII strings.
         /// </summary>
-        internal static int LastIndexOf(char[]/*!*/ array, int arrayLength, byte[]/*!*/ value, int start, int count) {
-            return LastIndexOf(new ReadOnlySpan<char>(array, 0, arrayLength), Widen(value), start, count);
+        internal static int LastIndexOf(ReadOnlySpan<byte> data, byte[]/*!*/ value, int start, int count) {
+            return LastIndexOf(data, new ReadOnlySpan<byte>(value), start, count);
+        }
+
+        /// <summary>
+        /// Implements the same behavior as String.LastIndexOf on ASCII strings.
+        /// </summary>
+        internal static int LastIndexOf(ReadOnlySpan<char> data, byte[]/*!*/ value, int start, int count) {
+            return LastIndexOf(data, new ReadOnlySpan<char>(Widen(value)), start, count);
         }
 
         /// <summary>
@@ -527,7 +547,7 @@ namespace IronRuby.Runtime {
 
         // Ordinal comparison: the difference of the first elements that differ, or else -1, 0 or +1
         // as the first sequence is shorter than, as long as or longer than the second.
-        private static int ValueCompareTo<T>(ReadOnlySpan<T> data, ReadOnlySpan<T> other) where T : IBinaryInteger<T> {
+        internal static int ValueCompareTo<T>(ReadOnlySpan<T> data, ReadOnlySpan<T> other) where T : IBinaryInteger<T> {
             int min = Math.Min(data.Length, other.Length);
             int i = data.Slice(0, min).CommonPrefixLength(other.Slice(0, min));
             return (i < min) ? Int32.CreateTruncating(data[i]) - Int32.CreateTruncating(other[i]) : data.Length.CompareTo(other.Length);
@@ -553,14 +573,14 @@ namespace IronRuby.Runtime {
             return ValueCompareTo(str.AsSpan(), other.AsSpan());
         }
 
-        internal static int ValueCompareTo(this byte[]/*!*/ array, int itemCount, string/*!*/ other) {
-            int min = Math.Min(itemCount, other.Length);
+        internal static int ValueCompareTo(ReadOnlySpan<byte> data, string/*!*/ other) {
+            int min = Math.Min(data.Length, other.Length);
             for (int i = 0; i < min; i++) {
-                if (array[i] != other[i]) {
-                    return (int)array[i] - other[i];
+                if (data[i] != other[i]) {
+                    return (int)data[i] - other[i];
                 }
             }
-            return itemCount.CompareTo(other.Length);
+            return data.Length.CompareTo(other.Length);
         }
 
         internal static bool ValueEquals<T>(T[] array, int arrayCount, T[] other, int otherCount) {

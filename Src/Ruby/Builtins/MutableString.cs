@@ -947,12 +947,23 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Returns hash code of the string. The hash code is the same regardless of the internal string representation 
-        /// and also equal to <see cref="System.String.GetHashCode"/> if the string only contains ASCII characters, is binary-encoded,
-        /// or UTF8 encoded. The hash code is not cached.
+        /// Returns hash code of the string. The hash code is the same regardless of the internal string representation,
+        /// and the same for strings that are #eql? in different encodings (ASCII in US-ASCII, UTF-8 or BINARY, say).
+        /// A string of ASCII characters hashes its bytes (Content.HashAsciiBytes); any other string is hashed as
+        /// <see cref="System.String.GetHashCode"/> hashes its characters, and so is equal to it. Both hashes are
+        /// seeded per process. The hash code is not cached.
         /// </summary>
         public override int GetHashCode() {
             return _content.CalculateHashCode();
+        }
+
+        /// <summary>
+        /// The hash of a CLR string that is the same as that of an equal (#eql?) String in UTF-8, as
+        /// a CLR string is #eql? to a String of the same characters: see <see cref="GetHashCode()"/>.
+        /// </summary>
+        public static int GetHashCode(string/*!*/ str) {
+            ContractUtils.RequiresNotNull(str, "str");
+            return Content.HashCharacters(str.AsSpan(), true);
         }
 
         /// <summary>
@@ -1180,9 +1191,9 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <exception cref="DecoderFallbackException">Invalid characters present.</exception>
         public string/*!*/ ToString(Encoding/*!*/ encoding) {
-            int count;
-            byte[] bytes = _content.GetByteArray(out count);
-            return encoding.GetString(bytes, 0, count);
+            int offset, count;
+            byte[] bytes = _content.GetByteArray(out offset, out count);
+            return encoding.GetString(bytes, offset, count);
         }
 
         /// <summary>
@@ -1190,7 +1201,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <exception cref="DecoderFallbackException">Invalid characters present.</exception>
         public string/*!*/ ToString(Encoding/*!*/ encoding, int start, int count) {
-            byte[] bytes = GetByteArrayChecked(start, count);
+            byte[] bytes = GetByteArrayChecked(ref start, count);
             return encoding.GetString(bytes, start, count);
         }
 
@@ -1710,14 +1721,17 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // _index counts from _start, the first item of the string in _data (see BinaryContent._start).
         internal sealed class BinaryCharacterEnumerator : CharacterEnumerator {
             private readonly byte[]/*!*/ _data;
+            private readonly int _start;
             private readonly int _count;
 
-            internal BinaryCharacterEnumerator(RubyEncoding/*!*/ encoding, byte[]/*!*/ data, int count)
+            internal BinaryCharacterEnumerator(RubyEncoding/*!*/ encoding, byte[]/*!*/ data, int start, int count)
                 : base(encoding) {
                 Assert.NotNull(data);
                 _data = data;
+                _start = start;
                 _count = count;
             }
 
@@ -1734,27 +1748,30 @@ namespace IronRuby.Builtins {
                     return false;
                 }
 
-                _current = new Character((char)_data[_index++]);
+                _current = new Character((char)_data[_start + _index++]);
                 return true;
             }
 
             internal override void AppendDataTo(MutableString/*!*/ str) {
-                str.Append(_data, _index, _count - _index);
+                str.Append(_data, _start + _index, _count - _index);
             }
         }
 
+        // _index counts from _start, as in BinaryCharacterEnumerator.
         internal sealed class CharArrayCharacterEnumerator : CharacterEnumerator {
             private readonly char[]/*!*/ _data;
+            private readonly int _start;
             private readonly int _count;
 
-            internal CharArrayCharacterEnumerator(RubyEncoding/*!*/ encoding, char[]/*!*/ data, int count) 
+            internal CharArrayCharacterEnumerator(RubyEncoding/*!*/ encoding, char[]/*!*/ data, int start, int count) 
                 : base(encoding) {
                 _data = data;
+                _start = start;
                 _count = count;
             }
 
             internal override void AppendDataTo(MutableString/*!*/ str) {
-                str.Append(_data, _index, _count - _index);
+                str.Append(_data, _start + _index, _count - _index);
             }
 
             public override bool HasMore {
@@ -1772,9 +1789,9 @@ namespace IronRuby.Builtins {
                     return false;
                 }
 
-                char c = _data[index];
+                char c = _data[_start + index];
                 char d;
-                if (Tokenizer.IsHighSurrogate(c) && index + 1 < _count && Tokenizer.IsLowSurrogate(d = _data[index + 1])) {
+                if (Tokenizer.IsHighSurrogate(c) && index + 1 < _count && Tokenizer.IsLowSurrogate(d = _data[_start + index + 1])) {
                     _current = new Character(c, d);
                     _index = index + 2;
                 } else if (EscapingEncoding.IsEscapedByte(c)) {
@@ -1846,6 +1863,20 @@ namespace IronRuby.Builtins {
                 result._flags = (result._flags & ~(AsciiUnknownFlag | SurrogatesUnknownFlag)) | IsAsciiFlag | NoSurrogatesFlag;
             }
             return result;
+        }
+
+        /// <summary>
+        /// A new String of the bytes [start, start + count) of this one (String#byteslice). A string
+        /// held as bytes slices them as <see cref="GetSlice(int, int)"/> does, which shares a long
+        /// slice's bytes with this string.
+        /// </summary>
+        public MutableString/*!*/ GetByteSlice(int start, int count) {
+            ContractUtils.Requires(start >= 0, "start");
+            ContractUtils.Requires(count >= 0, "count");
+            if (_content is BinaryContent) {
+                return GetSlice(start, count);
+            }
+            return CreateDerived().Append(GetBinarySlice(start, count));
         }
 
         public string/*!*/ GetStringSlice(int start) {
@@ -2584,7 +2615,7 @@ namespace IronRuby.Builtins {
 
         // TODO: characters
         public MutableString/*!*/ WriteBytes(int offset, MutableString/*!*/ value, int start, int count) {
-            byte[] bytes = value.GetByteArrayChecked(start, count);
+            byte[] bytes = value.GetByteArrayChecked(ref start, count);
             return Write(offset, bytes, start, count);
         }
 
@@ -3143,30 +3174,40 @@ namespace IronRuby.Builtins {
         #region Internal Helpers
 
         /// <summary>
-        /// The bytes of the string in place: the first <paramref name="count"/> items of the array.
-        /// Only for reading - the array may be shared with another string (see Content.Clone). A
-        /// caller that writes into it gets it from <see cref="GetWritableByteArray"/> instead.
+        /// The bytes of the string in place: <paramref name="count"/> items of the array from
+        /// <paramref name="start"/> (not 0 for a slice that shares the array of the string it was
+        /// taken from). Only for reading - the array may be shared with another string (see
+        /// Content.Clone). A caller that writes into it gets it from <see cref="GetWritableByteArray"/> instead.
         /// </summary>
-        internal byte[]/*!*/ GetByteArray(out int count) {
-            return _content.GetByteArray(out count);
+        internal byte[]/*!*/ GetByteArray(out int start, out int count) {
+            return _content.GetByteArray(out start, out count);
         }
 
         /// <summary>
-        /// <see cref="GetByteArray"/> for a caller that writes into the array (native code filling a
-        /// buffer, say): switches to bytes and gives the string an array of its own first.
+        /// The bytes of the string in place, for a caller that writes into the array (native code
+        /// filling a buffer, say): switches to bytes and gives the string an array of its own
+        /// first, in which the string starts at index 0.
         /// </summary>
         internal byte[]/*!*/ GetWritableByteArray(out int count) {
             SwitchToBytes();
             _content.PrepareForWrite(0);
-            return _content.GetByteArray(out count);
+            int start;
+            var result = _content.GetByteArray(out start, out count);
+            Debug.Assert(start == 0);
+            return result;
         }
 
-        internal byte[]/*!*/ GetByteArrayChecked(int start, int count) {
-            int byteCount;
-            var result = _content.GetByteArray(out byteCount);
-            if (count < 0 || start > byteCount - count) {
+        /// <summary>
+        /// The array of the bytes, after checking that [<paramref name="start"/>, start + count) is in
+        /// the string; <paramref name="start"/> is moved to the index of that byte in the array.
+        /// </summary>
+        internal byte[]/*!*/ GetByteArrayChecked(ref int start, int count) {
+            int offset, byteCount;
+            var result = _content.GetByteArray(out offset, out byteCount);
+            if (count < 0 || start < 0 || start > byteCount - count) {
                 throw new ArgumentOutOfRangeException("count");
             }
+            start += offset;
             return result;
         }
 

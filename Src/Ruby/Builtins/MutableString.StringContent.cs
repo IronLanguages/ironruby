@@ -93,8 +93,9 @@ namespace IronRuby.Builtins {
                 return UpdateAsciiAndSurrogatesFlags(_data, flags);
             }
 
+            // See Content.HashCharacters.
             public override int CalculateHashCode() {
-                return _data.GetHashCode();
+                return HashCharacters(_data.AsSpan());
             }
 
             public override int Count {
@@ -169,8 +170,8 @@ namespace IronRuby.Builtins {
                 return DataToBytes();
             }
 
-            internal override byte[]/*!*/ GetByteArray(out int count) {
-                return SwitchToBinary().GetByteArray(out count);
+            internal override byte[]/*!*/ GetByteArray(out int start, out int count) {
+                return SwitchToBinary().GetByteArray(out start, out count);
             }
 
             public override Content/*!*/ SwitchToBinaryContent() {
@@ -206,8 +207,8 @@ namespace IronRuby.Builtins {
                 return _data.ValueCompareTo(str);
             }
 
-            internal int OrdinalCompareTo(char[]/*!*/ chars, int count) {
-                return -chars.ValueCompareTo(count, _data);
+            internal int OrdinalCompareTo(ReadOnlySpan<char> chars) {
+                return Utils.ValueCompareTo(_data.AsSpan(), chars);
             }
 
             // this <=> content
