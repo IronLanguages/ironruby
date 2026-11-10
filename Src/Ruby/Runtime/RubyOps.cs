@@ -3486,7 +3486,8 @@ namespace IronRuby.Runtime {
             // The CLR takes an exception thrown in a filter for a filter that turned the exception down - here, for "goes through".
             // These say "catch it" instead.
             try {
-                if (IsDeepOrOverflow(exception) || TracePoint.ActiveEvents != 0) {
+                // A refinement of Module#=== would be what CRuby's rescue calls (IronRuby's CompareException does not see one yet).
+                if (IsDeepOrOverflow(exception) || TracePoint.ActiveEvents != 0 || scope.RubyContext.HasRefinements) {
                     return false;
                 }
                 var data = RubyExceptionData.TryGetInstance(exception);
