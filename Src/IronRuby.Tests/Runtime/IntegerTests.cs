@@ -592,6 +592,7 @@ p s { |a| (1.0..2.0).step(0.5) { |x| a << x; break 9 } }
             TestOutput(@"
 def c(s) = (z = s.to_c; [z.real, z.imaginary])
 p c(""1+2i""), c(""-i""), c("" 2j ""), c(""""), c(""7__9""), c(""1_i""), c(""1+x""), c(""-12_345-6i""), c(""1\0+2i"")
+p c(""\xff1+2i""), c(""1+2i\xff""), c(""1+2i\xff"".dup.force_encoding(""BINARY"")), c(""１+2i""), c(""1+2iü"".dup.force_encoding(""BINARY"").force_encoding(""UTF-8""))
 p Complex.__ir_scan__(""1.5e3-2/3i"", false), Complex.__ir_scan__(""1@2"", false), Complex.__ir_scan__(""1e+i"", false)
 p Complex.__ir_scan__(""7__9"", true)[0], Complex.__ir_scan__(""1+2i x"", true)[0], Complex.__ir_scan__(""1+2i "", true)[0]
 ", @"
@@ -604,6 +605,11 @@ p Complex.__ir_scan__(""7__9"", true)[0], Complex.__ir_scan__(""1+2i x"", true)[
 [1, 0]
 [-12345, -6]
 [1, 0]
+[0, 0]
+[1, 2]
+[1, 2]
+[0, 0]
+[1, 2]
 [true, 2, ""1.5e3"", ""-2/3""]
 [true, 3, 1, 2]
 [false, 0, ""1e"", nil]

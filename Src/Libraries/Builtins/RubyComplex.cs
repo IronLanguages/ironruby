@@ -377,17 +377,22 @@ namespace IronRuby.Builtins {
         }
 
         private static RubyArray/*!*/ ScanParts(MutableString/*!*/ str, bool strict) {
-            ReadOnlySpan<char> chars;
-            ReadOnlySpan<byte> bytes;
             char[] text;
-            if (str.GetCharacterData(out chars, out bytes)) {
-                text = chars.ToArray();
-            } else {
-                // only ASCII characters take part; any other byte is just not one of them
+            if (str.IsBinary) {
+                // Held as bytes, which need not be its characters one for one (invalid or multi-byte
+                // UTF-8): only ASCII characters take part in the scan, and any other byte is just not
+                // one of them. (GetCharacterData is only for a string PrepareForCharacterRead has made
+                // characters of, which would raise for an invalid one: MRI's scan does not.)
+                byte[] bytes = str.ToByteArray();
                 text = new char[bytes.Length];
                 for (int k = 0; k < bytes.Length; k++) {
                     text[k] = (char)bytes[k];
                 }
+            } else {
+                ReadOnlySpan<char> chars;
+                ReadOnlySpan<byte> bytes;
+                str.GetCharacterData(out chars, out bytes);
+                text = chars.ToArray();
             }
             var scanner = new ComplexScanner(text, strict);
             return scanner.Parse();
