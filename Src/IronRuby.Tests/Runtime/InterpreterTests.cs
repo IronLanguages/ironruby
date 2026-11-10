@@ -538,6 +538,55 @@ namespace IronRuby.Tests {
         }
 
         /// <summary>
+        /// The other half of Interpreter_FinallyThrowCaughtInFrame1: the finally block that throws and the handler that catches
+        /// it are in C# below the interpreted frame. Build/dlr-patches/0107 lets the first exception through the frame (its
+        /// filter decides the frame's finally blocks run as it goes), but the dispatch never reaches the frame: the handler
+        /// below ends it, and the frame completes normally. It must then return its result, not run its finally blocks again
+        /// and return one of its locals - which it did while the filter's decision outlived the dispatch.
+        /// </summary>
+        [Options(NoRuntime = true)]
+        public void Interpreter_FinallyThrowCaughtBelowFrame1() {
+            var local = Ast.Variable(typeof(object), "local");
+            var result = Ast.Variable(typeof(object), "result");
+
+            var l0 = Ast.Lambda<Func<object>>(
+                // local last: the stale path returned the frame's last local, which must not be the result
+                Ast.Block(new[] { result, local },
+                    Ast.Assign(local, Ast.Constant("local")),
+                    Ast.TryFinally(
+                        Ast.Assign(result, Ast.Call(null, typeof(Tests).GetMethod(nameof(ThrowFromFinallyAndCatch)))),
+                        Ast.Assign(local, Ast.Constant("finally"))
+                    ),
+                    result
+                )
+            );
+
+            foreach (var f in new[] { l0.Compile(), l0.LightCompile(Int32.MaxValue) }) {
+                object value;
+                try {
+                    value = f();
+                } catch (InvalidOperationException) {
+                    value = "escaped";
+                }
+                Assert(42.Equals(value), String.Format("returned {0}", value));
+            }
+        }
+
+        // The InvalidOperationException has no handler below the caller, so the caller sees it first; the finally block's
+        // ArgumentException, thrown while it is dispatched, replaces it and is caught here.
+        public static object ThrowFromFinallyAndCatch() {
+            try {
+                try {
+                    throw new InvalidOperationException();
+                } finally {
+                    throw new ArgumentException();
+                }
+            } catch (ArgumentException) {
+            }
+            return 42;
+        }
+
+        /// <summary>
         /// Pending continuation override: jump from finally should cancel any pending jumps (gotos or throws) from try-block.
         /// </summary>
         [Options(NoRuntime = true)]

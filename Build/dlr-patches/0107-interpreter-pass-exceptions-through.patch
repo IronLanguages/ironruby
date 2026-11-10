@@ -11,23 +11,44 @@ was dispatched n + 1 times: raising through 20 interpreted Ruby methods took
 ~470 us, against ~60 us through the same methods compiled.
 
 Run now catches only in a filter that says it must: a handler of the frame
-takes the exception, or a finally block of the frame contains a jump (which
-can end the exception, so it has to run inside the catch as before), or a
-handler of the frame encloses a finally block to run (it can catch what the
-block throws, which also ends the exception), or the
-stack is nearly exhausted (a catch gives the stack of the frames the exception
-came out of back before it rethrows, see 0105). Otherwise the exception goes on
-through, and the frame's finally blocks run from a finally of Run's own as it
-does - exactly the instructions the catch ran. The filter is also where the
-interpreted frames are saved on the exception, while all of them are still on
-the stack; HandleException still does it for an exception it catches.
+takes the exception, or a finally block of the frame contains a jump (which can
+end the exception, so it has to run inside the catch as before), or a handler
+of the frame encloses a finally block to run (it can catch what the block
+throws, which also ends the exception), or the stack is nearly exhausted (a
+catch gives the stack of the frames the exception came out of back before it
+rethrows, see 0105). Otherwise the exception goes on through, and the frame's
+finally blocks run from a finally of Run's own as it does - exactly the
+instructions the catch ran. The filter's decision is dropped when the frame
+completes normally: a handler below the frame can still catch an exception that
+a finally block threw while the original one was being dispatched, and the
+frame then goes on as if nothing had passed through it. The filter is also
+where the interpreted frames are saved on the exception, while all of them are
+still on the stack; HandleException still does it for an exception it catches.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+@@ -236,6 +236,14 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+         #region Continuations
+ 
++        // A finally block to run before the frame is left (see Interpreter.MustCatch).
++        internal bool HasContinuations => _continuationIndex > 0;
++
++        internal int ContinuationCount => _continuationIndex;
++
++        // the label of the index-th pending finally block, outermost first
++        internal int GetContinuation(int index) => _continuations[index];
++
+         public void RemoveContinuation() {
+             _continuationIndex--;
+         }
 diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
 --- a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
 +++ b/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
-@@ -86,6 +86,7 @@
+@@ -86,6 +86,7 @@ namespace Microsoft.Scripting.Interpreter {
          public void Run(InterpretedFrame frame) {
              while (true) {
                  ExceptionDispatchInfo rethrow;
@@ -35,16 +56,20 @@ diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Mi
                  try {
                      var instructions = Instructions.Instructions;
                      int index = frame.InstructionIndex;
-@@ -94,7 +95,7 @@
+@@ -93,8 +94,11 @@ namespace Microsoft.Scripting.Interpreter {
+                         index += instructions[index].Run(frame);
                          frame.InstructionIndex = index;
                      }
++                    // An exception that went through MustCatch may have been caught below this frame after
++                    // all (by a handler around a finally block that threw): it no longer passes through here.
++                    runFinallyBlocks = false;
                      return;
 -                } catch (Exception exception) {
 +                } catch (Exception exception) when (MustCatch(frame, exception, ref runFinallyBlocks)) {
                      switch (HandleException(frame, exception)) {
                          case ExceptionHandlingResult.Continue: continue;
                          case ExceptionHandlingResult.Return: return;
-@@ -106,11 +107,59 @@
+@@ -106,11 +110,59 @@ namespace Microsoft.Scripting.Interpreter {
                      // in proportion to its depth to get out, and ended the process. Leaving the catch first
                      // gives that stack back; the dispatch info keeps the exception's trace.
                      rethrow = ExceptionDispatchInfo.Capture(exception);
@@ -104,28 +129,10 @@ diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Mi
          private ExceptionHandlingResult HandleException(InterpretedFrame frame, Exception exception) {
              frame.SaveTraceToException(exception);
              frame.InstructionIndex += GotoHandler(frame, exception, out ExceptionHandler handler);
-diff --git a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
---- a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
-+++ b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
-@@ -236,6 +236,14 @@
- 
-         #region Continuations
- 
-+        // A finally block to run before the frame is left (see Interpreter.MustCatch).
-+        internal bool HasContinuations => _continuationIndex > 0;
-+
-+        internal int ContinuationCount => _continuationIndex;
-+
-+        // the label of the index-th pending finally block, outermost first
-+        internal int GetContinuation(int index) => _continuations[index];
-+
-         public void RemoveContinuation() {
-             _continuationIndex--;
-         }
 diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
 --- a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
 +++ b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
-@@ -148,6 +148,10 @@
+@@ -148,6 +148,10 @@ namespace Microsoft.Scripting.Interpreter {
          private readonly LocalVariables _locals = new();
  
          private readonly List<ExceptionHandler> _handlers = new();
@@ -136,7 +143,7 @@ diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs b/src/core/
          
          private readonly List<DebugInfo> _debugInfos = new();
          private readonly HybridReferenceDictionary<LabelTarget, LabelInfo> _treeLabels = new();
-@@ -231,7 +235,9 @@
+@@ -231,7 +235,9 @@ namespace Microsoft.Scripting.Interpreter {
              var handlers = _handlers.ToArray();
              var debugInfos = _debugInfos.ToArray();
  
@@ -147,7 +154,7 @@ diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs b/src/core/
          }
  
          private void CompileConstantExpression(Expression expr) {
-@@ -941,6 +947,12 @@
+@@ -941,6 +947,12 @@ namespace Microsoft.Scripting.Interpreter {
              var node = (GotoExpression)expr;
              var labelInfo = ReferenceLabel(node.Target);
  
