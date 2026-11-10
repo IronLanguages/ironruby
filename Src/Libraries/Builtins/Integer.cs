@@ -1311,12 +1311,64 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
-            while (!number.IsZero) {
-                BigInteger remainder;
-                number = BigInteger.DivRem(number, radixValue, out remainder);
-                result.Add(Protocols.Normalize(remainder));
+            if (radixValue <= 36) {
+                // Integer#to_s's digits, which are subquadratic, read backwards
+                string text = ClrInteger.ToRadixString(number, (int)radixValue);
+                for (int i = text.Length - 1; i >= 0; i--) {
+                    char c = text[i];
+                    result.Add(ScriptingRuntimeHelpers.Int32ToObject(c <= '9' ? c - '0' : c - 'a' + 10));
+                }
+                return result;
             }
+
+            // Dividing by the radix once per digit is quadratic (~200 ms for 100k bits in base 1000). Split by the
+            // radix ** 2**k instead: powers[k] is that, and the largest is at most the number.
+            var powers = new System.Collections.Generic.List<BigInteger> { radixValue };
+            while (true) {
+                BigInteger square = powers[powers.Count - 1] * powers[powers.Count - 1];
+                if (square > number) {
+                    break;
+                }
+                powers.Add(square);
+            }
+            AddDigits(result, number, radixValue, powers, powers.Count - 1, false);
             return result;
+        }
+
+        /// <summary>
+        /// Adds the digits of <paramref name="number"/>, which is less than radix ** 2**(level + 1), least significant first:
+        /// exactly 2**(level + 1) of them, leading zeros included, when <paramref name="pad"/> is set.
+        /// </summary>
+        private static void AddDigits(RubyArray/*!*/ result, BigInteger number, BigInteger radix,
+            System.Collections.Generic.List<BigInteger>/*!*/ powers, int level, bool pad) {
+
+            if (number <= Int64.MaxValue && radix <= Int64.MaxValue) {
+                long n = (long)number, r = (long)radix;
+                long count = 0;
+                while (n > 0) {
+                    result.Add(Protocols.Normalize(n % r));
+                    n /= r;
+                    count++;
+                }
+                if (pad) {
+                    for (long width = (level < 0) ? 1 : 2L << level; count < width; count++) {
+                        result.Add(ClrInteger.Zero);
+                    }
+                }
+                return;
+            }
+            if (level < 0) {
+                // a single digit, at least as large as a long
+                result.Add(Protocols.Normalize(number));
+                return;
+            }
+            BigInteger high = BigInteger.DivRem(number, powers[level], out BigInteger low);
+            if (high.IsZero && !pad) {
+                AddDigits(result, low, radix, powers, level - 1, false);
+            } else {
+                AddDigits(result, low, radix, powers, level - 1, true);
+                AddDigits(result, high, radix, powers, level - 1, pad);
+            }
         }
 
         #endregion

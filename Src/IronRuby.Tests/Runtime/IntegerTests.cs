@@ -1295,5 +1295,161 @@ end
                 Assert(s * s >= m);
             }
         }
+
+        /// <summary>
+        /// Integer#to_s of a Bignum (ClrInteger.ToRadixString) hands a radix that is not a power of two to the DLR's
+        /// subquadratic MathUtils.ToString, and in radix 10 changes over to it from BigInteger.ToString at a size that
+        /// depends on the runtime. Around powers of the radix, on both sides of the change-over and with both signs, it
+        /// must give what dividing out a few digits at a time gives.
+        /// </summary>
+        public void Integer_ToRadixStringLarge1() {
+            var random = new Random(89);
+            for (int radix = 2; radix <= 36; radix++) {
+                var values = new System.Collections.Generic.List<BigInteger> {
+                    BigInteger.Zero, BigInteger.One, long.MaxValue, (BigInteger)long.MaxValue + 1, ulong.MaxValue,
+                };
+                foreach (int exponent in new[] { 13, 40, 64, 1000, 4000 }) {
+                    BigInteger power = BigInteger.Pow(radix, exponent);
+                    values.Add(power - 1);
+                    values.Add(power);
+                    values.Add(power + 1);
+                }
+                int[] sizes = (radix == 10 || radix == 7) ? new[] { 65, 100, 1500, 6000, 40000, 100000 } : new[] { 65, 100, 1500, 6000 };
+                foreach (int bits in sizes) {
+                    byte[] bytes = new byte[bits / 8 + 1];
+                    random.NextBytes(bytes);
+                    bytes[bytes.Length - 1] = 0;
+                    values.Add(new BigInteger(bytes));
+                }
+
+                foreach (BigInteger value in values) {
+                    string expected = ReferenceRadixString(value, radix);
+                    Assert(ClrInteger.ToRadixString(value, radix) == expected);
+                    if (!value.IsZero) {
+                        Assert(ClrInteger.ToRadixString(-value, radix) == "-" + expected);
+                    }
+                }
+            }
+        }
+
+        // the digits of a non-negative value, lower case, found by dividing out as many digits as fit in an int at a time
+        private static string ReferenceRadixString(BigInteger value, int radix) {
+            if (value.IsZero) {
+                return "0";
+            }
+            int chunkDigits = 1;
+            long chunk = radix;
+            while (chunk * radix <= int.MaxValue) {
+                chunk *= radix;
+                chunkDigits++;
+            }
+            var parts = new System.Collections.Generic.List<string>();
+            while (!value.IsZero) {
+                value = BigInteger.DivRem(value, chunk, out BigInteger remainder);
+                var digits = new char[chunkDigits];
+                long part = (long)remainder;
+                for (int i = chunkDigits - 1; i >= 0; i--) {
+                    digits[i] = "0123456789abcdefghijklmnopqrstuvwxyz"[(int)(part % radix)];
+                    part /= radix;
+                }
+                parts.Add(new string(digits));
+            }
+            parts.Reverse();
+            return string.Concat(parts).TrimStart('0');
+        }
+
+        /// <summary>
+        /// format's %d, %x, %X, %o, %b, %B and %f of Bignums take Integer#to_s's digits (they divided by the radix once per
+        /// digit); Integer#digits of a Bignum reads them too, and splits by powers of a radix above 36. Expected output is
+        /// CRuby 4.0's.
+        /// </summary>
+        public void Integer_FormatAndDigitsLarge1() {
+            TestOutput(@"
+x = 2**70 + 0xabc
+[x, -x, 7**40, -(7**40)].each do |v|
+  puts format(""%d|%x|%X|%o|%b|%B|%#x|%+x|% o|%.30d|%30x|%-30b|"", v, v, v, v, v, v, v, v, v, v, v, v)
+end
+puts format(""%f|%.2f"", 3**50, -(3**50))
+def naive(n, b); r = []; while n > 0; n, d = n.divmod(b); r << d; end; r; end
+srand 89
+vals = [0, 1, 2**64 - 1, 2**64, 10**40, 10**40 - 1] + [100, 1000, 3000].map { |bits| rand(2**bits) | (1 << (bits - 1)) }
+ok = [2, 7, 10, 16, 36, 37, 1000, 2**32, 2**64 - 1, 2**64, 2**70 + 1].all? do |b|
+  vals.all? { |v| v.digits(b) == (v.zero? ? [0] : naive(v, b)) }
+end
+p ok
+p (10**40).digits(10**20), (2**128).digits(2**64), 0.digits(2**70)
+", @"
+1180591620717411306172|400000000000000abc|400000000000000ABC|200000000000000000005274|10000000000000000000000000000000000000000000000000000000000101010111100|10000000000000000000000000000000000000000000000000000000000101010111100|0x400000000000000abc|+400000000000000abc| 200000000000000000005274|000000001180591620717411306172|            400000000000000abc|10000000000000000000000000000000000000000000000000000000000101010111100|
+-1180591620717411306172|..fbffffffffffffff544|..FBFFFFFFFFFFFFFF544|..7577777777777777777772504|..101111111111111111111111111111111111111111111111111111111111010101000100|..101111111111111111111111111111111111111111111111111111111111010101000100|0x..fbffffffffffffff544|-400000000000000abc|-200000000000000000005274|-000000001180591620717411306172|         ..fbffffffffffffff544|..101111111111111111111111111111111111111111111111111111111111010101000100|
+6366805760909027985741435139224001|139e862f1509ba9c74345f78771c1|139E862F1509BA9C74345F78771C1|23475030570520467247072064276741670701|10011100111101000011000101111000101010000100110111010100111000111010000110100010111110111100001110111000111000001|10011100111101000011000101111000101010000100110111010100111000111010000110100010111110111100001110111000111000001|0x139e862f1509ba9c74345f78771c1|+139e862f1509ba9c74345f78771c1| 23475030570520467247072064276741670701|6366805760909027985741435139224001| 139e862f1509ba9c74345f78771c1|10011100111101000011000101111000101010000100110111010100111000111010000110100010111110111100001110111000111000001|
+-6366805760909027985741435139224001|..fec6179d0eaf645638bcba08788e3f|..FEC6179D0EAF645638BCBA08788E3F|..754302747207257310530705713501036107077|..101100011000010111100111010000111010101111011001000101011000111000101111001011101000001000011110001000111000111111|..101100011000010111100111010000111010101111011001000101011000111000101111001011101000001000011110001000111000111111|0x..fec6179d0eaf645638bcba08788e3f|-139e862f1509ba9c74345f78771c1|-23475030570520467247072064276741670701|-6366805760909027985741435139224001|..fec6179d0eaf645638bcba08788e3f|..101100011000010111100111010000111010101111011001000101011000111000101111001011101000001000011110001000111000111111|
+717897987691852588770249.000000|-717897987691852588770249.00
+true
+[0, 0, 1]
+[0, 0, 1]
+[0]
+");
+        }
+
+        /// <summary>
+        /// Range#size is C# (RangeOps.Size) for an Integer beginning with an Integer or no end, and a nil or Float beginning;
+        /// the prelude's __size__ answers the rest. Like MRI's range_size it reads the endpoints, not #begin. Expected output
+        /// is CRuby 4.0's.
+        /// </summary>
+        public void Range_Size1() {
+            TestOutput(@"
+require 'ruby4'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+show(""1..10"") { (1..10).size }
+show(""1...10"") { (1...10).size }
+show(""10..1"") { (10..1).size }
+show(""5...5"") { (5...5).size }
+show(""-3..3"") { (-3..3).size }
+show(""min..max"") { (-2**31..2**31 - 1).size }
+show(""1.."") { (1..).size }
+show(""1..."") { (1...).size }
+show(""big..big"") { (2**64..2**65).size }
+show(""1..big"") { (1..2**64).size }
+show(""big...1"") { (2**64...1).size }
+show(""big.."") { (2**64..).size }
+show(""1..2.5"") { (1..2.5).size }
+show(""1...3.0"") { (1...3.0).size }
+show(""1..inf"") { (1..Float::INFINITY).size }
+show(""1..1r"") { (1..1r).size }
+show(""1.0..2.0"") { (1.0..2.0).size }
+show(""1.5.."") { (1.5..).size }
+show(""..1"") { (..1).size }
+show(""nil..nil"") { (nil..nil).size }
+show(""a..z"") { (""a""..""z"").size }
+show(""time"") { t = Time.at(0); (t..t).size }
+show(""sub"") { Class.new(Range) { def begin; 100; end }.new(1, 3).size }
+show(""enum"") { (1..4).each_slice(2).size }
+", @"
+1..10: 10
+1...10: 9
+10..1: 0
+5...5: 0
+-3..3: 7
+min..max: 4294967296
+1..: Infinity
+1...: Infinity
+big..big: 18446744073709551617
+1..big: 18446744073709551616
+big...1: 0
+big..: Infinity
+1..2.5: 2
+1...3.0: 2
+1..inf: Infinity
+1..1r: 1
+1.0..2.0: ""TypeError: can't iterate from Float""
+1.5..: ""TypeError: can't iterate from Float""
+..1: ""TypeError: can't iterate from NilClass""
+nil..nil: ""TypeError: can't iterate from NilClass""
+a..z: nil
+time: ""TypeError: can't iterate from Time""
+sub: 3
+enum: 2
+");
+        }
     }
 }
