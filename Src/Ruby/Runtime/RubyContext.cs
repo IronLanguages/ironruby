@@ -2161,17 +2161,18 @@ namespace IronRuby.Runtime {
             return result.HasAdoptedInstances ? (TryGetClassOfAdoptedClrObject(obj) ?? result) : result;
         }
 
-        // nil, true, false, a Fixnum or a Float, by exact type tests: these come before the IRubyObject test, an
-        // interface cast that is the slowest kind for a boxed Int32 or Double - generic math gave them dozens of
-        // interfaces to scan.
+        // A Fixnum or a Float, by exact type tests: these come before the IRubyObject test, an interface cast that
+        // is the slowest kind for a boxed Int32 or Double - generic math gave them dozens of interfaces to scan. (nil
+        // and a bool go through the cast, which is cheap for them, so that a Ruby object pays only two compares.)
         private static bool IsImmediateValue(object obj) {
-            return obj == null || obj is int || obj is double || obj is bool;
+            return obj is int || obj is double;
         }
 
         /// <summary>
         /// The class of nil, true, false, a Fixnum (Int32) or a Float while no Integer or Float has a class of its
         /// own (see NoteOwnClassNoLock), so that its immediate class is its class - or null. Every is_a?, kind_of?,
-        /// instance_of?, Module#=== and #class of such a value comes here (IsImmediateValue).
+        /// instance_of?, Module#=== and #class of such a value comes here (by IsImmediateValue, or for nil and the
+        /// booleans after the failed IRubyObject cast).
         /// </summary>
         private RubyClass TryGetValueClass(object obj) {
             RubyClass result;
