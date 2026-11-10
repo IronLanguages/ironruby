@@ -87,6 +87,7 @@ namespace IronRuby.Tests {
                 Interpreter1D,
                 Interpreter_JumpFromFinally1,
                 Interpreter_JumpFromFinally2,
+                Interpreter_FinallyThrowCaughtInFrame1,
                 Interpreter2,
                 Interpreter5,
                 Interpreter6,

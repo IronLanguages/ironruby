@@ -509,6 +509,35 @@ namespace IronRuby.Tests {
         }
 
         /// <summary>
+        /// An exception the frame does not catch, whose finally block throws one that an enclosing handler of the same frame
+        /// does catch: the handler completes and the first exception is gone (Build/dlr-patches/0107 lets an exception
+        /// through a frame with only finally blocks for it, but not when a handler encloses one of them).
+        /// </summary>
+        [Options(NoRuntime = true)]
+        public void Interpreter_FinallyThrowCaughtInFrame1() {
+            var l0 = Ast.Lambda<Action>(
+                Ast.Block(
+                    Ast.TryCatch(
+                        Ast.TryFinally(
+                            Ast.Block(
+                                TraceCall(Ast.Constant(0)),
+                                Ast.Throw(Ast.New(typeof(InvalidOperationException)))
+                            ),
+                            Ast.Block(
+                                TraceCall(Ast.Constant(1)),
+                                Ast.Throw(Ast.New(typeof(ArgumentException)))
+                            )
+                        ),
+                        Ast.Catch(typeof(ArgumentException), TraceCall(Ast.Constant(2)))
+                    ),
+                    TraceCall(Ast.Constant(3))
+                )
+            );
+
+            TraceTestLambda(l0, new object[] { 0, 1, 2, 3 });
+        }
+
+        /// <summary>
         /// Pending continuation override: jump from finally should cancel any pending jumps (gotos or throws) from try-block.
         /// </summary>
         [Options(NoRuntime = true)]

@@ -1303,7 +1303,7 @@ end.join(' ')
 
         /// <summary>
         /// An exception passing interpreted frames that have only finally blocks to run (a method's own epilogue, an
-        /// `ensure') goes on through them instead of being caught and thrown again in each (Build/dlr-patches/0106). The
+        /// `ensure') goes on through them instead of being caught and thrown again in each (Build/dlr-patches/0107). The
         /// ensure clauses still run innermost first and before an outer `rescue' tests the exception, a jump out of an
         /// `ensure' still ends it, and the backtrace is the same. Run in an engine that only interprets, and in the test
         /// engine, which compiles. The expected output is CRuby 4.0's.

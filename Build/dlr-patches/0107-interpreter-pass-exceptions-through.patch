@@ -12,7 +12,9 @@ was dispatched n + 1 times: raising through 20 interpreted Ruby methods took
 
 Run now catches only in a filter that says it must: a handler of the frame
 takes the exception, or a finally block of the frame contains a jump (which
-can end the exception, so it has to run inside the catch as before), or the
+can end the exception, so it has to run inside the catch as before), or a
+handler of the frame encloses a finally block to run (it can catch what the
+block throws, which also ends the exception), or the
 stack is nearly exhausted (a catch gives the stack of the frames the exception
 came out of back before it rethrows, see 0105). Otherwise the exception goes on
 through, and the frame's finally blocks run from a finally of Run's own as it
@@ -42,7 +44,7 @@ diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Mi
                      switch (HandleException(frame, exception)) {
                          case ExceptionHandlingResult.Continue: continue;
                          case ExceptionHandlingResult.Return: return;
-@@ -106,11 +107,42 @@
+@@ -106,11 +107,59 @@
                      // in proportion to its depth to get out, and ended the process. Leaving the catch first
                      // gives that stack back; the dispatch info keeps the exception's trace.
                      rethrow = ExceptionDispatchInfo.Capture(exception);
@@ -74,12 +76,29 @@ diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Mi
 +        private bool MustCatch(InterpretedFrame frame, Exception exception, ref bool runFinallyBlocks) {
 +            bool mustCatch = GetBestHandler(frame.InstructionIndex, exception.GetType()) is not null ||
 +                // with no finally block to run, catching would only rethrow
-+                frame.HasContinuations && (HasJumpsInFinally || !RuntimeHelpers.TryEnsureSufficientExecutionStack());
++                frame.HasContinuations && (HasJumpsInFinally || IsFinallyInHandler(frame) || !RuntimeHelpers.TryEnsureSufficientExecutionStack());
 +
 +            // decided before anything else runs here: a filter that throws counts as false, and the finally blocks run then too
 +            runFinallyBlocks = !mustCatch && frame.HasContinuations;
 +            frame.SaveTraceToException(exception);
 +            return mustCatch;
++        }
++
++        // Whether a handler of this frame encloses one of the finally blocks the exception would run: it can catch what that
++        // block throws, and end the exception that way, which only the catch can do.
++        private bool IsFinallyInHandler(InterpretedFrame frame) {
++            if (_handlers.Length == 0) {
++                return false;
++            }
++            for (int i = 0; i < frame.ContinuationCount; i++) {
++                int finallyStart = _labels[frame.GetContinuation(i)].Index;
++                foreach (var handler in _handlers) {
++                    if (handler.IsInside(finallyStart)) {
++                        return true;
++                    }
++                }
++            }
++            return false;
 +        }
 +
          private ExceptionHandlingResult HandleException(InterpretedFrame frame, Exception exception) {
@@ -88,12 +107,17 @@ diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Mi
 diff --git a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
 --- a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
 +++ b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
-@@ -236,6 +236,9 @@
+@@ -236,6 +236,14 @@
  
          #region Continuations
  
 +        // A finally block to run before the frame is left (see Interpreter.MustCatch).
 +        internal bool HasContinuations => _continuationIndex > 0;
++
++        internal int ContinuationCount => _continuationIndex;
++
++        // the label of the index-th pending finally block, outermost first
++        internal int GetContinuation(int index) => _continuations[index];
 +
          public void RemoveContinuation() {
              _continuationIndex--;
