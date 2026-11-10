@@ -52,7 +52,12 @@ namespace IronRuby.Runtime {
             if (data != null && data.Handled) {
                 return true;
             }
-            RubyClass exceptionClass = context.GetClass(exception.GetType());
+            return IsBuiltinConstruction(context, context.GetClass(exception.GetType()));
+        }
+
+        // #new resolves to Class#new or a library constructor, and #initialize to a library method: HandleException only marks the
+        // exception handled (a C#-thrown exception of such a class already carries whatever that constructor would set)
+        private static bool IsBuiltinConstruction(RubyContext/*!*/ context, RubyClass/*!*/ exceptionClass) {
             var newMethod = exceptionClass.ImmediateClass.ResolveMethod("new", VisibilityContext.AllVisible);
             if (newMethod.Found && ((newMethod.Info.DeclaringModule == context.ClassClass && newMethod.Info is RubyCustomMethodInfo)
                 || newMethod.Info is RubyLibraryMethodInfo)) {
@@ -723,17 +728,10 @@ namespace IronRuby.Runtime {
 
             RubyClass exceptionClass = context.GetClass(exception.GetType());
 
-            // new resolves to Class#new built-in method, or to a library constructor (a C#-thrown
-            // exception of such a class already carries whatever that constructor would set):
-            var newMethod = exceptionClass.ImmediateClass.ResolveMethod("new", VisibilityContext.AllVisible);
-            if (newMethod.Found && ((newMethod.Info.DeclaringModule == context.ClassClass && newMethod.Info is RubyCustomMethodInfo)
-                || newMethod.Info is RubyLibraryMethodInfo)) {
-                // initialize resolves to a built-in method:
-                var initializeMethod = exceptionClass.ResolveMethod("initialize", VisibilityContext.AllVisible);
-                if (initializeMethod.Found && initializeMethod.Info is RubyLibraryMethodInfo) {
-                    instanceData.Handled = true;
-                    return exception;
-                }
+            // the built-in #new and #initialize (IsHandledInPlace, the rescue filter, relies on this being the test):
+            if (IsBuiltinConstruction(context, exceptionClass)) {
+                instanceData.Handled = true;
+                return exception;
             }
 
             object message = instanceData.Message;

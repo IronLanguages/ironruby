@@ -3472,11 +3472,16 @@ namespace IronRuby.Runtime {
         /// than PassEnsureMaxDepth compiled frames deep takes the catch, as in PassEnsure.
         /// </summary>
         public static bool RescuePassUnwinder(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-            if (RubyUtils.IsReclaimingFiber || exception is StackUnwinder) {
-                return !IsDeepOrOverflow(exception);
+            try {
+                if (RubyUtils.IsReclaimingFiber || exception is StackUnwinder) {
+                    return !IsDeepOrOverflow(exception);
+                }
+                LocalJumpError lje = exception as LocalJumpError;
+                return lje != null && lje.SkipFrame == scope.FlowControlScope && !IsDeepOrOverflow(exception);
+            } catch (Exception) {
+                // catch it (see RescuePassMayTest)
+                return false;
             }
-            LocalJumpError lje = exception as LocalJumpError;
-            return lje != null && lje.SkipFrame == scope.FlowControlScope && !IsDeepOrOverflow(exception);
         }
 
         /// <summary>
