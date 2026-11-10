@@ -40,6 +40,13 @@ namespace IronRuby.Builtins {
         
         private uint _flags = AsciiUnknownFlag | SurrogatesUnknownFlag | CharIndexChangedFlags;
 
+        // Counts changes, for a method that yields to a block and must notice that the block changed the
+        // string ("string modified"): it saves ChangeCount and compares. Unlike HasChangedFlag, which every
+        // watcher clears, a watcher only reads it, so watches nest (#gsub inside another's block) and
+        // read-only watches on other threads don't disturb each other. On 64-bit it fits in the padding
+        // after _flags. An increment lost to a racing writer still moves the count.
+        private int _changeCount;
+
         // true if frozen:
         private const uint IsFrozenFlag = 1;
 
@@ -578,6 +585,7 @@ namespace IronRuby.Builtins {
                 flags = FrozenOrCopyOnWrite(flags);
             }
             _flags = flags | setFlags;
+            _changeCount++;
         }
 
         /// <summary>
@@ -603,6 +611,7 @@ namespace IronRuby.Builtins {
                 }
             }
             _flags = flags | HasChangedFlags;
+            _changeCount++;
         }
 
         /// <summary>
@@ -619,6 +628,7 @@ namespace IronRuby.Builtins {
                 flags |= AsciiUnknownFlag;
             }
             _flags = flags | SurrogatesUnknownFlag | HasChangedFlags;
+            _changeCount++;
         }
 
         /// <summary>
@@ -975,6 +985,18 @@ namespace IronRuby.Builtins {
             return this;
         }
 
+        /// <summary>
+        /// The runs of bytes String#scrub replaces, as offset and length pairs, for a multibyte
+        /// encoding other than the Unicode ones; null for any other encoding.
+        /// </summary>
+        public List<int> GetScrubRuns() {
+            if (_encoding.IsDummy || _encoding == RubyEncoding.Binary) {
+                return null;
+            }
+            byte[] bytes = ToByteArray();
+            return RubyOnlyEncodings.FindScrubRuns(_encoding.StrictEncoding, bytes, bytes.Length);
+        }
+
         public bool ContainsInvalidCharacters() {
             // Nothing is invalid in a dummy encoding, which says nothing about its bytes.
             if (_encoding.IsDummy || _encoding == RubyEncoding.Binary) {
@@ -1019,6 +1041,14 @@ namespace IronRuby.Builtins {
 
         public void TrackChanges() {
             _flags &= ~HasChangedFlag;
+        }
+
+        /// <summary>
+        /// Moves on every change of the content (see _changeCount): equal before and after a block means the block
+        /// did not change the string.
+        /// </summary>
+        public int ChangeCount {
+            get { return _changeCount; }
         }
 
         void IRubyObjectState.Freeze() {

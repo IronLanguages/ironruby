@@ -8153,9 +8153,24 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.MutableString, System.Int32, System.Int32, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ByteSpliceInPlace)
             );
             
+            DefineLibraryMethod(module, "__ir_change_count__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.MutableString, System.Int32>(IronRuby.Builtins.MutableStringOps.GetChangeCount)
+            );
+            
             DefineLibraryMethod(module, "__ir_fstring__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.InternFrozen)
+            );
+            
+            DefineLibraryMethod(module, "__ir_require_unchanged__", 0x52, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.MutableString, System.Int32>(IronRuby.Builtins.MutableStringOps.RequireUnchanged)
+            );
+            
+            DefineLibraryMethod(module, "__ir_scrub_runs__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MutableStringOps.GetScrubRuns)
             );
             
             DefineLibraryMethod(module, "__locktmp__", 0x51, 

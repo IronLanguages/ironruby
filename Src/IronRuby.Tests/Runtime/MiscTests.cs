@@ -4196,6 +4196,146 @@ inspect: ""#<Digest::MD5: 0cc175b9c0f1b6a831c399e269772661>""
         }
 
         /// <summary>
+        /// Character boundaries in the multibyte encodings follow MRI's enc/*.c tables (#89; EUC-KR's
+        /// lead bytes that .NET reads alone are Encoding_EucKrTableGaps1): CP51932 has EUC-JP's shape
+        /// rather than .NET's code page 51932's, and its converter reads 0x8F as a bad byte;
+        /// EUC-TW's CNS planes 12-16 are one character; and #scrub replaces a cut-short sequence as one
+        /// run, from the bytes, as MRI does ("\xA1\x39" in GB18030 is one replacement). The StringIO#getc
+        /// column is the same split, which is where the difference was first seen.
+        /// </summary>
+        public void Encoding_MultiByteShapes1() {
+            TestOutput(@"
+require 'ruby4'
+require 'stringio'
+def show(enc, hex)
+  s = [hex].pack('H*').force_encoding(enc)
+  io = StringIO.new(s); g = []; while (c = io.getc); g << c.unpack1('H*'); end
+  puts ""#{enc} #{hex}: #{s.valid_encoding?} #{s.length} #{s.chars.map { |c| c.unpack1('H*') }.join(',')} getc=#{g.join(',')} "" \
+       ""scrub=#{s.scrub('?').unpack1('H*')} rev=#{s.reverse.unpack1('H*')} same=#{(s.chars.join == s)}""
+end
+show ""CP51932"", ""a2c7fcf0""
+show ""CP51932"", ""8fa1a18ea1""
+show ""CP51932"", ""948fa0c24f""
+show ""EUC-TW"", ""8eb0c6c6""
+show ""EUC-TW"", ""8f8eb0c6c6b0""
+show ""EUC-TW"", ""c98ea2f97ffe8f""
+show ""EUC-JP"", ""da8fa1""
+show ""EUC-JP"", ""fdd59c8ff0766d""
+show ""GB18030"", ""a139""
+show ""GB18030"", ""c93549fbdffc""
+show ""GB18030"", ""813081407e""
+show ""Big5"", ""a140a1fe81""
+show ""Shift_JIS"", ""81208140ff""
+p ""\xB0\xA1"".force_encoding(""EUC-KR"").encode(""UTF-8"")
+p ""\xA4\xA2"".force_encoding(""CP51932"").encode(""UTF-8"")
+p ""あ"".encode(""CP51932"").bytes
+p ""a\x8F\xA1b\xFE"".force_encoding(""EUC-JP"").scrub { |b| ""<#{b.unpack1('H*')}>"" }
+p ""a\x8F\xA1\xA1b"".force_encoding(""CP51932"").encode(""UTF-8"", invalid: :replace)
+", @"
+CP51932 a2c7fcf0: true 2 a2c7,fcf0 getc=a2c7,fcf0 scrub=a2c7fcf0 rev=fcf0a2c7 same=true
+CP51932 8fa1a18ea1: true 2 8fa1a1,8ea1 getc=8fa1a1,8ea1 scrub=8fa1a18ea1 rev=8ea18fa1a1 same=true
+CP51932 948fa0c24f: false 5 94,8f,a0,c2,4f getc=94,8f,a0,c2,4f scrub=3f3f3f3f4f rev=4fc2a08f94 same=true
+EUC-TW 8eb0c6c6: true 1 8eb0c6c6 getc=8eb0c6c6 scrub=8eb0c6c6 rev=8eb0c6c6 same=true
+EUC-TW 8f8eb0c6c6b0: false 3 8f,8eb0c6c6,b0 getc=8f,8eb0c6c6,b0 scrub=3f8eb0c6c63f rev=b08eb0c6c68f same=true
+EUC-TW c98ea2f97ffe8f: false 6 c9,8e,a2f9,7f,fe,8f getc=c9,8e,a2f9,7f,fe,8f scrub=3f3f7f3f3f rev=8ffe7fa2f98ec9 same=true
+EUC-JP da8fa1: false 3 da,8f,a1 getc=da,8f,a1 scrub=3f3f rev=a18fda same=true
+EUC-JP fdd59c8ff0766d: false 6 fdd5,9c,8f,f0,76,6d getc=fdd5,9c,8f,f0,76,6d scrub=fdd53f3f766d rev=6d76f08f9cfdd5 same=true
+GB18030 a139: false 2 a1,39 getc=a1,39 scrub=3f rev=39a1 same=true
+GB18030 c93549fbdffc: false 5 c9,35,49,fbdf,fc getc=c9,35,49,fbdf,fc scrub=3f49fbdf3f rev=fcfbdf4935c9 same=true
+GB18030 813081407e: false 4 81,30,8140,7e getc=81,30,8140,7e scrub=3f407e rev=7e81403081 same=true
+Big5 a140a1fe81: false 3 a140,a1fe,81 getc=a140,a1fe,81 scrub=a140a1fe3f rev=81a1fea140 same=true
+Shift_JIS 81208140ff: false 4 81,20,8140,ff getc=81,20,8140,ff scrub=3f2081403f rev=ff81402081 same=true
+""가""
+""あ""
+[164, 162]
+""a<8fa1>b<fe>""
+""a�　b""
+");
+        }
+
+        /// <summary>
+        /// String#scrub with a block raises "string modified" when the block changes the receiver, as MRI's
+        /// str_mod_check does after each yield, in the multibyte encodings whose runs come from C# and in
+        /// UTF-8. The scrub that read byte offsets found before the block from the changed receiver raised
+        /// TypeError after s.clear and copied the new bytes after s.replace. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void String_ScrubBlockModifies1() {
+            TestOutput(@"
+require 'ruby4'
+def t(label)
+  puts ""#{label}: #{yield.inspect}""
+rescue => e
+  puts ""#{label}: #{e.class}: #{e.message}""
+end
+%w[EUC-JP GB18030 UTF-8].each do |enc|
+  t(""#{enc} clear"") { s = ""a\xFFb\xFFc"".dup.force_encoding(enc); s.scrub { s.clear; '?' } }
+  t(""#{enc} replace"") { s = ""a\xFFb\xFFc"".dup.force_encoding(enc); s.scrub { s.replace('zzzzzzzzzz'); '?' } }
+  t(""#{enc} append"") { s = ""a\xFFbc"".dup.force_encoding(enc); s.scrub { s << 'XYZ'; '?' } }
+  t(""#{enc} other"") { o = +'x'; s = ""a\xFFb\xA1\x39"".dup.force_encoding(enc); [s.scrub { |x| o << 'y'; x.bytes.join(',') }, o] }
+  t(""#{enc} frozen"") { ""a\xFFb"".dup.force_encoding(enc).freeze.scrub { '?' } }
+end
+", @"
+EUC-JP clear: RuntimeError: string modified
+EUC-JP replace: RuntimeError: string modified
+EUC-JP append: RuntimeError: string modified
+EUC-JP other: [""a255b1619"", ""xyy""]
+EUC-JP frozen: ""a?b""
+GB18030 clear: RuntimeError: string modified
+GB18030 replace: RuntimeError: string modified
+GB18030 append: RuntimeError: string modified
+GB18030 other: [""a255b161,57"", ""xyy""]
+GB18030 frozen: ""a?b""
+UTF-8 clear: RuntimeError: string modified
+UTF-8 replace: RuntimeError: string modified
+UTF-8 append: RuntimeError: string modified
+UTF-8 other: [""a255b1619"", ""xyy""]
+UTF-8 frozen: ""a?b""
+");
+        }
+        /// <summary>
+        /// The "string modified" check of #gsub, #gsub!, #each_line and #scrub with a block nests: a call on the
+        /// same string from inside another's block - one that finishes, raises or is broken out of - no longer
+        /// clears the change the outer call is still to see (Greptile on #185; gsub inside gsub lost it too), and
+        /// read-only calls on other threads never see a change no one made. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void String_NestedChangeTracking1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l); puts ""#{l}: #{yield.inspect}""; rescue => e; puts ""#{l}: #{e.class}: #{e.message}""; end
+t(:outer_gsub) { s = +'abc'; s.gsub(/a/) { s.replace(""x\xFF""); s.scrub { '?' }; 'z' } }
+t(:outer_gsub_valid) { s = +'abc'; s.gsub(/a/) { s.replace(""xyzw""); s.scrub { '?' }; 'z' } }
+t(:inner_gsub) { s = ""a\xFFb"".dup; s.scrub { s << 'Q'; s.gsub(/a/) { 'b' }; '?' } }
+t(:outer_scrub_inner_scrub) { s = ""a\xFFb"".dup; s.scrub { s << 'Q'; s.scrub { '!' }; '?' } }
+t(:outer_gsub_inner_gsub) { s = +'abc'; s.gsub(/a/) { s << 'Q'; s.gsub(/x/) { 'y' }; 'z' } }
+t(:outer_each_line) { s = +""a\nb\n""; r = []; s.each_line { |l| s << ""c\n"" if r.empty?; s.scrub { '?' }; r << l }; r }
+t(:inner_raises) { s = +'abc'; s.gsub(/a/) { s << 'Q'; (s.gsub(/b/) { raise 'x' } rescue nil); 'z' } }
+t(:inner_breaks) { s = +'abc'; s.gsub(/a/) { s << 'Q'; s.gsub(/b/) { break 1 }; 'z' } }
+t(:inner_scrub_raises) { s = +'abc'; s.gsub(/a/) { s.replace(""x\xFF""); (s.scrub { raise 'y' } rescue nil); 'z' } }
+t(:each_line_inner_gsub) { s = +""a\nb\n""; s.each_line { s << ""c\n""; s.gsub(/q/) { 'r' } } }
+t(:gsub_bang_inner_scrub) { s = +'abc'; s.gsub!(/a/) { s.replace(""x\xFF""); s.scrub { '?' }; 'z' } }
+t(:after_nested_ok) { s = ""a\xFFb"".dup; s.gsub(/a/) { s.scrub { '?' }; 'z' } }
+
+shared = 'abc' * 20
+errors = Queue.new
+8.times.map { Thread.new { 300.times { begin; shared.gsub(/b/) { 'x' }; shared.each_line { }; rescue => e; errors << e.class; end } } }.each(&:join)
+p errors.size", @"
+outer_gsub: RuntimeError: string modified
+outer_gsub_valid: RuntimeError: string modified
+inner_gsub: ArgumentError: invalid byte sequence in UTF-8
+outer_scrub_inner_scrub: RuntimeError: string modified
+outer_gsub_inner_gsub: RuntimeError: string modified
+outer_each_line: [""a\n"", ""b\n""]
+inner_raises: RuntimeError: string modified
+inner_breaks: RuntimeError: string modified
+inner_scrub_raises: RuntimeError: string modified
+each_line_inner_gsub: ""a\nb\nc\nc\n""
+gsub_bang_inner_scrub: RuntimeError: string modified
+after_nested_ok: ArgumentError: invalid byte sequence in UTF-8
+0
+");
+        }
+
+        /// <summary>
         /// main has no #initialize of its own - it is BasicObject's - so send(:initialize) answers nil
         /// where a stub used to throw NotImplementedException.
         /// </summary>

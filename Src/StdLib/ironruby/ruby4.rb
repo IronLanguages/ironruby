@@ -3519,16 +3519,45 @@ class String
     __ir_check_scrub_replacement__(replacement) if replacement
     out = +""
     out.force_encoding(encoding) if out.respond_to?(:force_encoding)
+    # A block that changes the receiver raises "string modified", as MRI's str_mod_check does
+    # after each yield. The bytes are read from a copy taken first, so a change can never be
+    # copied into the result (or leave a slice past the end) before the check sees it.
+    if block
+      change_count = __ir_change_count__
+      source = __ir_plain_copy__
+      call = lambda do |bad|
+        result = block.call(bad)
+        __ir_require_unchanged__(change_count)
+        __ir_check_scrub_replacement__(__ir_scrub_replacement__(result))
+      end
+    else
+      source = self
+    end
+    # The other multibyte encodings (EUC-JP, GB18030, Big5, ...) get the runs of bytes to
+    # replace from C#, which finds them in the bytes the way MRI does: in GB18030 "\xA1\x39"
+    # is one run although "\x39" alone is a valid character (see MutableString.GetScrubRuns).
+    runs = source.__send__(:__ir_scrub_runs__)
+    if runs
+      pos = 0
+      size = source.bytesize
+      runs.each_slice(2) do |offset, length|
+        out << source.byteslice(pos, offset - pos) if offset > pos
+        out << (block ? call.call(source.byteslice(offset, length)) : (replacement || default))
+        pos = offset + length
+      end
+      out << source.byteslice(pos, size - pos) if pos < size
+      return out
+    end
     # A run of bad bytes that is the start of a character which simply ran out of input -
     # a truncated one at the end of the string - is one replacement, not one per byte, so
     # the bad characters are collected before being handed over.
     pending = nil
     flush = lambda do
       next if pending.nil?
-      out << (block ? __ir_check_scrub_replacement__(__ir_scrub_replacement__(block.call(pending))) : (replacement || default))
+      out << (block ? call.call(pending) : (replacement || default))
       pending = nil
     end
-    each_char do |ch|
+    source.each_char do |ch|
       if ch.valid_encoding?
         flush.call
         out << ch

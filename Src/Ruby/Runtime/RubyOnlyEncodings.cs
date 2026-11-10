@@ -53,7 +53,9 @@ namespace IronRuby.Runtime {
                 case RubyEncoding.CodePageUTF8DoCoMo: return new RenamedEncoding(codepage, "UTF8-DoCoMo", RubyEncoding.CodePageUTF8, throwOnError);
                 case RubyEncoding.CodePageUTF8KDDI: return new RenamedEncoding(codepage, "UTF8-KDDI", RubyEncoding.CodePageUTF8, throwOnError);
                 case RubyEncoding.CodePageUTF8SoftBank: return new RenamedEncoding(codepage, "UTF8-SoftBank", RubyEncoding.CodePageUTF8, throwOnError);
-                case RubyEncoding.CodePageCP51932: return new RenamedEncoding(codepage, "CP51932", RubyEncoding.CodePageEUCJP, throwOnError);
+                // Ruby's CP51932 has EUC-JP's shape (enc/euc_jp.c replicates EUC-JP for it) and
+                // the characters of .NET's code page 51932, whose own shape is wider.
+                case RubyEncoding.CodePageCP51932: return new DoubleByteEncoding(codepage, "CP51932", DoubleByteEncoding.EucJp, RubyEncoding.CodePageEUCJP, throwOnError);
                 case RubyEncoding.CodePageISO2022JP2: return new RenamedEncoding(codepage, "ISO-2022-JP-2", 50220, throwOnError);
                 case RubyEncoding.CodePageCP50220: return new RenamedEncoding(codepage, "CP50220", 50220, throwOnError);
                 case RubyEncoding.CodePageISO2022JPKDDI: return new RenamedEncoding(codepage, "ISO-2022-JP-KDDI", 50220, throwOnError);
@@ -164,6 +166,94 @@ namespace IronRuby.Runtime {
                     return 28591;
                 default: return codepage;
             }
+        }
+
+        /// <summary>
+        /// The runs of bytes String#scrub replaces, as offset and length pairs, the way MRI's
+        /// enc_str_scrub finds them; null for an encoding this does not cover (the Unicode ones,
+        /// which ruby4.rb's scrub handles itself, and the single byte ones). A byte that begins no
+        /// character is a run of its own, except that in an encoding of three or four byte
+        /// characters the longest start of a character that is cut short by a bad byte is one
+        /// run, as is whatever is left at the end of the string when it runs out mid character.
+        /// That is decided on the bytes, not on characters: "\xA1\x39" is one run in GB18030
+        /// even though "\x39" alone is a valid character.
+        /// </summary>
+        internal static System.Collections.Generic.List<int> FindScrubRuns(Encoding/*!*/ encoding, byte[]/*!*/ bytes, int count) {
+            var multiByte = encoding as MultiByteEncoding;
+            int maxLength;
+            if (multiByte != null) {
+                maxLength = multiByte.MaxLength;
+            } else if (encoding.CodePage == 54936) {
+                maxLength = 4;
+            } else {
+                return null;
+            }
+
+            var runs = new System.Collections.Generic.List<int>();
+            int p = 0;
+            while (p < count) {
+                int length = (multiByte != null) ? multiByte.PreciseLength(bytes, p, count) : ScanGb18030(bytes, p, count);
+                if (length > 0) {
+                    p += length;
+                    continue;
+                }
+                if (length == 0) {
+                    runs.Add(p);
+                    runs.Add(count - p);
+                    break;
+                }
+
+                int clen = Math.Min(maxLength, count - p);
+                if (clen <= 2) {
+                    clen = 1;
+                } else {
+                    for (clen--; clen > 1; clen--) {
+                        int prefix = (multiByte != null) ? multiByte.PreciseLength(bytes, p, p + clen) : ScanGb18030(bytes, p, p + clen);
+                        if (prefix == 0) {
+                            break;
+                        }
+                    }
+                }
+                runs.Add(p);
+                runs.Add(clen);
+                p += clen;
+            }
+            return runs;
+        }
+
+        // GB18030 as enc/gb18030.c has it: 0x81-0xFE leads either a second byte of 0x40-0x7E or
+        // 0x80-0xFE, or a four byte sequence of 0x30-0x39, 0x81-0xFE, 0x30-0x39. The length of
+        // the sequence at index, 0 if it is cut short, or -1 if it is not one.
+        private static int ScanGb18030(byte[]/*!*/ bytes, int index, int end) {
+            byte b = bytes[index];
+            if (b < 0x80) {
+                return 1;
+            }
+            if (b == 0x80 || b == 0xff) {
+                return -1;
+            }
+            if (index + 1 >= end) {
+                return 0;
+            }
+            b = bytes[index + 1];
+            if (b >= 0x40 && b <= 0xfe && b != 0x7f) {
+                return 2;
+            }
+            if (b < 0x30 || b > 0x39) {
+                return -1;
+            }
+            if (index + 2 >= end) {
+                return 0;
+            }
+            b = bytes[index + 2];
+            if (b < 0x81 || b == 0xff) {
+                return -1;
+            }
+            if (index + 3 >= end) {
+                return 0;
+            }
+            b = bytes[index + 3];
+            return (b >= 0x30 && b <= 0x39) ? 4 : -1;
         }
 
         /// <summary>
@@ -509,6 +599,16 @@ namespace IronRuby.Runtime {
         protected abstract int Scan(byte[]/*!*/ bytes, int index, int end);
 
         /// <summary>
+        /// Scan as the transcoder reads the bytes, where that is narrower than the encoding's
+        /// shape: MRI's CP51932 converter has no three byte form, so to it 0x8F is a bad byte
+        /// of its own although "\x8F\xA1\xA1" is a valid CP51932 string. The lossless form,
+        /// which holds a string's characters, reads the shape.
+        /// </summary>
+        protected virtual int TranscodingScan(byte[]/*!*/ bytes, int index, int end) {
+            return Scan(bytes, index, end);
+        }
+
+        /// <summary>
         /// Writes the characters of a well formed sequence and returns how many, or -1 if the
         /// sequence names no character.
         /// </summary>
@@ -520,6 +620,16 @@ namespace IronRuby.Runtime {
         /// chars that make up the character.
         /// </summary>
         protected abstract int EncodeCharacter(char[]/*!*/ chars, int index, int end, byte[]/*!*/ bytes, int byteIndex, out int used);
+
+        /// <summary>See Scan: MRI's rb_enc_precise_mbclen, for String#scrub.</summary>
+        internal int PreciseLength(byte[]/*!*/ bytes, int index, int end) {
+            return Scan(bytes, index, end);
+        }
+
+        /// <summary>MRI's rb_enc_mbmaxlen.</summary>
+        internal int MaxLength {
+            get { return MaxSequenceLength; }
+        }
 
         public int FindInvalid(byte[]/*!*/ bytes, int index, int count) {
             int end = index + count;
@@ -565,11 +675,14 @@ namespace IronRuby.Runtime {
         // Three and four byte sequences (EUC-JP's JIS X 0212 0x8F b1 b2, EUC-TW's CNS planes
         // 0x8E p b1 b2) do not fit a plane the way two bytes do, so they are numbered densely
         // over the 94 x 94 cells of their table: the three byte ones from LosslessBase, the four
-        // byte ones from there too and on into plane 16. That covers the first eleven CNS planes;
-        // a sequence beyond them still reads as one escaped character per byte.
+        // byte ones from there too, on into plane 16 and, for the rest of EUC-TW's sixteen
+        // CNS planes, on in plane 14. (EUC-TW decodes nothing beyond ASCII, so no character of
+        // its own can be mistaken for one of these; EUC-JP has no four byte sequences.)
         private const int CellCount = 94 * 94;
         private const int ShortLosslessRange = 0x8000;
         private const int LongLosslessBase = 0x100000;
+        private const int ExtraLosslessBase = 0xE0000;
+        private const int ExtraLosslessStart = ShortLosslessRange + 0x10000;
 
         private static int Cell(byte b1, byte b2) {
             return (b1 - 0xa1) * 94 + (b2 - 0xa1);
@@ -591,8 +704,11 @@ namespace IronRuby.Runtime {
                 if (cell < ShortLosslessRange) {
                     return LosslessBase + cell;
                 }
-                cell -= ShortLosslessRange;
-                return (cell <= 0xffff) ? LongLosslessBase + cell : -1;
+                if (cell < ExtraLosslessStart) {
+                    return LongLosslessBase + cell - ShortLosslessRange;
+                }
+                cell -= ExtraLosslessStart;
+                return (cell <= 0xffff) ? ExtraLosslessBase + cell : -1;
             }
             return -1;
         }
@@ -606,8 +722,11 @@ namespace IronRuby.Runtime {
                     bytes[0] = (byte)(codepoint >> 8);
                     bytes[1] = (byte)codepoint;
                     length = 2;
-                } else if (codepoint >= LosslessBase && codepoint < LosslessBase + ShortLosslessRange || codepoint >= LongLosslessBase) {
-                    int cell = (codepoint >= LongLosslessBase) ? codepoint - LongLosslessBase + ShortLosslessRange : codepoint - LosslessBase;
+                } else if (codepoint >= LosslessBase && codepoint < LosslessBase + ShortLosslessRange || codepoint >= LongLosslessBase ||
+                    codepoint >= ExtraLosslessBase && codepoint < LosslessBase) {
+                    int cell = (codepoint >= LongLosslessBase) ? codepoint - LongLosslessBase + ShortLosslessRange :
+                        (codepoint < LosslessBase) ? codepoint - ExtraLosslessBase + ExtraLosslessStart :
+                        codepoint - LosslessBase;
                     if (cell < CellCount) {
                         // EUC-JP's three bytes, if this is an encoding that has them
                         bytes[0] = 0x8f;
@@ -700,7 +819,7 @@ namespace IronRuby.Runtime {
                 var decoded = new char[_encoding.MaxSequenceLength + 2];
                 int i = start, written = 0;
                 while (i < end) {
-                    int length = _encoding.Scan(input, i, end);
+                    int length = _encoding._lossless ? _encoding.Scan(input, i, end) : _encoding.TranscodingScan(input, i, end);
                     if (length == 0) {
                         if (!flush) {
                             if (commit) {
@@ -791,6 +910,8 @@ namespace IronRuby.Runtime {
     /// below 0xA1, its EUC code pages decode C1 bytes), and Ruby measures, splits and validates a
     /// string by shape alone, so the shape cannot be left to .NET. A sequence of the right shape
     /// that the table has no character for is still valid; it just cannot be transcoded.
+    /// A layout can also have EUC-JP's three byte form (0x8F and two bytes of 0xA1-0xFE), which no
+    /// .NET table used here decodes, so those sequences are always ones without a character.
     /// </summary>
     internal sealed class DoubleByteEncoding : MultiByteEncoding {
         internal sealed class Layout {
@@ -798,7 +919,15 @@ namespace IronRuby.Runtime {
             internal readonly bool[]/*!*/ Trail = new bool[256];
             internal readonly bool[]/*!*/ Single = new bool[256];
 
-            internal Layout(int[]/*!*/ lead, int[]/*!*/ trail, int[]/*!*/ single) {
+            /// <summary>The byte that begins a three byte sequence, or -1.</summary>
+            internal readonly int ThreeByteLead;
+
+            internal Layout(int[]/*!*/ lead, int[]/*!*/ trail, int[]/*!*/ single)
+                : this(lead, trail, single, -1) {
+            }
+
+            internal Layout(int[]/*!*/ lead, int[]/*!*/ trail, int[]/*!*/ single, int threeByteLead) {
+                ThreeByteLead = threeByteLead;
                 Fill(Lead, lead);
                 Fill(Trail, trail);
                 Fill(Single, single);
@@ -819,6 +948,8 @@ namespace IronRuby.Runtime {
 
         internal static readonly Layout/*!*/ Big5 = new Layout(new[] { 0xa1, 0xfe }, new[] { 0x40, 0x7e, 0xa1, 0xfe }, new int[0]);
         internal static readonly Layout/*!*/ Euc = new Layout(new[] { 0xa1, 0xfe }, new[] { 0xa1, 0xfe }, new int[0]);
+        // Ruby's EUC-JP family (enc/euc_jp.c): 0x8E also leads two bytes, whatever follows it.
+        internal static readonly Layout/*!*/ EucJp = new Layout(new[] { 0x8e, 0x8e, 0xa1, 0xfe }, new[] { 0xa1, 0xfe }, new int[0], 0x8f);
         internal static readonly Layout/*!*/ ShiftJis = new Layout(new[] { 0x81, 0x9f, 0xe0, 0xfc }, new[] { 0x40, 0x7e, 0x80, 0xfc }, new[] { 0xa1, 0xdf });
         internal static readonly Layout/*!*/ Gbk = new Layout(new[] { 0x81, 0xfe }, new[] { 0x40, 0x7e, 0x80, 0xfe }, new[] { 0x80, 0x80 });
         internal static readonly Layout/*!*/ Cp949 = new Layout(new[] { 0x81, 0xfe }, new[] { 0x41, 0x5a, 0x61, 0x7a, 0x81, 0xfe }, new[] { 0x80, 0x80 });
@@ -828,62 +959,56 @@ namespace IronRuby.Runtime {
 
         // Lead bytes the table reads as a character of their own rather than as the start of two
         // bytes: .NET's EUC-KR (code page 51949) maps 0xAD-0xAF and 0xFE alone to private use
-        // characters, so 0xAD 0xAD, one unassigned character to Ruby, would decode as two (and
-        // the two would not encode back). A run holding such a byte is decoded sequence by
-        // sequence, and a sequence led by one has no character in the table.
-        private readonly bool[]/*!*/ _tableReadsAlone = new bool[256];
-        private readonly bool _anyTableReadsAlone;
+        // characters, so "\xAD\xAD", one unassigned character to Ruby, would decode as two that do
+        // not encode back (#chars raised, transcoding dropped the bytes). A run holding such a lead
+        // byte is decoded sequence by sequence, and a sequence led by one has no character in the
+        // table (see FitsTable and DecodeSequence).
+        private readonly bool[]/*!*/ _tableSingle = new bool[256];
 
         internal DoubleByteEncoding(int codepage, string/*!*/ name, Layout/*!*/ layout, int tableCodePage, bool throwOnError)
             : base(codepage, name, throwOnError) {
             _layout = layout;
             _table = Encoding.GetEncoding(tableCodePage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
-            var single = new byte[1];
-            var chars = new char[4];
-            for (int b = 0x80; b < 0x100; b++) {
-                if (!layout.Lead[b]) {
-                    continue;
-                }
-                single[0] = (byte)b;
-                try {
-                    _tableReadsAlone[b] = _table.GetChars(single, 0, 1, chars, 0) > 0;
-                } catch (DecoderFallbackException) {
-                    // not a character by itself, as it should be
-                }
-                _anyTableReadsAlone |= _tableReadsAlone[b];
-            }
-        }
 
-        /// <summary>
-        /// Whether the table can be trusted to read these well formed bytes as Ruby does: whether no character in them is
-        /// led by a byte the table reads alone. Only lead bytes count (0xB0 0xAD is an ordinary character), so the walk
-        /// goes character by character.
-        /// </summary>
-        private bool TableAgrees(byte[]/*!*/ bytes, int index, int count) {
-            if (_anyTableReadsAlone) {
-                for (int i = index, end = index + count; i < end; ) {
-                    byte b = bytes[i];
-                    if (_layout.Single[b]) {
-                        i++;
-                    } else if (_tableReadsAlone[b]) {
-                        return false;
-                    } else {
-                        i += 2;
-                    }
+            // a lead byte, as it should be, decodes alone to the sentinel (no exception per byte)
+            var probe = Encoding.GetEncoding(tableCodePage, EncoderFallback.ReplacementFallback, new DecoderReplacementFallback("\uffff"));
+            var single = new byte[1];
+            var decoded = new char[probe.GetMaxCharCount(1)];
+            for (int b = 0x80; b <= 0xff; b++) {
+                if (layout.Lead[b] || b == layout.ThreeByteLead) {
+                    single[0] = (byte)b;
+                    int n = probe.GetChars(single, 0, 1, decoded, 0);
+                    _tableSingle[b] = n > 0 && decoded[0] != '\uffff';
                 }
             }
-            return true;
         }
 
         protected override int MaxSequenceLength {
-            get { return 2; }
+            get { return _layout.ThreeByteLead >= 0 ? 3 : 2; }
+        }
+
+        /// <summary>
+        /// Whether the bytes are well formed and the table reads them sequence by sequence as Ruby
+        /// does: no three byte sequence (the table has none) and no lead byte it reads alone.
+        /// </summary>
+        private bool FitsTable(byte[]/*!*/ bytes, int index, int count) {
+            int end = index + count;
+            int i = index;
+            while (i < end) {
+                int length = Scan(bytes, i, end);
+                if (length <= 0 || length == 3 || length == 2 && _tableSingle[bytes[i]]) {
+                    return false;
+                }
+                i += length;
+            }
+            return true;
         }
 
         // The table reads a well formed run just as the sequence by sequence loop does, only much
         // faster; the loop is for what it refuses (and for the lossless form's plane 15 stand-ins).
 
         public override int GetCharCount(byte[]/*!*/ bytes, int index, int count) {
-            if (FindInvalid(bytes, index, count) < 0 && TableAgrees(bytes, index, count)) {
+            if (FitsTable(bytes, index, count)) {
                 try {
                     return _table.GetCharCount(bytes, index, count);
                 } catch (DecoderFallbackException) {
@@ -894,7 +1019,7 @@ namespace IronRuby.Runtime {
         }
 
         public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex) {
-            if (FindInvalid(bytes, byteIndex, byteCount) < 0 && TableAgrees(bytes, byteIndex, byteCount)) {
+            if (FitsTable(bytes, byteIndex, byteCount)) {
                 try {
                     return _table.GetChars(bytes, byteIndex, byteCount, chars, charIndex);
                 } catch (DecoderFallbackException) {
@@ -912,7 +1037,7 @@ namespace IronRuby.Runtime {
             } catch (EncoderFallbackException) {
                 return null;
             }
-            return FindInvalid(result, 0, result.Length) < 0 && TableAgrees(result, 0, result.Length) ? result : null;
+            return FitsTable(result, 0, result.Length) ? result : null;
         }
 
         public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
@@ -934,6 +1059,17 @@ namespace IronRuby.Runtime {
             if (_layout.Single[b]) {
                 return 1;
             }
+            if (b == _layout.ThreeByteLead) {
+                for (int i = 1; i < 3; i++) {
+                    if (index + i >= end) {
+                        return 0;
+                    }
+                    if (!IsGraphic(bytes[index + i])) {
+                        return -i;
+                    }
+                }
+                return 3;
+            }
             if (!_layout.Lead[b]) {
                 return -1;
             }
@@ -943,20 +1079,26 @@ namespace IronRuby.Runtime {
             return _layout.Trail[bytes[index + 1]] ? 2 : -1;
         }
 
+        protected override int TranscodingScan(byte[]/*!*/ bytes, int index, int end) {
+            return (bytes[index] == _layout.ThreeByteLead) ? -1 : Scan(bytes, index, end);
+        }
+
         protected override int DecodeSequence(byte[]/*!*/ bytes, int index, int length, char[]/*!*/ chars, int charIndex) {
             if (bytes[index] < 0x80) {
                 chars[charIndex] = (char)bytes[index];
                 return 1;
             }
-            if (_tableReadsAlone[bytes[index]]) {
-                // the table would split the sequence in two
+            if (length == 3 || _tableSingle[bytes[index]]) {
                 return -1;
             }
+            int n;
             try {
-                return _table.GetChars(bytes, index, length, chars, charIndex);
+                n = _table.GetChars(bytes, index, length, chars, charIndex);
             } catch (DecoderFallbackException) {
                 return -1;
             }
+            // one character, not the table's reading of the bytes as two
+            return (n == 1 || n == 2 && Char.IsSurrogatePair(chars[charIndex], chars[charIndex + 1])) ? n : -1;
         }
 
         protected override int EncodeCharacter(char[]/*!*/ chars, int index, int end, byte[]/*!*/ bytes, int byteIndex, out int used) {

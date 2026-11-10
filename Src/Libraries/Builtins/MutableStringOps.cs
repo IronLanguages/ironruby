@@ -1708,6 +1708,33 @@ namespace IronRuby.Builtins {
             return RubyOps.InternFrozenString(self.IsFrozen ? self : self.Clone());
         }
 
+        // String#scrub (ruby4.rb): the runs of bytes to replace, as a flat array of offset and
+        // length pairs, or nil where ruby4.rb works them out itself (see MutableString.GetScrubRuns).
+        [RubyMethod("__ir_scrub_runs__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray GetScrubRuns(MutableString/*!*/ self) {
+            var runs = self.GetScrubRuns();
+            if (runs == null) {
+                return null;
+            }
+            var result = new RubyArray(runs.Count);
+            foreach (int value in runs) {
+                result.Add(ScriptingRuntimeHelpers.Int32ToObject(value));
+            }
+            return result;
+        }
+
+        // String#scrub (ruby4.rb) with a block: MRI's str_mod_check raises "string modified" when
+        // the block changed the receiver, as #gsub with a block does here.
+        [RubyMethod("__ir_change_count__", RubyMethodAttributes.PrivateInstance)]
+        public static int GetChangeCount(MutableString/*!*/ self) {
+            return self.ChangeCount;
+        }
+
+        [RubyMethod("__ir_require_unchanged__", RubyMethodAttributes.PrivateInstance)]
+        public static void RequireUnchanged(MutableString/*!*/ self, int changeCount) {
+            RequireNoVersionChange(self, changeCount);
+        }
+
         /// <summary>
         /// #casecmp folds a-z/A-Z and nothing else - it is not the Unicode comparison #casecmp?
         /// is. Confirmed against CRuby 4.0.6: "ä".casecmp("Ä") is 1, and "ss".casecmp("ß") is -1.
@@ -2347,7 +2374,7 @@ namespace IronRuby.Builtins {
         }
 
         public static object EachLine(BlockParam/*!*/ block, MutableString/*!*/ self, [DefaultProtocol]MutableString separator, int start) {
-            self.TrackChanges();
+            int changeCount = self.ChangeCount;
 
             MutableString paragraphSeparator;
             if (separator == null || separator.IsEmpty) {
@@ -2396,7 +2423,7 @@ namespace IronRuby.Builtins {
             // MRI 1.8: this is checked after each line
             // MRI 1.9: not checked at all
             // Ensure that the underlying string has not been mutated during the iteration
-            RequireNoVersionChange(self);
+            RequireNoVersionChange(self, changeCount);
             return self;
         }
 
@@ -3195,14 +3222,15 @@ namespace IronRuby.Builtins {
             result = input.CreateDerived();
             
             int offset = 0;
+            int changeCount = input.ChangeCount;
             foreach (MatchData match in matches) {
                 matchScope.CurrentMatch = match;
 
-                input.TrackChanges();
                 if (block.Yield(match.GetValue(), out blockResult)) {
                     return true;
                 }
-                if (input.HasChanged) {
+                // the caller raises "string modified"
+                if (input.ChangeCount != changeCount) {
                     return false;
                 }
 
@@ -3463,10 +3491,10 @@ namespace IronRuby.Builtins {
 
             object blockResult;
             MutableString result;
-            self.TrackChanges();
+            int changeCount = self.ChangeCount;
             object r = BlockReplaceAll(tosConversion, scope, self, block, pattern, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
 
-            RequireNoVersionChange(self);
+            RequireNoVersionChange(self, changeCount);
             return r;
         }
 
@@ -3493,9 +3521,9 @@ namespace IronRuby.Builtins {
             // The same literal pattern the String forms without a block get from the Regexp conversion.
             var regex = RubyRegex.FromLiteralPattern(matchString);
 
-            self.TrackChanges();
+            int changeCount = self.ChangeCount;
             object r = BlockReplaceAll(tosConversion, scope, self, block, regex, out blockResult, out result) ? blockResult : (result ?? self.CloneDerived());
-            RequireNoVersionChange(self);
+            RequireNoVersionChange(self, changeCount);
             return r;
         }
 
@@ -3527,7 +3555,7 @@ namespace IronRuby.Builtins {
             object blockResult;
 
             self.RequireNotFrozen();
-            self.TrackChanges();
+            int changeCount = self.ChangeCount;
 
             // prepare replacement in a builder:
             MutableString builder;
@@ -3544,7 +3572,7 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
-            RequireNoVersionChange(self);
+            RequireNoVersionChange(self, changeCount);
 
             // replace content of self with content of the builder - and its encoding, which a
             // replacement may have changed (MRI's rb_str_shared_replace):
@@ -5756,8 +5784,8 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        private static void RequireNoVersionChange(MutableString/*!*/ self) {
-            if (self.HasChanged) {
+        private static void RequireNoVersionChange(MutableString/*!*/ self, int changeCount) {
+            if (self.ChangeCount != changeCount) {
                 throw RubyExceptions.CreateRuntimeError("string modified");
             }
         }
