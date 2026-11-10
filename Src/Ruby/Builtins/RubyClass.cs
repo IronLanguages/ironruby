@@ -119,6 +119,15 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal bool HasAdoptedInstances { get; set; }
 
+        /// <summary>
+        /// Set on the class of a CLR type that is not an IRubyObject once an object of that type has been given a
+        /// class of its own in its instance data: a singleton class (extend, def obj.m) or an adopted class
+        /// (RubyContext.NoteOwnClassNoLock). Until then the immediate class of every object of the type is this class,
+        /// and RubyContext.GetImmediateClassOf answers it without looking the object's instance data up.
+        /// </summary>
+        internal volatile bool HasInstancesWithOwnClass;
+
+
         // Increased each time an extension method is defined on this class or on interfaces or generic definitions included in it.
         internal int _extensionVersion;
 

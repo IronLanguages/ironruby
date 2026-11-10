@@ -476,6 +476,9 @@ namespace IronRuby.Runtime {
         private RubyClass _comObjectClass;
         private RubyClass _integerClass;
 
+        // The class of Float values, for TryGetValueClass (null until the builtins are loaded).
+        private RubyClass _floatClass;
+
         // The classes the System::Int64 and System::Numerics::BigInteger constants stand for (see GetClrTypeModule).
         private RubyClass _int64InteropClass;
         private RubyClass _bigIntegerInteropClass;
@@ -784,6 +787,7 @@ namespace IronRuby.Runtime {
                         ReplaceModuleInCacheNoLock(typeof(long), integerClass);
                         _integerClass = integerClass;
                     }
+                    TryGetClassNoLock(typeof(double), out _floatClass);
                 }
             }
 
@@ -1256,6 +1260,7 @@ namespace IronRuby.Runtime {
             Assert.NotNull(type, module);
             _moduleCache[type] = module;
             _classReadCache.TryRemove(type, out _);
+            Array.Clear(_clrClassCache, 0, _clrClassCache.Length);
         }
 
         internal RubyModule/*!*/ GetOrCreateModule(NamespaceTracker/*!*/ tracker) {
@@ -2124,13 +2129,122 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Gets a class of the specified object (skips any singletons).
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public RubyClass/*!*/ GetClassOf(object obj) {
             ContractUtils.Ensures(!ContractUtils.Result<RubyClass>().IsSingletonClass);
-            return TryGetClassOfRubyObject(obj) ?? (_hasAdoptedClrObjects ? TryGetClassOfAdoptedClrObject(obj) : null)
-                ?? GetOrCreateClass(obj.GetType());
+            // inlined into the rules of is_a? and the like, as the whole of it was before the type tests below came
+            if (!IsImmediateValue(obj)) {
+                IRubyObject rubyObj = obj as IRubyObject;
+                if (rubyObj != null) {
+                    var result = rubyObj.ImmediateClass.GetNonSingletonClass();
+                    Debug.Assert(result != null, "Invalid IRubyObject implementation: Class should not be null");
+                    return result;
+                }
+            }
+            return GetClassOfNonRubyObject(obj);
         }
 
-        private volatile bool _hasAdoptedClrObjects;
+        // GetClassOf of an object that is not an IRubyObject (GetClassOf has tested that, or obj is one of the
+        // values): a failed interface cast is the dearest test here, so it is not made twice.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private RubyClass/*!*/ GetClassOfNonRubyObject(object obj) {
+            Debug.Assert(!(obj is IRubyObject));
+            RubyClass result = TryGetValueClass(obj);
+            if (result != null) {
+                return result;
+            }
+            if (obj == null || obj is bool) {
+                // only while the builtins are being loaded
+                return TryGetClassOfRubyObject(obj) ?? GetOrCreateClass(obj.GetType());
+            }
+            result = GetClassOfClrType(obj);
+            return result.HasAdoptedInstances ? (TryGetClassOfAdoptedClrObject(obj) ?? result) : result;
+        }
+
+        // A Fixnum or a Float, by exact type tests: these come before the IRubyObject test, an interface cast that
+        // is the slowest kind for a boxed Int32 or Double - generic math gave them dozens of interfaces to scan. (nil
+        // and a bool go through the cast, which is cheap for them, so that a Ruby object pays only two compares.)
+        private static bool IsImmediateValue(object obj) {
+            return obj is int || obj is double;
+        }
+
+        /// <summary>
+        /// The class of nil, true, false, a Fixnum (Int32) or a Float while no Integer or Float has a class of its
+        /// own (see NoteOwnClassNoLock), so that its immediate class is its class - or null. Every is_a?, kind_of?,
+        /// instance_of?, Module#=== and #class of such a value comes here (by IsImmediateValue, or for nil and the
+        /// booleans after the failed IRubyObject cast).
+        /// </summary>
+        private RubyClass TryGetValueClass(object obj) {
+            RubyClass result;
+            if (obj == null) {
+                return _nilClass;
+            } else if (obj is int) {
+                result = _integerClass;
+            } else if (obj is bool) {
+                return (bool)obj ? _trueClass : _falseClass;
+            } else if (obj is double) {
+                result = _floatClass;
+            } else {
+                return null;
+            }
+            return (result != null && !result.HasInstancesWithOwnClass) ? result : null;
+        }
+
+        // GetOrCreateClass(obj.GetType()) for an object that is not an IRubyObject, by a cache in front of the
+        // dictionary: a probe of a small table indexed by the type's method table pointer, against a lookup by
+        // Type.GetHashCode (a runtime call) and a virtual Equals. An entry keeps its Type alive, so a collectible
+        // type's method table, and so the key, cannot be reused while the entry is there. A type's class is fixed
+        // once created (ReplaceModuleInCacheNoLock, which changes one at startup, clears the table).
+        private sealed class ClrClassCacheEntry {
+            internal readonly IntPtr Handle;
+            internal readonly Type/*!*/ Type;
+            internal readonly RubyClass/*!*/ Class;
+
+            internal ClrClassCacheEntry(IntPtr handle, Type/*!*/ type, RubyClass/*!*/ cls) {
+                Handle = handle;
+                Type = type;
+                Class = cls;
+            }
+        }
+
+        private const int ClrClassCacheSize = 64;
+        private readonly ClrClassCacheEntry[]/*!*/ _clrClassCache = new ClrClassCacheEntry[ClrClassCacheSize];
+
+        private static int ClrClassCacheIndex(IntPtr handle) {
+            ulong h = (ulong)(long)handle;
+            return (int)((h >> 3) ^ (h >> 9)) & (ClrClassCacheSize - 1);
+        }
+
+        private RubyClass/*!*/ GetClassOfClrType(object/*!*/ obj) {
+            IntPtr handle = Type.GetTypeHandle(obj).Value;
+            int index = ClrClassCacheIndex(handle);
+            ClrClassCacheEntry entry = Volatile.Read(ref _clrClassCache[index]);
+            if (entry != null && entry.Handle == handle) {
+                return entry.Class;
+            }
+            Type type = obj.GetType();
+            RubyClass result = GetOrCreateClass(type);
+            Volatile.Write(ref _clrClassCache[index], new ClrClassCacheEntry(handle, type, result));
+            return result;
+        }
+
+        /// <summary>
+        /// Marks the class of <paramref name="obj"/>'s CLR type as having instances with a class of their own, before
+        /// one is stored in <paramref name="obj"/>'s instance data (SetInstanceSingletonOfNoLock, AdoptClrObject,
+        /// ReplaceClrObjectClass): from then on GetImmediateClassOf reads the instance data of every object of the type,
+        /// and TryGetValueClass answers nothing for an Integer or a Float. User code cannot give an Integer, a Float
+        /// or a Symbol a class of its own - they all refuse a singleton class - but the runtime does not stop itself.
+        /// </summary>
+        private void NoteOwnClassNoLock(object/*!*/ obj) {
+            RequiresClassHierarchyLock();
+            Debug.Assert(obj != null && !(obj is IRubyObject));
+            RubyClass cls = GetClassOfClrType(obj);
+            if (!cls.HasInstancesWithOwnClass) {
+                cls.HasInstancesWithOwnClass = true;
+                // the flag is seen before the class the caller then stores is
+                Interlocked.MemoryBarrier();
+            }
+        }
 
         private RubyClass TryGetClassOfAdoptedClrObject(object/*!*/ obj) {
             RubyInstanceData data;
@@ -2165,7 +2279,7 @@ namespace IronRuby.Runtime {
                     // rules bound so far don't check for adopted objects:
                     clrClass.MethodsUpdated("AdoptClrObject");
                 }
-                _hasAdoptedClrObjects = true;
+                NoteOwnClassNoLock(obj);
                 GetInstanceData(obj).ImmediateClass = cls;
             }
         }
@@ -2193,9 +2307,42 @@ namespace IronRuby.Runtime {
         /// Gets a singleton or class for <c>obj</c>.
         /// Might return a class object from a foreign runtime (if obj is a runtime bound object).
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public RubyClass/*!*/ GetImmediateClassOf(object obj) {
-            RubyInstanceData data = null;
-            return GetImmediateClassOf(obj, ref data);
+            // inlined into the rules of is_a? and the like, as the whole of it was before the type tests below came
+            if (!IsImmediateValue(obj)) {
+                IRubyObject rubyObj = obj as IRubyObject;
+                if (rubyObj != null) {
+                    return rubyObj.ImmediateClass;
+                }
+            }
+            return GetImmediateClassOfNonRubyObject(obj);
+        }
+
+        // GetImmediateClassOf(obj, ref data) for an object that is not an IRubyObject (GetImmediateClassOf has
+        // tested that, or obj is one of the values), without casting it to one a second time.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private RubyClass/*!*/ GetImmediateClassOfNonRubyObject(object obj) {
+            Debug.Assert(!(obj is IRubyObject));
+            RubyClass result = TryGetValueClass(obj);
+            if (result != null) {
+                return result;
+            }
+            if (obj != null && !(obj is bool)) {
+                result = GetClassOfClrType(obj);
+                if (!result.HasInstancesWithOwnClass) {
+                    return result;
+                }
+            }
+            RubyInstanceData data = TryGetNonRubyObjectInstanceData(obj);
+            if (data != null && (result = data.ImmediateClass) != null) {
+                return result;
+            }
+            result = GetClassOfNonRubyObject(obj);
+            if (data != null) {
+                data.UpdateImmediateClass(result);
+            }
+            return result;
         }
 
         private RubyClass/*!*/ GetImmediateClassOf(object obj, ref RubyInstanceData data) {
@@ -2234,7 +2381,11 @@ namespace IronRuby.Runtime {
             IRubyObject rubyObj = obj as IRubyObject;
             if (rubyObj != null) {
                 rubyObj.ImmediateClass = singleton;
-            } else if (data != null) {
+                return;
+            }
+
+            NoteOwnClassNoLock(obj);
+            if (data != null) {
                 data.ImmediateClass = singleton;
             } else {
                 (data = GetInstanceData(obj)).ImmediateClass = singleton;
@@ -2673,7 +2824,7 @@ namespace IronRuby.Runtime {
                     clrClass.HasAdoptedInstances = true;
                     clrClass.MethodsUpdated("ReplaceClrObjectClass");
                 }
-                _hasAdoptedClrObjects = true;
+                NoteOwnClassNoLock(obj);
                 GetInstanceData(obj).ImmediateClass = cls;
             }
         }
