@@ -432,6 +432,10 @@ namespace IronRuby.Runtime {
                 if (!_exceptionDetail && _rubyFrameEnd >= 0 && _rubyFrameEnd < _trace.Count) {
                     _trace.RemoveRange(_rubyFrameEnd, _trace.Count - _rubyFrameEnd);
                 }
+                // a library frame flushed with the frame that ended the walk can take it past the limit
+                if (_trace.Count > _maxFrames) {
+                    _trace.RemoveRange(_maxFrames, _trace.Count - _maxFrames);
+                }
                 return _trace;
             }
         }

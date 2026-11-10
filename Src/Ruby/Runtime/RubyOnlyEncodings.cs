@@ -854,12 +854,21 @@ namespace IronRuby.Runtime {
             }
         }
 
-        /// <summary>Whether the table can be trusted to read these well formed bytes as Ruby does.</summary>
+        /// <summary>
+        /// Whether the table can be trusted to read these well formed bytes as Ruby does: whether no character in them is
+        /// led by a byte the table reads alone. Only lead bytes count (0xB0 0xAD is an ordinary character), so the walk
+        /// goes character by character.
+        /// </summary>
         private bool TableAgrees(byte[]/*!*/ bytes, int index, int count) {
             if (_anyTableReadsAlone) {
-                for (int i = index, end = index + count; i < end; i++) {
-                    if (_tableReadsAlone[bytes[i]]) {
+                for (int i = index, end = index + count; i < end; ) {
+                    byte b = bytes[i];
+                    if (_layout.Single[b]) {
+                        i++;
+                    } else if (_tableReadsAlone[b]) {
                         return false;
+                    } else {
+                        i += 2;
                     }
                 }
             }
