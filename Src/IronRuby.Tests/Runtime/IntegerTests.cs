@@ -641,6 +641,32 @@ Infinity
         }
 
         /// <summary>
+        /// String#split with a Regexp leaves $~ where MRI's rb_reg_search leaves it (#89): nil after the search
+        /// that finds no more, the last match when a limit stops it, and untouched when it does not search -
+        /// a limit of 1, // (characters) and / / (split at a space). The expected output is CRuby 4.0.9's.
+        /// </summary>
+        public void String_SplitMatchData1() {
+            TestOutput(@"
+""zz"" =~ /z/; ""a,b"".split(/,/); p $~
+""zz"" =~ /z/; ""a,b,c"".split(/,/, 2); p $~, $`
+""zz"" =~ /z/; ""abc"".split(//); p $~
+""zz"" =~ /z/; ""a b"".split(/ /); p $~
+""zz"" =~ /z/; """".split(/,/); p $~
+""zz"" =~ /z/; ""a,b"".split(/,/, 1); p $~
+""zz"" =~ /z/; ""a,b"".split(/,/) { }; p $~
+", @"
+nil
+#<MatchData "","">
+""a""
+#<MatchData ""z"">
+#<MatchData ""z"">
+nil
+#<MatchData ""z"">
+nil
+");
+        }
+
+        /// <summary>
         /// A shift width an Int32 does not hold (#89). MRI allocates 1 &lt;&lt; 2**31 (a 256 MB Integer); IronRuby
         /// raised RangeError. Shifts back by such widths, and bit references at such indexes, reach the real bits.
         /// From 2**32 on, a non-MRI implementation may say "shift width too big" (ruby/spec's left_shift_spec).

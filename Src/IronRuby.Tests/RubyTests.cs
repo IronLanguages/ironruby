@@ -1224,6 +1224,7 @@ namespace IronRuby.Tests {
                 Range_FloatStep1,
                 Complex_StringScan1,
                 Kernel_FloatParse1,
+                String_SplitMatchData1,
                 Integer_OutOfFloatRange1,
                 BasicObject_EqualIdentity1,
             };
