@@ -491,7 +491,7 @@ namespace IronRuby.Runtime.Calls {
                     // it would invoke the C$1::Add override again leading to a stack overflow. So we need to use a base call instead.
                     metaBuilder.Result = Ast.Field(null, Fields.ForwardToBase);
                 } else {
-                    metaBuilder.Result = bindingTarget.MakeExpression();
+                    metaBuilder.Result = KeepOutOfSlowTailCall(bindingTarget.MakeExpression(), bindingTarget.Overload);
 
                     // A keyword Hash is a positional argument to a method that does not receive keywords, which may keep it:
                     // it stops saying it is keyword arguments, as it does for a Ruby method (RubyMethodInfo.BuildCallNoFlow).
@@ -512,6 +512,22 @@ namespace IronRuby.Runtime.Calls {
             } else {
                 metaBuilder.SetError(resolver.MakeInvalidParametersError(bindingTarget).Expression);
             }
+        }
+
+        /// <summary>
+        /// A rule's lambda is compiled with tail calls, so the call to the library method is a `tail.' call when it is the
+        /// last thing the rule does. One the runtime cannot make in place - the callee takes more arguments on the stack
+        /// than its caller, as a method with storages, an optional argument and keywords does - goes through its tail call
+        /// helpers, which copy the arguments into a buffer they allocate: Integer("123", 10) cost ~155 ns with them and
+        /// ~90 ns without. The call of a method of more than six parameters (past the argument registers of x64 Unix)
+        /// stays an ordinary call, its value returned after it.
+        /// </summary>
+        private static Expression/*!*/ KeepOutOfSlowTailCall(Expression/*!*/ call, OverloadInfo/*!*/ overload) {
+            if (overload.ParameterCount + (overload.IsStatic ? 0 : 1) <= 6 || call.Type == typeof(void)) {
+                return call;
+            }
+            var result = Ast.Variable(call.Type, "#result");
+            return Ast.Block(call.Type, new[] { result }, Ast.Assign(result, call), result);
         }
 
         /// <summary>
