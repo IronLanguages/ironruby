@@ -5159,7 +5159,27 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region to_f, to_s, to_str, to_clr_string, to_sym, intern
+        #region to_c, to_f, to_s, to_str, to_clr_string, to_sym, intern
+
+        /// <summary>
+        /// MRI's string_to_c: the leading part that reads as a complex number, (0+0i) when none does. The scan is
+        /// C# (RubyComplex.Scan); a number with parts that are not plain Integers - a Float, a Rational, a polar
+        /// form - and a string of another encoding go to complex.rb's Complex.__parse_string__, as every call did.
+        /// </summary>
+        [RubyMethod("to_c")]
+        public static object ToComplex(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ parseStorage,
+            MutableString/*!*/ self) {
+            var context = parseStorage.Context;
+            RubyClass complex = context.GetClass(typeof(RubyComplex));
+            if (self.Encoding.IsAsciiIdentity) {
+                RubyArray scan = RubyComplex.Scan(complex, self, false);
+                if (scan.Count == 2) {
+                    return scan[1];
+                }
+            }
+            var site = parseStorage.GetCallSite("__parse_string__", 2);
+            return site.Target(site, complex, self, false);
+        }
 
         [RubyMethod("to_f")]
         public static double ToDouble(RubyContext/*!*/ context, MutableString/*!*/ self) {

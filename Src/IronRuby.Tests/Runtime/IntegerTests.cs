@@ -583,6 +583,37 @@ p s { |a| (1.0..2.0).step(0.5) { |x| a << x; break 9 } }
         }
 
         /// <summary>
+        /// complex.c's string scanner (String#to_c, Kernel#Complex) is C# now (#89): the texts it reads, its
+        /// backing up over a trailing or doubled underscore, polar and rational forms, and the strict caller's
+        /// trailing-garbage check. String#to_c of plain Integer parts is answered in C#; the parts as CRuby 4.0.9
+        /// reads them. The texts left for str2num (complex.rb, which these tests run without) are the scanner's.
+        /// </summary>
+        public void Complex_StringScan1() {
+            TestOutput(@"
+def c(s) = (z = s.to_c; [z.real, z.imaginary])
+p c(""1+2i""), c(""-i""), c("" 2j ""), c(""""), c(""7__9""), c(""1_i""), c(""1+x""), c(""-12_345-6i""), c(""1\0+2i"")
+p Complex.__ir_scan__(""1.5e3-2/3i"", false), Complex.__ir_scan__(""1@2"", false), Complex.__ir_scan__(""1e+i"", false)
+p Complex.__ir_scan__(""7__9"", true)[0], Complex.__ir_scan__(""1+2i x"", true)[0], Complex.__ir_scan__(""1+2i "", true)[0]
+", @"
+[1, 2]
+[0, -1]
+[0, 2]
+[0, 0]
+[7, 0]
+[1, 0]
+[1, 0]
+[-12345, -6]
+[1, 0]
+[true, 2, ""1.5e3"", ""-2/3""]
+[true, 3, 1, 2]
+[false, 0, ""1e"", nil]
+false
+false
+true
+");
+        }
+
+        /// <summary>
         /// Kernel#Float's decimal parse takes the exact fast path (at most 15 significant digits and a power of
         /// ten up to 22) and otherwise Double.TryParse over a stack buffer (#89); both round as strtod does.
         /// The expected output is CRuby 4.0.9's.

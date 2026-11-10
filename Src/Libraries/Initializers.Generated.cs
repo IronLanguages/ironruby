@@ -877,6 +877,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadComplex_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_scan__", 0x61, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyComplex.Scan)
+            );
+            
             DefineLibraryMethod(module, "__raw__", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.Builtins.RubyComplex>(IronRuby.Builtins.RubyComplex.Raw)
@@ -8739,6 +8744,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "swapcase!", 0x51, 
                 0x80000000U, 
                 new Func<IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.SwapCaseInPlace)
+            );
+            
+            DefineLibraryMethod(module, "to_c", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.ToComplex)
             );
             
             DefineLibraryMethod(module, "to_clr_string", 0x51, 

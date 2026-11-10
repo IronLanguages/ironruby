@@ -342,5 +342,274 @@ namespace IronRuby.Builtins {
             self.Freeze();
             return self;
         }
+
+        #region the string scanner (complex.c's read_comp)
+
+        // What __ir_scan__ found, the second element of its answer; complex.rb's __scan__ makes the value.
+        private const int ScanReal = 0;         // x + 0i
+        private const int ScanImaginary = 1;    // 0 + xi
+        private const int ScanRectangular = 2;  // x + yi
+        private const int ScanPolar = 3;        // x @ y
+
+        /// <summary>
+        /// complex.c's parse_comp, without making the numbers: [complete?, kind, x, y], where x and y
+        /// are the texts str2num is to read (the characters read, underscores taken out), or the
+        /// Integers they read as when they are plain decimal integers, or the Integer 1 or -1 that a
+        /// bare "i" or "-i" stands for. When no text is left for str2num and the form is not polar,
+        /// the answer is [complete?, the Complex] instead. complete? is false when the scan stopped
+        /// early, and when <paramref name="strict"/> also when something follows. The scan was
+        /// complex.rb's, where it took ~25 us a string, a String and a method call a character.
+        /// </summary>
+        [RubyMethod("__ir_scan__", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ Scan(RubyClass/*!*/ self, [NotNull]MutableString/*!*/ str, bool strict) {
+            RubyArray result = ScanParts(str, strict);
+            object x = result[2], y = result[3];
+            int kind = (int)result[1];
+            if (kind != ScanPolar && !(x is MutableString) && !(y is MutableString)) {
+                // f_complex_new2 of real parts is nucomp_s_new_internal
+                object zero = ScriptingRuntimeHelpers.Int32ToObject(0);
+                result[1] = kind == ScanReal ? new RubyComplex(self, x, zero)
+                    : kind == ScanImaginary ? new RubyComplex(self, zero, x)
+                    : new RubyComplex(self, x, y);
+                result.RemoveRange(2, 2);
+            }
+            return result;
+        }
+
+        private static RubyArray/*!*/ ScanParts(MutableString/*!*/ str, bool strict) {
+            ReadOnlySpan<char> chars;
+            ReadOnlySpan<byte> bytes;
+            char[] text;
+            if (str.GetCharacterData(out chars, out bytes)) {
+                text = chars.ToArray();
+            } else {
+                // only ASCII characters take part; any other byte is just not one of them
+                text = new char[bytes.Length];
+                for (int k = 0; k < bytes.Length; k++) {
+                    text[k] = (char)bytes[k];
+                }
+            }
+            var scanner = new ComplexScanner(text, strict);
+            return scanner.Parse();
+        }
+
+        private sealed class ComplexScanner {
+            private readonly char[]/*!*/ _s;
+            private readonly int _n;
+            private readonly bool _strict;
+            private readonly System.Text.StringBuilder/*!*/ _b = new System.Text.StringBuilder();
+            private int _i;
+
+            public ComplexScanner(char[]/*!*/ s, bool strict) {
+                _s = s;
+                // complex.c works on a C string, so an embedded NUL ends the input
+                int nul = Array.IndexOf(s, '\0');
+                _n = nul >= 0 ? nul : s.Length;
+                _strict = strict;
+            }
+
+            // nul ends the input, as it does for the C code
+            private char Cur => _i < _n ? _s[_i] : '\0';
+
+            private static bool IsDigit(char c) => c >= '0' && c <= '9';
+            private static bool IsSign(char c) => c == '-' || c == '+';
+            private static bool IsImaginaryUnit(char c) => c == 'i' || c == 'I' || c == 'j' || c == 'J';
+            private static bool IsSpace(char c) => c == ' ' || (c >= '\t' && c <= '\r');
+
+            private char ReadSign() {
+                char c = Cur;
+                if (IsSign(c)) {
+                    _b.Append(c);
+                    _i++;
+                    return c;
+                }
+                return '?';
+            }
+
+            private bool ReadDigits() {
+                if (!IsDigit(Cur)) {
+                    return false;
+                }
+                bool us = true;
+                while (IsDigit(Cur) || Cur == '_') {
+                    if (Cur == '_') {
+                        if (us) {
+                            if (_strict) {
+                                return false;
+                            }
+                            break;
+                        }
+                        us = true;
+                    } else {
+                        _b.Append(Cur);
+                        us = false;
+                    }
+                    _i++;
+                }
+                if (us) {
+                    // do { s--; } while (*s == '_');
+                    do {
+                        _i--;
+                    } while (_i >= 0 && _s[_i] == '_');
+                }
+                return true;
+            }
+
+            private void Unappend() {
+                _b.Length--;
+            }
+
+            private bool ReadNum() {
+                if (Cur != '.') {
+                    if (!ReadDigits()) {
+                        return false;
+                    }
+                }
+                if (Cur == '.') {
+                    _b.Append('.');
+                    _i++;
+                    if (!ReadDigits()) {
+                        Unappend();
+                        return false;
+                    }
+                }
+                if (Cur == 'e' || Cur == 'E') {
+                    _b.Append(Cur);
+                    _i++;
+                    ReadSign();
+                    if (!ReadDigits()) {
+                        Unappend();
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            private bool ReadRationalNoSign() {
+                if (!ReadNum()) {
+                    return false;
+                }
+                if (Cur == '/') {
+                    _b.Append('/');
+                    _i++;
+                    if (!ReadDigits()) {
+                        Unappend();
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            private bool ReadRational() {
+                ReadSign();
+                return ReadRationalNoSign();
+            }
+
+            // The text read since from, for str2num; or, when it is a sign and up to 18 digits (str2num's
+            // rb_cstr_to_inum, for which an empty text is 0), the Integer it reads as.
+            private object/*!*/ Buffered(int from) {
+                int length = _b.Length - from;
+                int i = from;
+                bool negative = false;
+                if (length > 0 && IsSign(_b[i])) {
+                    negative = _b[i] == '-';
+                    i++;
+                }
+                if (_b.Length - i <= 18) {
+                    long value = 0;
+                    for (; i < _b.Length && IsDigit(_b[i]); i++) {
+                        value = value * 10 + (_b[i] - '0');
+                    }
+                    if (i == _b.Length) {
+                        return ClrInteger.Narrow(negative ? -value : value);
+                    }
+                }
+                return MutableString.CreateAscii(_b.ToString(from, length));
+            }
+
+            private static RubyArray/*!*/ Result(bool ok, int kind, object x, object y = null) {
+                var result = new RubyArray(4);
+                result.Add(ok);
+                result.Add(ScriptingRuntimeHelpers.Int32ToObject(kind));
+                result.Add(x);
+                result.Add(y);
+                return result;
+            }
+
+            private static object UnitFor(char sign) {
+                return ScriptingRuntimeHelpers.Int32ToObject(sign == '-' ? -1 : 1);
+            }
+
+            private RubyArray/*!*/ ReadComplex() {
+                int bb = _b.Length;
+                char sign = ReadSign();
+
+                if (IsImaginaryUnit(Cur)) {
+                    _i++;
+                    return Result(true, ScanImaginary, UnitFor(sign));
+                }
+
+                if (!ReadRationalNoSign()) {
+                    return Result(false, ScanReal, Buffered(bb));
+                }
+                object num = Buffered(bb);
+
+                if (IsImaginaryUnit(Cur)) {
+                    _i++;
+                    return Result(true, ScanImaginary, num);
+                }
+
+                if (Cur == '@') {
+                    _i++;
+                    bb = _b.Length;
+                    bool st = ReadRational();
+                    if (_b.Length == bb || !IsDigit(_b[_b.Length - 1])) {
+                        return Result(false, ScanReal, num);
+                    }
+                    return Result(st, ScanPolar, num, Buffered(bb));
+                }
+
+                if (IsSign(Cur)) {
+                    bb = _b.Length;
+                    sign = ReadSign();
+                    object num2;
+                    if (IsImaginaryUnit(Cur)) {
+                        num2 = UnitFor(sign);
+                    } else {
+                        if (!ReadRationalNoSign()) {
+                            return Result(false, ScanReal, num);
+                        }
+                        num2 = Buffered(bb);
+                    }
+                    if (!IsImaginaryUnit(Cur)) {
+                        return Result(false, ScanReal, num);
+                    }
+                    _i++;
+                    return Result(true, ScanRectangular, num, num2);
+                }
+
+                return Result(true, ScanReal, num);
+            }
+
+            private void SkipSpace() {
+                while (_i < _n && IsSpace(_s[_i])) {
+                    _i++;
+                }
+            }
+
+            public RubyArray/*!*/ Parse() {
+                SkipSpace();
+                RubyArray result = ReadComplex();
+                if ((bool)result[0]) {
+                    SkipSpace();
+                    if (_strict && _i < _n) {
+                        result[0] = false;
+                    }
+                }
+                return result;
+            }
+        }
+
+        #endregion
     }
 }
