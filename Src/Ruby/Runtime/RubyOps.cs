@@ -3331,6 +3331,20 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static bool CanRescue(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            return CanRescueCore(scope, exception, false);
+        }
+
+        /// <summary>
+        /// CanRescue of a body with rescue clauses, for the exceptions its statements throw: the walk of the stack below the frame
+        /// may wait until the exception is exposed (RubyExceptionData.TryDeferCatchSite). The frame either rescues the exception,
+        /// restoring $! once the rescue clause is done, or throws it on (Body.TransformExceptionHandling), both before it is left.
+        /// Not so an ensure clause, which may end the exception with a jump and leave it in $!.
+        /// </summary>
+        public static bool CanRescueDeferTrace(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            return CanRescueCore(scope, exception, true);
+        }
+
+        private static bool CanRescueCore(RubyScope/*!*/ scope, Exception/*!*/ exception, bool deferTrace) {
             // A CLR finally may replace the reclaim signal with an ordinary exception.
             // That still belongs to a discarded stack and must not enter a Ruby rescue.
             if (RubyUtils.IsReclaimingFiber) {
@@ -3345,6 +3359,13 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            // Only an exception nothing can have kept: one Kernel#raise made itself. One C# threw may be kept by C# code that hands
+            // it to Ruby later (Encoding::Converter#last_error), and so may a CLR exception thrown again.
+            if (deferTrace) {
+                var raised = RubyExceptionData.TryGetInstance(exception);
+                deferTrace = raised != null && raised.RaisedUnkept;
+            }
+
             // calls "new" on the exception class if it hasn't been called yet:
             exception = RubyExceptionData.HandleException(scope, exception);
 
@@ -3357,8 +3378,71 @@ namespace IronRuby.Runtime {
             data.TrySetCause(scope.RubyContext.CurrentException);
 
             scope.RubyContext.CurrentException = exception;
-            data.CaptureExceptionTrace(scope);
+            data.CaptureExceptionTrace(scope, deferTrace);
             return true;
+        }
+
+        /// <summary>
+        /// What <see cref="PassEnsure"/> returns for an exception that goes through an ensure-only body the way it goes through the
+        /// handler CanRescue turns down: without $! being set for the ensure clause.
+        /// </summary>
+        internal static readonly Exception/*!*/ PassEnsureWithoutCurrentException = new Exception("#pass-ensure");
+
+        // 512 KB of stack beyond what StackLimit keeps: what an ensure clause gets at least when it runs on top of the raise
+        private const ulong PassEnsureStackRoom = 512 * 1024;
+
+        // the depth of compiled frames from which an ensure clause takes the catch (see PassEnsure)
+        private const int PassEnsureMaxDepth = 1000;
+
+        /// <summary>
+        /// The exception filter of a compiled body that has an ensure clause and nothing else (Body.TransformExceptionHandling,
+        /// EnsureGuardExpression), run in the CLR's first pass, while the stack is searched for a handler. Null: catch the exception,
+        /// which then takes CanRescue's path - $! set, the backtrace captured, and the exception thrown again after the ensure clause.
+        /// Anything else: let it go through, the ensure clause running from a CLR finally block as it passes, and set $! to the
+        /// result first unless it is <see cref="PassEnsureWithoutCurrentException"/>. A catch and a throw again is a full exception
+        /// dispatch of its own for every ensure an exception passes; going through costs next to nothing.
+        ///
+        /// It goes through only where the catch would have nothing left to do that the ensure clause could tell: the exception is
+        /// one CanRescue turns down, or one whose Ruby #new has run (Handled) and whose backtrace a frame it passed has already
+        /// captured - its throw-site trace is not needed again, and a throw again would only start it over. The cause is decided
+        /// here rather than in CanRescue, from the same $!: the ensure clauses that ran in between restore it. And there is room
+        /// on the stack: a finally block runs on top of the frames the exception came out of, a catch below them (#128).
+        /// </summary>
+        public static Exception PassEnsure(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            // A stack overflow, or a stack thousands of frames deep: one CLR dispatch across thousands of frames with filters costs
+            // more than a catch and a throw again per frame (SystemStackError through 10k ensure clauses: 2.5-4x slower than
+            // the catch on net8.0).
+            if (exception is SystemStackError || exception is InsufficientExecutionStackException ||
+                Precompiled.PrecompiledFrames.CurrentDepth > PassEnsureMaxDepth || !StackLimit.HasRoom(PassEnsureStackRoom)) {
+                return null;
+            }
+
+            if (RubyUtils.IsReclaimingFiber || exception is StackUnwinder) {
+                return PassEnsureWithoutCurrentException;
+            }
+
+            LocalJumpError lje = exception as LocalJumpError;
+            if (lje != null && lje.SkipFrame == scope.FlowControlScope) {
+                return PassEnsureWithoutCurrentException;
+            }
+
+            var data = RubyExceptionData.TryGetInstance(exception);
+            if (data == null || !data.Handled || !(data.HasBacktrace || data.RaiseBacktrace != null)) {
+                return null;
+            }
+
+            data.TrySetCause(scope.RubyContext.CurrentException);
+            return exception;
+        }
+
+        /// <summary>
+        /// The fault block of EnsureGuardExpression: the exception <see cref="PassEnsure"/> let through is leaving the body, and the
+        /// ensure clause sees it in $!, as it would had CanRescue caught it.
+        /// </summary>
+        public static void EnterPassedEnsure(RubyScope/*!*/ scope, Exception passing) {
+            if (passing != null && passing != PassEnsureWithoutCurrentException) {
+                scope.RubyContext.CurrentException = passing;
+            }
         }
 
         [Emitted]
@@ -3367,9 +3451,26 @@ namespace IronRuby.Runtime {
             return exception;
         }
 
+        // $! saved by a body with exception handling, to be restored later (see Body.TransformExceptionHandling)
         [Emitted]
         public static Exception GetCurrentException(RubyScope/*!*/ scope) {
+            return scope.RubyContext.CurrentExceptionNoExpose;
+        }
+
+        /// <summary>
+        /// $! handed to Ruby code: `rescue => e'. Its backtrace is completed first (RubyExceptionData.TryDeferCatchSite).
+        /// </summary>
+        public static Exception GetCurrentExceptionForRescueTarget(RubyScope/*!*/ scope) {
             return scope.RubyContext.CurrentException;
+        }
+
+        /// <summary>
+        /// The exception a body throws again on its way out (Body.TransformExceptionHandling): its backtrace is completed before
+        /// the frame that caught it is left (RubyExceptionData.TryDeferCatchSite).
+        /// </summary>
+        public static Exception/*!*/ ExposeException(Exception/*!*/ exception) {
+            RubyExceptionData.ResolveCatchSite(exception);
+            return exception;
         }
 
         /// <summary>
@@ -3387,14 +3488,25 @@ namespace IronRuby.Runtime {
                 throw RubyExceptions.CreateTypeError("class or module required for rescue clause");
             }
 
+            // Module#=== only tests the class of the exception; any other #=== is handed the exception, and may keep it
+            var exception = context.CurrentExceptionNoExpose;
+            if (exception != null && RubyExceptionData.IsCatchSitePending(exception) && !IsBuiltinCaseEquality(context, (RubyModule)classObject)) {
+                RubyExceptionData.ResolveCatchSite(exception);
+            }
+
             var site = comparisonStorage.GetCallSite("===");
-            bool result = IsTrue(site.Target(site, classObject, context.CurrentException));
+            bool result = IsTrue(site.Target(site, classObject, exception));
             if (result) {
                 // the frames the exception unwound to get here are no part of what is raised from here on
                 Precompiled.PrecompiledFrames.ForgetLeft();
-                TraceRescue(scope, context.CurrentException);
+                TraceRescue(scope, exception);
             }
             return result;
+        }
+
+        private static bool IsBuiltinCaseEquality(RubyContext/*!*/ context, RubyModule/*!*/ module) {
+            var method = context.GetImmediateClassOf(module).ResolveMethod("===", VisibilityContext.AllVisible).Info;
+            return method is RubyLibraryMethodInfo && method.DeclaringModule == context.ModuleClass;
         }
 
         [Emitted] //RescueClause:

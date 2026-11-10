@@ -1162,13 +1162,17 @@ namespace IronRuby.Builtins {
             }
 
             Exception exception;
+            // made here, from a String or a class whose #exception, #new and #initialize run no Ruby code: nothing can have kept it
+            bool unkept;
             if (args.Length == 0) {
                 // bare `raise` re-raises $!, or a fresh RuntimeError with an empty message.
                 exception = bareRaiseReRaisesCurrentException ? context.CurrentException : null;
+                unkept = exception == null;
                 if (exception == null) {
                     exception = RubyExceptionData.InitializeException(new RuntimeError(""), MutableString.CreateEmpty());
                 }
             } else {
+                unkept = args[0] is MutableString || args[0] is RubyClass cls && RubyExceptionData.MakesUnkeptException(cls);
                 exception = MakeException(respondToStorage, storage0, storage1, args);
 
                 if (args.Length >= 3 && args[2] != null) {
@@ -1181,6 +1185,7 @@ namespace IronRuby.Builtins {
             }
 
             SetCause(context, exception, hasCause, cause);
+            RubyExceptionData.GetInstance(exception).RaisedUnkept = unkept;
 
             // An exception with no backtrace - new, or cleared by set_backtrace(nil) - gets one from
             // where it is raised now. The interpreter keeps the frames of the first throw on the

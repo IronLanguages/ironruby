@@ -77,7 +77,7 @@ namespace IronRuby.Compiler.Ast {
             return AstUtils.IfCondition(condition,
                 gen.TransformStatements(
                     // <lvalue> = e;
-                    (_target != null) ? _target.TransformWrite(gen, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)) : null,
+                    (_target != null) ? _target.TransformWrite(gen, Ast.Call(typeof(RubyOps).GetMethod(nameof(RubyOps.GetCurrentExceptionForRescueTarget)), gen.CurrentScopeVariable)) : null,
 
                     // body:
                     _statements,

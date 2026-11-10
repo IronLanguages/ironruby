@@ -64,6 +64,21 @@ namespace IronRuby.Runtime {
             return (_limit > 1) ? sp > _limit : RuntimeHelpers.TryEnsureSufficientExecutionStack();
         }
 
+        /// <summary>
+        /// Whether the stack has <paramref name="bytes"/> to spare above the limit IsSufficient keeps (false when the OS cannot
+        /// say). For code that is about to run on top of the current stack where it would otherwise have run lower down.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static bool HasRoom(ulong bytes) {
+            byte probe;
+            ulong sp = (ulong)&probe;
+            if (!IsSufficient()) {
+                return false;
+            }
+            ulong limit = (sp - _mainLow < _mainSize) ? _mainLow : _limit;
+            return limit > 1 && sp - limit >= bytes;
+        }
+
         private static ulong QueryLimit(out ulong high) {
             ulong low;
             high = 0;
