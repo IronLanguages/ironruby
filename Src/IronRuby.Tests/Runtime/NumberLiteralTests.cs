@@ -52,6 +52,42 @@ namespace IronRuby.Tests {
             }
         }
 
+        /// <summary>
+        /// The DLR's MathUtils.ToString(BigInteger, radix) (Build/dlr-patches/0106) splits a large number by powers of the
+        /// radix: the digits either side of each split, and the numbers just below and at a power, are where it could go wrong.
+        /// </summary>
+        public void BigIntegerToString1() {
+            var random = new Random(89);
+            for (int radix = 2; radix <= 36; radix++) {
+                var values = new List<BigInteger> { BigInteger.Zero, BigInteger.One, long.MaxValue, ulong.MaxValue };
+                foreach (int exponent in new[] { 1, 19, 20, 21, 64, 300, 1000, 4100 }) {
+                    BigInteger power = BigInteger.Pow(radix, exponent);
+                    values.Add(power - 1);
+                    values.Add(power);
+                    values.Add(power + 1);
+                }
+                foreach (int bits in new[] { 100, 1500, 6000, 20000 }) {
+                    byte[] bytes = new byte[bits / 8 + 1];
+                    random.NextBytes(bytes);
+                    bytes[bytes.Length - 1] = 0;
+                    values.Add(new BigInteger(bytes));
+                }
+
+                foreach (BigInteger value in values) {
+                    string s = value.ToString(radix);
+                    Assert(s.Length == 1 || s[0] != '0');
+                    Assert(s.ToUpperInvariant() == s);
+                    Assert(Tokenizer.ParseBigInteger(s, 0, s.Length, radix) == value);
+                    if (!value.IsZero) {
+                        Assert((-value).ToString(radix) == "-" + s);
+                    }
+                    if (radix == 10) {
+                        Assert(s == value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    }
+                }
+            }
+        }
+
         public void ParseIntegers1() {
             IntegerValue x;
             Assert((x = Tokenizer.ParseInteger("", 0)).Equals(0));
