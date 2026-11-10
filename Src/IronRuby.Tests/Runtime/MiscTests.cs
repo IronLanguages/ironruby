@@ -4162,6 +4162,7 @@ p ""\xA4\xA2"".force_encoding(""CP51932"").encode(""UTF-8"")
 p ""あ"".encode(""CP51932"").bytes
 p ""\xFE\xFE\xB0\xA1"".force_encoding(""EUC-KR"").reverse.bytes
 p ""a\x8F\xA1b\xFE"".force_encoding(""EUC-JP"").scrub { |b| ""<#{b.unpack1('H*')}>"" }
+p ""a\x8F\xA1\xA1b"".force_encoding(""CP51932"").encode(""UTF-8"", invalid: :replace)
 ", @"
 EUC-KR fefe: true 1 fefe getc=fefe scrub=fefe rev=fefe same=true
 EUC-KR adadfe41: false 3 adad,fe,41 getc=adad,fe,41 scrub=adad3f41 rev=41feadad same=true
@@ -4185,6 +4186,7 @@ Encoding::UndefinedConversionError
 [164, 162]
 [176, 161, 254, 254]
 ""a<8fa1>b<fe>""
+""a�　b""
 ");
         }
 

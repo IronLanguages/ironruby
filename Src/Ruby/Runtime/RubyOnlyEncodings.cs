@@ -599,6 +599,16 @@ namespace IronRuby.Runtime {
         protected abstract int Scan(byte[]/*!*/ bytes, int index, int end);
 
         /// <summary>
+        /// Scan as the transcoder reads the bytes, where that is narrower than the encoding's
+        /// shape: MRI's CP51932 converter has no three byte form, so to it 0x8F is a bad byte
+        /// of its own although "\x8F\xA1\xA1" is a valid CP51932 string. The lossless form,
+        /// which holds a string's characters, reads the shape.
+        /// </summary>
+        protected virtual int TranscodingScan(byte[]/*!*/ bytes, int index, int end) {
+            return Scan(bytes, index, end);
+        }
+
+        /// <summary>
         /// Writes the characters of a well formed sequence and returns how many, or -1 if the
         /// sequence names no character.
         /// </summary>
@@ -809,7 +819,7 @@ namespace IronRuby.Runtime {
                 var decoded = new char[_encoding.MaxSequenceLength + 2];
                 int i = start, written = 0;
                 while (i < end) {
-                    int length = _encoding.Scan(input, i, end);
+                    int length = _encoding._lossless ? _encoding.Scan(input, i, end) : _encoding.TranscodingScan(input, i, end);
                     if (length == 0) {
                         if (!flush) {
                             if (commit) {
@@ -1064,6 +1074,10 @@ namespace IronRuby.Runtime {
                 return 0;
             }
             return _layout.Trail[bytes[index + 1]] ? 2 : -1;
+        }
+
+        protected override int TranscodingScan(byte[]/*!*/ bytes, int index, int end) {
+            return (bytes[index] == _layout.ThreeByteLead) ? -1 : Scan(bytes, index, end);
         }
 
         protected override int DecodeSequence(byte[]/*!*/ bytes, int index, int length, char[]/*!*/ chars, int charIndex) {
