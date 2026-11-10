@@ -4049,83 +4049,156 @@ to_str finish: [""01ff"", ""01ff"", ""01ff""]
         }
 
         /// <summary>
-        /// StringIO#getc reads one character as MRI's strio_getc measures it (#92): a byte that does not
-        /// begin a valid character is one character on its own, so "\xFFabcdef" no longer loses its "d"
-        /// and a cut-short UTF-8 sequence is not swallowed with the bytes after it. Covers UTF-16 lone
-        /// surrogates, #readchar/#getbyte/#readbyte, #ungetc and #each_char, and a set_encoding stream.
+        /// .NET's EUC-KR table (code page 51949) reads the lead bytes 0xAD-0xAF and 0xFE alone, as private
+        /// use characters, so 0xAD 0xAD - one unassigned character to Ruby - decoded as two that did not
+        /// encode back: #chars, #length and #inspect threw EncoderFallbackException, and transcoding dropped
+        /// the bytes. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Encoding_EucKrTableGaps1() {
+            TestOutput(@"
+require 'ruby4'
+require 'stringio'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}""; end; puts ""#{l}: #{v.inspect}""; end
+[""\xAD\xAD"", ""\xB0\xA1\xAD\xAE"", ""A\xFE\xFEB"", ""\xAF\xA1\xFF""].each do |raw|
+  s = raw.b.force_encoding(""EUC-KR"")
+  show(s.bytes.map { |b| ""%02X"" % b }.join) do
+    io = StringIO.new(s.dup)
+    getc = []
+    while (c = io.getc); getc << c.bytesize; end
+    [s.valid_encoding?, s.length, s.chars.map(&:bytesize), s.each_char.map(&:valid_encoding?), getc, s.scrub(""?"").bytes, s.reverse.bytes, s.inspect]
+  end
+end
+show(""transcode"") { ""\xAD\xAD"".force_encoding(""EUC-KR"").encode(""UTF-8"") }
+show(""transcode replace"") { ""\xB0\xA1\xAD\xAD"".force_encoding(""EUC-KR"").encode(""UTF-8"", undef: :replace) }
+show(""private use"") { """".encode(""EUC-KR"") }
+show(""hangul"") { ""가"".encode(""EUC-KR"").bytes }
+", @"
+ADAD: [true, 1, [2], [true], [2], [173, 173], [173, 173], ""\""\\x{ADAD}\""""]
+B0A1ADAE: [true, 2, [2, 2], [true, true], [2, 2], [176, 161, 173, 174], [173, 174, 176, 161], ""\""\\x{B0A1}\\x{ADAE}\""""]
+41FEFE42: [true, 3, [1, 2, 1], [true, true, true], [1, 2, 1], [65, 254, 254, 66], [66, 254, 254, 65], ""\""A\\x{FEFE}B\""""]
+AFA1FF: [false, 2, [2, 1], [true, false], [2, 1], [175, 161, 63], [255, 175, 161], ""\""\\x{AFA1}\\xFF\""""]
+transcode: ""Encoding::UndefinedConversionError""
+transcode replace: ""가�""
+private use: ""Encoding::UndefinedConversionError""
+hangul: [176, 161]
+");
+        }
+
+        /// <summary>
+        /// StringIO#getc measures a character the way CRuby does (rb_enc_mbclen): an invalid byte is one
+        /// character, a truncated sequence is cut at its first bad byte, a UTF-16 lone surrogate is one code
+        /// unit. The old Ruby wrapper swallowed up to four bad bytes into one "character" and then dropped
+        /// the fifth (#92). Expected output is CRuby 4.0's.
         /// </summary>
         public void StringIO_GetcInvalidBytes1() {
             TestOutput(@"
 require 'ruby4'
 require 'stringio'
-def all(io); a = []; while (c = io.getc); a << c; end; a; end
-io = StringIO.new(""\xFFabcdef"")
-p [io.getc, io.getc, io.pos]
-p StringIO.new(""\xE3\x81abc"").getc
-p all(StringIO.new(""a\xE3\x81\x82\xF0\x9F\x98\xFFb\xC0\x80""))
-p all(StringIO.new(""\x00\xD8a\x00"".force_encoding(""UTF-16LE""))).map(&:bytes)
-p all(StringIO.new(""\x3D\xD8\x00\xDE\x41\x00"".force_encoding(""UTF-16LE""))).map(&:bytes)
-io = StringIO.new(""\xFFa\xE3\x81\x82"")
-p [io.readchar, io.getbyte, io.readbyte, io.getc, io.getc]
-io = StringIO.new(""\xFFab"")
-c = io.getc; io.ungetc(c); p [io.pos, io.getc, io.getc.encoding]
-p StringIO.new(""x\xFFy"").each_char.to_a
-io = StringIO.new(""\xA4\xA2\xFF\xA4"".b); io.set_encoding(""EUC-JP""); p all(io).map { |s| [s.bytes, s.encoding.to_s, s.valid_encoding?] }
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+def all_getc(io); r = []; while (c = io.getc); r << c; end; r; end
+show(""invalid utf-8"") { s = StringIO.new(""\xFFabcdef""); [s.getc, s.getc, s.pos] }
+show(""truncated utf-8"") { s = StringIO.new(""\xE3\x81abc""); [s.getc, s.getc, s.getc, s.pos] }
+show(""utf-8 mix"") { all_getc(StringIO.new(""aé\xC3あ\xF0\x9F\x98\x80\xF0\x9Fz"")) }
+show(""bad lead bytes"") { all_getc(StringIO.new(""\x80\xBF\xC0\xC1\xF5\xFF"")) }
+show(""utf-16le lone surrogate"") { all_getc(StringIO.new(""\x00\xD8a\x00\x3D\xD8\x00\xDEb"".force_encoding(""UTF-16LE""))).map(&:bytes) }
+show(""utf-16le odd byte"") { all_getc(StringIO.new(""a\x00b"".force_encoding(""UTF-16LE""))).map(&:bytes) }
+show(""shift_jis"") { all_getc(StringIO.new(""\x82\xA0\x82\x7F\xA1\x81"".force_encoding(""Shift_JIS""))).map(&:bytes) }
+show(""euc-jp"") { all_getc(StringIO.new(""\xA4\xA2\x8F\xA1\xA1\x8F\xA1A\xFF"".force_encoding(""EUC-JP""))).map(&:bytes) }
+show(""big5"") { all_getc(StringIO.new(""\xA4\x40\xA4\x30\x81\x40\xFE"".force_encoding(""Big5""))).map(&:bytes) }
+show(""binary"") { all_getc(StringIO.new(""\xFF\xE3\x81"".b)).map(&:bytes) }
+show(""each_char"") { StringIO.new(""\xE3\x81\x82\xE3x"").each_char.to_a }
+show(""readchar"") { s = StringIO.new(""\xFFa""); [s.readchar, s.readchar, (s.readchar rescue $!.class)] }
+show(""getbyte/readbyte"") { s = StringIO.new(""\xFFa""); [s.getbyte, s.readbyte, s.getbyte, (s.readbyte rescue $!.class)] }
+show(""ungetc"") { s = StringIO.new(""\xFFa""); c = s.getc; s.ungetc(c); [s.getc, s.getc, s.pos] }
+show(""set_encoding"") { s = StringIO.new(""\xA4\xA2\xFF"".b); s.set_encoding(""EUC-JP""); all_getc(s).map(&:bytes) }
+show(""frozen"") { s = StringIO.new(""\xFFé"".freeze); [s.getc, s.getc, s.getc] }
+show(""closed"") { s = StringIO.new(""a""); s.close_read; s.getc }
 ", @"
-[""\xFF"", ""a"", 2]
-""\xE3""
-[""a"", ""あ"", ""\xF0"", ""\x9F"", ""\x98"", ""\xFF"", ""b"", ""\xC0"", ""\x80""]
-[[0, 216], [97, 0]]
-[[61, 216, 0, 222], [65, 0]]
-[""\xFF"", 97, 227, ""\x81"", ""\x82""]
-[0, ""\xFF"", #<Encoding:UTF-8>]
-[""x"", ""\xFF"", ""y""]
-[[[164, 162], ""EUC-JP"", true], [[255], ""EUC-JP"", false], [[164], ""EUC-JP"", false]]
+invalid utf-8: [""\xFF"", ""a"", 2]
+truncated utf-8: [""\xE3"", ""\x81"", ""a"", 3]
+utf-8 mix: [""a"", ""é"", ""\xC3"", ""あ"", ""😀"", ""\xF0"", ""\x9F"", ""z""]
+bad lead bytes: [""\x80"", ""\xBF"", ""\xC0"", ""\xC1"", ""\xF5"", ""\xFF""]
+utf-16le lone surrogate: [[0, 216], [97, 0], [61, 216, 0, 222], [98]]
+utf-16le odd byte: [[97, 0], [98]]
+shift_jis: [[130, 160], [130], [127], [161], [129]]
+euc-jp: [[164, 162], [143, 161, 161], [143], [161], [65], [255]]
+big5: [[164, 64], [164], [48], [129], [64], [254]]
+binary: [[255], [227], [129]]
+each_char: [""あ"", ""\xE3"", ""x""]
+readchar: [""\xFF"", ""a"", EOFError]
+getbyte/readbyte: [255, 97, nil, EOFError]
+ungetc: [""\xFF"", ""a"", 2]
+set_encoding: [[164, 162], [255]]
+frozen: [""\xFF"", ""é"", nil]
+closed: ""IOError: not opened for reading""
 ");
         }
 
         /// <summary>
-        /// Digest's class methods hash in one shot and instances stream (#92): both agree, for all five
-        /// algorithms, through #&lt;&lt;, #update, #clone and #dup (which carry the state across and stay
-        /// independent), #reset, #hexdigest!, #==, a Ruby subclass and Digest.hexencode.
+        /// The built-in Digest algorithms hash in one shot with HashData (#92) rather than through a
+        /// HashAlgorithm instance: class and instance digests, lengths, base64, the bang forms, reset, dup,
+        /// ==, file, hexencode and a Ruby subclass. Expected output is CRuby 4.0's.
         /// </summary>
         public void Digest_OneShot1() {
             TestOutput(@"
 require 'ruby4'
 require 'digest'
-[Digest::MD5, Digest::SHA1, Digest::SHA256, Digest::SHA384, Digest::SHA512].each do |k|
-  one = k.hexdigest(""abc"")
-  streamed = k.new
-  streamed << ""a"" << ""b""
-  streamed.update(""c"")
-  copy = streamed.clone
-  copy << ""d""
-  dupped = streamed.dup
-  dupped.reset
-  puts [k.name, one[0, 16], k.digest(""abc"") == [one].pack(""H*""), k.base64digest(""abc"")[0, 12],
-        streamed.hexdigest == one, streamed == one, copy.hexdigest == k.hexdigest(""abcd""), streamed.hexdigest == one,
-        dupped.hexdigest == k.hexdigest(""""), k.new.update(""abc"").hexdigest! == one, streamed.digest_length, streamed.block_length].inspect
+require 'tmpdir'
+def show(l); v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end; puts ""#{l}: #{v.inspect}""; end
+algs = [Digest::MD5, Digest::SHA1, Digest::SHA256, Digest::SHA384, Digest::SHA512]
+algs.each do |a|
+  n = a.name.split(""::"").last
+  show(""#{n} hex"") { [a.hexdigest(""""), a.hexdigest(""abc"")[0, 24]] }
+  show(""#{n} sizes"") { d = a.new; [d.digest_length, d.block_length, d.length, d.size, a.digest(""abc"").bytesize, a.digest(""abc"").encoding.to_s] }
+  show(""#{n} base64"") { a.base64digest(""abc"")[0, 20] }
+  show(""#{n} instance"") { d = a.new; d << ""a""; d.update(""bc""); [d.hexdigest == a.hexdigest(""abc""), d.to_s == d.hexdigest, d.hexdigest!.size, d.hexdigest == a.hexdigest(""""), d.digest!.bytesize] }
 end
-p Digest.hexencode(""\x01\xAB"")
-sub = Class.new(Digest::SHA256)
-p sub.hexdigest(""abc"") == Digest::SHA256.hexdigest(""abc"")
-d = Digest::SHA1.new; d << ""x""; e = d.clone; d << ""y""; p [d.hexdigest[0, 8], e.hexdigest[0, 8], d == e]
+show(""== string"") { d = Digest::SHA256.new << ""abc""; [d == Digest::SHA256.hexdigest(""abc""), d == Digest::SHA256.new.update(""abc""), d == ""x"", d == Digest::SHA1.new.update(""abc"")] }
+show(""dup"") { d = Digest::MD5.new << ""ab""; e = d.dup; e << ""c""; [d.hexdigest, e.hexdigest] }
+show(""reset"") { d = Digest::SHA1.new << ""zzz""; d.reset; d.hexdigest }
+show(""file"") { path = File.join(Dir.tmpdir, ""ir-digest-#{$$}.txt"");File.binwrite(path, ""abc""); begin; [Digest::SHA256.file(path).hexdigest[0, 16], Digest::MD5.new.file(path).hexdigest]; ensure; File.delete(path); end }
+show(""hexencode"") { Digest.hexencode(""\x00\x7f\xff"".b) }
+show(""binary input"") { Digest::MD5.hexdigest(""\xFF\xFE"".b) }
+show(""utf-8 input"") { Digest::SHA1.hexdigest(""é"") }
+show(""subclass"") { c = Class.new(Digest::SHA256); [c.hexdigest(""abc"")[0, 8], c.new.update(""abc"").hexdigest[0, 8], c.new.class.superclass == Digest::SHA256] }
+show(""inspect"") { (Digest::MD5.new << ""a"").inspect }
 ", @"
-[""Digest::MD5"", ""900150983cd24fb0"", true, ""kAFQmDzST7DW"", true, true, true, true, true, true, 16, 64]
-[""Digest::SHA1"", ""a9993e364706816a"", true, ""qZk+NkcGgWq6"", true, true, true, true, true, true, 20, 64]
-[""Digest::SHA256"", ""ba7816bf8f01cfea"", true, ""ungWv48Bz+pB"", true, true, true, true, true, true, 32, 64]
-[""Digest::SHA384"", ""cb00753f45a35e8b"", true, ""ywB1P0WjXou1"", true, true, true, true, true, true, 48, 128]
-[""Digest::SHA512"", ""ddaf35a193617aba"", true, ""3a81oZNherrM"", true, true, true, true, true, true, 64, 128]
-""01ab""
-true
-[""5f845998"", ""11f6ad8e"", false]
+MD5 hex: [""d41d8cd98f00b204e9800998ecf8427e"", ""900150983cd24fb0d6963f7d""]
+MD5 sizes: [16, 64, 16, 16, 16, ""ASCII-8BIT""]
+MD5 base64: ""kAFQmDzST7DWlj99KOF/""
+MD5 instance: [true, true, 32, true, 16]
+SHA1 hex: [""da39a3ee5e6b4b0d3255bfef95601890afd80709"", ""a9993e364706816aba3e2571""]
+SHA1 sizes: [20, 64, 20, 20, 20, ""ASCII-8BIT""]
+SHA1 base64: ""qZk+NkcGgWq6PiVxeFDC""
+SHA1 instance: [true, true, 40, true, 20]
+SHA256 hex: [""e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"", ""ba7816bf8f01cfea414140de""]
+SHA256 sizes: [32, 64, 32, 32, 32, ""ASCII-8BIT""]
+SHA256 base64: ""ungWv48Bz+pBQUDeXa4i""
+SHA256 instance: [true, true, 64, true, 32]
+SHA384 hex: [""38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b"", ""cb00753f45a35e8bb5a03d69""]
+SHA384 sizes: [48, 128, 48, 48, 48, ""ASCII-8BIT""]
+SHA384 base64: ""ywB1P0WjXou1oD1pmsZQ""
+SHA384 instance: [true, true, 96, true, 48]
+SHA512 hex: [""cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"", ""ddaf35a193617abacc417349""]
+SHA512 sizes: [64, 128, 64, 64, 64, ""ASCII-8BIT""]
+SHA512 base64: ""3a81oZNherrMQXNJriBB""
+SHA512 instance: [true, true, 128, true, 64]
+== string: [true, true, false, false]
+dup: [""187ef4436122d1cc2f40dc2b92f0eba0"", ""900150983cd24fb0d6963f7d28e17f72""]
+reset: ""da39a3ee5e6b4b0d3255bfef95601890afd80709""
+file: [""ba7816bf8f01cfea"", ""900150983cd24fb0d6963f7d28e17f72""]
+hexencode: ""007fff""
+binary input: ""f3b25701fe362ec84616a93a45ce9998""
+utf-8 input: ""bf15be717ac1b080b4f1c456692825891ff5073d""
+subclass: [""ba7816bf"", ""ba7816bf"", true]
+inspect: ""#<Digest::MD5: 0cc175b9c0f1b6a831c399e269772661>""
 ");
         }
 
         /// <summary>
-        /// Character boundaries in the multibyte encodings follow MRI's enc/*.c tables (#89): .NET's
-        /// EUC-KR reads 0xAD-0xAF and 0xFE alone, so "\xFE\xFE" was split in two (and #chars raised an
-        /// EncoderFallbackException); CP51932 has EUC-JP's shape rather than .NET's code page 51932's;
+        /// Character boundaries in the multibyte encodings follow MRI's enc/*.c tables (#89; EUC-KR's
+        /// lead bytes that .NET reads alone are Encoding_EucKrTableGaps1): CP51932 has EUC-JP's shape
+        /// rather than .NET's code page 51932's, and its converter reads 0x8F as a bad byte;
         /// EUC-TW's CNS planes 12-16 are one character; and #scrub replaces a cut-short sequence as one
         /// run, from the bytes, as MRI does ("\xA1\x39" in GB18030 is one replacement). The StringIO#getc
         /// column is the same split, which is where the difference was first seen.
@@ -4140,9 +4213,6 @@ def show(enc, hex)
   puts ""#{enc} #{hex}: #{s.valid_encoding?} #{s.length} #{s.chars.map { |c| c.unpack1('H*') }.join(',')} getc=#{g.join(',')} "" \
        ""scrub=#{s.scrub('?').unpack1('H*')} rev=#{s.reverse.unpack1('H*')} same=#{(s.chars.join == s)}""
 end
-show ""EUC-KR"", ""fefe""
-show ""EUC-KR"", ""adadfe41""
-show ""EUC-KR"", ""b0a1fefee0""
 show ""CP51932"", ""a2c7fcf0""
 show ""CP51932"", ""8fa1a18ea1""
 show ""CP51932"", ""948fa0c24f""
@@ -4156,17 +4226,12 @@ show ""GB18030"", ""c93549fbdffc""
 show ""GB18030"", ""813081407e""
 show ""Big5"", ""a140a1fe81""
 show ""Shift_JIS"", ""81208140ff""
-p ""\xFE\xFE"".force_encoding(""EUC-KR"").encode(""UTF-8"") rescue p $!.class
 p ""\xB0\xA1"".force_encoding(""EUC-KR"").encode(""UTF-8"")
 p ""\xA4\xA2"".force_encoding(""CP51932"").encode(""UTF-8"")
 p ""あ"".encode(""CP51932"").bytes
-p ""\xFE\xFE\xB0\xA1"".force_encoding(""EUC-KR"").reverse.bytes
 p ""a\x8F\xA1b\xFE"".force_encoding(""EUC-JP"").scrub { |b| ""<#{b.unpack1('H*')}>"" }
 p ""a\x8F\xA1\xA1b"".force_encoding(""CP51932"").encode(""UTF-8"", invalid: :replace)
 ", @"
-EUC-KR fefe: true 1 fefe getc=fefe scrub=fefe rev=fefe same=true
-EUC-KR adadfe41: false 3 adad,fe,41 getc=adad,fe,41 scrub=adad3f41 rev=41feadad same=true
-EUC-KR b0a1fefee0: false 3 b0a1,fefe,e0 getc=b0a1,fefe,e0 scrub=b0a1fefe3f rev=e0fefeb0a1 same=true
 CP51932 a2c7fcf0: true 2 a2c7,fcf0 getc=a2c7,fcf0 scrub=a2c7fcf0 rev=fcf0a2c7 same=true
 CP51932 8fa1a18ea1: true 2 8fa1a1,8ea1 getc=8fa1a1,8ea1 scrub=8fa1a18ea1 rev=8ea18fa1a1 same=true
 CP51932 948fa0c24f: false 5 94,8f,a0,c2,4f getc=94,8f,a0,c2,4f scrub=3f3f3f3f4f rev=4fc2a08f94 same=true
@@ -4180,11 +4245,9 @@ GB18030 c93549fbdffc: false 5 c9,35,49,fbdf,fc getc=c9,35,49,fbdf,fc scrub=3f49f
 GB18030 813081407e: false 4 81,30,8140,7e getc=81,30,8140,7e scrub=3f407e rev=7e81403081 same=true
 Big5 a140a1fe81: false 3 a140,a1fe,81 getc=a140,a1fe,81 scrub=a140a1fe3f rev=81a1fea140 same=true
 Shift_JIS 81208140ff: false 4 81,20,8140,ff getc=81,20,8140,ff scrub=3f2081403f rev=ff81402081 same=true
-Encoding::UndefinedConversionError
 ""가""
 ""あ""
 [164, 162]
-[176, 161, 254, 254]
 ""a<8fa1>b<fe>""
 ""a�　b""
 ");

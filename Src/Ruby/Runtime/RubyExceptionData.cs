@@ -98,6 +98,14 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// The first <paramref name="maxFrames"/> frames of what <see cref="CreateBacktrace(RubyContext, int)"/> would
+        /// return, without making the frames of the rest of the stack (most of the cost on a deep stack).
+        /// </summary>
+        public static RubyArray/*!*/ CreateBacktrace(RubyContext/*!*/ context, int skipFrames, int maxFrames) {
+            return new RubyStackTraceBuilder(context, skipFrames, false, maxFrames).RubyTrace;
+        }
+
+        /// <summary>
         /// Like CreateBacktrace, but frames of core methods written in Ruby keep their own file and line
         /// instead of being reported at their caller's (TracePoint needs to see where a call really is).
         /// </summary>

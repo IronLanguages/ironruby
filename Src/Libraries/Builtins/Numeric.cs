@@ -15,6 +15,7 @@
 
 using System;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using IronRuby.Runtime;
@@ -357,137 +358,22 @@ namespace IronRuby.Builtins {
         #region step
 
         /// <summary>
-        /// Invokes block with the sequence of numbers starting at self, incremented by step on each call.
-        /// The loop finishes when the value to be passed to the block is greater than limit (if step is positive) or less than limit (if step is negative).
+        /// Numeric#step (MRI's num_step). With a block and Fixnum or Float arguments of which one is a
+        /// Float, MRI's ruby_float_step loop runs here (<see cref="Integer.TryFloatStep"/>); everything
+        /// else is the prelude's (__ir_step_slow__ in ruby4.rb), whose `def step(*args, **kw)` this
+        /// replaces: getting into it cost ~6 us, more than a short Float step's loop. Integer has its
+        /// own #step for Fixnums (Integer.cs).
         /// </summary>
         [RubyMethod("step")]
-        public static object Step(BlockParam block, int self, int limit) {
-            return Step(block, self, limit, 1);
-        }
-
-        /// <summary>
-        /// Invokes block with the sequence of numbers starting at self, incremented by step on each call.
-        /// The loop finishes when the value to be passed to the block is greater than limit (if step is positive) or less than limit (if step is negative).
-        /// </summary>
-        [RubyMethod("step")]
-        public static object Step(BlockParam block, int self, int limit, int step) {
-            if (step == 0) {
-                throw RubyExceptions.CreateArgumentError("step can't be 0");
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [ReceivesKeywords]
+        public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
+            BlockParam block, object self, params object[]/*!*/ args) {
+            object result;
+            if (block != null && Integer.TryFloatStep(block, self, args, out result)) {
+                return result;
             }
-            if (step > 0) {
-                int current = self;
-                while (current <= limit) {
-                    object result;
-                    if (YieldStep(block, current, out result)) {
-                        return result;
-                    }
-                    current += step;
-                }
-            } else {
-                int current = self;
-                while (current >= limit) {
-                    object result;
-                    if (YieldStep(block, current, out result)) {
-                        return result;
-                    }
-                    current += step;
-                }
-            }
-            return self;
-        }
-
-        /// <summary>
-        /// Invokes block with the sequence of numbers starting at self, incremented by step on each call.
-        /// The loop finishes when the value to be passed to the block is greater than limit (if step is positive) or less than limit (if step is negative).
-        /// </summary>
-        [RubyMethod("step")]
-        public static object Step(BlockParam block, double self, double limit, double step) {
-            if (step == 0) {
-                throw RubyExceptions.CreateArgumentError("step can't be 0");
-            }
-            double n = (limit - self) / step;
-            int count = ((int)System.Math.Floor(n + n * Double.Epsilon)) + 1;
-            double current = self;
-            while (count > 0) {
-                object result;
-                if (YieldStep(block, current, out result)) {
-                    return result;
-                }
-                current += step;
-                count--;
-            }
-            return self;
-        }
-
-        /// <summary>
-        /// Invokes block with the sequence of numbers starting at self, incremented by step on each call.
-        /// The loop finishes when the value to be passed to the block is greater than limit (if step is positive) or less than limit (if step is negative).
-        /// </summary>
-        [RubyMethod("step")]
-        public static object Step(
-            BinaryOpStorage/*!*/ equals, 
-            BinaryOpStorage/*!*/ greaterThanStorage,
-            BinaryOpStorage/*!*/ lessThanStorage,
-            BinaryOpStorage/*!*/ addStorage, 
-            ConversionStorage<double>/*!*/ tofStorage,
-            BlockParam block, object self, object limit, [Optional]object step) {
-
-            if (step == Missing.Value) {
-                step = ClrInteger.One;
-            }
-
-            if (self is double || limit is double || step is double) {
-                var site = tofStorage.GetSite(ConvertToFAction.Make(tofStorage.Context));
-                // At least one of the arguments is double so convert all to double and run the Float version of Step
-                double floatSelf = self is double ? (double)self : site.Target(site, self);
-                double floatLimit = limit is double ? (double)self : site.Target(site, limit);
-                double floatStep = step is double ? (double)self : site.Target(site, step);
-                return Step(block, floatSelf, floatLimit, floatStep);
-            } else {
-                #region The generic step algorithm:
-                // current = self
-                // if step is postive then
-                //   while current < limit do
-                //     yield(current)
-                //     current = current + step
-                //   end
-                // else
-                //   while current > limit do
-                //     yield(current)
-                //     current = current + step
-                //   end
-                // return self
-                #endregion
-
-                bool isStepZero = Protocols.IsEqual(equals, step, 0);
-                if (isStepZero) {
-                    throw RubyExceptions.CreateArgumentError("step can't be 0");
-                }
-
-                var greaterThan = greaterThanStorage.GetCallSite(">");
-                bool isStepPositive = RubyOps.IsTrue(greaterThan.Target(greaterThan, step, 0));
-                var compare = isStepPositive ? greaterThan : lessThanStorage.GetCallSite("<");
-
-                object current = self;
-                while (!RubyOps.IsTrue(compare.Target(compare, current, limit))) {
-                    object result;
-                    if (YieldStep(block, current, out result)) {
-                        return result;
-                    }
-
-                    var add = addStorage.GetCallSite("+");
-                    current = add.Target(add, current, step);
-                }
-                return self;
-            }
-        }
-
-        private static bool YieldStep(BlockParam block, object current, out object result) {
-            if (block == null) {
-                throw RubyExceptions.NoBlockGiven();
-            }
-
-            return block.Yield(current, out result);
+            return Integer.StepSlow(slow, block, self, args);
         }
 
         #endregion

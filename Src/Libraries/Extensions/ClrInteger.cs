@@ -443,8 +443,9 @@ namespace IronRuby.Builtins {
                 // onto the numerator (rational.rb's __ir_pow_slow__ makes the same one, slower)
                 RubyClass cls = KernelOps.GetRationalClass(slow.Context);
                 if (cls != null) {
-                    // PowerNonNegative refuses a result too large to make, as MRI does
-                    object power = PowerNonNegative(new BigInteger(Math.Abs((long)self)), new BigInteger(-(long)other));
+                    // in a long while it fits; PowerNonNegative refuses a result too large to make, as MRI does
+                    object power = TryPowerInt64(Math.Abs((long)self), -other, out long small) ? Narrow(small)
+                        : PowerNonNegative(new BigInteger(Math.Abs((long)self)), new BigInteger(-(long)other));
                     bool negative = self < 0 && (other & 1) != 0;
                     return new RubyRational(cls, ScriptingRuntimeHelpers.Int32ToObject(negative ? -1 : 1), power);
                 }

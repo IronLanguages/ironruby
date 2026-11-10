@@ -742,7 +742,36 @@ namespace IronRuby.Builtins {
             if (block != null && self.Begin is int begin && self.End is int end) {
                 return StepFixnumRange(block, self, begin, end, 1);
             }
+            object result;
+            if (block != null && TryStepFloatRange(block, self, ScriptingRuntimeHelpers.Int32ToObject(1), out result)) {
+                return result;
+            }
             return StepSlow(slow, block, self, new RubyArray());
+        }
+
+        // A range whose ends are Fixnums or Floats with a Fixnum or Float step that is not 0, one of the three a
+        // Float: the prelude's ArithmeticSequence.__step_each__ (MRI's ruby_float_step), without the ~4 us of
+        // getting there.
+        private static bool TryStepFloatRange(BlockParam/*!*/ block, Range/*!*/ self, object step, out object result) {
+            result = null;
+            double beg, end, unit;
+            if (!(self.Begin is double || self.End is double || step is double) ||
+                !TryGetFixnumOrFloat(self.Begin, out beg) || !TryGetFixnumOrFloat(self.End, out end) ||
+                !TryGetFixnumOrFloat(step, out unit) || unit == 0) {
+                return false;
+            }
+            double n = KernelOps.FloatStepSize(beg, end, unit, self.ExcludeEnd);
+            object blockResult;
+            result = KernelOps.FloatStepLoop(block, beg, end, unit, n, out blockResult) ? blockResult : self;
+            return true;
+        }
+
+        private static bool TryGetFixnumOrFloat(object value, out double result) {
+            switch (value) {
+                case double d: result = d; return true;
+                case int i: result = i; return true;
+                default: result = 0; return false;
+            }
         }
 
         [RubyMethod("step")]
@@ -750,6 +779,10 @@ namespace IronRuby.Builtins {
             [NotNull]Range/*!*/ self, object step) {
             if (block != null && self.Begin is int begin && self.End is int end && step is int unit && unit > 0) {
                 return StepFixnumRange(block, self, begin, end, unit);
+            }
+            object result;
+            if (block != null && TryStepFloatRange(block, self, step, out result)) {
+                return result;
             }
             return StepSlow(slow, block, self, RubyArray.Create(step));
         }

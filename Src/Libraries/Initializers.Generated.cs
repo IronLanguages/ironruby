@@ -877,6 +877,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadComplex_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_scan__", 0x61, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyComplex.Scan)
+            );
+            
             DefineLibraryMethod(module, "__raw__", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.Builtins.RubyComplex>(IronRuby.Builtins.RubyComplex.Raw)
@@ -6842,11 +6847,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "step", 0x51, 
-                0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 
-                new Func<IronRuby.Runtime.BlockParam, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Numeric.Step), 
-                new Func<IronRuby.Runtime.BlockParam, System.Int32, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Numeric.Step), 
-                new Func<IronRuby.Runtime.BlockParam, System.Double, System.Double, System.Double, System.Object>(IronRuby.Builtins.Numeric.Step), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.ConversionStorage<System.Double>, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.Numeric.Step)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object, System.Object, System.Object>>, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Object>(IronRuby.Builtins.Numeric.Step)
             );
             
             DefineLibraryMethod(module, "to_int", 0x51, 
@@ -8676,7 +8678,7 @@ namespace IronRuby.Builtins {
                 0x00000000U, 0x00100000U, 0x00080008U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.Split), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.Split), 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.Split)
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.Split)
             );
             
             DefineLibraryMethod(module, "squeeze", 0x51, 
@@ -8747,6 +8749,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "swapcase!", 0x51, 
                 0x80000000U, 
                 new Func<IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.SwapCaseInPlace)
+            );
+            
+            DefineLibraryMethod(module, "to_c", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.ToComplex)
             );
             
             DefineLibraryMethod(module, "to_clr_string", 0x51, 

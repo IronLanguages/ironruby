@@ -957,9 +957,12 @@ namespace IronRuby.Runtime {
         private readonly Layout/*!*/ _layout;
         private readonly Encoding/*!*/ _table;
 
-        // Lead bytes that the table reads as a character on their own: .NET's EUC-KR (code page
-        // 51949) has 0xAD-0xAF and 0xFE as single bytes, so it splits "\xFE\xFE", one character
-        // to Ruby, in two.
+        // Lead bytes the table reads as a character of their own rather than as the start of two
+        // bytes: .NET's EUC-KR (code page 51949) maps 0xAD-0xAF and 0xFE alone to private use
+        // characters, so "\xAD\xAD", one unassigned character to Ruby, would decode as two that do
+        // not encode back (#chars raised, transcoding dropped the bytes). A run holding such a lead
+        // byte is decoded sequence by sequence, and a sequence led by one has no character in the
+        // table (see FitsTable and DecodeSequence).
         private readonly bool[]/*!*/ _tableSingle = new bool[256];
 
         internal DoubleByteEncoding(int codepage, string/*!*/ name, Layout/*!*/ layout, int tableCodePage, bool throwOnError)
@@ -1034,7 +1037,7 @@ namespace IronRuby.Runtime {
             } catch (EncoderFallbackException) {
                 return null;
             }
-            return FindInvalid(result, 0, result.Length) < 0 ? result : null;
+            return FitsTable(result, 0, result.Length) ? result : null;
         }
 
         public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
