@@ -336,14 +336,15 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// Whether a slice of the first <paramref name="count"/> of <paramref name="itemCount"/> items
-        /// of a string's array shares the array (copy-on-write, see MutableString.Content.Clone) rather
-        /// than copying them - s[0, n], a #chomp or #rstrip, a whole-buffer read. Only a long slice
-        /// that keeps at least half of the array does: a short one is cheap to copy, and a small slice
-        /// should not keep a large array alive.
+        /// Whether a slice of the first <paramref name="count"/> items of a string's array, of length
+        /// <paramref name="arrayLength"/>, shares the array (copy-on-write, see MutableString.Content.Clone)
+        /// rather than copying them - s[0, n], a #chomp or #rstrip. Only a long slice that keeps at
+        /// least half of the array does: a short one is cheap to copy, and a small slice must not keep
+        /// a large array alive - also not by slicing a slice, which is why this is the array's length
+        /// and not the string's.
         /// </summary>
-        internal static bool IsSharedPrefix(int itemCount, int count) {
-            return count >= SharedSliceMinLength && count >= itemCount - (itemCount >> 1);
+        internal static bool IsSharedPrefix(int arrayLength, int count) {
+            return count >= SharedSliceMinLength && count >= arrayLength - (arrayLength >> 1);
         }
 
         internal const int SharedSliceMinLength = 256;

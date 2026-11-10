@@ -322,7 +322,7 @@ namespace IronRuby.Builtins {
             }
 
             public override Content/*!*/ GetSlice(int start, int count) {
-                if (start == 0 && Utils.IsSharedPrefix(_count, count = Math.Min(count, _count))) {
+                if (start == 0 && Utils.IsSharedPrefix(_data.Length, count = Math.Min(count, _count))) {
                     // see Utils.IsSharedPrefix
                     _shared = true;
                     return new CharArrayContent(_data, count, _owner, null);

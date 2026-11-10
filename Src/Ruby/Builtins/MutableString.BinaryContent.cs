@@ -162,13 +162,15 @@ namespace IronRuby.Builtins {
                     System.Text.Ascii.IsValid(bytes);
                 int charCount = ascii ? _count : encoding.EscapingEncoding.GetCharCount(_data, 0, _count);
 
+                // EscapingEncoding implements only the array overloads: the span ones would go
+                // through temporary arrays of their own.
                 char[] rented = null;
-                Span<char> chars = (charCount <= 256) ? stackalloc char[256] : (rented = ArrayPool<char>.Shared.Rent(charCount));
+                Span<char> chars = (ascii && charCount <= 256) ? stackalloc char[256] : (rented = ArrayPool<char>.Shared.Rent(charCount));
                 try {
                     if (ascii) {
                         System.Text.Ascii.ToUtf16(bytes, chars, out _);
                     } else {
-                        encoding.EscapingEncoding.GetChars(bytes, chars);
+                        encoding.EscapingEncoding.GetChars(_data, 0, _count, rented, 0);
                     }
                     return String.GetHashCode(chars.Slice(0, charCount));
                 } finally {
@@ -434,7 +436,7 @@ namespace IronRuby.Builtins {
             }
 
             public override Content/*!*/ GetSlice(int start, int count) {
-                if (start == 0 && Utils.IsSharedPrefix(_count, count = Math.Min(count, _count))) {
+                if (start == 0 && Utils.IsSharedPrefix(_data.Length, count = Math.Min(count, _count))) {
                     // see Utils.IsSharedPrefix
                     _shared = true;
                     return new BinaryContent(_data, count, _owner, true);
