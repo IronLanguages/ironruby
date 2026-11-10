@@ -1126,7 +1126,7 @@ namespace IronRuby.Builtins {
             }
 
             // Newton's method from above: x stays at or above the root until it settles on it.
-            BigInteger x = BigInteger.One << (int)((number.GetBitLength() + 1) / 2);
+            BigInteger x = SqrtSeed(number);
             while (true) {
                 BigInteger next = (x + number / x) >> 1;
                 if (next >= x) {
@@ -1134,6 +1134,30 @@ namespace IronRuby.Builtins {
                 }
                 x = next;
             }
+        }
+
+        /// <summary>
+        /// Where Integer.sqrt's Newton iteration starts for n &gt;= 2**62: the double's root of the leading ~1000 bits,
+        /// raised by more than that root's rounding error so that it is above the true root, and shifted back. It is
+        /// already right to ~50 bits, so 2**70 settles in one division instead of seven. The shifts are counted in a
+        /// long and made in Int32-sized steps: a .NET 8 BigInteger can have more than 2**32 bits.
+        /// </summary>
+        public static BigInteger SqrtSeed(BigInteger n) {
+            long bits = n.GetBitLength();
+            long halfShift = (bits > 1000) ? (bits - 1000) / 2 : 0;
+            double leading = Math.Sqrt((double)ShiftRight(ShiftRight(n, halfShift), halfShift));
+            BigInteger seed = new BigInteger(leading * (1.0 + 1e-15)) + BigInteger.One;
+            for (long shift = halfShift; shift > 0; shift -= Int32.MaxValue) {
+                seed <<= (int)Math.Min(shift, Int32.MaxValue);
+            }
+            return seed;
+        }
+
+        private static BigInteger ShiftRight(BigInteger value, long shift) {
+            for (; shift > 0; shift -= Int32.MaxValue) {
+                value >>= (int)Math.Min(shift, Int32.MaxValue);
+            }
+            return value;
         }
 
         // floor(sqrt(n)) for 0 <= n < 2**62: the double's root, corrected by one either way where
@@ -1171,6 +1195,41 @@ namespace IronRuby.Builtins {
             return site.Target(site, self, other);
         }
 
+        // Fixnums all: the square-and-multiply in a long, as |modulus| <= 2**31 keeps every product below 2**62. Through
+        // BigInteger.ModPow, 12345.pow(5, 1000) cost ~150 ns, most of it making and reducing BigIntegers.
+        [RubyMethod("pow")]
+        public static object Pow(int self, int exponent, int modulus) {
+            if (exponent < 0) {
+                throw RubyExceptions.CreateRangeError("Integer#pow() 1st argument cannot be negative when 2nd argument specified");
+            }
+            // MRI's shortcut: 0 ** x is 0 for any modulus, 0 included, unless x is 0
+            if (self == 0 && exponent != 0) {
+                return ClrInteger.Zero;
+            }
+            long m = Math.Abs((long)modulus);
+            if (m == 0) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            if (m == 1) {
+                return ClrInteger.Zero;
+            }
+            long a = self % m, z = 1;
+            if (a < 0) {
+                a += m;
+            }
+            for (int e = exponent; e != 0; e >>= 1) {
+                if ((e & 1) != 0) {
+                    z = z * a % m;
+                }
+                a = a * a % m;
+            }
+            // the result takes the sign of the modulus, as in the BigInteger case below
+            if (modulus < 0 && z > 0) {
+                z -= m;
+            }
+            return Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers.Int32ToObject((int)z);
+        }
+
         /// <summary>
         /// Integer#pow(b, m): modular exponentiation, by BigInteger.ModPow, with MRI's checks in
         /// MRI's order (rb_int_powm) and its sign rule - the result takes the sign of m.
@@ -1187,6 +1246,12 @@ namespace IronRuby.Builtins {
             if (!TryGetInteger(modulus, out m)) {
                 throw RubyExceptions.CreateTypeError("Integer#pow() 2nd argument not allowed unless all arguments are integers");
             }
+            BigInteger a;
+            TryGetInteger(self, out a);
+            // MRI's shortcut: 0 ** x is 0 for any modulus, 0 included, unless x is 0
+            if (a.IsZero && !b.IsZero) {
+                return ClrInteger.Zero;
+            }
             bool negative = m.Sign < 0;
             if (negative) {
                 m = -m;
@@ -1198,8 +1263,6 @@ namespace IronRuby.Builtins {
                 return ClrInteger.Zero;
             }
 
-            BigInteger a;
-            TryGetInteger(self, out a);
             a %= m;
             if (a.Sign < 0) {
                 a += m;

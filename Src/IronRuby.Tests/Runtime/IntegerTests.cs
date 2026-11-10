@@ -815,5 +815,485 @@ p (2**70).divmod(2.5), (-2**70).divmod(2.5), (2**70).div(2.5), (2**70) % -2.5
             Assert((int)Integer.Gcd(Int32.MinValue, -1) == 1);
             Assert((long)Integer.Lcm(Int32.MinValue, -1) == -(long)Int32.MinValue);
         }
+
+        /// <summary>
+        /// Integer#[] is C# for an Integer index and for a Fixnum index and length; every other form goes to the
+        /// prelude's ports of MRI's int_aref1 and int_aref2. Covers 5[32] (C#'s shift count is mod 32, so it read bit 0),
+        /// a nil length (a TypeError), a zero length (no bits), and an empty, equal or reversed Range.
+        /// Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Integer_ElementReference1() {
+            TestOutput(@"
+require 'ruby4'
+class ToInt; def initialize(v) = @v = v; def to_int = @v; def inspect = ""ToInt(#{@v})""; end
+def show(label)
+  r = yield
+  puts ""#{label} => #{r.inspect}""
+rescue Exception => e
+  puts ""#{label} !! #{e.class}: #{e.message}""
+end
+[5, -5, 0x7fffffff, -0x80000000, 2**40 + 5, -(2**70) + 12345].each do |v|
+  [0, 2, 31, 32, 33, 63, 64, 100, -1, 2**40, -(2**40), 1.9, -0.5, 31.5, Float::NAN, nil, ToInt.new(3), ToInt.new(2**70)].each do |i|
+    show(""#{v}[#{i.inspect}]"") { v[i] }
+  end
+  [[2, 3], [0, 0], [3, -1], [-3, 4], [-40, 50], [60, 10], [1, 63], [1, 70], [1.5, 2], [2, nil], [nil, 2], [""1"", 2], [2, ToInt.new(3)], [1..2, 3]].each do |i, l|
+    show(""#{v}[#{i.inspect}, #{l.inspect}]"") { v[i, l] }
+  end
+  [1..3, 2...2, 3..3, 5..2, -3..2, 40..30, 2.., ..3, ...0, nil..nil, 1.5..3.5].each do |r|
+    show(""#{v}[#{r.inspect}]"") { v[r] }
+  end
+end
+show(""5[]"") { 5[] }
+show(""5[1, 2, 3]"") { 5[1, 2, 3] }
+show(""arity"") { [5.method(:[]).arity, 5.method(:[]).parameters] }
+show(""send"") { [5.send(:[], 2), 5.public_send(:[], 0, 3), [0, 1, 2].map(&5.method(:[]))] }
+", @"
+5[0] => 1
+5[2] => 1
+5[31] => 0
+5[32] => 0
+5[33] => 0
+5[63] => 0
+5[64] => 0
+5[100] => 0
+5[-1] => 0
+5[1099511627776] => 0
+5[-1099511627776] => 0
+5[1.9] => 0
+5[-0.5] => 1
+5[31.5] => 0
+5[NaN] !! FloatDomainError: NaN
+5[nil] !! TypeError: no implicit conversion of nil into Integer
+5[ToInt(3)] => 0
+5[ToInt(1180591620717411303424)] => 0
+5[2, 3] => 1
+5[0, 0] => 0
+5[3, -1] => 0
+5[-3, 4] => 8
+5[-40, 50] => 5497558138880
+5[60, 10] => 0
+5[1, 63] => 2
+5[1, 70] => 2
+5[1.5, 2] => 2
+5[2, nil] !! TypeError: no implicit conversion of nil into Integer
+5[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+5[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+5[2, ToInt(3)] => 1
+5[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+5[1..3] => 2
+5[2...2] => 0
+5[3..3] => 0
+5[5..2] => 0
+5[-3..2] => 40
+5[40..30] => 0
+5[2..] => 1
+5[..3] !! ArgumentError: The beginless range for Integer#[] results in infinity
+5[...0] => 0
+5[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+5[1.5..3.5] => 2
+-5[0] => 1
+-5[2] => 0
+-5[31] => 1
+-5[32] => 1
+-5[33] => 1
+-5[63] => 1
+-5[64] => 1
+-5[100] => 1
+-5[-1] => 0
+-5[1099511627776] => 1
+-5[-1099511627776] => 0
+-5[1.9] => 1
+-5[-0.5] => 1
+-5[31.5] => 1
+-5[NaN] !! FloatDomainError: NaN
+-5[nil] !! TypeError: no implicit conversion of nil into Integer
+-5[ToInt(3)] => 1
+-5[ToInt(1180591620717411303424)] => 1
+-5[2, 3] => 6
+-5[0, 0] => 0
+-5[3, -1] => -1
+-5[-3, 4] => 8
+-5[-40, 50] => 1120402348703744
+-5[60, 10] => 1023
+-5[1, 63] => 9223372036854775805
+-5[1, 70] => 1180591620717411303421
+-5[1.5, 2] => 1
+-5[2, nil] !! TypeError: no implicit conversion of nil into Integer
+-5[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+-5[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+-5[2, ToInt(3)] => 6
+-5[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+-5[1..3] => 5
+-5[2...2] => 0
+-5[3..3] => 1
+-5[5..2] => -1
+-5[-3..2] => 24
+-5[40..30] => -1
+-5[2..] => -2
+-5[..3] !! ArgumentError: The beginless range for Integer#[] results in infinity
+-5[...0] => 0
+-5[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+-5[1.5..3.5] => 5
+2147483647[0] => 1
+2147483647[2] => 1
+2147483647[31] => 0
+2147483647[32] => 0
+2147483647[33] => 0
+2147483647[63] => 0
+2147483647[64] => 0
+2147483647[100] => 0
+2147483647[-1] => 0
+2147483647[1099511627776] => 0
+2147483647[-1099511627776] => 0
+2147483647[1.9] => 1
+2147483647[-0.5] => 1
+2147483647[31.5] => 0
+2147483647[NaN] !! FloatDomainError: NaN
+2147483647[nil] !! TypeError: no implicit conversion of nil into Integer
+2147483647[ToInt(3)] => 1
+2147483647[ToInt(1180591620717411303424)] => 0
+2147483647[2, 3] => 7
+2147483647[0, 0] => 0
+2147483647[3, -1] => 268435455
+2147483647[-3, 4] => 8
+2147483647[-40, 50] => 1124800395214848
+2147483647[60, 10] => 0
+2147483647[1, 63] => 1073741823
+2147483647[1, 70] => 1073741823
+2147483647[1.5, 2] => 3
+2147483647[2, nil] !! TypeError: no implicit conversion of nil into Integer
+2147483647[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+2147483647[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+2147483647[2, ToInt(3)] => 7
+2147483647[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+2147483647[1..3] => 7
+2147483647[2...2] => 0
+2147483647[3..3] => 1
+2147483647[5..2] => 67108863
+2147483647[-3..2] => 56
+2147483647[40..30] => 0
+2147483647[2..] => 536870911
+2147483647[..3] !! ArgumentError: The beginless range for Integer#[] results in infinity
+2147483647[...0] => 0
+2147483647[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+2147483647[1.5..3.5] => 7
+-2147483648[0] => 0
+-2147483648[2] => 0
+-2147483648[31] => 1
+-2147483648[32] => 1
+-2147483648[33] => 1
+-2147483648[63] => 1
+-2147483648[64] => 1
+-2147483648[100] => 1
+-2147483648[-1] => 0
+-2147483648[1099511627776] => 1
+-2147483648[-1099511627776] => 0
+-2147483648[1.9] => 0
+-2147483648[-0.5] => 0
+-2147483648[31.5] => 1
+-2147483648[NaN] !! FloatDomainError: NaN
+-2147483648[nil] !! TypeError: no implicit conversion of nil into Integer
+-2147483648[ToInt(3)] => 0
+-2147483648[ToInt(1180591620717411303424)] => 1
+-2147483648[2, 3] => 0
+-2147483648[0, 0] => 0
+-2147483648[3, -1] => -268435456
+-2147483648[-3, 4] => 0
+-2147483648[-40, 50] => 0
+-2147483648[60, 10] => 1023
+-2147483648[1, 63] => 9223372035781033984
+-2147483648[1, 70] => 1180591620716337561600
+-2147483648[1.5, 2] => 0
+-2147483648[2, nil] !! TypeError: no implicit conversion of nil into Integer
+-2147483648[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+-2147483648[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+-2147483648[2, ToInt(3)] => 0
+-2147483648[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+-2147483648[1..3] => 0
+-2147483648[2...2] => 0
+-2147483648[3..3] => 0
+-2147483648[5..2] => -67108864
+-2147483648[-3..2] => 0
+-2147483648[40..30] => -1
+-2147483648[2..] => -536870912
+-2147483648[..3] => 0
+-2147483648[...0] => 0
+-2147483648[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+-2147483648[1.5..3.5] => 0
+1099511627781[0] => 1
+1099511627781[2] => 1
+1099511627781[31] => 0
+1099511627781[32] => 0
+1099511627781[33] => 0
+1099511627781[63] => 0
+1099511627781[64] => 0
+1099511627781[100] => 0
+1099511627781[-1] => 0
+1099511627781[1099511627776] => 0
+1099511627781[-1099511627776] => 0
+1099511627781[1.9] => 0
+1099511627781[-0.5] => 1
+1099511627781[31.5] => 0
+1099511627781[NaN] !! FloatDomainError: NaN
+1099511627781[nil] !! TypeError: no implicit conversion of nil into Integer
+1099511627781[ToInt(3)] => 0
+1099511627781[ToInt(1180591620717411303424)] => 0
+1099511627781[2, 3] => 1
+1099511627781[0, 0] => 0
+1099511627781[3, -1] => 137438953472
+1099511627781[-3, 4] => 8
+1099511627781[-40, 50] => 5497558138880
+1099511627781[60, 10] => 0
+1099511627781[1, 63] => 549755813890
+1099511627781[1, 70] => 549755813890
+1099511627781[1.5, 2] => 2
+1099511627781[2, nil] !! TypeError: no implicit conversion of nil into Integer
+1099511627781[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+1099511627781[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+1099511627781[2, ToInt(3)] => 1
+1099511627781[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+1099511627781[1..3] => 2
+1099511627781[2...2] => 0
+1099511627781[3..3] => 0
+1099511627781[5..2] => 34359738368
+1099511627781[-3..2] => 40
+1099511627781[40..30] => 1
+1099511627781[2..] => 274877906945
+1099511627781[..3] !! ArgumentError: The beginless range for Integer#[] results in infinity
+1099511627781[...0] => 0
+1099511627781[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+1099511627781[1.5..3.5] => 2
+-1180591620717411291079[0] => 1
+-1180591620717411291079[2] => 0
+-1180591620717411291079[31] => 0
+-1180591620717411291079[32] => 0
+-1180591620717411291079[33] => 0
+-1180591620717411291079[63] => 0
+-1180591620717411291079[64] => 0
+-1180591620717411291079[100] => 1
+-1180591620717411291079[-1] => 0
+-1180591620717411291079[1099511627776] => 1
+-1180591620717411291079[-1099511627776] => 0
+-1180591620717411291079[1.9] => 0
+-1180591620717411291079[-0.5] => 1
+-1180591620717411291079[31.5] => 0
+-1180591620717411291079[NaN] !! RangeError: float NaN out of range of integer
+-1180591620717411291079[nil] !! TypeError: no implicit conversion from nil to integer
+-1180591620717411291079[ToInt(3)] => 1
+-1180591620717411291079[ToInt(1180591620717411303424)] !! RangeError: bignum too big to convert into 'long'
+-1180591620717411291079[2, 3] => 6
+-1180591620717411291079[0, 0] => 0
+-1180591620717411291079[3, -1] => -147573952589676411385
+-1180591620717411291079[-3, 4] => 8
+-1180591620717411291079[-40, 50] => 62672162783232
+-1180591620717411291079[60, 10] => 0
+-1180591620717411291079[1, 63] => 6172
+-1180591620717411291079[1, 70] => 590295810358705657884
+-1180591620717411291079[1.5, 2] => 0
+-1180591620717411291079[2, nil] !! TypeError: no implicit conversion of nil into Integer
+-1180591620717411291079[nil, 2] !! TypeError: no implicit conversion of nil into Integer
+-1180591620717411291079[""1"", 2] !! TypeError: no implicit conversion of String into Integer
+-1180591620717411291079[2, ToInt(3)] => 6
+-1180591620717411291079[1..2, 3] !! TypeError: no implicit conversion of Range into Integer
+-1180591620717411291079[1..3] => 4
+-1180591620717411291079[2...2] => 0
+-1180591620717411291079[3..3] => 1
+-1180591620717411291079[5..2] => -36893488147419102847
+-1180591620717411291079[-3..2] => 8
+-1180591620717411291079[40..30] => -1073741824
+-1180591620717411291079[2..] => -295147905179352822770
+-1180591620717411291079[..3] !! ArgumentError: The beginless range for Integer#[] results in infinity
+-1180591620717411291079[...0] => 0
+-1180591620717411291079[nil..nil] !! ArgumentError: comparison of NilClass with 0 failed
+-1180591620717411291079[1.5..3.5] => 4
+5[] !! ArgumentError: wrong number of arguments (given 0, expected 1..2)
+5[1, 2, 3] !! ArgumentError: wrong number of arguments (given 3, expected 1..2)
+arity => [-1, [[:rest]]]
+send => [1, 5, [1, 0, 1]]
+");
+        }
+
+        /// <summary>
+        /// Integer.sqrt of a large Integer starts Newton's method from the double's root of its leading bits, raised above
+        /// the true root. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Integer_SqrtLarge1() {
+            TestOutput(@"
+require 'ruby4'
+[2**62, 2**62 + 1, 2**64 - 1, 2**70, 2**70 - 1, 10**40 + 7, (10**20)**2 - 1, (10**20)**2, (2**500 + 3)**2 - 1, (2**500 + 3)**2,
+ 2**999, 2**1000 + 1, 2**2000, (2**1023 - 1)**2, (2**1023)**2 - 1, (2**1100 + 12345)**2 - 1, (2**1100 + 12345)**2].each do |n|
+  r = Integer.sqrt(n)
+  puts ""#{n.bit_length}: #{r.bit_length} #{r % 1_000_000_007} #{r * r <= n && (r + 1) * (r + 1) > n}""
+end
+srand(7)
+ok = (1..300).all? do |i|
+  k = rand(2**(i * 7)) + 1
+  Integer.sqrt(k * k) == k && Integer.sqrt(k * k - 1) == k - 1 && Integer.sqrt(k * k + 2 * k) == k
+end
+p ok
+p((Integer.sqrt(-(2**70)) rescue $!.class))
+", @"
+63: 32 147483634 true
+63: 32 147483634 true
+64: 32 294967267 true
+71: 36 359738130 true
+70: 35 359738129 true
+133: 67 4900 true
+133: 67 4899 true
+133: 67 4900 true
+1001: 501 390483009 true
+1001: 501 390483010 true
+1000: 500 563322577 true
+1001: 501 390483007 true
+2001: 1001 688423210 true
+2046: 1023 406367295 true
+2046: 1023 406367295 true
+2201: 1101 466440651 true
+2201: 1101 466440652 true
+true
+Math::DomainError
+");
+        }
+
+        /// <summary>
+        /// Integer#pow(b, m) of three Fixnums squares and multiplies in a long; 0.pow(x, m) is 0 for any modulus (0
+        /// included) unless x is 0, as MRI's rb_int_powm shortcuts it. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Integer_PowModulo1() {
+            TestOutput(@"
+def show(label)
+  r = yield
+  puts ""#{label} => #{r.inspect}""
+rescue Exception => e
+  puts ""#{label} !! #{e.class}: #{e.message}""
+end
+[[12345, 5, 1000], [12345, 5, -1000], [-12345, 5, 1000], [-12345, 3, -7], [2, 10**9, 1_000_000_007], [3, 2**31 - 1, 2**31 - 1],
+ [-(2**31), 2**31 - 1, -(2**31)], [2**31 - 1, 2**31 - 1, 2**31 - 1], [7, 0, 1], [7, 0, -1], [7, 0, 13], [0, 0, 13], [0, 0, 0],
+ [0, 5, 0], [0, 5, -3], [0, 2**70, 0], [5, 3, 0], [5, -1, 7], [5, 1.5, 7], [5, 2, 7.0], [5, 2, nil], [2**70, 5, 1000], [5, 2**70, 1009], [5, 3, 2**70]].each do |a, b, m|
+  show(""#{a}.pow(#{b.inspect}, #{m.inspect})"") { a.pow(b, m) }
+end
+", @"
+12345.pow(5, 1000) => 625
+12345.pow(5, -1000) => -375
+-12345.pow(5, 1000) => 375
+-12345.pow(3, -7) => -1
+2.pow(1000000000, 1000000007) => 140625001
+3.pow(2147483647, 2147483647) => 3
+-2147483648.pow(2147483647, -2147483648) => 0
+2147483647.pow(2147483647, 2147483647) => 0
+7.pow(0, 1) => 0
+7.pow(0, -1) => 0
+7.pow(0, 13) => 1
+0.pow(0, 13) => 1
+0.pow(0, 0) !! ZeroDivisionError: divided by 0
+0.pow(5, 0) => 0
+0.pow(5, -3) => 0
+0.pow(1180591620717411303424, 0) => 0
+5.pow(3, 0) !! ZeroDivisionError: divided by 0
+5.pow(-1, 7) !! RangeError: Integer#pow() 1st argument cannot be negative when 2nd argument specified
+5.pow(1.5, 7) !! TypeError: Integer#pow() 2nd argument not allowed unless a 1st argument is integer
+5.pow(2, 7.0) !! TypeError: Integer#pow() 2nd argument not allowed unless all arguments are integers
+5.pow(2, nil) !! TypeError: Integer#pow() 2nd argument not allowed unless all arguments are integers
+1180591620717411303424.pow(5, 1000) => 624
+5.pow(1180591620717411303424, 1009) => 993
+5.pow(3, 1180591620717411303424) => 125
+");
+        }
+
+        /// <summary>
+        /// Kernel#Integer parses the digits in a long while they fit, and past that in long chunks folded into a BigInteger;
+        /// the general overload (eight parameters) is called without the runtime's tail call helpers. Expected output is
+        /// CRuby 4.0's.
+        /// </summary>
+        public void Kernel_IntegerParse1() {
+            TestOutput(@"
+%w[0 123 -123 +7 0x1A 0b11 0o17 017 1_000 1__0 12x 360287970189639679 360287970189639680 9223372036854775807 9223372036854775808
+   -9223372036854775808 -9223372036854775809 123456789012345678901234567890 -123456789012345678901234567890123456789012345678901234567890
+   0xffffffffffffffffffffffffffffff zzzzzzzzzzzzzzzzzzzz].each do |s|
+  a = (Integer(s) rescue $!.class)
+  puts ""#{s} => #{a.inspect} #{Integer(s, exception: false).inspect} #{(Integer(s, 36) rescue $!.class).inspect} #{(Integer(s, 16) rescue $!.class).inspect}""
+end
+p Integer(12.5, exception: false), Integer(nil, exception: false), Integer(""1"", 2, exception: false)
+", @"
+0 => 0 0 0 0
+123 => 123 123 1371 291
+-123 => -123 -123 -1371 -291
++7 => 7 7 7 7
+0x1A => 26 26 42814 26
+0b11 => 3 3 14293 2833
+0o17 => 15 15 31147 ArgumentError
+017 => 15 15 43 23
+1_000 => 1000 1000 46656 4096
+1__0 => ArgumentError nil ArgumentError ArgumentError
+12x => ArgumentError nil 1401 ArgumentError
+360287970189639679 => 360287970189639679 360287970189639679 907301047451005346972029605 996306460323103348345
+360287970189639680 => 360287970189639680 360287970189639680 907301047451005346972029632 996306460323103348352
+9223372036854775807 => 9223372036854775807 9223372036854775807 93419446956697119914106100423 43132194673522839607303
+9223372036854775808 => 9223372036854775808 9223372036854775808 93419446956697119914106100424 43132194673522839607304
+-9223372036854775808 => -9223372036854775808 -9223372036854775808 -93419446956697119914106100424 -43132194673522839607304
+-9223372036854775809 => -9223372036854775809 -9223372036854775809 -93419446956697119914106100425 -43132194673522839607305
+123456789012345678901234567890 => 123456789012345678901234567890 123456789012345678901234567890 1436287679432363134028105837355561937436483460 94522879687365475552814062743484560
+-123456789012345678901234567890123456789012345678901234567890 => -123456789012345678901234567890123456789012345678901234567890 -123456789012345678901234567890123456789012345678901234567890 -70196661532208757042783977637701616117055871610586212648024968891418249178413935920798572420 -125642457922655546520478558874028399442089214994038133908467238479231120
+0xffffffffffffffffffffffffffffff => 1329227995784915872903807060280344575 1329227995784915872903807060280344575 1633777235354469464643074861723322472080662705883 1329227995784915872903807060280344575
+zzzzzzzzzzzzzzzzzzzz => ArgumentError nil 13367494538843734067838845976575 ArgumentError
+12
+nil
+1
+");
+        }
+
+        /// <summary>
+        /// A Bignum's bit read converts a Float index as NUM2LONG does: 2.0**63 is past a long's range (a RangeError), -2.0**63
+        /// is not. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Integer_ElementReferenceFloatBound1() {
+            TestOutput(@"
+require 'ruby4'
+[9223372036854775808.0, -9223372036854775808.0, 9223372036854774784.0, -9223372036854777856.0, 1e19, -1e19].each do |f|
+  [2**70 + 5, -(2**70) + 5].each do |v|
+    r = begin; v[f]; rescue => e; ""#{e.class}: #{e.message}""; end
+    puts ""#{v}[#{f}] => #{r}""
+  end
+end
+", @"
+1180591620717411303429[9.223372036854776e+18] => RangeError: float 9.223372037e+18 out of range of integer
+-1180591620717411303419[9.223372036854776e+18] => RangeError: float 9.223372037e+18 out of range of integer
+1180591620717411303429[-9.223372036854776e+18] => 0
+-1180591620717411303419[-9.223372036854776e+18] => 0
+1180591620717411303429[9.223372036854775e+18] => 0
+-1180591620717411303419[9.223372036854775e+18] => 1
+1180591620717411303429[-9.223372036854778e+18] => RangeError: float -9.223372037e+18 out of range of integer
+-1180591620717411303419[-9.223372036854778e+18] => RangeError: float -9.223372037e+18 out of range of integer
+1180591620717411303429[1.0e+19] => RangeError: float 1e+19 out of range of integer
+-1180591620717411303419[1.0e+19] => RangeError: float 1e+19 out of range of integer
+1180591620717411303429[-1.0e+19] => RangeError: float -1e+19 out of range of integer
+-1180591620717411303419[-1.0e+19] => RangeError: float -1e+19 out of range of integer
+");
+        }
+
+        /// <summary>
+        /// Integer.sqrt's starting point for a value of more than 2**31 + 1000 bits, which only .NET 8's BigInteger can
+        /// hold: its shifts counted 2 * halfShift in an int, which wrapped negative, so the right shift became a left one
+        /// and the seed was huge or infinite. The seed must be at or above the root and within a bit of it.
+        /// </summary>
+        public void Integer_SqrtSeedHuge1() {
+            if (Environment.Version.Major >= 9) {
+                return;
+            }
+            long exponent = (1L << 31) + 1024;
+            BigInteger n = BigInteger.One << (int)(exponent / 2);
+            n <<= (int)(exponent / 2);
+            Assert(n.GetBitLength() == exponent + 1);
+            BigInteger root = BigInteger.One << (int)(exponent / 2);
+            BigInteger seed = IronRuby.Builtins.Integer.SqrtSeed(n);
+            Assert(seed >= root);
+            Assert(seed.GetBitLength() <= root.GetBitLength() + 1);
+
+            for (int bits = 63; bits < 5000; bits += 97) {
+                BigInteger m = (BigInteger.One << bits) + 12345;
+                BigInteger s = IronRuby.Builtins.Integer.SqrtSeed(m);
+                Assert(s * s >= m);
+            }
+        }
     }
 }

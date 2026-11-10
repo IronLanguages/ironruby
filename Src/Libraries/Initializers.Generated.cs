@@ -3116,9 +3116,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "pow", 0x51, 
-                0x00000000U, 0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Integer.Pow), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Pow), 
+                new Func<System.Int32, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.Integer.Pow), 
                 new Func<System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Pow)
             );
             
@@ -3933,10 +3934,16 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "[]", 0x51, 
-                0x00010000U, 0x00000002U, 0x00010000U, 0x00000002U, 
+                new[] { 0x00000000U, 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000008U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U}, 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Bit), 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Int32>(IronRuby.Builtins.ClrInteger.Bit), 
                 new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Bit), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, System.Int32, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Bits), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, System.Numerics.BigInteger, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Bits), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, System.Int32, IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.ClrInteger.Bits), 
+                new Func<System.Int32, System.Double, System.Int32>(IronRuby.Builtins.ClrInteger.Bit), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Bit), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Bits), 
                 new Func<System.Int32, System.Numerics.BigInteger, System.Int32>(IronRuby.Builtins.ClrInteger.Bit)
             );
             

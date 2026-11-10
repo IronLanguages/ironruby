@@ -2795,9 +2795,19 @@ namespace IronRuby.Builtins {
 
         // Per class, held weakly: a class (and the runtime it belongs to) is not kept alive by
         // having been asked about. The inner dictionary maps a method name to the method version
-        // at which it was last found to be the built-in one.
-        private static readonly ConditionalWeakTable<RubyClass, System.Collections.Concurrent.ConcurrentDictionary<string, int>>/*!*/ _builtinMethods =
-            new ConditionalWeakTable<RubyClass, System.Collections.Concurrent.ConcurrentDictionary<string, int>>();
+        // at which it was last found to be the built-in one, and the method it was found to be.
+        private static readonly ConditionalWeakTable<RubyClass, System.Collections.Concurrent.ConcurrentDictionary<string, BuiltinCheck>>/*!*/ _builtinMethods =
+            new ConditionalWeakTable<RubyClass, System.Collections.Concurrent.ConcurrentDictionary<string, BuiltinCheck>>();
+
+        private sealed class BuiltinCheck {
+            internal readonly int Version;
+            internal readonly RubyMemberInfo/*!*/ Method;
+
+            internal BuiltinCheck(int version, RubyMemberInfo/*!*/ method) {
+                Version = version;
+                Method = method;
+            }
+        }
 
         /// <summary>
         /// True while <paramref name="cls"/>'s <paramref name="name"/> is the library's own method,
@@ -2809,9 +2819,9 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static bool IsBuiltinMethod(RubyClass/*!*/ cls, string/*!*/ name) {
             int version = RubyModule.GlobalMethodVersion;
-            var checkedNames = _builtinMethods.GetValue(cls, _ => new System.Collections.Concurrent.ConcurrentDictionary<string, int>());
-            int checkedAt;
-            if (checkedNames.TryGetValue(name, out checkedAt) && checkedAt == version) {
+            var checkedNames = _builtinMethods.GetValue(cls, _ => new System.Collections.Concurrent.ConcurrentDictionary<string, BuiltinCheck>());
+            BuiltinCheck check;
+            if (checkedNames.TryGetValue(name, out check) && check.Version == version) {
                 return true;
             }
 
@@ -2819,6 +2829,13 @@ namespace IronRuby.Builtins {
             var info = resolved.Found ? resolved.Info as RubyLibraryMethodInfo : null;
             if (info == null || !ReferenceEquals(info.DeclaringModule, cls)) {
                 return false;
+            }
+            // Any method defined anywhere moves the version on - Data.define does on every call - but the name usually still
+            // resolves to the very method already checked, whose attributes have not changed: reading them again by
+            // reflection was ~13% of Data.define.
+            if (check != null && ReferenceEquals(check.Method, info)) {
+                checkedNames[name] = new BuiltinCheck(version, info);
+                return true;
             }
             foreach (var member in info.GetMembers()) {
                 bool named = false;
@@ -2832,7 +2849,7 @@ namespace IronRuby.Builtins {
                     return false;
                 }
             }
-            checkedNames[name] = version;
+            checkedNames[name] = new BuiltinCheck(version, info);
             return true;
         }
 

@@ -584,6 +584,9 @@ namespace IronRuby.Builtins {
             return -1;
         }
 
+        // x * radix + digit stays in a long for any x up to this, radix 36 and digit 35 included
+        private const long SmallParseLimit = (Int64.MaxValue - 35) / 36;
+
         private static bool TryParseRubyInteger(string/*!*/ str, int requestedRadix, out object result) {
             result = null;
 
@@ -644,12 +647,32 @@ namespace IronRuby.Builtins {
                 radix = (requestedRadix < 0 && hinted >= 2 && hinted <= 36) ? hinted : 10;
             }
 
+            // In a long while it fits, and past that in long chunks folded into the BigInteger: a BigInteger step per digit
+            // was most of the time of Integer("123"), and of a 30-digit number nearly all of it.
+            long small = 0, chunk = 0, chunkScale = 1;
+            bool big = false;
             BigInteger magnitude = BigInteger.Zero;
             while (index < end) {
                 char c = str[index];
                 int digit = DigitValue(c);
                 if (digit >= 0 && digit < radix) {
-                    magnitude = magnitude * radix + digit;
+                    if (!big) {
+                        if (small <= SmallParseLimit) {
+                            small = small * radix + digit;
+                        } else {
+                            big = true;
+                            magnitude = small;
+                            chunk = digit;
+                            chunkScale = radix;
+                        }
+                    } else if (chunkScale <= SmallParseLimit) {
+                        chunk = chunk * radix + digit;
+                        chunkScale *= radix;
+                    } else {
+                        magnitude = magnitude * chunkScale + chunk;
+                        chunk = digit;
+                        chunkScale = radix;
+                    }
                     digits++;
                     index++;
                 } else if (c == '_' && digits > 0) {
@@ -667,7 +690,12 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
-            result = Protocols.Normalize(negative ? -magnitude : magnitude);
+            if (big) {
+                magnitude = magnitude * chunkScale + chunk;
+                result = Protocols.Normalize(negative ? -magnitude : magnitude);
+            } else {
+                result = Protocols.Normalize(negative ? -small : small);
+            }
             return true;
         }
 
