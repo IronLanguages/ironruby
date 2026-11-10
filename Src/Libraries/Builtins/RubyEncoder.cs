@@ -1481,7 +1481,7 @@ namespace IronRuby.Builtins {
                                 if (scalar < 0 || scalar > 0x7fffffff) {
                                     throw RubyExceptions.CreateRangeError("pack(U): value out of range");
                                 }
-                                RubyEncoder.WriteUtf8CodePoint(stream, codePoint.Fixnum);
+                                RubyEncoder.WriteUtf8CodePoint(stream, (int)scalar);
                             }
                             break;
 
