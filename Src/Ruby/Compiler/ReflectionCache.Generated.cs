@@ -136,6 +136,10 @@ namespace IronRuby.Compiler {
         private static MethodInfo _CreateModuleScope;
         public static MethodInfo/*!*/ CreateMutableStringB { get { return _CreateMutableStringB ?? (_CreateMutableStringB = CallInstruction.CacheFunc<System.Byte[], IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.MutableString>(RubyOps.CreateMutableStringB)); } }
         private static MethodInfo _CreateMutableStringB;
+        public static MethodInfo/*!*/ CreateMutableStringA { get { return _CreateMutableStringA ?? (_CreateMutableStringA = CallInstruction.CacheFunc<System.String, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.MutableString>(RubyOps.CreateMutableStringA)); } }
+        private static MethodInfo _CreateMutableStringA;
+        public static MethodInfo/*!*/ CreateChilledMutableStringA { get { return _CreateChilledMutableStringA ?? (_CreateChilledMutableStringA = CallInstruction.CacheFunc<System.String, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.MutableString>(RubyOps.CreateChilledMutableStringA)); } }
+        private static MethodInfo _CreateChilledMutableStringA;
         public static MethodInfo/*!*/ CreateMutableStringL { get { return _CreateMutableStringL ?? (_CreateMutableStringL = CallInstruction.CacheFunc<System.String, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.MutableString>(RubyOps.CreateMutableStringL)); } }
         private static MethodInfo _CreateMutableStringL;
         public static MethodInfo/*!*/ CreateMutableStringLM { get { return _CreateMutableStringLM ?? (_CreateMutableStringLM = CallInstruction.CacheFunc<System.String, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.MutableString>(RubyOps.CreateMutableStringLM)); } }

@@ -183,8 +183,17 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// A new array for a copy that fills every item of it. Not zeroed first (unless T holds
+        /// references): for a long string the zeroing of a large object heap array cost as much as
+        /// the copy itself.
+        /// </summary>
+        internal static T[]/*!*/ NewArrayToFill<T>(int length) {
+            return GC.AllocateUninitializedArray<T>(length);
+        }
+
         internal static T[]/*!*/ Concatenate<T>(T[]/*!*/ array1, int itemCount1, T[]/*!*/ array2, int itemCount2) {
-            T[] result = new T[itemCount1 + itemCount2];
+            T[] result = NewArrayToFill<T>(itemCount1 + itemCount2);
             Array.Copy(array1, 0, result, 0, itemCount1);
             Array.Copy(array2, 0, result, itemCount1, itemCount2);
             return result;
@@ -262,6 +271,9 @@ namespace IronRuby.Runtime {
         internal static int Remove<T>(ref T[]/*!*/ array, int itemCount, int start, int count) {
             T[] a;
             int remaining = itemCount - count;
+            if (count == 0) {
+                return itemCount;
+            }
             if (remaining > MinBufferSize && remaining < itemCount / 2) {
                 a = new T[remaining];
                 Array.Copy(array, 0, a, 0, start);
@@ -274,15 +286,39 @@ namespace IronRuby.Runtime {
             return remaining;
         }
 
+        /// <summary>
+        /// <see cref="Remove{T}"/> for an array that is shared with another string (copy-on-write) and
+        /// so must not be written to. Removing from the end keeps the array, which stays shared; any
+        /// other removal copies the items that remain into an array of their own, which is no
+        /// longer shared.
+        /// </summary>
+        internal static int RemoveShared<T>(ref T[]/*!*/ array, int itemCount, int start, int count, ref bool shared) {
+            int remaining = itemCount - count;
+            if (count == 0) {
+                return itemCount;
+            }
+            if (start == remaining) {
+                return remaining;
+            }
+
+            // the same capacity Remove would leave (zeroed: a write past the end relies on that)
+            var a = new T[remaining > MinBufferSize && remaining < itemCount / 2 ? remaining : itemCount];
+            Array.Copy(array, 0, a, 0, start);
+            Array.Copy(array, start + count, a, start, remaining - start);
+            array = a;
+            shared = false;
+            return remaining;
+        }
+
         internal static T[]/*!*/ GetSlice<T>(this T[]/*!*/ array, int start, int count) {
-            var copy = new T[count];
+            var copy = NewArrayToFill<T>(count);
             Array.Copy(array, start, copy, 0, count);
             return copy;
         }
 
         internal static T[]/*!*/ GetSlice<T>(this T[]/*!*/ array, int arrayLength, int start, int count) {
             count = NormalizeCount(arrayLength, start, count);
-            var copy = new T[count];
+            var copy = NewArrayToFill<T>(count);
             if (count > 0) {
                 Array.Copy(array, start, copy, 0, count);
             }
@@ -298,6 +334,20 @@ namespace IronRuby.Runtime {
             count = NormalizeCount(arrayLength, start, count);
             return count > 0 ? new String(chars, start, count) : String.Empty;
         }
+
+        /// <summary>
+        /// Whether a slice of the first <paramref name="count"/> items of a string's array, of length
+        /// <paramref name="arrayLength"/>, shares the array (copy-on-write, see MutableString.Content.Clone)
+        /// rather than copying them - s[0, n], a #chomp or #rstrip. Only a long slice that keeps at
+        /// least half of the array does: a short one is cheap to copy, and a small slice must not keep
+        /// a large array alive - also not by slicing a slice, which is why this is the array's length
+        /// and not the string's.
+        /// </summary>
+        internal static bool IsSharedPrefix(int arrayLength, int count) {
+            return count >= SharedSliceMinLength && count >= arrayLength - (arrayLength >> 1);
+        }
+
+        internal const int SharedSliceMinLength = 256;
 
         internal static int NormalizeCount(int arrayLength, int start, int count) {
             if (count > arrayLength - start) {

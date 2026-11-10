@@ -190,6 +190,17 @@ namespace IronRuby.Builtins {
             : this(new StringContent(str, null), encoding) {
         }
 
+        // A string literal the compiler has found to be all ASCII, in an encoding where ASCII is
+        // itself (see CreateAsciiLiteral): everything the general constructor works out is known.
+        private MutableString(string/*!*/ str, RubyEncoding/*!*/ encoding, uint flags) {
+            _encoding = encoding;
+            _content = new StringContent(str, this);
+            _flags = flags;
+            if (ObjectTracking.Enabled) {
+                ObjectTracking.Track(this);
+            }
+        }
+
         // mutable (visible for subclasses):
         protected MutableString(RubyEncoding/*!*/ encoding)
             : this(new CharArrayContent(Utils.EmptyChars, 0, null), encoding) {
@@ -233,6 +244,28 @@ namespace IronRuby.Builtins {
             var result = Create(str, RubyEncoding.Ascii);
             result._flags = IsAsciiFlag | NoSurrogatesFlag;
             return result;
+        }
+
+        private const uint AsciiLiteralFlags = IsAsciiFlag | NoSurrogatesFlag | HasChangedFlag | CharIndexChangedFlags;
+
+        /// <summary>
+        /// A string literal that the compiler has checked is all ASCII, in an ASCII-compatible
+        /// encoding. Evaluating a literal is common enough that the general constructor's working out
+        /// of the encoding's flags was a measurable part of it, and knowing the string is ASCII from
+        /// the start spares the first #bytesize, #hash or comparison a scan of it.
+        /// </summary>
+        internal static MutableString/*!*/ CreateAsciiLiteral(string/*!*/ str, RubyEncoding/*!*/ encoding) {
+            Debug.Assert(encoding.IsAsciiIdentity && str.IsAscii());
+            return new MutableString(str, encoding, AsciiLiteralFlags);
+        }
+
+        /// <summary>
+        /// <see cref="CreateAsciiLiteral"/> for a literal in a file that said nothing about
+        /// frozen_string_literal (see <see cref="Chill"/>).
+        /// </summary>
+        internal static MutableString/*!*/ CreateChilledAsciiLiteral(string/*!*/ str, RubyEncoding/*!*/ encoding) {
+            Debug.Assert(encoding.IsAsciiIdentity && str.IsAscii());
+            return new MutableString(str, encoding, AsciiLiteralFlags | IsChilledFlag);
         }
 
         public static MutableString/*!*/ Create(string/*!*/ str) {
@@ -355,6 +388,28 @@ namespace IronRuby.Builtins {
 
         public static MutableString/*!*/ CreateEmpty(RubyEncoding/*!*/ encoding) {
             return MutableString.Create(String.Empty, encoding);
+        }
+
+        /// <summary>
+        /// String#replace and #initialize_copy (#dup, #clone): makes this string a copy of
+        /// <paramref name="other"/> - its content, encoding and what is known about its characters.
+        /// The content is shared until one of the two is changed (see Content.Clone), so this does not
+        /// depend on the length of the string. A frozen, chilled or locked receiver is handled as by
+        /// any other mutation.
+        /// </summary>
+        public MutableString/*!*/ Replace(MutableString/*!*/ other) {
+            ContractUtils.RequiresNotNull(other, "other");
+            Mutate();
+            if (ReferenceEquals(this, other)) {
+                return this;
+            }
+
+            var content = other._content.Clone();
+            SetEncoding(other._encoding);
+            SetContent(content);
+            const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
+            _flags = (_flags & ~CharacterFlags) | (other._flags & CharacterFlags);
+            return this;
         }
 
         /// <summary>
@@ -1423,7 +1478,14 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Makes room for <paramref name="minCapacity"/> bytes or characters. Also makes sure the
+        /// array is not shared with another string (copy-on-write, see Content.Clone), as a caller that
+        /// asks for capacity is about to write into it - RubyBufferedStream writes into the array
+        /// <see cref="GetByteArray"/> answers.
+        /// </summary>
         public void EnsureCapacity(int minCapacity) {
+            _content.PrepareForWrite(minCapacity);
             if (_content.GetCapacity() < minCapacity) {
                 _content.SetCapacity(minCapacity);
             }
@@ -1778,7 +1840,12 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ GetSlice(int start, int count) {
             ContractUtils.Requires(start >= 0, "start");
             ContractUtils.Requires(count >= 0, "count");
-            return CreateDerived(_content.GetSlice(start, count), _encoding);
+            var result = CreateDerived(_content.GetSlice(start, count), _encoding);
+            // a part of an ASCII string is ASCII, and saying so spares the next operation a scan of it
+            if ((_flags & (IsAsciiFlag | AsciiUnknownFlag)) == IsAsciiFlag) {
+                result._flags = (result._flags & ~(AsciiUnknownFlag | SurrogatesUnknownFlag)) | IsAsciiFlag | NoSurrogatesFlag;
+            }
+            return result;
         }
 
         public string/*!*/ GetStringSlice(int start) {
@@ -3075,7 +3142,22 @@ namespace IronRuby.Builtins {
 
         #region Internal Helpers
 
+        /// <summary>
+        /// The bytes of the string in place: the first <paramref name="count"/> items of the array.
+        /// Only for reading - the array may be shared with another string (see Content.Clone). A
+        /// caller that writes into it gets it from <see cref="GetWritableByteArray"/> instead.
+        /// </summary>
         internal byte[]/*!*/ GetByteArray(out int count) {
+            return _content.GetByteArray(out count);
+        }
+
+        /// <summary>
+        /// <see cref="GetByteArray"/> for a caller that writes into the array (native code filling a
+        /// buffer, say): switches to bytes and gives the string an array of its own first.
+        /// </summary>
+        internal byte[]/*!*/ GetWritableByteArray(out int count) {
+            SwitchToBytes();
+            _content.PrepareForWrite(0);
             return _content.GetByteArray(out count);
         }
 

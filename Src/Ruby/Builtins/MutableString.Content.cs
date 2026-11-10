@@ -19,11 +19,54 @@ using Microsoft.Scripting.Utils;
 using System.Text;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace IronRuby.Builtins {
     public partial class MutableString {
         // TODO: Add range checks to APIs or change the implementation to be out-of-range tolerant (see GetSlice).
         // Tha latter is preferred if the semantics is reasonable since it reduces the amounts of content size dependent checks that the user needs to do.
+        /// <summary>
+        /// The state word of a BinaryContent or CharArrayContent: whether its array may be shared with
+        /// another content (copy-on-write, see Content.Clone), and whether a thread holds the content.
+        /// There is no GVL, so a #dup can run while another thread writes the string, and the copy
+        /// must not change after the dup returns (a frozen copy may be a Hash key). Clone, a sharing
+        /// GetSlice and every write hold the content, so a write cannot check that the array is its
+        /// own, let a Clone hand the array out, and then write into it; and a copy made while the
+        /// array is replaced cannot see the new array with the old count or lose its shared mark.
+        /// The common write - unshared, nobody holding it - costs one compare-exchange. Holding is not
+        /// reentrant and other threads spin while it lasts, so nothing runs while a content is held but
+        /// array copies and IronRuby's own encoders: no stream, no user code, nothing that could reach
+        /// this string again (Append(Stream) reads before it holds the content).
+        /// </summary>
+        internal static class ContentState {
+            internal const int Shared = 1;
+            internal const int Held = 2;
+
+            /// <summary>Holds the content if its array is its own and nobody holds it.</summary>
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal static bool TryEnterUnshared(ref int state) {
+                return Interlocked.CompareExchange(ref state, Held, 0) == 0;
+            }
+
+            /// <summary>Holds the content, waiting while another thread does. Returns whether its array is shared.</summary>
+            internal static bool Enter(ref int state) {
+                var spin = new SpinWait();
+                while (true) {
+                    int s = Volatile.Read(ref state);
+                    if ((s & Held) == 0 && Interlocked.CompareExchange(ref state, s | Held, s) == s) {
+                        return (s & Shared) != 0;
+                    }
+                    spin.SpinOnce();
+                }
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal static void Exit(ref int state, bool shared) {
+                Volatile.Write(ref state, shared ? Shared : 0);
+            }
+        }
+
         [Serializable]
         internal abstract class Content {
             protected MutableString _owner;
@@ -114,7 +157,26 @@ namespace IronRuby.Builtins {
             public abstract void TrimExcess();
             public abstract int GetCapacity();
             public abstract void SetCapacity(int capacity);
+            /// <summary>
+            /// A copy of the content, owned by the same string until it is given to another one.
+            /// BinaryContent and CharArrayContent share their array with the copy instead of copying
+            /// it (copy-on-write): both are marked shared, and each copies the array the first time it
+            /// writes to it. That is what makes #dup, #clone, String.new(str) and a whole-buffer
+            /// StringIO#read of a long string cost the same as of a short one, as they do in MRI.
+            /// Every method that writes into the array of either class must hold the content with its
+            /// EnterWrite/ExitWrite (see <see cref="ContentState"/>); anything outside them that writes
+            /// into an array it got from GetByteArray must call <see cref="PrepareForWrite"/> before
+            /// taking it. StringContent wraps an immutable CLR string, so its copy shares that string
+            /// with nothing to mark.
+            /// </summary>
             public abstract Content/*!*/ Clone();
+
+            /// <summary>
+            /// Makes sure the array this content holds is its own (see <see cref="Clone"/>), with room
+            /// for at least <paramref name="minCapacity"/> items if it has to be copied.
+            /// </summary>
+            internal virtual void PrepareForWrite(int minCapacity) {
+            }
 
             /// <summary>
             /// Gets index'th character of the string.
