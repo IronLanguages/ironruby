@@ -1405,32 +1405,129 @@ $log.join(""|"")
         /// other frame's. CRuby's #last_error is a fresh exception with no backtrace at all, which passes too.
         /// </summary>
         public void Exception_DeferredTraceKeptByClr1() {
-            const string script = @"def bt(e) = e.backtrace.to_a.map { |f| f[/in '[^']*'/] }.join("","")
-EC = Encoding::Converter.new(""UTF-8"", ""EUC-JP"")
-def c1; begin; EC.convert(""a\xffb""); rescue Encoding::InvalidByteSequenceError; end; end
-def c0; c1; end
-c0
-r = [EC.last_error.backtrace.nil? || bt(EC.last_error).include?(""Object#c0"")]
-def k1(read); return bt(EC.last_error) if read; begin; EC.convert(""a\xffb""); rescue Encoding::InvalidByteSequenceError; end; nil; end
-def first_path; k1(false); end
-def other_path; k1(true); end
-first_path
-x = other_path
-r << (x.empty? || x.include?(""first_path"") && !x.include?(""other_path""))
-EX = System::Runtime::InteropServices::Marshal.GetExceptionForHR(-2147024809)
-def thr; System::Runtime::ExceptionServices::ExceptionDispatchInfo.capture(EX).throw; end
-def x1; begin; thr; rescue Exception; end; end
-def x0; x1; end
-x0
-r << bt(EX).include?(""Object#x0"")
-def x2; begin; thr; rescue Exception => e; bt(e); end; end
-def x3; x2; end
-r << x3.include?(""Object#x0"")
+            const string script = @"def bt(e) = e.backtrace.to_a.map { |f| f[/in '[^']*'/] }.join("","")
+EC = Encoding::Converter.new(""UTF-8"", ""EUC-JP"")
+def c1; begin; EC.convert(""a\xffb""); rescue Encoding::InvalidByteSequenceError; end; end
+def c0; c1; end
+c0
+r = [EC.last_error.backtrace.nil? || bt(EC.last_error).include?(""Object#c0"")]
+def k1(read); return bt(EC.last_error) if read; begin; EC.convert(""a\xffb""); rescue Encoding::InvalidByteSequenceError; end; nil; end
+def first_path; k1(false); end
+def other_path; k1(true); end
+first_path
+x = other_path
+r << (x.empty? || x.include?(""first_path"") && !x.include?(""other_path""))
+EX = System::Runtime::InteropServices::Marshal.GetExceptionForHR(-2147024809)
+def thr; System::Runtime::ExceptionServices::ExceptionDispatchInfo.capture(EX).throw; end
+def x1; begin; thr; rescue Exception; end; end
+def x0; x1; end
+x0
+r << bt(EX).include?(""Object#x0"")
+def x2; begin; thr; rescue Exception => e; bt(e); end; end
+def x3; x2; end
+r << x3.include?(""Object#x0"")
 r.join(""|"")
 ";
             var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
             AreEqual(interpreting.CreateScriptSourceFromString(script, "kept1.rb", SourceCodeKind.File).Execute().ToString(), "true|true|true|true");
             AreEqual(Engine.CreateScriptSourceFromString(script, "kept2.rb", SourceCodeKind.File).Execute().ToString(), "true|true|true|true");
+        }
+
+        /// <summary>
+        /// A compiled body none of whose rescue clauses can match lets the exception go through in the CLR's first pass
+        /// (RubyOps.RescuePassMayTest) instead of catching it and throwing it again; anything that could tell the difference takes the
+        /// catch. Non-matching lists of constants (the backtrace and $! after), a class expression with a side effect or one that
+        /// raises, a later clause with a splat, `===' redefined and a constant reassigned after the site has run, an ensure
+        /// clause that redefines `===' before an outer clause is matched, an ensure clause raising another exception, retry, else,
+        /// a module the exception was extended with, a bare rescue of a non-StandardError, a throw through the frames, a
+        /// #set_backtrace of the exception's own that redefines `===' (it runs before the clauses are matched). The expected
+        /// output is CRuby 4.0's; run interpreted and compiled.
+        /// </summary>
+        public void Exception_RescueFilterPassThrough1() {
+            const string script = @"$log = []
+def bt(e) = e.backtrace.map { |f| f[/:\d+:in '[^']*'/] }.join("","")
+def boom(k = ArgumentError) = raise(k, ""b"")
+def nm(n) = n == 0 ? boom : (begin; nm(n - 1); rescue TypeError, NameError; $log << :never; end)
+def side; begin; boom; rescue ($log << :side; TypeError); end; end
+def raising_list; begin; boom; rescue (raise IOError, ""in list""); end; end
+def two(n) = (begin; boom; rescue TypeError; rescue (n << 1; NameError), *(n << 2; [ArgumentError]); :two; end)
+class Later < StandardError; end
+def later; begin; boom; rescue Later; :later; end; end
+def k_const; begin; boom; rescue KK; :kk; end; end
+KK = TypeError
+def cap; begin; boom; rescue ArgumentError => e; raise e; end; end
+def ens_redefine; cap; ensure; def Later.===(e) = true; end
+def outer_redefine; begin; ens_redefine; rescue Later; :caught_after_ensure; end; end
+def ens_other; boom; ensure; raise IOError, ""other""; end
+def nm2(n) = n == 0 ? ens_other : (begin; nm2(n - 1); rescue TypeError; end)
+def retr; n = 0; begin; n += 1; boom(n < 3 ? TypeError : ArgumentError); rescue TypeError; retry; end; end
+def els; begin; boom; rescue TypeError; else; :else; end; end
+module Tag; end
+def tagged; begin; raise ArgumentError.new(""t"").extend(Tag); rescue Tag; :tag; end; end
+def bare_nomatch; begin; raise Exception, ""not std""; rescue; :wrong; end; end
+def thrower(n) = n == 0 ? throw(:t, :thrown) : (begin; thrower(n - 1); rescue TypeError; end)
+5.times do
+  $log << (begin; nm(3); rescue => e; [e.class, bt(e), $!.class]; end).inspect
+  $log << (begin; side; rescue => e; e.class; end)
+  $log << (begin; raising_list; rescue => e; [e.class, e.cause.class]; end).inspect
+  n = []; $log << two(n) << n.inspect
+  $log << (begin; later; rescue => e; e.class; end)
+  $log << (begin; k_const; rescue => e; e.class; end)
+  $log << (begin; nm2(2); rescue => e; [e.message, e.cause.class]; end).inspect
+  $log << (begin; retr; rescue => e; e.class; end)
+  $log << (begin; els; rescue => e; e.class; end)
+  $log << tagged << (begin; bare_nomatch; rescue Exception => e; e.class; end)
+  $log << catch(:t) { thrower(3) }
+end
+def Later.===(e) = true
+$log << later
+Object.send(:remove_const, :KK); KK = ArgumentError
+$log << k_const
+class << Later; remove_method :===; end
+$log << outer_redefine
+class Sneaky < StandardError
+  def set_backtrace(bt)
+    def TypeError.===(e) = true
+    super
+  end
+end
+def sneaky; begin; yield; rescue TypeError; :caught_by_set_backtrace; end; end
+5.times { begin; sneaky { boom }; rescue ArgumentError; end }
+$log << (sneaky { raise Sneaky } rescue :passed)
+$log.join(""|"")
+";
+            const string expected = "[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|[ArgumentError, \":3:in 'Object#boom',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:4:in 'Object#nm',:24:in 'block in <main>',:23:in 'Integer#times',:23:in '<main>'\", ArgumentError]|side|ArgumentError|[IOError, ArgumentError]|two|[1, 2]|ArgumentError|ArgumentError|[\"other\", ArgumentError]|ArgumentError|ArgumentError|tag|Exception|thrown|later|kk|caught_after_ensure|caught_by_set_backtrace";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "rf1.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            AreEqual(Engine.CreateScriptSourceFromString(script, "rf2.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
+        /// An exception that goes through a rescue frame unmatched (RubyOps.RescuePassMayTest) gets the cause CanRescue would have
+        /// given it there: the exception an ensure clause in that frame ran for, when C# threw the new one from the clause (Kernel#raise
+        /// sets a cause itself). Through a Thread#join too. The expected output is CRuby 4.0's; run interpreted and compiled.
+        /// </summary>
+        public void Exception_RescueFilterCause1() {
+            const string script = @"def f1
+  begin
+    begin; raise ""first""; ensure; 1/0; end
+  rescue TypeError
+  end
+end
+def f2; begin; begin; raise ""second""; ensure; nil.zork; end; rescue TypeError; end; end
+def f3; begin; begin; raise ""third""; ensure; [].fetch(5); end; rescue TypeError; end; end
+def g(m) = (begin; send(m); rescue => e; [e.class, e.cause&.message]; end)
+r = 50.times.map { [g(:f1), g(:f2), g(:f3)] }
+t = Thread.new { f1 }
+t.report_on_exception = false
+x = begin; t.join; rescue => e; [e.class, e.cause&.message]; end
+[r.first, r.last, x].inspect";
+            const string expected = "[[[ZeroDivisionError, \"first\"], [NoMethodError, \"second\"], [IndexError, \"third\"]], [[ZeroDivisionError, \"first\"], [NoMethodError, \"second\"], [IndexError, \"third\"]], [ZeroDivisionError, \"first\"]]";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "cause1.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            AreEqual(Engine.CreateScriptSourceFromString(script, "cause2.rb", SourceCodeKind.File).Execute().ToString(), expected);
         }
     }
 }

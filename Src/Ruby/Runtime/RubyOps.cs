@@ -3432,6 +3432,8 @@ namespace IronRuby.Runtime {
             }
 
             data.TrySetCause(scope.RubyContext.CurrentException);
+            // the ensure clause will run Ruby code before an outer frame's rescue clauses are matched (see RescuePassMayTest)
+            data.PendingPassedEnsures++;
             return exception;
         }
 
@@ -3442,7 +3444,119 @@ namespace IronRuby.Runtime {
         public static void EnterPassedEnsure(RubyScope/*!*/ scope, Exception passing) {
             if (passing != null && passing != PassEnsureWithoutCurrentException) {
                 scope.RubyContext.CurrentException = passing;
+                var data = RubyExceptionData.TryGetInstance(passing);
+                if (data != null && data.PendingPassedEnsures > 0) {
+                    data.PendingPassedEnsures--;
+                }
             }
+        }
+
+        /// <summary>
+        /// The exception filter of a compiled body with rescue clauses (Body.TransformExceptionHandling, RubyFilterExpression), run in
+        /// the CLR's first pass: <c>RescuePassUnwinder || RescuePassMayTest &amp;&amp; (one CannotMatch call for each class of each
+        /// clause)</c>, each site a constant of the expression. True: none of the clauses can match the exception, which goes through
+        /// - no catch, no `===', no throw again. False: the exception is caught and matched as before (CanRescue, then the clauses).
+        /// 
+        /// Ruby matches the clauses after the ensure clauses of the frames the exception left have run, and evaluates each class
+        /// expression and its `===' then; this decides now. That is the same answer only where nothing can tell the difference:
+        /// - every class of the list is a constant read through a site whose cache is current (ConstantAccessVersion): the read
+        ///   would return the cached module and run nothing (no autoload, no const_missing);
+        /// - each `===' is Module#===, which only tests the class of the exception (and so is the default StandardError's);
+        /// - no Ruby code runs before the clauses would be matched: no compiled ensure clause has let the exception through
+        ///   (PendingPassedEnsures); an interpreted one, or one with a jump, catches it, so this frame is not reached in this pass;
+        /// - CanRescue would match the exception itself, not a new one made by its class's Ruby #new (IsHandledInPlace), and would
+        ///   not call a #set_backtrace of the exception's own when it captures the backtrace (CaptureRunsNoRubyCode);
+        /// - no TracePoint is on.
+        /// An exception CanRescue turns down (an unwinder: throw, break, return from a block, Thread#kill) goes through as well: the
+        /// clauses are not matched against it at all. A SystemStackError, an InsufficientExecutionStackException or a stack more
+        /// than PassEnsureMaxDepth compiled frames deep takes the catch, as in PassEnsure.
+        /// </summary>
+        public static bool RescuePassUnwinder(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            try {
+                if (RubyUtils.IsReclaimingFiber || exception is StackUnwinder) {
+                    return !IsDeepOrOverflow(exception);
+                }
+                LocalJumpError lje = exception as LocalJumpError;
+                return lje != null && lje.SkipFrame == scope.FlowControlScope && !IsDeepOrOverflow(exception);
+            } catch (Exception) {
+                // catch it (see RescuePassMayTest)
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// The part of <see cref="RescuePassUnwinder"/>'s description that is about the exception rather than the clauses: whether the
+        /// class list may be tested now (RescueSiteCannotMatch, RescueDefaultCannotMatch, one call for each class).
+        /// </summary>
+        public static bool RescuePassMayTest(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            // The CLR takes an exception thrown in a filter for a filter that turned the exception down - here, for "goes through".
+            // These say "catch it" instead.
+            try {
+                // A refinement of Module#=== would be what CRuby's rescue calls (IronRuby's CompareException does not see one yet).
+                if (IsDeepOrOverflow(exception) || TracePoint.ActiveEvents != 0 || scope.RubyContext.HasRefinements) {
+                    return false;
+                }
+                var data = RubyExceptionData.TryGetInstance(exception);
+                return (data == null || data.PendingPassedEnsures == 0) && RubyExceptionData.IsHandledInPlace(scope.RubyContext, exception) &&
+                    RubyExceptionData.CaptureRunsNoRubyCode(scope.RubyContext, exception);
+            } catch (Exception) {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// The class a rescue clause reads from <paramref name="site"/> - the cached value, if the cache is current - cannot match.
+        /// </summary>
+        public static bool RescueSiteCannotMatch(RubyScope/*!*/ scope, Exception/*!*/ exception, ConstantSiteCache/*!*/ site) {
+            try {
+                var context = scope.RubyContext;
+                if (site.Version != context.ConstantAccessVersion) {
+                    return false;
+                }
+                object value = site.Value;
+                var weak = value as WeakReference;
+                if (weak != null) {
+                    value = (weak == ConstantSiteCache.WeakMissingConstant) ? null : weak.Target;
+                }
+                var module = value as RubyModule;
+                return module != null && CannotMatch(context, exception, module);
+            } catch (Exception) {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// The last test of the rescue filter, once every clause has been found not to match: the exception goes through, and gets the
+        /// cause CanRescue would have given it here - this frame's $!, which the frame restores to its own on the way out (an
+        /// exception C# threw from an ensure clause in the frame has the exception that clause ran for as its cause). An exception
+        /// Kernel#raise made has one already. Always true.
+        /// </summary>
+        public static bool RescuePassCommit(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            try {
+                RubyExceptionData.GetInstance(exception).TrySetCause(scope.RubyContext.CurrentException);
+            } catch (Exception) {
+                // goes through all the same: the cause is what an outer frame then decides
+            }
+            return true;
+        }
+
+        /// <summary>A bare `rescue' (StandardError) cannot match.</summary>
+        public static bool RescueDefaultCannotMatch(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            try {
+                return CannotMatch(scope.RubyContext, exception, scope.RubyContext.StandardErrorClass);
+            } catch (Exception) {
+                return false;
+            }
+        }
+
+        private static bool IsDeepOrOverflow(Exception/*!*/ exception) {
+            return exception is SystemStackError || exception is InsufficientExecutionStackException ||
+                Precompiled.PrecompiledFrames.CurrentDepth > PassEnsureMaxDepth;
+        }
+
+        // `module === exception' is Module#=== and false (the class test first: a clause that matches is caught either way)
+        private static bool CannotMatch(RubyContext/*!*/ context, Exception/*!*/ exception, RubyModule/*!*/ module) {
+            return !context.IsKindOf(exception, module) && IsBuiltinCaseEquality(context, module);
         }
 
         [Emitted]

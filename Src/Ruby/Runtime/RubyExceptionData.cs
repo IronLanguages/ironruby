@@ -38,6 +38,35 @@ namespace IronRuby.Runtime {
         // True if the exception has already been handled by Ruby EH clause or if it was constructed "dynamically" via Class#new.
         internal bool Handled { get; set; }
 
+        // Compiled ensure clauses the exception has been let through (RubyOps.PassEnsure) and that have not run yet: Ruby code
+        // that runs before the rescue clauses of an outer frame would be matched (see RubyOps.RescuePassMayTest).
+        internal int PendingPassedEnsures;
+
+        /// <summary>
+        /// Whether RubyOps.CanRescue would match the rescue clauses against <paramref name="exception"/> itself: it has been
+        /// handled, or HandleException would only mark it so (its class's #new and #initialize are IronRuby's own) rather than
+        /// make a new one. Runs no Ruby code.
+        /// </summary>
+        internal static bool IsHandledInPlace(RubyContext/*!*/ context, Exception/*!*/ exception) {
+            var data = TryGetInstance(exception);
+            if (data != null && data.Handled) {
+                return true;
+            }
+            return IsBuiltinConstruction(context, context.GetClass(exception.GetType()));
+        }
+
+        // #new resolves to Class#new or a library constructor, and #initialize to a library method: HandleException only marks the
+        // exception handled (a C#-thrown exception of such a class already carries whatever that constructor would set)
+        private static bool IsBuiltinConstruction(RubyContext/*!*/ context, RubyClass/*!*/ exceptionClass) {
+            var newMethod = exceptionClass.ImmediateClass.ResolveMethod("new", VisibilityContext.AllVisible);
+            if (newMethod.Found && ((newMethod.Info.DeclaringModule == context.ClassClass && newMethod.Info is RubyCustomMethodInfo)
+                || newMethod.Info is RubyLibraryMethodInfo)) {
+                var initializeMethod = exceptionClass.ResolveMethod("initialize", VisibilityContext.AllVisible);
+                return initializeMethod.Found && initializeMethod.Info is RubyLibraryMethodInfo;
+            }
+            return false;
+        }
+
         /// <summary>
         /// Set by Kernel#raise for an exception that no Ruby code can have kept before it was raised: made by the raise itself
         /// from a String, or from a class whose #exception, #new and #initialize are all IronRuby's own. Only the backtrace of such
@@ -436,7 +465,20 @@ namespace IronRuby.Runtime {
         /// #backtrace_locations does on demand all the same.
         /// </summary>
         private bool HasBuiltinSetBacktrace(RubyContext/*!*/ context) {
-            var method = context.GetImmediateClassOf(_exception).ResolveMethod("set_backtrace", VisibilityContext.AllVisible).Info;
+            return HasBuiltinSetBacktrace(context, _exception);
+        }
+
+        /// <summary>
+        /// Whether CanRescue's capture of the exception's backtrace runs no Ruby code: it has one already, or the #set_backtrace the
+        /// capture would call is IronRuby's own (see RubyOps.RescuePassMayTest).
+        /// </summary>
+        internal static bool CaptureRunsNoRubyCode(RubyContext/*!*/ context, Exception/*!*/ exception) {
+            var data = TryGetInstance(exception);
+            return data != null && (data.HasBacktrace || data._raiseBacktrace != null) || HasBuiltinSetBacktrace(context, exception);
+        }
+
+        private static bool HasBuiltinSetBacktrace(RubyContext/*!*/ context, Exception/*!*/ exception) {
+            var method = context.GetImmediateClassOf(exception).ResolveMethod("set_backtrace", VisibilityContext.AllVisible).Info;
             if (method is RubyLibraryMethodInfo) {
                 return true;
             }
@@ -686,17 +728,10 @@ namespace IronRuby.Runtime {
 
             RubyClass exceptionClass = context.GetClass(exception.GetType());
 
-            // new resolves to Class#new built-in method, or to a library constructor (a C#-thrown
-            // exception of such a class already carries whatever that constructor would set):
-            var newMethod = exceptionClass.ImmediateClass.ResolveMethod("new", VisibilityContext.AllVisible);
-            if (newMethod.Found && ((newMethod.Info.DeclaringModule == context.ClassClass && newMethod.Info is RubyCustomMethodInfo)
-                || newMethod.Info is RubyLibraryMethodInfo)) {
-                // initialize resolves to a built-in method:
-                var initializeMethod = exceptionClass.ResolveMethod("initialize", VisibilityContext.AllVisible);
-                if (initializeMethod.Found && initializeMethod.Info is RubyLibraryMethodInfo) {
-                    instanceData.Handled = true;
-                    return exception;
-                }
+            // the built-in #new and #initialize (IsHandledInPlace, the rescue filter, relies on this being the test):
+            if (IsBuiltinConstruction(context, exceptionClass)) {
+                instanceData.Handled = true;
+                return exception;
             }
 
             object message = instanceData.Message;
