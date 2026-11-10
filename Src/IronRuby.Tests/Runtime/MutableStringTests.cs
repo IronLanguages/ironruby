@@ -19,6 +19,7 @@ using System.Text;
 using System.Collections.Generic;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
+using System.Threading;
 
 namespace IronRuby.Tests {
     using MSC = MutableString.Character;
@@ -1513,6 +1514,63 @@ namespace IronRuby.Tests {
             int h1 = invalid.GetHashCode();
             invalid.SwitchToCharacters();
             Assert(invalid.GetHashCode() == h1);
+        }
+
+        /// <summary>
+        /// Copy-on-write while another thread writes the string. There is no GVL, so a copy can be made
+        /// in the middle of a write, and it must not change after Clone returns (a frozen copy may be
+        /// a Hash key): the write must neither land in the array Clone just handed out nor make the
+        /// original forget that it shares a new one. Bytes and characters, a write in place and a
+        /// write that moves the rest of the string. Before the content state word, the writes landed in
+        /// a few hundred copies out of 200,000.
+        /// </summary>
+        public void MutableString_CopyOnWrite3() {
+            string text = "abcdefghijklmnop";
+            while (text.Length < 4096) {
+                text += text;
+            }
+
+            foreach (bool binary in new[] { true, false }) {
+                foreach (bool shift in new[] { false, true }) {
+                    var s = binary
+                        ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(text), RubyEncoding.UTF8)
+                        : MutableString.CreateMutable(RubyEncoding.UTF8).Append("\u00e9" + text);
+                    Assert(s.IsBinary == binary);
+
+                    bool stop = false;
+                    var writer = new Thread(() => {
+                        for (int i = 0; !Volatile.Read(ref stop); i++) {
+                            if (shift) {
+                                s.Insert(50, 'Z');
+                                s.Remove(50, 1);
+                            } else if (binary) {
+                                s.SetByte(100, (byte)('a' + (i & 15)));
+                            } else {
+                                s.SetChar(100, (char)('a' + (i & 15)));
+                            }
+                        }
+                    });
+                    writer.Start();
+
+                    int changed = 0;
+                    try {
+                        for (int i = 0; i < 50000; i++) {
+                            var copy = s.Clone();
+                            int a = binary ? copy.GetByte(100) : copy.GetChar(100);
+                            int b = binary ? copy.GetByte(60) : copy.GetChar(60);
+                            Thread.SpinWait(20);
+                            if ((binary ? copy.GetByte(100) : copy.GetChar(100)) != a ||
+                                (binary ? copy.GetByte(60) : copy.GetChar(60)) != b) {
+                                changed++;
+                            }
+                        }
+                    } finally {
+                        Volatile.Write(ref stop, true);
+                        writer.Join();
+                    }
+                    Assert(changed == 0, String.Format("binary: {0}, shift: {1}: {2} copies changed", binary, shift, changed));
+                }
+            }
         }
 
         /// <summary>

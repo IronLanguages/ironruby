@@ -34,12 +34,12 @@ namespace IronRuby.Builtins {
             protected byte[] _data;
             protected int _count;
 
-            // True while _data may be referenced by another content as well - a copy made by Clone
-            // shares the array instead of copying it (copy-on-write; see MutableString.Content.cs).
-            // Every method that writes to _data calls Unshare first, which gives this content an
-            // array of its own. Only ever set to true by Clone, on both contents, and cleared by
-            // Unshare, so a reader racing with a dup can at worst cause a copy that was not needed.
-            private bool _shared;
+            // Whether _data may be referenced by another content as well - a copy made by Clone
+            // shares the array instead of copying it (copy-on-write; see MutableString.Content.cs) -
+            // and whether a thread holds this content: see ContentState. Every method that writes to
+            // _data does so between EnterWrite, which gives this content an array of its own, and
+            // ExitWrite.
+            private int _state;
 
             internal BinaryContent(byte[]/*!*/ data, MutableString owner) 
                 : this(data, data.Length, owner) {
@@ -53,35 +53,48 @@ namespace IronRuby.Builtins {
                 _count = count;
             }
 
-            // A content that shares data with another: see _shared.
+            // A content that shares data with another: see _state.
             private BinaryContent(byte[]/*!*/ data, int count, MutableString owner, bool shared)
                 : this(data, count, owner) {
-                _shared = shared;
+                _state = shared ? ContentState.Shared : 0;
             }
 
             /// <summary>
-            /// Gives this content an array of its own if it shares one, before a write, with room for at
-            /// least <paramref name="minCapacity"/> bytes so that an append does not copy a second time.
+            /// Holds this content for a write until <see cref="ExitWrite"/>, and gives it an array of its
+            /// own if it shares one, with room for at least <paramref name="minCapacity"/> bytes so that
+            /// an append does not copy a second time.
             /// </summary>
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            private void Unshare(int minCapacity) {
-                if (_shared) {
-                    UnshareSlow(minCapacity);
+            private void EnterWrite(int minCapacity) {
+                if (!ContentState.TryEnterUnshared(ref _state)) {
+                    EnterWriteSlow(minCapacity);
                 }
             }
 
             [MethodImpl(MethodImplOptions.NoInlining)]
-            private void UnshareSlow(int minCapacity) {
-                // Room past the end is zeroed, as a fresh array's would be; the rest is copied over.
-                var data = Utils.NewArrayToFill<byte>(Math.Max(_count, minCapacity));
-                Buffer.BlockCopy(_data, 0, data, 0, _count);
-                Array.Clear(data, _count, data.Length - _count);
-                _data = data;
-                _shared = false;
+            private void EnterWriteSlow(int minCapacity) {
+                if (ContentState.Enter(ref _state)) {
+                    try {
+                        // Room past the end is zeroed, as a fresh array's would be; the rest is copied over.
+                        var data = Utils.NewArrayToFill<byte>(Math.Max(_count, minCapacity));
+                        Buffer.BlockCopy(_data, 0, data, 0, _count);
+                        Array.Clear(data, _count, data.Length - _count);
+                        _data = data;
+                    } catch {
+                        ContentState.Exit(ref _state, true);
+                        throw;
+                    }
+                }
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private void ExitWrite() {
+                ContentState.Exit(ref _state, false);
             }
 
             internal override void PrepareForWrite(int minCapacity) {
-                Unshare(minCapacity);
+                EnterWrite(minCapacity);
+                ExitWrite();
             }
 
             internal ReadOnlySpan<byte> GetDataSpan() {
@@ -126,13 +139,21 @@ namespace IronRuby.Builtins {
             }
 
             internal void AppendBytes(string/*!*/ str, int start, int count) {
-                Unshare(_count + count);
-                _count = Utils.Append(ref _data, _count, str, start, count, _owner._encoding.EscapingEncoding);
+                EnterWrite(_count + count);
+                try {
+                    _count = Utils.Append(ref _data, _count, str, start, count, _owner._encoding.EscapingEncoding);
+                } finally {
+                    ExitWrite();
+                }
             }
 
             internal void AppendBytes(char[]/*!*/ chars, int start, int count) {
-                Unshare(_count + count);
-                _count = Utils.Append(ref _data, _count, chars, start, count, _owner._encoding.EscapingEncoding);
+                EnterWrite(_count + count);
+                try {
+                    _count = Utils.Append(ref _data, _count, chars, start, count, _owner._encoding.EscapingEncoding);
+                } finally {
+                    ExitWrite();
+                }
             }
 
             #region UpdateCharacterFlags, CalculateHashCode, Length, Clone, Count (read-only)
@@ -183,13 +204,17 @@ namespace IronRuby.Builtins {
             public override int Count {
                 get { return _count; }
                 set {
-                    Unshare(value);
-                    if (_data.Length < value) {
-                        Array.Resize(ref _data, Utils.GetExpandedSize(_data, value));
-                    } else {
-                        Utils.Fill(_data, _count, (byte)0, value - _count);
+                    EnterWrite(value);
+                    try {
+                        if (_data.Length < value) {
+                            Array.Resize(ref _data, Utils.GetExpandedSize(_data, value));
+                        } else {
+                            Utils.Fill(_data, _count, (byte)0, value - _count);
+                        }
+                        _count = value;
+                    } finally {
+                        ExitWrite();
                     }
-                    _count = value;
                 }
             }
 
@@ -281,10 +306,14 @@ namespace IronRuby.Builtins {
                 return _count;
             }
 
-            // Shares the array: see _shared.
+            // Shares the array: see _state.
             public override Content/*!*/ Clone() {
-                _shared = true;
-                return new BinaryContent(_data, _count, _owner, true);
+                ContentState.Enter(ref _state);
+                try {
+                    return new BinaryContent(_data, _count, _owner, true);
+                } finally {
+                    ContentState.Exit(ref _state, true);
+                }
             }
 
             public override void TrimExcess() {
@@ -436,10 +465,18 @@ namespace IronRuby.Builtins {
             }
 
             public override Content/*!*/ GetSlice(int start, int count) {
-                if (start == 0 && Utils.IsSharedPrefix(_data.Length, count = Math.Min(count, _count))) {
-                    // see Utils.IsSharedPrefix
-                    _shared = true;
-                    return new BinaryContent(_data, count, _owner, true);
+                if (start == 0 && Utils.IsSharedPrefix(_data.Length, Math.Min(count, _count))) {
+                    // see Utils.IsSharedPrefix; checked again while holding the content
+                    bool shared = ContentState.Enter(ref _state);
+                    try {
+                        int prefix = Math.Min(count, _count);
+                        if (Utils.IsSharedPrefix(_data.Length, prefix)) {
+                            shared = true;
+                            return new BinaryContent(_data, prefix, _owner, true);
+                        }
+                    } finally {
+                        ContentState.Exit(ref _state, shared);
+                    }
                 }
                 return Create(_data.GetSlice(_count, start, count), _owner);
             }
@@ -625,14 +662,22 @@ namespace IronRuby.Builtins {
                 if (_owner.HasByteCharacters || c < 0x80 && _owner._encoding.IsAsciiIdentity) {
                     Append((byte)c, repeatCount);
                 } else {
-                    Unshare(_count + repeatCount);
-                    _count = Utils.Append(ref _data, _count, c, repeatCount, _owner._encoding.EscapingEncoding);
+                    EnterWrite(_count + repeatCount);
+                    try {
+                        _count = Utils.Append(ref _data, _count, c, repeatCount, _owner._encoding.EscapingEncoding);
+                    } finally {
+                        ExitWrite();
+                    }
                 }
             }
 
             public override void Append(byte b, int repeatCount) {
-                Unshare(_count + repeatCount);
-                _count = Utils.Append(ref _data, _count, b, repeatCount);
+                EnterWrite(_count + repeatCount);
+                try {
+                    _count = Utils.Append(ref _data, _count, b, repeatCount);
+                } finally {
+                    ExitWrite();
+                }
             }
 
             public override void Append(string/*!*/ str, int start, int count) {
@@ -644,14 +689,22 @@ namespace IronRuby.Builtins {
             }
 
             public override void Append(byte[]/*!*/ bytes, int start, int count) {
-                Unshare(_count + count);
-                _count = Utils.Append(ref _data, _count, bytes, start, count);
+                EnterWrite(_count + count);
+                try {
+                    _count = Utils.Append(ref _data, _count, bytes, start, count);
+                } finally {
+                    ExitWrite();
+                }
             }
 
             public override void Append(Stream/*!*/ stream, int count) {
-                Unshare(_count + count);
-                Utils.Resize(ref _data, _count + count);
-                _count += stream.Read(_data, _count, count);
+                EnterWrite(_count + count);
+                try {
+                    Utils.Resize(ref _data, _count + count);
+                    _count += stream.Read(_data, _count, count);
+                } finally {
+                    ExitWrite();
+                }
             }
 
             public override void AppendFormat(IFormatProvider provider, string/*!*/ format, object[]/*!*/ args) {
@@ -697,16 +750,19 @@ namespace IronRuby.Builtins {
 
             public override void Insert(int index, char c) {
                 if (_owner.HasByteCharacters || c < 0x80 && _owner._encoding.IsAsciiIdentity) {
-                    Unshare(_count + 1);
-                    _count = Utils.InsertAt(ref _data, _count, index, (byte)c, 1);
+                    Insert(index, (byte)c);
                 } else {
                     SwitchToChars(1).Insert(index, c);
                 }
             }
 
             public override void Insert(int index, byte b) {
-                Unshare(_count + 1);
-                _count = Utils.InsertAt(ref _data, _count, index, b, 1);
+                EnterWrite(_count + 1);
+                try {
+                    _count = Utils.InsertAt(ref _data, _count, index, b, 1);
+                } finally {
+                    ExitWrite();
+                }
             }
 
             public override void Insert(int index, string/*!*/ str, int start, int count) {
@@ -718,8 +774,12 @@ namespace IronRuby.Builtins {
             }
 
             public override void Insert(int index, byte[]/*!*/ bytes, int start, int count) {
-                Unshare(_count + count);
-                _count = Utils.InsertAt(ref _data, _count, index, bytes, start, count);
+                EnterWrite(_count + count);
+                try {
+                    _count = Utils.InsertAt(ref _data, _count, index, bytes, start, count);
+                } finally {
+                    ExitWrite();
+                }
             }
 
             public override void InsertTo(Content/*!*/ str, int index, int start, int count) {
@@ -730,8 +790,12 @@ namespace IronRuby.Builtins {
                 if (index >= _count) {
                     throw new IndexOutOfRangeException();
                 }
-                Unshare(0);
-                _data[index] = b;
+                EnterWrite(0);
+                try {
+                    _data[index] = b;
+                } finally {
+                    ExitWrite();
+                }
             }
 
             public override void SetChar(int index, char c) {
@@ -747,31 +811,44 @@ namespace IronRuby.Builtins {
             #region Remove, Write
 
             public override void Remove(int start, int count) {
-                if (_shared) {
-                    // Cutting off the end leaves the shared bytes as they are; anything else copies
-                    // what is left in one go rather than copying everything and then moving the tail.
-                    _count = Utils.RemoveShared(ref _data, _count, start, count, ref _shared);
-                    return;
+                bool shared = ContentState.Enter(ref _state);
+                try {
+                    if (shared) {
+                        // Cutting off the end leaves the shared bytes as they are; anything else copies
+                        // what is left in one go rather than copying everything and then moving the tail.
+                        _count = Utils.RemoveShared(ref _data, _count, start, count, ref shared);
+                    } else {
+                        _count = Utils.Remove(ref _data, _count, start, count);
+                    }
+                } finally {
+                    ContentState.Exit(ref _state, shared);
                 }
-                _count = Utils.Remove(ref _data, _count, start, count);
             }
 
             public override void Write(int offset, byte[]/*!*/ value, int start, int count) {
-                Unshare(offset + count);
-                Utils.Resize(ref _data, offset + count);
-                _count = Math.Max(_count, offset + count);
-                Buffer.BlockCopy(value, start, _data, offset, count);
+                EnterWrite(offset + count);
+                try {
+                    Utils.Resize(ref _data, offset + count);
+                    _count = Math.Max(_count, offset + count);
+                    Buffer.BlockCopy(value, start, _data, offset, count);
+                } finally {
+                    ExitWrite();
+                }
             }
 
             public override void Write(int offset, byte value, int repeatCount) {
                 int end = offset + repeatCount;
-                Unshare(end);
-                Utils.Resize(ref _data, end);
-                if (end > _count) {
-                    _count = end;
-                }
-                for (int i = offset; i < end; i++) {
-                    _data[i] = value;
+                EnterWrite(end);
+                try {
+                    Utils.Resize(ref _data, end);
+                    if (end > _count) {
+                        _count = end;
+                    }
+                    for (int i = offset; i < end; i++) {
+                        _data[i] = value;
+                    }
+                } finally {
+                    ExitWrite();
                 }
             }
 
