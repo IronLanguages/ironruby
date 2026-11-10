@@ -1338,5 +1338,58 @@ $log.join(""|"")
             AreEqual(interpreting.CreateScriptSourceFromString(script, "pass1.rb", SourceCodeKind.File).Execute().ToString(), expected);
             AreEqual(Engine.CreateScriptSourceFromString(script, "pass2.rb", SourceCodeKind.File).Execute().ToString(), expected);
         }
+
+        /// <summary>
+        /// A compiled body with only an `ensure' lets an exception whose backtrace has been captured go through (a real exception
+        /// filter, RubyOps.PassEnsure) instead of catching it and throwing it again, and a compiled frame that rescues an exception
+        /// leaves the walk of the stack below it until the exception is exposed (RubyExceptionData.TryDeferCatchSite). $! in the
+        /// ensure clauses and their order against an outer `rescue'; a raise and a bare re-raise from an ensure clause; the
+        /// exception kept by a #=== of a rescue clause, in a global, re-raised, as a cause - also of one rescued by a recursive call
+        /// of the method that rescued it -, retry; and the backtraces after each. The expected output is CRuby 4.0's. Run
+        /// interpreted and compiled.
+        /// </summary>
+        public void Exception_EnsurePassThroughDeferredTrace1() {
+            const string script = @"$log = []
+def bt(e) = e.backtrace.map { |f| f[/:\d+:in '[^']*'/] }.join("","")
+def d; raise ""x""; end
+def e1; d; ensure; $log << ""e1 #{$!.message}""; end
+def e2; begin; e1; ensure; $log << ""e2 #{$!.message}""; end; end
+begin
+  e2
+rescue ($log << ""match""; RuntimeError) => e
+  $log << bt(e)
+end
+def ens_raise; d; ensure; raise IOError, ""ens""; end
+begin; ens_raise; rescue IOError => e; $log << ""#{e.message} #{e.cause.message} #{bt(e.cause)}""; end
+def ens_reraise; e1; ensure; raise; end
+begin; ens_reraise; rescue => e; $log << bt(e); end
+def ens_reads; e1; ensure; $log << bt($!); end
+begin; ens_reads; rescue; end
+class Keep; def self.===(e) = ($kept = e; false); end
+def keep; d; rescue Keep; end
+begin; keep; rescue; end
+$log << bt($kept)
+def to_global; d; rescue; $g = $!; end
+to_global; $log << bt($g)
+def bare; d; rescue; raise; end
+begin; bare; rescue => e; $log << bt(e); end
+def chain; d; rescue; raise IOError, ""c""; end
+begin; chain; rescue => e; $log << ""#{bt(e)} / #{bt(e.cause)}""; end
+def rr(n); d; rescue; rr(n - 1) if n > 0; raise IOError, ""r#{n}""; end
+begin; rr(2); rescue => e; while e; $log << bt(e); e = e.cause; end; end
+def again; n = 0; begin; n += 1; d; rescue; retry if n < 3; n; end; end
+$log << again
+def nomatch; d; rescue TypeError; end
+begin; nomatch; rescue => e; $log << bt(e); end
+$log << (d rescue bt($!))
+$log << $!.inspect
+$log.join(""|"")
+";
+            const string expected = "e1 x|e2 x|match|:3:in 'Object#d',:4:in 'Object#e1',:5:in 'Object#e2',:7:in '<main>'|ens x :3:in 'Object#d',:11:in 'Object#ens_raise',:12:in '<main>'|e1 x|:3:in 'Object#d',:4:in 'Object#e1',:13:in 'Object#ens_reraise',:14:in '<main>'|e1 x|:3:in 'Object#d',:4:in 'Object#e1',:15:in 'Object#ens_reads',:16:in '<main>'|:3:in 'Object#d',:18:in 'Object#keep',:19:in '<main>'|:3:in 'Object#d',:21:in 'Object#to_global',:22:in '<main>'|:3:in 'Object#d',:23:in 'Object#bare',:24:in '<main>'|:25:in 'Object#chain',:26:in '<main>' / :3:in 'Object#d',:25:in 'Object#chain',:26:in '<main>'|:27:in 'Object#rr',:27:in 'Object#rr',:27:in 'Object#rr',:28:in '<main>'|:3:in 'Object#d',:27:in 'Object#rr',:27:in 'Object#rr',:27:in 'Object#rr',:28:in '<main>'|:3:in 'Object#d',:27:in 'Object#rr',:27:in 'Object#rr',:28:in '<main>'|:3:in 'Object#d',:27:in 'Object#rr',:28:in '<main>'|3|:3:in 'Object#d',:31:in 'Object#nomatch',:32:in '<main>'|:3:in 'Object#d',:33:in '<main>'|nil";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "pass3.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            AreEqual(Engine.CreateScriptSourceFromString(script, "pass4.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
     }
 }
