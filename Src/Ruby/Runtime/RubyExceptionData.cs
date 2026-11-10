@@ -38,6 +38,30 @@ namespace IronRuby.Runtime {
         // True if the exception has already been handled by Ruby EH clause or if it was constructed "dynamically" via Class#new.
         internal bool Handled { get; set; }
 
+        /// <summary>
+        /// Set by Kernel#raise for an exception that no Ruby code can have kept before it was raised: made by the raise itself
+        /// from a String, or from a class whose #exception, #new and #initialize are all IronRuby's own. Only the backtrace of such
+        /// an exception may wait for it to be exposed (see TryDeferCatchSite): a kept one may be read after its rescuing frame is
+        /// gone without any of that frame's code ever touching it (`raise e' rescued and dropped, e read later).
+        /// </summary>
+        public bool RaisedUnkept { get; set; }
+
+        /// <summary>
+        /// Whether <c>raise exceptionClass</c> makes the exception without running any Ruby code that could keep it: #exception,
+        /// #new and #initialize of the class are IronRuby's own.
+        /// </summary>
+        public static bool MakesUnkeptException(RubyClass/*!*/ exceptionClass) {
+            var singleton = exceptionClass.ImmediateClass;
+            return IsBuiltin(singleton.ResolveMethod("exception", VisibilityContext.AllVisible).Info) &&
+                IsBuiltin(singleton.ResolveMethod("new", VisibilityContext.AllVisible).Info) &&
+                IsBuiltin(exceptionClass.ResolveMethod("initialize", VisibilityContext.AllVisible).Info);
+        }
+
+        // a method of IronRuby's own, which runs no Ruby code: a library method, or one the runtime builds (Class#new, Exception.exception)
+        private static bool IsBuiltin(RubyMemberInfo method) {
+            return method is RubyLibraryMethodInfo || method is RubyCustomMethodInfo;
+        }
+
         // The exception this data belongs to. Needed for lazy initialization of message, backtrace
         private readonly Exception/*!*/ _exception;
 
@@ -157,10 +181,12 @@ namespace IronRuby.Runtime {
         }
 
         /// <param name="rescuing">
-        /// Called where a compiled frame has caught the exception to match it with its rescue clauses (RubyOps.CanRescue): the walk
-        /// of the stack below that frame may be left until it is known to be needed (see <see cref="TryDeferCatchSite"/>).
+        /// Called where a compiled frame has caught the exception to match it with its rescue clauses (RubyOps.CanRescue), and no
+        /// Ruby code can have kept the exception: the walk of the stack below that frame may be left until it is known to be
+        /// needed (see <see cref="TryDeferCatchSite"/>).
         /// </param>
         internal void CaptureExceptionTrace(RubyScope/*!*/ scope, bool rescuing) {
+
             if (rescuing && !HasBacktrace && _raiseBacktrace == null && TryDeferCatchSite(scope)) {
                 return;
             }

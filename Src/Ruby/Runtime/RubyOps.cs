@@ -3359,6 +3359,12 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            // An exception no Ruby code can have kept: one a raise made itself, or one C# threw that Ruby code has never touched.
+            if (deferTrace) {
+                var raised = RubyExceptionData.TryGetInstance(exception);
+                deferTrace = raised == null || raised.RaisedUnkept;
+            }
+
             // calls "new" on the exception class if it hasn't been called yet:
             exception = RubyExceptionData.HandleException(scope, exception);
 

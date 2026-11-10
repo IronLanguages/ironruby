@@ -1345,7 +1345,8 @@ $log.join(""|"")
         /// leaves the walk of the stack below it until the exception is exposed (RubyExceptionData.TryDeferCatchSite). $! in the
         /// ensure clauses and their order against an outer `rescue'; a raise and a bare re-raise from an ensure clause; the
         /// exception kept by a #=== of a rescue clause, in a global, re-raised, as a cause - also of one rescued by a recursive call
-        /// of the method that rescued it -, retry; and the backtraces after each. The expected output is CRuby 4.0's. Run
+        /// of the method that rescued it -, retry, an exception kept before it was raised (by the caller, by its #initialize);
+        /// and the backtraces after each. The expected output is CRuby 4.0's. Run
         /// interpreted and compiled.
         /// </summary>
         public void Exception_EnsurePassThroughDeferredTrace1() {
@@ -1383,9 +1384,14 @@ def nomatch; d; rescue TypeError; end
 begin; nomatch; rescue => e; $log << bt(e); end
 $log << (d rescue bt($!))
 $log << $!.inspect
+def swallow(e); raise e; rescue RuntimeError; end
+kept = RuntimeError.new(""k""); swallow(kept); $log << bt(kept)
+class Held < StandardError; def initialize(m = ""h"") = ($held = self; super); end
+def held; raise Held; rescue Held; end
+held; $log << bt($held)
 $log.join(""|"")
 ";
-            const string expected = "e1 x|e2 x|match|:3:in 'Object#d',:4:in 'Object#e1',:5:in 'Object#e2',:7:in '<main>'|ens x :3:in 'Object#d',:11:in 'Object#ens_raise',:12:in '<main>'|e1 x|:3:in 'Object#d',:4:in 'Object#e1',:13:in 'Object#ens_reraise',:14:in '<main>'|e1 x|:3:in 'Object#d',:4:in 'Object#e1',:15:in 'Object#ens_reads',:16:in '<main>'|:3:in 'Object#d',:18:in 'Object#keep',:19:in '<main>'|:3:in 'Object#d',:21:in 'Object#to_global',:22:in '<main>'|:3:in 'Object#d',:23:in 'Object#bare',:24:in '<main>'|:25:in 'Object#chain',:26:in '<main>' / :3:in 'Object#d',:25:in 'Object#chain',:26:in '<main>'|:27:in 'Object#rr',:27:in 'Object#rr',:27:in 'Object#rr',:28:in '<main>'|:3:in 'Object#d',:27:in 'Object#rr',:27:in 'Object#rr',:27:in 'Object#rr',:28:in '<main>'|:3:in 'Object#d',:27:in 'Object#rr',:27:in 'Object#rr',:28:in '<main>'|:3:in 'Object#d',:27:in 'Object#rr',:28:in '<main>'|3|:3:in 'Object#d',:31:in 'Object#nomatch',:32:in '<main>'|:3:in 'Object#d',:33:in '<main>'|nil";
+            const string expected = "e1 x|e2 x|match|:3:in 'Object#d',:4:in 'Object#e1',:5:in 'Object#e2',:7:in '<main>'|ens x :3:in 'Object#d',:11:in 'Object#ens_raise',:12:in '<main>'|e1 x|:3:in 'Object#d',:4:in 'Object#e1',:13:in 'Object#ens_reraise',:14:in '<main>'|e1 x|:3:in 'Object#d',:4:in 'Object#e1',:15:in 'Object#ens_reads',:16:in '<main>'|:3:in 'Object#d',:18:in 'Object#keep',:19:in '<main>'|:3:in 'Object#d',:21:in 'Object#to_global',:22:in '<main>'|:3:in 'Object#d',:23:in 'Object#bare',:24:in '<main>'|:25:in 'Object#chain',:26:in '<main>' / :3:in 'Object#d',:25:in 'Object#chain',:26:in '<main>'|:27:in 'Object#rr',:27:in 'Object#rr',:27:in 'Object#rr',:28:in '<main>'|:3:in 'Object#d',:27:in 'Object#rr',:27:in 'Object#rr',:27:in 'Object#rr',:28:in '<main>'|:3:in 'Object#d',:27:in 'Object#rr',:27:in 'Object#rr',:28:in '<main>'|:3:in 'Object#d',:27:in 'Object#rr',:28:in '<main>'|3|:3:in 'Object#d',:31:in 'Object#nomatch',:32:in '<main>'|:3:in 'Object#d',:33:in '<main>'|nil|:35:in 'Object#swallow',:36:in '<main>'|:38:in 'Object#held',:39:in '<main>'";
 
             var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
             AreEqual(interpreting.CreateScriptSourceFromString(script, "pass3.rb", SourceCodeKind.File).Execute().ToString(), expected);
