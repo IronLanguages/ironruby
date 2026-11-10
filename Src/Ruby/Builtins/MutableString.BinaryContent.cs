@@ -209,7 +209,10 @@ namespace IronRuby.Builtins {
                     } else {
                         encoding.EscapingEncoding.GetChars(_data, _start, _count, rented, 0);
                     }
-                    return String.GetHashCode(chars.Slice(0, charCount));
+                    // Characters decoded in an encoding whose ASCII bytes are not its ASCII characters
+                    // (UTF-16, a dummy encoding) can still be long ASCII, which is hashed narrowed -
+                    // as the characters of the same string held as characters, or of a CLR string, are.
+                    return HashCharacters(chars.Slice(0, charCount), !encoding.AsciiRoundTrips);
                 } finally {
                     if (rented != null) {
                         ArrayPool<char>.Shared.Return(rented);

@@ -98,9 +98,8 @@ namespace IronRuby.Builtins {
             }
 
             /// <summary>
-            /// The length from which a string whose characters are all ASCII, in an encoding that
-            /// <see cref="RubyEncoding.AsciiRoundTrips"/>, hashes its bytes (<see cref="HashAsciiBytes"/>)
-            /// rather than its UTF-16 characters. A shorter one costs about the same either way, and
+            /// The length from which a string whose characters are all ASCII hashes them as bytes
+            /// (<see cref="HashAsciiBytes"/>) rather than as UTF-16 characters, whatever its encoding. A shorter one costs about the same either way, and
             /// keeps the hash it had - String.GetHashCode of its characters - with no narrowing first.
             /// ASCII characters and bytes are as many, so the choice does not depend on how the
             /// string is held.
@@ -108,14 +107,16 @@ namespace IronRuby.Builtins {
             internal const int AsciiByteHashMinLength = 128;
 
             /// <summary>
-            /// The hash of a long string whose characters are all ASCII, in an encoding that
-            /// <see cref="RubyEncoding.AsciiRoundTrips"/>, from its bytes: Marvin - the seeded hash of
+            /// The hash of a long string whose characters are all ASCII, from those characters as bytes
+            /// (in an encoding that <see cref="RubyEncoding.AsciiRoundTrips"/>, the string's own
+            /// bytes; in any other, its characters narrowed): Marvin - the seeded hash of
             /// String.GetHashCode, with its random per-process key - over the bytes, two to a
             /// UTF-16 unit, and an odd byte at the end mixed in with HashCode's (also seeded) mixer.
             /// That reads half the bytes the hash of the UTF-16 characters did. (An ASCII string of
             /// even length hashes as the one string of UTF-16 units its bytes spell, which is not
             /// ASCII: a pair that collides whatever the seed, but only ever a pair.) Every equal string - bytes or
-            /// characters, US-ASCII, UTF-8 or BINARY, each #eql? the others - hashes the same.
+            /// characters, US-ASCII, UTF-8 or BINARY, each #eql? the others, and a CLR string #eql? to
+            /// any of them - hashes the same.
             /// </summary>
             internal static int HashAsciiBytes(ReadOnlySpan<byte> ascii) {
                 Debug.Assert(ascii.Length >= AsciiByteHashMinLength);
@@ -132,8 +133,11 @@ namespace IronRuby.Builtins {
                 if (chars.Length < AsciiByteHashMinLength) {
                     return String.GetHashCode(chars);
                 }
-                // A string known not to be ASCII skips the attempt.
-                return HashCharacters(chars, _owner._encoding.AsciiRoundTrips && (_owner._flags & (MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag)) != 0);
+                // A string known not to be ASCII skips the attempt; the flags speak of the characters
+                // only in an encoding whose ASCII characters are its ASCII bytes. The hash itself
+                // depends on the characters alone, not the encoding: a CLR string is #eql? to a
+                // String of the same characters in any encoding.
+                return HashCharacters(chars, !_owner._encoding.AsciiRoundTrips || (_owner._flags & (MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag)) != 0);
             }
 
             [SkipLocalsInit]

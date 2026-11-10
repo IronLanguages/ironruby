@@ -1560,6 +1560,8 @@ p 'abc'.hash == 'abc'.b.hash, 'abc'.hash == 'abc'.dup.force_encoding('US-ASCII')
 p ''.hash == ''.encode('UTF-16LE').hash, ''.hash == ''.b.hash
 s = 'x' * 1000
 p s[1..].hash == ('x' * 999).hash, s.b[1..].hash == ('x' * 999).hash, s[1..].eql?('x' * 999)
+clr = System::String.new('a' * 200)
+p [clr, ('a' * 200).encode('UTF-16LE')].uniq.size, { ('a' * 200).encode('UTF-32BE') => 1 }[clr]
 u = 'é' * 600
 p u[1..].hash == ('é' * 599).hash, u.b.force_encoding('UTF-8').byteslice(2..).hash == ('é' * 599).hash
 ", @"
@@ -1573,6 +1575,8 @@ true
 true
 true
 true
+1
+1
 true
 true
 ");
