@@ -587,7 +587,9 @@ namespace IronRuby.Builtins {
                         num2 = Buffered(bb);
                     }
                     if (!IsImaginaryUnit(Cur)) {
-                        return Result(false, ScanReal, num);
+                        // read_comp has already made num2 by now and drops it: str2num still runs, and
+                        // still raises for a zero denominator ("1+2/0x"), so the text goes along as y
+                        return Result(false, ScanReal, num, num2);
                     }
                     _i++;
                     return Result(true, ScanRectangular, num, num2);

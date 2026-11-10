@@ -770,7 +770,11 @@ class Complex < Numeric
     kind = result[1]
     x = __str2num__(result[2])
     result[1] = case kind
-                when 0 then __raw__(x, 0)
+                when 0
+                  # an imaginary part read_comp made and then dropped: made all the same, since
+                  # str2num raises for a zero denominator ("1+2/0x")
+                  __str2num__(result[3])
+                  __raw__(x, 0)
                 when 1 then __raw__(0, x)
                 when 2 then __raw__(x, __str2num__(result[3]))
                 else __polar__(x, __str2num__(result[3]))
