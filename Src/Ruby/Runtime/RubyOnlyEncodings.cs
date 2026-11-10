@@ -967,15 +967,15 @@ namespace IronRuby.Runtime {
             _layout = layout;
             _table = Encoding.GetEncoding(tableCodePage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
 
+            // a lead byte, as it should be, decodes alone to the sentinel (no exception per byte)
+            var probe = Encoding.GetEncoding(tableCodePage, EncoderFallback.ReplacementFallback, new DecoderReplacementFallback("\uffff"));
             var single = new byte[1];
+            var decoded = new char[probe.GetMaxCharCount(1)];
             for (int b = 0x80; b <= 0xff; b++) {
                 if (layout.Lead[b] || b == layout.ThreeByteLead) {
                     single[0] = (byte)b;
-                    try {
-                        _tableSingle[b] = _table.GetCharCount(single, 0, 1) > 0;
-                    } catch (DecoderFallbackException) {
-                        // a lead byte, as it should be
-                    }
+                    int n = probe.GetChars(single, 0, 1, decoded, 0);
+                    _tableSingle[b] = n > 0 && decoded[0] != '\uffff';
                 }
             }
         }
