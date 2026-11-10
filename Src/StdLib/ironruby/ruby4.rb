@@ -6777,11 +6777,16 @@ class Data
         end
         m = m.to_sym
         # a member cannot look like a setter (rb_is_attrset_id: `[]=` is fine)
-        ::Kernel.raise(::ArgumentError, "invalid data member: #{m}") if m.name.match?(/\A[[:alpha:]_][[:alnum:]_]*=\z/)
+        name = m.name
+        if name.end_with?("=") && name.match?(/\A[[:alpha:]_][[:alnum:]_]*=\z/)
+          ::Kernel.raise(::ArgumentError, "invalid data member: #{m}")
+        end
         m
       end
-      duplicate = names.group_by { |m| m }.select { |_, v| v.size > 1 }.keys.first
-      ::Kernel.raise(::ArgumentError, "duplicate member: #{duplicate}") if duplicate
+      if names.uniq.size != names.size
+        duplicate = names.group_by { |m| m }.select { |_, v| v.size > 1 }.keys.first
+        ::Kernel.raise(::ArgumentError, "duplicate member: #{duplicate}")
+      end
       names.freeze
 
       klass = ::Class.new(self) do
