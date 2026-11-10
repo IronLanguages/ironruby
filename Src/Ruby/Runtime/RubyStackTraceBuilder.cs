@@ -54,6 +54,9 @@ namespace IronRuby.Runtime {
         // TracePoint's c_call location needs the frame that really made the call, which inside a
         // core method written in Ruby is that method's own, not its caller's.
         private bool _keepInternalFrames;
+        // The walk stops once this many frames are reported and known to be followed by nothing a
+        // host would cut off (see RubyTrace); Thread.new needs only the one frame that called it.
+        private int _maxFrames = Int32.MaxValue;
 
         private RubyStackTraceBuilder(RubyContext/*!*/ context)
             : this(context, context.GetPathEncoding()) {
@@ -180,8 +183,13 @@ namespace IronRuby.Runtime {
         }
 
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames, bool keepInternalFrames)
+            : this(context, skipFrames, keepInternalFrames, Int32.MaxValue) {
+        }
+
+        internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames, bool keepInternalFrames, int maxFrames)
             : this(context) {
             _keepInternalFrames = keepInternalFrames;
+            _maxFrames = maxFrames;
 
             // Kernel#caller and #caller_locations: -X:ExceptionDetail adds the CLR frames to exception
             // backtraces, not here, where code reads the frames - require_relative takes its directory
@@ -541,6 +549,10 @@ namespace IronRuby.Runtime {
                     if (!isClrFrame) {
                         _rubyFrameEnd = _trace.Count;
                     }
+                    if (_rubyFrameEnd >= _maxFrames) {
+                        // the first _maxFrames frames are what the whole walk would have reported first
+                        break;
+                    }
                 }
             }
         }
@@ -701,10 +713,12 @@ namespace IronRuby.Runtime {
                 }
 
                 return true;
-            } else if (method.IsDefined(typeof(RubyStackTraceHiddenAttribute), false)) {
-                return false;
             } else {
-                object[] attrs = method.GetCustomAttributes(typeof(RubyMethodAttribute), false);
+                FrameAttributes frameAttributes = GetFrameAttributes(method);
+                if (frameAttributes.Hidden) {
+                    return false;
+                }
+                object[] attrs = frameAttributes.RubyMethods;
                 if (attrs.Length > 0) {
                     // Ruby library method:
                     methodName = GetLibraryMethodLabel(method, attrs);
@@ -730,6 +744,27 @@ namespace IronRuby.Runtime {
                     return false;
                 }
             }
+        }
+
+        /// <summary>The attributes of a CLR method that decide how its frame is reported.</summary>
+        private sealed class FrameAttributes {
+            internal readonly bool Hidden;
+            internal readonly object[]/*!*/ RubyMethods;
+
+            internal FrameAttributes(MethodBase/*!*/ method) {
+                Hidden = method.IsDefined(typeof(RubyStackTraceHiddenAttribute), false);
+                RubyMethods = Hidden ? new object[0] : method.GetCustomAttributes(typeof(RubyMethodAttribute), false);
+            }
+        }
+
+        // Reading custom attributes allocates and parses metadata on every call, and every frame of every walk asked
+        // (most of a short walk - the one frame Thread.new records - went there). Weak, so a collectible method's
+        // entry goes with it.
+        private static readonly ConditionalWeakTable<MethodBase, FrameAttributes>/*!*/ _frameAttributes =
+            new ConditionalWeakTable<MethodBase, FrameAttributes>();
+
+        private static FrameAttributes/*!*/ GetFrameAttributes(MethodBase/*!*/ method) {
+            return _frameAttributes.GetValue(method, m => new FrameAttributes(m));
         }
 
         private static readonly ConcurrentDictionary<MethodBase, string>/*!*/ _libraryMethodLabels =
