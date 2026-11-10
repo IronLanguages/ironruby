@@ -188,8 +188,8 @@ namespace IronRuby.Builtins {
                 RubyEncoding encoding = _owner._encoding;
                 bool ascii;
                 if (_count >= AsciiByteHashMinLength) {
-                    ascii = encoding.AsciiRoundTrips &&
-                        ((_owner._flags & (MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag)) == MutableString.IsAsciiFlag || System.Text.Ascii.IsValid(bytes));
+                    // the bytes themselves, not the cached flags, which a write in place can leave behind
+                    ascii = encoding.AsciiRoundTrips && System.Text.Ascii.IsValid(bytes);
                     if (ascii) {
                         return HashAsciiBytes(bytes);
                     }

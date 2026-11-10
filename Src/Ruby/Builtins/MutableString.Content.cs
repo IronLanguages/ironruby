@@ -133,11 +133,11 @@ namespace IronRuby.Builtins {
                 if (chars.Length < AsciiByteHashMinLength) {
                     return String.GetHashCode(chars);
                 }
-                // A string known not to be ASCII skips the attempt; the flags speak of the characters
-                // only in an encoding whose ASCII characters are its ASCII bytes. The hash itself
-                // depends on the characters alone, not the encoding: a CLR string is #eql? to a
-                // String of the same characters in any encoding.
-                return HashCharacters(chars, !_owner._encoding.AsciiRoundTrips || (_owner._flags & (MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag)) != 0);
+                // The hash depends on the characters alone, not on the encoding (a CLR string is #eql? to
+                // a String of the same characters in any encoding) nor on the cached ASCII flags, which
+                // a write in place can leave behind: the narrowing checks the characters themselves
+                // and stops at the first that is not ASCII.
+                return HashCharacters(chars, true);
             }
 
             [SkipLocalsInit]

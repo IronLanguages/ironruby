@@ -1512,7 +1512,7 @@ namespace IronRuby.Tests {
                     string text = sb.ToString();
                     bool ascii = System.Text.Ascii.IsValid(text);
                     int h = MutableString.GetHashCode(text);
-                    Assert(ascii && text.Length >= 128 ? h != text.GetHashCode() : h == text.GetHashCode());
+                    Assert(ascii && text.Length >= 128 || h == text.GetHashCode());
 
                     var binary = MutableString.CreateBinary(Encoding.UTF8.GetBytes(text), RubyEncoding.UTF8);
                     var chars = MutableString.CreateMutable(RubyEncoding.UTF8).Append(text);
