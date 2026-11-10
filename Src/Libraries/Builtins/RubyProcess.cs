@@ -794,6 +794,9 @@ namespace IronRuby.Builtins {
         /// The CPU time the calling thread has used, in nanoseconds: clock_gettime(CLOCK_THREAD_CPUTIME_ID) on Unix, whose
         /// id is 3 on Linux, 16 on macOS and 14 on FreeBSD, and GetThreadTimes' kernel and user time (in 100 ns units) on
         /// Windows. A Ruby Thread is a CLR thread, which is an OS thread, so this is the Ruby Thread's CPU time as in MRI.
+        /// One difference remains: a Fiber runs on a worker thread of its own here (ThreadOps.Fiber.cs), while MRI runs it on
+        /// the thread that resumes it, so the CPU time a Fiber (or Enumerator#next) spends counts toward neither that thread's
+        /// clock nor, read inside the Fiber, the resuming thread's. Charging it back would cost two clock reads per switch.
         /// </summary>
         private static bool TryGetThreadCpuTime(out long nanoseconds) {
             nanoseconds = 0;
