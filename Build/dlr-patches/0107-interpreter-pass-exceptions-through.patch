@@ -42,7 +42,7 @@ diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Mi
                      switch (HandleException(frame, exception)) {
                          case ExceptionHandlingResult.Continue: continue;
                          case ExceptionHandlingResult.Return: return;
-@@ -106,11 +107,47 @@
+@@ -106,11 +107,42 @@
                      // in proportion to its depth to get out, and ended the process. Leaving the catch first
                      // gives that stack back; the dispatch info keeps the exception's trace.
                      rethrow = ExceptionDispatchInfo.Capture(exception);
@@ -72,19 +72,14 @@ diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Mi
 +        /// runs on top of the frames the exception came out of, a catch gives their stack back before it rethrows.
 +        /// </summary>
 +        private bool MustCatch(InterpretedFrame frame, Exception exception, ref bool runFinallyBlocks) {
++            bool mustCatch = GetBestHandler(frame.InstructionIndex, exception.GetType()) is not null ||
++                // with no finally block to run, catching would only rethrow
++                frame.HasContinuations && (HasJumpsInFinally || !RuntimeHelpers.TryEnsureSufficientExecutionStack());
++
++            // decided before anything else runs here: a filter that throws counts as false, and the finally blocks run then too
++            runFinallyBlocks = !mustCatch && frame.HasContinuations;
 +            frame.SaveTraceToException(exception);
-+            if (GetBestHandler(frame.InstructionIndex, exception.GetType()) is not null) {
-+                return true;
-+            }
-+            if (!frame.HasContinuations) {
-+                // nothing to run here: catching would only rethrow
-+                return false;
-+            }
-+            if (HasJumpsInFinally || !RuntimeHelpers.TryEnsureSufficientExecutionStack()) {
-+                return true;
-+            }
-+            runFinallyBlocks = true;
-+            return false;
++            return mustCatch;
 +        }
 +
          private ExceptionHandlingResult HandleException(InterpretedFrame frame, Exception exception) {
