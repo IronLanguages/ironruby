@@ -391,19 +391,22 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The most bits MRI 3.4+ is willing to produce from Integer#** before it gives up with
-        /// an ArgumentError (16 GiB). Anything past <see cref="Int32.MaxValue"/> bits is out of
-        /// reach for System.Numerics.BigInteger anyway, so that is the effective ceiling here.
+        /// MRI's rb_big_pow refuses a power when the bit length of its base times the exponent is
+        /// past 2**34 (BIGLEN_LIMIT on a 64-bit build): "exponent is too large".
         /// </summary>
-        private const long PowerResultBitLimit = 16L * 1024 * 1024 * 1024;
+        private const long PowerBitLimit = 1L << 34;
+
+        // MRI's Fixnum range (62 bits and a sign): a base and an exponent in it go through int_pow
+        private const long MriFixnumMax = (1L << 62) - 1;
 
         /// <summary>
         /// self ** exponent for exponent &gt;= 0.
         ///
-        /// Refuses absurd result sizes up front the way MRI 3.4+ does, rather than spending
-        /// minutes and gigabytes on a value nobody can use, and shifts instead of multiplying
-        /// when |self| is a power of two - BigInteger.Pow multiplies in quadratic time, which
-        /// makes even a legal result like 2 ** 40_000_000 effectively a hang.
+        /// Refuses what MRI refuses ("exponent is too large", <see cref="PowerIsTooLarge"/>) and
+        /// computes everything else, as MRI does: 2 ** (2**31) is a 2**31+1-bit Integer. A power of
+        /// two is a shift, linear instead of quadratic, so even 2 ** 40_000_000 is quick. .NET 9 and
+        /// later cap a BigInteger at about 2**31 bits; there a larger result is the failed
+        /// allocation MRI reports (NoMemoryError), as it is for a shift (<see cref="ShiftLeftOrFail"/>).
         /// </summary>
         internal static object/*!*/ PowerNonNegative(BigInteger/*!*/ self, BigInteger/*!*/ exponent) {
             Debug.Assert(exponent.Sign >= 0);
@@ -418,27 +421,100 @@ namespace IronRuby.Builtins {
                 return ScriptingRuntimeHelpers.Int32ToObject(exponent.IsEven ? 1 : -1);
             }
 
-            // |self| >= 2 from here on, so the result needs at least
-            // (bitLength(|self|) - 1) * exponent + 1 bits.
-            BigInteger magnitude = BigInteger.Abs(self);
-            long magnitudeBits = magnitude.GetBitLength();
-            BigInteger resultBits = (BigInteger)(magnitudeBits - 1) * exponent + BigInteger.One;
-            if (resultBits > PowerResultBitLimit || resultBits > Int32.MaxValue) {
+            if (PowerIsTooLarge(self, exponent)) {
                 throw RubyExceptions.CreateArgumentError("exponent is too large");
             }
 
+            // |self| >= 2, so from here on the exponent is below 2**34
+            BigInteger magnitude = BigInteger.Abs(self);
+            long magnitudeBits = magnitude.GetBitLength();
             bool negateResult = self.Sign < 0 && !exponent.IsEven;
-            int exp = (int)exponent;
+            long exp = (long)exponent;
 
             BigInteger result;
-            if ((magnitude & (magnitude - BigInteger.One)).IsZero) {
-                // |self| == 2 ** (magnitudeBits - 1): a shift, linear instead of quadratic
-                result = BigInteger.One << (int)((magnitudeBits - 1) * exp);
-            } else {
-                result = BigInteger.Pow(magnitude, exp);
+            try {
+                if ((magnitude & (magnitude - BigInteger.One)).IsZero) {
+                    // |self| == 2 ** (magnitudeBits - 1): a shift, linear instead of quadratic, in
+                    // Int32 steps (BigInteger shifts by an Int32)
+                    long shift = (magnitudeBits - 1) * exp;
+                    result = BigInteger.One;
+                    while (shift > Int32.MaxValue) {
+                        result = ShiftLeftOrFail(result, Int32.MaxValue);
+                        shift -= Int32.MaxValue;
+                    }
+                    result = ShiftLeftOrFail(result, (int)shift);
+                } else if (exp <= Int32.MaxValue) {
+                    result = BigInteger.Pow(magnitude, (int)exp);
+                } else {
+                    // BigInteger.Pow takes an Int32 exponent: raise to the exponent's high bits,
+                    // then square and multiply for the low ones
+                    int low = 0;
+                    while ((exp >> low) > Int32.MaxValue) {
+                        low++;
+                    }
+                    result = BigInteger.Pow(magnitude, (int)(exp >> low));
+                    for (int bit = low - 1; bit >= 0; bit--) {
+                        result *= result;
+                        if (((exp >> bit) & 1) != 0) {
+                            result *= magnitude;
+                        }
+                    }
+                }
+            } catch (OverflowException) {
+                // past the largest BigInteger (.NET 9 and later)
+                throw new OutOfMemoryException("failed to allocate memory");
             }
 
             return Protocols.Normalize(negateResult ? -result : result);
+        }
+
+        /// <summary>
+        /// MRI's test for "exponent is too large", for |self| &gt;= 2 and exponent &gt;= 1. A Bignum
+        /// base goes straight to rb_big_pow, which refuses bits(|self|) * exponent &gt; 2**34, and so
+        /// does any base to a Bignum power. A Fixnum base to a Fixnum power goes through int_pow
+        /// first, which squares the base in a long while it can and hands rb_big_pow the base and
+        /// exponent it has reached by then, so the test is made on those: 2 ** (2**33) is computed,
+        /// but 2 ** (2**34 - 1) is refused.
+        /// </summary>
+        private static bool PowerIsTooLarge(BigInteger/*!*/ self, BigInteger/*!*/ exponent) {
+            if (exponent > MriFixnumMax) {
+                return true;
+            }
+            long y = (long)exponent;
+            BigInteger x = BigInteger.Abs(self);
+
+            if (y > 1 && self >= -MriFixnumMax - 1 && self <= MriFixnumMax) {
+                // int_pow (numeric.c) up to its jump to rb_big_pow; its x is |self| here
+                long xs = (long)x;
+                long z = ((y & 1) != 0) ? xs : 1;
+                y &= ~1L;
+                while (true) {
+                    while ((y & 1) == 0) {
+                        if (xs >= 1L << 31) {
+                            // !FIT_SQRT_LONG(x)
+                            return (BigInteger)BitLength(xs) * y > PowerBitLimit;
+                        }
+                        xs *= xs;
+                        y >>= 1;
+                    }
+                    if ((Int128)xs * z > MriFixnumMax) {
+                        // MUL_OVERFLOW_FIXNUM_P(x, z)
+                        return (BigInteger)BitLength(xs) * y > PowerBitLimit;
+                    }
+                    z *= xs;
+                    if (--y == 0) {
+                        // the power fits in a Fixnum
+                        return false;
+                    }
+                }
+            }
+
+            // rb_big_pow: rb_absint_numwords(x, 1) * y > BIGLEN_LIMIT
+            return (BigInteger)x.GetBitLength() * y > PowerBitLimit;
+        }
+
+        private static long BitLength(long positive) {
+            return 64 - BitOperations.LeadingZeroCount((ulong)positive);
         }
 
         /// <summary>

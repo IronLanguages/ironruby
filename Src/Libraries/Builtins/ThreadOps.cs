@@ -1329,6 +1329,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static string GetCallerLocation(RubyContext/*!*/ context) {
             try {
+                // the frame records, not a CLR stack walk: even cut short after one frame (#184), the walk
+                // was most of what Thread.new cost
                 MutableString caller = RubyExceptionData.GetCallerFrame(context);
                 if (caller != null) {
                     string frame = caller.ToString();

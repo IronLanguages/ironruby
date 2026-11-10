@@ -3840,12 +3840,9 @@ class Numeric
   end
   private :__step_scan_args__
 
-  def step(*args, **kw, &block)
-    __ir_step_slow__(args, kw, &block)
-  end
-
-  # Numeric#step. Integer#step (Integer.cs) loops over Fixnums itself and comes here with
-  # everything else: the positional arguments as an Array, the keywords as a Hash or nil.
+  # Numeric#step. Numeric#step (Numeric.cs) loops over Floats itself, Integer#step
+  # (Integer.cs) over Fixnums, and both come here with everything else: the positional
+  # arguments as an Array, the keywords as a Hash or nil.
   def __ir_step_slow__(args, kw, &block)
     kw ||= {}
     unless block

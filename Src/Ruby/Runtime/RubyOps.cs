@@ -4097,14 +4097,18 @@ namespace IronRuby.Runtime {
             if (!TryParseRubyFloat(text, out result)) {
                 return false;
             }
-            WarnIfFloatOutOfRange(context, text.Trim(_FloatWhitespace).Replace("_", ""), result, KernelFloatNoExceptionLine);
+            if (MayWarnFloatOutOfRange(context, result)) {
+                WarnIfFloatOutOfRange(context, text.Trim(_FloatWhitespace).Replace("_", ""), result, KernelFloatNoExceptionLine);
+            }
             return true;
         }
 
         private static double ConvertStringToFloat(RubyContext/*!*/ context, string/*!*/ value, MutableString original, int kernelFloatLine = 0) {
             double result;
             if (TryParseRubyFloat(value, out result)) {
-                WarnIfFloatOutOfRange(context, value.Trim(_FloatWhitespace).Replace("_", ""), result, kernelFloatLine);
+                if (MayWarnFloatOutOfRange(context, result)) {
+                    WarnIfFloatOutOfRange(context, value.Trim(_FloatWhitespace).Replace("_", ""), result, kernelFloatLine);
+                }
                 return result;
             }
 
@@ -4112,6 +4116,11 @@ namespace IronRuby.Runtime {
         }
 
         private static readonly char[] _FloatWhitespace = { ' ', '\t', '\n', '\v', '\f', '\r' };
+
+        // whether WarnIfFloatOutOfRange can warn about this result: the text it quotes is made only then
+        private static bool MayWarnFloatOutOfRange(RubyContext/*!*/ context, double result) {
+            return (Double.IsInfinity(result) || result == 0) && context.Verbose is bool verbose && verbose;
+        }
 
         /// <summary>
         /// MRI's rb_cstr_to_dbl warns (verbose only) when strtod over- or underflows, quoting at
@@ -4204,17 +4213,19 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// Consumes a run of digits, appending them to <paramref name="digits"/>. When
+        /// Consumes a run of digits, appending them to <paramref name="digits"/> at
+        /// <paramref name="length"/>, which has room for every character up to <paramref name="end"/>. When
         /// <paramref name="allowUnderscore"/> is set an '_' may appear between two digits of the
         /// run, so "1_0" scans but "1__0", "_1" and "1_" do not. Returns the number of digits
         /// consumed, or -1 for a misplaced underscore.
         /// </summary>
-        private static int ScanDigitRun(string/*!*/ str, int end, ref int index, StringBuilder/*!*/ digits, bool hexadecimal, bool allowUnderscore) {
+        private static int ScanDigitRun(string/*!*/ str, int end, ref int index, Span<char> digits, ref int length, bool hexadecimal,
+            bool allowUnderscore) {
             int count = 0;
             while (index < end) {
                 char c = str[index];
                 if (hexadecimal ? IsHexadecimalDigit(c) : IsDecimalDigit(c)) {
-                    digits.Append(c);
+                    digits[length++] = c;
                     count++;
                     index++;
                 } else if (c == '_' && allowUnderscore && count > 0) {
@@ -4240,20 +4251,31 @@ namespace IronRuby.Runtime {
                 index++;
             }
 
-            StringBuilder digits = new StringBuilder();
-            if (ScanDigitRun(str, end, ref index, digits, false, true) <= 0) {
+            // the digits, underscores and all, are within what is left of the string
+            Span<char> digits = (end - index) <= 64 ? stackalloc char[end - index] : new char[end - index];
+            int length = 0;
+            if (ScanDigitRun(str, end, ref index, digits, ref length, false, true) <= 0) {
                 return false;
             }
 
-            if (!Int32.TryParse(digits.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out exponent)) {
-                // Far past the point where the result saturates to 0 or Infinity either way.
-                exponent = 99999;
+            long value = 0;
+            for (int i = 0; i < length; i++) {
+                value = value * 10 + (digits[i] - '0');
+                if (value > Int32.MaxValue) {
+                    // Far past the point where the result saturates to 0 or Infinity either way.
+                    value = 99999;
+                    break;
+                }
             }
-            if (negative) {
-                exponent = -exponent;
-            }
+            exponent = negative ? -(int)value : (int)value;
             return true;
         }
+
+        // 10**0 .. 10**22, every one of them exact in a double
+        private static readonly double[]/*!*/ _ExactPowersOfTen = {
+            1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+            1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+        };
 
         public static bool TryParseRubyFloat(string/*!*/ str, out double result) {
             result = 0.0;
@@ -4289,8 +4311,11 @@ namespace IronRuby.Runtime {
         private static bool TryParseDecimalFloat(string/*!*/ str, int index, int end, out double result) {
             result = 0.0;
 
-            StringBuilder digits = new StringBuilder();
-            int integerDigits = ScanDigitRun(str, end, ref index, digits, false, true);
+            // the digits, then "E" and the power for Double.TryParse: no more than the rest of the string and 8
+            int capacity = end - index + 8;
+            Span<char> digits = capacity <= 128 ? stackalloc char[capacity] : new char[capacity];
+            int length = 0;
+            int integerDigits = ScanDigitRun(str, end, ref index, digits, ref length, false, true);
             if (integerDigits < 0) {
                 return false;
             }
@@ -4298,7 +4323,7 @@ namespace IronRuby.Runtime {
             int scale = 0;
             if (index < end && str[index] == '.') {
                 index++;
-                int fractionDigits = ScanDigitRun(str, end, ref index, digits, false, true);
+                int fractionDigits = ScanDigitRun(str, end, ref index, digits, ref length, false, true);
                 if (fractionDigits < 0) {
                     return false;
                 }
@@ -4334,19 +4359,37 @@ namespace IronRuby.Runtime {
                 power = -99999;
             }
 
+            // The usual number has at most 15 significant digits and a small power of ten: then the
+            // digits and the power are both exact in a double, and one multiplication or division
+            // rounds the result correctly (Clinger's fast path), as strtod and Double.Parse would.
+            int first = 0;
+            while (first < length && digits[first] == '0') {
+                first++;
+            }
+            if (length - first <= 15 && power >= -22 && power <= 22) {
+                long mantissa = 0;
+                for (int i = first; i < length; i++) {
+                    mantissa = mantissa * 10 + (digits[i] - '0');
+                }
+                result = power >= 0 ? (double)mantissa * _ExactPowersOfTen[power] : (double)mantissa / _ExactPowersOfTen[-power];
+                return true;
+            }
+
             // Double.Parse saturates to Infinity or zero rather than failing, which is what Ruby
             // does with "1e400" and "1e-400".
-            return Double.TryParse(
-                digits.ToString() + "E" + power.ToString(CultureInfo.InvariantCulture),
-                NumberStyles.Float, CultureInfo.InvariantCulture, out result);
+            digits[length++] = 'E';
+            power.TryFormat(digits.Slice(length), out int written, default, CultureInfo.InvariantCulture);
+            length += written;
+            return Double.TryParse(digits.Slice(0, length), NumberStyles.Float, CultureInfo.InvariantCulture, out result);
         }
 
         private static bool TryParseHexadecimalFloat(string/*!*/ str, int index, int end, out double result) {
             result = 0.0;
 
             // '_' may separate two hexadecimal digits, exactly as in the decimal form.
-            StringBuilder digits = new StringBuilder();
-            int integerDigits = ScanDigitRun(str, end, ref index, digits, true, true);
+            Span<char> digits = (end - index) <= 128 ? stackalloc char[end - index] : new char[end - index];
+            int length = 0;
+            int integerDigits = ScanDigitRun(str, end, ref index, digits, ref length, true, true);
             if (integerDigits < 0) {
                 return false;
             }
@@ -4354,7 +4397,7 @@ namespace IronRuby.Runtime {
             int scale = 0;
             if (index < end && str[index] == '.') {
                 index++;
-                int fractionDigits = ScanDigitRun(str, end, ref index, digits, true, true);
+                int fractionDigits = ScanDigitRun(str, end, ref index, digits, ref length, true, true);
                 if (fractionDigits <= 0) {
                     return false;
                 }
@@ -4376,7 +4419,7 @@ namespace IronRuby.Runtime {
             }
 
             BigInteger mantissa = BigInteger.Zero;
-            for (int i = 0; i < digits.Length; i++) {
+            for (int i = 0; i < length; i++) {
                 char c = digits[i];
                 int digit = (c <= '9') ? (c - '0') : ((c | 0x20) - 'a' + 10);
                 mantissa = mantissa * 16 + digit;

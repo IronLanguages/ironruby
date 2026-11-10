@@ -4679,10 +4679,25 @@ namespace IronRuby.Builtins {
             return InternalSplit(self, separator, limit);            
         }
 
-        public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, 
+        public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self,
             [NotNull]RubyRegex/*!*/ regexp, [DefaultProtocol, Optional]int limit) {
+            bool searched;
+            MatchData lastMatch;
+            return Split(self, regexp, limit, out searched, out lastMatch);
+        }
+
+        /// <summary>
+        /// String#split with a Regexp. <paramref name="searched"/> tells whether MRI's rb_str_split_m
+        /// searches with it, and so leaves $~ at <paramref name="lastMatch"/>: the match a limit
+        /// stopped at, or nil after the search that found no more. It does not search for a limit of
+        /// 1, nor for // (split into characters) and / / (split at a space, like " ").
+        /// </summary>
+        private static RubyArray/*!*/ Split(MutableString/*!*/ self, RubyRegex/*!*/ regexp, int limit, out bool searched,
+            out MatchData lastMatch) {
 
             RequireValidEncoding(self);
+            lastMatch = null;
+            searched = limit != 1 && !regexp.IsEmpty && !(regexp.Pattern.Length == 1 && regexp.Pattern.GetChar(0) == ' ');
 
             if (self.IsEmpty) {
                 // If self is "", the result is always []. This is special cased because the code will
@@ -4701,7 +4716,7 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
-            RubyArray fields = RegexSplit(self, regexp, limit);
+            RubyArray fields = RegexSplit(self, regexp, limit, out lastMatch);
             if (limit == 0) {
                 // suppress trailing empty fields
                 while (fields.Count != 0 && ((MutableString)fields[fields.Count - 1]).Length == 0) {
@@ -4718,8 +4733,9 @@ namespace IronRuby.Builtins {
         /// where the field starts and only cuts at the next one, giving ["h", "i", "m", "o", "m"].
         /// The captures of each match go into the result after the field it ended.
         /// </summary>
-        private static RubyArray/*!*/ RegexSplit(MutableString/*!*/ self, RubyRegex/*!*/ regexp, int limit) {
+        private static RubyArray/*!*/ RegexSplit(MutableString/*!*/ self, RubyRegex/*!*/ regexp, int limit, out MatchData lastMatch) {
             // CLR indices throughout: they come from the matches and go straight back into slices.
+            lastMatch = null;
             RubyArray result = new RubyArray();
             self.PrepareForCharacterRead();
             int length = self.GetCharCount();
@@ -4729,6 +4745,7 @@ namespace IronRuby.Builtins {
             int fieldCount = 1;
 
             while (searchFrom <= length) {
+                int matchFrom = searchFrom;
                 MatchData match = regexp.Match(self, searchFrom, false);
                 if (match == null) {
                     break;
@@ -4766,6 +4783,8 @@ namespace IronRuby.Builtins {
                 }
 
                 if (limit > 0 && limit <= ++fieldCount) {
+                    // $~ is the match the limit stopped at, over a snapshot of the string as it is now
+                    lastMatch = regexp.Match(self, matchFrom, true);
                     break;
                 }
             }
@@ -4799,9 +4818,16 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("split")]
-        public static object Split(ConversionStorage<MutableString>/*!*/ stringCast, BlockParam block, MutableString/*!*/ self,
+        public static object Split(RubyScope/*!*/ scope, BlockParam block, MutableString/*!*/ self,
             [NotNull]RubyRegex/*!*/ regexp, [DefaultProtocol, Optional]int limit) {
-            return YieldSplit(block, self, Split(stringCast, self, regexp, limit));
+            bool searched;
+            MatchData lastMatch;
+            RubyArray fields = Split(self, regexp, limit, out searched, out lastMatch);
+            if (searched) {
+                // as MRI's rb_reg_search leaves it: nil after the search that found no more
+                scope.GetInnerMostClosureScope().CurrentMatch = lastMatch;
+            }
+            return YieldSplit(block, self, fields);
         }
 
         private static object YieldSplit(BlockParam block, MutableString/*!*/ self, RubyArray/*!*/ fields) {
@@ -5159,7 +5185,27 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region to_f, to_s, to_str, to_clr_string, to_sym, intern
+        #region to_c, to_f, to_s, to_str, to_clr_string, to_sym, intern
+
+        /// <summary>
+        /// MRI's string_to_c: the leading part that reads as a complex number, (0+0i) when none does. The scan is
+        /// C# (RubyComplex.Scan); a number with parts that are not plain Integers - a Float, a Rational, a polar
+        /// form - and a string of another encoding go to complex.rb's Complex.__parse_string__, as every call did.
+        /// </summary>
+        [RubyMethod("to_c")]
+        public static object ToComplex(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ parseStorage,
+            MutableString/*!*/ self) {
+            var context = parseStorage.Context;
+            RubyClass complex = context.GetClass(typeof(RubyComplex));
+            if (self.Encoding.IsAsciiIdentity) {
+                RubyArray scan = RubyComplex.Scan(complex, self, false);
+                if (scan.Count == 2) {
+                    return scan[1];
+                }
+            }
+            var site = parseStorage.GetCallSite("__parse_string__", 2);
+            return site.Target(site, complex, self, false);
+        }
 
         [RubyMethod("to_f")]
         public static double ToDouble(RubyContext/*!*/ context, MutableString/*!*/ self) {

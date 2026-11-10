@@ -64,6 +64,7 @@ namespace IronRuby.Tests {
                 ReflectionUtils_GetMembers,
 
                 ParseBigInts1,
+                BigIntegerToString1,
                 ParseIntegers1,
 
                 ShebangNamesIronRuby1,
@@ -976,6 +977,9 @@ namespace IronRuby.Tests {
                 SyntaxError_Formatted1,
                 Digest_Incremental1,
                 Digest_NonStringResult1,
+                Encoding_EucKrTableGaps1,
+                StringIO_GetcInvalidBytes1,
+                Digest_OneShot1,
                 Main_Initialize1,
                 Dir_NotADirectory1,
                 Dir_NotADirectorySymlinks1,
@@ -1221,6 +1225,12 @@ namespace IronRuby.Tests {
                 Kernel_IntegerOverloads1,
                 Integer_Int64Shifts1,
                 Integer_HugeShifts1,
+                Integer_HugePower1,
+                Numeric_FloatStep1,
+                Range_FloatStep1,
+                Complex_StringScan1,
+                Kernel_FloatParse1,
+                String_SplitMatchData1,
                 Integer_OutOfFloatRange1,
                 BasicObject_EqualIdentity1,
             };
