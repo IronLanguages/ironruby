@@ -1,0 +1,297 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Largo <andi@idogawa.com>
+Date: Tue, 10 Nov 2026 00:30:00 +0100
+Subject: MathUtils.ToString(BigInteger, radix) in subquadratic time
+
+It divided the whole number by the radix once per digit: quadratic, with a
+BigInteger division per digit, so a million-bit number took ~108 s. A
+power-of-two radix now reads the bits; any other radix splits the number by
+powers of the radix (divide and conquer) down to pieces of 8 words, which are
+divided in place by the largest power of the radix that fits in a uint. On
+.NET 5 to 8, whose BigInteger.DivRem is quadratic, the large splits use
+Barrett reduction with a Newton reciprocal (multiplications only). The output
+is the same: upper case, '-' for a negative number.
+
+---
+diff --git a/src/core/Microsoft.Dynamic/Utils/MathUtils.cs b/src/core/Microsoft.Dynamic/Utils/MathUtils.cs
+--- a/src/core/Microsoft.Dynamic/Utils/MathUtils.cs
++++ b/src/core/Microsoft.Dynamic/Utils/MathUtils.cs
+@@ -982,35 +982,261 @@
+             return BigInteger.ModPow(self, power, mod);
+         }
+ 
+-        public static string ToString(this BigInteger self, int radix) {
+-            const string symbols = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
++        private const string RadixSymbols = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+ 
++        /// <summary>
++        /// The digits of <paramref name="self"/> in base <paramref name="radix"/> (2 through 36), upper case,
++        /// with a leading '-' when it is negative.
++        /// </summary>
++        /// <remarks>
++        /// This used to divide the whole number by the radix once per digit, which is quadratic with a large
++        /// constant: a million-bit number took minutes. A power-of-two radix now reads the bits directly, and
++        /// any other radix splits the number by powers of the radix (see <see cref="RadixConverter"/>).
++        /// </remarks>
++        public static string ToString(this BigInteger self, int radix) {
+             if (radix < 2 || radix > 36) {
+                 throw ExceptionUtils.MakeArgumentOutOfRangeException(nameof(radix), radix, "radix must be between 2 and 36");
+             }
+ 
+-            bool isNegative = false;
+-            if (self < BigInteger.Zero) {
+-                self = -self;
+-                isNegative = true;
+-            } else if (self == BigInteger.Zero) {
++            int sign = self.Sign;
++            if (sign == 0) {
+                 return "0";
+             }
+ 
+-            List<char> digits = new List<char>();
+-            while (self > 0) {
+-                digits.Add(symbols[(int)(self % radix)]);
+-                self /= radix;
++            BigInteger magnitude = sign < 0 ? BigInteger.Negate(self) : self;
++
++            // little-endian; the top byte may be a zero sign byte:
++            byte[] bytes = magnitude.ToByteArray();
++            int topByte = bytes.Length - 1;
++            while (bytes[topByte] == 0) {
++                topByte--;
++            }
++            long bitLength = (long)topByte * 8;
++            for (int b = bytes[topByte]; b != 0; b >>= 1) {
++                bitLength++;
++            }
++
++            // the digits go to chars[1..], leaving chars[0] for a sign:
++            char[] chars;
++            int first;
++            if ((radix & (radix - 1)) == 0) {
++                int bitsPerDigit = 1;
++                while ((1 << bitsPerDigit) != radix) {
++                    bitsPerDigit++;
++                }
++                long digitCount = (bitLength + bitsPerDigit - 1) / bitsPerDigit;
++                chars = new char[digitCount + 1];
++                int mask = radix - 1;
++                for (long d = 0; d < digitCount; d++) {
++                    long bit = d * bitsPerDigit;
++                    int byteIndex = (int)(bit >> 3);
++                    int window = bytes[byteIndex];
++                    if (byteIndex + 1 < bytes.Length) {
++                        window |= bytes[byteIndex + 1] << 8;
++                    }
++                    chars[digitCount - d] = RadixSymbols[(window >> (int)(bit & 7)) & mask];
++                }
++                first = 1;
++            } else {
++                var converter = new RadixConverter(radix, bitLength);
++                chars = new char[converter.Digits(converter.TopLevel) + 1];
++                converter.Write(magnitude, bytes, converter.TopLevel, chars, chars.Length);
++
++                first = 1;
++                while (chars[first] == '0') {
++                    first++;
++                }
++            }
++
++            if (sign < 0) {
++                chars[--first] = '-';
++            }
++            return new string(chars, first, chars.Length - first);
++        }
++
++        /// <summary>
++        /// Writes a non-negative BigInteger in a radix that is not a power of two, by divide and conquer: a number below
++        /// radix ** (k * 2**(level + 1)), where radix**k is the largest power of the radix that fits in a uint, is split by
++        /// radix ** (k * 2**level) into a high and a low half of k * 2**level digits each, down to pieces of a few words.
++        /// </summary>
++        private sealed class RadixConverter {
++            // A piece of at most 2**LeafLevel digit groups (about as many 32-bit words) is converted by dividing its words
++            // in place by radix**k, which yields k digits per pass over the words.
++            private const int LeafLevel = 3;
++
++            // BigInteger.DivRem is quadratic before .NET 9 (which divides by Burnikel-Ziegler), while its multiplication
++            // is Karatsuba. There, a split by a power of the radix of at least BarrettBits bits uses Barrett reduction
++            // with a reciprocal found by Newton's method, which takes only multiplications: a million-bit number takes
++            // ~0.55 s instead of ~2.7 s on .NET 8. On .NET 9 and later BigInteger.DivRem is faster than that (~0.3 s).
++            // (.NET Framework multiplies in quadratic time too, so it gains nothing from it.)
++            private static readonly bool s_useBarrett = Environment.Version.Major >= 5 && Environment.Version.Major < 9;
++            private const int BarrettBits = 1 << 12;
++
++            // A reciprocal of at most this many bits is found with one BigInteger division.
++            private const int DirectReciprocalBits = 1 << 12;
++
++            private readonly int _radix;
++            private readonly int _groupDigits;
++            private readonly BigInteger[] _powers;      // _powers[i] = radix ** (k * 2**i)
++            private readonly int[] _powerBits;          // their bit lengths, found when first needed
++            private readonly BigInteger[] _reciprocals; // floor(4 ** _powerBits[i] / _powers[i]), found when first needed
++
++            /// <summary>The level of the whole number: it has at most Digits(TopLevel) digits.</summary>
++            public readonly int TopLevel;
++
++            public RadixConverter(int radix, long bitLength) {
++                _radix = radix;
++                _groupDigits = (int)maxCharsPerDigit[radix];
++
++                // a number below 2**bitLength has at most maxDigits digits:
++                long maxDigits = (long)(bitLength * (Math.Log(2) / Math.Log(radix))) + 2;
++                int level = 0;
++                while (Digits(level) < maxDigits) {
++                    level++;
++                }
++                TopLevel = level;
++
++                _powers = new BigInteger[level];
++                _powerBits = new int[level];
++                _reciprocals = new BigInteger[level];
++                if (level > LeafLevel) {
++                    _powers[0] = groupRadixValues[radix];
++                    for (int i = 1; i < level; i++) {
++                        _powers[i] = _powers[i - 1] * _powers[i - 1];
++                    }
++                }
++            }
++
++            public long Digits(int level) {
++                return (long)_groupDigits << level;
+             }
+ 
+-            StringBuilder ret = new StringBuilder();
+-            if (isNegative) {
+-                ret.Append('-');
++            /// <summary>
++            /// Writes <paramref name="value"/>, which is less than radix ** Digits(<paramref name="level"/>), as exactly
++            /// Digits(<paramref name="level"/>) digits with leading zeros, ending before chars[<paramref name="end"/>].
++            /// <paramref name="bytes"/> is null or <paramref name="value"/>.ToByteArray().
++            /// </summary>
++            public void Write(BigInteger value, byte[] bytes, int level, char[] chars, int end) {
++                int start = end - (int)Digits(level);
++
++                if (value.IsZero) {
++                    for (int i = start; i < end; i++) {
++                        chars[i] = '0';
++                    }
++                    return;
++                }
++
++                if (level > LeafLevel) {
++                    BigInteger high = DivRem(value, level - 1, out BigInteger low);
++                    Write(high, null, level - 1, chars, end - (int)Digits(level - 1));
++                    Write(low, null, level - 1, chars, end);
++                    return;
++                }
++
++                if (bytes == null) {
++                    bytes = value.ToByteArray();
++                }
++                uint[] words = new uint[(bytes.Length + 3) / 4];
++                for (int i = 0; i < bytes.Length; i++) {
++                    words[i >> 2] |= (uint)bytes[i] << ((i & 3) * 8);
++                }
++                int wordCount = words.Length;
++                while (wordCount > 0 && words[wordCount - 1] == 0) {
++                    wordCount--;
++                }
++
++                uint groupRadix = groupRadixValues[_radix];
++                uint radix = (uint)_radix;
++                int pos = end;
++                while (wordCount > 0) {
++                    uint group = div(words, ref wordCount, groupRadix);
++                    for (int j = 0; j < _groupDigits; j++) {
++                        chars[--pos] = RadixSymbols[(int)(group % radix)];
++                        group /= radix;
++                    }
++                }
++                System.Diagnostics.Debug.Assert(pos >= start);
++                while (pos > start) {
++                    chars[--pos] = '0';
++                }
+             }
+-            for (int digitIndex = digits.Count - 1; digitIndex >= 0; digitIndex--) {
+-                ret.Append(digits[digitIndex]);
++
++            /// <summary>
++            /// Divides <paramref name="value"/>, which is less than _powers[i]**2, by _powers[i].
++            /// </summary>
++            private BigInteger DivRem(BigInteger value, int i, out BigInteger remainder) {
++                BigInteger divisor = _powers[i];
++                int bits = _powerBits[i];
++                if (bits == 0) {
++                    _powerBits[i] = bits = BitLength(divisor);
++                }
++                // A short quotient (the top split of a number a little longer than a power) is cheap to divide out:
++                if (!s_useBarrett || bits < BarrettBits || BitLength(value) - bits < bits / 8) {
++                    return BigInteger.DivRem(value, divisor, out remainder);
++                }
++
++                BigInteger reciprocal = _reciprocals[i];
++                if (reciprocal.IsZero) {
++                    _reciprocals[i] = reciprocal = Reciprocal(divisor, bits);
++                }
++
++                // value < 2**(2 * bits), so this estimate is at most 2 below the quotient (Barrett reduction):
++                BigInteger quotient = ((value >> (bits - 1)) * reciprocal) >> (bits + 1);
++                remainder = value - quotient * divisor;
++                while (remainder.Sign < 0) {
++                    quotient -= BigInteger.One;
++                    remainder += divisor;
++                }
++                while (remainder >= divisor) {
++                    quotient += BigInteger.One;
++                    remainder -= divisor;
++                }
++                return quotient;
++            }
++
++            /// <summary>
++            /// floor(2**(2 * <paramref name="bits"/>) / <paramref name="divisor"/>), for a <paramref name="divisor"/> of
++            /// exactly <paramref name="bits"/> bits.
++            /// </summary>
++            private static BigInteger Reciprocal(BigInteger divisor, int bits) {
++                BigInteger power = BigInteger.One << (2 * bits);
++                if (bits <= DirectReciprocalBits) {
++                    return power / divisor;
++                }
++
++                // The reciprocal of the divisor's top k bits is good to about k - 2 bits; one Newton step,
++                // y + y * (1 - divisor * y), doubles that to more than the bits wanted.
++                int k = bits / 2 + 32;
++                int shift = bits - k;
++                BigInteger top = Reciprocal(divisor >> shift, k);
++                // y = top << shift; the result is 2y - divisor * y**2 / 2**(2 * bits):
++                BigInteger result = (top << (shift + 1)) - ((divisor * (top * top)) >> (2 * k));
++
++                // within a few units of the reciprocal; make it exact:
++                BigInteger remainder = power - result * divisor;
++                while (remainder.Sign < 0) {
++                    result -= BigInteger.One;
++                    remainder += divisor;
++                }
++                while (remainder >= divisor) {
++                    result += BigInteger.One;
++                    remainder -= divisor;
++                }
++                return result;
++            }
++
++            private static int BitLength(BigInteger value) {
++                byte[] bytes = value.ToByteArray();
++                int top = bytes.Length - 1;
++                while (top > 0 && bytes[top] == 0) {
++                    top--;
++                }
++                int bits = top * 8;
++                for (int b = bytes[top]; b != 0; b >>= 1) {
++                    bits++;
++                }
++                return bits;
+             }
+-            return ret.ToString();
+         }
+ 
+         #endregion

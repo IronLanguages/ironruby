@@ -64,6 +64,7 @@ namespace IronRuby.Tests {
                 ReflectionUtils_GetMembers,
 
                 ParseBigInts1,
+                BigIntegerToString1,
                 ParseIntegers1,
 
                 ShebangNamesIronRuby1,
