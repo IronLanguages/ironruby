@@ -1524,6 +1524,7 @@ namespace IronRuby.Tests {
         /// </summary>
         public void MutableString_CopyOnWrite2() {
             TestOutput(@"
+require 'ruby4'
 require 'stringio'
 fresh = ->(bytes, enc) { bytes.pack('C*').force_encoding(enc) }
 makers = [
