@@ -3359,10 +3359,11 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
-            // An exception no Ruby code can have kept: one a raise made itself, or one C# threw that Ruby code has never touched.
+            // Only an exception nothing can have kept: one Kernel#raise made itself. One C# threw may be kept by C# code that hands
+            // it to Ruby later (Encoding::Converter#last_error), and so may a CLR exception thrown again.
             if (deferTrace) {
                 var raised = RubyExceptionData.TryGetInstance(exception);
-                deferTrace = raised == null || raised.RaisedUnkept;
+                deferTrace = raised != null && raised.RaisedUnkept;
             }
 
             // calls "new" on the exception class if it hasn't been called yet:
@@ -3390,6 +3391,9 @@ namespace IronRuby.Runtime {
         // 512 KB of stack beyond what StackLimit keeps: what an ensure clause gets at least when it runs on top of the raise
         private const ulong PassEnsureStackRoom = 512 * 1024;
 
+        // the depth of compiled frames from which an ensure clause takes the catch (see PassEnsure)
+        private const int PassEnsureMaxDepth = 1000;
+
         /// <summary>
         /// The exception filter of a compiled body that has an ensure clause and nothing else (Body.TransformExceptionHandling,
         /// EnsureGuardExpression), run in the CLR's first pass, while the stack is searched for a handler. Null: catch the exception,
@@ -3405,7 +3409,11 @@ namespace IronRuby.Runtime {
         /// on the stack: a finally block runs on top of the frames the exception came out of, a catch below them (#128).
         /// </summary>
         public static Exception PassEnsure(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-            if (!StackLimit.HasRoom(PassEnsureStackRoom)) {
+            // A stack overflow, or a stack thousands of frames deep: one CLR dispatch across thousands of frames with filters costs
+            // more than a catch and a throw again per frame (SystemStackError through 10k ensure clauses: 2.5-4x slower than
+            // the catch on net8.0).
+            if (exception is SystemStackError || exception is InsufficientExecutionStackException ||
+                Precompiled.PrecompiledFrames.CurrentDepth > PassEnsureMaxDepth || !StackLimit.HasRoom(PassEnsureStackRoom)) {
                 return null;
             }
 

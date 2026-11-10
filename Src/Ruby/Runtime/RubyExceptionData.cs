@@ -224,7 +224,8 @@ namespace IronRuby.Runtime {
             Precompiled.PrecompiledFrames frames;
             int index;
             string name;
-            if (!Precompiled.PrecompiledFrames.TryGetInnermost(out frames, out index, out name)) {
+            long sequence;
+            if (!Precompiled.PrecompiledFrames.TryGetInnermost(out frames, out index, out name, out sequence)) {
                 return false;
             }
 
@@ -237,7 +238,7 @@ namespace IronRuby.Runtime {
             }
 
             _capturedTrace = new RubyStackTraceBuilder.CapturedTrace(context, _exception, throwSiteTrace, null, false);
-            _pendingCatchSite = new PendingCatchSite(frames, index, name, Thread.CurrentThread);
+            _pendingCatchSite = new PendingCatchSite(frames, index, name, sequence, Thread.CurrentThread);
             return true;
         }
 
@@ -245,12 +246,14 @@ namespace IronRuby.Runtime {
             internal readonly Precompiled.PrecompiledFrames/*!*/ Frames;
             internal readonly int Index;
             internal readonly string/*!*/ Name;
+            internal readonly long Sequence;
             internal readonly Thread/*!*/ Thread;
 
-            internal PendingCatchSite(Precompiled.PrecompiledFrames/*!*/ frames, int index, string/*!*/ name, Thread/*!*/ thread) {
+            internal PendingCatchSite(Precompiled.PrecompiledFrames/*!*/ frames, int index, string/*!*/ name, long sequence, Thread/*!*/ thread) {
                 Frames = frames;
                 Index = index;
                 Name = name;
+                Sequence = sequence;
                 Thread = thread;
             }
         }
@@ -292,9 +295,10 @@ namespace IronRuby.Runtime {
                 // The catching frame, in a walk from here: the frames of its name the records have above it are those the walk
                 // has above it, compiled Ruby frames all having a record (CompiledFrameExpression), so it is the one after them.
                 StackFrame[] catchSite = null;
+                StackFrame[] frames = null;
                 int above;
-                if (pending.Thread == Thread.CurrentThread && pending.Frames.TryCountLiveAbove(pending.Index, pending.Name, out above)) {
-                    var frames = RubyStackTraceBuilder.GetClrStackTrace(null, false).GetFrames();
+                if (pending.Thread == Thread.CurrentThread && pending.Frames.TryCountLiveAbove(pending.Index, pending.Name, pending.Sequence, out above)) {
+                    frames = RubyStackTraceBuilder.GetClrStackTrace(null, false).GetFrames();
                     for (int i = 0; i < frames.Length; i++) {
                         var method = frames[i].GetMethod();
                         if (method != null && String.Equals(method.Name, pending.Name, StringComparison.Ordinal) && above-- == 0) {
@@ -305,9 +309,15 @@ namespace IronRuby.Runtime {
                     }
                 }
 
-                // Not reached: the exception is exposed before the frame is left. Without the walk the backtrace ends at that frame.
-                Debug.Assert(catchSite != null, "catch site of a deferred backtrace not found");
-                captured.CatchSiteFrames = catchSite ?? Array.Empty<StackFrame>();
+                if (catchSite != null) {
+                    captured.CatchSiteFrames = catchSite;
+                } else {
+                    // Not reached: only an exception nothing can have kept is deferred, and it is exposed before its frame is left
+                    // (the entry's sequence tells that frame from a later one in its slot). Should it be, the frames below are
+                    // those of here - closer than none.
+                    captured.CatchSiteFrames = frames ?? RubyStackTraceBuilder.GetClrStackTrace(null, false).GetFrames();
+                    captured.CatchSiteFramesFromHere = true;
+                }
             }
         }
 

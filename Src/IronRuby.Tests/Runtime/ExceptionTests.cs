@@ -1397,5 +1397,40 @@ $log.join(""|"")
             AreEqual(interpreting.CreateScriptSourceFromString(script, "pass3.rb", SourceCodeKind.File).Execute().ToString(), expected);
             AreEqual(Engine.CreateScriptSourceFromString(script, "pass4.rb", SourceCodeKind.File).Execute().ToString(), expected);
         }
+
+        /// <summary>
+        /// The walk of the stack below a rescuing frame waits only for an exception Kernel#raise made itself: C# code may keep the
+        /// exception it throws and hand it to Ruby code after the frame is gone (Encoding::Converter#last_error is the one convert
+        /// threw), and so may a CLR exception thrown again. Their backtraces must keep the callers of the rescuing frame, and no
+        /// other frame's. CRuby's #last_error is a fresh exception with no backtrace at all, which passes too.
+        /// </summary>
+        public void Exception_DeferredTraceKeptByClr1() {
+            const string script = @"def bt(e) = e.backtrace.to_a.map { |f| f[/in '[^']*'/] }.join("","")
+EC = Encoding::Converter.new(""UTF-8"", ""EUC-JP"")
+def c1; begin; EC.convert(""a\xffb""); rescue Encoding::InvalidByteSequenceError; end; end
+def c0; c1; end
+c0
+r = [EC.last_error.backtrace.nil? || bt(EC.last_error).include?(""Object#c0"")]
+def k1(read); return bt(EC.last_error) if read; begin; EC.convert(""a\xffb""); rescue Encoding::InvalidByteSequenceError; end; nil; end
+def first_path; k1(false); end
+def other_path; k1(true); end
+first_path
+x = other_path
+r << (x.empty? || x.include?(""first_path"") && !x.include?(""other_path""))
+EX = System::Runtime::InteropServices::Marshal.GetExceptionForHR(-2147024809)
+def thr; System::Runtime::ExceptionServices::ExceptionDispatchInfo.capture(EX).throw; end
+def x1; begin; thr; rescue Exception; end; end
+def x0; x1; end
+x0
+r << bt(EX).include?(""Object#x0"")
+def x2; begin; thr; rescue Exception => e; bt(e); end; end
+def x3; x2; end
+r << x3.include?(""Object#x0"")
+r.join(""|"")
+";
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "kept1.rb", SourceCodeKind.File).Execute().ToString(), "true|true|true|true");
+            AreEqual(Engine.CreateScriptSourceFromString(script, "kept2.rb", SourceCodeKind.File).Execute().ToString(), "true|true|true|true");
+        }
     }
 }

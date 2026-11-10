@@ -791,6 +791,7 @@ namespace IronRuby.Tests {
                 Exception_StackLevelTooDeepJitTailCall1,
                 Exception_InterpretedFramesPassThrough1,
                 Exception_EnsurePassThroughDeferredTrace1,
+                Exception_DeferredTraceKeptByClr1,
 
                 ClassVariables1,
                 UnqualifiedConstants2,

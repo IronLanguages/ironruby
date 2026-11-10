@@ -707,7 +707,11 @@ namespace IronRuby.Runtime.Precompiled {
             public string Name;
             public int Line;
             public Microsoft.Scripting.Interpreter.InterpretedFrame Below;
+            // which entry into the slot this is: tells a frame from another one of the same name at the same depth later
+            public long Sequence;
         }
+
+        private long _sequence;
 
         private Entry[] _entries = new Entry[16];
         private int _depth;
@@ -776,6 +780,7 @@ namespace IronRuby.Runtime.Precompiled {
             }
             entry.Line = line;
             entry.Below = _interpreted.Value;
+            entry.Sequence = ++_sequence;
             _top = depth + 1;
             // written last: another thread reading the frames reads the depth first
             _depth = depth + 1;
@@ -821,22 +826,31 @@ namespace IronRuby.Runtime.Precompiled {
         /// The current thread's innermost frame: where a compiled frame that has just caught an exception finds its own record,
         /// the frames the exception came out of having been left (RubyExceptionData.TryDeferCatchSite).
         /// </summary>
-        internal static bool TryGetInnermost(out PrecompiledFrames frames, out int index, out string name) {
+        internal static bool TryGetInnermost(out PrecompiledFrames frames, out int index, out string name, out long sequence) {
             frames = _current;
             index = (frames != null) ? frames._depth - 1 : -1;
             name = (index >= 0) ? frames._entries[index].Name : null;
+            sequence = (index >= 0) ? frames._entries[index].Sequence : 0;
             return name != null;
         }
 
+        /// <summary>The number of compiled frames the current thread is in.</summary>
+        internal static int CurrentDepth {
+            get {
+                var frames = _current;
+                return (frames != null) ? frames._depth : 0;
+            }
+        }
+
         /// <summary>
-        /// Whether the frame at <paramref name="index"/> is still the one of that name, and how many frames of the same name have
-        /// been entered above it since and are still there.
+        /// Whether the frame entered into slot <paramref name="index"/> as <paramref name="sequence"/> is still there, and how many
+        /// frames of the same name have been entered above it since and are still there.
         /// </summary>
-        internal bool TryCountLiveAbove(int index, string/*!*/ name, out int count) {
+        internal bool TryCountLiveAbove(int index, string/*!*/ name, long sequence, out int count) {
             count = 0;
             int depth = _depth;
             var entries = _entries;
-            if (index >= depth || !String.Equals(entries[index].Name, name, StringComparison.Ordinal)) {
+            if (index >= depth || entries[index].Sequence != sequence) {
                 return false;
             }
             for (int i = index + 1; i < depth; i++) {

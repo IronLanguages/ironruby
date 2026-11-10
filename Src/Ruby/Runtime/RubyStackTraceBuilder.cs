@@ -87,7 +87,7 @@ namespace IronRuby.Runtime {
                 AddClrCaughtBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace);
             } else if (captured.CatchSiteFrames != null) {
                 AddBacktrace(captured.ThrowSiteTrace.GetFrames(), 0, false);
-                AddBacktrace(captured.CatchSiteFrames, 0, false, true);
+                AddBacktrace(captured.CatchSiteFrames, 0, false, !captured.CatchSiteFramesFromHere);
             } else {
                 AddExceptionBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace, captured.IsCatchSiteInterpreted);
             }
@@ -143,6 +143,8 @@ namespace IronRuby.Runtime {
             // The catch-site walk from the catching frame down, when it was taken after the catch (RubyExceptionData.TryDeferCatchSite):
             // the catching frame first, which is skipped as CatchSiteTrace's is. Set, under a lock of this object, before Build.
             internal StackFrame[] CatchSiteFrames;
+            // CatchSiteFrames is a walk from where the catching frame could not be found, which does not start with it
+            internal bool CatchSiteFramesFromHere;
 
             internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted)
                 : this(context, exception, null, catchSiteTrace, isCatchSiteInterpreted) {
