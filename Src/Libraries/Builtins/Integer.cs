@@ -1324,8 +1324,14 @@ namespace IronRuby.Builtins {
             // Dividing by the radix once per digit is quadratic (~200 ms for 100k bits in base 1000). Split by the
             // radix ** 2**k instead: powers[k] is that, and the largest is at most the number.
             var powers = new System.Collections.Generic.List<BigInteger> { radixValue };
+            long numberBits = (long)number.GetBitLength();
             while (true) {
-                BigInteger square = powers[powers.Count - 1] * powers[powers.Count - 1];
+                // a square of b bits has at least 2b - 1 of them: past the number's, it need not be computed
+                BigInteger last = powers[powers.Count - 1];
+                if (2 * (long)last.GetBitLength() - 1 > numberBits) {
+                    break;
+                }
+                BigInteger square = last * last;
                 if (square > number) {
                     break;
                 }
