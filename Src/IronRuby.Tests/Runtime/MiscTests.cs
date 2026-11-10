@@ -2408,6 +2408,36 @@ false
         }
 
         /// <summary>
+        /// Thread#inspect shows where the thread was made: the frame that called Thread.new, read from the interpreted
+        /// and compiled frames' records rather than from a CLR stack walk, which was most of what Thread.new cost. The
+        /// expected output is CRuby 4.0's.
+        /// </summary>
+        public void Thread_InspectLocation1() {
+            TestOutput(@"
+def show(t) = puts(t.inspect.sub(__FILE__, 'F').sub(/0x\h+/, 'X').sub(/ \w+>$/, '>'))
+def mk = Thread.new { }
+show(Thread.new { })
+show(mk)
+show([1].map { Thread.new { } }.first)
+show(Thread.start { })
+show(Thread.method(:new).call { })
+pr = proc { Thread.new { } }
+show(pr.call)
+show(Thread.new { Thread.new { } }.value)
+puts eval('Thread.new { }').inspect.sub(/\(eval at .*\)/, 'E').sub(/0x\h+/, 'X').sub(/ \w+>$/, '>')
+", @"
+#<Thread:X F:4>
+#<Thread:X F:3>
+#<Thread:X F:6>
+#<Thread:X F:7>
+#<Thread:X F:8>
+#<Thread:X F:9>
+#<Thread:X F:11>
+#<Thread:X E:1>
+");
+        }
+
+        /// <summary>
         /// Largo/ironruby#126: a finished thread's state is released (its Thread object is collected,
         /// so .NET recycles its ManagedThreadId), and a new thread that gets a recycled id starts
         /// fresh instead of inheriting the dead thread's locals, name, variables and flags.

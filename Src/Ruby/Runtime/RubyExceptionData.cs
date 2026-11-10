@@ -136,6 +136,18 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// The innermost Ruby frame of the calling thread ("file:line:in 'name'"), or null if it has none. Read from the
+        /// interpreted and compiled frames' own records, as another thread's backtrace is, not from a CLR stack walk: the
+        /// walk resolves every CLR frame of the stack, the host's included, which made it most of what Thread.new cost.
+        /// A library method has no frame there, so this is the frame of the Ruby code that called it.
+        /// </summary>
+        public static MutableString GetCallerFrame(RubyContext/*!*/ context) {
+            var trace = new RubyStackTraceBuilder(context, InterpretedFrame.CurrentFrame.Value,
+                Precompiled.PrecompiledFrames.Snapshot(Thread.CurrentThread), 1).RubyTrace;
+            return (trace.Count > 0) ? trace[0] as MutableString : null;
+        }
+
+        /// <summary>
         /// Builds backtrace for the exception if it wasn't built yet. 
         /// Captures a full stack trace starting with the current frame and combines it with the trace of the exception.
         /// Called from compiled code.

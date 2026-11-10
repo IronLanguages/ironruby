@@ -1329,10 +1329,11 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static string GetCallerLocation(RubyContext/*!*/ context) {
             try {
-                // one frame: building the whole backtrace was most of what Thread.new cost
-                RubyArray trace = RubyExceptionData.CreateBacktrace(context, 1, 1);
-                if (trace != null && trace.Count > 0) {
-                    string frame = trace[0].ToString();
+                // the frame records, not a CLR stack walk: even cut short after one frame (#184), the walk
+                // was most of what Thread.new cost
+                MutableString caller = RubyExceptionData.GetCallerFrame(context);
+                if (caller != null) {
+                    string frame = caller.ToString();
                     int inIndex = frame.LastIndexOf(":in ", StringComparison.Ordinal);
                     return inIndex > 0 ? frame.Substring(0, inIndex) : frame;
                 }
