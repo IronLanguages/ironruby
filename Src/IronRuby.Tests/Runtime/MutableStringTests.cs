@@ -1574,6 +1574,58 @@ namespace IronRuby.Tests {
         }
 
         /// <summary>
+        /// Append(Stream) reads before it holds the string's content, which is not reentrant: a stream
+        /// whose Read copies the string it is read into must not wait for itself, and a Read that
+        /// blocks must not block a copy made on another thread meanwhile.
+        /// </summary>
+        public void MutableString_CopyOnWrite4() {
+            foreach (bool binary in new[] { true, false }) {
+                var s = binary
+                    ? MutableString.CreateBinary(Encoding.ASCII.GetBytes("abc"), RubyEncoding.UTF8)
+                    : MutableString.CreateMutable(RubyEncoding.UTF8).Append("\u00e9bc");
+
+                MutableString copy = null;
+                var copyingStream = new ReadCallbackStream(() => copy = s.Clone());
+                MutableString copyOnOtherThread = null;
+                var blockingStream = new ReadCallbackStream(() => {
+                    var t = new Thread(() => copyOnOtherThread = s.Clone()) { IsBackground = true };
+                    t.Start();
+                    Assert(t.Join(5000), "a copy waited for a stream read");
+                });
+
+                // background threads: a hang must fail the test, not keep the process alive
+                var appender = new Thread(() => {
+                    s.Append(copyingStream, 2);
+                    s.Append(blockingStream, 2);
+                }) { IsBackground = true };
+                appender.Start();
+                if (!appender.Join(5000)) {
+                    Assert(false, "Append(Stream) hung");
+                    return;
+                }
+
+                Assert(copy.ToString() == (binary ? "abc" : "\u00e9bc"));
+                Assert(copyOnOtherThread.ToString() == (binary ? "abcxy" : "\u00e9bcxy"));
+                Assert(s.ToString() == (binary ? "abcxyxy" : "\u00e9bcxyxy"));
+            }
+        }
+
+        private sealed class ReadCallbackStream : System.IO.MemoryStream {
+            private readonly Action _onRead;
+
+            public ReadCallbackStream(Action onRead) {
+                _onRead = onRead;
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) {
+                _onRead();
+                buffer[offset] = (byte)'x';
+                buffer[offset + 1] = (byte)'y';
+                return 2;
+            }
+        }
+
+        /// <summary>
         /// The Ruby side of copy-on-write (#89): #dup, #clone, String.new, +@, #replace,
         /// #initialize, StringIO#read of the whole buffer, a long prefix slice, #chomp and an
         /// interpolation share the content; each is changed through many String and StringIO

@@ -54,6 +54,7 @@ namespace IronRuby.Tests {
                 MutableString_CopyOnWrite1,
                 MutableString_CopyOnWrite2,
                 MutableString_CopyOnWrite3,
+                MutableString_CopyOnWrite4,
                 MutableString_GetHashCode2,
                 RubyArray_Ctors,
                 RubyArray_Basic,

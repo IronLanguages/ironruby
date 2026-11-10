@@ -34,7 +34,10 @@ namespace IronRuby.Builtins {
         /// GetSlice and every write hold the content, so a write cannot check that the array is its
         /// own, let a Clone hand the array out, and then write into it; and a copy made while the
         /// array is replaced cannot see the new array with the old count or lose its shared mark.
-        /// The common write - unshared, nobody holding it - costs one compare-exchange.
+        /// The common write - unshared, nobody holding it - costs one compare-exchange. Holding is not
+        /// reentrant and other threads spin while it lasts, so nothing runs while a content is held but
+        /// array copies and IronRuby's own encoders: no stream, no user code, nothing that could reach
+        /// this string again (Append(Stream) reads before it holds the content).
         /// </summary>
         internal static class ContentState {
             internal const int Shared = 1;

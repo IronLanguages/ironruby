@@ -698,12 +698,15 @@ namespace IronRuby.Builtins {
             }
 
             public override void Append(Stream/*!*/ stream, int count) {
-                EnterWrite(_count + count);
+                // Read outside the content, which a write holds without reentry: a stream's Read is code of any
+                // kind - a pipe or socket that blocks a #dup of this string for as long as it waits, or a Read
+                // that copies this very string, which would wait for itself.
+                byte[] buffer = ArrayPool<byte>.Shared.Rent(count);
                 try {
-                    Utils.Resize(ref _data, _count + count);
-                    _count += stream.Read(_data, _count, count);
+                    int read = stream.Read(buffer, 0, count);
+                    Append(buffer, 0, read);
                 } finally {
-                    ExitWrite();
+                    ArrayPool<byte>.Shared.Return(buffer);
                 }
             }
 
