@@ -1063,8 +1063,8 @@ send => [1, 5, [1, 0, 1]]
         }
 
         /// <summary>
-        /// Integer.sqrt of a large Integer starts Newton's method from the double's root of its leading bits, raised above
-        /// the true root. Expected output is CRuby 4.0's.
+        /// Integer.sqrt of a large Integer (Integer.SqrtRem, the Karatsuba square root, and its small-operand base case).
+        /// Expected output is CRuby 4.0's.
         /// </summary>
         public void Integer_SqrtLarge1() {
             TestOutput(@"
@@ -1221,24 +1221,44 @@ end
         }
 
         /// <summary>
-        /// Integer.sqrt's starting point. Its shifts once counted 2 * halfShift in an int, which wrapped negative for a
-        /// value of more than 2**31 + 1000 bits (which only .NET 8's BigInteger could hold), so the right shift became a
-        /// left one and the seed was huge or infinite. The seed must be at or above the root and within a bit of it.
+        /// Integer.SqrtRem (Integer.sqrt above 2**62): the root s and remainder r of n must satisfy s*s + r == n and
+        /// 0 &lt;= r &lt;= 2s, around the sizes where the recursion splits differently (bit lengths 4k - 1 .. 4k + 2, the
+        /// small-operand limit at 106 bits), at perfect squares and their neighbours, at powers of two, and up to a
+        /// million bits.
         /// </summary>
-        public void Integer_SqrtSeedHuge1() {
-            foreach (long exponent in new long[] { 2048, 100_000, 1_000_000 }) {
-                BigInteger n = BigInteger.One << (int)exponent;
-                Assert(n.GetBitLength() == exponent + 1);
-                BigInteger root = BigInteger.One << (int)(exponent / 2);
-                BigInteger seed = IronRuby.Builtins.Integer.SqrtSeed(n);
-                Assert(seed >= root);
-                Assert(seed.GetBitLength() <= root.GetBitLength() + 1);
+        public void Integer_SqrtRem1() {
+            var random = new Random(89);
+            void Check(BigInteger n) {
+                BigInteger s = IronRuby.Builtins.Integer.SqrtRem(n, out BigInteger r);
+                Assert(s * s + r == n && r.Sign >= 0 && r <= 2 * s);
             }
-
-            for (int bits = 63; bits < 5000; bits += 97) {
-                BigInteger m = (BigInteger.One << bits) + 12345;
-                BigInteger s = IronRuby.Builtins.Integer.SqrtSeed(m);
-                Assert(s * s >= m);
+            BigInteger RandomBits(int bits) {
+                var bytes = new byte[(bits + 7) / 8 + 1];
+                random.NextBytes(bytes);
+                bytes[bytes.Length - 1] = 0;
+                BigInteger value = new BigInteger(bytes) & ((BigInteger.One << bits) - 1);
+                return value | (BigInteger.One << (bits - 1));
+            }
+            for (int bits = 1; bits <= 600; bits++) {
+                Check((BigInteger.One << bits) - 1);
+                Check(BigInteger.One << bits);
+                Check((BigInteger.One << bits) + 1);
+                for (int i = 0; i < 20; i++) {
+                    Check(RandomBits(bits));
+                    BigInteger k = RandomBits(bits);
+                    Check(k * k - 1);
+                    Check(k * k);
+                    Check(k * k + 1);
+                    Check(k * k + 2 * k);
+                    Check(k * k + 2 * k + 1);
+                }
+            }
+            foreach (int bits in new[] { 4095, 4096, 4097, 4098, 10_000, 100_000, 1_000_000 }) {
+                BigInteger k = RandomBits(bits / 2);
+                Check(RandomBits(bits));
+                Check(k * k - 1);
+                Check(k * k);
+                Check(BigInteger.One << bits);
             }
         }
 
