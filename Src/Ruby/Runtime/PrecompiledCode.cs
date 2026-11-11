@@ -861,6 +861,177 @@ namespace IronRuby.Runtime.Precompiled {
             return true;
         }
 
+        #region Loops the interpreter compiled
+
+        // An interpreted frame running a loop the interpreter has compiled (the DLR's CompiledLoopInstruction) is at the loop's
+        // instruction for as long as the loop runs, and that instruction's sequence point is the cleared one the loop starts
+        // with: caller, Thread#backtrace and the backtrace of an exception raised in the loop reported line 16707566 (0xFEEFEE)
+        // for the frame. The compiled loop is a DynamicMethod, which has no line information, so its statements keep their
+        // line here instead (SourceLineMarker, reduced by the loop compiler), with the interpreted frame they are of and its
+        // depth - its position in the interpreted frame chain, which is all an exception's saved interpreted frames have to
+        // tell the frames apart. Innermost last; a record whose frame has been left is dropped once a frame that is not
+        // above it writes a line.
+        public sealed class LoopLine {
+            internal Microsoft.Scripting.Interpreter.InterpretedFrame Frame;
+            internal int Depth;
+            public int Line;
+        }
+
+        private LoopLine[] _loopLines;
+        private int _loopLineCount;
+
+        /// <summary>
+        /// The line of a statement in a loop the interpreter has compiled (SourceLineMarker): the line of the interpreted frame
+        /// the loop runs in.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        public static void SetLoopLine(int line) {
+            var frames = Current;
+            var frame = frames._interpreted.Value;
+            int count = frames._loopLineCount;
+            if (count > 0) {
+                var top = frames._loopLines[count - 1];
+                if (top.Frame == frame) {
+                    top.Line = line;
+                    return;
+                }
+            }
+            frames.SetLoopLineSlow(frame, line);
+        }
+
+        /// <summary>
+        /// The line record of the interpreted frame a loop the interpreter has compiled runs in, which the loop's statements write
+        /// their line to (SourceLineMarker). The frame keeps it in a variable: a record stays the frame's while the frame lives,
+        /// since only a frame that is neither it nor one it called drops it.
+        /// </summary>
+        public static LoopLine/*!*/ GetLoopLine() {
+            var frames = Current;
+            var frame = frames._interpreted.Value;
+            int count = frames._loopLineCount;
+            if (count > 0) {
+                var top = frames._loopLines[count - 1];
+                if (top.Frame == frame) {
+                    return top;
+                }
+            }
+            return frames.SetLoopLineSlow(frame, 0) ?? new LoopLine();
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private LoopLine SetLoopLineSlow(Microsoft.Scripting.Interpreter.InterpretedFrame frame, int line) {
+            if (frame == null) {
+                return null;
+            }
+            int depth = 0;
+            for (var parent = frame.Parent; parent != null; parent = parent.Parent) {
+                depth++;
+            }
+
+            // keep the records of this frame and of the frames it was called from; the others' frames have been left
+            int count = _loopLineCount;
+            var lines = _loopLines;
+            while (count > 0) {
+                var top = lines[count - 1];
+                if (top.Frame == frame) {
+                    top.Line = line;
+                    TrimLoopLines(count);
+                    return top;
+                }
+                if (top.Depth < depth && IsCalledFrom(frame, depth - top.Depth, top.Frame)) {
+                    break;
+                }
+                count--;
+            }
+
+            if (lines == null || count == lines.Length) {
+                var grown = new LoopLine[(lines == null) ? 4 : lines.Length * 2];
+                if (lines != null) {
+                    Array.Copy(lines, grown, lines.Length);
+                }
+                _loopLines = lines = grown;
+            }
+            var record = lines[count] ?? (lines[count] = new LoopLine());
+            record.Frame = frame;
+            record.Depth = depth;
+            record.Line = line;
+            TrimLoopLines(count + 1);
+            return record;
+        }
+
+        // the frame `levels' callers out from frame is caller
+        private static bool IsCalledFrom(Microsoft.Scripting.Interpreter.InterpretedFrame/*!*/ frame, int levels,
+            Microsoft.Scripting.Interpreter.InterpretedFrame caller) {
+            for (int i = 0; i < levels && frame != null; i++) {
+                frame = frame.Parent;
+            }
+            return frame == caller;
+        }
+
+        private void TrimLoopLines(int count) {
+            // the records above are reused; the frames they were of are not kept alive by them
+            for (int i = count; i < _loopLineCount; i++) {
+                _loopLines[i].Frame = null;
+            }
+            // written last: another thread reading the records reads the count first
+            _loopLineCount = count;
+        }
+
+        /// <summary>The line of a statement of a compiled loop that an interpreted frame runs, by the frame's depth.</summary>
+        internal struct LoopLineInfo {
+            public int Depth;
+            public int Line;
+        }
+
+        /// <summary>
+        /// The lines of the loops the current thread's interpreted frames run compiled (see <see cref="SetLoopLine"/>); null if
+        /// none.
+        /// </summary>
+        internal static LoopLineInfo[] CaptureLoopLines() {
+            var frames = _current;
+            return (frames != null) ? frames.ReadLoopLines() : null;
+        }
+
+        /// <summary>The same for another thread, which runs on while it is read.</summary>
+        internal static LoopLineInfo[] SnapshotLoopLines(Thread/*!*/ thread) {
+            PrecompiledFrames frames;
+            return _byThread.TryGetValue(thread, out frames) ? frames.ReadLoopLines() : null;
+        }
+
+        private LoopLineInfo[] ReadLoopLines() {
+            int count = _loopLineCount;
+            var lines = _loopLines;
+            if (count == 0 || lines == null) {
+                return null;
+            }
+            count = Math.Min(count, lines.Length);
+            var result = new LoopLineInfo[count];
+            for (int i = 0; i < count; i++) {
+                var record = lines[i];
+                if (record != null) {
+                    result[i].Depth = record.Depth;
+                    result[i].Line = record.Line;
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// The line of the interpreted frame at <paramref name="depth"/> in the frame chain if it runs a compiled loop, or
+        /// <paramref name="line"/>. For a frame whose sequence point is the cleared one only.
+        /// </summary>
+        internal static int GetLoopLine(LoopLineInfo[] lines, int depth, int line) {
+            if (lines != null) {
+                for (int i = lines.Length - 1; i >= 0; i--) {
+                    if (lines[i].Depth == depth && lines[i].Line > 0) {
+                        return lines[i].Line;
+                    }
+                }
+            }
+            return line;
+        }
+
+        #endregion
+
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private Entry[]/*!*/ Grow() {
             // filled before it is published: a reader sees the old array or the complete new one
@@ -873,6 +1044,8 @@ namespace IronRuby.Runtime.Precompiled {
             public string Name;
             public int Line;
             public Microsoft.Scripting.Interpreter.InterpretedFrame Below;
+            // The frame was in an ensure clause (a statement there sets its line negated, see SourceLineMarker.InEnsure).
+            public bool InEnsure;
         }
 
         /// <summary>
@@ -895,7 +1068,9 @@ namespace IronRuby.Runtime.Precompiled {
             var result = new Frame[count];
             for (int i = 0; i < count; i++) {
                 result[i].Name = entries[i].Name;
-                result[i].Line = entries[i].Line;
+                int line = entries[i].Line;
+                result[i].Line = Math.Abs(line);
+                result[i].InEnsure = line < 0;
             }
             return result;
         }
@@ -916,7 +1091,7 @@ namespace IronRuby.Runtime.Precompiled {
             for (int i = depth - 1; i >= 0; i--) {
                 var entry = entries[i];
                 if (entry.Name != null) {
-                    result.Add(new Frame { Name = entry.Name, Line = entry.Line, Below = entry.Below });
+                    result.Add(new Frame { Name = entry.Name, Line = Math.Abs(entry.Line), Below = entry.Below });
                 }
             }
             return result.ToArray();

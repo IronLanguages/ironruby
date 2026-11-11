@@ -20,6 +20,7 @@ using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Osr;
+using IronRuby.Runtime.Precompiled;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
@@ -96,7 +97,15 @@ namespace IronRuby.Compiler.Ast {
             MSA.LabelTarget breakLabel = Ast.Label();
             MSA.LabelTarget continueLabel = Ast.Label();
 
+            // the frame's line record while the interpreter runs the loop compiled (SourceLineMarker); an inner loop of the
+            // same frame shares the outer one's
+            var outerLoop = gen.CurrentLoop;
+            MSA.Expression loopLineVariable = (outerLoop != null && outerLoop.LoopLineScope == gen.CurrentScope) ? outerLoop.LoopLineVariable :
+                gen.CurrentScope.DefineHiddenVariable("#loop-line", typeof(PrecompiledFrames.LoopLine));
+
             gen.EnterLoop(redoVariable, resultVariable, breakLabel, continueLabel);
+            gen.CurrentLoop.LoopLineVariable = loopLineVariable;
+            gen.CurrentLoop.LoopLineScope = gen.CurrentScope;
             MSA.Expression transformedBody = gen.TransformStatements(_statements, ResultOperation.Ignore);
             MSA.Expression transformedCondition = _condition.TransformCondition(gen, true);
             gen.LeaveLoop();
@@ -180,7 +189,7 @@ namespace IronRuby.Compiler.Ast {
                     // volatile load and a branch while nothing is pending). It carries the loop's
                     // own line, which is where MRI reports an exception raised at a back edge;
                     // without it the frame would show the cleared sequence point (0xFEEFEE).
-                    gen.AddDebugInfo(Ast.Call(RubyUtils.SafePointMethod), Location),
+                    gen.AddDebugInfo(Ast.Call(RubyUtils.SafePointMethod), Location, loopLineVariable),
                     backEdge,
                     AstUtils.Try(
 

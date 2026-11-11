@@ -1028,5 +1028,96 @@ IO#each_line
 block
 ");
         }
+
+        /// <summary>
+        /// The backtrace of an exception raised in a compiled method's ensure clause: on .NET 9 and later the exception's own trace
+        /// has the method twice (the clause runs as a funclet of it), and so did the backtrace. A method that calls itself from
+        /// its ensure clause, or from its body, keeps every frame. Interpreted, sync-compiled and compiled; expected output is
+        /// CRuby 4.0's.
+        /// </summary>
+        public void Backtrace_RaiseInEnsure1() {
+            const string script = @"class A < StandardError; end
+class B < StandardError; end
+def bt(e)
+  f = e.backtrace.map { |l| l[/:\d+:in '[^']*'/] }
+  f[0..f.index { |l| l.include?(""<main>"") }].join("","")
+end
+def m; raise A; ensure; raise B; end
+def z; raise A; ensure; Integer(""x""); end
+def rec(n) = n == 0 ? m : rec(n - 1)
+def blk; [1].each { begin; raise A; ensure; raise B; end }; end
+def er2 = er(2)
+def er(n)
+  raise A if n == 0
+ensure
+  er(n - 1) if n > 0
+end
+r = 3.times.map do
+  [:m, :z, :blk, :er2].map { |s| begin; send(s); rescue => e; bt(e); end } <<
+    (begin; rec(2); rescue => e; bt(e); end) <<
+    (begin; begin; raise A; ensure; raise B; end; rescue => e; bt(e); end)
+end
+r.uniq.inspect";
+            const string expected = @"[["":7:in 'Object#m',:18:in 'block (2 levels) in <main>'"", "":8:in 'Kernel#Integer',:8:in 'Object#z',:18:in 'block (2 levels) in <main>'"", "":10:in 'block in Object#blk',:10:in 'Array#each',:10:in 'Object#blk',:18:in 'block (2 levels) in <main>'"", "":13:in 'Object#er',:15:in 'Object#er',:15:in 'Object#er',:11:in 'Object#er2',:18:in 'block (2 levels) in <main>'"", "":7:in 'Object#m',:9:in 'Object#rec',:9:in 'Object#rec',:9:in 'Object#rec',:19:in 'block in <main>'"", "":20:in 'block in <main>'""]]";
+
+            foreach (int threshold in new[] { Int32.MaxValue, 1 }) {
+                var engine = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = threshold; });
+                AreEqual(engine.CreateScriptSourceFromString(script, "t2.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            }
+            AreEqual(Engine.CreateScriptSourceFromString(script, "t2.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
+        /// A frame running a loop the interpreter has compiled (a method called once, its loop hot) reported line 16707566, the
+        /// cleared sequence point the loop starts with, in caller, caller_locations and the backtrace of an exception raised in
+        /// the loop - and one rescued inside the loop lost the outermost frame. CompilationThreshold 1 compiles the loop at its
+        /// second iteration and the methods at their second call. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Backtrace_CompiledLoopLine1() {
+            const string script = @"require 'ruby4'; def thrower = raise(ArgumentError, ""t"")
+def lines(a) = a.map { |l| l[/:(\d+):in '([^']*)'/] }.join("","")
+def hot
+  r = []
+  i = 0
+  while i < 300
+    i += 1
+    r << lines(caller(0, 2)) if i == 299
+    r << caller_locations(0, 1)[0].lineno if i == 299
+    begin
+      thrower if i == 298
+    rescue => e
+      r << lines(e.backtrace[0, 3])
+    end
+  end
+  r
+end
+def nested
+  a = 0
+  while a < 2
+    a += 1
+    b = 0
+    while b < 300
+      b += 1
+      return lines(caller(0, 2)) if a == 2 && b == 299
+    end
+  end
+end
+def uncaught
+  i = 0
+  while i < 300
+    i += 1
+    thrower if i == 299
+  end
+end
+def call_uncaught = (begin; uncaught; rescue => e; lines(e.backtrace[0, 4]); end)
+[hot, nested, call_uncaught].inspect";
+            const string expected = @"[["":1:in 'Object#thrower',:11:in 'Object#hot',:37:in '<main>'"", "":8:in 'Object#hot',:37:in '<main>'"", 9], "":25:in 'Object#nested',:37:in '<main>'"", "":1:in 'Object#thrower',:33:in 'Object#uncaught',:36:in 'Object#call_uncaught',:37:in '<main>'""]";
+
+            foreach (int threshold in new[] { Int32.MaxValue, 1 }) {
+                var engine = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = threshold; });
+                AreEqual(engine.CreateScriptSourceFromString(script, "t3.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            }
+            AreEqual(Engine.CreateScriptSourceFromString(script, "t3.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
     }
 }

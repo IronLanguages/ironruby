@@ -966,6 +966,8 @@ namespace IronRuby.Tests {
                 Backtrace_RaiseInRescue1,
                 Backtrace_RedefinedSetBacktrace1,
                 Backtrace_ArityCalleeFrame1,
+                Backtrace_RaiseInEnsure1,
+                Backtrace_CompiledLoopLine1,
                 Enumerator_Copy1,
                 Io_Messages1,
                 Encoding_Misc1,

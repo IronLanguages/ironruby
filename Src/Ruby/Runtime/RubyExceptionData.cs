@@ -185,7 +185,7 @@ namespace IronRuby.Runtime {
                 return null;
             }
 
-            return new RubyStackTraceBuilder(context, frame, precompiled).RubyTrace;
+            return new RubyStackTraceBuilder(context, frame, precompiled, Precompiled.PrecompiledFrames.SnapshotLoopLines(thread)).RubyTrace;
         }
 
         /// <summary>
@@ -196,7 +196,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static MutableString GetCallerFrame(RubyContext/*!*/ context) {
             var trace = new RubyStackTraceBuilder(context, InterpretedFrame.CurrentFrame.Value,
-                Precompiled.PrecompiledFrames.Snapshot(Thread.CurrentThread), 1).RubyTrace;
+                Precompiled.PrecompiledFrames.Snapshot(Thread.CurrentThread), Precompiled.PrecompiledFrames.CaptureLoopLines(), 1).RubyTrace;
             return (trace.Count > 0) ? trace[0] as MutableString : null;
         }
 

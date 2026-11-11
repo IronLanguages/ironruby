@@ -163,7 +163,7 @@ namespace IronRuby.Compiler.Ast {
                         // An exception the clause raises has the exception the clause runs for as its cause, which the
                         // filter decides before the finally below restores $! (RubyOps.SetCauseLeavingEnsure).
                         new RubyFilterExpression(
-                            Ast.Block(gen.TransformStatements(_ensureStatements, ResultOperation.Ignore), AstUtils.Empty()),
+                            Ast.Block(TransformEnsureStatements(gen), AstUtils.Empty()),
                             leaving,
                             Ast.Call(_SetCauseLeavingInterpretedEnsure, gen.CurrentScopeVariable, leaving),
                             AstUtils.Empty(),
@@ -424,6 +424,17 @@ namespace IronRuby.Compiler.Ast {
             );
 
             return result;
+        }
+
+        // the ensure clause's statements, whose lines say so (SourceLineMarker.InEnsure)
+        private MSA.Expression/*!*/ TransformEnsureStatements(AstGenerator/*!*/ gen) {
+            var scope = gen.CurrentScope;
+            scope.EnsureDepth++;
+            try {
+                return gen.TransformStatements(_ensureStatements, ResultOperation.Ignore);
+            } finally {
+                scope.EnsureDepth--;
+            }
         }
 
         internal override Expression/*!*/ ToCondition(LexicalScope/*!*/ currentScope) {
