@@ -200,6 +200,22 @@ namespace IronRuby.Builtins {
                 _registered.RemoveAll(info => (info._thread.ThreadState & System.Threading.ThreadState.Stopped) != 0);
             }
 
+            /// <summary>
+            /// Drops the info of a Ruby thread whose block is over from <see cref="_registered"/>. Left for the
+            /// next prune - up to 64 threads later, or twice as many as were alive at the last one - it kept the
+            /// finished Thread reachable, so the Thread was promoted through the GCs in between and then stayed,
+            /// with the CLR's record of the dead thread, until a gen-2 collection.
+            /// </summary>
+            internal static void Unregister(RubyThreadInfo/*!*/ info) {
+                lock (_mappingLock) {
+                    // from the end: a thread that finishes is usually one of the latest
+                    int index = _registered.LastIndexOf(info);
+                    if (index >= 0) {
+                        _registered.RemoveAt(index);
+                    }
+                }
+            }
+
             /// <summary>Registers the calling thread; cheap once it is.</summary>
             internal static void RegisterCurrentThread() {
                 if (_current == null) {
@@ -1502,6 +1518,7 @@ namespace IronRuby.Builtins {
                 // thread's safe points on the slow path.
                 RubyUtils.DropPendingAsyncExceptions(Thread.CurrentThread);
                 info.RunsRuby = false;
+                RubyThreadInfo.Unregister(info);
             }
         }
 
