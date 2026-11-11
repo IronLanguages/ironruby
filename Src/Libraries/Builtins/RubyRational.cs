@@ -414,12 +414,14 @@ namespace IronRuby.Builtins {
             return ClrInteger.FDiv(n, d);
         }
 
-        // nurat_hash: a function of the two parts, the same for any representation of them
+        // nurat_hash: a function of the two parts, the same for any representation of them,
+        // mixed with the per-process key Integer#hash has (CVE-2011-4815: MRI's rb_memhash is
+        // keyed, so colliding Rational keys cannot be computed ahead of time).
         [RubyMethod("hash")]
         public static int Hash(RubyRational/*!*/ self) {
             int h1 = Big(self._numerator).GetHashCode();
             int h2 = Big(self._denominator).GetHashCode();
-            return unchecked((h1 * 31 + h2) * 31 + 0x52617469);
+            return RubyUtils.GetFixnumHashCode(unchecked((h1 * 31 + h2) * 31 + 0x52617469));
         }
 
         #endregion

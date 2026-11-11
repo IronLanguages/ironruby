@@ -286,11 +286,12 @@ namespace IronRuby.Builtins {
             return Slow(slow, "__ir_eqeq_slow__", self, other);
         }
 
-        // nucomp_hash: a function of the parts and their classes (#eql? tells 1 from 1.0)
+        // nucomp_hash: a function of the parts and their classes (#eql? tells 1 from 1.0), mixed
+        // with the per-process key Integer#hash has (CVE-2011-4815), as Rational#hash is.
         [RubyMethod("hash")]
         public static object Hash(CallSiteStorage<Func<CallSite, object, object>>/*!*/ slow, RubyComplex/*!*/ self) {
             if (self.HasSimpleParts) {
-                return ScriptingRuntimeHelpers.Int32ToObject(unchecked((PartHash(self._real) * 31 + PartHash(self._imaginary)) * 31 + 0x436f6d70));
+                return ScriptingRuntimeHelpers.Int32ToObject(RubyUtils.GetFixnumHashCode(unchecked((PartHash(self._real) * 31 + PartHash(self._imaginary)) * 31 + 0x436f6d70)));
             }
             var site = slow.GetCallSite("__ir_hash_slow__", 0);
             return site.Target(site, self);
