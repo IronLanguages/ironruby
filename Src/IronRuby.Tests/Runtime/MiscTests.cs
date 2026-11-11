@@ -7021,5 +7021,35 @@ p [1, 1].tally({1 => 1}), (1..2).tally
 {1 => 1, 2 => 1}
 ");
         }
+
+        /// <summary>
+        /// inject(:op) calls the operator publicly, as MRI's rb_funcallv_public does since [Bug #13592]: a private #+
+        /// is a NoMethodError, for an Array's fast path too.
+        /// </summary>
+        public void Enumerable_InjectPrivateOp1() {
+            TestOutput(@"
+require 'ruby4'
+k = Class.new { include Enumerable; def each; yield 1; yield 2; yield 3; end }
+%i[+ *].each do |op|
+  begin
+    Integer.class_eval { private op }
+    p((k.new.inject(op) rescue $!), ([1, 2, 3].inject(op) rescue $!), ((1..3).inject(op) rescue $!))
+  ensure
+    Integer.class_eval { public op }
+  end
+end
+p k.new.inject(:+), [1, 2, 3].inject(:+), [1, 2, 3].inject(10, :*)
+", @"
+#<NoMethodError: private method '+' called for an instance of Integer>
+#<NoMethodError: private method '+' called for an instance of Integer>
+#<NoMethodError: private method '+' called for an instance of Integer>
+#<NoMethodError: private method '*' called for an instance of Integer>
+#<NoMethodError: private method '*' called for an instance of Integer>
+#<NoMethodError: private method '*' called for an instance of Integer>
+6
+6
+60
+");
+        }
     }
 }
