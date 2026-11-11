@@ -1294,6 +1294,7 @@ namespace IronRuby.Tests {
                 Enumerable_InjectPrivateOp1,
                 HostingHelpOption1,
                 String_CompareInverse1,
+                String_EachLineParagraphChomp1,
             };
         }
     }

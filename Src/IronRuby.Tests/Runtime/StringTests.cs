@@ -510,5 +510,25 @@ nil
 #<ArgumentError: comparison of String with 0 failed>
 ");
         }
+
+        /// <summary>
+        /// each_line('', chomp: true) takes the newline and the blank line off a paragraph a blank line ended, and leaves
+        /// the last paragraph, which none ended, as it is, trailing newline and all (rb_str_enumerate_lines).
+        /// </summary>
+        public void String_EachLineParagraphChomp1() {
+            TestOutput(@"
+require 'ruby4'
+p ""hello\n\n\nworld\n"".each_line('', chomp: true).to_a
+p ""a\n\n\nb\n\n"".lines('', chomp: true), ""a\r\n\r\nb\r\n"".lines('', chomp: true), ""\n\na\n\n"".lines('', chomp: true)
+p ""a\n\n\nb\n"".lines(''), ""a\nb\n\nc"".lines('', chomp: true)
+", @"
+[""hello"", ""world\n""]
+[""a"", ""b""]
+[""a"", ""b\r\n""]
+["""", ""a""]
+[""a\n\n"", ""b\n""]
+[""a\nb"", ""c""]
+");
+        }
     }
 }

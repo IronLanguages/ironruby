@@ -6139,11 +6139,9 @@ class String
 
     return empty? ? [] : [__ir_chomp_line__(__ir_each_line_all__(nil), nil, chomp)] if separator.nil?
 
-    if separator.empty?
-      lines = __ir_paragraphs__(__ir_each_line_all__(newline), newline)
-    else
-      lines = __ir_each_line_all__(separator)
-    end
+    # paragraph mode chomps as it splits
+    return __ir_paragraphs__(__ir_each_line_all__(newline), newline, chomp) if separator.empty?
+    lines = __ir_each_line_all__(separator)
     return lines unless chomp
     lines.map { |line| __ir_chomp_line__(line, separator, chomp) }
   end
@@ -6159,8 +6157,10 @@ class String
 
   # Paragraph mode: a paragraph ends at the first blank line after some
   # content, that blank line is kept, and every further blank line of the run
-  # is dropped.
-  def __ir_paragraphs__(physical, newline)
+  # is dropped. With chomp: a paragraph that ended so loses its last newline and
+  # the blank line, and the last paragraph, which no blank line ended, is left as
+  # it is, trailing newline and all (rb_str_enumerate_lines' chomp_rslen).
+  def __ir_paragraphs__(physical, newline, chomp = false)
     result = []
     buffer = nil
     skipping = false
@@ -6172,7 +6172,11 @@ class String
         skipping = false
       end
       if blank && buffer
-        result << (buffer + line)
+        if chomp
+          result << buffer[0, buffer.length - (buffer.end_with?(crlf) ? crlf.length : newline.length)]
+        else
+          result << (buffer + line)
+        end
         buffer = nil
         skipping = true
       elsif buffer
