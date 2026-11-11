@@ -510,8 +510,11 @@ namespace IronRuby.Builtins {
         /// The slow path of a mutation: the string is frozen, shared, chilled, or some
         /// combination. Answers the flags the caller should go on to store - it must not reuse
         /// the ones it read, or it would put the copy-on-write and chilled bits straight back.
+        /// <paramref name="appendCount"/> is how many items an append that follows adds, if that is
+        /// what the write is: a slice copied for it gets room for them, so the append does not copy
+        /// the slice a second time.
         /// </summary>
-        private uint FrozenOrCopyOnWrite(uint flags) {
+        private uint FrozenOrCopyOnWrite(uint flags, int appendCount = 0) {
             if ((flags & IsFrozenFlag) != 0) {
                 throw RubyExceptions.CreateStringFrozenError(this);
             }
@@ -523,7 +526,7 @@ namespace IronRuby.Builtins {
             if (_content.IsOffsetSlice) {
                 // A slice from an offset is not written in place (see Content.IsOffsetSlice); its copy
                 // is a content of its own, so this also covers CopyOnWriteFlag.
-                _content = _content.Unslice();
+                _content = _content.Unslice(appendCount);
                 flags &= ~CopyOnWriteFlag;
             } else if ((flags & CopyOnWriteFlag) != 0) {
                 // TODO: we can do better if the representation is being changed: we don't need to copy the data twice
@@ -639,10 +642,10 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private void MutateContent(uint setFlags) {
+        private void MutateContent(uint setFlags, int appendCount = 0) {
             uint flags = _flags;
             if ((flags & MutationGuardFlags) != 0 || _content.IsOffsetSlice) {
-                flags = FrozenOrCopyOnWrite(flags);
+                flags = FrozenOrCopyOnWrite(flags, appendCount);
             }
             _flags = flags | setFlags;
             _changeCount++;
@@ -658,10 +661,10 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Set, append or insert a single char.
         /// </summary>
-        private void MutateOne(char c) {
+        private void MutateOne(char c, int appendCount = 0) {
             uint flags = _flags;
             if ((flags & MutationGuardFlags) != 0 || _content.IsOffsetSlice) {
-                flags = FrozenOrCopyOnWrite(flags);
+                flags = FrozenOrCopyOnWrite(flags, appendCount);
             }
             if (c >= 0x80) {
                 if (Tokenizer.IsSurrogate(c)) {
@@ -680,10 +683,10 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Set, append or insert a single byte.
         /// </summary>
-        private void MutateOne(byte b) {
+        private void MutateOne(byte b, int appendCount = 0) {
             uint flags = _flags;
             if ((flags & MutationGuardFlags) != 0 || _content.IsOffsetSlice) {
-                flags = FrozenOrCopyOnWrite(flags);
+                flags = FrozenOrCopyOnWrite(flags, appendCount);
             }
             if (b >= 0x80) {
                 flags &= ~(AsciiUnknownFlag | IsAsciiFlag);
@@ -719,11 +722,12 @@ namespace IronRuby.Builtins {
         /// A string known to contain a non-ASCII character still contains it afterwards, so that
         /// knowledge is kept rather than paying for a rescan of the whole content.
         /// </summary>
-        private void MutateAppend() {
+        private void MutateAppend(int appendCount) {
             MutateContent(
                 ((_flags & (AsciiUnknownFlag | IsAsciiFlag)) == 0 ? 0 : AsciiUnknownFlag) |
                 SurrogatesUnknownFlag |
-                HasChangedFlags
+                HasChangedFlags,
+                appendCount
             );
             if ((_flags & AsciiUnknownFlag) != 0) {
                 _flags &= ~IsAsciiFlag;
@@ -736,7 +740,8 @@ namespace IronRuby.Builtins {
         /// so that building a string piece by piece doesn't rescan it after every append (which made appends quadratic).
         /// </summary>
         /// <param name="whole">True if all of <paramref name="other"/> is added, false for a part of it.</param>
-        private void MutateAppend(MutableString/*!*/ other, bool whole) {
+        /// <param name="appendCount">How many of <paramref name="other"/>'s items are added (see FrozenOrCopyOnWrite).</param>
+        private void MutateAppend(MutableString/*!*/ other, bool whole, int appendCount) {
             RubyEncoding newEncoding = RequireCompatibleEncoding(other);
 
             // an empty string is ASCII and has no surrogates, whether or not that has been worked out:
@@ -774,7 +779,7 @@ namespace IronRuby.Builtins {
                 surrogates = NoSurrogatesFlag;
             }
 
-            MutateContent(HasChangedFlags);
+            MutateContent(HasChangedFlags, appendCount);
             _flags = (_flags & ~(AsciiUnknownFlag | IsAsciiFlag | SurrogatesUnknownFlag | NoSurrogatesFlag)) | ascii | surrogates;
             if (newEncoding != _encoding) {
                 SetEncoding(newEncoding);
@@ -914,6 +919,12 @@ namespace IronRuby.Builtins {
             Mutate();
 
             if (isAscii) {
+                // ASCII bytes are the target's only if it is ASCII compatible: a string held as bytes
+                // (a long ASCII sum, say) goes over to characters for UTF-16 and UTF-32, whose bytes
+                // are then made from them, as for a string held as characters.
+                if (IsBinary && !toEncoding.AsciiRoundTrips) {
+                    _content = _content.SwitchToStringContent();
+                }
                 SetEncoding(toEncoding);
                 return;
             }
@@ -1894,7 +1905,9 @@ namespace IronRuby.Builtins {
             if (content is BinaryContent) {
                 return GetSlice(content, start, count);
             }
-            return CreateDerived().Append(GetBinarySlice(start, count));
+            // the slice is a new array, which the result takes over rather than copies
+            byte[] bytes = GetBinarySlice(start, count);
+            return CreateDerived(bytes, bytes.Length);
         }
 
         public string/*!*/ GetStringSlice(int start) {
@@ -2097,7 +2110,11 @@ namespace IronRuby.Builtins {
             var encoding = RequireCompatibleEncoding(other);
 
             // MRI doesn't create a subclass
-            var result = new MutableString(_content.Concat(other._content), encoding);
+            Content content = null;
+            if ((long)_content.Count + other._content.Count >= AsciiConcatAsBytesMinLength) {
+                content = TryConcatAsciiBytes(other, encoding);
+            }
+            var result = new MutableString(content ?? _content.Concat(other._content), encoding);
 
             // Two halves known to be ASCII make an ASCII whole (MRI's coderange of a concatenation),
             // which keeps "a" + x + "b" from scanning the first sum again for the second:
@@ -2106,6 +2123,54 @@ namespace IronRuby.Builtins {
                 result._flags = (result._flags & ~(AsciiFlags | SurrogatesUnknownFlag)) | IsAsciiFlag | NoSurrogatesFlag;
             }
             return result;
+        }
+
+        /// <summary>
+        /// The length from which a sum of ASCII text is held as bytes (<see cref="TryConcatAsciiBytes"/>).
+        /// </summary>
+        internal const int AsciiConcatAsBytesMinLength = 1024;
+
+        /// <summary>
+        /// A long sum of ASCII text as bytes, half the memory of its characters. The cost of a long
+        /// String#+ is mostly the garbage collections its allocation brings on (a 100 KB sum of
+        /// characters is a 200 KB array, on the large object heap), so it goes with the size of the
+        /// array. A regexp match turns such a string into a CLR string once (BinaryContent.ConvertToString),
+        /// as it did a sum of characters. Null if the sum is not ASCII, or not in an encoding whose
+        /// ASCII characters are their bytes; the bytes of a part held as bytes go over as they are.
+        /// </summary>
+        private BinaryContent TryConcatAsciiBytes(MutableString/*!*/ other, RubyEncoding/*!*/ encoding) {
+            Content left = _content, right = other._content;
+            if ((left is BinaryContent && right is BinaryContent) || (long)left.Count + right.Count > Array.MaxLength ||
+                !encoding.AsciiRoundTrips || !_encoding.AsciiRoundTrips || !other._encoding.AsciiRoundTrips ||
+                !IsAscii() || !other.IsAscii()) {
+                return null;
+            }
+            int leftCount = left.Count, rightCount = right.Count;
+            var bytes = Utils.NewArrayToFill<byte>(leftCount + rightCount);
+            if (!TryCopyAscii(left, bytes.AsSpan(0, leftCount)) || !TryCopyAscii(right, bytes.AsSpan(leftCount))) {
+                return null;
+            }
+            return new BinaryContent(bytes, null);
+        }
+
+        // The ASCII characters of a content, as bytes, into a span of exactly its length. False if they
+        // are not ASCII after all (flags that a write in place has left behind).
+        private static bool TryCopyAscii(Content/*!*/ content, Span<byte> destination) {
+            ReadOnlySpan<char> chars;
+            if (content is BinaryContent binary) {
+                var bytes = binary.GetDataSpan();
+                if (bytes.Length != destination.Length) {
+                    return false;
+                }
+                bytes.CopyTo(destination);
+                return true;
+            } else if (content is StringContent str) {
+                chars = str.Data.AsSpan();
+            } else {
+                chars = ((CharArrayContent)content).GetDataSpan();
+            }
+            return chars.Length == destination.Length &&
+                System.Text.Ascii.FromUtf16(chars, destination, out _) == System.Buffers.OperationStatus.Done;
         }
 
         /// <summary>
@@ -2260,7 +2325,7 @@ namespace IronRuby.Builtins {
         /// Value should only contain characters that can be represented in the string's encoding.
         /// </summary>
         public MutableString/*!*/ Append(char value) {
-            MutateOne(value);
+            MutateOne(value, 1);
             _content.Append(value, 1);
             return this;
         }
@@ -2269,19 +2334,19 @@ namespace IronRuby.Builtins {
         /// Value should only contain characters that can be represented in the string's encoding.
         /// </summary>
         public MutableString/*!*/ Append(char value, int repeatCount) {
-            MutateOne(value);
+            MutateOne(value, repeatCount);
             _content.Append(value, repeatCount);
             return this;
         }
 
         public MutableString/*!*/ Append(byte value) {
-            MutateOne(value);
+            MutateOne(value, 1);
             _content.Append(value, 1);
             return this;
         }
 
         public MutableString/*!*/ Append(byte value, int repeatCount) {
-            MutateOne(value);
+            MutateOne(value, repeatCount);
             _content.Append(value, repeatCount);
             return this;
         }
@@ -2291,7 +2356,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         public MutableString/*!*/ Append(char[] value) {
             if (value != null) {
-                MutateAppend();
+                MutateAppend(value.Length);
                 _content.Append(value, 0, value.Length);
             }
             return this;
@@ -2304,7 +2369,7 @@ namespace IronRuby.Builtins {
             ContractUtils.RequiresNotNull(value, "value");
             ContractUtils.RequiresArrayRange(value, start, count, "startIndex", "count");
 
-            MutateAppend();
+            MutateAppend(count);
             _content.Append(value, start, count);
             return this;
         }
@@ -2314,7 +2379,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         public MutableString/*!*/ Append(string value) {
             if (value != null) {
-                MutateAppend();
+                MutateAppend(value.Length);
                 _content.Append(value, 0, value.Length);
             }
             return this;
@@ -2326,7 +2391,7 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ Append(string/*!*/ value, int start, int count) {
             ContractUtils.RequiresNotNull(value, "value");
             ContractUtils.RequiresArrayRange(value, start, count, "start", "count");
-            MutateAppend();
+            MutateAppend(count);
 
             _content.Append(value, start, count);
             return this;
@@ -2334,7 +2399,7 @@ namespace IronRuby.Builtins {
 
         public MutableString/*!*/ Append(byte[] value) {
             if (value != null) {
-                MutateAppend();
+                MutateAppend(value.Length);
                 _content.Append(value, 0, value.Length);
             }
             return this;
@@ -2344,7 +2409,7 @@ namespace IronRuby.Builtins {
             ContractUtils.RequiresNotNull(value, "value");
             ContractUtils.RequiresArrayRange(value, start, count, "start", "count");
 
-            MutateAppend();
+            MutateAppend(count);
             _content.Append(value, start, count);
             return this;
         }
@@ -2357,14 +2422,14 @@ namespace IronRuby.Builtins {
             ContractUtils.RequiresNotNull(stream, "stream");
             ContractUtils.Requires(count >= 0, "count");
 
-            MutateAppend();
+            MutateAppend(count);
             _content.Append(stream, count);
             return this;
         }
 
         public MutableString/*!*/ Append(MutableString value) {
             if ((object)value != null) {
-                MutateAppend(value, true);
+                MutateAppend(value, true, value._content.Count);
                 _content.Append(value._content, 0, value._content.Count);
             }
             return this;
@@ -2385,14 +2450,14 @@ namespace IronRuby.Builtins {
             ContractUtils.Requires(start >= 0, "start");
             ContractUtils.Requires(count >= 0, "count");
 
-            MutateAppend(value, start == 0 && count == value._content.Count);
+            MutateAppend(value, start == 0 && count == value._content.Count, count);
             _content.Append(value._content, start, count);
             return this;
         }
 
         public MutableString/*!*/ AppendMultiple(MutableString/*!*/ value, int repeatCount) {
             ContractUtils.RequiresNotNull(value, "value");
-            MutateAppend(value, repeatCount > 0);
+            MutateAppend(value, repeatCount > 0, 0);
 
             var other = value._content;
             EnsureCapacity(other.Count * repeatCount);
@@ -2527,7 +2592,7 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ Insert(int index, MutableString value) {
             if (value != null) {
                 index = ToContentInsertIndex(index, value);
-                MutateAppend(value, true);
+                MutateAppend(value, true, value._content.Count);
                 value._content.InsertTo(_content, index, 0, value._content.Count);
             }
             return this;
@@ -2538,7 +2603,7 @@ namespace IronRuby.Builtins {
             ContractUtils.RequiresNotNull(value, "value");
 
             index = ToContentInsertIndex(index, value);
-            MutateAppend(value, start == 0 && count == value._content.Count);
+            MutateAppend(value, start == 0 && count == value._content.Count, count);
             value._content.InsertTo(_content, index, start, count);
             return this;
         }

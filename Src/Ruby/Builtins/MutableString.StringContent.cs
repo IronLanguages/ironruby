@@ -41,9 +41,17 @@ namespace IronRuby.Builtins {
                 return WrapContent(bytes, bytes.Length);
             }
 
+            // The switch makes room for the append that follows, which would otherwise copy everything
+            // once more to grow the exactly sized array.
             internal BinaryContent/*!*/ SwitchToBinary(int additionalCapacity) {
-                // TODO:
-                return SwitchToBinary();
+                if (additionalCapacity == 0 || _data.Length == 0) {
+                    return SwitchToBinary();
+                }
+                int count = GetDataByteCount();
+                var bytes = Utils.NewArrayToFill<byte>((int)Math.Min((long)count + additionalCapacity, Array.MaxLength));
+                GetDataBytes(bytes, 0);
+                Array.Clear(bytes, count, bytes.Length - count);
+                return WrapContent(bytes, count);
             }
 
             private CharArrayContent/*!*/ SwitchToMutable() {
@@ -51,8 +59,13 @@ namespace IronRuby.Builtins {
             }
 
             private CharArrayContent/*!*/ SwitchToMutable(int additionalCapacity) {
-                // TODO:
-                return SwitchToMutable();
+                if (additionalCapacity == 0) {
+                    return SwitchToMutable();
+                }
+                var chars = Utils.NewArrayToFill<char>((int)Math.Min((long)_data.Length + additionalCapacity, Array.MaxLength));
+                _data.CopyTo(chars);
+                Array.Clear(chars, _data.Length, chars.Length - _data.Length);
+                return WrapContent(chars, _data.Length);
             }
 
             // ASCII text in an ASCII-compatible encoding is its own bytes. Narrowing it is one

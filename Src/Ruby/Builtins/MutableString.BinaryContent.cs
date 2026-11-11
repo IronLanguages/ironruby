@@ -69,8 +69,16 @@ namespace IronRuby.Builtins {
                 IsOffsetSlice = start != 0;
             }
 
-            internal override Content/*!*/ Unslice() {
-                return IsOffsetSlice ? new BinaryContent(ToByteArray(), _owner) : this;
+            internal override Content/*!*/ Unslice(int additionalCapacity) {
+                if (!IsOffsetSlice) {
+                    return this;
+                }
+                // Room past the end is zeroed, as in EnterWriteSlow. (The room asked for is a hint: past
+                // the largest array, the append that follows fails on its own.)
+                var data = Utils.NewArrayToFill<byte>((int)Math.Min((long)_count + additionalCapacity, Array.MaxLength));
+                GetDataSpan().CopyTo(data);
+                Array.Clear(data, _count, data.Length - _count);
+                return new BinaryContent(data, _count, _owner);
             }
 
             /// <summary>
@@ -156,6 +164,12 @@ namespace IronRuby.Builtins {
             private string/*!*/ DataToString() {
                 if (_count == 0) {
                     return String.Empty;
+                }
+                // ASCII widened in one vectorized pass (checked on the bytes, not the cached flags, which a
+                // write in place can leave behind); the escaping decoder has to be ready for invalid bytes.
+                var bytes = GetDataSpan();
+                if (_owner._encoding.AsciiRoundTrips && System.Text.Ascii.IsValid(bytes)) {
+                    return System.Text.Encoding.Latin1.GetString(bytes);
                 } else {
                     return _owner._encoding.EscapingEncoding.GetString(_data, _start, _count);
                 } 
@@ -407,8 +421,11 @@ namespace IronRuby.Builtins {
 
             #region Conversions (read-only)
 
+            // The string becomes the content as well (a regexp match is the usual caller): switching to
+            // characters and then taking a snapshot of them made two copies of a long string, and a
+            // long ASCII sum held as bytes cost more to match than one held as characters.
             public override string/*!*/ ConvertToString() {
-                return SwitchToChars().ConvertToString();
+                return WrapContent(DataToString()).Data;
             }
 
             public override byte[]/*!*/ ConvertToBytes() {
