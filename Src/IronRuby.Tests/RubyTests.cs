@@ -1297,6 +1297,7 @@ namespace IronRuby.Tests {
                 String_EachLineParagraphChomp1,
                 String_UptoCopies1,
                 String_StartWithRegexpLastMatch1,
+                String_InspectDummyControl1,
             };
         }
     }

@@ -2159,8 +2159,26 @@ namespace IronRuby.Builtins {
 
             RubyEncoding encoding = self.Encoding;
             if (encoding.IsDummy) {
+                // rb_str_inspect still gives the C escapes of the control characters their short
+                // form ("\e", not "\x1B"); '"', '\\' and '#' are bytes like any other here.
                 foreach (byte b in self.ToByteArray()) {
-                    AppendByteEscape(result, b);
+                    char shortEscape;
+                    switch (b) {
+                        case (byte)'\n': shortEscape = 'n'; break;
+                        case (byte)'\r': shortEscape = 'r'; break;
+                        case (byte)'\t': shortEscape = 't'; break;
+                        case (byte)'\f': shortEscape = 'f'; break;
+                        case 0x0B: shortEscape = 'v'; break;
+                        case 0x08: shortEscape = 'b'; break;
+                        case 0x07: shortEscape = 'a'; break;
+                        case 0x1B: shortEscape = 'e'; break;
+                        default: shortEscape = '\0'; break;
+                    }
+                    if (shortEscape != '\0') {
+                        result.Append('\\').Append(shortEscape);
+                    } else {
+                        AppendByteEscape(result, b);
+                    }
                 }
             } else if (encoding.IsUnicodeEncoding) {
                 string str = self.ToString();

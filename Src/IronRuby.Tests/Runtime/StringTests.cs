@@ -575,5 +575,17 @@ false
 nil
 ");
         }
+
+        /// <summary>
+        /// A string in a dummy encoding (ISO-2022-JP) inspects byte by byte, but the control characters with a C escape keep
+        /// its short form, as in MRI's rb_str_inspect: "\e", not "\x1B".
+        /// </summary>
+        public void String_InspectDummyControl1() {
+            TestOutput(@"
+puts ""\n\r\t\f\v\b\a\e\""\\#a\x7f"".dup.force_encoding('ISO-2022-JP').inspect
+", @"
+""\n\r\t\f\v\b\a\e\x22\x5C\x23\x61\x7F""
+");
+        }
     }
 }
