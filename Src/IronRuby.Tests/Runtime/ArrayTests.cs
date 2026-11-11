@@ -496,5 +496,33 @@ Infinity
 #<TypeError: can't convert Object to Integer (Object#to_int gives String)>
 ");
         }
+
+        /// <summary>
+        /// Array#join marks the element it is inside, as MRI's ary_join_1_ary does: an element whose to_ary answers
+        /// a new [self] each time recursed through ever new arrays until the stack overflowed (CRuby's
+        /// TestArray#test_join2 killed the process).
+        /// </summary>
+        public void Array_JoinRecursive1() {
+            TestOutput(@"
+a = []
+a << a
+p((a.join rescue $!))
+def (o = Object.new).to_ary
+  [self]
+end
+p(([o].join rescue $!))
+b = [1]
+c = [b, 2]
+b << c
+p((c.join('-') rescue $!))
+x = [3]
+p [1, [2, [x, x], 5]].join
+", @"
+#<ArgumentError: recursive array join>
+#<ArgumentError: recursive array join>
+#<ArgumentError: recursive array join>
+""12335""
+");
+        }
     }
 }

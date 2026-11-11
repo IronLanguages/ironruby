@@ -1281,6 +1281,7 @@ namespace IronRuby.Tests {
                 IOBuffer_ExperimentalWarning1,
                 Array_Cycle1,
                 Range_Recursive1,
+                Array_JoinRecursive1,
             };
         }
     }
