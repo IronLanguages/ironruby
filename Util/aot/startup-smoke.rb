@@ -33,12 +33,22 @@ puts "format: #{format("%05.2f|%-3s|%x", 3.14159, "a", 255)}"
 # Methods of the library whose code runs only when called, not at startup: a method compiled wrong fails here, at its
 # first call (a Fiber's block and IO.pipe once threw InvalidProgramException, and the fiber then hung).
 puts "fiber: #{Fiber.new { |x| Fiber.yield(x + 1); :end }.then { |f| [f.resume(1), f.resume, f.alive?] }.inspect}"
-r, w = IO.pipe
-w.write("piped")
-w.close
-puts "pipe: #{r.read}"
-r.close
-puts "popen: #{IO.popen("echo popen", &:read).strip} #{$?.success?}"
+# (what a pipe raises is printed, not raised: the check compares the two runs, and IO.pipe failing on a platform
+# without the library too - macOS has no pipe2 - is not the library's doing)
+begin
+  r, w = IO.pipe
+  w.write("piped")
+  w.close
+  puts "pipe: #{r.read}"
+  r.close
+rescue Exception => e
+  puts "pipe: #{e.class}"
+end
+begin
+  puts "popen: #{IO.popen("echo popen", &:read).strip} #{$?.success?}"
+rescue Exception => e
+  puts "popen: #{e.class}"
+end
 require "tempfile"
 puts "tempfile: #{Tempfile.create("smoke") { |f| f.write("x"); f.flush; File.size(f.path) }}"
 point = Data.define(:x, :y)
