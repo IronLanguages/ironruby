@@ -1693,6 +1693,105 @@ true
         }
 
         /// <summary>
+        /// A slice from an offset that is appended to is copied once, with room for what is appended,
+        /// rather than copied and then grown (#89); so is a CLR string content, and a byteslice of a
+        /// string held as characters is not copied a second time. The Ruby half is CRuby 4.0's output.
+        /// </summary>
+        public void MutableString_SliceAppend1() {
+            foreach (bool binary in new[] { true, false }) {
+                var source = binary
+                    ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(new String('a', 2000)), RubyEncoding.Binary)
+                    : MutableString.CreateMutable(RubyEncoding.UTF8).Append(new String('a', 2000));
+                var slice = source.GetSlice(1, 1999);
+                slice.Append("xyz");
+                Assert(slice.Capacity == 2002 && slice.GetCharCount() == 2002 && source.GetCharCount() == 2000);
+            }
+
+            TestOutput(@"
+require 'ruby4'
+s = ""x"" * 1000 + ""yz""
+t = s[1..]; t << ""ab""
+p t.size, t[-4..], s.size, s[-2..]
+t << ""c"" * 3000
+p t.size, t[-3..], t.count(""c"")
+b = s.b[1..]; b << ""ab""
+p b.size, b[-4..], b.encoding
+c = s[1..]; c << 0x41
+p c.size, c[-2..]
+d = s[1..]; d.concat(""a"", ""b"")
+p d.size, d[-3..]
+e = s[1..]; e.insert(0, ""Q"")
+p e.size, e[0, 2], e[-1]
+f = s[1..]; f.prepend(""P"")
+p f.size, f[0, 2]
+g = s.byteslice(1..); g << ""q""
+p g.encoding, g.size, g[-2..], s.bytesize
+h = (""é"" * 600).byteslice(2..); h << ""x""
+p h.valid_encoding?, h.size, h.bytesize, h[-2..]
+i = (""é"" * 600)[1..]; i << ""x""
+p i.size, i.bytesize, i[-2..], i.valid_encoding?
+j = s[1..]; j << ""é""
+p j.size, j.bytesize, j[-2..], j.ascii_only?
+k = s[1..]; k[0] = ""K""
+p k.size, k[0, 2], s[0, 2]
+l = s[1..]; l.setbyte(0, 0x4c)
+p l[0, 2], s[1, 2]
+m = s.b[1..]; m << ""\xff"".b
+p m.size, m[-2..], m.valid_encoding?
+n = s.byteslice(1..)
+p n.encoding, n.size, n == s[1..], n.hash == s[1..].hash
+", @"
+1003
+""yzab""
+1002
+""yz""
+4003
+""ccc""
+3000
+1003
+""yzab""
+#<Encoding:BINARY (ASCII-8BIT)>
+1002
+""zA""
+1003
+""zab""
+1002
+""Qx""
+""z""
+1002
+""Px""
+#<Encoding:UTF-8>
+1002
+""zq""
+1002
+true
+600
+1199
+""éx""
+600
+1199
+""éx""
+true
+1002
+1003
+""zé""
+false
+1001
+""Kx""
+""xx""
+""Lx""
+""xx""
+1002
+""z\xFF""
+true
+#<Encoding:UTF-8>
+1001
+true
+true
+");
+        }
+
+        /// <summary>
         /// Ruby's side of the hash (#89): #eql? strings hash the same - ASCII in UTF-8, BINARY and
         /// US-ASCII, empty strings in any encoding, a slice from an offset and an equal fresh string,
         /// and a CLR string and the String of the same characters, which are #eql? as well.

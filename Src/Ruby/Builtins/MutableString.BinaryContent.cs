@@ -69,8 +69,16 @@ namespace IronRuby.Builtins {
                 IsOffsetSlice = start != 0;
             }
 
-            internal override Content/*!*/ Unslice() {
-                return IsOffsetSlice ? new BinaryContent(ToByteArray(), _owner) : this;
+            internal override Content/*!*/ Unslice(int additionalCapacity) {
+                if (!IsOffsetSlice) {
+                    return this;
+                }
+                // Room past the end is zeroed, as in EnterWriteSlow. (The room asked for is a hint: past
+                // the largest array, the append that follows fails on its own.)
+                var data = Utils.NewArrayToFill<byte>((int)Math.Min((long)_count + additionalCapacity, Array.MaxLength));
+                GetDataSpan().CopyTo(data);
+                Array.Clear(data, _count, data.Length - _count);
+                return new BinaryContent(data, _count, _owner);
             }
 
             /// <summary>

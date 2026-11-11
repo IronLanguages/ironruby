@@ -82,8 +82,16 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            internal override Content/*!*/ Unslice() {
-                return IsOffsetSlice ? new CharArrayContent(Utils.GetSlice(GetDataSpan(), 0, _count), _owner) : this;
+            internal override Content/*!*/ Unslice(int additionalCapacity) {
+                if (!IsOffsetSlice) {
+                    return this;
+                }
+                // Room past the end is zeroed, as in EnterWriteSlow. (The room asked for is a hint: past
+                // the largest array, the append that follows fails on its own.)
+                var data = Utils.NewArrayToFill<char>((int)Math.Min((long)_count + additionalCapacity, Array.MaxLength));
+                GetDataSpan().CopyTo(data);
+                Array.Clear(data, _count, data.Length - _count);
+                return new CharArrayContent(data, _count, _owner);
             }
 
             [MethodImpl(MethodImplOptions.NoInlining)]
@@ -364,11 +372,9 @@ namespace IronRuby.Builtins {
                     // the whole string over to a byte array. Switching is what makes a mixed
                     // reader - StringScanner matches on the characters and then slices out the
                     // bytes it matched - convert the entire subject back and forth on every token.
-                    var result = new byte[count];
-                    var chars = GetDataSpan().Slice(start, count);
-                    for (int i = 0; i < chars.Length; i++) {
-                        result[i] = (byte)chars[i];
-                    }
+                    // (Latin-1 narrows every character below 0x100 to its own byte, vectorized.)
+                    var result = Utils.NewArrayToFill<byte>(count);
+                    System.Text.Encoding.Latin1.GetBytes(GetDataSpan().Slice(start, count), result);
                     return result;
                 }
                 return SwitchToBinary().GetBinarySlice(start, count);
